@@ -138,6 +138,7 @@ pub(in crate::server) async fn accept_native_completion(
     }
     validate_native_evidence(
         &profile.provider_id,
+        &profile.account_id,
         method.native_identity.as_ref(),
         Some(&profile.identity),
     )?;

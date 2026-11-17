@@ -365,7 +365,7 @@ impl MachinePluginStore {
             .native_identity
             .as_ref()
             .context("native identity verification unavailable")?;
-        let identity = native_identity::read(&directory.join("home"), recipe)?;
+        let identity = native_identity::read(&directory.join("home"), recipe, &self.account_id)?;
         let root = self.native_profile_root(provider);
         match native_identity::read_login_file(&root, "identity.json", 4096) {
             Ok(bytes) => {

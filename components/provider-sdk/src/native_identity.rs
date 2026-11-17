@@ -35,6 +35,11 @@ pub enum NativeIdentityRecipe {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         subject_claim: Option<Vec<String>>,
     },
+    /// The owner names the subscription when adding the account; the native
+    /// login writes no identity Cowboy may read without opening credentials.
+    /// The subject is the Cowboy account ID, so the binding proves only which
+    /// account card authorized the login, never which vendor account it was.
+    OwnerDeclaredV1 { authority: String },
 }
 
 /// Path component selecting the sole member of a JSON object.
@@ -44,17 +49,49 @@ impl NativeIdentityRecipe {
     /// Whether the recipe uses identity paths newer than Provider SDK 3.1.15.
     #[must_use]
     pub fn uses_extended_paths(&self) -> bool {
-        let Self::FreshLoginJsonV1 {
-            subject_path,
-            tenant_path,
-            subject_claim,
-            ..
-        } = self;
-        subject_claim.is_some()
-            || subject_path
-                .iter()
-                .chain(tenant_path.iter().flatten())
-                .any(|part| part == NATIVE_IDENTITY_SOLE_MEMBER)
+        match self {
+            Self::FreshLoginJsonV1 {
+                subject_path,
+                tenant_path,
+                subject_claim,
+                ..
+            } => {
+                subject_claim.is_some()
+                    || subject_path
+                        .iter()
+                        .chain(tenant_path.iter().flatten())
+                        .any(|part| part == NATIVE_IDENTITY_SOLE_MEMBER)
+            }
+            Self::OwnerDeclaredV1 { .. } => false,
+        }
+    }
+
+    /// Whether the recipe is newer than Provider SDK 3.3.0.
+    #[must_use]
+    pub fn is_owner_declared(&self) -> bool {
+        matches!(self, Self::OwnerDeclaredV1 { .. })
+    }
+
+    /// The authority every identity produced by this recipe carries.
+    #[must_use]
+    pub fn authority(&self) -> &str {
+        match self {
+            Self::FreshLoginJsonV1 { authority, .. } | Self::OwnerDeclaredV1 { authority } => {
+                authority
+            }
+        }
+    }
+
+    /// Whether identities produced by this recipe carry a tenant.
+    #[must_use]
+    pub fn has_tenant(&self) -> bool {
+        matches!(
+            self,
+            Self::FreshLoginJsonV1 {
+                tenant_path: Some(_),
+                ..
+            }
+        )
     }
 }
 
@@ -86,6 +123,13 @@ pub(crate) fn validate_method(method: &AuthMethod) -> Result<()> {
                     && !argument.chars().any(char::is_control)),
             "invalid native logout arguments"
         );
+    }
+    if let Some(NativeIdentityRecipe::OwnerDeclaredV1 { authority }) = &method.native_identity {
+        ensure!(
+            matches!(method.executor, AuthExecutor::CommandV1 { .. }),
+            "native identity requires a native login command"
+        );
+        validate_id(authority, "native identity authority")?;
     }
     if let Some(NativeIdentityRecipe::FreshLoginJsonV1 {
         authority,

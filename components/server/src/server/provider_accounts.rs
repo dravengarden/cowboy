@@ -17,21 +17,22 @@ pub(in crate::server) use revocation::run_recovery;
 
 pub(super) fn validate_native_evidence(
     provider: &str,
+    account: &crate::provider_account::ProviderAccountId,
     recipe: Option<&cowboy_provider_sdk::NativeIdentityRecipe>,
     identity: Option<&crate::provider_account::NativeIdentity>,
 ) -> Result<(), &'static str> {
     match (recipe, identity) {
         (None, None) => Ok(()),
-        (
-            Some(cowboy_provider_sdk::NativeIdentityRecipe::FreshLoginJsonV1 {
-                authority,
-                tenant_path,
-                ..
-            }),
-            Some(identity),
-        ) => {
-            if &identity.authority != authority
-                || identity.tenant.is_some() != tenant_path.is_some()
+        (Some(recipe), Some(identity)) => {
+            if identity.authority != recipe.authority()
+                || identity.tenant.is_some() != recipe.has_tenant()
+            {
+                return Err("native_identity_contract_mismatch");
+            }
+            // An owner-declared subject is the account card itself; any other
+            // value would let one card's login bind another card.
+            if recipe.is_owner_declared()
+                && (account.is_default() || identity.subject != account.as_str())
             {
                 return Err("native_identity_contract_mismatch");
             }
@@ -389,10 +390,42 @@ mod tests {
             subject: "subject".into(),
             tenant: Some("tenant".into()),
         };
-        assert!(validate_native_evidence("provider", None, None).is_ok());
-        assert!(validate_native_evidence("provider", Some(&recipe), Some(&identity)).is_ok());
-        assert!(validate_native_evidence("provider", None, Some(&identity)).is_err());
-        assert!(validate_native_evidence("provider", Some(&recipe), None).is_err());
+        assert!(
+            validate_native_evidence(
+                "provider",
+                &crate::provider_account::ProviderAccountId::default(),
+                None,
+                None
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_native_evidence(
+                "provider",
+                &crate::provider_account::ProviderAccountId::default(),
+                Some(&recipe),
+                Some(&identity)
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_native_evidence(
+                "provider",
+                &crate::provider_account::ProviderAccountId::default(),
+                None,
+                Some(&identity)
+            )
+            .is_err()
+        );
+        assert!(
+            validate_native_evidence(
+                "provider",
+                &crate::provider_account::ProviderAccountId::default(),
+                Some(&recipe),
+                None
+            )
+            .is_err()
+        );
         for invalid in [
             crate::provider_account::NativeIdentity {
                 authority: "other".into(),
@@ -407,7 +440,15 @@ mod tests {
                 ..identity.clone()
             },
         ] {
-            assert!(validate_native_evidence("provider", Some(&recipe), Some(&invalid)).is_err());
+            assert!(
+                validate_native_evidence(
+                    "provider",
+                    &crate::provider_account::ProviderAccountId::default(),
+                    Some(&recipe),
+                    Some(&invalid)
+                )
+                .is_err()
+            );
         }
     }
 

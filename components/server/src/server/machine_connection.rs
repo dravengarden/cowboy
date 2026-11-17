@@ -517,6 +517,30 @@ pub(super) async fn reconcile_machine_account_grants(
     Ok(())
 }
 
+/// The signed method a candidate names must accept its native evidence.
+fn candidate_evidence(
+    package: &cowboy_provider_sdk::ProviderPackage,
+    auth_method: &str,
+    provider_id: &str,
+    account_id: &crate::provider_account::ProviderAccountId,
+    native_identity: Option<&crate::provider_account::NativeIdentity>,
+) -> Result<(), String> {
+    let method = package
+        .manifest
+        .authentication
+        .methods
+        .iter()
+        .find(|method| method.id == auth_method)
+        .ok_or_else(|| "authentication method is not declared".to_owned())?;
+    provider_accounts::validate_native_evidence(
+        provider_id,
+        account_id,
+        method.native_identity.as_ref(),
+        native_identity,
+    )
+    .map_err(str::to_owned)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn accept_service_auth_candidate(
     state: &Arc<AppState>,
@@ -588,19 +612,13 @@ pub(super) async fn accept_service_auth_candidate(
         if package.manifest.authentication.portable_schema != portable_schema {
             return Err("authentication candidate portable schema mismatch".to_owned());
         }
-        let method = package
-            .manifest
-            .authentication
-            .methods
-            .iter()
-            .find(|method| method.id == auth_method)
-            .ok_or_else(|| "authentication method is not declared".to_owned())?;
-        provider_accounts::validate_native_evidence(
+        candidate_evidence(
+            &package,
+            auth_method,
             provider_id,
-            method.native_identity.as_ref(),
+            account_id,
             native_identity,
-        )
-        .map_err(str::to_owned)?;
+        )?;
         let bundle = crate::machine_protocol::PortableCredentialBundle {
             portable_schema: portable_schema.to_owned(),
             method_id: auth_method.to_owned(),

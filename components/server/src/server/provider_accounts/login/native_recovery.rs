@@ -82,6 +82,7 @@ pub(super) async fn observe(
     }
     validate_native_evidence(
         &receipt.provider_id,
+        &receipt.input.account_id,
         method.native_identity.as_ref(),
         Some(&profile.identity),
     )?;

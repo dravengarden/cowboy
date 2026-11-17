@@ -761,6 +761,21 @@ pub struct RuntimeContract {
     pub platforms: Vec<PlatformPayload>,
     #[serde(default)]
     pub required_capabilities: BTreeSet<RuntimeCapability>,
+    /// Signed restriction of the address families the Provider runtime worker
+    /// may open. Absent means the host default. Native login and logout
+    /// processes are not yet covered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<RuntimeNetworkPolicy>,
+}
+
+/// Closed network policies a host must enforce on the Provider process tree,
+/// or refuse to launch it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeNetworkPolicy {
+    /// Only IPv4, Unix and netlink sockets; a vendor that judges location by
+    /// address must see the host's stable IPv4 egress.
+    Ipv4OnlyV1,
 }
 
 /// A closed runtime value DSL. Plain strings remain ergonomic literals while
@@ -1589,6 +1604,23 @@ impl ProviderManifest {
             ensure!(
                 semver::Version::parse(&self.sdk_version)? >= semver::Version::new(3, 3, 0),
                 "native identity claims and sole-member paths require Provider SDK 3.3.0 or newer"
+            );
+        }
+        if self.runtime.network.is_some() {
+            ensure!(
+                semver::Version::parse(&self.sdk_version)? >= semver::Version::new(3, 4, 0),
+                "runtime network policies require Provider SDK 3.4.0 or newer"
+            );
+        }
+        if self.authentication.methods.iter().any(|method| {
+            method
+                .native_identity
+                .as_ref()
+                .is_some_and(NativeIdentityRecipe::is_owner_declared)
+        }) {
+            ensure!(
+                semver::Version::parse(&self.sdk_version)? >= semver::Version::new(3, 4, 0),
+                "owner-declared native identity requires Provider SDK 3.4.0 or newer"
             );
         }
         if self
@@ -4086,7 +4118,9 @@ mod tests {
         );
         for path in ["", "../profile.json", "/profile.json"] {
             let mut invalid = recipe.clone();
-            let NativeIdentityRecipe::FreshLoginJsonV1 { relative_path, .. } = &mut invalid;
+            let NativeIdentityRecipe::FreshLoginJsonV1 { relative_path, .. } = &mut invalid else {
+                unreachable!()
+            };
             *relative_path = path.into();
             auth.methods[0].native_identity = Some(invalid);
             assert!(auth.validate().is_err());
@@ -4096,6 +4130,48 @@ mod tests {
         assert!(
             auth.validate().is_err(),
             "API-key input cannot assert native login identity"
+        );
+    }
+
+    #[test]
+    fn owner_declared_identity_and_network_policy_require_sdk_3_4() {
+        let source: StandardProviderSource =
+            serde_json::from_str(include_str!("../../../plugins/grok/provider.json")).unwrap();
+        let mut manifest = source.compile().unwrap();
+        let recipe = NativeIdentityRecipe::OwnerDeclaredV1 {
+            authority: "google".into(),
+        };
+        assert!(recipe.is_owner_declared() && !recipe.has_tenant());
+        assert_eq!(recipe.authority(), "google");
+        assert_eq!(
+            serde_json::to_value(&recipe).unwrap(),
+            serde_json::json!({"kind": "owner_declared_v1", "authority": "google"})
+        );
+        let method = manifest
+            .authentication
+            .methods
+            .iter()
+            .position(|method| matches!(method.executor, AuthExecutor::CommandV1 { .. }))
+            .unwrap();
+        manifest.authentication.methods[method].native_identity = Some(recipe);
+        manifest.authentication.methods[method].native_logout = None;
+        manifest.runtime.network = Some(RuntimeNetworkPolicy::Ipv4OnlyV1);
+        manifest.sdk_version = "3.4.0".into();
+        build_package(manifest.clone()).unwrap();
+        manifest.sdk_version = "3.3.0".into();
+        let error = manifest.validate().unwrap_err().to_string();
+        assert!(error.contains("Provider SDK 3.4.0"), "{error}");
+        manifest.runtime.network = None;
+        let error = manifest.validate().unwrap_err().to_string();
+        assert!(error.contains("owner-declared native identity"), "{error}");
+        manifest.authentication.methods[method].native_identity =
+            Some(NativeIdentityRecipe::OwnerDeclaredV1 {
+                authority: "bad authority".into(),
+            });
+        assert!(manifest.authentication.validate().is_err());
+        assert_eq!(
+            serde_json::to_value(RuntimeNetworkPolicy::Ipv4OnlyV1).unwrap(),
+            serde_json::json!("ipv4_only_v1")
         );
     }
 

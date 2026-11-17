@@ -292,3 +292,24 @@ pub(super) fn validate_launch_placement(
     }
     Ok(())
 }
+
+/// The `systemd-run` property enforcing a signed Provider network policy on
+/// the whole worker unit, including the native agent and its MCP children.
+pub(super) fn network_property(policy: cowboy_provider_sdk::RuntimeNetworkPolicy) -> &'static str {
+    match policy {
+        cowboy_provider_sdk::RuntimeNetworkPolicy::Ipv4OnlyV1 => {
+            "--property=RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK"
+        }
+    }
+}
+
+#[cfg(test)]
+mod network_policy_tests {
+    #[test]
+    fn ipv4_only_policy_excludes_ipv6_sockets() {
+        let property =
+            super::network_property(cowboy_provider_sdk::RuntimeNetworkPolicy::Ipv4OnlyV1);
+        assert!(property.contains("AF_INET "));
+        assert!(!property.contains("AF_INET6"));
+    }
+}

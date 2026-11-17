@@ -525,7 +525,7 @@ pub(super) fn refresh_identity_evidence(
     if account_id.is_default() && identity.is_none() {
         return Ok(());
     }
-    provider_accounts::validate_native_evidence(provider_id, recipe, identity)
+    provider_accounts::validate_native_evidence(provider_id, account_id, recipe, identity)
         .map_err(str::to_owned)
 }
 

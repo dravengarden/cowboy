@@ -11,14 +11,34 @@ const LIMIT: usize = 256 * 1024;
 pub(super) fn read(
     home: &Path,
     recipe: &NativeIdentityRecipe,
+    account: &crate::provider_account::ProviderAccountId,
 ) -> Result<crate::provider_account::NativeIdentity> {
-    let NativeIdentityRecipe::FreshLoginJsonV1 {
-        authority,
-        relative_path,
-        subject_path,
-        tenant_path,
-        subject_claim,
-    } = recipe;
+    let (authority, relative_path, subject_path, tenant_path, subject_claim) = match recipe {
+        NativeIdentityRecipe::OwnerDeclaredV1 { authority } => {
+            ensure!(
+                !account.is_default(),
+                "owner-declared identity requires a named account"
+            );
+            return Ok(crate::provider_account::NativeIdentity {
+                authority: authority.clone(),
+                subject: account.as_str().to_owned(),
+                tenant: None,
+            });
+        }
+        NativeIdentityRecipe::FreshLoginJsonV1 {
+            authority,
+            relative_path,
+            subject_path,
+            tenant_path,
+            subject_claim,
+        } => (
+            authority,
+            relative_path,
+            subject_path,
+            tenant_path,
+            subject_claim,
+        ),
+    };
     let bytes = read_login_file(home, relative_path, LIMIT)?;
     let document: UniqueJson = serde_json::from_slice(&bytes)
         .map_err(|_| anyhow::anyhow!("invalid native identity JSON"))?;
@@ -229,6 +249,33 @@ fn field(document: &serde_json::Value, path: &[String]) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn named() -> crate::provider_account::ProviderAccountId {
+        crate::provider_account::ProviderAccountId::try_from(
+            "8f0c6f39-2c55-4a3b-9b3b-7c1d6e5a4b21".to_owned(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn owner_declared_identity_is_the_named_account_and_reads_no_file() {
+        let home = tempfile::tempdir().unwrap();
+        let recipe = NativeIdentityRecipe::OwnerDeclaredV1 {
+            authority: "google".into(),
+        };
+        let identity = read(home.path(), &recipe, &named()).unwrap();
+        assert_eq!(identity.authority, "google");
+        assert_eq!(identity.subject, named().as_str());
+        assert_eq!(identity.tenant, None);
+        assert!(
+            read(
+                home.path(),
+                &recipe,
+                &crate::provider_account::ProviderAccountId::default()
+            )
+            .is_err()
+        );
+    }
     use std::fs;
     use std::os::unix::fs::symlink;
 
@@ -264,10 +311,10 @@ mod tests {
             r#"{"oauthAccount":{"accountUuid":"","organizationUuid":"org"}}"#,
         ] {
             fs::write(&path, profile).unwrap();
-            assert!(read(home.path(), &recipe).is_err());
+            assert!(read(home.path(), &recipe, &named()).is_err());
         }
         fs::write(&path, r#"{"oauthAccount":{"accountUuid":"account","organizationUuid":"org","emailAddress":"person@example.invalid"}}"#).unwrap();
-        let identity = read(home.path(), &recipe).unwrap();
+        let identity = read(home.path(), &recipe, &named()).unwrap();
         assert_eq!(identity.authority, "claude-ai");
         assert_eq!(identity.subject, "account");
         assert_eq!(identity.tenant.as_deref(), Some("org"));
@@ -295,7 +342,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let path = home.path().join("profile.json");
         fs::write(&path, r#"{"account":{"id":"subject"},"tenant":"org","email":"irrelevant","token":"fixture-secret"}"#).unwrap();
-        let identity = read(home.path(), &recipe()).unwrap();
+        let identity = read(home.path(), &recipe(), &named()).unwrap();
         assert_eq!(identity.subject, "subject");
         assert_eq!(identity.tenant.as_deref(), Some("org"));
         assert!(
@@ -310,7 +357,9 @@ mod tests {
             "fixture-secret-invalid-json",
         ] {
             fs::write(&path, invalid).unwrap();
-            let error = read(home.path(), &recipe()).unwrap_err().to_string();
+            let error = read(home.path(), &recipe(), &named())
+                .unwrap_err()
+                .to_string();
             assert!(!error.contains("fixture-secret"));
         }
     }
@@ -326,16 +375,21 @@ mod tests {
             r#"{"account":{"id":"subject"},"tenant":"org","extra":[{"secret-key":"secret-value","secret-key":"other"}]}"#,
         ] {
             fs::write(&path, invalid).unwrap();
-            let error = read(home.path(), &recipe()).unwrap_err();
+            let error = read(home.path(), &recipe(), &named()).unwrap_err();
             assert_eq!(format!("{error:#}"), "invalid native identity JSON");
         }
         // Unknown native fields remain forward compatible; only ambiguous
         // objects are rejected. Preserve ordinary JSON values and bounds.
         fs::write(&path, r#"{"account":{"id":"subject"},"tenant":"org","extra":[null,true,false,-1,18446744073709551615,1.5,"text",{"id":"independent"}]}"#).unwrap();
-        assert_eq!(read(home.path(), &recipe()).unwrap().subject, "subject");
+        assert_eq!(
+            read(home.path(), &recipe(), &named()).unwrap().subject,
+            "subject"
+        );
         fs::write(&path, format!("{}0{}", "[".repeat(130), "]".repeat(130))).unwrap();
         assert_eq!(
-            read(home.path(), &recipe()).unwrap_err().to_string(),
+            read(home.path(), &recipe(), &named())
+                .unwrap_err()
+                .to_string(),
             "invalid native identity JSON"
         );
     }
@@ -373,15 +427,17 @@ mod tests {
         fs::write(outside.path().join("profile.json"), "{}").unwrap();
         let path = home.path().join("profile.json");
         symlink(outside.path().join("profile.json"), &path).unwrap();
-        assert!(read(home.path(), &recipe()).is_err());
+        assert!(read(home.path(), &recipe(), &named()).is_err());
         fs::remove_file(&path).unwrap();
         fs::write(&path, vec![b' '; LIMIT + 1]).unwrap();
-        assert!(read(home.path(), &recipe()).is_err());
+        assert!(read(home.path(), &recipe(), &named()).is_err());
         symlink(outside.path(), home.path().join("alias")).unwrap();
         let mut nested = recipe();
-        let NativeIdentityRecipe::FreshLoginJsonV1 { relative_path, .. } = &mut nested;
+        let NativeIdentityRecipe::FreshLoginJsonV1 { relative_path, .. } = &mut nested else {
+            unreachable!()
+        };
         *relative_path = "alias/profile.json".into();
-        assert!(read(home.path(), &nested).is_err());
+        assert!(read(home.path(), &nested, &named()).is_err());
     }
 
     fn plugin_recipe(plugin: &str, method: &str) -> NativeIdentityRecipe {
@@ -424,7 +480,12 @@ mod tests {
         let auth = serde_json::json!({"auth_mode":"chatgpt","tokens":{
             "id_token":token,"access_token":"a","refresh_token":"r","account_id":"workspace-1"}});
         fs::write(home.path().join(".codex/auth.json"), auth.to_string()).unwrap();
-        let identity = read(home.path(), &plugin_recipe("codex", "chatgpt-subscription")).unwrap();
+        let identity = read(
+            home.path(),
+            &plugin_recipe("codex", "chatgpt-subscription"),
+            &named(),
+        )
+        .unwrap();
         assert_eq!(identity.authority, "chatgpt");
         assert_eq!(identity.subject, "user-1");
         assert_eq!(identity.tenant.as_deref(), Some("workspace-1"));
@@ -432,7 +493,14 @@ mod tests {
             let auth =
                 serde_json::json!({"tokens":{"id_token":invalid,"account_id":"workspace-1"}});
             fs::write(home.path().join(".codex/auth.json"), auth.to_string()).unwrap();
-            assert!(read(home.path(), &plugin_recipe("codex", "chatgpt-subscription")).is_err());
+            assert!(
+                read(
+                    home.path(),
+                    &plugin_recipe("codex", "chatgpt-subscription"),
+                    &named()
+                )
+                .is_err()
+            );
         }
     }
 
@@ -448,7 +516,7 @@ mod tests {
         )
         .unwrap();
         let recipe = plugin_recipe("grok", "xai-subscription");
-        let identity = read(home.path(), &recipe).unwrap();
+        let identity = read(home.path(), &recipe, &named()).unwrap();
         assert_eq!(identity.authority, "x-ai");
         assert_eq!(identity.subject, "user-1");
         assert_eq!(identity.tenant.as_deref(), Some("team-1"));
@@ -458,8 +526,8 @@ mod tests {
             serde_json::json!({"a::one": entry, "b::two": entry}).to_string(),
         )
         .unwrap();
-        assert!(read(home.path(), &recipe).is_err());
+        assert!(read(home.path(), &recipe, &named()).is_err());
         fs::write(&path, "{}").unwrap();
-        assert!(read(home.path(), &recipe).is_err());
+        assert!(read(home.path(), &recipe, &named()).is_err());
     }
 }

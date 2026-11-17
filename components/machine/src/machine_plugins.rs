@@ -24,6 +24,7 @@ mod code_runtime;
 mod code_sync_conformance;
 mod extensions;
 mod installation;
+mod launch_context;
 mod machine_browser;
 mod service_trust;
 pub use machine_browser::{
@@ -111,19 +112,7 @@ const PROVIDER_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 const AUTH_SEAL_DOMAIN: &[u8] = b"cowboy-provider-auth-seal-v1\0";
 static ATOMIC_WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-#[derive(Debug, Clone)]
-pub struct ProviderLaunchContext {
-    pub package_path: PathBuf,
-    pub command: String,
-    pub version: String,
-    pub behavior: cowboy_provider_sdk::ProviderBehaviorContract,
-    pub environment: BTreeMap<String, String>,
-    pub remove_environment: BTreeSet<String>,
-    pub remove_environment_prefixes: BTreeSet<String>,
-    pub home: Option<PathBuf>,
-    pub execution_jsonrpc: bool,
-    pub mcp_bindings: bool,
-}
+pub use launch_context::ProviderLaunchContext;
 
 #[derive(Debug)]
 pub struct PluginHostInvocationFailure {
@@ -1698,6 +1687,7 @@ impl MachinePluginStore {
                 .remove_environment_prefixes
                 .clone(),
             home,
+            network: package.manifest.runtime.network,
         })
     }
 
@@ -1902,7 +1892,7 @@ impl MachinePluginStore {
         let native_identity = method
             .native_identity
             .as_ref()
-            .map(|recipe| native_identity::read(&home, recipe))
+            .map(|recipe| native_identity::read(&home, recipe, &self.account_id))
             .transpose()?;
         let mut values = BTreeMap::new();
         let mut total = 0_usize;

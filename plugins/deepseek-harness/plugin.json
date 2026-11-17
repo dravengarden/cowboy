@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "id": "deepseek-harness",
-  "version": "1.0.19",
-  "component_release": "3.110.0",
+  "version": "1.0.20",
+  "component_release": "3.111.0",
   "publisher": "cowboy-first-party",
   "kind": "agent_provider",
   "entrypoint": "provider.json",
@@ -13,7 +13,7 @@
     },
     {
       "id": "cowboy.plugin-sdk",
-      "version": "1.16.0"
+      "version": "1.17.0"
     },
     {
       "id": "cowboy.plugin-api",
@@ -21,11 +21,11 @@
     },
     {
       "id": "cowboy.provider-sdk",
-      "version": "3.3.0"
+      "version": "3.4.0"
     },
     {
       "id": "cowboy.provider-ui",
-      "version": "3.4.0"
+      "version": "3.5.0"
     },
     {
       "id": "cowboy.provider-runtime",

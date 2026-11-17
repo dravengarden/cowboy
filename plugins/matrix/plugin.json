@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "id": "matrix",
-  "version": "1.0.9",
-  "component_release": "3.110.0",
+  "version": "1.0.10",
+  "component_release": "3.111.0",
   "publisher": "cowboy-first-party",
   "kind": "memory_backend",
   "entrypoint": "contract.json",
@@ -13,7 +13,7 @@
     },
     {
       "id": "cowboy.plugin-sdk",
-      "version": "1.16.0"
+      "version": "1.17.0"
     }
   ]
 }

@@ -3288,6 +3288,12 @@ impl Broker {
         worker_launch::validate_launch_placement(session, &provider, &behavior)?;
         let session_environment = self.launch_session_environment(session, &provider, &behavior)?;
         let worker_command = self.launch_worker_command(session).await?;
+        let network = provider.as_ref().and_then(|provider| provider.network);
+        // A signed network policy needs a unit sandbox; refuse to launch the
+        // Provider unrestricted rather than silently ignore it.
+        if network.is_some() && self.args.spawn_mode != SpawnMode::SystemdUser {
+            anyhow::bail!("Provider network policy requires the systemd user spawn mode");
+        }
         if self.args.spawn_mode == SpawnMode::Direct {
             self.await_previous_direct_worker(session).await?;
         }
@@ -3347,6 +3353,9 @@ impl Broker {
                     "--property=Slice=cowboy-agents.slice",
                     &format!("--unit={unit}"),
                 ]);
+                if let Some(policy) = network {
+                    command.arg(worker_launch::network_property(policy));
+                }
                 // A unit starts from the user manager's environment, which a
                 // desktop login fills with its shell-initialization guards.
                 command.arg(worker_environment::unset_shell_init_guards_property());

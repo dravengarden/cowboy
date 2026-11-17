@@ -154,6 +154,7 @@ impl MachinePluginStore {
         candidate: &ProviderAuthRefreshCandidate,
     ) -> Result<Option<crate::provider_account::NativeIdentity>> {
         let named = !candidate.account_id.is_default();
+        let account = candidate.account_id.clone();
         let store = std::sync::Arc::clone(self);
         let candidate = candidate.clone();
         let probe =
@@ -176,7 +177,7 @@ impl MachinePluginStore {
             .find(|method| method.id == bundle.method_id)
             .and_then(|method| method.native_identity.as_ref())
             .context("named refresh requires a signed identity recipe")?;
-        native_identity::read(&probe.directory.0.join("home"), recipe).map(Some)
+        native_identity::read(&probe.directory.0.join("home"), recipe, &account).map(Some)
     }
 }
 

@@ -83,6 +83,22 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.111.0 records provider-sdk 3.4.0, plugin-sdk 1.17.0,
+provider-ui 3.5.0 and provider-authoring 1.0.16. Native identity gains the
+`owner_declared_v1` recipe: the owner names the subscription when adding the
+account, the Machine reads no login file, and the identity subject is the named
+Cowboy account ID, which the Controller requires to match the account that
+authorized the login. It cannot serve the default account. Runtime contracts
+gain an optional `network` policy; `ipv4_only_v1` makes the Machine launch the
+worker unit with `RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK` and refuse
+to launch it outside the systemd user spawn mode. Native login and logout
+processes are not yet restricted. Both require Provider SDK 3.4.0, and older
+hosts reject the unknown runtime field. Every Plugin pins the SDKs and advances
+one patch version without behavior changes: claude-code 3.20.43,
+claude-deepseek 3.1.62, codex 3.6.1, codex-deepseek 3.1.62, deepseek-harness
+1.0.20, github 0.2.12, grok 3.2.1, machine-browser 1.0.8, matrix 1.0.10, review
+1.0.13 and zed 1.39.6.
+
 Component release 3.110.0 records provider-sdk 3.3.0, plugin-sdk 1.16.0,
 provider-ui 3.4.0 and provider-authoring 1.0.15. Named subscription support is
 derived from the signed manifest: a Provider supports named native accounts

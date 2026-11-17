@@ -38,3 +38,31 @@ export function usesExtendedNativeIdentityPaths(identity: Record<string, unknown
     )
   );
 }
+
+type CompareVersions = (left: string, right: string) => number;
+
+/** An `owner_declared_v1` recipe names only its authority; Provider SDK 3.4.0. */
+export function ownerDeclaredIdentity(
+  identity: Record<string, unknown>,
+  executor: Record<string, unknown>,
+  sdkVersion: string,
+  compare: CompareVersions,
+  identifier: (value: string) => boolean,
+): boolean {
+  return (
+    compare(sdkVersion, "3.4.0") >= 0 &&
+    executor.kind === "command_v1" &&
+    Object.keys(identity).every((key) => key === "kind" || key === "authority") &&
+    typeof identity.authority === "string" &&
+    identifier(identity.authority)
+  );
+}
+
+/** Absent, or the closed `ipv4_only_v1` policy of Provider SDK 3.4.0. */
+export function runtimeNetworkPolicy(
+  network: unknown,
+  sdkVersion: string,
+  compare: CompareVersions,
+): boolean {
+  return network === undefined || (network === "ipv4_only_v1" && compare(sdkVersion, "3.4.0") >= 0);
+}

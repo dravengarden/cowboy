@@ -50,6 +50,7 @@ pub(in crate::server) fn resolve(
     }
     super::validate_native_evidence(
         &profile.provider_id,
+        &profile.account_id,
         method.native_identity.as_ref(),
         Some(&profile.identity),
     )

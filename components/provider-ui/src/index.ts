@@ -9,6 +9,8 @@ import {
   nativeIdentityPath,
   optionalNativeIdentityPath,
   usesExtendedNativeIdentityPaths,
+  ownerDeclaredIdentity,
+  runtimeNetworkPolicy,
 } from "./nativeIdentity.ts";
 import { type ProviderCapability, providerCapabilities } from "./providerCapabilities.ts";
 
@@ -27,7 +29,7 @@ export const PROVIDER_UI_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_HOST_SCHEMA_MIN_VERSION = 1 as const;
 export const PROVIDER_HOST_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_MACHINE_CONTRACT_VERSION = 4 as const;
-export const PROVIDER_SDK_VERSION = "3.3.0" as const;
+export const PROVIDER_SDK_VERSION = "3.4.0" as const;
 export {
   type TelemetryBackendContract,
   validateTelemetryBackendContract,
@@ -372,6 +374,7 @@ export interface ProviderManifest {
     sidecars: RuntimeSidecar[];
     remove_environment: string[];
     remove_environment_prefixes: string[];
+    network?: "ipv4_only_v1";
     dependencies: Array<{
       id: string;
       version: string;
@@ -434,14 +437,16 @@ export interface ProviderManifest {
             >;
           };
       required_bundle_keys: string[];
-      native_identity?: {
-        kind: "fresh_login_json_v1";
-        authority: string;
-        relative_path: string;
-        subject_path: string[];
-        tenant_path?: string[] | null;
-        subject_claim?: string[] | null;
-      };
+      native_identity?:
+        | {
+            kind: "fresh_login_json_v1";
+            authority: string;
+            relative_path: string;
+            subject_path: string[];
+            tenant_path?: string[] | null;
+            subject_claim?: string[] | null;
+          }
+        | { kind: "owner_declared_v1"; authority: string };
       native_logout?: { kind: "command_v1"; arguments: string[] };
     }>;
     credential_files: Array<{
@@ -1100,6 +1105,9 @@ export function validateProviderManifest(input: unknown): asserts input is Provi
   ) {
     throw new Error("Invalid complete Provider runtime or authentication contract");
   }
+  if (!runtimeNetworkPolicy(runtime.network, String(full.sdk_version), compareProviderVersions)) {
+    throw new Error("Invalid Provider runtime network policy");
+  }
   validateProviderBehavior(runtime.behavior);
   const managedArguments = validateManagedProfiles(
     runtime.managed_profiles,
@@ -1527,6 +1535,14 @@ function validateNativeIdentityRecipe(
   executor: Record<string, unknown>,
   sdkVersion: string,
 ): void {
+  if (isRecord(identity) && identity.kind === "owner_declared_v1") {
+    if (
+      !ownerDeclaredIdentity(identity, executor, sdkVersion, compareProviderVersions, isIdentifier)
+    ) {
+      throw new Error("Invalid Provider native identity recipe");
+    }
+    return;
+  }
   if (
     compareProviderVersions(sdkVersion, "3.1.15") < 0 ||
     executor.kind !== "command_v1" ||

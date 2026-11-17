@@ -101,6 +101,7 @@ pub(in crate::server) async fn accept(
     }
     validate_native_evidence(
         candidate.provider,
+        candidate.account,
         method.native_identity.as_ref(),
         candidate.identity,
     )

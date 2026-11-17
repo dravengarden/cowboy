@@ -45,38 +45,38 @@ test("native identity recipes require the new SDK and bounded native output path
     subject_path: ["account", "id"],
     tenant_path: ["tenant"],
   };
-  candidate.authentication.methods = [{
-    id: "native",
-    label: "Native account",
-    flow: "browser_code",
-    required_bundle_keys: [],
-    native_identity: identity,
-    executor: {
-      kind: "command_v1",
-      component: { kind: "provider_cli", slot: "fixture" },
-      arguments: ["auth", "login"],
-      terminal: "pipes",
-      challenge: "browser_code",
-      environment: {},
-      preflight: [],
+  candidate.authentication.methods = [
+    {
+      id: "native",
+      label: "Native account",
+      flow: "browser_code",
+      required_bundle_keys: [],
+      native_identity: identity,
+      executor: {
+        kind: "command_v1",
+        component: { kind: "provider_cli", slot: "fixture" },
+        arguments: ["auth", "login"],
+        terminal: "pipes",
+        challenge: "browser_code",
+        environment: {},
+        preflight: [],
+      },
     },
-  }];
+  ];
   validateProviderManifest(candidate);
   candidate.authentication.methods[0]!.native_logout = {
     kind: "command_v1",
     arguments: ["auth", "logout"],
   };
   validateProviderManifest(candidate);
-  for (
-    const logout of [
-      { kind: "other", arguments: ["logout"] },
-      { kind: "command_v1", arguments: ["logout"], extra: true },
-      { kind: "command_v1", arguments: [] },
-      { kind: "command_v1", arguments: Array(33).fill("logout") },
-      { kind: "command_v1", arguments: ["secret\nargument"] },
-      { kind: "command_v1", arguments: ["界".repeat(342)] },
-    ]
-  ) {
+  for (const logout of [
+    { kind: "other", arguments: ["logout"] },
+    { kind: "command_v1", arguments: ["logout"], extra: true },
+    { kind: "command_v1", arguments: [] },
+    { kind: "command_v1", arguments: Array(33).fill("logout") },
+    { kind: "command_v1", arguments: ["secret\nargument"] },
+    { kind: "command_v1", arguments: ["界".repeat(342)] },
+  ]) {
     const invalid = structuredClone(candidate);
     Object.assign(invalid.authentication.methods[0]!, {
       native_logout: logout,
@@ -89,31 +89,58 @@ test("native identity recipes require the new SDK and bounded native output path
   const old = structuredClone(candidate);
   old.sdk_version = "3.1.14";
   assertThrows(() => validateProviderManifest(old));
-  for (
-    const invalid of [
-      { ...identity, kind: "unknown" },
-      { ...identity, extra: "ignored" },
-      { ...identity, relative_path: "../other-account" },
-      { ...identity, relative_path: "" },
-      { ...identity, relative_path: "a".repeat(513) },
-      { ...identity, subject_path: [] },
-      { ...identity, subject_path: ["x".repeat(129)] },
-      { ...identity, tenant_path: ["control\u0000"] },
-    ]
-  ) {
+  for (const invalid of [
+    { ...identity, kind: "unknown" },
+    { ...identity, extra: "ignored" },
+    { ...identity, relative_path: "../other-account" },
+    { ...identity, relative_path: "" },
+    { ...identity, relative_path: "a".repeat(513) },
+    { ...identity, subject_path: [] },
+    { ...identity, subject_path: ["x".repeat(129)] },
+    { ...identity, tenant_path: ["control\u0000"] },
+  ]) {
     const broken = structuredClone(candidate);
     Object.assign(broken.authentication.methods[0]!, {
       native_identity: invalid,
     });
     assertThrows(() => validateProviderManifest(broken));
   }
+  // Owner-declared identity names the account card; Provider SDK 3.4.0.
+  const declared = structuredClone(candidate);
+  declared.sdk_version = "3.4.0";
+  Object.assign(declared.authentication.methods[0]!, {
+    native_identity: { kind: "owner_declared_v1", authority: "google" },
+  });
+  validateProviderManifest(declared);
+  for (const invalid of [
+    { kind: "owner_declared_v1", authority: "google", subject_path: ["x"] },
+    { kind: "owner_declared_v1", authority: "bad authority" },
+  ]) {
+    const broken = structuredClone(declared);
+    Object.assign(broken.authentication.methods[0]!, { native_identity: invalid });
+    assertThrows(() => validateProviderManifest(broken));
+  }
+  const declaredOld = structuredClone(declared);
+  declaredOld.sdk_version = "3.3.0";
+  assertThrows(() => validateProviderManifest(declaredOld));
+  const ipv4 = structuredClone(declared);
+  Object.assign(ipv4.runtime, { network: "ipv4_only_v1" });
+  validateProviderManifest(ipv4);
+  const unknownNetwork = structuredClone(ipv4);
+  Object.assign(unknownNetwork.runtime, { network: "ipv6_only_v1" });
+  assertThrows(() => validateProviderManifest(unknownNetwork));
+  const ipv4Old = structuredClone(ipv4);
+  ipv4Old.sdk_version = "3.3.0";
+  delete (ipv4Old.authentication.methods[0] as Record<string, unknown>).native_identity;
+  delete (ipv4Old.authentication.methods[0] as Record<string, unknown>).native_logout;
+  assertThrows(() => validateProviderManifest(ipv4Old));
+  ipv4Old.sdk_version = "3.4.0";
+  validateProviderManifest(ipv4Old);
   // JWT claims and sole-member paths are Provider SDK 3.3.0 recipes.
-  for (
-    const extended of [
-      { ...identity, subject_path: ["tokens", "id_token"], subject_claim: ["auth", "user_id"] },
-      { ...identity, subject_path: ["*", "user_id"], tenant_path: ["*", "team_id"] },
-    ]
-  ) {
+  for (const extended of [
+    { ...identity, subject_path: ["tokens", "id_token"], subject_claim: ["auth", "user_id"] },
+    { ...identity, subject_path: ["*", "user_id"], tenant_path: ["*", "team_id"] },
+  ]) {
     const accepted = structuredClone(candidate);
     Object.assign(accepted.authentication.methods[0]!, { native_identity: extended });
     validateProviderManifest(accepted);
@@ -149,24 +176,24 @@ test("managed profiles require signed capability and validate every argument bin
   const old = structuredClone(candidate);
   old.sdk_version = "3.1.12";
   assertThrows(() => validateProviderManifest(old));
-  for (
-    const profiles of [
-      {},
-      null,
-      { read_write_v1: { arguments: ["--write"] } },
-      { read_only_v1: { arguments: [], extra: true } },
-      {
-        read_only_v1: {
-          arguments: [{
+  for (const profiles of [
+    {},
+    null,
+    { read_write_v1: { arguments: ["--write"] } },
+    { read_only_v1: { arguments: [], extra: true } },
+    {
+      read_only_v1: {
+        arguments: [
+          {
             source: "sidecar_url",
             sidecar: "undeclared",
             prefix: "",
             suffix: "",
-          }],
-        },
+          },
+        ],
       },
-    ]
-  ) {
+    },
+  ]) {
     const invalid = structuredClone(candidate);
     Object.assign(invalid.runtime, { managed_profiles: profiles });
     assertThrows(() => validateProviderManifest(invalid));
@@ -250,31 +277,39 @@ function manifest(): ProviderManifest {
         { id: "done", payload: {} },
         { id: "failed", payload: { detail: "string" } },
       ],
-      reducers: [{
-        message: "toggle",
-        assignments: [{
-          field: "open",
-          value: { source: "literal", value: true },
-        }],
-        effect: "toggle",
-      }],
-      effects: [{
-        id: "toggle",
-        capability: "install_on_machine",
-        request: {},
-        success_message: "done",
-        failure_message: "failed",
-      }],
+      reducers: [
+        {
+          message: "toggle",
+          assignments: [
+            {
+              field: "open",
+              value: { source: "literal", value: true },
+            },
+          ],
+          effect: "toggle",
+        },
+      ],
+      effects: [
+        {
+          id: "toggle",
+          capability: "install_on_machine",
+          request: {},
+          success_message: "done",
+          failure_message: "failed",
+        },
+      ],
     },
     configuration: {
       schema_version: 1,
-      presets: [{
-        id: "recommended",
-        name: "Recommended",
-        detail: "Typed fixture",
-        is_default: true,
-        values: { model: "fixture" },
-      }],
+      presets: [
+        {
+          id: "recommended",
+          name: "Recommended",
+          detail: "Typed fixture",
+          is_default: true,
+          values: { model: "fixture" },
+        },
+      ],
       options: [],
     },
     host: {
@@ -305,25 +340,31 @@ function manifest(): ProviderManifest {
       sidecars: [],
       remove_environment: [],
       remove_environment_prefixes: [],
-      dependencies: [{
-        id: "fixture-runtime",
-        version: "1.0.0",
-        source: "https://example.invalid/fixture-runtime-1.0.0.tgz",
-        integrity: `sha256:${"a".repeat(64)}`,
-        private: true,
-      }],
-      platforms: [{
-        os: "linux",
-        architecture: "x86_64",
-        payload_digest: `sha256:${"b".repeat(64)}`,
-        launch_command: "fixture-runtime",
-        private_components: [{
-          kind: "provider_cli",
-          slot: "fixture",
-          dependency: "fixture-runtime",
-          command: "fixture-runtime",
-        }],
-      }],
+      dependencies: [
+        {
+          id: "fixture-runtime",
+          version: "1.0.0",
+          source: "https://example.invalid/fixture-runtime-1.0.0.tgz",
+          integrity: `sha256:${"a".repeat(64)}`,
+          private: true,
+        },
+      ],
+      platforms: [
+        {
+          os: "linux",
+          architecture: "x86_64",
+          payload_digest: `sha256:${"b".repeat(64)}`,
+          launch_command: "fixture-runtime",
+          private_components: [
+            {
+              kind: "provider_cli",
+              slot: "fixture",
+              dependency: "fixture-runtime",
+              command: "fixture-runtime",
+            },
+          ],
+        },
+      ],
       required_capabilities: ["provider.runtime.v1"],
     },
     authentication: {
@@ -355,8 +396,9 @@ function uiManifest(full = manifest()): ProviderUiManifest {
       schema_version: authentication.schema_version,
       required: authentication.required,
       presentation:
-        authentication.required && authentication.methods.length > 0 &&
-          authentication.methods.every(({ flow }) => flow === "secret_input")
+        authentication.required &&
+        authentication.methods.length > 0 &&
+        authentication.methods.every(({ flow }) => flow === "secret_input")
           ? "api_key"
           : "account",
       methods: authentication.methods.map(({ id, label, flow }) => ({
@@ -415,11 +457,13 @@ test("Machine Plugin inventory projects only Agent capability entries", () => {
       plugin_kind: "code_intelligence",
     },
   ];
-  assertEquals(projectAgentPluginInventory(inventory), [{
-    ...shared,
-    provider_id: "codex",
-    provider_version: "3.0.0",
-  }]);
+  assertEquals(projectAgentPluginInventory(inventory), [
+    {
+      ...shared,
+      provider_id: "codex",
+      provider_version: "3.0.0",
+    },
+  ]);
 });
 
 test("Provider UI accepts only closed Service authentication presentations", () => {
@@ -429,11 +473,13 @@ test("Provider UI accepts only closed Service authentication presentations", () 
 
   const apiKey = uiManifest();
   apiKey.authentication.required = true;
-  apiKey.authentication.methods = [{
-    id: "api-key",
-    label: "API key",
-    flow: "secret_input",
-  }];
+  apiKey.authentication.methods = [
+    {
+      id: "api-key",
+      label: "API key",
+      flow: "secret_input",
+    },
+  ];
   apiKey.authentication.presentation = "api_key";
   validateProviderUiManifest(apiKey);
 
@@ -497,11 +543,7 @@ test("Provider UI rejects v2 nodes in v1 and unknown future interfaces", () => {
     },
     accessible_label: "Example is working",
   };
-  assertThrows(
-    () => validateProviderManifest(fixture),
-    Error,
-    "requires UI schema 2",
-  );
+  assertThrows(() => validateProviderManifest(fixture), Error, "requires UI schema 2");
   fixture.ui.schema_version = 3;
   assertThrows(
     () => validateProviderManifest(fixture),
@@ -522,14 +564,12 @@ test("Provider UI rejects v2 nodes in v1 and unknown future interfaces", () => {
     },
     accessible_label: "Example is working",
   };
-  const unknownIndicator = unknown.ui.surfaces.loading
-    .indicator as unknown as Record<string, unknown>;
+  const unknownIndicator = unknown.ui.surfaces.loading.indicator as unknown as Record<
+    string,
+    unknown
+  >;
   unknownIndicator.speed_curve = "provider_magic";
-  assertThrows(
-    () => validateProviderManifest(unknown),
-    Error,
-    "Invalid Provider glyph activity",
-  );
+  assertThrows(() => validateProviderManifest(unknown), Error, "Invalid Provider glyph activity");
 });
 
 test("Provider UI rejects unbounded activity motion before rendering", () => {
@@ -546,17 +586,11 @@ test("Provider UI rejects unbounded activity motion before rendering", () => {
     },
     accessible_label: "Example is working",
   };
-  assertThrows(
-    () => validateProviderManifest(fixture),
-    Error,
-    "Invalid Provider glyph activity",
-  );
+  assertThrows(() => validateProviderManifest(fixture), Error, "Invalid Provider glyph activity");
 });
 
 test("Provider host schema 2 accepts only bounded Transcript variants", () => {
-  for (
-    const variant of ["timeline", "workcell", "signal", "terminal"] as const
-  ) {
+  for (const variant of ["timeline", "workcell", "signal", "terminal"] as const) {
     const fixture = manifest();
     fixture.sdk_version = "3.0.0";
     fixture.host = {
@@ -632,11 +666,7 @@ test("Provider SDK rejects assignment type drift before rendering", () => {
     source: "literal",
     value: "not-a-boolean",
   };
-  assertThrows(
-    () => validateProviderManifest(fixture),
-    Error,
-    "assignment type mismatch",
-  );
+  assertThrows(() => validateProviderManifest(fixture), Error, "assignment type mismatch");
 });
 
 test("Provider SDK host expressions are closed and deterministic", () => {
@@ -678,10 +708,12 @@ test("Provider SDK host expressions are closed and deterministic", () => {
 
 test("Provider SDK validates closed signed tool presentation links", () => {
   const fixture = manifest();
-  fixture.host.tool_presentations = [{
-    tool_name: "FutureTodo",
-    renderer: "todo_list_v1",
-  }];
+  fixture.host.tool_presentations = [
+    {
+      tool_name: "FutureTodo",
+      renderer: "todo_list_v1",
+    },
+  ];
   validateProviderManifest(fixture);
   fixture.host.tool_presentations.push({
     tool_name: "FutureTodo",
@@ -697,19 +729,21 @@ test("Provider SDK validates closed signed tool presentation links", () => {
 test("Provider Catalog distinguishes typed unbound packages from installable releases", () => {
   const fixture = uiManifest();
   const catalog = {
-    providers: [{
-      provider_id: fixture.id,
-      provider_version: fixture.version,
-      package_digest: `sha256:${"4".repeat(64)}`,
-      artifact_digest: null,
-      authentication_scope: "none-v1",
-      release_state: "unbound",
-      release_detail: "runtime is not published",
-      publisher: fixture.publisher,
-      contract_fingerprint: `sha256:${"5".repeat(64)}`,
-      supported_platforms: [{ os: "linux", architecture: "x86_64" }],
-      manifest: fixture,
-    }],
+    providers: [
+      {
+        provider_id: fixture.id,
+        provider_version: fixture.version,
+        package_digest: `sha256:${"4".repeat(64)}`,
+        artifact_digest: null,
+        authentication_scope: "none-v1",
+        release_state: "unbound",
+        release_detail: "runtime is not published",
+        publisher: fixture.publisher,
+        contract_fingerprint: `sha256:${"5".repeat(64)}`,
+        supported_platforms: [{ os: "linux", architecture: "x86_64" }],
+        manifest: fixture,
+      },
+    ],
     authentications: [],
     authentication_executors: [],
   };
@@ -720,45 +754,35 @@ test("Provider Catalog distinguishes typed unbound packages from installable rel
     authentication_executors: unknown[];
   };
   leaked.providers[0]!.manifest.runtime = {};
-  assertThrows(
-    () => validateProviderCatalog(leaked),
-    Error,
-    "exposed a private Provider contract",
-  );
+  assertThrows(() => validateProviderCatalog(leaked), Error, "exposed a private Provider contract");
   catalog.providers[0]!.release_state = "ready";
-  assertThrows(
-    () => validateProviderCatalog(catalog),
-    Error,
-    "not content addressed",
-  );
+  assertThrows(() => validateProviderCatalog(catalog), Error, "not content addressed");
 });
 
 test("Provider Catalog preserves presentation for historical SDK releases", () => {
   const fixture = uiManifest();
   fixture.sdk_version = "2.4.0";
   const catalog = {
-    providers: [{
-      provider_id: fixture.id,
-      provider_version: fixture.version,
-      package_digest: `sha256:${"4".repeat(64)}`,
-      artifact_digest: `sha256:${"5".repeat(64)}`,
-      authentication_scope: "none-v1",
-      release_state: "ready",
-      publisher: fixture.publisher,
-      contract_fingerprint: `sha256:${"6".repeat(64)}`,
-      supported_platforms: [{ os: "linux", architecture: "x86_64" }],
-      manifest: fixture,
-    }],
+    providers: [
+      {
+        provider_id: fixture.id,
+        provider_version: fixture.version,
+        package_digest: `sha256:${"4".repeat(64)}`,
+        artifact_digest: `sha256:${"5".repeat(64)}`,
+        authentication_scope: "none-v1",
+        release_state: "ready",
+        publisher: fixture.publisher,
+        contract_fingerprint: `sha256:${"6".repeat(64)}`,
+        supported_platforms: [{ os: "linux", architecture: "x86_64" }],
+        manifest: fixture,
+      },
+    ],
     authentications: [],
     authentication_executors: [],
   };
 
   validateProviderCatalog(catalog);
-  assertThrows(
-    () => validateProviderUiManifest(fixture),
-    Error,
-    "is incompatible",
-  );
+  assertThrows(() => validateProviderUiManifest(fixture), Error, "is incompatible");
 });
 
 test("Provider Catalog accepts a first Service authentication in progress", () => {
@@ -827,11 +851,13 @@ test("Service authentication selects the newest exact active executor", () => {
   const olderManifest = uiManifest();
   olderManifest.authentication.required = true;
   olderManifest.authentication.presentation = "account";
-  olderManifest.authentication.methods = [{
-    id: "account",
-    label: "Account",
-    flow: "device_code",
-  }];
+  olderManifest.authentication.methods = [
+    {
+      id: "account",
+      label: "Account",
+      flow: "device_code",
+    },
+  ];
   const older: ProviderCatalogEntry = {
     provider_id: olderManifest.id,
     provider_version: "1.0.0",
@@ -858,11 +884,13 @@ test("Service authentication selects the newest exact active executor", () => {
       {
         providers: [latest, older],
         authentications: [],
-        authentication_executors: [{
-          provider_id: older.provider_id,
-          provider_version: older.provider_version,
-          generation_digest: older.artifact_digest!,
-        }],
+        authentication_executors: [
+          {
+            provider_id: older.provider_id,
+            provider_version: older.provider_version,
+            generation_digest: older.artifact_digest!,
+          },
+        ],
       },
       older.provider_id,
       "account",
@@ -888,27 +916,17 @@ test("Service authentication selects the newest exact active executor", () => {
     ],
   };
   assertEquals(
-    providerAuthenticationExecutorEntry(
-      catalog,
-      older.provider_id,
-      "account",
-      "machine-a",
-    ),
+    providerAuthenticationExecutorEntry(catalog, older.provider_id, "account", "machine-a"),
     { ...older, machine_id: "machine-a" },
   );
   assertEquals(
-    providerAuthenticationExecutorEntry(
-      catalog,
-      older.provider_id,
-      "account",
-      "offline",
-    ),
+    providerAuthenticationExecutorEntry(catalog, older.provider_id, "account", "offline"),
     undefined,
   );
-  assertEquals(
-    providerAuthenticationExecutorEntry(catalog, older.provider_id, "account"),
-    { ...latest, machine_id: "machine-b" },
-  );
+  assertEquals(providerAuthenticationExecutorEntry(catalog, older.provider_id, "account"), {
+    ...latest,
+    machine_id: "machine-b",
+  });
 });
 
 test("Machine Provider UI resolves the exact installed package", () => {
@@ -961,10 +979,7 @@ test("Machine Provider UI resolves the exact installed package", () => {
     ),
     undefined,
   );
-  assertEquals(
-    providerEntryForIdentity([first, second], first.provider_id),
-    second,
-  );
+  assertEquals(providerEntryForIdentity([first, second], first.provider_id), second);
   assertEquals(
     providerPresentationEntry(
       [second, first],
@@ -1155,13 +1170,8 @@ test("Machine Provider capabilities select the newest compatible release", () =>
     provider_contracts: legacyMachine,
     plugin_contracts: pluginMachine,
   };
-  assertEquals(latestCompatibleProviderEntries([current, legacy], target), [
-    legacy,
-  ]);
-  assertEquals(
-    providerCompatibilityProblem(current, target)?.code,
-    "host_schema_unsupported",
-  );
+  assertEquals(latestCompatibleProviderEntries([current, legacy], target), [legacy]);
+  assertEquals(providerCompatibilityProblem(current, target)?.code, "host_schema_unsupported");
   const [joined] = joinProviderInstallations([current, legacy], [], target);
   assertEquals(joined?.latestEntry, current);
   assertEquals(joined?.latestCompatibleEntry, legacy);
@@ -1172,17 +1182,12 @@ test("Machine Provider capabilities select the newest compatible release", () =>
     release_state: "unbound" as const,
     artifact_digest: null,
   };
-  assertEquals(
-    serviceAuthenticationProviderEntries([unpublishedCurrent, legacy]),
-    [legacy],
-  );
-  assertEquals(serviceAuthenticationProviderEntries([current, legacy]), [
-    current,
-  ]);
-  const [readyFallback] = latestCompatibleProviderEntries(
-    [unpublishedCurrent, legacy],
-    { ...target, provider_contracts: { ...legacyMachine, max_host_schema: 2 } },
-  );
+  assertEquals(serviceAuthenticationProviderEntries([unpublishedCurrent, legacy]), [legacy]);
+  assertEquals(serviceAuthenticationProviderEntries([current, legacy]), [current]);
+  const [readyFallback] = latestCompatibleProviderEntries([unpublishedCurrent, legacy], {
+    ...target,
+    provider_contracts: { ...legacyMachine, max_host_schema: 2 },
+  });
   assertEquals(readyFallback, legacy);
 
   const currentMachine = { ...legacyMachine, max_host_schema: 2 };
@@ -1287,11 +1292,7 @@ test("Provider SDK rejects unknown behavior profiles and unsafe retry rules", ()
   const runtime = unknown.runtime as Record<string, unknown>;
   const behavior = runtime.behavior as Record<string, unknown>;
   behavior.permission = "provider_specific_magic";
-  assertThrows(
-    () => validateProviderManifest(unknown),
-    Error,
-    "behavior contract",
-  );
+  assertThrows(() => validateProviderManifest(unknown), Error, "behavior contract");
 
   const unsafe = manifest();
   unsafe.runtime.behavior.error_rules.push({
@@ -1299,22 +1300,13 @@ test("Provider SDK rejects unknown behavior profiles and unsafe retry rules", ()
     retry_once_without_visible_update: true,
     keep_worker_alive: false,
   });
-  assertThrows(
-    () => validateProviderManifest(unsafe),
-    Error,
-    "must keep the worker alive",
-  );
+  assertThrows(() => validateProviderManifest(unsafe), Error, "must keep the worker alive");
 });
 
 test("Provider SDK rejects runtime bindings that do not export their launch command", () => {
   const fixture = manifest();
-  fixture.runtime.platforms[0]!.private_components[0]!.command =
-    "different-command";
-  assertThrows(
-    () => validateProviderManifest(fixture),
-    Error,
-    "launch command",
-  );
+  fixture.runtime.platforms[0]!.private_components[0]!.command = "different-command";
+  assertThrows(() => validateProviderManifest(fixture), Error, "launch command");
 });
 
 test("Provider SDK keeps effects inside their typed lifecycle surfaces", () => {
@@ -1337,18 +1329,10 @@ test("Provider SDK enforces semantic release identity and precedence", () => {
   assertEquals(compareProviderVersions("1.0.0", "1.0.0-rc.10"), 1);
   const fixture = manifest();
   fixture.id = "..";
-  assertThrows(
-    () => validateProviderManifest(fixture),
-    Error,
-    "manifest envelope",
-  );
+  assertThrows(() => validateProviderManifest(fixture), Error, "manifest envelope");
   fixture.id = "example";
   fixture.version = "1.0";
-  assertThrows(
-    () => validateProviderManifest(fixture),
-    Error,
-    "manifest envelope",
-  );
+  assertThrows(() => validateProviderManifest(fixture), Error, "manifest envelope");
 });
 
 test("Provider SDK rejects incompatible authoring SDK versions before rendering", () => {
@@ -1363,11 +1347,7 @@ test("Provider SDK rejects incompatible authoring SDK versions before rendering"
 
   const oldMajor = manifest();
   oldMajor.sdk_version = "2.99.0";
-  assertThrows(
-    () => validateProviderManifest(oldMajor),
-    Error,
-    "is incompatible",
-  );
+  assertThrows(() => validateProviderManifest(oldMajor), Error, "is incompatible");
 });
 
 test("Provider SDK links session sidecars, components, and auth projections", () => {
@@ -1403,24 +1383,22 @@ test("Provider SDK links session sidecars, components, and auth projections", ()
   validateProviderManifest(fixture);
 
   fixture.runtime.sidecars[0]!.id = "renamed-gateway";
-  assertThrows(
-    () => validateProviderManifest(fixture),
-    Error,
-    "unknown sidecar",
-  );
+  assertThrows(() => validateProviderManifest(fixture), Error, "unknown sidecar");
 });
 
 test("Machine Provider inventory uses the exact Rust protocol state union", () => {
-  const inventory = [{
-    provider_id: "grok",
-    provider_version: "1.0.0",
-    generation_digest: `sha256:${"4".repeat(64)}`,
-    contract_fingerprint: `sha256:${"5".repeat(64)}`,
-    state: "incompatible",
-    active_session_leases: 0,
-    replica_state: "pending",
-    materialization_state: "not_installed",
-  }];
+  const inventory = [
+    {
+      provider_id: "grok",
+      provider_version: "1.0.0",
+      generation_digest: `sha256:${"4".repeat(64)}`,
+      contract_fingerprint: `sha256:${"5".repeat(64)}`,
+      state: "incompatible",
+      active_session_leases: 0,
+      replica_state: "pending",
+      materialization_state: "not_installed",
+    },
+  ];
   assertEquals(validateMachineProviderInventory(inventory), inventory);
 
   const drifted = structuredClone(inventory) as Array<Record<string, unknown>>;
@@ -1437,19 +1415,22 @@ test("Catalog refresh publishes new recommendations without racing foreground re
   const olderManifest = uiManifest();
   const latestManifest = structuredClone(olderManifest);
   latestManifest.version = "1.1.0";
-  latestManifest.configuration.presets = [{
-    id: "balanced",
-    name: "Balanced",
-    detail: "Updated default",
-    is_default: true,
-    values: { model: "balanced-model" },
-  }, {
-    id: "frontier",
-    name: "Frontier",
-    detail: "Newly available model",
-    is_default: false,
-    values: { model: "frontier-model" },
-  }];
+  latestManifest.configuration.presets = [
+    {
+      id: "balanced",
+      name: "Balanced",
+      detail: "Updated default",
+      is_default: true,
+      values: { model: "balanced-model" },
+    },
+    {
+      id: "frontier",
+      name: "Frontier",
+      detail: "Newly available model",
+      is_default: false,
+      values: { model: "frontier-model" },
+    },
+  ];
   const entry = (manifest: ProviderUiManifest): ProviderCatalogEntry => ({
     provider_id: manifest.id,
     provider_version: manifest.version,
@@ -1473,10 +1454,10 @@ test("Catalog refresh publishes new recommendations without racing foreground re
       unavailable
         ? new Response("Service recovering", { status: 503 })
         : Response.json({
-          providers: [entry(published)],
-          authentications: [],
-          authentication_executors: [],
-        }),
+            providers: [entry(published)],
+            authentications: [],
+            authentication_executors: [],
+          }),
     );
   };
   try {
@@ -1491,18 +1472,18 @@ test("Catalog refresh publishes new recommendations without racing foreground re
     assertEquals(notifications, 2);
     assertEquals(currentProviderEntry("example")?.provider_version, "1.1.0");
     assertEquals(
-      currentProviderEntry("example")?.manifest.configuration.presets.map(
-        (preset) => [preset.id, preset.is_default],
-      ),
-      [["balanced", true], ["frontier", false]],
+      currentProviderEntry("example")?.manifest.configuration.presets.map((preset) => [
+        preset.id,
+        preset.is_default,
+      ]),
+      [
+        ["balanced", true],
+        ["frontier", false],
+      ],
     );
 
     unavailable = true;
-    await assertRejects(
-      () => loadProviderCatalog(true),
-      Error,
-      "Service recovering",
-    );
+    await assertRejects(() => loadProviderCatalog(true), Error, "Service recovering");
     assertEquals(currentProviderEntry("example")?.provider_version, "1.1.0");
     assertEquals(notifications, 2);
   } finally {
