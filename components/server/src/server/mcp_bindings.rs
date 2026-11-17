@@ -19,6 +19,7 @@ use crate::mcp_binding::{AppGrant, Binding, valid_epoch, validate_app_grants, va
 pub(super) mod apps;
 mod authority;
 pub(super) mod defaults;
+mod generations;
 pub(super) mod launch;
 mod launch_prepare;
 pub(super) mod relay;

@@ -94,7 +94,11 @@ impl McpLink {
                 | TransportRequest::ConfirmNative { .. } => unreachable!(),
             };
             if scope.upgrade().is_some() {
-                reply(result.unwrap_or_else(|_| serde_json::json!({"error":"mcp_unavailable"})));
+                reply(result.unwrap_or_else(|error| {
+                    // The wire code stays closed; the reason belongs in this log.
+                    tracing::warn!(error = %format!("{error:#}"), "MCP transport request failed");
+                    serde_json::json!({"error":"mcp_unavailable"})
+                }));
             }
         });
     }

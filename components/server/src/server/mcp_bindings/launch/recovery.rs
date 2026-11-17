@@ -31,6 +31,7 @@ pub(super) fn start(state: &Arc<AppState>) {
     let weak = Arc::downgrade(state);
     tokio::spawn(async move {
         let mut cursor = String::new();
+        let mut failures = HashMap::new();
         let mut tick = tokio::time::interval(Duration::from_secs(5));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -56,10 +57,52 @@ pub(super) fn start(state: &Arc<AppState>) {
                     .launches
                     .recover_next(&Context::from(state.as_ref()), &mut cursor)
                     .await;
-                if !matches!(recovered, Ok(true)) || *state.shutdown.borrow() {
+                let recovered = match recovered {
+                    Ok(recovered) => {
+                        failures.remove(&cursor);
+                        recovered
+                    }
+                    // The cursor names the session that just failed.
+                    Err(error) => retry_advanced(&state, &cursor, error, &mut failures).await,
+                };
+                if !recovered || *state.shutdown.borrow() {
                     break;
                 }
             }
         }
     });
+}
+
+/// A session whose Plugin was released again since its policy was pinned can
+/// never prepare the superseded generation: advance it and prepare once more.
+/// Other failures are logged once per distinct reason, then retried quietly.
+async fn retry_advanced(
+    state: &AppState,
+    session: &str,
+    error: anyhow::Error,
+    failures: &mut HashMap<String, String>,
+) -> bool {
+    let error = match super::super::generations::advance(state, session).await {
+        Ok(Some(epoch)) => match state
+            .extensions
+            .launches
+            .prepare(state, session, &epoch)
+            .await
+        {
+            Ok(()) => {
+                failures.remove(session);
+                tracing::info!(session = %session, "MCP launch owner recovered on the active Plugin generation");
+                return true;
+            }
+            Err(error) => format!("{error:#}"),
+        },
+        Ok(None) => format!("{error:#}"),
+        Err(reason) => format!("{error:#}; advancing the Plugin generation failed: {reason}"),
+    };
+    failures.retain(|id, _| state.hub.session_info(id).is_some());
+    if failures.get(session) != Some(&error) {
+        tracing::warn!(session = %session, error = %error, "MCP launch owner recovery failed");
+        failures.insert(session.to_owned(), error);
+    }
+    false
 }

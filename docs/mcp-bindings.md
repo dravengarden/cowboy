@@ -534,7 +534,14 @@ content-addressed on the execution Machine (a private per-user directory, keyed
 by store, profile and descriptor) and shared by every connection's receipts, so
 recovery re-prepares the exact plan a surviving worker launched with; the worker
 adopts again and its MCP authority still matches. Changed policy or generation
-content yields a new path. Until a session's owner recovers, the restart
+content yields a new path. The Machine prepares only its active generation, so
+a policy pinned to a generation that a later Plugin release superseded can
+never recover as is: recovery then advances each superseded pin to the
+generation active on the execution Machine (name, tools, sources and view
+grants unchanged; the Machine verifies them against the new contract), keeps an
+`applied` directory-default outcome on the new epoch and prepares again. A
+Plugin that is no longer active keeps its pin. Each distinct recovery failure
+is logged once per session. Until a session's owner recovers, the restart
 declaration for its surviving worker is deferred with a log line rather than
 reported as a session error; the Machine keeps its own declaration.
 Adoption never moves a live worker's plan. When the current plan differs from

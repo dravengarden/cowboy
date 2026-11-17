@@ -130,6 +130,20 @@ fn resolve(
         .collect()
 }
 
+/// Keep an applied outcome on the policy that a generation advance replaced.
+pub(super) fn follow(hub: &Hub, session: &str, previous: &str, next: &Stored) {
+    if matches!(load(hub, session), Some(Outcome::Applied { epoch, .. }) if epoch == previous) {
+        record(
+            hub,
+            session,
+            &Outcome::Applied {
+                epoch: next.epoch.clone(),
+                bindings: next.bindings.clone(),
+            },
+        );
+    }
+}
+
 /// Commit a pending default before the session's first launch. Idempotent and
 /// serialized; a session still preparing its execution binding stays pending.
 pub(in crate::server) async fn apply(state: &AppState, session: &str) {
