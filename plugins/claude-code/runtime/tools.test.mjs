@@ -352,9 +352,44 @@ test("only small valid text deltas travel inside the hook snapshot command", () 
     "f",
     "x'y",
   );
-  assert.match(script, /^\(umask 077 && set -C && printf '%s' 'x'\\''y' > 'd e'\) \|\| exit 1\n/);
-  assert.match(script, /\nrm -f -- 'd e' 'f\.cache'\nexit "\$s"$/);
+  assert.match(
+    script,
+    /^set \+e\n\(umask 077 && set -C && printf '%s' 'x'\\''y' > 'd e'\) \|\| exit 1\n/,
+  );
+  assert.match(script, /\nrm -f -- 'd e' 'f\.cache' \|\| s=\$\(\(s \+ 100\)\)\nexit "\$s"$/);
   assert.doesNotMatch(hookSnapshotScript(["helper"], "d", "f", undefined), /printf/);
+});
+
+test("the hook snapshot script cleans up under errexit and reports a failed removal", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "cowboy-hook-script-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const delta = join(directory, "copy.jsonl.delta");
+  const copy = join(directory, "copy.jsonl");
+  const run = (env) => {
+    try {
+      execFileSync(
+        "sh",
+        ["-e", "-c", hookSnapshotScript(["sh", "-c", "exit 75"], delta, copy, "x")],
+        {
+          env,
+          stdio: "ignore",
+        },
+      );
+      return 0;
+    } catch (error) {
+      return error.status;
+    }
+  };
+  // An inherited errexit still removes the delta before the cache miss.
+  assert.equal(run(process.env), 75);
+  await assert.rejects(stat(delta));
+  // Without rm the status says so, and the caller removes the files.
+  const bin = join(directory, "bin");
+  await mkdir(bin);
+  const sh = execFileSync("sh", ["-c", "command -v sh"], { encoding: "utf8" }).trim();
+  execFileSync("ln", ["-s", sh, join(bin, "sh")]);
+  assert.equal(run({ PATH: bin }), 175);
+  await stat(delta);
 });
 
 test("hook transcripts send only appended bytes to an executor without the file helper", async (t) => {
