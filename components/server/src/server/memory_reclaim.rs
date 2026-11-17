@@ -538,14 +538,15 @@ fn decide(
         device.stopping_wait = None;
         return Step::Idle;
     }
-    if let Some(browser) = state
+    let running: Vec<Observed> = state
         .browsers
         .running_on(machine_id)
         .into_iter()
-        .find(|observed| state.machine_control.is_current(&observed.connection))
-    {
+        .filter(|observed| state.machine_control.is_current(&observed.connection))
+        .collect();
+    if let Some(browser) = unused_browser(&running) {
         device.stopping_wait = None;
-        return Step::HibernateBrowser(Box::new(browser));
+        return Step::HibernateBrowser(Box::new(browser.clone()));
     }
     // A browser already stopping still holds its memory: wait for its
     // confirmed exit (asking the Machine, since an incarnation-less
@@ -577,8 +578,29 @@ fn decide(
         .collect::<Vec<_>>();
     match session_reclaim::choose(&candidates, min_idle) {
         Some(session) => Step::Hibernate(session.to_owned()),
-        None => Step::Stuck,
+        // Only when no idle session can give memory back does a browser
+        // someone is using stop under them.
+        None => running.into_iter().next().map_or(Step::Stuck, |browser| {
+            device.stopping_wait = None;
+            Step::HibernateBrowser(Box::new(browser))
+        }),
     }
+}
+
+/// A browser being opened or watched is in use: hibernating it closes the
+/// owner's view mid-task, and the reopen that follows restarts it.
+fn in_use(observed: &Observed) -> bool {
+    matches!(
+        observed.event.state,
+        BrowserState::Starting | BrowserState::Attached
+    )
+}
+
+/// The running browser reclaim hibernates before selecting any session:
+/// one nobody is using. Its snapshot keeps its state and no Provider cache
+/// is lost, so it is the cheapest memory to give back.
+fn unused_browser(running: &[Observed]) -> Option<&Observed> {
+    running.iter().find(|observed| !in_use(observed))
 }
 
 #[cfg(test)]
@@ -586,7 +608,7 @@ mod tests {
     use super::{
         BrowserPending, Dispatch, MAX_HIBERNATE_RESENDS, Observed, Pending, Policy, QUERY_INTERVAL,
         RELEASE_TIMEOUT, Step, StoppingWait, browser_exited, browser_settled, pending_settled,
-        query_due, resend_due, stopping_step,
+        query_due, resend_due, stopping_step, unused_browser,
     };
     use crate::machine_control::{ConnectionToken, MachineControl};
     use crate::machine_protocol::machine_browser::{InstanceRef, State, StateEvent};
@@ -895,5 +917,18 @@ mod tests {
         assert!(policy.reclaiming(false, 999));
         assert!(policy.reclaiming(true, 1_500));
         assert!(!policy.reclaiming(true, 2_000));
+    }
+    #[test]
+    fn reclaim_spares_a_browser_being_opened_or_watched() {
+        let control = MachineControl::default();
+        let current = connection(&control, "epoch-1");
+        let attached = observed(&current, 1, State::Attached);
+        let starting = observed(&current, 2, State::Starting);
+        let detached = observed(&current, 3, State::Detached);
+        assert_eq!(
+            unused_browser(&[attached.clone(), detached.clone(), starting.clone()]),
+            Some(&detached)
+        );
+        assert_eq!(unused_browser(&[attached, starting]), None);
     }
 }

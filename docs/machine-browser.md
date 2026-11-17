@@ -1056,7 +1056,13 @@ properties they were started with; bounds enforced by the schema):
 | `browser.max_width` / `browser.max_height` | 2560 / 1600 | 320–4096 / 480–4096 | resize bound |
 
 Reclaim ordering: the Controller's memory reclaim hibernates running browsers
-on a Machine before it selects any session. Browser reclaim has its own
+nobody is using (`detached`, in their grace period) on a Machine before it
+selects any session. A browser being opened (`starting`) or watched
+(`attached`) is hibernated only when no session is eligible: stopping it
+closes the owner's view mid-task, and their reopen admits it again, so taking
+it first turned every low-memory episode into a stop/reopen loop (OVH,
+2026-11-17: three reclaims in a day, each stopping the attached browser).
+Browser reclaim has its own
 pending state: the admission fence stays raised, the stop is retried and
 escalated (`SIGTERM`, then `SIGKILL` through the unit), and the step settles
 only on verified unit exit followed by a fresh resource sample: the targeted
