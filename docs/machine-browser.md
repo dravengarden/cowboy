@@ -1057,8 +1057,12 @@ properties they were started with; bounds enforced by the schema):
 | `browser.max_width` / `browser.max_height` | 2560 / 1600 | 320–4096 / 480–4096 | resize bound |
 
 Reclaim ordering: the Controller's memory reclaim hibernates running browsers
-nobody is using (`detached`, in their grace period) on a Machine before it
-selects any session. A browser being opened (`starting`) or watched
+nobody is using on a Machine before it selects any session: a browser counts
+once reclaim has seen it `detached` for 120 s. Leaving is often brief
+(switching apps to fetch a code, a dropped connection) and a hibernated
+browser comes back without its tabs, while the Machine's own detached grace
+(`browser.hibernate_after`, 120 s by default) stops it about then anyway, so
+reclaim only takes one kept detached for longer. A browser being opened (`starting`) or watched
 (`attached`) is never reclaimed; with no eligible session left the step is
 stuck, as with no browser. Admission already granted its memory and its own
 `MemoryMax` caps it, while stopping it closes the owner's view mid-task and
