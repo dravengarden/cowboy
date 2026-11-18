@@ -1,0 +1,122 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Draven <dravengarden@gmail.com>
+Date: Wed, 18 Nov 2026 01:04:03 +0000
+Subject: [PATCH] Launch the exact native Codex with private configuration
+
+The Provider launcher passes validated leading `-c` options in
+COWBOY_PRIVATE_CODEX_ARGUMENTS. The client prepends them to ACP's own
+startup arguments and launches the exact bound CODEX_PATH directly. A
+remote execution session instead starts the Cowboy execution bridge,
+which must name the same native executable.
+
+Cowboy-Delta: native-launch-arguments
+Upstream: not-proposed
+Drop-When: upstream codex-acp accepts caller-supplied native config overrides and an execution wrapper for the app-server process
+Tests: src/__tests__/CodexJsonRpcConnection.test.ts
+
+diff --git a/src/CodexJsonRpcConnection.ts b/src/CodexJsonRpcConnection.ts
+index 94fb23bb0598107d06efa90bd45b9d91b1a57cf0..2c3ef07e83e893d147ddee59f65638672b6bbca9 100644
+--- a/src/CodexJsonRpcConnection.ts
++++ b/src/CodexJsonRpcConnection.ts
+@@ -3,6 +3,7 @@ import type {Message} from "vscode-jsonrpc/node";
+ import type {MessageConnection} from "vscode-jsonrpc/node";
+ import {spawn, type ChildProcessWithoutNullStreams} from "node:child_process";
+ import {createRequire} from "node:module";
++import {isAbsolute} from "node:path";
+ import crossSpawn from "cross-spawn";
+ 
+ import {createJSONRPCReader, createJSONRPCWriter} from "./StdUtils";
+@@ -38,13 +39,32 @@ export function startCodexConnection(
+     options: StartCodexConnectionOptions = {},
+ ): CodexConnection {
+     const spawnEnv = env ?? process.env;
++    const configuration: unknown = JSON.parse(spawnEnv['COWBOY_PRIVATE_CODEX_ARGUMENTS'] ?? '[]');
++    if (!Array.isArray(configuration) || configuration.length % 2 !== 0 ||
++        configuration.some((value, index) => typeof value !== 'string' ||
++            (index % 2 === 0 ? value !== '-c' : !/^[a-zA-Z0-9_.-]+=/.test(value)))) {
++        throw new Error('Invalid private Codex configuration arguments');
++    }
++    if (configuration.length && (!codexPath || !isAbsolute(codexPath))) {
++        throw new Error('Configured Codex requires an exact executable');
++    }
++    const nativeArguments = [...configuration, ...appServerStartupArgs] as string[];
++    const executionBridge = spawnEnv['COWBOY_PRIVATE_CODEX_BRIDGE'];
++    if (spawnEnv['COWBOY_EXECUTION_DESCRIPTOR'] &&
++        (!codexPath || !isAbsolute(codexPath) || !executionBridge || !isAbsolute(executionBridge) ||
++            spawnEnv['COWBOY_PRIVATE_CODEX_EXECUTABLE'] !== codexPath)) {
++        throw new Error('Remote execution requires its exact private bridge');
++    }
+ 
+     let codex: ChildProcessWithoutNullStreams;
+-    if (codexPath) {
++    if (executionBridge) {
++        // The bridge prepends the validated private configuration itself.
++        codex = spawn(process.execPath, [executionBridge, '--cowboy-private-cli', ...appServerStartupArgs], {env: spawnEnv});
++    } else if (codexPath) {
+         // cross-spawn runs `.cmd` shims through cmd.exe with correct escaping for the TOML hook override.
+         codex = process.platform === "win32"
+             ? crossSpawn(codexPath, appServerStartupArgs, {env: spawnEnv}) as ChildProcessWithoutNullStreams
+-            : spawn(codexPath, appServerStartupArgs, {env: spawnEnv});
++            : spawn(codexPath, nativeArguments, {env: spawnEnv});
+     } else {
+         const bundledCodexPath = require.resolve("@openai/codex/bin/codex.js");
+         codex = spawn(process.execPath, [bundledCodexPath, ...appServerStartupArgs], {env: spawnEnv});
+diff --git a/src/__tests__/CodexJsonRpcConnection.test.ts b/src/__tests__/CodexJsonRpcConnection.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..d96c23c1e39f6aa1a46f0130f0a507b37a240257
+--- /dev/null
++++ b/src/__tests__/CodexJsonRpcConnection.test.ts
+@@ -0,0 +1,53 @@
++import {EventEmitter} from 'node:events';
++import {PassThrough} from 'node:stream';
++import {afterEach, expect, it, vi} from 'vitest';
++import {spawn} from 'node:child_process';
++import type {ChildProcessWithoutNullStreams} from 'node:child_process';
++import {startCodexConnection} from '../CodexJsonRpcConnection';
++
++vi.mock('node:child_process', () => ({spawn: vi.fn()}));
++afterEach(() => vi.clearAllMocks());
++
++function nativeProcess() {
++    const child = Object.assign(new EventEmitter(), {
++        stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
++        exitCode: null as number | null, signalCode: null as string | null,
++        kill: vi.fn(() => {
++            child.signalCode = 'SIGTERM';
++            child.emit('exit', null, 'SIGTERM');
++            return true;
++        }),
++    });
++    vi.mocked(spawn).mockReturnValue(child as unknown as ChildProcessWithoutNullStreams);
++    return child;
++}
++
++it('keeps the upstream startup arguments behind the private configuration', () => {
++    const child = nativeProcess();
++    const startup = ['app-server', '-c', 'hooks={ }'];
++    const {connection} = startCodexConnection('/exact/codex', {
++        COWBOY_PRIVATE_CODEX_ARGUMENTS: '["-c","approval_policy=never"]',
++    }, startup);
++    expect(spawn).toHaveBeenCalledWith('/exact/codex', ['-c', 'approval_policy=never', ...startup], expect.anything());
++    connection.dispose();
++    for (const stream of [child.stdin, child.stdout, child.stderr]) stream.destroy();
++});
++
++it('uses the owned execution bridge without replacing the native CLI binding', () => {
++    const child = nativeProcess();
++    const environment = {
++        COWBOY_PRIVATE_CODEX_ARGUMENTS: '[]',
++        COWBOY_EXECUTION_DESCRIPTOR: '/private/descriptor',
++        COWBOY_PRIVATE_CODEX_EXECUTABLE: '/exact/codex',
++        COWBOY_PRIVATE_CODEX_BRIDGE: '/exact/launcher.mjs',
++    };
++    const {connection} = startCodexConnection('/exact/codex', environment);
++    expect(spawn).toHaveBeenCalledWith(process.execPath,
++        ['/exact/launcher.mjs', '--cowboy-private-cli', 'app-server'], {env: environment});
++    connection.dispose();
++    for (const stream of [child.stdin, child.stdout, child.stderr]) stream.destroy();
++    for (const changed of [
++        {...environment, COWBOY_PRIVATE_CODEX_BRIDGE: ''},
++        {...environment, COWBOY_PRIVATE_CODEX_EXECUTABLE: '/different/codex'},
++    ]) expect(() => startCodexConnection('/exact/codex', changed)).toThrow('exact private bridge');
++});

@@ -22,7 +22,7 @@ an object (Claude `dist/acp-subagents.js` `clientSupportsSubagents`, Codex
 | Parent cancel | Spares background children (`perTaskStopAffordance: true` in the RFD form) | Cascades to children |
 | Nesting | A grandchild is announced on its parent child's session | Same |
 
-Cowboy's Codex `adapter.patch` does not touch subagent routing.
+Cowboy's Codex delta series (`third_party/codex-acp`) does not touch subagent routing.
 
 ## Routing (worker)
 

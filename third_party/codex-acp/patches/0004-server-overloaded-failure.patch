@@ -1,0 +1,131 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Draven <dravengarden@gmail.com>
+Date: Wed, 18 Nov 2026 01:04:42 +0000
+Subject: [PATCH] Fail the prompt when the selected model is overloaded
+
+A terminal `serverOverloaded` error ("Selected model is at capacity")
+fails the prompt with its native error data, as upstream already does
+for `usageLimitExceeded`, and keeps the readable message in the
+transcript. A managed call then reports a Provider error instead of
+treating the message as model output.
+
+Cowboy-Delta: server-overloaded-failure
+Upstream: not-proposed
+Drop-When: upstream fails the prompt on serverOverloaded
+Tests: src/__tests__/CodexACPAgent/auth-error-events.test.ts src/__tests__/CodexACPAgent/review-turn-ids.test.ts
+
+diff --git a/src/CodexEventHandler.ts b/src/CodexEventHandler.ts
+index bf01605ae301f2dd6a239518a258fcbff493c247..cc1165b43003ccdf7a9b6588db0d37e516c2ff39 100644
+--- a/src/CodexEventHandler.ts
++++ b/src/CodexEventHandler.ts
+@@ -1207,7 +1207,10 @@ export class CodexEventHandler {
+             this.recordTypedSessionFailure(params);
+             return null;
+         }
+-        if (error === "usageLimitExceeded") {
++        // Cowboy: an overloaded model is a Provider failure like a usage limit,
++        // not model output. Fail the prompt with the native error data so a
++        // client can retry or switch models instead of parsing chat text.
++        if (error === "usageLimitExceeded" || error === "serverOverloaded") {
+             this.failure = RequestError.internalError(
+                 this.createTurnErrorData(params.error),
+             );
+diff --git a/src/__tests__/CodexACPAgent/auth-error-events.test.ts b/src/__tests__/CodexACPAgent/auth-error-events.test.ts
+index 4b90b3950f20a6ac685a0e022bf00e1c67654165..14dbb5872a18983e49e4cae9aa35276d2a6ca3df 100644
+--- a/src/__tests__/CodexACPAgent/auth-error-events.test.ts
++++ b/src/__tests__/CodexACPAgent/auth-error-events.test.ts
+@@ -453,7 +453,7 @@ describe("CodexEventHandler - auth error events", () => {
+             account: {type: "apiKey"},
+         }), {
+             message: "legacy fallback",
+-            codexErrorInfo: "serverOverloaded",
++            codexErrorInfo: "internalServerError",
+             additionalDetails: null,
+             misalignment: null,
+         }, false, {_meta: {jetbrains: {air: {version, capabilities: ["sessionFailure"]}}}} as acp.ClientCapabilities);
+@@ -1114,3 +1114,26 @@ function createTurn(
+         durationMs: null,
+     };
+ }
++
++describe("CodexEventHandler - overloaded model", () => {
++    it("keeps the message as agent text and fails the prompt with the native error", async () => {
++        const {result, updates} = await runPromptWithError(createTestSessionState({
++            sessionId: "overloaded-session",
++            account: {type: "apiKey"},
++        }), {
++            message: "Selected model is at capacity. Please try a different model.",
++            codexErrorInfo: "serverOverloaded",
++            additionalDetails: null,
++            misalignment: null,
++        });
++
++        expect(result).toMatchObject({
++            code: -32603,
++            data: {
++                message: "Selected model is at capacity. Please try a different model.",
++                codexErrorInfo: "serverOverloaded",
++            },
++        });
++        expect(JSON.stringify(updates)).toContain("Selected model is at capacity");
++    });
++});
+diff --git a/src/__tests__/CodexACPAgent/data/review-turn-error.json b/src/__tests__/CodexACPAgent/data/review-turn-error.json
+index 86759831f21cb0f46a030665c1cea6b5c69256fa..661b27acd4268f57194471795f8ef1ad0825a5bf 100644
+--- a/src/__tests__/CodexACPAgent/data/review-turn-error.json
++++ b/src/__tests__/CodexACPAgent/data/review-turn-error.json
+@@ -4,7 +4,7 @@
+       "sessionUpdate": "agent_message_chunk",
+       "content": {
+         "type": "text",
+-        "text": "Codex is temporarily overloaded.\n\n"
++        "text": "Codex hit an internal server error.\n\n"
+       }
+     }
+   ],
+diff --git a/src/__tests__/CodexACPAgent/review-turn-ids.test.ts b/src/__tests__/CodexACPAgent/review-turn-ids.test.ts
+index ffad2409b7f82ffef448152994294adf8bf7f9ac..63cabfbd4cb856a9344f8e4b9f50a5c1d14a539e 100644
+--- a/src/__tests__/CodexACPAgent/review-turn-ids.test.ts
++++ b/src/__tests__/CodexACPAgent/review-turn-ids.test.ts
+@@ -22,6 +22,15 @@ const overloadedError: ErrorNotification["error"] = {
+     misalignment: null,
+ };
+ 
++// Cowboy fails the prompt on serverOverloaded (CodexEventHandler), so the
++// agent-text and fatal-wait cases use another service error.
++const internalServerError: ErrorNotification["error"] = {
++    message: "Codex hit an internal server error.",
++    codexErrorInfo: "internalServerError",
++    additionalDetails: null,
++    misalignment: null,
++};
++
+ const notGitRepositoryError: ErrorNotification["error"] = {
+     message: "/test/cwd is not a git repository",
+     codexErrorInfo: null,
+@@ -48,8 +57,8 @@ describe("/review turn ids", () => {
+     it("surfaces a review error as agent text, like a normal turn's error", async () => {
+         const review = await startReview();
+ 
+-        review.send(error(overloadedError));
+-        review.send(turnCompleted("failed", overloadedError));
++        review.send(error(internalServerError));
++        review.send(turnCompleted("failed", internalServerError));
+ 
+         const result = await review.prompt;
+         expect(result).toMatchObject({stopReason: "end_turn"});
+@@ -241,12 +250,12 @@ describe("/review turn ids", () => {
+         let settled = false;
+         void review.prompt.then(() => settled = true, () => settled = true);
+ 
+-        review.send(error(overloadedError));
++        review.send(error(internalServerError));
+         await review.fixture.getCodexAcpClient().waitForSessionNotifications(sessionId);
+         await new Promise(resolve => setTimeout(resolve, 10));
+         expect(settled).toBe(false);
+ 
+-        review.send(turnCompleted("failed", overloadedError));
++        review.send(turnCompleted("failed", internalServerError));
+         await expect(review.prompt).resolves.toMatchObject({stopReason: "end_turn"});
+     });
+ });

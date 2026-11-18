@@ -6,32 +6,44 @@ native storage format unchanged.
 
 ## Source ownership
 
-`source.json` pins the ACP source archive and npm lock by digest.
-`adapter.patch` is a source patch against that exact revision, not a
-modification to an installed bundle. `build.ts` runs the upstream type check,
-complete test suite and build, then packages the result with the existing pinned
-Node and native CLI artifacts. Both supported platforms carry the patch, source
-identity and resulting bundle digest in `codex-source.json`. Runtime artifacts
-are immutable and signed through the ordinary Plugin lifecycle. Failed builds
-remove the candidate runtime binding.
+[`third_party/codex-acp`](../../../third_party/codex-acp) pins the ACP release,
+its source archive and npm lock by digest, and carries Cowboy's changes as a
+series of source deltas, one per feature, managed with the generic
+[third-party workflow](../../../docs/third-party.md). Each delta's commit
+message records its purpose, upstream state, drop condition and tests.
+`build.ts` prepares the patched tree, runs the upstream type check, complete
+test suite and build, then packages the result with the existing pinned Node
+and native CLI artifacts. Both supported platforms carry the concatenated
+series (`codex-adapter.patch`), the source identity, each delta's digest and
+the resulting bundle digest in `codex-source.json`. Runtime artifacts are
+immutable and signed through the ordinary Plugin lifecycle. Failed builds
+remove the candidate runtime binding. `codex-deepseek` uses the unmodified
+upstream release.
 
-The shared runtime component remains unchanged. This Provider owns the changes:
+The shared runtime component remains unchanged. This Provider owns the changes
+(delta IDs in parentheses):
 
 - ACP `session/resume` sends native `thread/resume` with `excludeTurns: true`.
-  Explicit history loading retains its existing behavior.
-- The JSONL reader searches incoming bytes once, preserves split UTF-8
+  Upstream has done this since ACP 1.11; no delta remains.
+- (`jsonl-frame-reader`) The JSONL reader searches incoming bytes once, preserves split UTF-8
   sequences, and assembles each completed frame once. The compatibility ceiling
   is 256 MiB per frame; a malformed, oversized or incomplete frame stops the
   native process, whose exit closes pending requests, with a diagnostic that
   does not include conversation contents.
-- The Provider launcher passes its validated leading `-c` options to the native
+- (`native-launch-arguments`) The Provider launcher passes its validated leading `-c` options to the native
   client, which launches the exact bound `CODEX_PATH` directly. No intermediary
   executable owns or rewrites the native protocol.
-- A terminal `serverOverloaded` error ("Selected model is at capacity") fails
+- (`server-overloaded-failure`) A terminal `serverOverloaded` error ("Selected model is at capacity") fails
   the prompt with its native error data, as upstream already does for
   `usageLimitExceeded`, and keeps the readable message in the transcript. A
   managed call then reports `provider_error` instead of treating the message as
   model output such as an invalid structured review.
+- (`steer-prompt-required`) `initialize` advertises steering
+  `idleBehavior: "promptRequired"`, and an opted-in host may replay a steer
+  only after an explicit native no-active-turn refusal.
+- (`managed-read-only-profile`, `native-image-profile`) The managed read-only
+  and image profiles; see [native capabilities](../../../docs/managed-native-capabilities.md).
+- (`configured-mcp-startup-wait`) The MCP startup wait below.
 
 ## Authentication default
 
@@ -63,7 +75,7 @@ honors it only for servers in the request's `mcpServers`. Every server a Cowboy
 Codex session uses comes from native configuration instead: user/project
 `config.toml`, or the launcher's `-c mcp_servers.*` options.
 
-The owned patch extends the wait to the servers the Provider's native bridge
+The `configured-mcp-startup-wait` delta extends the wait to the servers the Provider's native bridge
 injects. The launcher computes their exact names with the bridge's own naming
 rules (`injectedMcpServerNames` in `memory.mjs`): the session Cowboy MCP
 (`cowboy`, or a fresh `cowboy_session*` name when native configuration already

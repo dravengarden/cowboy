@@ -1,0 +1,338 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Draven <dravengarden@gmail.com>
+Date: Wed, 18 Nov 2026 01:04:56 +0000
+Subject: [PATCH] Add the Cowboy managed read-only profile
+
+A signed managed launch sets COWBOY_PRIVATE_MANAGED_PROFILE. Its
+sessions are never trusted projects, expose no permission profiles,
+keep the signed launch restrictions in thread configuration, run every
+turn with approval `never` and a read-only, network-free sandbox, and
+require Cowboy call metadata carrying the output schema. Mode changes,
+native slash commands and generated titles are refused or suppressed.
+An ordinary session refuses managed call metadata.
+
+Cowboy-Delta: managed-read-only-profile
+Upstream: cowboy-specific
+Drop-When: Cowboy managed calls stop launching codex-acp with a managed profile
+Tests: src/__tests__/CowboyManagedProfile.test.ts src/__tests__/CowboyManagedPermissionProfiles.test.ts
+
+diff --git a/src/CodexAcpClient.ts b/src/CodexAcpClient.ts
+index b7271800b7dadd73eb8a5b1e244ffabefe93ec4c..4e96e0d64fdb5f5de40116917944f3b2663907c0 100644
+--- a/src/CodexAcpClient.ts
++++ b/src/CodexAcpClient.ts
+@@ -27,6 +27,7 @@ import type {ServiceTier} from "./app-server/ServiceTier";
+ import type {JsonValue} from "./app-server/serde_json/JsonValue";
+ import {ModelId} from "./ModelId";
+ import {AgentMode} from "./AgentMode";
++import {MANAGED_SANDBOX_POLICY, managedProfileActive, managedTurn, managedConfiguration} from "./CowboyManagedProfile";
+ import path from "node:path";
+ import {isDeepStrictEqual} from "node:util";
+ import {logger} from "./Logger";
+@@ -1155,12 +1156,28 @@ export class CodexAcpClient {
+             apiType: activeProvider.apiType,
+             baseUrl: activeProvider.baseUrl,
+         });
++        // A managed snapshot is never trusted: its project config, rules,
++        // hooks and MCP servers stay disabled, and client MCP servers are
++        // not configured for it.
++        const managed = managedProfileActive();
+         const mergedConfig = {
+             ...disableUnsupportedSkills(forceGitRootTurnDiffPaths(mergeGatewayConfig(this.config, this.gatewayConfig))),
+-            projects: Object.fromEntries(sessionRoots.map(root => [root, {
+-                trust_level: "trusted",
+-            }])),
++            ...(managed ? {} : {
++                projects: Object.fromEntries(sessionRoots.map(root => [root, {
++                    trust_level: "trusted",
++                }])),
++            }),
+         };
++        if (managed) {
++            // No permission profile modes either: the managed turn always
++            // runs under its own fixed read-only sandbox policy.
++            return {
++                config: {...mergedConfig, ...managedConfiguration()},
++                skippedMcpServers: [],
++                permissionProfiles: [],
++                defaultPermissionProfileId: null,
++            };
++        }
+         const configWithWorkspaceRoots = mergeSandboxWorkspaceWriteRoots(mergedConfig, additionalDirectories);
+         const permissionProfiles = await this.fetchPermissionProfiles(projectPath);
+         const effectiveConfig = await this.codexClient.configRead({includeLayers: true, cwd: projectPath});
+@@ -1397,6 +1414,9 @@ export class CodexAcpClient {
+     ): Promise<TurnCompletedNotification | null> {
+         const input = buildPromptItems(request.prompt);
+         const effort = modelId.effort as ReasoningEffort | null; //TODO remove unsafe conversion
++        // Resolve before any effect: a managed turn without its metadata, or
++        // an ordinary turn carrying it, is refused instead of downgraded.
++        const managed = managedTurn(request._meta);
+         await this.refreshSkills(cwd, additionalDirectories);
+         if (shouldCancel?.()) {
+             return null;
+@@ -1405,19 +1425,22 @@ export class CodexAcpClient {
+         return await this.codexClient.runTurn({
+             threadId: request.sessionId,
+             input: input,
+-            approvalPolicy: agentMode.approvalPolicy,
+-            approvalsReviewer: agentMode.approvalsReviewer,
+-            ...(permissionProfileId
+-                ? {
+-                    permissions: permissionProfileId,
+-                    runtimeWorkspaceRoots: [cwd, ...additionalDirectories],
+-                }
+-                : {sandboxPolicy: addAdditionalDirectoriesToSandboxPolicy(agentMode.sandboxPolicy!, additionalDirectories)}),
++            approvalPolicy: managed ? "never" : agentMode.approvalPolicy,
++            approvalsReviewer: managed ? "user" : agentMode.approvalsReviewer,
++            ...(managed
++                ? {sandboxPolicy: MANAGED_SANDBOX_POLICY}
++                : permissionProfileId
++                    ? {
++                        permissions: permissionProfileId,
++                        runtimeWorkspaceRoots: [cwd, ...additionalDirectories],
++                    }
++                    : {sandboxPolicy: addAdditionalDirectoriesToSandboxPolicy(agentMode.sandboxPolicy!, additionalDirectories)}),
+             summary: disableSummary ? "none" : "auto",
+             effort: effort,
+             model: modelId.model,
+             serviceTier: serviceTier,
+             ...(clientUserMessageId !== undefined ? {clientUserMessageId} : {}),
++            ...(managed ? {outputSchema: managed.outputSchema} : {}),
+         }, onTurnStarted);
+     }
+ 
+diff --git a/src/CodexAcpServer.ts b/src/CodexAcpServer.ts
+index 1b2f01dda136316b70008ce58d83db7741656a22..82df355a795699d5eff5eaa2d69d2cad46e12de3 100644
+--- a/src/CodexAcpServer.ts
++++ b/src/CodexAcpServer.ts
+@@ -86,6 +86,7 @@ import type {RateLimitsMap} from "./RateLimitsMap";
+ import {ModelId} from "./ModelId";
+ import {normalizeSessionTitle} from "./SessionTitle";
+ import {AgentMode, MODE_CONFIG_ID} from "./AgentMode";
++import {refuseManagedReconfiguration, managedProfileActive} from "./CowboyManagedProfile";
+ import {
+     COLLABORATION_MODE_CONFIG_ID,
+     createCollaborationModeConfigOption,
+@@ -2826,6 +2827,7 @@ export class CodexAcpServer {
+             modeId: _params.modeId
+         });
+         const sessionState = this.getSessionState(_params.sessionId);
++        refuseManagedReconfiguration();
+ 
+         await this.applySessionConfigOption(sessionState, {
+             sessionId: _params.sessionId,
+@@ -2842,6 +2844,9 @@ export class CodexAcpServer {
+             configId: params.configId,
+         });
+         const sessionState = this.getSessionState(params.sessionId);
++        if (params.configId === MODE_CONFIG_ID) {
++            refuseManagedReconfiguration();
++        }
+ 
+         await this.applySessionConfigOption(sessionState, params);
+ 
+@@ -5447,7 +5452,9 @@ export class CodexAcpServer {
+                 .map(b => b.text)
+                 .join(" ")
+                 .trim();
+-            sessionState.titleGen?.onTurnCompleted(promptText);
++            if (!managedProfileActive()) {
++                sessionState.titleGen?.onTurnCompleted(promptText);
++            }
+ 
+             // Same fire-and-forget rule: a predicted follow-up comes after the answer, never before it. No prediction in plan mode or after a turn that did not complete.
+             if (turnCompleted.turn.status === "completed" && sessionState.collaborationMode !== PLAN_COLLABORATION_MODE) sessionState.promptSuggestions?.onTurnCompleted(sessionState.sessionId, turnCompleted.turn.id);
+diff --git a/src/CodexCommands.ts b/src/CodexCommands.ts
+index a83566cee597d028786f4da5b60f18d496a7c361..81aed25ca552f7e766c23cb337556f11d552f6ae 100644
+--- a/src/CodexCommands.ts
++++ b/src/CodexCommands.ts
+@@ -1,4 +1,5 @@
+ import type * as acp from "@agentclientprotocol/sdk/unstable";
++import {managedProfileActive} from "./CowboyManagedProfile";
+ import type {AvailableCommand} from "@agentclientprotocol/sdk/unstable";
+ import {ACPSessionConnection, type AcpClientConnection} from "./ACPSessionConnection";
+ import {AIR_COMMAND_ACTION_KEY, AIR_SKILL_PATH_KEY, airOnlyMeta} from "./AirExtension";
+@@ -358,6 +359,9 @@ export class CodexCommands {
+         sessionState: SessionState,
+         options: CommandHandleOptions = {},
+     ): Promise<CommandHandleResult> {
++        // A managed child's prompt is the caller's literal text; it never
++        // starts native review, goal or compaction turns.
++        if (managedProfileActive()) return { handled: false };
+         const command = this.parseCommand(prompt);
+         if (command === null) return { handled: false };
+         const commandName = command.name;
+diff --git a/src/CowboyManagedProfile.ts b/src/CowboyManagedProfile.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..1a123d739e8631d7483490e13621ac561ee5582f
+--- /dev/null
++++ b/src/CowboyManagedProfile.ts
+@@ -0,0 +1,75 @@
++// Cowboy-owned managed read-only profile. The Provider launcher enables it
++// only for a signed managed launch; it never widens an ordinary session.
++import type {JsonValue} from "./app-server/serde_json/JsonValue";
++import type {SandboxPolicy} from "./app-server/v2";
++
++export const MANAGED_PROFILE_ENV = "COWBOY_PRIVATE_MANAGED_PROFILE";
++export const MANAGED_PROFILE = "read-only-v1";
++export const MANAGED_CALL_META_KEY = "cowboy.dev/managedCall";
++
++/** Every turn of a managed child: never ask, never write, no network. */
++export const MANAGED_SANDBOX_POLICY: SandboxPolicy = {type: "readOnly", networkAccess: false};
++
++export function managedProfileActive(): boolean {
++    return process.env[MANAGED_PROFILE_ENV] === MANAGED_PROFILE;
++}
++
++/** Thread configuration must retain the signed launch restrictions. Native
++ * thread/start can otherwise re-resolve features from the user configuration. */
++export function managedConfiguration(): Record<string, JsonValue> {
++    if (!managedProfileActive()) return {};
++    const pairs: unknown = JSON.parse(process.env["COWBOY_PRIVATE_CODEX_ARGUMENTS"] ?? "[]");
++    if (!Array.isArray(pairs) || pairs.length % 2 !== 0) throw new Error("Invalid managed configuration");
++    const result: Record<string, JsonValue> = {};
++    for (let i = 0; i < pairs.length; i += 2) {
++        const pair: unknown = pairs[i + 1];
++        if (pairs[i] !== "-c" || typeof pair !== "string" || !pair.includes("=")) throw new Error("Invalid managed configuration");
++        const at = pair.indexOf("=");
++        const value = pair.slice(at + 1);
++        // Signed profiles use JSON literals or bare TOML string values only.
++        result[pair.slice(0, at)] = /^[a-z][a-z-]*$/.test(value) && !["true", "false"].includes(value)
++            ? value : JSON.parse(value) as JsonValue;
++    }
++    return result;
++}
++
++export interface ManagedTurn {
++    callId: string;
++    outputSchema: JsonValue | null;
++}
++
++/**
++ * Resolve the Cowboy turn metadata. A managed child refuses a turn without
++ * it, and an ordinary session refuses it rather than silently ignoring an
++ * output constraint it cannot enforce.
++ */
++export function managedTurn(meta: unknown): ManagedTurn | null {
++    const entry = meta !== null && typeof meta === "object"
++        ? (meta as Record<string, unknown>)[MANAGED_CALL_META_KEY]
++        : undefined;
++    if (!managedProfileActive()) {
++        if (entry !== undefined) {
++            throw new Error("Managed call metadata requires the managed read-only profile");
++        }
++        return null;
++    }
++    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
++        throw new Error("Managed read-only turn is missing its Cowboy call metadata");
++    }
++    const value = entry as Record<string, unknown>;
++    const callId = value["callId"];
++    const schema = value["outputSchema"];
++    if (typeof callId !== "string" || callId.length === 0
++        || typeof value["inputRevision"] !== "string"
++        || (schema !== null && schema !== undefined
++            && (typeof schema !== "object" || Array.isArray(schema)))) {
++        throw new Error("Managed read-only turn has invalid Cowboy call metadata");
++    }
++    return {callId, outputSchema: (schema ?? null) as JsonValue | null};
++}
++
++export function refuseManagedReconfiguration(): void {
++    if (managedProfileActive()) {
++        throw new Error("Managed read-only profile configuration is fixed");
++    }
++}
+diff --git a/src/__tests__/CowboyManagedPermissionProfiles.test.ts b/src/__tests__/CowboyManagedPermissionProfiles.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..911aa752699eda26697bbdc4bc17c54082f977b5
+--- /dev/null
++++ b/src/__tests__/CowboyManagedPermissionProfiles.test.ts
+@@ -0,0 +1,44 @@
++import {afterEach, describe, expect, it, vi} from "vitest";
++import {createCodexMockTestFixture, createTestModel} from "./acp-test-utils";
++import {MANAGED_PROFILE, MANAGED_PROFILE_ENV} from "../CowboyManagedProfile";
++
++afterEach(() => {
++    delete process.env[MANAGED_PROFILE_ENV];
++    vi.unstubAllEnvs();
++});
++
++describe("Cowboy managed profile and permission profile modes", () => {
++    it("offers no configured permission profile and reads no project configuration", async () => {
++        vi.stubEnv("INITIAL_AGENT_MODE", undefined);
++        process.env[MANAGED_PROFILE_ENV] = MANAGED_PROFILE;
++        const fixture = createCodexMockTestFixture();
++        const codexAcpClient = fixture.getCodexAcpClient();
++        const appServer = fixture.getCodexAppServerClient();
++        vi.spyOn(codexAcpClient, "readAuthRequirement").mockResolvedValue({required: false, account: null});
++        vi.spyOn(codexAcpClient, "getAccount").mockResolvedValue({account: null, requiresOpenaiAuth: false});
++        vi.spyOn(appServer, "listSkills").mockResolvedValue({data: []});
++        const configRead = vi.spyOn(appServer, "configRead").mockResolvedValue({config: {}} as any);
++        const listProfiles = vi.spyOn(appServer, "listPermissionProfiles").mockResolvedValue({
++            data: [{id: "team-default", description: null, allowed: true}],
++            nextCursor: null,
++        });
++        const threadStart = vi.spyOn(appServer, "threadStart").mockResolvedValue({
++            thread: {id: "thread-id", turns: [], status: {type: "idle"}},
++            model: "gpt-5",
++            modelProvider: "openai",
++            reasoningEffort: "medium",
++            serviceTier: null,
++            approvalPolicy: "never",
++            approvalsReviewer: "user",
++        } as any);
++        vi.spyOn(appServer, "listModels").mockResolvedValue({data: [createTestModel({id: "gpt-5"})], nextCursor: null});
++
++        const session = await fixture.getCodexAcpAgent().newSession({cwd: "/workspace", mcpServers: []});
++
++        expect(listProfiles).not.toHaveBeenCalled();
++        expect(configRead).not.toHaveBeenCalled();
++        expect(threadStart.mock.calls[0]![0].config?.["projects"]).toBeUndefined();
++        expect(session.modes?.availableModes.map(mode => mode.id) ?? [])
++            .not.toContain("permission-profile:team-default");
++    });
++});
+diff --git a/src/__tests__/CowboyManagedProfile.test.ts b/src/__tests__/CowboyManagedProfile.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..797fbf280aa3e9524abbdc2f01e9d17d6c93ddbe
+--- /dev/null
++++ b/src/__tests__/CowboyManagedProfile.test.ts
+@@ -0,0 +1,37 @@
++import {afterEach, describe, expect, it} from "vitest";
++import {
++    MANAGED_CALL_META_KEY,
++    MANAGED_PROFILE_ENV,
++    managedTurn,
++    refuseManagedReconfiguration,
++} from "../CowboyManagedProfile";
++
++const meta = (value: unknown) => ({[MANAGED_CALL_META_KEY]: value});
++
++describe("Cowboy managed read-only profile", () => {
++    afterEach(() => {
++        delete process.env[MANAGED_PROFILE_ENV];
++    });
++
++    it("leaves ordinary sessions untouched and refuses managed metadata there", () => {
++        expect(managedTurn(undefined)).toBeNull();
++        expect(managedTurn({other: true})).toBeNull();
++        expect(() => managedTurn(meta({callId: "c", inputRevision: "r", outputSchema: null})))
++            .toThrow(/requires the managed/);
++        expect(() => refuseManagedReconfiguration()).not.toThrow();
++    });
++
++    it("requires per-turn metadata and forwards the native output schema", () => {
++        process.env[MANAGED_PROFILE_ENV] = "read-only-v1";
++        expect(() => managedTurn(undefined)).toThrow(/missing/);
++        expect(() => managedTurn(meta({callId: "c"}))).toThrow(/invalid/);
++        expect(() => managedTurn(meta({callId: "c", inputRevision: "r", outputSchema: []})))
++            .toThrow(/invalid/);
++        const schema = {type: "object", properties: {verdict: {type: "string"}}};
++        expect(managedTurn(meta({callId: "c", inputRevision: "r", outputSchema: schema})))
++            .toEqual({callId: "c", outputSchema: schema});
++        expect(managedTurn(meta({callId: "c", inputRevision: "r", outputSchema: null})))
++            .toEqual({callId: "c", outputSchema: null});
++        expect(() => refuseManagedReconfiguration()).toThrow(/fixed/);
++    });
++});

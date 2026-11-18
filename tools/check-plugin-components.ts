@@ -341,6 +341,25 @@ export async function filesDigest(sourceFiles: string[]): Promise<string> {
 // non-ignored source is included so a pre-commit check observes new input too.
 // The isolation gate copies this same list and compares SDK package bytes to
 // the in-tree build, catching ignored files used as package/host inputs.
+/** Files of every third_party package that `pluginRoot` builds from source. */
+export async function thirdPartySourceFiles(pluginRoot: string): Promise<string[]> {
+  const files: string[] = [];
+  for (const name of readdirSync("third_party").sort()) {
+    const manifest = `third_party/${name}/upstream.json`;
+    try {
+      statSync(manifest);
+    } catch {
+      continue;
+    }
+    const consumers: Array<{ path: string; mode: string }> =
+      JSON.parse(readFileSync(manifest, "utf8")).consumers ?? [];
+    if (consumers.some((consumer) => consumer.path === pluginRoot && consumer.mode === "source")) {
+      files.push(...(await repositorySourceFiles(`third_party/${name}`)));
+    }
+  }
+  return files;
+}
+
 export async function repositorySourceFiles(root: string, cwd?: string): Promise<string[]> {
   const result = await new Command("git", {
     args: ["ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", root],
@@ -541,7 +560,9 @@ async function repositoryClosure(
     plugins[id] = {
       component_release: manifest.component_release,
       components: manifest.components,
-      source_digest: await filesDigest(files),
+      // A source-built third-party delta series is part of the Plugin's
+      // release input: changing it requires a new Plugin version.
+      source_digest: await filesDigest([...files, ...(await thirdPartySourceFiles(root))]),
     };
   }
   return { component_dependencies: graph, plugins };

@@ -49,3 +49,4 @@ tools/__pycache__/
 # The state engines remain committed Cowboy components; they are never staged
 # from another checkout during development or release builds.
 components/*/node_modules/
+dist/third-party/

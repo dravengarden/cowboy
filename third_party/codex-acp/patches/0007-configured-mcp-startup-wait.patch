@@ -1,0 +1,291 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Draven <dravengarden@gmail.com>
+Date: Wed, 18 Nov 2026 01:05:01 +0000
+Subject: [PATCH] Await the natively configured Cowboy MCP servers at session
+ start
+
+The Provider launcher names the MCP servers its native bridge injects
+through `-c mcp_servers.*` in COWBOY_CODEX_AWAIT_MCP_SERVERS. With a
+positive `mcpStartupAwaitTimeoutMs`, a session open awaits and reports
+them beside the request's `mcpServers`. Managed profiles never wait.
+
+Cowboy-Delta: configured-mcp-startup-wait
+Upstream: not-proposed
+Drop-When: upstream awaits natively configured MCP servers, or Cowboy passes its servers as ACP mcpServers
+Tests: src/__tests__/CodexACPAgent/cowboy-configured-mcp-wait.test.ts
+
+diff --git a/src/CodexAcpServer.ts b/src/CodexAcpServer.ts
+index 82df355a795699d5eff5eaa2d69d2cad46e12de3..02b6c86b45e57cc97a7edff333c8d7c0087a1dfb 100644
+--- a/src/CodexAcpServer.ts
++++ b/src/CodexAcpServer.ts
+@@ -13,6 +13,7 @@ import type {ProviderStartupConfig} from "./CodexConfigOverride";
+ import {isDeepStrictEqual} from "node:util";
+ import {createMcpServerSignIn, type McpServerSignIn} from "./mcp/McpServerSignIn";
+ import {getRequestedMcpServerNames, McpSessionStartup, parseMcpStartupAwaitTimeoutMs} from "./mcp/McpSessionStartup";
++import {configuredStartupServers} from "./CowboyMcpStartup";
+ import {
+     CodexAcpClient,
+     type JsonObject,
+@@ -1296,7 +1297,9 @@ export class CodexAcpServer {
+             : null;
+         const knownAccount = await this.checkAuthorization();
+         const requestedMcpServers = request.mcpServers ?? [];
+-        const readMcpServerStartupVersion = () => requestedMcpServers.length > 0
++        const configuredMcpServers = configuredStartupServers(request._meta);
++        const awaitsMcpServers = requestedMcpServers.length > 0 || configuredMcpServers.length > 0;
++        const readMcpServerStartupVersion = () => awaitsMcpServers
+             ? this.codexAcpClient.getMcpServerStartupVersion()
+             : null;
+         let mcpServerStartupVersion = readMcpServerStartupVersion();
+@@ -1448,12 +1451,13 @@ export class CodexAcpServer {
+         resumeSubscribed = false;
+ 
+         const canPublishSessionUpdates = operation !== "fork";
+-        if (requestedMcpServers.length > 0 && mcpServerStartupVersion !== null) {
++        if (awaitsMcpServers && mcpServerStartupVersion !== null) {
+             // A fork publishes no startup report, so nothing waits for the rest of the startup.
+             const startupWait = this.mcpSessionStartup.begin(sessionId, requestedMcpServers, mcpServerStartupVersion, {
+                 publish: canPublishSessionUpdates,
+                 awaitTimeoutMs: parseMcpStartupAwaitTimeoutMs(request._meta),
+                 skippedServers: sessionMetadata.skippedMcpServers,
++                configuredServers: configuredMcpServers,
+             });
+             if (startupWait !== null) {
+                 try {
+diff --git a/src/CowboyMcpStartup.ts b/src/CowboyMcpStartup.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..6aa7a21d1e8f912648e3db69490bf7a98657834d
+--- /dev/null
++++ b/src/CowboyMcpStartup.ts
+@@ -0,0 +1,40 @@
++// Cowboy-owned MCP startup wait for natively configured servers. The Provider
++// launcher injects its own servers through `-c mcp_servers.*` and names them
++// here; the native app-server reports their startup on the thread like the
++// servers of an ACP request, so a session open with a startup wait awaits them
++// too. Upstream waits only for the request's `mcpServers`.
++import {managedProfileActive} from "./CowboyManagedProfile";
++import {logger} from "./Logger";
++import {parseMcpStartupAwaitTimeoutMs} from "./mcp/McpSessionStartup";
++
++export const AWAIT_MCP_SERVERS_ENV = "COWBOY_CODEX_AWAIT_MCP_SERVERS";
++
++/**
++ * The configured MCP server names a session open awaits beside its requested servers: none without a positive
++ * `mcpStartupAwaitTimeoutMs`, under a managed profile, or without a valid launcher list.
++ */
++export function configuredStartupServers(
++    meta: Record<string, unknown> | null | undefined,
++    env: NodeJS.ProcessEnv = process.env,
++): Array<string> {
++    const awaitTimeoutMs = parseMcpStartupAwaitTimeoutMs(meta);
++    if (awaitTimeoutMs === undefined || awaitTimeoutMs <= 0 || managedProfileActive()) {
++        return [];
++    }
++    const declared = env[AWAIT_MCP_SERVERS_ENV];
++    if (declared === undefined || declared === "") {
++        return [];
++    }
++    let names: unknown;
++    try {
++        names = JSON.parse(declared);
++    } catch {
++        logger.error("Ignoring an invalid configured MCP startup list", AWAIT_MCP_SERVERS_ENV);
++        return [];
++    }
++    if (!Array.isArray(names) || names.some(name => typeof name !== "string" || !/^[A-Za-z0-9_-]+$/.test(name))) {
++        logger.error("Ignoring an invalid configured MCP startup list", AWAIT_MCP_SERVERS_ENV);
++        return [];
++    }
++    return Array.from(new Set(names as Array<string>));
++}
+diff --git a/src/__tests__/CodexACPAgent/cowboy-configured-mcp-wait.test.ts b/src/__tests__/CodexACPAgent/cowboy-configured-mcp-wait.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..d088460d9c109d1187ed390f55ec0d51cb2c872c
+--- /dev/null
++++ b/src/__tests__/CodexACPAgent/cowboy-configured-mcp-wait.test.ts
+@@ -0,0 +1,142 @@
++import {afterEach, describe, expect, it, vi} from "vitest";
++import {createCodexMockTestFixture, createTestModel} from "../acp-test-utils";
++import type {McpStartupResult} from "../../mcp/McpStartupTracker";
++import {AWAIT_MCP_SERVERS_ENV, configuredStartupServers} from "../../CowboyMcpStartup";
++
++const metadata = (sessionId: string) => ({
++    sessionId,
++    currentModelId: "gpt-5[medium]",
++    models: [createTestModel({id: "gpt-5"})],
++    collaborationMode: "default" as const,
++    currentServiceTier: null,
++    additionalDirectories: [],
++});
++
++function setup() {
++    const fixture = createCodexMockTestFixture();
++    const agent = fixture.getCodexAcpAgent();
++    const client = fixture.getCodexAcpClient();
++    vi.spyOn(client, "readAuthRequirement").mockResolvedValue({required: false, account: null});
++    vi.spyOn(client, "getAccount").mockResolvedValue({account: null, requiresOpenaiAuth: false});
++    vi.spyOn(client, "listSkills").mockResolvedValue({data: []});
++    vi.spyOn(client, "newSession").mockResolvedValue(metadata("new-id"));
++    vi.spyOn(client, "forkSession").mockResolvedValue(metadata("fork-id"));
++    return {fixture, agent, client};
++}
++
++describe("Cowboy configured MCP startup wait", () => {
++    afterEach(() => {
++        vi.unstubAllEnvs();
++        vi.restoreAllMocks();
++    });
++
++    it("awaits the launcher's configured servers and reports only their failures", async () => {
++        vi.stubEnv(AWAIT_MCP_SERVERS_ENV, JSON.stringify(["cowboy_session", "matrix"]));
++        const {fixture, agent, client} = setup();
++        const startup = deferred<McpStartupResult>();
++        const awaitSpy = vi.spyOn(client, "awaitMcpServerStartup").mockReturnValue(startup.promise);
++
++        const opened = agent.newSession({cwd: "/workspace", mcpServers: [], _meta: {mcpStartupAwaitTimeoutMs: 30_000}});
++        let settled = false;
++        void opened.then(() => { settled = true; }, () => { settled = true; });
++        await vi.waitFor(() => {
++            expect(awaitSpy).toHaveBeenCalledWith(
++                ["cowboy_session", "matrix"],
++                expect.any(Number),
++                {threadId: "new-id", signal: expect.any(AbortSignal)},
++            );
++        });
++        expect(settled).toBe(false);
++
++        startup.resolve({
++            ready: ["cowboy_session"],
++            failed: [
++                {server: "matrix", error: "connection refused"},
++                {server: "user-server", error: "not ours"},
++            ],
++            cancelled: [],
++        });
++        await expect(opened).resolves.toMatchObject({sessionId: "new-id"});
++        await vi.waitFor(() => {
++            expect(fixture.getAcpConnectionDump([])).toContain("MCP server `matrix` failed to start: connection refused");
++        });
++        expect(fixture.getAcpConnectionDump([])).not.toContain("user-server");
++    });
++
++    it("does not wait without the startup wait metadata", async () => {
++        vi.stubEnv(AWAIT_MCP_SERVERS_ENV, JSON.stringify(["cowboy_session"]));
++        const {agent, client} = setup();
++        const awaitSpy = vi.spyOn(client, "awaitMcpServerStartup");
++
++        await agent.newSession({cwd: "/workspace", mcpServers: []});
++
++        expect(awaitSpy).not.toHaveBeenCalled();
++        const tracker = client.appServerClient.mcpStartup as unknown as {waiters: unknown[]};
++        expect(tracker.waiters).toHaveLength(0);
++    });
++
++    it("does not wait without configured names", async () => {
++        const {agent, client} = setup();
++        const awaitSpy = vi.spyOn(client, "awaitMcpServerStartup");
++
++        await agent.newSession({cwd: "/workspace", mcpServers: [], _meta: {mcpStartupAwaitTimeoutMs: 30_000}});
++
++        expect(awaitSpy).not.toHaveBeenCalled();
++    });
++
++    it("waits for a fork's configured servers without publishing a report", async () => {
++        vi.stubEnv(AWAIT_MCP_SERVERS_ENV, JSON.stringify(["cowboy_session"]));
++        const {fixture, agent, client} = setup();
++        const awaitSpy = vi.spyOn(client, "awaitMcpServerStartup").mockResolvedValue({
++            ready: [],
++            failed: [{server: "cowboy_session", error: "fork failure"}],
++            cancelled: [],
++        });
++
++        await expect(agent.forkSession({
++            sessionId: "source-id",
++            cwd: "/workspace",
++            mcpServers: [],
++            _meta: {mcpStartupAwaitTimeoutMs: 30_000},
++        })).resolves.toMatchObject({sessionId: "fork-id"});
++
++        expect(awaitSpy).toHaveBeenCalledWith(["cowboy_session"], expect.any(Number), {threadId: "fork-id", signal: expect.any(AbortSignal)});
++        expect(fixture.getAcpConnectionDump([])).not.toContain("fork failure");
++    });
++});
++
++describe("configuredStartupServers", () => {
++    const meta = {mcpStartupAwaitTimeoutMs: 15_000};
++
++    afterEach(() => vi.unstubAllEnvs());
++
++    it("reads exact names only with a positive wait", () => {
++        const env = {[AWAIT_MCP_SERVERS_ENV]: JSON.stringify(["cowboy", "matrix", "cowboy"])};
++        expect(configuredStartupServers(meta, env)).toEqual(["cowboy", "matrix"]);
++        expect(configuredStartupServers(undefined, env)).toEqual([]);
++        expect(configuredStartupServers({mcpStartupAwaitTimeoutMs: 0}, env)).toEqual([]);
++        expect(configuredStartupServers(meta, {})).toEqual([]);
++    });
++
++    it("ignores an invalid list", () => {
++        for (const value of ["{", "\"cowboy\"", JSON.stringify([1]), JSON.stringify(["a.b"]), JSON.stringify([""])]) {
++            expect(configuredStartupServers(meta, {[AWAIT_MCP_SERVERS_ENV]: value})).toEqual([]);
++        }
++    });
++
++    it("never applies to a managed profile", () => {
++        const env = {[AWAIT_MCP_SERVERS_ENV]: JSON.stringify(["cowboy"])};
++        for (const profile of ["read-only-v1", "image-v1"]) {
++            vi.stubEnv("COWBOY_PRIVATE_MANAGED_PROFILE", profile);
++            expect(configuredStartupServers(meta, env)).toEqual([]);
++        }
++    });
++});
++
++function deferred<T>(): {promise: Promise<T>, resolve: (value: T) => void} {
++    let resolve: (value: T) => void = () => {};
++    const promise = new Promise<T>((innerResolve) => {
++        resolve = innerResolve;
++    });
++    return {promise, resolve};
++}
+diff --git a/src/mcp/McpSessionStartup.ts b/src/mcp/McpSessionStartup.ts
+index 25d29aebe6f727f91af57f3ec8483adfa106c0ec..144ec8a3ce0a5954f79092ff7b200e14def1b5a3 100644
+--- a/src/mcp/McpSessionStartup.ts
++++ b/src/mcp/McpSessionStartup.ts
+@@ -27,6 +27,8 @@ export interface McpSessionStartupOptions {
+     awaitTimeoutMs?: number | undefined;
+     /** The requested servers that the Codex config already defines. Nothing waits for them, and the report shows them. */
+     skippedServers?: Array<string> | undefined;
++    /** Natively configured servers to await and report beside the requested ones. */
++    configuredServers?: Array<string> | undefined;
+ }
+ 
+ /**
+@@ -72,7 +74,13 @@ export class McpSessionStartup {
+         afterVersion: number,
+         options: McpSessionStartupOptions,
+     ): Promise<void> | null {
+-        const pendingStartup = this.createPendingSession(sessionId, mcpServers, afterVersion, options.skippedServers ?? []);
++        const pendingStartup = this.createPendingSession(
++            sessionId,
++            mcpServers,
++            afterVersion,
++            options.skippedServers ?? [],
++            options.configuredServers ?? [],
++        );
+         if (options.publish) {
+             this.pendingSessions.set(sessionId, pendingStartup);
+         }
+@@ -127,9 +135,12 @@ export class McpSessionStartup {
+         mcpServers: Array<AcpMcpServer>,
+         afterVersion: number,
+         skippedServers: Array<string>,
++        configuredServers: Array<string>,
+     ): PendingMcpStartupSession {
+-        const requestedServers = new Set(getRequestedMcpServerNames(mcpServers)
+-            .filter(server => !skippedServers.includes(server)));
++        const requestedServers = new Set([
++            ...getRequestedMcpServerNames(mcpServers).filter(server => !skippedServers.includes(server)),
++            ...configuredServers,
++        ]);
+         const abort = new AbortController();
+         const startup = this.runWithProcessCheck(() => this.codexAcpClient().awaitMcpServerStartup(
+             Array.from(requestedServers),

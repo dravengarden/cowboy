@@ -1,17 +1,7 @@
 // Codex-owned source patching. The shared component still builds the exact
 // upstream runtime graph; only unpublished candidate archives are replaced.
 import { readdirSync } from "node:fs";
-import {
-  copyFile,
-  cp,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rename,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { copyFile, cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,37 +29,13 @@ for (const key of [
 if (!baseUrl.startsWith("https://") || baseUrl.includes("latest")) {
   throw new Error("Provider artifact base URL must be immutable HTTPS");
 }
-const source = JSON.parse(await readFile(`${root}/source.json`, "utf8"));
 const manifest = JSON.parse(await readFile(`${pluginRoot}/provider.json`, "utf8"));
-const adapter = source.adapter;
 const dependency = manifest.runtime.dependencies.find(
   (value: { id: string }) => value.id === "codex-acp",
 );
-if (source.schema_version !== 1 || adapter.version !== dependency?.version) {
-  throw new Error("Codex adapter source does not match the Provider pin");
-}
-if (
-  !/^[a-f0-9]{40}$/.test(adapter.revision) ||
-  adapter.archive_url !==
-    `https://codeload.github.com/agentclientprotocol/codex-acp/tar.gz/${adapter.revision}` ||
-  adapter.patch !== "adapter.patch"
-)
-  throw new Error("Invalid pinned Codex adapter source");
-
 const output = `${repository}/dist/plugins/codex/runtime`;
 const cache = `${repository}/dist/plugins/.runtime-cache`;
 await mkdir(cache, { recursive: true });
-const archive = `${cache}/codex-acp-${adapter.archive_sha256}.tar.gz`;
-try {
-  await stat(archive);
-} catch (error) {
-  if (!((error as { code?: string }).code === "ENOENT")) throw error;
-  const partial = `${archive}.${process.pid}.partial`;
-  await run("curl", ["--fail", "--location", "--output", partial, adapter.archive_url]);
-  await verify(partial, adapter.archive_sha256);
-  await rename(partial, archive);
-}
-await verify(archive, adapter.archive_sha256);
 const stage = await mkdtemp(join(cache, "codex-source-"));
 buildEnvironment.HOME = `${stage}/home`;
 buildEnvironment.XDG_CONFIG_HOME = `${stage}/home/.config`;
@@ -88,11 +54,42 @@ try {
     await copyFile(`${root}/${name}`, `${glue}/${name}`);
   }
   await run("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], glue);
+  // The pinned upstream release plus Cowboy's delta series (third_party/codex-acp).
   const sourceRoot = `${stage}/source`;
-  await mkdir(sourceRoot);
-  await run("tar", ["-xzf", archive, "--strip-components=1", "-C", sourceRoot]);
-  await verify(`${sourceRoot}/package-lock.json`, adapter.npm_lock_sha256);
-  await run("patch", ["--batch", "--fuzz=0", "-p1", "-i", `${root}/adapter.patch`], sourceRoot);
+  const prepared = Bun.spawn({
+    cmd: [process.execPath, "tools/third-party.ts", "prepare", "codex-acp", sourceRoot, cache],
+    cwd: repository,
+    env: buildEnvironment,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "inherit",
+  });
+  const preparedOutput = await new Response(prepared.stdout).text();
+  if ((await prepared.exited) !== 0) throw new Error("Could not prepare the Codex adapter source");
+  const { upstream, series } = JSON.parse(preparedOutput) as {
+    upstream: {
+      version: string;
+      repository: string;
+      tag: string;
+      commit: string;
+      archive_sha256: string;
+    };
+    series: Array<{ id: string; file: string; sha256: string }>;
+  };
+  if (upstream.version !== dependency?.version) {
+    throw new Error("Codex adapter source does not match the Provider pin");
+  }
+  const deltas = `${stage}/codex-adapter.patch`;
+  await writeFile(
+    deltas,
+    (
+      await Promise.all(
+        series.map((delta) =>
+          readFile(`${repository}/third_party/codex-acp/patches/${delta.file}`, "utf8"),
+        ),
+      )
+    ).join(""),
+  );
   await run("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], sourceRoot);
   await run("npm", ["run", "typecheck"], sourceRoot);
   await run("npm", ["test"], sourceRoot);
@@ -122,7 +119,7 @@ try {
     const component = target.components.find(
       (value: { dependency: string }) => value.dependency === "codex-acp",
     );
-    if (!component || component.version !== adapter.version) {
+    if (!component || component.version !== upstream.version) {
       throw new Error("Missing exact Codex adapter target");
     }
     const targetName = `${target.os}-${target.architecture}`;
@@ -169,9 +166,15 @@ try {
     );
     await rm(`${targetRoot}/bin/cowboy-configured-cli`);
     const provenance = {
-      schema: "cowboy.codex-source-patch/v1",
-      upstream: adapter,
-      patch_sha256: await sha256(`${root}/adapter.patch`),
+      schema: "cowboy.codex-source-patch/v2",
+      upstream: {
+        repository: upstream.repository,
+        tag: upstream.tag,
+        commit: upstream.commit,
+        archive_sha256: upstream.archive_sha256,
+      },
+      deltas: series.map((delta) => ({ id: delta.id, file: delta.file, sha256: delta.sha256 })),
+      patch_sha256: await sha256(deltas),
       launcher_sha256: await sha256(`${root}/launch.mjs`),
       memory_bridge_sha256: await sha256(`${targetRoot}/app/memory.mjs`),
       binding_launcher_sha256: await sha256(`${targetRoot}/app/bindings.mjs`),
@@ -185,7 +188,7 @@ try {
       bundle_sha256: await sha256(`${sourceRoot}/dist/index.js`),
     };
     await writeFile(`${targetRoot}/codex-source.json`, JSON.stringify(provenance, null, 2) + "\n");
-    await copyFile(`${root}/adapter.patch`, `${targetRoot}/codex-adapter.patch`);
+    await copyFile(deltas, `${targetRoot}/codex-adapter.patch`);
     const names = [...readdirSync(targetRoot, { withFileTypes: true })]
       .map((entry) => entry.name)
       .sort();
@@ -248,12 +251,6 @@ async function sha256(path: string): Promise<string> {
     throw new Error("Could not hash source artifact");
   }
   return output.split(/\s/)[0];
-}
-
-async function verify(path: string, expected: string): Promise<void> {
-  if (!/^[a-f0-9]{64}$/.test(expected) || (await sha256(path)) !== expected) {
-    throw new Error("Codex source artifact digest mismatch");
-  }
 }
 
 async function run(command: string, args: string[], cwd = repository): Promise<void> {

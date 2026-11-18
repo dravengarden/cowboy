@@ -59,6 +59,28 @@ prove compatibility. Preserve isolated Provider homes and closed environments;
 never read, copy or link standard Claude/Codex credentials or settings to make a
 DeepSeek candidate work. Credentials and model requests are not audit inputs.
 
+## Upgrade source-built third-party packages
+
+A dependency listed under `third_party/` (for example `codex-acp`) is built
+from its pinned upstream source plus Cowboy's delta series. Upgrade it with
+the workflow in `docs/third-party.md`, never by editing patch files:
+
+```bash
+nix develop -c bun tools/third-party.ts status codex-acp
+nix develop -c bun tools/third-party.ts checkout codex-acp --force
+nix develop -c bun tools/third-party.ts upgrade codex-acp <tag>
+# decide each delta against dist/third-party/codex-acp-upgrade-<tag>.md
+nix develop -c bun tools/third-party.ts export codex-acp
+```
+
+Upstream first: drop every delta upstream now implements or covers, adapting
+Cowboy to upstream's behavior; keep only deltas Cowboy still needs, each with
+its drop condition. Record each delta's decision (dropped, adapted, kept,
+added) in the Provider's dependency audit. Then pin the new version in every
+declared consumer (`bun tools/third-party.ts check` enforces this) and run the
+consumer's source build, which executes upstream's type check and complete
+test suite.
+
 ## Configure Recommended without product code
 
 The source of truth is `plugins/<id>/provider.json` → `configuration_presets`.

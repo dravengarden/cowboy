@@ -278,6 +278,7 @@ primary phone/desktop product path.
 - [`plugin-browser-buffer-sync.md`](plugin-browser-buffer-sync.md) — Browser-owned Code synchronization
 - [`plugin-buffer-cleanup-surface.md`](plugin-buffer-cleanup-surface.md) — Core Code cleanup in Settings
 - [`plugin-code-connected-conformance.md`](plugin-code-connected-conformance.md) — Connected core Code buffer acceptance
+- [`third-party.md`](third-party.md) — Third-party upstream pins and owned delta series: develop, review, upgrade (upstream first) and build
 - [`plugin-code-read-authority.md`](plugin-code-read-authority.md) — Buffered Code read authority
 - [`plugin-content-bound-reads.md`](plugin-content-bound-reads.md) — Reads conditional on displayed content
 - [`plugin-continuation-finalization.md`](plugin-continuation-finalization.md) — Core Code continuation finalization

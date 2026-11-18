@@ -28,6 +28,11 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   package self-contained.
   Scripts use `node:` and `Bun` APIs and spawn through `tools/lib/command.ts`.
   Do not use `jsr:`/`npm:` specifiers.
+- Upstream packages Cowboy builds from source live in `third_party/<name>/`
+  as a pinned release plus a delta series. Change them only through
+  `tools/third-party.ts` (checkout, export, upgrade); never hand-edit a patch.
+  Upstream first: drop a delta once upstream covers it. See
+  `docs/third-party.md`.
 - Signed Plugin collectors (`plugins/*/collector/`) run on the Machine's
   bundled Bun with no host-provided globals. A package is self-contained, so
   a collector that starts its provider CLI carries its own `process.js`.

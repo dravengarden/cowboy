@@ -615,11 +615,14 @@ provider-check: claude-remote-check plugin-check
     node --test components/provider-runtime/packages/deepseek-harness/launch_test.mjs
     node --import ./tools/register-memory-client.mjs --test plugins/codex/runtime/launch.test.mjs
     node --import ./tools/register-memory-client.mjs --test plugins/codex/runtime/execution-mcp.test.mjs
-    bun x --no-install biome format plugins/codex/runtime/build.ts plugins/codex/runtime/launch.mjs plugins/codex/runtime/launch.test.mjs plugins/codex/runtime/memory.mjs plugins/codex/runtime/execution-mcp.mjs plugins/codex/runtime/execution-mcp.test.mjs plugins/codex/runtime/source.json plugins/codex/runtime/package.json plugins/codex/runtime/package-lock.json
+    bun x --no-install biome format plugins/codex/runtime/build.ts plugins/codex/runtime/launch.mjs plugins/codex/runtime/launch.test.mjs plugins/codex/runtime/memory.mjs plugins/codex/runtime/execution-mcp.mjs plugins/codex/runtime/execution-mcp.test.mjs plugins/codex/runtime/package.json plugins/codex/runtime/package-lock.json
     bun run typecheck
     bun test ./tools/check-provider-release-coverage_test.ts
     bun test ./tools/provider-runtime-platforms_test.ts
     bun test ./.agents/skills/release-cowboy-plugin/scripts/audit-dependencies_test.ts
+    bun test ./tools/third-party_test.ts
+    bun tools/third-party.ts check
+    bun x --no-install biome format tools/third-party.ts tools/third-party_test.ts tools/lib/third-party.ts third_party
     bun test ./.agents/skills/release-cowboy-plugin/scripts/converge-machine_test.ts
     bun test ./tools/plugin-publication-receipt_test.ts
     bun test ./tools/immutable-publication_test.ts

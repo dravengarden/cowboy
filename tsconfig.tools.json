@@ -55,6 +55,9 @@
     "tools/idb-browser-conformance.ts",
     "tools/native-shell-probe_test.ts",
     "tools/plugin-publication-receipt.ts",
-    "tools/publish-plugin-release.ts"
+    "tools/publish-plugin-release.ts",
+    "tools/third-party.ts",
+    "tools/third-party_test.ts",
+    "tools/lib/third-party.ts"
   ]
 }
