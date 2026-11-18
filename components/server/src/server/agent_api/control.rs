@@ -739,6 +739,24 @@ fn command(name: &str) -> Option<(&'static str, &'static str)> {
     })
 }
 
+/// [`command_value`] plus refusals the command path could only report as a
+/// bare `rejected`: a managed child's configuration belongs to its call.
+fn checked_command_value(
+    state: &AppState,
+    name: &str,
+    input: &Value,
+    operation: &str,
+) -> Result<Value, &'static str> {
+    if name == "sessions.configure"
+        && input["session_id"]
+            .as_str()
+            .is_some_and(|id| state.hub.is_managed_child(id))
+    {
+        return Err("managed_child_configuration");
+    }
+    command_value(name, input, operation)
+}
+
 fn command_value(name: &str, input: &Value, operation: &str) -> Result<Value, &'static str> {
     if name == "sessions.review_open" {
         only_keys(input, &["session_id", "path", "line"]).map_err(|_| "invalid_argument")?;
@@ -1157,7 +1175,7 @@ async fn dispatch(
     }
     if command(name).is_some() {
         let operation = operation.ok_or("read_only")?;
-        let value = command_value(name, &input, operation)?;
+        let value = checked_command_value(state, name, &input, operation)?;
         let mut principal = auth.principal.clone();
         principal.role = AdminRole::Operator;
         let accepted = web::handle_command(

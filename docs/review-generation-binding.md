@@ -63,14 +63,18 @@ reuse of unchecked verdicts.
   readiness generation it already resolves per Provider, so what an agent
   sees is what admission will choose. Falls back to the latest package only
   when the Provider is unavailable (the call would be refused anyway).
-- An explicit review `--preset` is checked against the runnable
-  generation's reviewer candidates, not the latest Catalog.
+- Every explicit `--preset` (review, analysis or image) must exist on the
+  runnable generation (`preset_unavailable` otherwise); a review's must then
+  also be one of that generation's reviewer candidates
+  (`review_model_not_allowed`).
 - `claim` re-resolves readiness (unchanged) and, for a review, resolves the
   admitted preset on the generation it pins. If an update landed while the
   call waited (for example for approval) and the ID is missing or no longer a
-  reviewer family, the call fails `preset_unavailable` /
+  reviewer family, or (for a fresh review) not a family the session's review
+  preferences list, the call fails `preset_unavailable` /
   `review_model_not_allowed` before any snapshot or worker; the caller
-  submits again and admission ranks the new generation.
+  submits again and admission ranks the new generation. A continuation keeps
+  its child's preset, as admission does.
 - Claim does not silently re-rank an automatic choice. The ledger `Record`
   denies unknown fields, so recording whether the preset was automatic would
   make a rolled-back Controller unable to read new records; the rare
@@ -80,9 +84,9 @@ reuse of unchecked verdicts.
 
 - `repin_workerless_provider` refuses managed children, matching the live
   reload refusal. This covers both dormant and missing-generation re-pin.
-  A managed child whose generation was uninstalled cannot continue; the
-  continuation fails `conversation_unavailable` and the caller starts a
-  fresh call.
+  A managed child whose generation was uninstalled cannot continue: the
+  missing-generation note is kept for managed children, and claim fails such
+  a continuation `conversation_unavailable` before preparing a round.
 - Defense in depth: `configuration::ready` fails `generation_changed` when
   the child's `meta.provider_version/digest` differs from the record's
   claimed values, before `start_registered_session`.
@@ -90,17 +94,27 @@ reuse of unchecked verdicts.
 ### C. Only the runner configures a managed child
 
 - `config_revert::apply` refuses managed children for every client and Agent
-  API entry point (`managed child configuration is owned by its call`). The
-  runner keeps writing preferences through `apply_preset`.
+  API entry point (`managed child configuration is owned by its call`); MCP
+  `sessions.configure` reports it as `managed_child_configuration` rather
+  than a bare `rejected`. The runner keeps writing preferences through
+  `apply_preset`.
 - The Hub persists queues, so a managed prompt queued before a Controller
-  restart would otherwise drain as soon as the child is ready. The queue now
-  dispatches a managed prompt only after the runner released it in this
-  process (`submit_managed_prompt` releases after `configuration::ready`;
-  the release set is in memory only). `ManagedTurn::held` reports a queued,
-  unreleased prompt; the runner then runs `configuration::ready` again
-  (which also rejects preset-less legacy reviews) and calls
-  `release_managed_prompt`, or discards the prompt and fails the call. A
-  finished call discards its prompt and forgets its release.
+  restart drains when its child is ready. With B and the refusal above, that
+  worker runs the same generation and replays the same runner-written
+  preferences the previous process confirmed, so no new gate is needed. The
+  runner withdraws a still-queued prompt that must never start: a review
+  admitted without a preset (fails `review_model_not_allowed`) and a call
+  whose cancellation was accepted (finishes `Cancelled` immediately, so
+  resuming the queue during the stop grace cannot run it). A finished call
+  also withdraws any leftover prompt.
+- A refused continuation's child is hibernated, never deleted: deletion
+  would tombstone the retained conversation on a Machine with the deletion
+  writer. Fresh children are still deleted.
+- An earlier revision held every queued managed prompt behind an in-memory
+  release set. Review showed it could strand a prompt (dispatch requeue,
+  ordinary sessions using the prefix, a predecessor's orphaned row) or let a
+  replacement worker inherit a release, so it was dropped for the narrower
+  rules above.
 
 ### D. Reuse only checked reviews
 
@@ -132,6 +146,19 @@ and the preference write, so A, B and D share one validation.
   the UI or MCP now fails with an explicit message (it was never honoured
   reliably).
 
+## Residual, deliberately not changed
+
+- A reconnecting worker can still settle a managed child on its own
+  surviving release (existing runtime reconciliation). The call then pins and
+  resolves presets on that same generation, so one call still uses one
+  generation.
+- A schema-1 reservation already mapped before the upgrade is followed by
+  reservation recovery; `reviewed_by_reviewer` still refuses a source without
+  a signed reviewer preset and recorded reviewer model. A refused source
+  keeps owning its identity; pass `fresh:true` to run a new review.
+- `configuration::ready` keeps its existing preference/observation
+  handshake; it is not rewritten here.
+
 ## Tests
 
 - Selection: latest package ≠ runnable generation → auto pick comes from the
@@ -142,8 +169,8 @@ and the preference write, so A, B and D share one validation.
   `ready` fails `generation_changed` on a hand-modified child meta.
 - Configure: `SetConfigOption` / `sessions.configure` on a managed child is
   refused; ordinary sessions unchanged.
-- Recovery: Running call with queued-only prompt runs `ready` before
-  resubmit; preset-less legacy review fails `review_model_not_allowed`.
+- Withdrawal: a queued managed prompt is withdrawn by its own call id only,
+  and the queue is then empty.
 - Reuse: schema-1 source never matches; source with non-reviewer recorded
   model is not reused; disallowed request reserves nothing.
 

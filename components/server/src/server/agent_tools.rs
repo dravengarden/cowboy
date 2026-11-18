@@ -852,21 +852,6 @@ fn option_choices(state: &AppState, agent: &str) -> serde_json::Value {
     }).collect::<Vec<_>>())
 }
 
-/// Whether `preset` is one of `agent`'s signed configuration presets.
-pub(super) fn preset_exists(state: &AppState, agent: &str, preset: &str) -> bool {
-    state
-        .provider_catalog
-        .latest_package(agent)
-        .is_some_and(|(_, _, package)| {
-            package
-                .manifest
-                .configuration
-                .presets
-                .iter()
-                .any(|candidate| candidate.id == preset)
-        })
-}
-
 pub(super) fn presets(state: &AppState, agent: &str) -> serde_json::Value {
     presets_on(state, agent, None)
 }

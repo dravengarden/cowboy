@@ -1,30 +1,18 @@
-//! Managed call children: Controller-owned prompts and their dispatch release.
+//! Managed call children: Controller-owned prompts and generation evidence.
 
 use super::*;
 
 impl Hub {
     /// Submit a managed call's prompt to its child. Client entry points refuse
     /// managed children; only the Controller-owned call runner reaches here.
-    /// The caller has just confirmed the child's configuration, so the prompt
-    /// is released for dispatch on this Controller.
     pub fn submit_managed_prompt(&self, session_id: &str, call_id: &str, text: String) {
         let cmid = format!("{MANAGED_CALL_CMID_PREFIX}{call_id}");
-        self.inner.managed_releases.lock().insert(cmid.clone());
         self.submit_inner(session_id, text, Vec::new(), Some(cmid), true, false);
     }
 
-    /// Release a held managed prompt (see [`ManagedTurn::held`]) after the
-    /// runner confirmed the child's configuration again.
-    pub fn release_managed_prompt(&self, session_id: &str, call_id: &str) {
-        self.inner
-            .managed_releases
-            .lock()
-            .insert(format!("{MANAGED_CALL_CMID_PREFIX}{call_id}"));
-        self.try_drain(session_id);
-    }
-
-    /// Drop a held managed prompt whose configuration could not be confirmed.
-    pub fn discard_managed_prompt(&self, session_id: &str, call_id: &str) {
+    /// Withdraw a call's still-queued prompt (cancelled, refused or finished).
+    /// Returns whether a queued prompt was withdrawn (so it never started).
+    pub fn discard_managed_prompt(&self, session_id: &str, call_id: &str) -> bool {
         let cmid = format!("{MANAGED_CALL_CMID_PREFIX}{call_id}");
         let removed = {
             let mut sessions = self.inner.sessions.lock();
@@ -37,14 +25,17 @@ impl Hub {
         if removed {
             self.emit_pending(session_id);
         }
+        removed
     }
 
-    /// Forget a finished call's release.
-    pub fn forget_managed_release(&self, call_id: &str) {
+    /// Whether this session's last launch was refused because its pinned
+    /// Provider generation is no longer installed on its Machine.
+    pub fn provider_generation_missing(&self, session_id: &str) -> bool {
         self.inner
-            .managed_releases
+            .sessions
             .lock()
-            .remove(&format!("{MANAGED_CALL_CMID_PREFIX}{call_id}"));
+            .get(session_id)
+            .is_some_and(|s| s.provider_generation_missing)
     }
 
     pub fn is_managed_child(&self, session_id: &str) -> bool {

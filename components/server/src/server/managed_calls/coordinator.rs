@@ -872,11 +872,6 @@ async fn start(
         if continued.is_some() {
             return error("invalid_contract", "not_submitted");
         }
-        // A review checks its explicit preset against the runnable
-        // generation's reviewer candidates after readiness, below.
-        if !request.purpose.is_review() && !agent_tools::preset_exists(state, requested, preset) {
-            return error("preset_unavailable", "not_submitted");
-        }
         for target in &mut targets {
             target.preset = Some(preset.to_owned());
             target.options = None;
@@ -905,6 +900,20 @@ async fn start(
             Ok(ready) => ready,
             Err(reason) => return error(reason, "not_submitted"),
         };
+    // Discovery and admission use the generation the claim will pin, not the
+    // latest Catalog: an id may be absent or name another model on it.
+    let runnable = agent_tools::presets_on(
+        state,
+        &target.agent,
+        generation.as_ref().map(|(v, d)| (v.as_str(), d.as_str())),
+    );
+    if preset.is_some_and(|id| {
+        !runnable
+            .as_array()
+            .is_some_and(|all| all.iter().any(|p| p["id"].as_str() == Some(id)))
+    }) {
+        return error("preset_unavailable", "not_submitted");
+    }
     if continued.is_none()
         && matches!(
             request.purpose,
@@ -915,20 +924,8 @@ async fn start(
             .labels
             .get(crate::managed_calls::review::RISK)
             .is_some_and(|risk| risk == "high");
-        // Rank the generation the claim will pin, not the latest Catalog: a
-        // preset id may be absent or name another model on the runnable one.
-        let choices = super::selection::candidates(
-            &agent_tools::presets_on(
-                state,
-                &target.agent,
-                generation
-                    .as_ref()
-                    .map(|(version, digest)| (version.as_str(), digest.as_str())),
-            ),
-            &target.agent,
-            &policy.review,
-            high_risk,
-        );
+        let choices =
+            super::selection::candidates(&runnable, &target.agent, &policy.review, high_risk);
         // Generic Tools pins apply to ordinary calls. Review uses its own
         // ordered list unless this invocation explicitly names a signed preset.
         target.preset = match super::selection::review_preset(&choices, preset) {

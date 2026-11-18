@@ -340,9 +340,9 @@ Review selection, claim, worker start, prompt delivery, recovery and reuse
 are bound to one Provider generation: admission and capabilities rank the
 generation readiness would launch; claim refuses a preset that is no reviewer
 on the generation it pins; managed children are never re-pinned or configured
-by anyone but their call; a prompt queued before a Controller restart is held
-until its configuration is confirmed again; and only schema-2 review results
-from a signed reviewer run are reused. See
+by anyone but their call; a still-queued prompt of a cancelled call or of a
+preset-less legacy review is withdrawn before it can start; and only schema-2
+review results from a signed reviewer run are reused. See
 [`review-generation-binding.md`](review-generation-binding.md). Generic Tools target pins
 remain inputs to ordinary calls; they do not override Review preferences.
 Quota assessment remains the calling agent's responsibility, with no fixed

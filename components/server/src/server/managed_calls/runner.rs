@@ -256,9 +256,15 @@ async fn claim(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
         advance(state, store, record, fail("parent_unavailable", None)).await;
         return Step::Again;
     };
-    let (runtime, version, digest) = match state.hub.session_info(&record.child_session_id) {
+    let child = state.hub.session_info(&record.child_session_id);
+    let fresh = child.is_none();
+    let (runtime, version, digest) = match child {
         // A continued conversation keeps its own runtime and exact Provider
-        // generation.
+        // generation; one its Machine no longer has cannot continue.
+        Some(child) if state.hub.provider_generation_missing(&child.meta.id) => {
+            advance(state, store, record, fail("conversation_unavailable", None)).await;
+            return Step::Again;
+        }
         Some(child) => (
             child.meta.machine_id.clone(),
             child.meta.provider_version.clone(),
@@ -295,7 +301,27 @@ async fn claim(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
     // have landed while the call waited. Refuse before any snapshot or worker
     // if the admitted preset is no reviewer on the generation pinned now.
     if record.purpose.is_review()
-        && let Err(code) = review_preset_on(state, record, &version, &digest)
+        && let Err(code) = review_preset_on(state, record, &version, &digest).and_then(|family| {
+            // Still queued, so still admission: a fresh review's family must
+            // be one the session prefers, not merely any reviewer. A
+            // continuation keeps its child's preset, as admission does.
+            if !fresh {
+                return Ok(());
+            }
+            let review = super::super::agent_tools::effective(state, &parent.meta)
+                .calls
+                .review;
+            let order = if record.provider == "codex" {
+                review.gpt
+            } else {
+                review.claude
+            };
+            order
+                .iter()
+                .any(|preferred| Some(preferred.as_str()) == family)
+                .then_some(())
+                .ok_or("review_model_not_allowed")
+        })
     {
         advance(state, store, record, fail(code, None)).await;
         return Step::Again;
@@ -478,12 +504,6 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
         advance(state, store, record, fail("identity_mismatch", None)).await;
         return Step::Again;
     }
-    // A request that could not run may not reserve, or take, a review result.
-    if let Err(code) = review_admissible(state, record) {
-        state.supervisor.delete_session(child);
-        advance(state, store, record, fail(code, None)).await;
-        return Step::Again;
-    }
     if let Some(step) = reuse_review(state, store, record, &request, &prepared.input_revision).await
     {
         return step;
@@ -493,8 +513,9 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
             return Step::Wait(POLL);
         }
         // No prompt was admitted. Stop even a still-starting child so a late
-        // ready event cannot leave an orphan worker after the failed call.
-        state.supervisor.delete_session(child);
+        // ready event cannot leave an orphan worker after the failed call;
+        // a continued conversation keeps its transcript.
+        release_refused_child(state, store, record).await;
         advance(state, store, record, fail(error.code, error.detail)).await;
         return Step::Again;
     }
@@ -527,6 +548,15 @@ async fn reuse_review(
     request: &Request,
     revision: &str,
 ) -> Option<Step> {
+    // A request that could not run may not reserve, or take, a review result.
+    // No worker started; only a fresh child's registration needs retiring.
+    if let Err(code) = review_admissible(state, record) {
+        if matches!(request.conversation, Conversation::Fresh {}) {
+            state.supervisor.delete_session(&record.child_session_id);
+        }
+        advance(state, store, record, fail(code, None)).await;
+        return Some(Step::Again);
+    }
     let child = state.hub.session_info(&record.child_session_id)?;
     let identity = crate::managed_calls::review::identity(
         request,
@@ -574,18 +604,22 @@ fn review_admissible(state: &AppState, record: &Record) -> Result<(), &'static s
     else {
         return Err("preset_unavailable");
     };
-    review_preset_on(state, record, version, digest)
+    review_preset_on(state, record, version, digest).map(|_| ())
 }
 
+/// The reviewer family the call's preset resolves to on one generation.
 fn review_preset_on(
     state: &AppState,
     record: &Record,
     version: &str,
     digest: &str,
-) -> Result<(), &'static str> {
-    resolve_preset(state, record, version, digest)?
-        .map(|_| ())
-        .ok_or("review_model_not_allowed")
+) -> Result<Option<&'static str>, &'static str> {
+    let values =
+        resolve_preset(state, record, version, digest)?.ok_or("review_model_not_allowed")?;
+    Ok(values
+        .get("model")
+        .and_then(Value::as_str)
+        .and_then(super::selection::family))
 }
 
 /// A source verdict is reusable only if it ran a signed reviewer preset.
@@ -1104,6 +1138,9 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
         .await;
         return Step::Again;
     };
+    if let Some(step) = withdraw_unstarted(state, store, record).await {
+        return step;
+    }
     if record.state == State::Running && record.cancel_requested_at_ms.is_some() {
         if advance(state, store, record, |next| next.state = State::Stopping).await {
             let _ = state
@@ -1217,15 +1254,6 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
         .await;
         return Step::Again;
     }
-    // Queued before a Controller restart: no worker has seen it, and only the
-    // previous process confirmed the child's configuration.
-    if record.state == State::Running && turn.held {
-        if let Err(step) = reconfirm(state, store, record).await {
-            return step;
-        }
-        state.hub.release_managed_prompt(child, &record.call_id);
-        return Step::Wait(POLL);
-    }
     let elapsed = now_ms() - record.updated_at_ms;
     match turn.status {
         Status::Crashed | Status::Interrupted if turn.prompted || elapsed > PROMPT_RECOVERY_MS => {
@@ -1275,6 +1303,51 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
     Step::Wait(POLL)
 }
 
+/// End a running call whose prompt is still queued and must never start:
+/// a cancelled call (resuming the queue during the stop grace would run it)
+/// or a review admitted before reviews required a preset, which never passed
+/// the reviewer check (for example one queued across a restart).
+async fn withdraw_unstarted(state: &AppState, store: &Store, record: &Record) -> Option<Step> {
+    let cancelled = record.cancel_requested_at_ms.is_some();
+    let unvetted = record.purpose.is_review() && record.preset.is_none();
+    if record.state != State::Running
+        || !(cancelled || unvetted)
+        || !state
+            .hub
+            .discard_managed_prompt(&record.child_session_id, &record.call_id)
+    {
+        return None;
+    }
+    advance(state, store, record, |next| {
+        if cancelled {
+            next.state = State::Cancelled;
+        } else {
+            next.state = State::Failed;
+            next.error = Some(CallError::new("review_model_not_allowed", None));
+        }
+    })
+    .await;
+    Some(Step::Again)
+}
+
+/// Stop a child whose call was refused before its prompt ran. A fresh child
+/// has no other owner and is deleted; a continued conversation is only
+/// hibernated, because deleting it would tombstone the retained transcript.
+async fn release_refused_child(state: &AppState, store: &Store, record: &Record) {
+    let child = record.child_session_id.as_str();
+    let continued = store
+        .managed_call_input(&record.placement.parent_session_id, &record.call_id)
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|request| matches!(request.conversation, Conversation::Continue { .. }));
+    if continued {
+        let _ = state.supervisor.hibernate_session(child);
+    } else {
+        state.supervisor.delete_session(child);
+    }
+}
+
 /// Confirm a running call's preset on its child again before a recovered
 /// prompt may reach the model. On refusal, its prompt and worker are dropped.
 async fn reconfirm(state: &AppState, store: &Store, record: &Record) -> Result<(), Step> {
@@ -1284,9 +1357,7 @@ async fn reconfirm(state: &AppState, store: &Store, record: &Record) -> Result<(
     if error.code == RETRY {
         return Err(Step::Wait(POLL));
     }
-    let child = record.child_session_id.as_str();
-    state.hub.discard_managed_prompt(child, &record.call_id);
-    state.supervisor.delete_session(child);
+    release_refused_child(state, store, record).await;
     advance(state, store, record, fail(error.code, error.detail)).await;
     Err(Step::Again)
 }
@@ -1346,10 +1417,9 @@ fn call_notice(record: &Record) -> String {
 fn settle(state: &AppState, record: &Record) {
     // A finished call's prompt must never run later (for example one still
     // held after a restart when the call was cancelled).
-    state
+    let _ = state
         .hub
         .discard_managed_prompt(&record.child_session_id, &record.call_id);
-    state.hub.forget_managed_release(&record.call_id);
     if state.supervisor.has_live_worker(&record.child_session_id) {
         let _ = state.supervisor.hibernate_session(&record.child_session_id);
     }
