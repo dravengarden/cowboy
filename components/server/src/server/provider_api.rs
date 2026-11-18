@@ -216,6 +216,21 @@ pub(super) async fn api_provider_auth_logout(
     .into_response()
 }
 
+/// Why the default account cannot sign in with `method`, if it cannot.
+fn default_login_refusal(
+    package: &cowboy_provider_sdk::ProviderPackage,
+    method: &str,
+) -> Option<&'static str> {
+    if crate::provider_account::named_only(&package.manifest.id) {
+        return Some("named_account_required: this Provider signs in only to named accounts");
+    }
+    (!crate::provider_account::portable_contract::contract(package)
+        .methods
+        .iter()
+        .any(|candidate| candidate.id == method))
+    .then_some("authentication method is not available for the default account")
+}
+
 pub(super) async fn api_provider_auth_start(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthenticatedProductRequest>,
@@ -233,23 +248,8 @@ pub(super) async fn api_provider_auth_start(
         )
             .into_response();
     };
-    if crate::provider_account::named_only(&provider_id) {
-        return (
-            StatusCode::BAD_REQUEST,
-            "named_account_required: this Provider signs in only to named accounts",
-        )
-            .into_response();
-    }
-    if !crate::provider_account::portable_contract::contract(&package)
-        .methods
-        .iter()
-        .any(|method| method.id == request.method)
-    {
-        return (
-            StatusCode::BAD_REQUEST,
-            "authentication method is not available for the default account",
-        )
-            .into_response();
+    if let Some(refusal) = default_login_refusal(&package, &request.method) {
+        return (StatusCode::BAD_REQUEST, refusal).into_response();
     }
     let timestamp = now_ms();
     let reconciliation = {
@@ -990,4 +990,30 @@ pub(super) fn resolve_provider_generation_with_auth(
         named_carry: None,
         service_lineage,
     })
+}
+
+#[cfg(test)]
+mod default_login_tests {
+    use super::default_login_refusal;
+
+    fn package(source: &str) -> cowboy_provider_sdk::ProviderPackage {
+        let source: cowboy_provider_sdk::StandardProviderSource =
+            serde_json::from_str(source).unwrap();
+        cowboy_provider_sdk::build_package(source.compile().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn antigravity_default_account_never_signs_in() {
+        let antigravity = package(include_str!(
+            "../../../../plugins/antigravity/provider.json"
+        ));
+        for method in ["google-account", "google-subscription"] {
+            assert!(
+                default_login_refusal(&antigravity, method)
+                    .is_some_and(|refusal| refusal.starts_with("named_account_required"))
+            );
+        }
+        let grok = package(include_str!("../../../../plugins/grok/provider.json"));
+        assert_eq!(default_login_refusal(&grok, "xai-account"), None);
+    }
 }
