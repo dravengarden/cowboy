@@ -308,6 +308,10 @@ restart, logout, kill switch, and two-account isolation if Phase 1.3 passed.
 
 ### Phase 4 — OVH split execution
 
+Designed in [Antigravity real accounts on OVH](antigravity-real-accounts-design.md)
+(owner decision 2026-11-18: four real accounts on OVH, test account first).
+
+
 Disable built-in workspace tools, inject a Cowboy MCP facade bound to the
 execution JSON-RPC endpoint, project target context, and refuse initialization
 unless a zero-inference probe proves facade and projection. Declare
