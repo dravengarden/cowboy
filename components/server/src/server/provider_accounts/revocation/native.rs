@@ -118,6 +118,8 @@ async fn deliver(
         expected.observation.succeeded = recorded.observation.succeeded;
         expected.observation.profile_cleaned = recorded.observation.profile_cleaned;
         expected.observation.process_trees_exited = recorded.observation.process_trees_exited;
+        expected.observation.credential_cleared = recorded.observation.credential_cleared;
+        expected.observation.history_retained = recorded.observation.history_retained;
         ensure!(recorded == expected, "native_logout_scope_mismatch");
         if recorded.observation.succeeded != Some(true) || recorded.observation.profile_cleaned {
             return Ok(outcome(&recorded.observation));
