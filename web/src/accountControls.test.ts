@@ -8,7 +8,7 @@ import {
 } from "./accountControls";
 import { AccountControlsPanel } from "./AccountControlsPanel";
 import { UncertainEffectAcknowledge } from "./SessionAccountControl";
-import { subscriptionAllowed, subscriptionChoices } from "./SessionSubscription";
+import { namedOnlyLoginReason, subscriptionAllowed, subscriptionChoices } from "./SessionSubscription";
 import { SurfaceProvider } from "./surface/SurfaceProfile";
 
 const render = (element: React.ReactElement) => renderToStaticMarkup(createElement(SurfaceProvider, null, element));
@@ -120,6 +120,9 @@ test("the new-session picker offers only admitted, signed-in, ok accounts and ne
   assert(!subscriptionAllowed(data, "antigravity", ""));
   assert(!subscriptionAllowed(data, "antigravity", "default"));
   assert(subscriptionAllowed(data, "antigravity", ACCOUNT));
+  // An unloaded controls snapshot never enables a choice.
+  const unloaded = { ...data, account_controls: { ...data.account_controls, loaded: false } };
+  assertEquals(subscriptionChoices(unloaded, "antigravity", () => undefined)[0]!.reason, "Account state not loaded");
   // Other Providers keep their default entry.
   const codex = { ...data, registry: { ...data.registry, accounts: [] } };
   assertEquals(subscriptionChoices(codex, "codex", () => undefined).map((choice) => choice.id), ["default"]);
@@ -187,4 +190,13 @@ test("the account card shows its notice, usage, the session using it and the kil
     session: "s1", effect: { session_id: "s1", method: "fs/write_text_file", sequence: 2 }, onDone: () => undefined,
   }));
   assertStringIncludes(ack, "Acknowledge…");
+});
+
+test("a named-only account's sign-in is independent of usage collection", () => {
+  const observed = (fields: Record<string, unknown>) => [{ account_id: ACCOUNT, provider_id: "antigravity", ...fields }];
+  assertEquals(signInObservation({ reason: "account_usage_unsupported", signed_in: true }), "signed_in");
+  assertEquals(namedOnlyLoginReason(observed({ reason: "account_usage_unsupported", signed_in: true }), "antigravity", ACCOUNT), undefined);
+  assertEquals(namedOnlyLoginReason(observed({ reason: "account_usage_unsupported" }), "antigravity", ACCOUNT), "Sign-in not confirmed");
+  assertEquals(namedOnlyLoginReason([], "antigravity", ACCOUNT), "Sign-in not confirmed");
+  assertEquals(namedOnlyLoginReason(observed({ reason: "native_login_required" }), "antigravity", ACCOUNT), "Not signed in on a Machine");
 });

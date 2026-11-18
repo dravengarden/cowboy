@@ -77,6 +77,13 @@ export function accountControl(data: ControlledAccounts | undefined, account: st
   return account ? data?.account_controls?.accounts.find((control) => control.account_id === account) : undefined;
 }
 
+/** The control a choice may rely on: none until the Controller's controls
+ * snapshot is loaded, so the picker never enables an account from a
+ * partial or failed load. */
+export function loadedAccountControl(data: ControlledAccounts | undefined, account: string | undefined | null): AccountControl | undefined {
+  return data?.account_controls?.loaded === true ? accountControl(data, account) : undefined;
+}
+
 /** `Nov 18, 14:05` in the viewer's locale. */
 export function controlTime(ms: number): string {
   return new Date(ms).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -256,8 +263,11 @@ export function acknowledgeUncertainEffect(session: string, sequence: number): P
 
 /** The sign-in state of an account from its cached usage observation
  * (`/api/provider-accounts/usage`), never a Provider request. */
-export function signInObservation(observation: { reason?: string | undefined; available?: boolean | undefined } | undefined): "signed_in" | "not_signed_in" | "pending" | undefined {
+export function signInObservation(observation: { reason?: string | undefined; available?: boolean | undefined; signed_in?: boolean | undefined } | undefined): "signed_in" | "not_signed_in" | "pending" | undefined {
   if (!observation) return undefined;
+  // The server's verified native login, reported also when the Provider has
+  // no usage collector (Antigravity): sign-in is independent of quota.
+  if (observation.signed_in === true) return "signed_in";
   if (observation.reason === "native_login_required" || observation.reason === "native_login_outdated") return "not_signed_in";
   if (observation.reason === "native_login_pending") return "pending";
   // Only the server's resolved native login is evidence of a sign-in; any

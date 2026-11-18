@@ -45,6 +45,19 @@ async fn observes_binding(
         .is_ok_and(|fingerprint| account.identity_fingerprint.as_ref() == Some(&fingerprint)))
 }
 
+/// Internal: a verified native login exists, but its Provider has no usage
+/// collector (Antigravity). Public as `account_usage_unsupported`; the read
+/// model still reports the sign-in (`signed_in`).
+const SIGNED_IN_USAGE_UNSUPPORTED: &str = "account_usage_unsupported_signed_in";
+
+fn public_code(code: &'static str) -> &'static str {
+    if code == SIGNED_IN_USAGE_UNSUPPORTED {
+        "account_usage_unsupported"
+    } else {
+        code
+    }
+}
+
 async fn target(
     state: &AppState,
     owner: &str,
@@ -139,13 +152,13 @@ async fn target(
                 &completion.profile.provider_version,
                 &completion.profile.generation_digest,
             )
-            .ok_or("account_usage_unsupported")?;
+            .ok_or(SIGNED_IN_USAGE_UNSUPPORTED)?;
         let binding = state
             .usage
             .plugin_bindings()
             .into_iter()
             .find(|binding| binding.account == provider)
-            .ok_or("account_usage_unsupported")?;
+            .ok_or(SIGNED_IN_USAGE_UNSUPPORTED)?;
         return Ok(Target {
             operation,
             completion,
@@ -221,6 +234,10 @@ pub(in crate::server) async fn read_one(
     let target = match target(state, owner, id).await {
         Ok(target) => target,
         Err(code) => {
+            if code == SIGNED_IN_USAGE_UNSUPPORTED {
+                value["signed_in"] = json!(true);
+            }
+            let code = public_code(code);
             value["reason"] = json!(code);
             value["message"] = json!(error_message(code));
             return Ok(value);
@@ -228,6 +245,7 @@ pub(in crate::server) async fn read_one(
     };
     value["machine_id"] = json!(target.completion.machine_id);
     value["available"] = json!(true);
+    value["signed_in"] = json!(true);
     let cache = state.usage.native.entry(owner, id.as_str());
     value["refreshing"] = json!(cache.collection.try_lock().is_err());
     // A read neither takes the database admission write lock nor binds a cache
@@ -354,10 +372,10 @@ async fn refresh_owned(
     id: &ProviderAccountId,
 ) -> Result<(), &'static str> {
     // Resolve ownership before allocating a cache slot for an untrusted ID.
-    target(state, owner, id).await?;
+    target(state, owner, id).await.map_err(public_code)?;
     let cache = state.usage.native.entry(owner, id.as_str());
     let collection = Arc::clone(&cache.collection).lock_owned().await;
-    let target = target(state, owner, id).await?;
+    let target = target(state, owner, id).await.map_err(public_code)?;
     let key = crate::usage::limiter::Limiter::account_key(owner, id.as_str());
     let mut permit = None;
     let due = state

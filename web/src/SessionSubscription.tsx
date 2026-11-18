@@ -6,7 +6,7 @@ import { useNativeAccountUsage } from "./nativeAccountUsage";
 import { loadUsageSnapshot, useStoreSelector } from "./store";
 import { providerUsage, subscriptionQuotaHint } from "./usageLimits";
 import { accountServes, providerDefault } from "./subscriptionAccounts";
-import { accountControl, type ControlledAccounts, namedOnlyProvider, pickerUnavailableReason, validAccountControls } from "./accountControls";
+import { type ControlledAccounts, loadedAccountControl, namedOnlyProvider, pickerUnavailableReason, signInObservation, validAccountControls } from "./accountControls";
 
 interface Account { id: string; provider_id: string; label: string; enabled: boolean }
 interface Accounts extends ControlledAccounts {
@@ -34,6 +34,18 @@ export function subscriptionLoginReason(
   if (id === "default") return undefined;
   const reason = observations.find((item) => item.account_id === id && item.provider_id === provider)?.reason;
   return reason ? LOGIN_REASONS[reason] : undefined;
+}
+
+/** A named-only Provider's account is choosable only on a confirmed sign-in:
+ * a missing or inconclusive observation disables it too. */
+export function namedOnlyLoginReason(
+  observations: readonly { account_id: string; provider_id: string; reason?: string; available?: boolean; signed_in?: boolean }[],
+  provider: string,
+  id: string,
+): string | undefined {
+  const observation = observations.find((item) => item.account_id === id && item.provider_id === provider);
+  if (signInObservation(observation) === "signed_in") return undefined;
+  return (observation?.reason ? LOGIN_REASONS[observation.reason] : undefined) ?? "Sign-in not confirmed";
 }
 
 export function subscriptionAllowed(data: Accounts | undefined, provider: string, choice: string): boolean {
@@ -69,7 +81,7 @@ export function subscriptionChoices(data: Accounts | undefined, provider: string
     ...account,
     label: `${account.label}${data && !namedOnly && account.id === defaultId ? " · Default" : ""}`,
     reason: subscriptionUnavailableReason(data, provider, account.id) ??
-      (namedOnly ? pickerUnavailableReason(accountControl(data, account.id), loginReason(account.id), now) : loginReason(account.id)),
+      (namedOnly ? pickerUnavailableReason(loadedAccountControl(data, account.id), loginReason(account.id), now) : loginReason(account.id)),
   }));
 }
 
@@ -86,7 +98,9 @@ export function useSessionSubscription(active: boolean, provider: string, prefer
   useEffect(() => { if (active) void loadNative(); }, [active, loadNative]);
   const snapshotLoaded = useStoreSelector((state) => state.usage !== null);
   useEffect(() => { if (active && !snapshotLoaded) void loadUsageSnapshot().catch(() => undefined); }, [active, snapshotLoaded]);
-  const loginReason = (id: string) => subscriptionLoginReason(native.accounts, provider, id);
+  const loginReason = (id: string) => namedOnlyProvider(data, provider)
+    ? namedOnlyLoginReason(native.accounts, provider, id)
+    : subscriptionLoginReason(native.accounts, provider, id);
   // Cached observations only (the Service snapshot and named-account reads);
   // shown to help choose, never to pick or rotate an account automatically.
   const snapshot = useStoreSelector((state) => state.usage);
@@ -142,7 +156,7 @@ export function useSessionSubscription(active: boolean, provider: string, prefer
     /** The user picked a subscription instead of the default. */
     chosen: Boolean(choice),
     allowed: (subscriptionAllowed(data, provider, value) && !(namedOnly
-      ? pickerUnavailableReason(accountControl(data, value), loginReason(value))
+      ? pickerUnavailableReason(loadedAccountControl(data, value), loginReason(value))
       : loginReason(value))) || (error && value === "default" && !namedOnly),
     loginReason,
     quota,

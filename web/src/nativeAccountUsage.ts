@@ -10,6 +10,8 @@ export interface NativeAccountUsage {
   provider_id: string;
   machine_id?: string;
   available?: boolean;
+  /** A verified native login exists, whether or not usage is collected. */
+  signed_in?: boolean;
   usage?: ProviderUsage | null;
   refreshing: boolean;
   reason?: string;
