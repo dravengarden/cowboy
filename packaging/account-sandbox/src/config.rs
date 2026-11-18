@@ -13,7 +13,8 @@ pub const DEFAULT_CONFIG_PATH: &str = "/etc/cowboy-account-sandbox/config.json";
 const GIB: u64 = 1024 * 1024 * 1024;
 const MAX_CONFIG_BYTES: u64 = 64 * 1024;
 
-/// Address ranges always denied to account units, besides the configured ones.
+/// Address ranges always denied to account units; `ip_deny` only appends to
+/// them, so configuring a host address can never drop a private range.
 /// Explicit prefixes: `systemd-run -p` rejects the symbolic names
 /// (`localhost`, `link-local`, `multicast`) that unit files accept.
 pub const BUILTIN_IP_DENY: &[&str] = &[
@@ -23,6 +24,10 @@ pub const BUILTIN_IP_DENY: &[&str] = &[
     "fe80::/10",
     "224.0.0.0/4",
     "ff00::/8",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "100.64.0.0/10",
 ];
 
 #[derive(Debug, Clone, Deserialize)]
@@ -42,7 +47,8 @@ pub struct Config {
     pub home_image_inodes: u64,
     /// Host free space that must remain on the state root's filesystem.
     pub free_space_reserve_bytes: u64,
-    /// Extra `IPAddressDeny=` entries (host addresses, RFC 1918/6598).
+    /// Extra `IPAddressDeny=` entries appended to [`BUILTIN_IP_DENY`]
+    /// (the host's own public addresses).
     pub ip_deny: Vec<String>,
     /// `IPAddressAllow=` entries (the resolver stub).
     pub ip_allow: Vec<String>,
@@ -90,14 +96,7 @@ impl Default for Config {
             home_image_bytes: 2 * GIB,
             home_image_inodes: 131_072,
             free_space_reserve_bytes: 8 * GIB,
-            ip_deny: [
-                "10.0.0.0/8",
-                "172.16.0.0/12",
-                "192.168.0.0/16",
-                "100.64.0.0/10",
-            ]
-            .map(str::to_owned)
-            .to_vec(),
+            ip_deny: Vec::new(),
             ip_allow: vec!["127.0.0.53/32".to_owned()],
             max_runtime_units: 1,
             unit_memory_max: "3G".to_owned(),
@@ -169,10 +168,9 @@ impl Config {
             self.home_image_inodes >= 1024,
             "home_image_inodes is below 1024"
         );
-        ensure!(
-            self.max_runtime_units >= 1,
-            "max_runtime_units must be positive"
-        );
+        // Revision 5: one runtime per account is a safety invariant, not a
+        // tunable; a larger value would admit concurrent turns of one account.
+        ensure!(self.max_runtime_units == 1, "max_runtime_units must be 1");
         ensure!(self.max_runtimes >= 1, "max_runtimes must be positive");
         for range in self.ip_deny.iter().chain(&self.ip_allow) {
             ensure!(valid_ip_range(range), "invalid address range {range:?}");
@@ -246,5 +244,29 @@ mod tests {
             ..Config::default()
         };
         assert!(bad.validated().is_err());
+    }
+
+    #[test]
+    fn runtime_limit_is_fixed_at_one() {
+        for limit in [0, 2] {
+            let config = Config {
+                max_runtime_units: limit,
+                ..Config::default()
+            };
+            assert!(config.validated().is_err(), "{limit} accepted");
+        }
+    }
+
+    #[test]
+    fn private_ranges_are_always_denied() {
+        for range in [
+            "10.0.0.0/8",
+            "172.16.0.0/12",
+            "192.168.0.0/16",
+            "100.64.0.0/10",
+            "169.254.0.0/16",
+        ] {
+            assert!(BUILTIN_IP_DENY.contains(&range), "{range} missing");
+        }
     }
 }

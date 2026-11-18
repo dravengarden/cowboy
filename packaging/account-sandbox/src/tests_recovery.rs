@@ -134,6 +134,55 @@ fn a_unit_is_settled_only_after_systemd_confirms_it_gone() {
 }
 
 #[test]
+fn a_client_exit_during_start_keeps_the_running_unit_owned() {
+    let f = fixture();
+    f.host.client_exits_on_spawn.store(true, Ordering::Relaxed);
+    let other = f.daemon.connect(0);
+    let unit = unit_of(&f.start_on(&other, Mode::Probe, 0).unwrap());
+    assert!(f.host.unit_status_of(&unit).is_some());
+    assert_eq!(f.meta().units.len(), 1, "systemd still runs it");
+    assert_eq!(code(f.start(Mode::Probe, 0)), Code::Limit);
+    // Teardown of its connection still finds and stops it.
+    f.daemon.disconnect(&other);
+    assert!(f.host.unit_status_of(&unit).is_none());
+    assert!(f.meta().units.is_empty());
+}
+
+#[test]
+fn a_starting_record_of_an_earlier_boot_is_retired() {
+    let f = fixture();
+    let unit = crate::units::unit_name(&f.key, Mode::Probe, "00112233aabbccdd");
+    let dir = safefs::open_root(&f.account_dir()).unwrap();
+    let mut meta = f.meta();
+    meta.units.push(meta::UnitRecord {
+        unit: unit.clone(),
+        nonce: "00112233aabbccdd".into(),
+        mode: Mode::Probe,
+        phase: meta::UnitPhase::Starting,
+        connection: "gone".into(),
+        invocation_id: None,
+        boot_id: "boot-0".into(),
+        credential_generation: 0,
+        runtime_sha256: "ab".repeat(32),
+        session_id: None,
+    });
+    meta::save(dir.as_fd(), &meta).unwrap();
+    // Same boot: a crashed instance's client may still submit it.
+    let mut same = meta.clone();
+    same.units.last_mut().unwrap().boot_id = "boot-1".into();
+    meta::save(dir.as_fd(), &same).unwrap();
+    f.daemon.reconcile().unwrap();
+    assert_eq!(f.meta().units.len(), 1, "a same-boot submission stays held");
+    meta::save(dir.as_fd(), &meta).unwrap();
+    f.daemon.reconcile().unwrap();
+    assert!(
+        f.meta().units.is_empty(),
+        "an earlier boot's record is retired"
+    );
+    f.start(Mode::Probe, 0).unwrap();
+}
+
+#[test]
 fn a_live_unrecorded_unit_is_alive_and_needs_reconciliation() {
     let f = fixture();
     let unit = unit_of(&f.start(Mode::Probe, 0).unwrap());
@@ -382,4 +431,28 @@ fn an_unknown_invocation_of_a_live_unit_is_never_reported_dead() {
     let state = f.call(Request::UnitState { unit }).unwrap();
     assert_eq!(state["alive"], true);
     assert_eq!(state["requires_reconciliation"], true);
+}
+
+#[test]
+fn cleanup_certifies_a_refused_first_login_generation() {
+    let f = fixture();
+    let cleanup = |generation| {
+        f.call(Request::LogoutCleanup {
+            key: f.key.clone(),
+            credential_generation: generation,
+            operation_id: Some("refused-login".into()),
+        })
+    };
+    // Generation 1 was reserved but its login never started.
+    let receipt = cleanup(1).unwrap();
+    assert_eq!(receipt["credential_cleared"], true);
+    assert_eq!(receipt["token_removed"], false);
+    assert_eq!(f.meta().credential.generation, 1);
+    assert_eq!(f.meta().credential.state, CredentialState::LoggedOut);
+    // A delayed start of the certified generation is refused.
+    assert_eq!(code(f.start(Mode::Login, 1)), Code::Precondition);
+    // An unknown generation with a token present is never certified.
+    f.sign_in(2);
+    assert_eq!(code(cleanup(3)), Code::Precondition);
+    assert!(f.token().exists());
 }

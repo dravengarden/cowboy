@@ -20,15 +20,37 @@ pub struct UnitStatus {
     /// systemd holds a queued job for the unit (`Job=` is set): an inactive
     /// unit with a pending start job is about to run.
     pub job_pending: bool,
+    /// The unit's cgroup still holds a process (or could not be shown
+    /// empty): a stop that timed out can leave a `failed` unit with a
+    /// surviving descendant.
+    pub cgroup_populated: bool,
 }
 
 impl UnitStatus {
     /// Whether processes of the unit may still exist or are about to.
     /// `inactive` or `failed` alone is not proof: a queued job may still
-    /// start it.
+    /// start it, and its cgroup may still hold a process.
     #[must_use]
     pub fn is_live(&self) -> bool {
-        self.job_pending || !matches!(self.active_state.as_str(), "inactive" | "failed")
+        self.job_pending
+            || self.cgroup_populated
+            || !matches!(self.active_state.as_str(), "inactive" | "failed")
+    }
+}
+
+/// Whether the cgroup at `control_group` (systemd's `ControlGroup=`, relative
+/// to the unified hierarchy) holds a process. An empty path or a removed
+/// cgroup is empty; any other read failure counts as populated (fail closed).
+fn cgroup_populated(control_group: &str) -> bool {
+    if control_group.is_empty() {
+        return false;
+    }
+    let path = PathBuf::from("/sys/fs/cgroup")
+        .join(control_group.trim_start_matches('/'))
+        .join("cgroup.events");
+    match std::fs::read_to_string(&path) {
+        Ok(events) => !events.lines().any(|line| line == "populated 0"),
+        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
     }
 }
 
@@ -115,22 +137,25 @@ fn lookup_id(file: &str, name: &str) -> Result<Option<u32>> {
     Ok(None)
 }
 
-struct SystemdRun(std::process::Child);
+/// A `systemd-run` client and a pidfd opened before any waiter could reap
+/// it, so cancelling can never signal a recycled PID.
+struct SystemdRun {
+    child: std::process::Child,
+    pidfd: Option<std::sync::Arc<OwnedFd>>,
+}
 
 impl UnitChild for SystemdRun {
     fn wait(&mut self) -> Result<Option<i32>> {
-        Ok(self.0.wait()?.code())
+        Ok(self.child.wait()?.code())
     }
 
     fn canceller(&self) -> Box<dyn Fn() + Send + Sync> {
-        let pid = i32::try_from(self.0.id())
-            .ok()
-            .and_then(rustix::process::Pid::from_raw);
+        let pidfd = self.pidfd.clone();
         Box::new(move || {
-            if let Some(pid) = pid {
-                // The client has not been reaped (its waiter owns it), so
-                // the pid still names it.
-                let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+            // Without a pidfd the client is never signalled: the start stays
+            // unconfirmed (fail closed) rather than risk another process.
+            if let Some(pidfd) = &pidfd {
+                let _ = rustix::process::pidfd_send_signal(pidfd, rustix::process::Signal::KILL);
             }
         })
     }
@@ -225,7 +250,15 @@ impl Host for SystemHost {
             .stderr(Stdio::from(stdio.stderr))
             .spawn()
             .context("spawn systemd-run")?;
-        Ok(Box::new(SystemdRun(child)))
+        // Not yet waited for, so the pid still names this child.
+        let pidfd = i32::try_from(child.id())
+            .ok()
+            .and_then(rustix::process::Pid::from_raw)
+            .and_then(|pid| {
+                rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty()).ok()
+            })
+            .map(std::sync::Arc::new);
+        Ok(Box::new(SystemdRun { child, pidfd }))
     }
 
     fn unit_status(&self, unit: &str) -> Result<Option<UnitStatus>> {
@@ -233,7 +266,7 @@ impl Host for SystemHost {
             &self.tools.systemctl,
             &[
                 "show",
-                "--property=LoadState,ActiveState,InvocationID,Job",
+                "--property=LoadState,ActiveState,InvocationID,Job,ControlGroup",
                 "--",
                 unit,
             ],
@@ -256,6 +289,7 @@ impl Host for SystemHost {
             active_state: field("ActiveState"),
             invocation_id: (!invocation.is_empty()).then_some(invocation),
             job_pending: !job.is_empty() && job != "0",
+            cgroup_populated: cgroup_populated(&field("ControlGroup")),
         }))
     }
 
@@ -301,4 +335,15 @@ impl Host for SystemHost {
 #[must_use]
 pub fn var_run_is_directory() -> bool {
     std::fs::symlink_metadata(PathBuf::from("/var/run")).is_ok_and(|metadata| metadata.is_dir())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_missing_or_unset_cgroup_is_empty() {
+        assert!(!super::cgroup_populated(""));
+        assert!(!super::cgroup_populated(
+            "/system.slice/cga-absent-0000.service"
+        ));
+    }
 }

@@ -83,6 +83,19 @@ pub fn load(store: BorrowedFd<'_>, sha256: &str, allow_list: &Path) -> Outcome<M
     verify_tree(entry.as_fd(), allow_list)
 }
 
+/// Whether runtime `sha256` is registered and passes verification.
+fn intact(store: BorrowedFd<'_>, sha256: &str, allow_list: &Path) -> Outcome<bool> {
+    if !safefs::exists(store, sha256)? {
+        return Ok(false);
+    }
+    let entry = safefs::open_dir(store, sha256, safefs::STRICT)?;
+    match verify_tree(entry.as_fd(), allow_list) {
+        Ok(_) => Ok(true),
+        Err(error) if error.code == Code::RuntimeRejected => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 fn verify_tree(entry: BorrowedFd<'_>, allow_list: &Path) -> Outcome<Manifest> {
     let rejected = |message: String| fail(Code::RuntimeRejected, message);
     let bytes = safefs::read_file(entry, MANIFEST, MAX_MANIFEST_BYTES)
@@ -198,7 +211,7 @@ fn receive_and_install(
     if hex::encode(hasher.finalize()) != sha256 {
         return Err(fail(Code::RuntimeRejected, "archive SHA-256 mismatch"));
     }
-    if safefs::exists(store, sha256)? {
+    if intact(store, sha256, &config.agy_allow_list)? {
         return Ok(true);
     }
     file.sync_all()?;
@@ -213,13 +226,24 @@ fn receive_and_install(
     tar::unpack(&mut archive, target.as_fd(), limits)
         .map_err(|error| fail(Code::RuntimeRejected, format!("{error:#}")))?;
     verify_tree(target.as_fd(), &config.agy_allow_list)?;
-    rustix::fs::fsync(&target).context("fsync runtime")?;
+    tar::sync_dirs(target.as_fd()).context("fsync runtime")?;
     drop(target);
     let _guard = lock
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if safefs::exists(store, sha256)? {
+    if intact(store, sha256, &config.agy_allow_list)? {
         return Ok(true);
+    }
+    if safefs::exists(store, sha256)? {
+        // A damaged entry (a power loss before its tree was durable) is
+        // replaced, unless a live unit still uses it.
+        if live()?.contains(sha256) {
+            return Err(fail(
+                Code::RuntimeRejected,
+                "the registered runtime is damaged and still in use",
+            ));
+        }
+        safefs::remove_tree(store, sha256)?;
     }
     evict(store, config.max_runtimes.saturating_sub(1), &live()?)?;
     rustix::fs::renameat(store, unpacked, store, sha256).context("install runtime")?;

@@ -265,7 +265,16 @@ impl Daemon {
                 record.phase = UnitPhase::Running;
                 record.invocation_id.clone_from(&invocation_id);
             }
-            if self.exited(&unit) {
+            // `systemd-run` ending is not the unit ending (it may die after
+            // submitting): settle only once systemd confirms the invocation
+            // is gone; otherwise the connection owns it, so teardown stops it.
+            let gone = self.exited(&unit)
+                && meta
+                    .units
+                    .iter()
+                    .find(|record| record.unit == unit)
+                    .is_some_and(|record| matches!(self.invocation_live(record), Ok(false)));
+            if gone {
                 let exit = self.wait_exit(&unit, Duration::ZERO);
                 if let Some(index) = meta.units.iter().position(|record| record.unit == unit) {
                     let record = meta.units.remove(index);

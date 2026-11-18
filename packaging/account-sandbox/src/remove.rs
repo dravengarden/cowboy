@@ -132,9 +132,8 @@ impl Daemon {
             .as_ref()
             .map_or_else(|| ids::user_name(key), |removal| removal.user.clone());
         let accounts = self.accounts()?;
-        if safefs::exists(accounts.as_fd(), key)? {
-            safefs::remove_tree(accounts.as_fd(), key)?;
-        }
+        // Also on replay: the sync makes an earlier crash's removal durable.
+        safefs::remove_tree(accounts.as_fd(), key)?;
         self.host.remove_user(&user)?;
         let replayed = tombstone
             .removal

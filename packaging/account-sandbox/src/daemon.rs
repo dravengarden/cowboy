@@ -559,10 +559,15 @@ impl Daemon {
             self.host.stop_unit(unit)?;
         }
         let exit = self.wait_exit(unit, timeout);
-        let starting = meta
-            .units
-            .iter()
-            .any(|record| record.unit == unit && record.phase == meta::UnitPhase::Starting);
+        // A `Starting` record of an earlier boot has no client left: a reboot
+        // ended every `systemd-run` and transient unit. In this boot, a
+        // client this instance did not observe ending may still submit it
+        // (an earlier instance's crash), so it stays held: fail closed.
+        let starting = meta.units.iter().any(|record| {
+            record.unit == unit
+                && record.phase == meta::UnitPhase::Starting
+                && record.boot_id == self.boot_id
+        });
         if starting && !self.exited(unit) {
             // Its `systemd-run` client may still submit it: never confirmed.
             return Err(fail(
@@ -712,7 +717,7 @@ impl Daemon {
 
     /// Whether systemd still runs the recorded invocation of `record` (an
     /// unknown invocation of a live unit counts as running).
-    fn invocation_live(&self, record: &UnitRecord) -> Outcome<bool> {
+    pub(crate) fn invocation_live(&self, record: &UnitRecord) -> Outcome<bool> {
         Ok(self.host.unit_status(&record.unit)?.is_some_and(|status| {
             status.is_live()
                 && (record.invocation_id.is_none()
@@ -931,17 +936,36 @@ impl Daemon {
                 // token of `generation` is already gone; the newer one stays.
                 return Ok(receipt(false, true));
             }
-            if generation > current {
-                return Err(fail(
-                    Code::Precondition,
-                    format!("credential generation {generation} is not known (current {current})"),
-                ));
-            }
             if !meta.units.is_empty() {
                 return Err(fail(
                     Code::Conflict,
                     "units of the account are still running",
                 ));
+            }
+            if generation > current {
+                // A login of `generation` was refused before it started (a
+                // fence or space refusal of a first login): nothing of it
+                // exists. Certify it only with no token present, and retire
+                // the generation so a delayed start of it is refused.
+                let home = self.mount_home(dir, key, meta)?;
+                if Self::token_present(&home)? {
+                    return Err(fail(
+                        Code::Precondition,
+                        format!(
+                            "credential generation {generation} is not known (current {current}) and a token is present"
+                        ),
+                    ));
+                }
+                meta.credential.generation = generation;
+                meta.credential.state = CredentialState::LoggedOut;
+                meta.cleanups.clear();
+                meta.last_logout = Some(LogoutRecord {
+                    generation,
+                    credential_cleared: true,
+                    history_retained: true,
+                });
+                Self::save(dir, meta)?;
+                return Ok(receipt(false, false));
             }
             if meta.credential.state == CredentialState::LoggedOut
                 && meta

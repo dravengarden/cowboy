@@ -5,7 +5,7 @@
 //! descriptor with `openat2` and become root-owned and read-only (`0444`, or
 //! `0555` when the archive marks them executable); directories are `0755`.
 
-use std::io::{self, Read, Write as _};
+use std::io::{self, Read};
 use std::os::fd::{AsFd as _, BorrowedFd, OwnedFd};
 
 use anyhow::{Context as _, Result, bail, ensure};
@@ -84,11 +84,26 @@ pub fn unpack(reader: &mut impl Read, root: BorrowedFd<'_>, limits: Limits) -> R
                 } else {
                     0o444
                 };
-                file.flush()?;
                 rustix::fs::fchmod(&file, rustix::fs::Mode::from_raw_mode(mode))?;
+                // Durable before the runtime is published under its digest.
+                file.sync_all()?;
             }
         }
     }
+}
+
+/// Fsync every directory below (and including) `dir`, so the entries of an
+/// unpacked tree survive a power loss once it is published.
+pub fn sync_dirs(dir: BorrowedFd<'_>) -> Result<()> {
+    for name in safefs::list(dir)? {
+        let stat = rustix::fs::statat(dir, name.as_str(), rustix::fs::AtFlags::SYMLINK_NOFOLLOW)?;
+        if rustix::fs::FileType::from_raw_mode(stat.st_mode) == rustix::fs::FileType::Directory {
+            let child = safefs::open_dir(dir, &name, safefs::STRICT)?;
+            sync_dirs(child.as_fd())?;
+        }
+    }
+    rustix::fs::fsync(dir).context("fsync directory")?;
+    Ok(())
 }
 
 fn parent_fd<'a>(root: BorrowedFd<'a>, parent: Option<&'a OwnedFd>) -> BorrowedFd<'a> {

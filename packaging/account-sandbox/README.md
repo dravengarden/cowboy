@@ -57,9 +57,9 @@ Every field is optional; unknown fields are rejected.
 | `home_image_bytes` | `2147483648` (2 GiB) | Size of each sparse ext4 home image |
 | `home_image_inodes` | `131072` | Fixed inode count of each image |
 | `free_space_reserve_bytes` | `8589934592` (8 GiB) | Free space required on `state_root` before `ensure_account` and every start |
-| `ip_deny` | `["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","100.64.0.0/10"]` | Extra `IPAddressDeny=` entries; `localhost link-local multicast` are always denied. OVH adds its public address, e.g. `40.160.141.233/32` |
+| `ip_deny` | `[]` | Extra `IPAddressDeny=` entries appended to the always-denied set (loopback, link-local, multicast, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`); it can never remove one. OVH adds its public address, e.g. `40.160.141.233/32` |
 | `ip_allow` | `["127.0.0.53/32"]` | `IPAddressAllow=` (the resolver stub) |
-| `max_runtime_units` | `1` | `runtime`/`probe` units per account (plus at most one `login`/`logout` unit, fixed). One runtime per account bounds it to one turn; a second start is `limit` (design "Revision 5 simplification") |
+| `max_runtime_units` | `1` | Must be `1` (any other value is rejected). `runtime`/`probe` units per account (plus at most one `login`/`logout` unit, fixed). One runtime per account bounds it to one turn; a second start is `limit` (design "Revision 5 simplification") |
 | `unit_memory_max` | `"3G"` | `MemoryMax=` per unit |
 | `unit_tasks_max` | `512` | `TasksMax=` per unit |
 | `unit_tmp_size` | `"256M"` | Size of each unit's `/tmp` and of its separate `/var/tmp` (both tmpfs) |

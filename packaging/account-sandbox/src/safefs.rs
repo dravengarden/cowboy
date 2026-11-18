@@ -83,7 +83,9 @@ pub fn ensure_dir(
 ) -> Result<OwnedFd> {
     check_name(name)?;
     match rustix::fs::mkdirat(dir, name, Mode::from_raw_mode(mode)) {
-        Ok(()) | Err(Errno::EXIST) => {}
+        // A new entry is durable before anything inside it is relied on.
+        Ok(()) => rustix::fs::fsync(dir).context("fsync parent directory")?,
+        Err(Errno::EXIST) => {}
         Err(error) => return Err(error).with_context(|| format!("mkdir {name}")),
     }
     let fd = open_dir(dir, name, STRICT)?;
@@ -222,8 +224,16 @@ pub fn remove_file(dir: BorrowedFd<'_>, name: &str) -> Result<bool> {
 }
 
 /// Remove `name` (a file or a whole directory tree) from `dir` without ever
-/// following a symlink or crossing a mount; `false` when it was absent.
+/// following a symlink or crossing a mount; `false` when it was absent. The
+/// removal is durable (`dir` is synced, also when `name` was already absent,
+/// so a replay after a crash makes an earlier removal durable).
 pub fn remove_tree(dir: BorrowedFd<'_>, name: &str) -> Result<bool> {
+    let removed = remove_tree_entry(dir, name)?;
+    rustix::fs::fsync(dir).context("fsync directory")?;
+    Ok(removed)
+}
+
+fn remove_tree_entry(dir: BorrowedFd<'_>, name: &str) -> Result<bool> {
     check_name(name)?;
     let stat = match rustix::fs::statat(dir, name, AtFlags::SYMLINK_NOFOLLOW) {
         Ok(stat) => stat,
@@ -240,7 +250,7 @@ pub fn remove_tree(dir: BorrowedFd<'_>, name: &str) -> Result<bool> {
             break;
         }
         for entry in names {
-            remove_tree(child.as_fd(), &entry)?;
+            remove_tree_entry(child.as_fd(), &entry)?;
         }
     }
     drop(child);

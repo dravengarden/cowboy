@@ -40,6 +40,9 @@ pub struct FakeHost {
     pub defer_submission: std::sync::atomic::AtomicBool,
     /// The next this many `unit_status` calls fail.
     pub status_failures: AtomicU64,
+    /// `systemd-run` clients exit right after submitting their unit, which
+    /// systemd keeps running.
+    pub client_exits_on_spawn: std::sync::atomic::AtomicBool,
 }
 
 impl FakeHost {
@@ -50,6 +53,7 @@ impl FakeHost {
             stop_failures: AtomicU64::new(0),
             defer_submission: std::sync::atomic::AtomicBool::new(false),
             status_failures: AtomicU64::new(0),
+            client_exits_on_spawn: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -176,6 +180,13 @@ impl Host for FakeHost {
         }
         state.spawned.push(argv.to_vec());
         state.stdio.push(stdio);
+        if self.client_exits_on_spawn.load(Ordering::Relaxed) {
+            state.exits.insert(unit.clone(), Some(1));
+            drop(state);
+            self.inner.signal.notify_all();
+            // Let the waiter observe the exit before the starter looks.
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
         Ok(Box::new(FakeChild {
             inner: Arc::clone(&self.inner),
             unit,
@@ -194,6 +205,7 @@ impl Host for FakeHost {
             active_state: "active".into(),
             invocation_id: Some(invocation.clone()),
             job_pending: false,
+            cgroup_populated: false,
         }))
     }
 
