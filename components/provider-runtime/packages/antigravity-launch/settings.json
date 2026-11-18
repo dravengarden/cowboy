@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "deny": [
+      "read_file",
+      "write_file",
+      "edit_file",
+      "run_command",
+      "view_file",
+      "write_to_file",
+      "replace_file_content",
+      "multi_replace_file_content",
+      "list_dir",
+      "grep_search",
+      "schedule",
+      "swarm",
+      "run_workflow",
+      "invoke_subagent",
+      "define_subagent",
+      "manage_subagents"
+    ]
+  }
+}

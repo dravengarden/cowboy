@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "id": "antigravity",
-  "version": "0.1.1",
-  "component_release": "3.114.0",
+  "version": "0.2.0",
+  "component_release": "3.115.0",
   "publisher": "cowboy-first-party",
   "kind": "agent_provider",
   "entrypoint": "provider.json",
@@ -13,7 +13,7 @@
     },
     {
       "id": "cowboy.plugin-sdk",
-      "version": "1.18.0"
+      "version": "1.19.0"
     },
     {
       "id": "cowboy.plugin-api",
@@ -21,15 +21,15 @@
     },
     {
       "id": "cowboy.provider-sdk",
-      "version": "3.5.0"
-    },
-    {
-      "id": "cowboy.provider-ui",
       "version": "3.6.0"
     },
     {
+      "id": "cowboy.provider-ui",
+      "version": "3.7.0"
+    },
+    {
       "id": "cowboy.provider-runtime",
-      "version": "1.3.1"
+      "version": "1.3.2"
     }
   ]
 }

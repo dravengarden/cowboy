@@ -95,9 +95,9 @@
     "dependencies": [
       {
         "id": "cowboy-antigravity-launch",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "source": "cowboy:components/provider-runtime/packages/antigravity-launch",
-        "integrity": "sha256:637faf8ce2a74c5d5a4dad71a875b2609d7b90eb5770d5f74c18e79961ecc023",
+        "integrity": "sha256:9fdbd1bba97f4af5cf20c9c789d06b99abaac9664b4c93798080fce60fa304c4",
         "private": true
       },
       {

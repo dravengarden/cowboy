@@ -23,3 +23,21 @@ export function knownCapabilities(
       (value !== "provider.native-custody.v1" || compare(sdkVersion, "3.5.0") >= 0),
   );
 }
+
+/** The Provider supports this Cowboy's Controller and Machine contracts. */
+export function validateProviderCompatibility(compatibility: Record<string, unknown>): void {
+  if (
+    typeof compatibility.min_controller_contract !== "number" ||
+    typeof compatibility.max_controller_contract !== "number" ||
+    compatibility.min_controller_contract > 2 ||
+    compatibility.max_controller_contract < 2 ||
+    typeof compatibility.min_machine_contract !== "number" ||
+    typeof compatibility.max_machine_contract !== "number" ||
+    compatibility.min_machine_contract > 4 ||
+    compatibility.max_machine_contract < 4 ||
+    typeof compatibility.ui_component_fingerprint !== "string" ||
+    typeof compatibility.auth_contract_fingerprint !== "string"
+  ) {
+    throw new Error("Provider is incompatible with this Cowboy contract");
+  }
+}

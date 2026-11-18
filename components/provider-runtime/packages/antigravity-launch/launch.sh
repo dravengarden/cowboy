@@ -23,7 +23,20 @@ if [ "${1-}" = "--cowboy-probe" ]; then
   [ -f "$hooks" ] && exit 0
   exit 1
 fi
-agy="$cowboy_root/../../provider_cli-antigravity/content/antigravity"
+# In an account-sandbox runtime archive (`cowboy-runtime.json` at its root)
+# the vendor binary is `bin/agy`, and the daemon binds the hooks and settings
+# read-only over the account home, so nothing is copied there.
+sandboxed=false
+if [ -f "$cowboy_root/cowboy-runtime.json" ]; then
+  sandboxed=true
+  agy="$cowboy_root/bin/agy"
+  # `agy-proxy` is this launcher until the Node proxy replaces it.
+  if [ "${0##*/}" = "agy-proxy" ] && [ "$#" -eq 0 ]; then
+    set -- acp --disable-telemetry
+  fi
+else
+  agy="$cowboy_root/../../provider_cli-antigravity/content/antigravity"
+fi
 [ -x "$agy" ] || { echo "cowboy: Antigravity CLI component is missing" >&2; exit 127; }
 : "${HOME:?HOME is required}"
 umask 077
@@ -48,7 +61,7 @@ case "${1-}" in
 esac
 # Only an ACP runtime session owns its account home. Version and other probes
 # may run with the Machine user's real HOME and must never write to it.
-if [ "${1-}" != "acp" ]; then
+if [ "${1-}" != "acp" ] || [ "$sandboxed" = true ]; then
   exec "$agy" "$@"
 fi
 config="$HOME/.gemini/config"

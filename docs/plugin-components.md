@@ -83,6 +83,21 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.115.0 records provider-sdk 3.6.0, plugin-sdk 1.19.0,
+provider-ui 3.7.0, provider-authoring 1.0.18 and provider-runtime 1.3.2.
+Runtime contracts gain an optional `isolation` policy (SDK 3.6.0+):
+`account_sandbox_v1` runs every process of a named account (runtime, login,
+logout and probe) as that account's own system identity through the host's
+`cowboy-account-sandbox` daemon, and requires `provider.native-custody.v1`
+and the `ipv4_only_v1` network policy. Older hosts reject the unknown field;
+a Machine without a reachable daemon reports the Provider unavailable.
+Antigravity 0.2.0 declares it; its launcher 1.1.0 adds the `settings.json`
+built-in tool denial list and runs from the daemon's runtime archive. Every
+other Plugin pins the SDKs and advances one patch version without behavior
+changes: claude-code 3.20.47, claude-deepseek 3.1.65, codex 3.6.5,
+codex-deepseek 3.1.65, deepseek-harness 1.0.23, github 0.2.14, grok 3.2.4,
+machine-browser 1.0.10, matrix 1.0.12, review 1.0.15 and zed 1.39.9.
+
 Component release 3.114.0 records provider-runtime 1.3.1, whose lock moves
 native Codex (`openai-codex`) to 0.169.1 for both `codex` and
 `codex-deepseek`. Every Provider that pins provider-runtime advances one patch

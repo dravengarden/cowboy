@@ -168,11 +168,12 @@
     },
     "cowboy-antigravity-launch": {
       "kind": "owned_archive",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "package_dir": "packages/antigravity-launch",
       "launcher": "launch.sh",
       "files": [
-        "hooks.json"
+        "hooks.json",
+        "settings.json"
       ],
       "probe": [
         "--cowboy-probe"

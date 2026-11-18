@@ -147,6 +147,26 @@ test("native identity recipes require the new SDK and bounded native output path
   const custodyOld = structuredClone(custody);
   custodyOld.sdk_version = "3.4.0";
   assertThrows(() => validateProviderManifest(custodyOld));
+  // Account sandbox isolation needs custody and IPv4; Provider SDK 3.6.0.
+  const sandboxed = structuredClone(custody);
+  sandboxed.sdk_version = "3.6.0";
+  Object.assign(sandboxed.runtime, { isolation: "account_sandbox_v1" });
+  validateProviderManifest(sandboxed);
+  const sandboxedOld = structuredClone(sandboxed);
+  sandboxedOld.sdk_version = "3.5.0";
+  assertThrows(() => validateProviderManifest(sandboxedOld));
+  const sandboxedPortable = structuredClone(sandboxed);
+  sandboxedPortable.runtime.required_capabilities =
+    sandboxedPortable.runtime.required_capabilities.filter(
+      (capability) => capability !== "provider.native-custody.v1",
+    );
+  assertThrows(() => validateProviderManifest(sandboxedPortable));
+  const sandboxedDualStack = structuredClone(sandboxed);
+  delete (sandboxedDualStack.runtime as Record<string, unknown>).network;
+  assertThrows(() => validateProviderManifest(sandboxedDualStack));
+  const unknownIsolation = structuredClone(sandboxed);
+  Object.assign(unknownIsolation.runtime, { isolation: "account_sandbox_v2" });
+  assertThrows(() => validateProviderManifest(unknownIsolation));
   // JWT claims and sole-member paths are Provider SDK 3.3.0 recipes.
   for (const extended of [
     { ...identity, subject_path: ["tokens", "id_token"], subject_claim: ["auth", "user_id"] },

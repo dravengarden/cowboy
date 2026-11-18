@@ -10,9 +10,13 @@ import {
   optionalNativeIdentityPath,
   usesExtendedNativeIdentityPaths,
   ownerDeclaredIdentity,
-  runtimeNetworkPolicy,
+  runtimePolicies,
 } from "./nativeIdentity.ts";
-import { knownCapabilities, type ProviderCapability } from "./providerCapabilities.ts";
+import {
+  knownCapabilities,
+  type ProviderCapability,
+  validateProviderCompatibility,
+} from "./providerCapabilities.ts";
 
 /**
  * Cowboy Provider UI SDK v2.
@@ -29,7 +33,7 @@ export const PROVIDER_UI_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_HOST_SCHEMA_MIN_VERSION = 1 as const;
 export const PROVIDER_HOST_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_MACHINE_CONTRACT_VERSION = 4 as const;
-export const PROVIDER_SDK_VERSION = "3.5.0" as const;
+export const PROVIDER_SDK_VERSION = "3.6.0" as const;
 export {
   type TelemetryBackendContract,
   validateTelemetryBackendContract,
@@ -375,6 +379,7 @@ export interface ProviderManifest {
     remove_environment: string[];
     remove_environment_prefixes: string[];
     network?: "ipv4_only_v1";
+    isolation?: "account_sandbox_v1";
     dependencies: Array<{
       id: string;
       version: string;
@@ -1105,8 +1110,8 @@ export function validateProviderManifest(input: unknown): asserts input is Provi
   ) {
     throw new Error("Invalid complete Provider runtime or authentication contract");
   }
-  if (!runtimeNetworkPolicy(runtime.network, String(full.sdk_version), compareProviderVersions)) {
-    throw new Error("Invalid Provider runtime network policy");
+  if (!runtimePolicies(runtime, String(full.sdk_version), compareProviderVersions)) {
+    throw new Error("Invalid Provider runtime network or isolation policy");
   }
   validateProviderBehavior(runtime.behavior);
   const managedArguments = validateManagedProfiles(
@@ -1322,23 +1327,6 @@ export function validateProviderManifest(input: unknown): asserts input is Provi
     input.sdk_version,
   );
   validateProviderCompatibility(compatibility);
-}
-
-function validateProviderCompatibility(compatibility: Record<string, unknown>): void {
-  if (
-    typeof compatibility.min_controller_contract !== "number" ||
-    typeof compatibility.max_controller_contract !== "number" ||
-    compatibility.min_controller_contract > 2 ||
-    compatibility.max_controller_contract < 2 ||
-    typeof compatibility.min_machine_contract !== "number" ||
-    typeof compatibility.max_machine_contract !== "number" ||
-    compatibility.min_machine_contract > 4 ||
-    compatibility.max_machine_contract < 4 ||
-    typeof compatibility.ui_component_fingerprint !== "string" ||
-    typeof compatibility.auth_contract_fingerprint !== "string"
-  ) {
-    throw new Error("Provider is incompatible with this Cowboy contract");
-  }
 }
 
 function validateProviderBehavior(input: Record<string, unknown>): void {

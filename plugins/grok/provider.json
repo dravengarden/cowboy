@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "grok",
-  "version": "3.2.3",
+  "version": "3.2.4",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.5.0",
+  "sdk_version": "3.6.0",
   "display": {
     "name": "Grok Build",
     "vendor": "xAI",
