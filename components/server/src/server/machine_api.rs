@@ -49,6 +49,7 @@ pub(super) fn machine_diagnostic_event_visible(
         | MachineEvent::NativeLogoutObserved { .. }
         | MachineEvent::LoginStopObserved { .. }
         | MachineEvent::WorkerExitObserved { .. }
+        | MachineEvent::AccountSandboxFenceObserved { .. }
         | MachineEvent::NativeBindingPrepared { .. }
         | MachineEvent::ProviderAuthRefreshCandidate { .. }
         | MachineEvent::Browser { .. } => false,

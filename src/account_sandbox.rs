@@ -230,6 +230,9 @@ pub struct UnitState {
 pub struct AccountFence {
     pub key: String,
     pub fence_epoch: u64,
+    /// Units `stop_account` stopped and confirmed gone.
+    #[serde(default)]
+    pub stopped: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

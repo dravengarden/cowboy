@@ -202,6 +202,47 @@ pub struct NativeLogoutObservation {
     pub history_retained: Option<bool>,
 }
 
+/// What an account-sandbox fence command asks of a Machine's daemon
+/// (`docs/antigravity-real-accounts-design.md`, "Kill switch and logout").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountFenceAction {
+    /// Persist the daemon's account fence, then stop every unit of the
+    /// account and confirm none remains (`stop_account`).
+    Stop,
+    /// Clear the daemon's account fence (`admit_account`); starts nothing.
+    Admit,
+}
+
+/// One Controller-owned account fence operation for one Machine. The
+/// operation ID is derived by the Controller from its durable control state,
+/// so a retry after a lost reply repeats exactly the same request; both
+/// daemon operations are idempotent.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountFenceRequest {
+    pub operation_id: String,
+    pub provider_id: String,
+    pub account_id: ProviderAccountId,
+    pub action: AccountFenceAction,
+}
+
+/// The daemon's confirmation of an [`AccountFenceRequest`]. A `stop` is only
+/// reported after the daemon confirmed no unit of the account remains.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountFenceObservation {
+    pub request: AccountFenceRequest,
+    /// The daemon's fence epoch after the operation; `None` when the daemon
+    /// has never created this account, so no unit of it can exist.
+    pub fence_epoch: Option<u64>,
+    /// Whether the daemon's account fence is set after the operation.
+    pub fenced: bool,
+    /// Units the daemon stopped and confirmed gone.
+    #[serde(default)]
+    pub stopped: Vec<String>,
+}
+
 /// Prepare one private directory without following a symlink for either the
 /// directory or its immediate parent. Call in parent-first order for a scope.
 /// Permissions are applied to the opened directory, never to a link target.

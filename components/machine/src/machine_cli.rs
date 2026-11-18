@@ -2553,6 +2553,7 @@ fn handle_machine_command(
         | MachineCommand::CodeBufferSync { .. }
         | MachineCommand::Projects { .. }
         | MachineCommand::QueryWorkerExit { .. }
+        | MachineCommand::AccountSandboxFence { .. }
         | MachineCommand::AdapterRequest { .. }
         | MachineCommand::InvokePluginHost { .. }
         | MachineCommand::Reconcile { .. }) => {

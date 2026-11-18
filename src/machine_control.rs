@@ -19,6 +19,7 @@ use std::sync::{
 use parking_lot::RwLock;
 use tokio::sync::{mpsc, oneshot};
 
+mod account_fence;
 mod browser;
 mod code_buffer_navigation;
 mod code_buffer_sync;
@@ -595,95 +596,14 @@ impl MachineControl {
             self.record_browser(live, token, &browser);
             return;
         }
+        let event = match Reply::from_observation(event) {
+            Ok((request_id, reply)) => {
+                live.complete(token, &request_id, reply);
+                return;
+            }
+            Err(event) => event,
+        };
         match event {
-            MachineEvent::NativeBindingPrepared {
-                request_id,
-                binding,
-            } => {
-                live.complete(token, &request_id, Reply::NativeBinding(binding));
-            }
-            MachineEvent::WorkerExitObserved {
-                request_id,
-                observation,
-            } => {
-                live.complete(token, &request_id, Reply::WorkerExit(observation));
-            }
-            MachineEvent::LoginStopObserved {
-                request_id,
-                observation,
-            } => {
-                live.complete(token, &request_id, Reply::LoginStop(observation));
-            }
-            MachineEvent::NativeLogoutObserved {
-                request_id,
-                observation,
-            } => {
-                live.complete(token, &request_id, Reply::NativeLogout(observation));
-            }
-            MachineEvent::NativeProfileObserved {
-                request_id,
-                profile,
-            } => {
-                live.complete(token, &request_id, Reply::NativeProfile(profile));
-            }
-            MachineEvent::TelemetryRecoveryAuditObservation {
-                request_id,
-                observation,
-            } => {
-                live.complete(
-                    token,
-                    &request_id,
-                    Reply::TelemetryRecoveryAudit(observation),
-                );
-            }
-            MachineEvent::TelemetryBindingRecovered { request_id, result } => {
-                live.complete(token, &request_id, Reply::TelemetryRecoveryCommit(result));
-            }
-            MachineEvent::TelemetryRecoveryObservation {
-                request_id,
-                observation,
-            } => {
-                live.complete(token, &request_id, Reply::TelemetryRecovery(observation));
-            }
-            MachineEvent::TelemetryExported {
-                request_id,
-                receipt,
-            } => {
-                live.complete(token, &request_id, Reply::TelemetryExport(receipt));
-            }
-            MachineEvent::TelemetryBindingCommitted { request_id, result } => {
-                live.complete(token, &request_id, Reply::TelemetryBindingCommit(result));
-            }
-            MachineEvent::TelemetryBindingObservation {
-                request_id,
-                observation,
-            } => {
-                live.complete(token, &request_id, Reply::TelemetryBinding(observation));
-            }
-            MachineEvent::PluginUninstallRecovery {
-                request_id,
-                observation,
-            } => {
-                live.complete(token, &request_id, Reply::PluginRecovery(observation));
-            }
-            MachineEvent::PluginInstallationTarget {
-                request_id,
-                observation,
-            } => {
-                live.complete(token, &request_id, Reply::InstallationTarget(observation));
-            }
-            MachineEvent::PluginInstallationStep {
-                request_id,
-                observation,
-            } => {
-                live.complete(token, &request_id, Reply::InstallationStep(observation));
-            }
-            MachineEvent::PluginUninstallStep {
-                request_id,
-                observation,
-            } => {
-                live.complete(token, &request_id, Reply::PluginStep(observation));
-            }
             MachineEvent::ProviderAuthRefreshCandidate { .. }
             | MachineEvent::NativeProfileCompleted { .. }
             | MachineEvent::ServiceAuthCandidate { .. } => {}

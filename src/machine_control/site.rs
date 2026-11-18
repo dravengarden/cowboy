@@ -62,6 +62,7 @@ fn claimed_site(command: &MachineCommand) -> Option<ClaimedSite<'_>> {
         | MachineCommand::NativeLogout { .. }
         | MachineCommand::QueryLoginStop { .. }
         | MachineCommand::QueryWorkerExit { .. }
+        | MachineCommand::AccountSandboxFence { .. }
         | MachineCommand::PrepareNativeBinding { .. }
         | MachineCommand::CancelLogin { .. }
         | MachineCommand::CancelLoginRequest { .. }

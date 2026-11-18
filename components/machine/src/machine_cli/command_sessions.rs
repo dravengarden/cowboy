@@ -135,6 +135,9 @@ pub(super) fn handle(
         MachineCommand::QueryWorkerExit { request_id, worker } => {
             query_worker_exit(protocol, &providers, &events, request_id, &worker);
         }
+        MachineCommand::AccountSandboxFence { request_id, fence } => {
+            tokio::spawn(account_sandbox_fence(providers, events, request_id, fence));
+        }
         MachineCommand::AdapterRequest {
             request_id,
             adapter,
@@ -211,34 +214,63 @@ pub(super) fn handle(
             request_id,
             components: desired,
         } => {
-            tokio::spawn(async move {
-                let active = components.active().unwrap_or_default();
-                let restart_host = desired.iter().any(|component| {
-                    component_requires_host_restart(&component.id.kind)
-                        && !active.iter().any(|(current, _)| {
-                            current.id == component.id
-                                && current.digest.eq_ignore_ascii_case(&component.digest)
-                        })
-                });
-                let result = reconcile_components(request_id, desired, components).await;
-                let restart_host = accepted_component_restart(restart_host, &result);
-                for event in result {
-                    let _ = events.send(event);
-                }
-                if restart_host {
-                    // The service manager owns host replacement. Payload
-                    // processes and state survive; exit only after the result
-                    // has had a chance to reach the controller.
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    std::process::exit(75);
-                }
-            });
+            tokio::spawn(reconcile(request_id, desired, components, events));
         }
         other => tracing::error!(
             command = ?std::mem::discriminant(&other),
             "machine command routed to the wrong family (command_sessions)"
         ),
     }
+}
+
+async fn reconcile(
+    request_id: String,
+    desired: Vec<crate::machine_protocol::DesiredComponent>,
+    components: Arc<ComponentStore>,
+    events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+) {
+    let active = components.active().unwrap_or_default();
+    let restart_host = desired.iter().any(|component| {
+        component_requires_host_restart(&component.id.kind)
+            && !active.iter().any(|(current, _)| {
+                current.id == component.id && current.digest.eq_ignore_ascii_case(&component.digest)
+            })
+    });
+    let result = reconcile_components(request_id, desired, components).await;
+    let restart_host = accepted_component_restart(restart_host, &result);
+    for event in result {
+        let _ = events.send(event);
+    }
+    if restart_host {
+        // The service manager owns host replacement. Payload processes and
+        // state survive; exit only after the result has had a chance to
+        // reach the controller.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        std::process::exit(75);
+    }
+}
+
+/// Fence or admit one account in the account-sandbox daemon; only the
+/// daemon's confirmation is reported as an observation.
+async fn account_sandbox_fence(
+    providers: Arc<MachinePluginStore>,
+    events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+    request_id: String,
+    fence: crate::provider_account::AccountFenceRequest,
+) {
+    let result = tokio::task::spawn_blocking(move || providers.account_sandbox_fence(&fence))
+        .await
+        .map_err(anyhow::Error::from)
+        .and_then(std::convert::identity);
+    let (observation, detail) = match result {
+        Ok(observation) => (Some(observation), None),
+        Err(error) => (None, Some(format!("{error:#}"))),
+    };
+    let _ = events.send(MachineEvent::AccountSandboxFenceObserved {
+        request_id,
+        observation,
+        detail,
+    });
 }
 
 fn query_worker_exit(

@@ -156,6 +156,41 @@ impl MachinePluginStore {
         Ok(())
     }
 
+    /// Fence or admit one account in the daemon for the Controller's account
+    /// controls. `stop_account` answers only after it confirmed every unit of
+    /// the account gone; an account the daemon never created has no unit.
+    pub fn account_sandbox_fence(
+        &self,
+        request: &crate::provider_account::AccountFenceRequest,
+    ) -> Result<crate::provider_account::AccountFenceObservation> {
+        use crate::provider_account::{AccountFenceAction, AccountFenceObservation};
+        ensure!(
+            !request.account_id.is_default()
+                && crate::provider_account::named_only(&request.provider_id),
+            "account fences apply only to named accounts of account-sandbox Providers"
+        );
+        let (socket, service) = self.sandbox_host()?;
+        let key = daemon::account_key(service, request.account_id.as_str());
+        let mut client = daemon::Client::connect(socket)?;
+        let result = match request.action {
+            AccountFenceAction::Stop => client.stop_account(&key),
+            AccountFenceAction::Admit => client.admit_account(&key),
+        };
+        let observation = |fence_epoch, stopped| AccountFenceObservation {
+            request: request.clone(),
+            fence_epoch,
+            fenced: fence_epoch.is_some() && request.action == AccountFenceAction::Stop,
+            stopped,
+        };
+        match result {
+            Ok(fence) => Ok(observation(Some(fence.fence_epoch), fence.stopped)),
+            Err(error) if daemon::DaemonError::code_of(&error) == Some("not_found") => {
+                Ok(observation(None, Vec::new()))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// Confirm with the daemon that `unit` is gone, stopping it if a lost
     /// worker left it running.
     pub fn confirm_account_unit_gone(&self, unit: &str) -> Result<()> {
@@ -201,6 +236,73 @@ mod tests {
         store.set_account_sandbox(root.path().join("missing.sock"), Some("service".into()));
         let detail = store.account_sandbox_unavailable(&antigravity).unwrap();
         assert!(detail.contains("unreachable"), "{detail}");
+    }
+
+    #[test]
+    fn account_fences_drive_the_daemon_and_report_its_confirmation() {
+        use crate::provider_account::{AccountFenceAction, AccountFenceRequest};
+        let root = tempfile::tempdir().unwrap();
+        let socket = root.path().join("control.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let account: crate::provider_account::ProviderAccountId =
+            uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let key = daemon::account_key("service", account.as_str());
+        let server = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for reply in [
+                serde_json::json!({"ok": true, "result": {
+                    "key": "k", "fence_epoch": 4, "stopped": ["cga-k-runtime-1.service"]}}),
+                serde_json::json!({"ok": false, "error": {
+                    "code": "not_found", "message": "unknown account"}}),
+                serde_json::json!({"ok": false, "error": {
+                    "code": "internal", "message": "units still running: u"}}),
+            ] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut line = String::new();
+                std::io::BufReader::new(&stream)
+                    .read_line(&mut line)
+                    .unwrap();
+                requests.push(serde_json::from_str::<serde_json::Value>(&line).unwrap());
+                writeln!(stream, "{reply}").unwrap();
+            }
+            requests
+        });
+        let store = store(root.path());
+        store.set_account_sandbox(socket, Some("service".into()));
+        let request = |action| AccountFenceRequest {
+            operation_id: "op".into(),
+            provider_id: "antigravity".into(),
+            account_id: account.clone(),
+            action,
+        };
+        let stopped = store
+            .account_sandbox_fence(&request(AccountFenceAction::Stop))
+            .unwrap();
+        assert_eq!(stopped.fence_epoch, Some(4));
+        assert!(stopped.fenced);
+        assert_eq!(stopped.stopped, ["cga-k-runtime-1.service"]);
+        // An account the daemon never created has no unit to stop.
+        let absent = store
+            .account_sandbox_fence(&request(AccountFenceAction::Admit))
+            .unwrap();
+        assert_eq!((absent.fence_epoch, absent.fenced), (None, false));
+        let error = store
+            .account_sandbox_fence(&request(AccountFenceAction::Stop))
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("still running"), "{error:#}");
+        let ops: Vec<_> = server.join().unwrap();
+        assert_eq!(
+            ops[0],
+            serde_json::json!({"op": "stop_account", "key": key})
+        );
+        assert_eq!(
+            ops[1],
+            serde_json::json!({"op": "admit_account", "key": key})
+        );
+        // Only named accounts of account-sandbox Providers are fenced.
+        let mut codex = request(AccountFenceAction::Stop);
+        codex.provider_id = "codex".into();
+        assert!(store.account_sandbox_fence(&codex).is_err());
     }
 
     #[test]

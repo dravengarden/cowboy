@@ -33,7 +33,10 @@ pub mod telemetry_recovery_audit;
 mod challenge_proof;
 pub use challenge_proof::{challenge_proof_v1, challenge_proof_v2, challenge_proof_v3};
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 47;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 48;
+/// Controller-owned account-sandbox fences (`AccountSandboxFence`): the kill
+/// switch and suspension stop an account's units through the Machine's daemon.
+pub const ACCOUNT_FENCE_PROTOCOL_VERSION: u16 = 48;
 /// Named subscription accounts (other than native-only Providers) keep their
 /// credentials in the account's Service vault: Machines sign in at account
 /// scope with a native identity recipe and apply, refresh and launch from
@@ -846,6 +849,12 @@ pub enum MachineCommand {
         request_id: String,
         worker: crate::provider_account::WorkerExitRequest,
     },
+    /// Fence or admit one account in this Machine's account-sandbox daemon;
+    /// answered only by `AccountSandboxFenceObserved`.
+    AccountSandboxFence {
+        request_id: String,
+        fence: crate::provider_account::AccountFenceRequest,
+    },
     PrepareNativeBinding {
         request_id: String,
         binding: Box<crate::provider_account::PreparedBinding>,
@@ -1266,6 +1275,14 @@ pub enum MachineEvent {
         request_id: String,
         observation: Option<crate::provider_account::WorkerExitObservation>,
     },
+    /// The daemon's confirmation of an `AccountSandboxFence`, or the refusal
+    /// that left it unconfirmed.
+    AccountSandboxFenceObserved {
+        request_id: String,
+        observation: Option<crate::provider_account::AccountFenceObservation>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
     NativeBindingPrepared {
         request_id: String,
         binding: Option<Box<crate::provider_account::PreparedBinding>>,
@@ -1504,6 +1521,31 @@ mod tests {
                 named["account_id"]
             );
         }
+    }
+
+    #[test]
+    fn account_fences_need_fence_aware_machines() {
+        let value = serde_json::json!({"command":"account_sandbox_fence","request_id":"r",
+            "fence":{"operation_id":"op","provider_id":"antigravity",
+                "account_id":"11111111-1111-4111-8111-111111111111","action":"stop"}});
+        let command: MachineCommand = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(command.minimum_protocol(), ACCOUNT_FENCE_PROTOCOL_VERSION);
+        const {
+            assert!(ACCOUNT_FENCE_PROTOCOL_VERSION <= MACHINE_PROTOCOL_VERSION);
+            assert!(ACCOUNT_FENCE_PROTOCOL_VERSION > PORTABLE_SUBSCRIPTION_PROTOCOL_VERSION);
+        }
+        assert_eq!(serde_json::to_value(command).unwrap(), value);
+        let observed: MachineEvent = serde_json::from_value(serde_json::json!({
+            "event":"account_sandbox_fence_observed","request_id":"r","observation":null,
+            "detail":"units still running"}))
+        .unwrap();
+        assert!(matches!(
+            observed,
+            MachineEvent::AccountSandboxFenceObserved {
+                detail: Some(_),
+                ..
+            }
+        ));
     }
 
     #[test]

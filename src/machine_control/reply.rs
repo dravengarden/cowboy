@@ -1,6 +1,7 @@
 //! Typed replies correlated to Machine requests.
 
 use super::AdapterFailure;
+use crate::machine_protocol::MachineEvent;
 use crate::machine_protocol::machine_browser;
 use crate::machine_protocol::plugin_recovery::RecoveryObservation;
 use crate::machine_protocol::plugin_step::StepObservation;
@@ -13,6 +14,7 @@ pub enum ReplyKind {
     NativeLogout,
     LoginStop,
     WorkerExit,
+    AccountFence,
     NativeProfile,
     Execution,
     Adapter,
@@ -37,6 +39,8 @@ pub enum Reply {
     NativeLogout(Option<crate::provider_account::NativeLogoutObservation>),
     LoginStop(Option<crate::provider_account::LoginStopObservation>),
     WorkerExit(Option<crate::provider_account::WorkerExitObservation>),
+    /// The daemon's confirmation, or the Machine's refusal detail.
+    AccountFence(Result<crate::provider_account::AccountFenceObservation, String>),
     NativeProfile(Option<Box<crate::provider_account::NativeProfileReceipt>>),
     Execution(Box<crate::machine_protocol::execution::Response>),
     InstallationTarget(Box<crate::machine_protocol::plugin_install::InstallTargetObservation>),
@@ -72,6 +76,7 @@ impl Reply {
             Self::NativeLogout(_) => ReplyKind::NativeLogout,
             Self::LoginStop(_) => ReplyKind::LoginStop,
             Self::WorkerExit(_) => ReplyKind::WorkerExit,
+            Self::AccountFence(_) => ReplyKind::AccountFence,
             Self::NativeBinding(_) => ReplyKind::NativeBinding,
             Self::Execution(_) => ReplyKind::Execution,
             Self::InstallationTarget(_) => ReplyKind::InstallationTarget,
@@ -89,5 +94,82 @@ impl Reply {
             Self::Browser(_) => ReplyKind::Browser,
             Self::PluginHost { .. } => ReplyKind::PluginHost,
         }
+    }
+}
+
+impl Reply {
+    /// The typed reply a Machine observation event carries for its request,
+    /// or the event itself when it is not one.
+    #[allow(clippy::result_large_err)] // The unmatched event returns to its caller unchanged.
+    pub(super) fn from_observation(event: MachineEvent) -> Result<(String, Self), MachineEvent> {
+        Ok(match event {
+            MachineEvent::NativeBindingPrepared {
+                request_id,
+                binding,
+            } => (request_id, Self::NativeBinding(binding)),
+            MachineEvent::WorkerExitObserved {
+                request_id,
+                observation,
+            } => (request_id, Self::WorkerExit(observation)),
+            MachineEvent::AccountSandboxFenceObserved {
+                request_id,
+                observation,
+                detail,
+            } => (
+                request_id,
+                Self::AccountFence(observation.ok_or_else(|| detail.unwrap_or_default())),
+            ),
+            MachineEvent::LoginStopObserved {
+                request_id,
+                observation,
+            } => (request_id, Self::LoginStop(observation)),
+            MachineEvent::NativeLogoutObserved {
+                request_id,
+                observation,
+            } => (request_id, Self::NativeLogout(observation)),
+            MachineEvent::NativeProfileObserved {
+                request_id,
+                profile,
+            } => (request_id, Self::NativeProfile(profile)),
+            MachineEvent::TelemetryRecoveryAuditObservation {
+                request_id,
+                observation,
+            } => (request_id, Self::TelemetryRecoveryAudit(observation)),
+            MachineEvent::TelemetryBindingRecovered { request_id, result } => {
+                (request_id, Self::TelemetryRecoveryCommit(result))
+            }
+            MachineEvent::TelemetryRecoveryObservation {
+                request_id,
+                observation,
+            } => (request_id, Self::TelemetryRecovery(observation)),
+            MachineEvent::TelemetryExported {
+                request_id,
+                receipt,
+            } => (request_id, Self::TelemetryExport(receipt)),
+            MachineEvent::TelemetryBindingCommitted { request_id, result } => {
+                (request_id, Self::TelemetryBindingCommit(result))
+            }
+            MachineEvent::TelemetryBindingObservation {
+                request_id,
+                observation,
+            } => (request_id, Self::TelemetryBinding(observation)),
+            MachineEvent::PluginUninstallRecovery {
+                request_id,
+                observation,
+            } => (request_id, Self::PluginRecovery(observation)),
+            MachineEvent::PluginInstallationTarget {
+                request_id,
+                observation,
+            } => (request_id, Self::InstallationTarget(observation)),
+            MachineEvent::PluginInstallationStep {
+                request_id,
+                observation,
+            } => (request_id, Self::InstallationStep(observation)),
+            MachineEvent::PluginUninstallStep {
+                request_id,
+                observation,
+            } => (request_id, Self::PluginStep(observation)),
+            event => return Err(event),
+        })
     }
 }
