@@ -582,6 +582,15 @@ R3-4, R3-9, R3-10, R3-13 and R3-16, with these concrete choices:
   home remain. Unblocking before a target was ever sent cancels it. A later
   revocation accepts the recorded logout instead of asking the Machine for a
   second logout of the same generation.
+- **Revocation removes the sandbox.** Unlike logout, revoking a named-only
+  account must destroy its persistent home and system user on every Machine
+  it signed in or ran a session on. Once every session is stopped and every
+  native profile cleaned up, the revocation asks each Machine's daemon for
+  `remove_account` under an operation ID derived from the revocation,
+  account and Machine (so every retry repeats the same request), and records
+  the receipt only when it answers exactly that request with both removals
+  confirmed. Completion requires a receipt from every such Machine; until a
+  Machine implements the command the removal stays `pending`.
 - **Detection.** `suspended` and a policy violation (`needs_attention`,
   reason `policy_violation:<tool>`) stop the account's units like a block.
 - **Uncertain effects.** The worker ledger counts lost replies

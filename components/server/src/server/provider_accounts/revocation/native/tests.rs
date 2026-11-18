@@ -207,6 +207,12 @@ async fn native_logout_lost_response_retries_original_scope_and_records_observat
 }
 
 async fn fixture(store: &Store) {
+    fixture_for(store, "claude-code").await;
+}
+
+/// An owner's account of `provider` signed in on `machine` and revoking
+/// under operation `revoke`.
+pub(in crate::server) async fn fixture_for(store: &Store, provider: &str) {
     store.migrate().await.unwrap();
     let MutationResult::Applied(created) = store
         .mutate_provider_accounts(
@@ -215,7 +221,7 @@ async fn fixture(store: &Store) {
             &Mutation {
                 expected_revision: 0,
                 change: Change::Create {
-                    provider_id: "claude-code".into(),
+                    provider_id: provider.into(),
                     label: "Personal".into(),
                 },
             },

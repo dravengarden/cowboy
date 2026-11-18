@@ -190,4 +190,4 @@ fn outcome(observation: &NativeLogoutObservation) -> State {
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

@@ -14,6 +14,7 @@ mod native;
 mod pass;
 mod recovery;
 mod remote;
+mod sandbox;
 mod temporary;
 mod worker_trees;
 pub(in crate::server) use recovery::run as run_recovery;
@@ -76,6 +77,23 @@ pub(in crate::server) async fn reconcile(
             .map_err(|_| "revocation_reconciliation_failed")?,
     )
     .map_err(|_| "unavailable")?;
+    // Destructive: only after every session stopped and every native
+    // profile was cleaned up. Completion waits for every receipt.
+    result["account_sandboxes"] = if cleanup_ready {
+        serde_json::to_value(
+            sandbox::run(
+                store,
+                &sandbox::MachineRemover(Arc::clone(state)),
+                owner,
+                operation,
+            )
+            .await
+            .map_err(|_| "revocation_reconciliation_failed")?,
+        )
+        .map_err(|_| "unavailable")?
+    } else {
+        serde_json::json!({"state": if ready { "waiting_for_native_logout" } else { "waiting_for_session_stop" }})
+    };
     result["remote_grants"] = if cleanup_ready {
         serde_json::to_value(
             remote::run(state, owner, operation)
