@@ -2,6 +2,7 @@
 /target
 /plugins/zed/adapter/target
 /plugins/claude-code/relay/target
+/packaging/account-sandbox/target
 
 # Frontend
 node_modules/
