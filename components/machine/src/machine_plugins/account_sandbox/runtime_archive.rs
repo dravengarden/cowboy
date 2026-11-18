@@ -55,6 +55,8 @@ const MANIFEST: &str =
 const MAX_ARCHIVE_BYTES: u64 = 1 << 30;
 const ARCHIVE_NAME: &str = "account-sandbox-runtime.tar";
 const RECORD_NAME: &str = "account-sandbox-runtime.json";
+/// Schema 2: the archive was registered and passed the daemon's probe.
+const RECORD_SCHEMA: u32 = 2;
 
 /// A generation's runtime archive and the digest the daemon registered.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,7 +81,11 @@ pub(in crate::machine_plugins) fn cached(generation: &Path) -> Result<Option<Arc
         result => result?,
     };
     let record: Record = serde_json::from_slice(&bytes).context("invalid runtime record")?;
-    ensure!(record.schema == 1, "unsupported runtime record");
+    if record.schema != RECORD_SCHEMA {
+        // An older record predates the daemon probe: rebuild, register and
+        // probe the archive again.
+        return Ok(None);
+    }
     let path = generation.join(ARCHIVE_NAME);
     match fs::symlink_metadata(&path) {
         Ok(metadata) if metadata.is_file() && metadata.len() == record.size => Ok(Some(Archive {
@@ -90,13 +96,13 @@ pub(in crate::machine_plugins) fn cached(generation: &Path) -> Result<Option<Arc
     }
 }
 
-/// Record that the daemon registered `archive`.
+/// Record that the daemon registered `archive` and its probe passed.
 pub(in crate::machine_plugins) fn record_registered(
     generation: &Path,
     archive: &Archive,
 ) -> Result<()> {
     let record = Record {
-        schema: 1,
+        schema: RECORD_SCHEMA,
         sha256: archive.sha256.clone(),
         size: fs::metadata(&archive.path)?.len(),
     };
@@ -512,6 +518,14 @@ mod tests {
         assert!(cached(generation.path()).unwrap().is_none());
         record_registered(generation.path(), &archive).unwrap();
         assert_eq!(cached(generation.path()).unwrap(), Some(archive.clone()));
+        // A record from before the daemon probe is registered and probed again.
+        let record = generation.path().join(RECORD_NAME);
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
+        value["schema"] = 1.into();
+        fs::write(&record, value.to_string()).unwrap();
+        assert!(cached(generation.path()).unwrap().is_none());
+        record_registered(generation.path(), &archive).unwrap();
         fs::write(&archive.path, b"truncated").unwrap();
         assert!(cached(generation.path()).unwrap().is_none());
     }

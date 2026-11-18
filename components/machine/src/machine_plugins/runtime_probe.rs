@@ -1,18 +1,12 @@
 //! Install-time probes of a staged Provider runtime.
 //!
-//! An `account_sandbox_v1` Provider is probed without its launcher and
-//! without the daemon. The daemon's `probe` mode runs only inside an existing
-//! account's unit: probing through it would either create an account (a new
-//! system user and home image per install) or run the new, not yet accepted
-//! generation against a real account's persistent home. Neither belongs to an
-//! install. The launcher's `--version` resolves and prepares its HOME-based
-//! state (`~/.gemini`), so running it as the Machine user would touch the
-//! Machine user's home, which a sandboxed Provider must never do. What is
-//! probed instead is each vendor component (`agy --version`) with a
-//! disposable HOME and a closed environment, and the probe must leave that
-//! HOME empty: a component that writes state on `--version` fails the
-//! install rather than being trusted with a real account. The launcher and
-//! proxy are then first exercised inside the daemon's confined unit.
+//! No vendor code of an `account_sandbox_v1` Provider runs as the Machine
+//! user, not even a `--version`: its components and launcher are not probed
+//! on the host. The daemon probes the generation's registered runtime instead
+//! (`probe_runtime`), in a confined unit of its own probe identity rather
+//! than a real account, before the generation's first account unit
+//! (`account_sandbox_connection`); a failed or unavailable probe refuses the
+//! generation.
 use super::*;
 
 /// Probe the staged launch command, except for an account-sandboxed Provider.
@@ -27,7 +21,7 @@ pub(super) async fn probe_provider_runtime(
     if runtime.isolation == Some(cowboy_provider_sdk::RuntimeIsolationPolicy::AccountSandboxV1) {
         tracing::info!(
             command = %command.display(),
-            "launcher probe skipped for an account-sandboxed Provider; its components were probed sealed"
+            "launcher probe skipped for an account-sandboxed Provider; the daemon probes its runtime"
         );
         return Ok(());
     }
@@ -50,30 +44,9 @@ pub(super) async fn probe_provider_runtime(
     Ok(())
 }
 
-/// A sealed component probe must not have written anything to its HOME.
-pub(super) fn ensure_sealed(home: &Path, sealed: bool) -> Result<()> {
-    if sealed {
-        ensure!(
-            fs::read_dir(home)?.next().is_none(),
-            "a sandboxed Provider component wrote to its disposable HOME during its probe"
-        );
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_sealed_probe_home_must_stay_empty() {
-        let home = tempfile::tempdir().unwrap();
-        ensure_sealed(home.path(), true).unwrap();
-        fs::write(home.path().join(".state"), b"x").unwrap();
-        assert!(ensure_sealed(home.path(), false).is_ok());
-        let error = ensure_sealed(home.path(), true).unwrap_err();
-        assert!(error.to_string().contains("disposable HOME"));
-    }
 
     #[tokio::test]
     async fn the_launcher_probe_is_skipped_only_for_sandboxed_providers() {

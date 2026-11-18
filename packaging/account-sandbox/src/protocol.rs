@@ -59,6 +59,11 @@ pub enum Request {
         sha256: String,
         size: u64,
     },
+    /// Run a registered runtime's fixed probe command in a unit of the
+    /// daemon-owned probe identity (never a real account).
+    ProbeRuntime {
+        runtime_sha256: String,
+    },
     Start {
         key: String,
         mode: Mode,
@@ -181,7 +186,14 @@ fn validate(request: &Request) -> Result<()> {
             account_id,
         } => {
             ids::validate_id("service_id", service_id)?;
+            anyhow::ensure!(
+                service_id != crate::probe::PROBE_SERVICE,
+                "service_id {service_id:?} is reserved"
+            );
             ids::validate_id("account_id", account_id)
+        }
+        Request::ProbeRuntime { runtime_sha256 } => {
+            ids::validate_hex("runtime_sha256", runtime_sha256, 64)
         }
         Request::RegisterRuntime { sha256, size } => {
             ids::validate_hex("sha256", sha256, 64)?;

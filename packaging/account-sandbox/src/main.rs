@@ -14,6 +14,7 @@ mod fence;
 mod host;
 mod ids;
 mod meta;
+mod probe;
 mod protocol;
 mod raw;
 mod safefs;

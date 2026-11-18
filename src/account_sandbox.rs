@@ -271,6 +271,15 @@ pub struct LogoutCleanup {
     pub superseded: bool,
 }
 
+/// The daemon's probe of a registered runtime in its probe identity's unit.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct RuntimeProbe {
+    pub runtime_sha256: String,
+    pub unit: String,
+    pub exit_code: Option<i32>,
+    pub passed: bool,
+}
+
 /// One sequential connection to the daemon.
 #[derive(Debug)]
 pub struct Client {
@@ -324,6 +333,18 @@ impl Client {
         let (value, fds) = self.receive()?;
         ensure!(fds.is_empty(), "unexpected descriptors on a registration");
         Ok(serde_json::from_value(value)?)
+    }
+
+    /// Run the registered runtime's probe command in a confined unit of the
+    /// daemon's own probe identity (never an account).
+    pub fn probe_runtime(&mut self, runtime_sha256: &str) -> Result<RuntimeProbe> {
+        let probe: RuntimeProbe =
+            self.call(&json!({"op": "probe_runtime", "runtime_sha256": runtime_sha256}))?;
+        ensure!(
+            probe.runtime_sha256 == runtime_sha256,
+            "the account sandbox probed another runtime"
+        );
+        Ok(probe)
     }
 
     /// Start one account unit and receive its pipes.

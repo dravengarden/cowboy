@@ -70,6 +70,9 @@ pub fn root_owner() -> Option<(u32, u32)> {
     rustix::process::geteuid().is_root().then_some((0, 0))
 }
 
+/// Exits of settled units kept for late `wait_exit` callers.
+const RECENT_EXITS: usize = 64;
+
 /// Runtime registrations staging at once.
 pub const MAX_CONCURRENT_REGISTRATIONS: usize = 2;
 
@@ -107,6 +110,7 @@ pub struct Daemon {
     pub(crate) owned: Mutex<HashMap<String, Vec<(String, String)>>>,
     exits: Mutex<HashMap<String, ExitSlot>>,
     staging: Mutex<StagingTotals>,
+    recent_exits: Mutex<std::collections::VecDeque<(String, Option<i32>)>>,
     exit_signal: Condvar,
     next_connection: AtomicU64,
 }
@@ -138,6 +142,7 @@ impl Daemon {
             owned: Mutex::new(HashMap::new()),
             exits: Mutex::new(HashMap::new()),
             staging: Mutex::new(StagingTotals::default()),
+            recent_exits: Mutex::new(std::collections::VecDeque::new()),
             exit_signal: Condvar::new(),
             next_connection: AtomicU64::new(1),
         });
@@ -223,6 +228,7 @@ impl Daemon {
                 service_id,
                 account_id,
             } => self.ensure_account(&service_id, &account_id),
+            Request::ProbeRuntime { runtime_sha256 } => self.probe_runtime(conn, &runtime_sha256),
             Request::RegisterRuntime { sha256, size } => {
                 self.register_runtime(&sha256, size, payload)
             }
@@ -291,7 +297,7 @@ impl Daemon {
         Ok(())
     }
 
-    fn ensure_account(&self, service_id: &str, account_id: &str) -> Outcome<Reply> {
+    pub(crate) fn ensure_account(&self, service_id: &str, account_id: &str) -> Outcome<Reply> {
         let key = ids::derive_key(service_id, account_id);
         let user = ids::user_name(&key);
         let lock = self.lock(&key);
@@ -482,6 +488,13 @@ impl Daemon {
         if let Some(slot) = guard(&self.exits).get_mut(unit) {
             *slot = ExitSlot::Exited(exit);
         }
+        {
+            let mut recent = guard(&self.recent_exits);
+            if recent.len() >= RECENT_EXITS {
+                recent.pop_front();
+            }
+            recent.push_back((unit.to_owned(), exit));
+        }
         self.exit_signal.notify_all();
     }
 
@@ -496,7 +509,14 @@ impl Daemon {
         let mut exits = guard(&self.exits);
         loop {
             match exits.get(unit) {
-                None => return None,
+                // A settled unit keeps its exit among the recent ones.
+                None => {
+                    return guard(&self.recent_exits)
+                        .iter()
+                        .rev()
+                        .find(|(name, _)| name == unit)
+                        .and_then(|(_, exit)| *exit);
+                }
                 Some(ExitSlot::Exited(exit)) => return *exit,
                 Some(ExitSlot::Running) => {}
             }
@@ -713,7 +733,7 @@ impl Daemon {
         }
     }
 
-    fn stop_unit(&self, unit: &str) -> Outcome<Reply> {
+    pub(crate) fn stop_unit(&self, unit: &str) -> Outcome<Reply> {
         let key = crate::protocol::validate_unit_name(unit)
             .map_err(|e| fail(Code::InvalidRequest, e.to_string()))?;
         self.with_account(key, |dir, meta| {

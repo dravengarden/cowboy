@@ -288,3 +288,20 @@ fn execution_ledgers_are_keyed_by_a_plain_session_id() {
         assert!(execution_ledger_file(root, invalid).is_none(), "{invalid}");
     }
 }
+
+#[test]
+fn runtime_probes_name_the_probed_runtime() {
+    let fake = fake(vec![
+        ok(json!({"runtime_sha256": SHA, "unit": "u", "exit_code": 0, "passed": true})),
+        ok(json!({"runtime_sha256": "b".repeat(64), "unit": "u", "exit_code": 0, "passed": true})),
+    ]);
+    let mut client = Client::connect(&fake.socket).unwrap();
+    assert!(client.probe_runtime(SHA).unwrap().passed);
+    assert!(client.probe_runtime(SHA).is_err());
+    drop(client);
+    let requests = fake.server.join().unwrap();
+    assert_eq!(
+        requests[0],
+        json!({"op": "probe_runtime", "runtime_sha256": SHA})
+    );
+}

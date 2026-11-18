@@ -103,6 +103,14 @@ impl MachinePluginStore {
             })?;
             let archive = runtime_archive::build(&components, generation)?;
             daemon::register_file(&mut client, &archive.path, &archive.sha256)?;
+            // The generation's vendor code first runs here, confined in the
+            // daemon's probe identity; a failed probe refuses the generation.
+            let probe = client.probe_runtime(&archive.sha256)?;
+            ensure!(
+                probe.passed,
+                "the account sandbox probe of this Provider generation exited {:?}",
+                probe.exit_code
+            );
             runtime_archive::record_registered(generation, &archive)?;
             archive
         };

@@ -3768,8 +3768,7 @@ fn write_provider_generation_files(
     Ok(())
 }
 
-/// `sealed_probe`: every component probe must leave its disposable HOME
-/// empty (an account-sandboxed Provider; see `runtime_probe`).
+/// `sealed_probe`: no component runs on the host (see `runtime_probe`).
 async fn stage_provider_runtime(
     content: &Path,
     artifacts: &PlatformRuntimeArtifacts,
@@ -4216,7 +4215,10 @@ async fn stage_runtime_component(
     };
     let unpack_ms = unpack_started.elapsed().as_millis();
     let probe_started = Instant::now();
-    probe_released_component(&executable, artifact, sealed_probe).await?;
+    // A sandboxed Provider's vendor code never runs as the Machine user.
+    if !sealed_probe {
+        probe_released_component(&executable, artifact).await?;
+    }
     let probe_ms = probe_started.elapsed().as_millis();
     let verify_started = Instant::now();
     ensure!(
@@ -4295,7 +4297,6 @@ impl Drop for StagedProbeHome {
 async fn probe_released_component(
     executable: &Path,
     artifact: &ReleasedPrivateComponent,
-    sealed: bool,
 ) -> Result<()> {
     let directory = std::env::temp_dir().join(format!(
         "cowboy-component-probe-{:032x}",
@@ -4361,7 +4362,7 @@ async fn probe_released_component(
         status.success(),
         "staged Provider component probe exited {status}"
     );
-    runtime_probe::ensure_sealed(&home.0, sealed)
+    Ok(())
 }
 
 fn runtime_command(package_path: &Path, command: &str) -> Result<PathBuf> {

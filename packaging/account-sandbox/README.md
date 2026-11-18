@@ -89,6 +89,7 @@ each: `{"ok":true,"result":{...}}` or
 |---|---|---|
 | `ensure_account` | `service_id`, `account_id` | `key`, `user` |
 | `register_runtime` | `sha256`, `size`, then exactly `size` raw bytes | `sha256`, `already_present` |
+| `probe_runtime` | `runtime_sha256` | `runtime_sha256`, `unit`, `exit_code`, `passed` |
 | `start` | `key`, `mode` (`runtime`/`login`/`logout`/`probe`), `credential_generation`, `runtime_sha256`, optional `session_id`, `descriptor_b64` (≤ 32 KiB decoded) | `unit`, `mode`, `invocation_id`, `boot_id`, `fds` |
 | `stop_unit` | `unit` | `unit`, `stopped` |
 | `stop_account` | `key`, optional `revision` + `operation_id` (together) | `key`, `fence_epoch`, `fenced`, `stopped`, `revision`, `replayed`, `account_present` |
@@ -99,6 +100,15 @@ each: `{"ok":true,"result":{...}}` or
 | `remove_account` | `key` | `removed` |
 
 `key = hex(sha256("cowboy-account-v1" || 0x00 || service_id || 0x00 || account_id))[..16]`.
+
+`probe_runtime` runs the registered runtime's fixed `probe` command
+(`bin/agy-launch --version`) in a confined unit of the daemon-owned probe
+identity (`service_id` `cowboy-account-sandbox`, `account_id`
+`runtime-probe`), waits up to 30 s for it, then stops and confirms the unit
+gone before answering. It never touches a real account or credential; the
+Machine runs it once per Provider generation before that generation's first
+account unit, so no vendor code of an isolated Provider runs as the Machine
+user. `ensure_account` refuses the reserved `service_id`.
 
 A successful `start` response carries, as `SCM_RIGHTS` on its line, the
 caller's ends of the unit's stdin (write), stdout (read) and stderr (read)
