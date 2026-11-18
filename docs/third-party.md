@@ -80,7 +80,9 @@ cd - && nix develop -c bun tools/third-party.ts export codex-acp
 
 `export` squashes fixups, renders the series deterministically (ignoring
 user and system Git configuration), and refuses
-commits without a complete ledger. Commit the patches with the Cowboy code
+commits without a complete ledger, merge commits (the series is linear),
+and a work tree whose recorded series changed in Cowboy since checkout (for
+example after switching branches): check out again and reapply the commits. Commit the patches with the Cowboy code
 that uses them. `drop <name> <id>` removes one delta from the work tree.
 
 Review a series change as code, not as a diff of patch files:

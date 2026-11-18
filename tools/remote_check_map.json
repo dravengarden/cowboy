@@ -26,7 +26,10 @@
     "components/machine/src/bin/cowboy-execution-host.rs",
     "components/machine/src/bin/cowboy-machine.rs",
     "components/machine/src/bin/cowboy-machine-install.rs",
-    "components/memory-client/"
+    "components/memory-client/",
+    "third_party/",
+    "tools/third-party.ts",
+    "tools/lib/third-party.ts"
   ],
   "native": {
     "claude": {
@@ -156,7 +159,8 @@
     "components/provider-runtime/packages/deepseek-harness/",
     "components/provider-runtime/packages/antigravity-launch/",
     "components/provider-runtime/check.ts",
-    "plugins/codex/runtime/resume_conformance.py"
+    "plugins/codex/runtime/resume_conformance.py",
+    "third_party/claude-agent-acp/"
   ],
   "suites": {
     "claude-remote-check": {
@@ -193,7 +197,11 @@
       "command": "just provider-check (its codex-acp launch_test and codex runtime checks)",
       "paths": [
         "components/provider-runtime/packages/codex-acp/",
-        "plugins/codex/runtime/"
+        "plugins/codex/runtime/",
+        "third_party/codex-acp/",
+        "tools/third-party.ts",
+        "tools/lib/third-party.ts",
+        "tools/lib/command.ts"
       ],
       "native": [
         "codex"
@@ -484,7 +492,9 @@
         "components/provider-runtime/execution-connection.mjs",
         "components/provider-runtime/execution-probe.mjs",
         "components/provider-runtime/mcp-bindings.mjs",
-        "plugins/codex/runtime/bindings.mjs"
+        "plugins/codex/runtime/bindings.mjs",
+        "tools/third-party.ts",
+        "tools/lib/command.ts"
       ],
       "native": [
         "codex",
@@ -651,7 +661,10 @@
         "src/managed_calls/snapshot.rs",
         "src/managed_calls/snapshot/images.rs",
         "components/machine/src/machine_cli/execution.rs",
-        "components/server/src/server/managed_calls/runner.rs"
+        "components/server/src/server/managed_calls/runner.rs",
+        "tools/third-party.ts",
+        "tools/lib/third-party.ts",
+        "tools/lib/command.ts"
       ],
       "manifests": [
         "plugins/codex/provider.json"

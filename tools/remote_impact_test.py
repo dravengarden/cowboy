@@ -62,6 +62,12 @@ class ImpactTest(unittest.TestCase):
     def test_a_codex_launcher_change_stays_in_its_lane(self):
         self.assertEqual(set(suites(["plugins/codex/runtime/launch.mjs"])), {"codex-adapter-check", "codex-worker", "codex-image"})
 
+    def test_the_codex_adapter_source_inputs_select_the_codex_suites(self):
+        for path in ["third_party/codex-acp/patches/0001-native-launch-arguments.patch",
+                     "third_party/codex-acp/upstream.json", "tools/third-party.ts",
+                     "tools/lib/third-party.ts", "tools/lib/command.ts"]:
+            self.assertEqual(set(suites([path])), {"codex-adapter-check", "codex-worker", "codex-image"}, path)
+
     def test_the_execution_transport_runs_every_suite_built_on_it(self):
         selected = suites(["components/machine/src/execution_host/ledger.rs"])
         self.assertEqual(set(selected), {"execution-rust-tests", "claude-worker", "codex-worker", "session",

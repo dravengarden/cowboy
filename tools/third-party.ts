@@ -51,6 +51,8 @@ interface WorkState {
   name: string;
   base: string;
   tag: string;
+  /** Digest of the repository's manifest and series this work tree was expanded from or exported to. */
+  recorded: string;
   /** Present between `upgrade` and the `export` that records it. */
   upgrade?: { from: { tag: string; commit: string }; to: { tag: string; commit: string } };
 }
@@ -62,6 +64,34 @@ export function workTree(name: string): string {
 
 const git = (work: string, ...args: string[]) =>
   run("git", ["-C", work, ...args], undefined, COMMITTER);
+
+/** Digest of the manifest and patch files currently in the repository. */
+async function recordedSeries(name: string): Promise<string> {
+  const hash = new Bun.CryptoHasher("sha256");
+  const root = packageRoot(name);
+  hash
+    .update(`${MANIFEST}\0`)
+    .update(await readFile(join(root, MANIFEST)))
+    .update("\0");
+  const directory = join(root, PATCHES);
+  for (const file of existsSync(directory) ? (await readdir(directory)).sort() : []) {
+    hash
+      .update(`${file}\0`)
+      .update(await readFile(join(directory, file)))
+      .update("\0");
+  }
+  return hash.digest("hex");
+}
+
+/** The repository's series must still be the one this work tree started from. */
+async function requireRecorded(name: string, state: WorkState): Promise<void> {
+  if (state.recorded !== (await recordedSeries(name))) {
+    throw new Error(
+      `third_party/${name} changed since this work tree was checked out (another branch or commit); ` +
+        "rerun checkout --force and reapply your commits",
+    );
+  }
+}
 
 async function readState(work: string): Promise<WorkState> {
   const path = join(work, ".git", STATE);
@@ -171,7 +201,12 @@ async function checkout(name: string, force: boolean): Promise<void> {
     join(packageRoot(name), PATCHES, delta.file),
   );
   await applySeries(work, upstream.commit, series);
-  await writeState(work, { name, base: upstream.commit, tag: upstream.tag });
+  await writeState(work, {
+    name,
+    base: upstream.commit,
+    tag: upstream.tag,
+    recorded: await recordedSeries(name),
+  });
   console.log(`${work}: ${upstream.tag} + ${series.length} deltas on branch ${BRANCH}`);
   console.log("Commit a new delta with a Cowboy-Delta/Upstream/Drop-When/Tests trailer block,");
   console.log("amend an existing one with `git commit --fixup`, then run export.");
@@ -182,6 +217,7 @@ async function exportSeries(name: string): Promise<void> {
   const state = await readState(work);
   await requireClean(work);
   await requireSeriesShape(work, state);
+  await requireRecorded(name, state);
   const pending = (await git(work, "log", "--format=%s", `${seriesBase(state)}..HEAD`))
     .split("\n")
     .some((subject) => /^(fixup|squash|amend)! /.test(subject));
@@ -199,10 +235,9 @@ async function exportSeries(name: string): Promise<void> {
   await rm(directory, { recursive: true, force: true });
   if (rendered.size > 0) await mkdir(directory);
   for (const [file, text] of rendered) await writeFile(join(directory, file), text);
-  if (state.upgrade) {
-    delete state.upgrade;
-    await writeState(work, state);
-  }
+  delete state.upgrade;
+  state.recorded = await recordedSeries(name);
+  await writeState(work, state);
   const problems = await checkPackage(name);
   for (const problem of problems) console.error(`warning: ${problem}`);
   console.log(`${name}: exported ${rendered.size} deltas to third_party/${name}/${PATCHES}`);
@@ -229,6 +264,10 @@ async function requireSeriesShape(work: string, state: WorkState): Promise<void>
         ? `the upgrade to ${state.upgrade.to.tag} was not completed (rebase aborted?); rerun checkout --force and upgrade`
         : `${work} no longer contains its base ${base}; rerun checkout --force`,
     );
+  }
+  // format-patch omits merges, which would silently lose their changes.
+  if ((await git(work, "rev-list", "--merges", `${base}..HEAD`)).trim() !== "") {
+    throw new Error(`${work} has merge commits; the series must be linear (rebase instead)`);
   }
 }
 
@@ -259,6 +298,7 @@ async function upgrade(name: string, tag: string): Promise<void> {
   const work = workTree(name);
   const state = await readState(work);
   await requireClean(work);
+  await requireRecorded(name, state);
   if (
     state.upgrade ||
     state.base !== upstream.commit ||
@@ -573,7 +613,9 @@ if (import.meta.main) {
     }
     case "diff": {
       const at = rest.indexOf("--base");
-      await diff(one(), at >= 0 && rest[at + 1] ? rest[at + 1] : "HEAD");
+      const base = at < 0 ? "HEAD" : rest[at + 1];
+      if (!base || base.startsWith("--")) throw new Error("--base needs a revision");
+      await diff(one(), base);
       break;
     }
     default:
