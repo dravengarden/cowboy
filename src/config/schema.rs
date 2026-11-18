@@ -128,6 +128,13 @@ pub static SERVICE_FIELDS: &[Field] = &[
         doc: "Antigravity account IDs admitted to sign in, create sessions and run turns.\nChecked at login start and completion, session creation, every prompt dispatch\nand every worker revival. Removing an ID parks its queues; nothing is deleted.",
     },
     Field {
+        key: "accounts.antigravity_admission",
+        kind: Kind::Bool,
+        default: Value::Bool(false),
+        reload: Reload::Live,
+        doc: "Deprecated and ignored: replaced by accounts.antigravity_admitted.\nAccepted so an older configuration still starts; it admits nothing.\nRemove it from the file.",
+    },
+    Field {
         key: "accounts.machine_browser",
         kind: Kind::Bool,
         default: Value::Bool(false),

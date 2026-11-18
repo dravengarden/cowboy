@@ -46,6 +46,11 @@ schema = 1
 # and every worker revival. Removing an ID parks its queues; nothing is deleted.
 # array of at most 16 distinct lowercase slug identifiers; applies live.
 # antigravity_admitted = []
+# Deprecated and ignored: replaced by accounts.antigravity_admitted.
+# Accepted so an older configuration still starts; it admits nothing.
+# Remove it from the file.
+# boolean (true or false); applies live.
+# antigravity_admission = false
 # Allow owners to open Machine browsers for accounts they enabled one for.
 # Requires the machine_browser Plugin and its host policy on the Machine.
 # Disabling refuses new opens and closes viewer streams; snapshots are kept.

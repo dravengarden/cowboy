@@ -553,3 +553,20 @@ fn patch_rechecks_original_authority_after_waiting_for_the_shared_writer() {
     );
     assert_eq!(std::fs::read_to_string(path).unwrap(), "schema = 1\n");
 }
+
+#[test]
+fn the_deprecated_antigravity_admission_key_is_accepted_and_ignored() {
+    // A deployed Controller configuration still carries the boolean that
+    // `accounts.antigravity_admitted` replaced; it must never stop startup.
+    let report = check_text(
+        Scope::Service,
+        "schema = 1\n\n[accounts]\nantigravity_admission = true\n",
+        None,
+    );
+    assert!(report.is_valid(), "{:?}", codes(&report));
+    assert!(
+        Config::defaults(Scope::Service)
+            .get(&schema::ACCOUNT_ANTIGRAVITY_ADMITTED)
+            .is_empty()
+    );
+}

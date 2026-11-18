@@ -47,6 +47,21 @@ struct SandboxUnit {
     handle: account_sandbox::UnitHandle,
 }
 
+/// The daemon runs one runtime per account (`limit`): another session of
+/// the account holds it. Explain that instead of a bare refusal.
+fn in_use(error: anyhow::Error, account_id: &str) -> anyhow::Error {
+    if account_sandbox::DaemonError::code_of(&error) == Some("limit") {
+        return anyhow::anyhow!("{}", in_use_message(account_id));
+    }
+    error
+}
+
+/// The session error of a second runtime of one account.
+fn in_use_message(account_id: &str) -> String {
+    let short: String = account_id.chars().take(8).collect();
+    format!("Antigravity \u{b7} account {short} is in use by another session; hibernate it first")
+}
+
 impl AgentProcess {
     pub(super) async fn spawn(
         spec: &LaunchSpec,
@@ -127,6 +142,7 @@ impl AgentProcess {
     ) -> Result<(Self, Pipes)> {
         let session = session_id.to_owned();
         let descriptor = bridge.as_ref().map(|bridge| bridge.descriptor.clone());
+        let account_id = launch.account_id.clone();
         let (client, started) = tokio::task::spawn_blocking(move || -> Result<_> {
             let mut client = account_sandbox::Client::connect(&launch.socket)?;
             let account = client.ensure_account(&launch.service_id, &launch.account_id)?;
@@ -146,6 +162,7 @@ impl AgentProcess {
         })
         .await
         .context("account sandbox start task failed")?
+        .map_err(|error| in_use(error, &account_id))
         .context("starting the Provider in the account sandbox")?;
         tracing::info!(
             session = session_id,
@@ -361,5 +378,23 @@ mod tests {
         assert!(retry.is_some_and(|at| at > std::time::Instant::now()));
         assert!(recycler.hard_recycle("session").await.is_none());
         server.join().unwrap();
+    }
+
+    #[test]
+    fn a_second_runtime_of_an_account_is_explained() {
+        let limit = anyhow::Error::new(account_sandbox::DaemonError {
+            code: "limit".into(),
+            message: "runtime unit limit reached".into(),
+        });
+        let explained = in_use(limit, "11111111-1111-4111-8111-111111111111").to_string();
+        assert!(
+            explained.contains("account 11111111 is in use by another session; hibernate it first"),
+            "{explained}"
+        );
+        let other = anyhow::Error::new(account_sandbox::DaemonError {
+            code: "fenced".into(),
+            message: String::new(),
+        });
+        assert!(in_use(other, "a").to_string().contains("fenced"));
     }
 }

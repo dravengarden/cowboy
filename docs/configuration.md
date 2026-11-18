@@ -162,6 +162,13 @@ Never add a new behavioural environment variable or a separate JSON policy
 file. Existing ones move into these files one at a time, keeping the old input
 as a deprecated override for one release.
 
+## Deprecated settings
+
+`accounts.antigravity_admission` (Service, boolean) was replaced by
+`accounts.antigravity_admitted`, the list of admitted Antigravity account IDs.
+The old key is still accepted so an existing configuration starts, but it is
+ignored: it admits nothing. Remove it and list the admitted accounts instead.
+
 ## Current settings
 
 | Scope | Key | Default | Reload |
@@ -171,6 +178,7 @@ as a deprecated override for one release.
 | Service | `accounts.native_claude_login` | `false` | live |
 | Service | `accounts.native_claude_sessions` | `false` | live |
 | Service | `accounts.antigravity_admitted` | `[]` | live |
+| Service | `accounts.antigravity_admission` | `false` (deprecated, ignored) | live |
 | Service | `accounts.machine_browser` | `false` | live |
 | Service | `plugins.urgent_retention_cooldown` | `"1h"` | live |
 | Service | `plugins.catalog_keep_releases` | `3` | live |
