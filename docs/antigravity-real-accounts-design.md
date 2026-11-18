@@ -1,6 +1,6 @@
 # Antigravity real accounts on OVH — design
 
-Status: design, revision 3, 2026-11-18. Nothing here is implemented. It extends
+Status: design, revision 4, 2026-11-18. Nothing here is implemented. It extends
 [`antigravity-provider-plan.md`](antigravity-provider-plan.md) Phases 3 and 4
 under the
 [Antigravity consumer-subscription boundary](requirements.md#antigravity-consumer-subscription-boundary).
@@ -9,6 +9,9 @@ Revision 1 was design-reviewed by Codex Astra Max (call
 (call `call-448741b8535e72fe7823b378`, 18 findings, **[R2-n]**). Findings that
 assume a hostile `ubuntu` process (R2-1, R2-2, R2-4 and the caller parts of
 R2-5) are outside the owner's trust model below; the rest are answered inline.
+Revision 3's review (call `call-52d3994a3d9ece0fbc1bdc27`, 17 findings,
+**[R3-n]**) is answered in [Revision 4 amendments](#revision-4-amendments),
+which take precedence over earlier sections where they differ.
 
 ## Owner decisions (2026-11-18)
 
@@ -393,7 +396,102 @@ why.
    Stop conditions: any verification, location, suspension or unknown refusal
    on any account halts further admissions until the owner decides.
 
+## Revision 4 amendments
+
+- **[R3-1] Owner decision: accepted.** Every agent session on Hawk runs as
+  `draven`, whose operator SSH reaches OVH as root (`ssh ovh`, passwordless
+  sudo). A prompt-injected session of any Provider can therefore reach every
+  account's state through root on OVH. The owner accepted this residual risk on
+  2026-11-18 rather than restricting operator access; it is listed below.
+- **[R3-2] Privileged traversal.** Every daemon operation inside an account
+  tree (cleanup, token removal, ledger and size reads) opens paths with
+  `openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS |
+  RESOLVE_NO_XDEV)` relative to a directory descriptor of the account root
+  opened at daemon start-up, never by pathname.
+- **[R3-3] Host IPC and addresses.** The unit is started through the daemon's
+  own `exec-confined` mode as `ExecStart` wrapper, which applies Landlock
+  scoping (`LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET | LANDLOCK_SCOPE_SIGNAL`, ABI 6,
+  available on OVH's ABI 8) before exec, so abstract sockets and signals outside
+  the unit are unreachable. `/run` and `/var/run` are masked
+  (`TemporaryFileSystem=`), re-exposing only the unit's own bridge socket and
+  `/run/systemd/resolve` read-only. `IPAddressDeny=localhost link-local
+  multicast` plus OVH's own addresses and RFC 1918/6598 ranges, with
+  `IPAddressAllow=127.0.0.53/32` for the resolver stub. Acceptance attempts
+  connections to host sockets and services and requires refusal.
+- **[R3-4] Daemon account fence.** `stop-account` first persists
+  `fenced(epoch)` in `meta.json`; every start takes the account lock and
+  refuses when fenced; only operation-scoped cleanup and logout run while
+  fenced; `admit-account` clears it.
+- **[R3-5, R3-6] Trusted process ledger.** The ledger lives in the worker's
+  execution endpoint (`src/worker_execution.rs`, Cowboy code outside the
+  unit), which already relays every request: it records each `process/start`
+  per session and turn before forwarding, refuses starts after a cancel
+  fence, and terminates recorded processes on cancel, turn end, unit loss and
+  teardown, observing completion through `process/read` rather than waiting
+  for a consumed `process/exited`. The Machine persists pending terminations
+  per execution binding; if the worker dies or OVH reboots, the Machine
+  re-opens the binding on reconnect and completes them. A reservation (even a
+  forced release) settles only with target termination evidence or the
+  target's proof the process is gone.
+- **[R3-7] Bounded storage.** Each account home is an ext4 image of fixed size
+  (default 4 GiB, fixed inode count) that the daemon loop-mounts per unit;
+  `/tmp` is `TemporaryFileSystem=/tmp:size=256M`; `agy`'s log directory is
+  inside the image. The daemon keeps a host-wide free-space reserve and refuses
+  starts below it.
+- **[R3-8] Exclusive authentication transitions.** `login` and `logout` take
+  the account fence, stop every runtime unit of the account and confirm them
+  gone first; `meta.json` records the credential generation; runtime units
+  carry it, and a runtime unit of an older credential generation is never
+  started. Cleanup of an interrupted login applies only to the generation it
+  owns.
+- **[R3-9] Reservation states.** `reserved` → `may_have_dispatched` (durable,
+  with worker epoch and turn ID, written before the prompt is enqueued) →
+  terminal. Only a reservation still `reserved` can settle `not_dispatched`.
+- **[R3-10] Evidence on every path.** Every settlement, including unit loss,
+  runs evidence reconciliation over the unit's log (read by the daemon from the
+  image after the unit stops): a refusal record always wins; complete success
+  evidence with infrastructure loss settles `interrupted`; anything else is
+  `unknown_refusal`.
+- **[R3-11, R3-17] Transports.** The worker's execution endpoint additionally
+  listens on a Unix socket the daemon creates per unit
+  (`/run/cowboy-account-sandbox/units/<invocation>/exec.sock`, owner `ubuntu`,
+  connectable by `cga-<key>` only, bearer token unchanged), bound into the unit
+  as its only reachable host socket. Inside the unit the proxy owns the single
+  execution connection and listens on a unit-private socket; `mcpServers`
+  names the signed stdio relay `facade-relay.mjs`, which `agy` launches and
+  which connects to that socket.
+- **[R3-12] Daemon restart.** Unit ownership (worker connection identity,
+  unit name, `InvocationID`, boot ID) is persisted before a launch is
+  acknowledged; on every activation the daemon reconciles persisted units with
+  systemd, stops unclaimed ones, and keeps unresolved cleanups. A worker whose
+  control connection drops stops relaying, asks the daemon (after it returns)
+  for its unit's state, and reports its session crashed unless the unit is
+  confirmed alive and still owned.
+- **[R3-13] Sessions across sign-ins.** After a new sign-in, existing
+  sessions of the account move to the new credential generation through the
+  existing native-session transition (stop evidence, `ReadmitAccountSession`),
+  keeping their `agy` conversation IDs because the home is persistent.
+  Acceptance covers logout → login → resume.
+- **[R3-14] Immutable policy paths.** `~/.gemini` is a read-only bind of a
+  daemon-assembled tree; `~/.gemini/antigravity-cli` is the writable state bind
+  inside it; `hooks.json` and `settings.json` are read-only file binds, so
+  neither they nor any ancestor can be renamed or replaced (`EBUSY`/`EROFS`).
+  Acceptance tests ancestor replacement besides hook failures.
+- **[R3-15] Browser IPv6.** For accounts of an `ipv4_only_v1` Provider, the
+  account browser's unit adds `SystemCallArchitectures=native`, a syscall
+  filter without `io_uring`, `RestrictAddressFamilies=AF_INET AF_UNIX
+  AF_NETLINK`, and its AppArmor sealed profile denies `inet6`. Acceptance
+  attempts IPv6 connections from the browser and requires failure, besides
+  recording a real sign-in's address family.
+- **[R3-16] Several idle sessions.** Each session has its own runtime unit
+  (at most 4 per account plus 1 authentication unit); the one-turn limit is
+  enforced by the Controller's reservation, not by the unit count.
+
 ## Residual risks
+
+- **Accepted by the owner (R3-1):** a prompt-injected agent session of any
+  Provider on Hawk can reach root on OVH through the operator SSH route and
+  read every account's state.
 
 - Linkage of the accounts by shared egress, host fingerprint and timing.
 - Same-user (`ubuntu`) host processes and the Machine are trusted (owner
