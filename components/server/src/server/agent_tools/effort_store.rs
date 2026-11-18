@@ -66,10 +66,26 @@ fn merge(mut document: Value, effort: Option<Value>) -> Value {
     document
 }
 
+/// Commit both settings under one Hub lock so concurrent saves cannot pair
+/// one caller's policy with another's effort; the store queue keeps order.
+fn write_pair(
+    hub: &crate::core::Hub,
+    key: String,
+    document: Value,
+    effort_key: String,
+    effort: Value,
+) {
+    let snapshot = hub.with_settings_mut(|settings| {
+        settings.insert(effort_key.clone(), effort.clone());
+        crate::core::Hub::commit_setting_locked(settings, key.clone(), document.clone())
+    });
+    hub.publish_setting(effort_key, effort, snapshot.clone());
+    hub.publish_setting(key, document, snapshot);
+}
+
 fn store(hub: &crate::core::Hub, key: String, effort_key: String, document: Option<Value>) {
     let (document, effort) = document.map_or((Value::Null, Value::Null), split);
-    hub.set_setting(effort_key, effort);
-    hub.set_setting(key, document);
+    write_pair(hub, key, document, effort_key, effort);
 }
 
 pub(in crate::server) fn agent_document(hub: &crate::core::Hub, agent: &str) -> Option<Value> {
@@ -116,8 +132,13 @@ pub(in crate::server) fn store_session(
     } else {
         document
     };
-    hub.set_setting(format!("{SESSION_REVIEW_EFFORT_PREFIX}{session}"), effort);
-    hub.set_setting(format!("{SESSION_TOOLS_PREFIX}{session}"), document);
+    write_pair(
+        hub,
+        format!("{SESSION_TOOLS_PREFIX}{session}"),
+        document,
+        format!("{SESSION_REVIEW_EFFORT_PREFIX}{session}"),
+        effort,
+    );
 }
 
 #[cfg(test)]
