@@ -167,7 +167,7 @@ export function SessionSubscription({ state, disabled, desktop, helperText }: {
       <TextField select fullWidth size={desktop ? "small" : "medium"} label="Subscription"
         slotProps={{ select: { displayEmpty: true, renderValue: () => selected?.label ?? placeholder }, inputLabel: { shrink: true } }}
         value={selectedId} disabled={disabled || (!state.data && !state.error)}
-        error={state.error || Boolean(state.data && !state.allowed)}
+        error={state.error || Boolean(state.data && !state.allowed && (selectedId || !namedOnly))}
         helperText={state.error ? "Could not load subscriptions." : !state.data ? "Loading subscriptions…" : !state.allowed ? selected?.reason ?? (namedOnly && !selectedId ? "Choose a signed-in, admitted account." : "Account unavailable") : helperText ?? selected?.quota ?? "Independent of the selected Machine."}
         onChange={(event) => state.select(event.target.value)}>
         {!selected && <MenuItem value={selectedId} disabled>{placeholder}</MenuItem>}
