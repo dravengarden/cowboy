@@ -368,7 +368,10 @@ fn add_config_choices(
             let Some(value) = addition.get("value") else {
                 continue;
             };
-            if !choices.iter().any(|choice| choice.get("value") == Some(value)) {
+            if !choices
+                .iter()
+                .any(|choice| choice.get("value") == Some(value))
+            {
                 choices.push(addition.clone());
                 changed = true;
             }

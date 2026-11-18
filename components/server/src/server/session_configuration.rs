@@ -180,14 +180,19 @@ fn collect_model_choices(
     additions: &mut BTreeMap<String, Vec<Value>>,
 ) {
     for option in options.as_array().into_iter().flatten() {
-        let Some(id) = option["id"].as_str().filter(|id| ids.iter().any(|known| known == id))
+        let Some(id) = option["id"]
+            .as_str()
+            .filter(|id| ids.iter().any(|known| known == id))
         else {
             continue;
         };
         for choice in option["options"].as_array().into_iter().flatten() {
             if choice["value"].is_string() && choice["name"].is_string() {
                 let choices = additions.entry(id.to_owned()).or_default();
-                if !choices.iter().any(|known| known["value"] == choice["value"]) {
+                if !choices
+                    .iter()
+                    .any(|known| known["value"] == choice["value"])
+                {
                     choices.push(json!({"value": choice["value"], "name": choice["name"]}));
                 }
             }
