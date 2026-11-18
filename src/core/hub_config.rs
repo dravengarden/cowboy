@@ -41,6 +41,64 @@ impl Hub {
         }
     }
 
+    /// Add choices to the options snapshot of a dormant session. A session
+    /// moved to another Provider generation while exited keeps the snapshot
+    /// its previous generation reported until a worker starts; this lets its
+    /// settings offer what the pinned generation offers without starting one.
+    /// Only choices of options the snapshot already has are added, nothing is
+    /// removed and no current value changes. Returns whether anything changed.
+    pub fn add_dormant_config_choices(
+        &self,
+        expected: &SessionMeta,
+        additions: &std::collections::BTreeMap<String, Vec<serde_json::Value>>,
+    ) -> bool {
+        let options = {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(session) = sessions.get_mut(&expected.id) else {
+                return false;
+            };
+            if session.meta.status != Status::Exited
+                || session.in_flight
+                || session.meta.provider != expected.provider
+                || session.meta.provider_account_id != expected.provider_account_id
+                || session.meta.provider_version != expected.provider_version
+                || session.meta.provider_generation_digest != expected.provider_generation_digest
+                || session.meta.machine_id != expected.machine_id
+                || session.meta.owner_user_id != expected.owner_user_id
+            {
+                return false;
+            }
+            let Some(snapshot) = session.config_options.as_mut() else {
+                return false;
+            };
+            if !add_config_choices(snapshot, additions) {
+                return false;
+            }
+            let stored = snapshot.clone();
+            let projected = projected_config_options(
+                &session.meta.provider,
+                session.meta.provider_behavior.as_ref(),
+                &session.config_preferences,
+                display_config_options(session),
+            );
+            (stored, projected)
+        };
+        let (stored, projected) = options;
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::UpdateConfigOptions {
+                session_id: expected.id.clone(),
+                options: stored,
+            });
+        }
+        if let Some(options) = projected {
+            self.fanout(Outbound::ConfigOptions {
+                session_id: expected.id.clone(),
+                options,
+            });
+        }
+        true
+    }
+
     /// Return only the last agent-backed options snapshot. Unlike
     /// [`Self::config_options`], this does not synthesize host-owned controls
     /// when the agent has not advertised any options yet.
@@ -274,4 +332,47 @@ impl Hub {
             options,
         });
     }
+}
+
+/// Append each addition `{value, name}` to the flat choice list of the option
+/// with the same id when no choice has its value. Grouped choice lists are left
+/// alone: an ungrouped entry would change how the agent's groups render.
+fn add_config_choices(
+    snapshot: &mut serde_json::Value,
+    additions: &std::collections::BTreeMap<String, Vec<serde_json::Value>>,
+) -> bool {
+    let Some(options) = snapshot.as_array_mut() else {
+        return false;
+    };
+    let mut changed = false;
+    for option in options {
+        let Some(id) = option.get("id").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let Some(additions) = additions.get(id) else {
+            continue;
+        };
+        let Some(choices) = option
+            .get_mut("options")
+            .and_then(serde_json::Value::as_array_mut)
+        else {
+            continue;
+        };
+        if choices
+            .iter()
+            .any(|choice| choice.get("options").is_some() || choice.get("value").is_none())
+        {
+            continue;
+        }
+        for addition in additions {
+            let Some(value) = addition.get("value") else {
+                continue;
+            };
+            if !choices.iter().any(|choice| choice.get("value") == Some(value)) {
+                choices.push(addition.clone());
+                changed = true;
+            }
+        }
+    }
+    changed
 }

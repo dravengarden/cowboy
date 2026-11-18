@@ -397,3 +397,65 @@ fn deepseek_context_option_is_projected_after_the_model() {
     assert_eq!(options[2]["currentValue"], true);
     assert_eq!(options[3]["id"], "reasoning_effort");
 }
+
+#[test]
+fn a_dormant_snapshot_gains_choices_without_changing_selections() {
+    let hub = Hub::new();
+    hub.create_local_session(
+        "dormant".to_owned(),
+        "codex".to_owned(),
+        "/tmp".to_owned(),
+        "test".to_owned(),
+        SessionOrigin::Web,
+        false,
+    );
+    hub.set_config_options(
+        "dormant",
+        serde_json::json!([
+            {"id": "model", "category": "model", "currentValue": "gpt-6.1-sol",
+             "options": [{"value": "gpt-6.1-sol", "name": "6.1 Sol"}]},
+            {"id": "mode", "currentValue": "ask",
+             "options": [{"group": "Profiles", "options": [{"value": "ask", "name": "Ask"}]}]},
+        ]),
+    );
+    let meta = hub.session_info("dormant").unwrap().meta;
+    let additions: std::collections::BTreeMap<String, Vec<serde_json::Value>> = [
+        (
+            "model".to_owned(),
+            vec![
+                serde_json::json!({"value": "gpt-6.1-sol", "name": "duplicate"}),
+                serde_json::json!({"value": "gpt-6.2-sol", "name": "6.2 Sol"}),
+            ],
+        ),
+        (
+            "mode".to_owned(),
+            vec![serde_json::json!({"value": "bypass", "name": "Bypass"})],
+        ),
+    ]
+    .into();
+
+    // A session with a worker reports its own options.
+    hub.set_status("dormant", Status::Running, None);
+    let live = hub.session_info("dormant").unwrap().meta;
+    assert!(!hub.add_dormant_config_choices(&live, &additions));
+
+    hub.set_status("dormant", Status::Exited, None);
+    let mut moved = meta.clone();
+    moved.provider_generation_digest = "sha256:other".to_owned();
+    assert!(!hub.add_dormant_config_choices(&moved, &additions));
+
+    assert!(hub.add_dormant_config_choices(&meta, &additions));
+    let options = hub.persisted_config_options("dormant").unwrap();
+    assert_eq!(options[0]["currentValue"], "gpt-6.1-sol");
+    assert_eq!(
+        options[0]["options"],
+        serde_json::json!([
+            {"value": "gpt-6.1-sol", "name": "6.1 Sol"},
+            {"value": "gpt-6.2-sol", "name": "6.2 Sol"},
+        ])
+    );
+    // Grouped choices keep the agent's grouping.
+    assert_eq!(options[1]["options"].as_array().unwrap().len(), 1);
+    // Idempotent: a second open changes nothing.
+    assert!(!hub.add_dormant_config_choices(&meta, &additions));
+}
