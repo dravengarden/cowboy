@@ -84,6 +84,11 @@ impl Purpose {
     pub fn is_image(self) -> bool {
         matches!(self, Self::ImageGenerate | Self::ImageEdit)
     }
+
+    /// Review and Design Review run only on the allowed reviewer families.
+    pub fn is_review(self) -> bool {
+        matches!(self, Self::Review | Self::DesignReview)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

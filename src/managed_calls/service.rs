@@ -109,7 +109,12 @@ impl Ledger {
                         && previous.provider == provider
                         && previous.placement.same_location(&self.placement)
                         && previous.access == request.access
-                        && previous.purpose.profile() == request.purpose.profile(),
+                        && previous.purpose.profile() == request.purpose.profile()
+                        // Analysis shares the read-only profile but not the
+                        // reviewer allowlist. Keeping every round of a child on
+                        // the same side means its latest call shows how it was
+                        // created: a review continues only a review child.
+                        && request.purpose.is_review() == previous.purpose.is_review(),
                     "managed child unavailable or incompatible"
                 );
                 // A new Tools default must not replace the original model on
@@ -343,6 +348,69 @@ mod tests {
             crate::execution_environment::ExecutionBinding::from_record(serde_json::Value::Null),
         );
         assert!(resolve_placement("service-test", &parent).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_review_cannot_continue_an_analysis_child() {
+        // Analysis shares the read-only profile but never passed the reviewer
+        // allowlist, so continuing it as a review would run its model unvetted.
+        let root = std::env::temp_dir().join(format!(
+            "cw-ledger-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let store = Store::connect("sqlite::memory:", root.clone())
+            .await
+            .unwrap();
+        store.migrate().await.unwrap();
+        let parent = parent();
+        store.insert_session(&parent).await.unwrap();
+        let ledger = Ledger::for_parent(store, "service-test", &parent).unwrap();
+        let analysis = Request::parse(br#"{"schema":1,"request_id":"ask-1","purpose":"analysis","instruction":"Summarize","context":{"scope":"current-worktree"},"access":"read-only","conversation":{"mode":"fresh"}}"#).unwrap();
+        let luna = Choice {
+            preset: Some("luna-6-max".into()),
+            selection: "explicit",
+        };
+        let first = ledger
+            .admit("codex", &analysis, "call-1", "child-1", &luna)
+            .await
+            .unwrap();
+        let started = ledger
+            .claim(&first.call_id, "hawk", "1.0.0", "generation")
+            .await
+            .unwrap()
+            .unwrap()
+            .0;
+        let mut done = started.clone();
+        done.state = State::Failed;
+        done.error = Some(super::super::lifecycle::CallError::new("cancelled", None));
+        done.revision += 1;
+        done.updated_at_ms += 1;
+        done.finished_at_ms = Some(done.updated_at_ms);
+        assert!(ledger.advance(&started, &done).await.unwrap());
+        for (purpose, admitted) in [
+            ("review", false),
+            ("design_review", false),
+            ("analysis", true),
+        ] {
+            let mut next = analysis.clone();
+            next.request_id = format!("next-{purpose}");
+            next.purpose = serde_json::from_value(serde_json::json!(purpose)).unwrap();
+            next.conversation = Conversation::Continue {
+                child_session_id: "child-1".into(),
+            };
+            let result = ledger
+                .admit(
+                    "codex",
+                    &next,
+                    &format!("call-{purpose}"),
+                    "unused",
+                    &Choice::explicit(),
+                )
+                .await;
+            assert_eq!(result.is_ok(), admitted, "{purpose}");
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]

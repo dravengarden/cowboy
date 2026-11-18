@@ -201,7 +201,18 @@ fn after_id(args: &Value) -> Result<Option<&str>, String> {
 // common reason agents retried a read with another guessed option.
 fn help(args: &Value) -> Result<Value, String> {
     only_keys(args, &["topic"])?;
-    crate::agent_api::help(arg_str(args, "topic")?).ok_or("invalid_help".into())
+    let topic = arg_str(args, "topic")?;
+    // Model evidence ships with the Controller, not the shared SDK crate.
+    if topic == "models" || topic.starts_with("models.") {
+        return Ok(super::model_catalog::help());
+    }
+    let mut value = crate::agent_api::help(topic).ok_or("invalid_help")?;
+    if topic == "index"
+        && let Some(topics) = value["help"].as_array_mut()
+    {
+        topics.push(Value::from("models"));
+    }
+    Ok(value)
 }
 
 fn only_keys(args: &Value, allowed: &[&str]) -> Result<(), String> {

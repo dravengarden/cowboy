@@ -606,10 +606,15 @@ fn apply_preset(
     record: &Record,
     version: &str,
     digest: &str,
-) -> Result<(), &'static str> {
+) -> Result<Option<Value>, &'static str> {
     let Some(preset) = &record.preset else {
-        return Ok(());
+        return Ok(None);
     };
+    // Reviews run only signed presets: a custom value map never passed the
+    // reviewer selection, even when each key appears in some signed preset.
+    if record.purpose.is_review() && super::super::agent_tools::custom_values(preset).is_some() {
+        return Err("review_model_not_allowed");
+    }
     let presets = state
         .provider_catalog
         .package(&record.provider, version, digest)
@@ -640,13 +645,45 @@ fn apply_preset(
                 .map(|(id, value)| (id, json!(value)))
                 .collect()
         };
+    if record.purpose.is_review() {
+        if state
+            .hub
+            .session_info(&record.placement.parent_session_id)
+            .is_none()
+        {
+            return Err("parent_unavailable");
+        }
+        if !reviewer_family_allowed(
+            &record.provider,
+            values.get("model").and_then(Value::as_str),
+        ) {
+            return Err("review_model_not_allowed");
+        }
+    }
+    let applied = json!(values);
     for (config_id, value) in values {
         state
             .hub
             .set_config_preference(&record.child_session_id, config_id, json!(value))
             .map_err(|_| "preset_unavailable")?;
     }
-    Ok(())
+    Ok(Some(applied))
+}
+
+/// Admission ranked presets from the latest Catalog and the session's
+/// preferences; the executed generation's values decide the model. That model
+/// must be a reviewer family of this Provider (never, say, Luna). Preference
+/// order is admission's concern, so a running review is not refused on
+/// recovery after a person narrows the list for future calls.
+fn reviewer_family_allowed(provider: &str, model: Option<&str>) -> bool {
+    let families: &[&str] = if provider == "codex" {
+        &["astra", "sol"]
+    } else {
+        &["opus", "fable"]
+    };
+    model
+        .and_then(super::selection::family)
+        .is_some_and(|family| families.contains(&family))
 }
 
 /// A transient preparation failure; the same launch is repeated.
@@ -1211,6 +1248,19 @@ fn settle(state: &AppState, record: &Record) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_executed_model_must_be_a_reviewer_family_of_its_provider() {
+        assert!(reviewer_family_allowed("codex", Some("gpt-6.2-astra")));
+        assert!(reviewer_family_allowed("codex", Some("gpt-6.2-sol")));
+        assert!(!reviewer_family_allowed("codex", Some("gpt-6-luna")));
+        assert!(!reviewer_family_allowed("codex", None));
+        assert!(reviewer_family_allowed("claude-code", Some("fable")));
+        assert!(reviewer_family_allowed("claude-code", Some("opus[1m]")));
+        assert!(!reviewer_family_allowed("claude-code", Some("sonnet")));
+        // A Claude model is never a GPT reviewer.
+        assert!(!reviewer_family_allowed("codex", Some("opus")));
+    }
 
     #[tokio::test]
     #[allow(clippy::too_many_lines)] // One durable timeline covers timeout, recovery and continuation.

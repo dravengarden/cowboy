@@ -3,9 +3,11 @@
 use crate::usage::UsageSnapshot;
 use serde_json::{Value, json};
 
-pub(super) const GUIDANCE: &str = "For Review/Design Review, use providers[].review_candidates in order: session preferences override Settings defaults. Only Opus, Fable, Astra and SOL participate. review_candidates is the routine order: review_preferences.*_effort (max or standard) orders effort inside a family. Declare risk:'high' (security, permissions, concurrency, persistence, deletion, money, large refactors) so an omitted preset starts at Max in the first family; an explicit preset still wins. Choose the first preferred family with fresh sufficient account AND model quota. Do not skip a preferred family merely because another is stronger. Unknown/stale quota is not ample; inspect windows and reset times before choosing. Explicit user choice takes precedence within the allowed list. Pass --agent, --preset and --reason; explain any skipped preference. No silent fallback after a failed call: diagnose before retrying. Analysis/image calls are unaffected. usedPercent is USED; resetsAt is epoch seconds. Large quota payloads: use cowboy.usage.read.";
+pub(super) const GUIDANCE: &str = "For Review/Design Review, use providers[].review_candidates in order: session preferences override Settings defaults. Only Opus, Fable, Astra and SOL participate. review_candidates is the routine order: review_preferences.*_effort (max or standard) orders effort inside a family. Declare risk:'high' (security, permissions, concurrency, persistence, deletion, money, large refactors) so an omitted preset starts at Max in the first family; an explicit preset still wins. Preset trade-off evidence: cowboy_read({help:'models'}). Choose the first preferred family with fresh sufficient account AND model quota. Do not skip a preferred family merely because another is stronger. Unknown/stale quota is not ample; inspect windows and reset times before choosing. Explicit user choice takes precedence within the allowed list. Pass --agent, --preset and --reason; explain any skipped preference. No silent fallback after a failed call: diagnose before retrying. Analysis/image calls are unaffected. usedPercent is USED; resetsAt is epoch seconds. Large quota payloads: use cowboy.usage.read.";
 
 pub(super) fn family(model: &str) -> Option<&'static str> {
+    // Signed presets may carry a context suffix such as `opus[1m]`.
+    let model = model.split_once('[').map_or(model, |(base, _)| base);
     if model == "opus" || model.starts_with("claude-opus-") {
         Some("opus")
     } else if model == "fable" || model.starts_with("claude-fable-") {
@@ -139,6 +141,8 @@ mod tests {
         preference.claude = vec!["opus".into()];
         assert!(!ids(&preference).iter().any(|v| v.contains("fable")));
         assert_eq!(family("gpt-6.1-sol"), Some("sol"));
+        assert_eq!(family("opus[1m]"), Some("opus"));
+        assert_eq!(family("claude-fable-5-1[1m]"), Some("fable"));
         let gpt = json!([
             {"id":"astra-max","values":{"model":"gpt-6.2-astra","reasoning_effort":"max"}},
             {"id":"astra-medium","values":{"model":"gpt-6.2-astra","reasoning_effort":"medium"}},

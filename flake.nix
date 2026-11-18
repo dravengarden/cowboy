@@ -67,6 +67,8 @@
         ./components/server/Cargo.toml
         ./components/server/src
         ./components/server/tests
+        # Served by the Controller as the on-demand `models` help topic.
+        ./models/summary.md
       ] ++ codeact-runtime-files;
       # Cargo loads every workspace member manifest and checks its targets, so
       # slices that never build the Controller server carry only its entry files.

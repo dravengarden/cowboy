@@ -61,7 +61,9 @@ both input sets so a later audit can tell whether its inputs are complete. Read
 7. **Review.** A methodology change (weights, floors, task mapping) needs one
    design review before its catalog is committed. A data-only refresh needs a
    normal review of the catalog and report diff.
-8. **Deliver.** Commit `models/`. If the recommendations differ from the
+8. **Deliver.** Commit `models/`. Agents read `models/summary.md` on demand
+   through Cowboy MCP (`cowboy_read({help:"models"})`); the Controller embeds
+   it, so the refresh reaches agents with the next Controller release. If the recommendations differ from the
    signed presets, apply the proposed order/default through
    `release-cowboy-plugin` (preserving preset IDs; fewer than four distinct
    recommendations is acceptable) in a separate, reviewable change.
