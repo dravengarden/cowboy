@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "codex-deepseek",
-  "version": "3.1.63",
+  "version": "3.1.64",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.5.0",
   "display": {
@@ -234,9 +234,9 @@
       },
       {
         "id": "openai-codex",
-        "version": "0.166.0",
-        "source": "https://registry.npmjs.org/@openai/codex/-/codex-0.166.0.tgz",
-        "integrity": "sha512-2Szlp1l1cz5TX1ccpX4Zok3DZrot9xeZe0km+6/1v8JmqxADwyJxKBJah4dBymkwtS25j/u6dipJusTOI97Z8Q==",
+        "version": "0.169.1",
+        "source": "https://registry.npmjs.org/@openai/codex/-/codex-0.169.1.tgz",
+        "integrity": "sha512-2ZP53HuNspqL1lCX9Xc2XfoSq26VjjQ7XC08dTnkpetzH0kkAN1TTM3K1YOSwzAqikCdjQUzMV0haZmdxhPhjg==",
         "private": true
       },
       {

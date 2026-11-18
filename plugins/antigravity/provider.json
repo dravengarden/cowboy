@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "antigravity",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.5.0",
   "display": {

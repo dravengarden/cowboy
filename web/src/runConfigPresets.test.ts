@@ -75,7 +75,7 @@ test("custom configuration remains visible without a matching preset", () => {
   assertEquals(runConfigCurrentTitle(undefined), "Current · Custom");
 });
 
-test("Codex recommends generation 6 models and defaults to Sol 6.1 Medium", async () => {
+test("Codex recommends generation 6 models and defaults to Sol 6.2 Medium", async () => {
   const provider = JSON.parse(
     await readFile(
       new URL("../../plugins/codex/provider.json", import.meta.url), "utf8",
@@ -83,15 +83,15 @@ test("Codex recommends generation 6 models and defaults to Sol 6.1 Medium", asyn
   );
   const presets = provider.configuration_presets as DeclaredPreset[];
   assertEquals(presets.find((preset) => preset.id === "astra-medium")?.values, {
-    model: "gpt-6-astra",
+    model: "gpt-6.2-astra",
     reasoning_effort: "medium",
   });
   assertEquals(
     presets.filter((preset) => preset.is_default).map((preset) => preset.id),
-    ["sol-6-1-medium"],
+    ["sol-6-2-medium"],
   );
   assertEquals(
-    presets.every((preset) => /^gpt-6(?:\.1)?-/.test(preset.values.model)),
+    presets.every((preset) => /^gpt-6(?:\.[12])?-/.test(preset.values.model)),
     true,
   );
   assertEquals(

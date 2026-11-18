@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "codex",
-  "version": "3.6.3",
+  "version": "3.6.4",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.5.0",
   "display": {
@@ -40,32 +40,32 @@
   },
   "configuration_presets": [
     {
-      "id": "sol-6-1-medium",
-      "name": "Sol 6.1 · Medium",
-      "detail": "GPT-6.1-Sol · Medium reasoning",
+      "id": "sol-6-2-medium",
+      "name": "Sol 6.2 · Medium",
+      "detail": "GPT-6.2-Sol · Medium reasoning",
       "is_default": true,
       "values": {
-        "model": "gpt-6.1-sol",
+        "model": "gpt-6.2-sol",
         "reasoning_effort": "medium"
       }
     },
     {
       "id": "astra-medium",
       "name": "Astra · Medium",
-      "detail": "GPT-6-Astra · Medium reasoning",
+      "detail": "GPT-6.2-Astra · Medium reasoning",
       "is_default": false,
       "values": {
-        "model": "gpt-6-astra",
+        "model": "gpt-6.2-astra",
         "reasoning_effort": "medium"
       }
     },
     {
       "id": "astra-max",
       "name": "Astra · Max",
-      "detail": "GPT-6-Astra · Max reasoning",
+      "detail": "GPT-6.2-Astra · Max reasoning",
       "is_default": false,
       "values": {
-        "model": "gpt-6-astra",
+        "model": "gpt-6.2-astra",
         "reasoning_effort": "max"
       }
     },
@@ -80,12 +80,12 @@
       }
     },
     {
-      "id": "sol-6-1-max",
-      "name": "Sol 6.1 · Max",
-      "detail": "GPT-6.1-Sol · Max reasoning",
+      "id": "sol-6-2-max",
+      "name": "Sol 6.2 · Max",
+      "detail": "GPT-6.2-Sol · Max reasoning",
       "is_default": false,
       "values": {
-        "model": "gpt-6.1-sol",
+        "model": "gpt-6.2-sol",
         "reasoning_effort": "max"
       }
     }
@@ -125,7 +125,7 @@
       "turn_end": "portable_v1",
       "configuration": "acp_config_options_v1",
       "default_preferences": {
-        "model": "gpt-6.1-sol",
+        "model": "gpt-6.2-sol",
         "reasoning_effort": "medium"
       },
       "error_rules": [
@@ -248,9 +248,9 @@
       },
       {
         "id": "openai-codex",
-        "version": "0.166.0",
-        "source": "https://registry.npmjs.org/@openai/codex/-/codex-0.166.0.tgz",
-        "integrity": "sha512-2Szlp1l1cz5TX1ccpX4Zok3DZrot9xeZe0km+6/1v8JmqxADwyJxKBJah4dBymkwtS25j/u6dipJusTOI97Z8Q==",
+        "version": "0.169.1",
+        "source": "https://registry.npmjs.org/@openai/codex/-/codex-0.169.1.tgz",
+        "integrity": "sha512-2ZP53HuNspqL1lCX9Xc2XfoSq26VjjQ7XC08dTnkpetzH0kkAN1TTM3K1YOSwzAqikCdjQUzMV0haZmdxhPhjg==",
         "private": true
       }
     ],
