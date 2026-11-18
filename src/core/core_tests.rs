@@ -4466,4 +4466,9 @@ async fn antigravity_drafts_are_never_scheduled_or_fired() {
     hub.fire_scheduled_draft("agy", &drafts[0].id);
     assert!(rx.try_recv().is_err());
     assert_eq!(hub.queue_and_drafts("agy", |_| true).unwrap().1.len(), 1);
+    // Managed-call notices and wakeups park too; a human sends them.
+    hub.submit_call_notice("agy", "call-1", "call finished".into());
+    hub.submit_automatic("agy", "wake".into(), "__wakeup-agy".into());
+    assert!(rx.try_recv().is_err());
+    assert_eq!(hub.queue_and_drafts("agy", |_| true).unwrap().1.len(), 3);
 }

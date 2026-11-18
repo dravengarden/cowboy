@@ -295,7 +295,9 @@ restart, logout, kill switch, and two-account isolation if Phase 1.3 passed.
   removal deletes the whole native home including `agy` conversations (as for
   Claude); the kill switch must not use that cleanup. Native login/logout
   still lacks the IPv4 restriction; required before OVH login (Phase 4).
-  Managed-call completion notices into an Antigravity session are untriaged.
+  A follow-up review (call `call-cb3524e2003b057b472a43bf`) found that
+  managed-call completion notices still dispatched turns; call notices and
+  scheduled wakeups now park as drafts for an explicit human send.
 - Live check: ACP `logout` from a copied home removed only that local token
   file; the original home's grant kept working, so logout does not revoke the
   Google grant.

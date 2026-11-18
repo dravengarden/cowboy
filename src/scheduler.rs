@@ -166,7 +166,7 @@ pub async fn run_scheduler(hub: Hub, mut rx: mpsc::Receiver<ScheduleCmd>) {
                             // Own turn: idle → dispatch, busy → queue. The `__wake__`
                             // cmid tags the echo as a "↻ scheduled wakeup" note.
                             let cmid = format!("{WAKEUP_PREFIX}{sid}-{now}");
-                            hub.submit(&sid, prompt, Vec::new(), Some(cmid));
+                            hub.submit_automatic(&sid, prompt, cmid);
                         }
                         Action::Draft { session_id: sid, draft_id } => {
                             // One-shot: activate the parked draft per its delivery.

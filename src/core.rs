@@ -2577,21 +2577,21 @@ impl Hub {
     /// An idle parent starts a turn; a busy one sees it at its next turn. The
     /// call-scoped id makes a repeated notice a no-op.
     pub fn submit_call_notice(&self, session_id: &str, call_id: &str, text: String) {
-        self.submit_inner(
-            session_id,
-            text,
-            Vec::new(),
-            Some(format!(
-                "{}{call_id}",
-                crate::agent_model::CALL_NOTICE_PREFIX
-            )),
-            false,
-            false,
-        );
+        let cmid = format!("{}{call_id}", crate::agent_model::CALL_NOTICE_PREFIX);
+        self.submit_automatic(session_id, text, cmid);
     }
 
-    /// Antigravity sessions run human-paced only: their drafts never get a
-    /// schedule and a schedule restored from storage parks instead of firing.
+    /// Submit a prompt no human sent (call notice, scheduled wakeup). A
+    /// human-paced session parks it as a draft for an explicit send instead.
+    pub fn submit_automatic(&self, session_id: &str, text: String, cmid: String) {
+        if self.human_paced(session_id) {
+            return self.add_draft(session_id, text, Vec::new(), Some(cmid));
+        }
+        self.submit_inner(session_id, text, Vec::new(), Some(cmid), false, false);
+    }
+
+    /// Antigravity sessions run human-paced only: no draft schedule, wakeup or
+    /// call notice dispatches a turn; each waits for an explicit human send.
     fn human_paced(&self, session_id: &str) -> bool {
         self.inner
             .sessions
