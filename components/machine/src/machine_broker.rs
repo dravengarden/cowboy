@@ -634,6 +634,7 @@ impl Broker {
                 native_cycle_id: None,
                 incarnation: None,
                 account_unit: None,
+                uncertain_effect: None,
             });
         }
         for snapshot in &mut snapshots {
@@ -1277,6 +1278,7 @@ impl Broker {
                     native_cycle_id: None,
                     incarnation: None,
                     account_unit: None,
+                    uncertain_effect: None,
                 },
                 acked_runtime_seq: 0,
                 last_seen: Instant::now(),
@@ -6141,6 +6143,7 @@ mod tests {
                 native_cycle_id: None,
                 incarnation: None,
                 account_unit: None,
+                uncertain_effect: None,
             },
             1,
         );
@@ -10556,6 +10559,7 @@ mod tests {
                     native_cycle_id: None,
                     incarnation: None,
                     account_unit: None,
+                    uncertain_effect: None,
                 }),
             },
         )

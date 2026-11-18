@@ -143,6 +143,19 @@ pub struct WorkerSnapshot {
     /// the worker stopped. Absent for every other Provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_unit: Option<AccountUnitHandle>,
+    /// A target mutation or process start of this session lost its reply,
+    /// so its effect is unknown (an account-sandboxed session's execution
+    /// ledger records it durably). Absent when false and from older workers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uncertain_effect: Option<UncertainEffect>,
+}
+
+/// The first target request of a session whose reply was lost after it may
+/// have been admitted; its effect is unknown until the owner reviews it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UncertainEffect {
+    pub method: String,
 }
 
 /// One unit of the `cowboy-account-sandbox` daemon: its transient systemd
@@ -1167,6 +1180,7 @@ mod tests {
             native_cycle_id: None,
             incarnation: None,
             account_unit: None,
+            uncertain_effect: None,
         }
     }
 

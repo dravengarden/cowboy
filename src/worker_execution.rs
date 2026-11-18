@@ -1,17 +1,24 @@
 //! Worker-owned endpoint for the execution protocol. The native client sees
-//! one authenticated loopback socket; placement and retries are not model tools.
+//! one authenticated socket: loopback TCP, or for an account-sandboxed unit
+//! the Unix socket the daemon bound into it. Placement and retries are not
+//! model tools.
+
+mod ledger;
+pub use ledger::{LEDGER_ENV, Ledger, MAX_PROCESSES};
 
 use std::collections::{BTreeMap, HashSet};
+use std::os::fd::OwnedFd;
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail, ensure};
 use futures::{SinkExt as _, StreamExt as _};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::{TcpListener, UnixListener};
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio_tungstenite::tungstenite::{
     Message,
@@ -49,6 +56,8 @@ pub struct Client {
     pub pending: Mutex<BTreeMap<String, Pending>>,
     notify: mpsc::UnboundedSender<()>,
     event_cursor: Mutex<Option<u64>>,
+    /// The trusted process ledger of an account-sandboxed session.
+    ledger: OnceLock<Arc<Ledger>>,
 }
 
 /// Wire calls at least this slow are logged individually.
@@ -68,6 +77,7 @@ impl Client {
             pending: Mutex::default(),
             notify,
             event_cursor: Mutex::new(None),
+            ledger: OnceLock::new(),
         })
     }
 
@@ -120,6 +130,11 @@ impl Client {
     }
 
     pub async fn call(&self, command: Command) -> Result<Response> {
+        self.call_queued(command).await?
+    }
+
+    /// The outer error means the request was never queued for sending.
+    async fn call_queued(&self, command: Command) -> Result<Result<Response>> {
         let started = Instant::now();
         let operation = match &command {
             Command::Invoke { invocation, .. } => Some(invocation.operation_id.clone()),
@@ -202,13 +217,13 @@ impl Client {
                         tracing::info!(event_name = "cowboy.execution.call_observed", session = %self.session, environment_id = %self.binding.environment.id, %operation, duration_ms = started.elapsed().as_secs_f64() * 1000.0, "slow execution invocation observed");
                     }
                 }
-                Ok(response)
+                Ok(Ok(response))
             }
             _ => {
                 tracing::warn!(event_name = "cowboy.execution.response_timeout", session = %self.session, environment_id = %self.binding.environment.id, reason = "response_unavailable", duration_ms = started.elapsed().as_secs_f64() * 1000.0, "execution response unavailable");
-                bail!(
+                Ok(Err(anyhow::anyhow!(
                     "execution response unavailable; original operation was not replayed under a new identity"
-                )
+                )))
             }
         }
     }
@@ -262,6 +277,17 @@ impl Client {
     }
 
     pub async fn invoke(&self, method: String, params: Value) -> Result<Value> {
+        self.invoke_classified(method, params).await.map_err(|_| {
+            anyhow::anyhow!(
+                "execution operation refused or its final result is unknown; do not replay"
+            )
+        })
+    }
+
+    /// One invocation; its error says whether the target may have admitted
+    /// the effect (`true`: lost reply or unknown outcome) or certainly did
+    /// not (`false`: refused before admission, or never sent).
+    async fn invoke_classified(&self, method: String, params: Value) -> Result<Value, bool> {
         let started = std::time::Instant::now();
         let invocation = Invocation {
             // The suffix asks the keeper for the backend's own duration.
@@ -274,14 +300,25 @@ impl Client {
             params,
         };
         let method = invocation.method.clone();
-        ensure!(invocation.validate(), "invalid execution request");
+        if !invocation.validate() {
+            return Err(false);
+        }
         let operation_id = invocation.operation_id.clone();
         let mut command = Command::Invoke {
             invocation,
             wait_ms: wire::MAX_WAIT_MS,
         };
+        let mut admitted = false;
         loop {
-            match self.call(command).await? {
+            // A request the transport refused to queue was never sent; any
+            // later loss may follow admission.
+            let queued = self.call_queued(command).await;
+            let response = match queued {
+                Ok(Ok(response)) => response,
+                Ok(Err(_)) => return Err(true),
+                Err(_) => return Err(admitted),
+            };
+            match response {
                 Response::Operation {
                     outcome: Outcome::Completed { mut reply },
                 } => {
@@ -291,14 +328,14 @@ impl Client {
                 Response::Operation {
                     outcome: Outcome::Pending,
                 } => {
+                    admitted = true;
                     command = Command::Observe {
                         operation_id: operation_id.clone(),
                         wait_ms: wire::MAX_WAIT_MS,
                     };
                 }
-                _ => bail!(
-                    "execution operation refused or its final result is unknown; do not replay"
-                ),
+                Response::Refused { .. } => return Err(admitted),
+                _ => return Err(true),
             }
         }
     }
@@ -353,14 +390,69 @@ impl Client {
 
 pub struct Endpoint {
     pub client: Arc<Client>,
-    descriptor: PathBuf,
+    descriptor: Option<PathBuf>,
     listener: tokio::task::JoinHandle<()>,
 }
 
 impl Drop for Endpoint {
     fn drop(&mut self) {
         self.listener.abort();
-        let _ = std::fs::remove_file(&self.descriptor);
+        if let Some(descriptor) = &self.descriptor {
+            let _ = std::fs::remove_file(descriptor);
+        }
+    }
+}
+
+fn bearer_token() -> String {
+    format!(
+        "{:032x}{:032x}",
+        rand::random::<u128>(),
+        rand::random::<u128>()
+    )
+}
+
+/// One connection at a time: a second is closed while the first is served.
+struct Admission {
+    token: String,
+    client: Arc<Client>,
+    connections: Arc<Semaphore>,
+    tasks: tokio::task::JoinSet<()>,
+}
+
+impl Admission {
+    fn new(token: String, client: Arc<Client>) -> Self {
+        Self {
+            token,
+            client,
+            connections: Arc::new(Semaphore::new(1)),
+            tasks: tokio::task::JoinSet::new(),
+        }
+    }
+
+    fn admit<S>(&mut self, socket: S)
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let Ok(permit) = Arc::clone(&self.connections).try_acquire_owned() else {
+            return;
+        };
+        let client = Arc::clone(&self.client);
+        let token = self.token.clone();
+        self.tasks.spawn(async move {
+            let _permit = permit;
+            let session = client.session.clone();
+            if serve(socket, &token, client).await.is_err() {
+                // Do not log frames, capabilities or arbitrary
+                // native error text from the private endpoint.
+                tracing::warn!(event_name = "cowboy.execution.disconnected", %session, reason = "endpoint_failed", "execution endpoint disconnected");
+            }
+        });
+    }
+
+    async fn reap(&mut self) {
+        if self.tasks.join_next().await.is_none() {
+            std::future::pending::<()>().await;
+        }
     }
 }
 
@@ -368,11 +460,7 @@ impl Endpoint {
     pub async fn start(client: Arc<Client>, directory: &Path) -> Result<Self> {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
         let address = listener.local_addr()?;
-        let token = format!(
-            "{:032x}{:032x}",
-            rand::random::<u128>(),
-            rand::random::<u128>()
-        );
+        let token = bearer_token();
         let descriptor = directory.join(format!(".cowboy-execution-{}.json", client.epoch));
         let file = std::fs::OpenOptions::new()
             .create_new(true)
@@ -390,40 +478,95 @@ impl Endpoint {
         }
         serde_json::to_writer(&file, &descriptor_value)?;
         file.sync_all()?;
-        let endpoint_client = Arc::clone(&client);
+        let mut admission = Admission::new(token, Arc::clone(&client));
         let listener = tokio::spawn(async move {
-            let connections = Arc::new(Semaphore::new(1));
-            let mut tasks = tokio::task::JoinSet::new();
             loop {
                 tokio::select! {
                     accepted = listener.accept() => {
                         let Ok((socket, _)) = accepted else { break; };
-                        let Ok(permit) = Arc::clone(&connections).try_acquire_owned() else { continue; };
-                        let client = Arc::clone(&endpoint_client);
-                        let token = token.clone();
-                        tasks.spawn(async move {
-                            let _permit = permit;
-                            let session = client.session.clone();
-                            if serve(socket, &token, client).await.is_err() {
-                                // Do not log frames, capabilities or arbitrary
-                                // native error text from the private endpoint.
-                                tracing::warn!(event_name = "cowboy.execution.disconnected", %session, reason = "endpoint_failed", "execution endpoint disconnected");
-                            }
-                        });
+                        admission.admit(socket);
                     }
-                    _ = tasks.join_next(), if !tasks.is_empty() => {}
+                    () = admission.reap() => {}
                 }
             }
         });
         Ok(Self {
             client,
-            descriptor,
+            descriptor: Some(descriptor),
             listener,
         })
     }
 
-    pub fn descriptor(&self) -> &Path {
-        &self.descriptor
+    /// The endpoint of an account-sandboxed unit (design R3-11): no loopback
+    /// listener and no descriptor file. The returned bridge carries the
+    /// descriptor the daemon hands the unit, naming the socket bound into it,
+    /// and takes the listening socket each started unit returns; the newest
+    /// one is served with the same token, one-connection limit and frame
+    /// bounds as the loopback endpoint.
+    pub fn start_unix(
+        client: Arc<Client>,
+    ) -> Result<(Self, crate::account_sandbox::ExecutionBridge)> {
+        let token = bearer_token();
+        let descriptor = serde_json::to_vec(&json!({"schema": 1, "binding": client.binding,
+            "endpoint": format!("unix:{}", crate::account_sandbox::UNIT_EXEC_SOCKET),
+            "bearer_token": token}))?;
+        let (listeners, mut received) = mpsc::unbounded_channel::<OwnedFd>();
+        let mut admission = Admission::new(token, Arc::clone(&client));
+        let listener = tokio::spawn(async move {
+            let mut listener: Option<UnixListener> = None;
+            let mut open = true;
+            loop {
+                tokio::select! {
+                    next = received.recv(), if open => match next {
+                        Some(fd) => match unix_listener(fd) {
+                            Ok(next) => listener = Some(next),
+                            Err(error) => tracing::warn!(%error, "unusable execution socket from the account sandbox"),
+                        },
+                        None => open = false,
+                    },
+                    accepted = accept_unix(listener.as_ref()) => {
+                        match accepted {
+                            Ok(socket) => admission.admit(socket),
+                            Err(error) => {
+                                tracing::warn!(%error, "execution socket accept failed");
+                                tokio::time::sleep(Duration::from_millis(100)).await;
+                            }
+                        }
+                    }
+                    () = admission.reap() => {}
+                }
+            }
+        });
+        Ok((
+            Self {
+                client,
+                descriptor: None,
+                listener,
+            },
+            crate::account_sandbox::ExecutionBridge {
+                descriptor,
+                listeners,
+            },
+        ))
+    }
+
+    /// The loopback descriptor file; `None` for a sandboxed unit's endpoint.
+    #[must_use]
+    pub fn descriptor(&self) -> Option<&Path> {
+        self.descriptor.as_deref()
+    }
+}
+
+fn unix_listener(fd: OwnedFd) -> Result<UnixListener> {
+    let listener = std::os::unix::net::UnixListener::from(fd);
+    listener.set_nonblocking(true)?;
+    Ok(UnixListener::from_std(listener)?)
+}
+
+async fn accept_unix(listener: Option<&UnixListener>) -> std::io::Result<tokio::net::UnixStream> {
+    match listener {
+        Some(listener) => listener.accept().await.map(|(socket, _)| socket),
+        None => std::future::pending().await,
     }
 }
 
@@ -431,7 +574,10 @@ impl Endpoint {
     clippy::result_large_err,
     reason = "Tungstenite fixes the callback HTTP error response type"
 )]
-async fn serve(socket: TcpStream, token: &str, client: Arc<Client>) -> Result<()> {
+async fn serve<S>(socket: S, token: &str, client: Arc<Client>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let expected = format!("Bearer {token}");
     let websocket = tokio_tungstenite::accept_hdr_async_with_config(
         socket,
@@ -531,10 +677,7 @@ async fn serve(socket: TcpStream, token: &str, client: Arc<Client>) -> Result<()
                             Some(params) => params.clone(),
                         };
                         let client = Arc::clone(&client);
-                        calls.spawn(async move {
-                            let reply = client.invoke(method, params).await.unwrap_or_else(|_| json!({"error": {"code": -32000, "message": "Execution unavailable or result unknown; no local fallback and no replay"}}));
-                            (id, reply)
-                        });
+                        calls.spawn(async move { (id, client.relay(method, params).await) });
                     }
                     _ => bail!("unsupported execution frame"),
                 }
@@ -549,6 +692,7 @@ async fn serve(socket: TcpStream, token: &str, client: Arc<Client>) -> Result<()
                 match result? {
                     Response::Events { events: batch, through } => {
                         for event in batch {
+                            client.observe_event(&event.message);
                             writer.send(Message::Text(event.message.to_string().into())).await?;
                         }
                         cursor = through;
@@ -582,3 +726,6 @@ fn valid_id(value: &Value) -> bool {
             .as_str()
             .is_some_and(|value| !value.is_empty() && value.len() <= 128)
 }
+
+#[cfg(test)]
+mod tests;

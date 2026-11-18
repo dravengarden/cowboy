@@ -143,7 +143,7 @@ fn fixture_state(resume: bool) -> (Arc<ClientState>, Arc<HubSink>) {
         last_echoed_user_contents: Mutex::new(Vec::new()),
         last_progress: Mutex::new(std::time::Instant::now()),
         open_tools: Mutex::new(std::collections::HashSet::new()),
-        cgroup: None,
+        recycler: process::Recycler::Uncontained,
         backoff: Mutex::new(None),
         model_label: Mutex::new(None),
         subagents: Mutex::new(subagents::Subagents::default()),

@@ -2691,9 +2691,9 @@ struct ClientState {
     /// The UI uses this to hide a false "waiting" caret during live exec;
     /// a silent open tool does not postpone the watchdog.
     open_tools: Mutex<HashSet<String>>,
-    /// This agent's containment cgroup, or None when the host can't contain
-    /// it. A watchdog hard-recycle SIGKILLs the whole subtree.
-    cgroup: Option<PathBuf>,
+    /// How a watchdog hard-recycle ends this agent's whole process tree: its
+    /// containment cgroup, or its confirmed account-unit stop.
+    recycler: process::Recycler,
     /// The provider's own scheduled retry, when it reported one. Cleared by any
     /// turn progress and at the start of every prompt, so it only ever explains
     /// the silence the current turn is sitting in.
@@ -2894,7 +2894,7 @@ async fn agent_main(
 
     let (mut process, pipes) =
         process::AgentProcess::spawn(spec, session_id, &cwd, sink.as_ref()).await?;
-    let agent_cgroup = process.cgroup.clone();
+    let recycler = process.recycler();
     let child_stderr = pipes.stderr;
     let stderr_session = session_id.to_owned();
     let stderr_provider = spec.id.clone();
@@ -2962,7 +2962,7 @@ async fn agent_main(
         last_echoed_user_contents: Mutex::new(Vec::new()),
         last_progress: Mutex::new(Instant::now()),
         open_tools: Mutex::new(HashSet::new()),
-        cgroup: agent_cgroup.clone(),
+        recycler,
         backoff: Mutex::new(None),
         model_label: Mutex::new(None),
         subagents: Mutex::new(subagents::Subagents::default()),
@@ -3473,18 +3473,7 @@ async fn await_prompt_with_idle_watchdog<R>(
             }
             () = tokio::time::sleep(wait) => {
                 if cancel_deadline.is_some() {
-                    if let Some(dir) = &state.cgroup {
-                        tracing::warn!(
-                            session = %state.session_id,
-                            "prompt watchdog: agent will not yield to cancel — recycling"
-                        );
-                        cgroup::kill_and_remove(dir);
-                    } else {
-                        tracing::warn!(
-                            session = %state.session_id,
-                            "prompt watchdog: agent wedged and uncontained — waiting for prompt to fail"
-                        );
-                    }
+                    state.recycler.hard_recycle(&state.session_id).await;
                     recycled = true;
                     cancel_deadline = None;
                 } else if !cancelled {

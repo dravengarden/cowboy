@@ -260,3 +260,15 @@ fn account_keys_follow_the_daemon_derivation() {
     assert_eq!(account_key("service", "account"), ACCOUNT_KEY);
     assert_ne!(account_key("ab", "c"), account_key("a", "bc"));
 }
+
+#[test]
+fn execution_ledgers_are_keyed_by_a_plain_session_id() {
+    let root = Path::new("/var/lib/cowboy-machine");
+    assert_eq!(
+        execution_ledger_file(root, "sess-1_a").unwrap(),
+        root.join("execution-ledgers/sess-1_a.json")
+    );
+    for invalid in ["", "../x", "a/b", "a.b", &"x".repeat(129)] {
+        assert!(execution_ledger_file(root, invalid).is_none(), "{invalid}");
+    }
+}

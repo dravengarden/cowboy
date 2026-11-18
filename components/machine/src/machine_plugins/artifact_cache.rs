@@ -244,6 +244,7 @@ mod tests {
                 &InstallGuard::Legacy,
                 Some(root.path()),
                 None,
+                false,
             ),
         )
         .await

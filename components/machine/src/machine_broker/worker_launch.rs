@@ -6,6 +6,7 @@ use super::*;
 
 use crate::machine_plugins::ProviderLaunchContext;
 use cowboy_provider_sdk::ProviderBehaviorContract;
+use std::os::unix::fs::DirBuilderExt as _;
 
 pub(super) fn should_recycle_for_explicit_revive(
     worker: &WorkerSnapshot,
@@ -177,9 +178,37 @@ impl Broker {
                     crate::account_sandbox::LAUNCH_ENV,
                     serde_json::to_string(launch)?,
                 ));
+                if session.execution_binding.is_some() {
+                    session_environment.push((
+                        crate::account_sandbox::EXECUTION_LEDGER_ENV,
+                        self.execution_ledger(&session.session_id)?
+                            .display()
+                            .to_string(),
+                    ));
+                }
             }
         }
         Ok(session_environment)
+    }
+
+    /// The durable process ledger of a sandboxed session's execution binding
+    /// (design R3-5, R3-6). It lives under the Machine state root, keyed by
+    /// Session, so a worker that died or a reboot leaves it for the next
+    /// worker of the binding, which terminates every recorded process first.
+    fn execution_ledger(&self, session_id: &str) -> Result<PathBuf> {
+        let root = self
+            .args
+            .call_context_root
+            .as_deref()
+            .context("a sandboxed execution binding needs the Machine state root")?;
+        let path = crate::account_sandbox::execution_ledger_file(root, session_id)
+            .context("invalid session id for an execution ledger")?;
+        let directory = path.parent().context("execution ledger has no directory")?;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(directory)?;
+        Ok(path)
     }
 
     /// A Direct launch waits until the previous worker for this session has
@@ -233,16 +262,6 @@ pub(super) fn validate_launch_placement(
         );
     }
     super::mcp_launch::validate(session, provider.as_ref())?;
-    // TODO(step 3b): the execution endpoint's Unix socket bridge and trusted
-    // process ledger (docs/antigravity-real-accounts-design.md [R3-5, R3-6,
-    // R3-11]). Until then a sandboxed Provider runs no execution binding.
-    ensure!(
-        session.execution_binding.is_none()
-            || provider
-                .as_ref()
-                .is_none_or(|provider| provider.account_sandbox.is_none()),
-        "account-sandboxed Providers do not yet support execution bindings"
-    );
     if let Some(installed) = &provider {
         ensure!(
             session.provider_version == installed.version,

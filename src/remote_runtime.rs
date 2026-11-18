@@ -4052,6 +4052,7 @@ mod tests {
             native_cycle_id: None,
             incarnation: None,
             account_unit: None,
+            uncertain_effect: None,
         }
     }
 

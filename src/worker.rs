@@ -27,6 +27,7 @@ use crate::runtime_wire::{
 };
 
 const BROKER_RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(100);
+mod execution_launch;
 mod mcp_launch;
 pub mod startup_gate;
 const BROKER_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
@@ -216,6 +217,9 @@ impl Shared {
                 snapshot.pending_permissions.retain(|id| id != request_id);
             }
             RuntimeEvent::TurnStarted { turn_id, .. } => {
+                if let Some(ledger) = self.execution.as_ref().and_then(|client| client.ledger()) {
+                    ledger.begin_turn(turn_id);
+                }
                 snapshot.current_turn_id = Some(turn_id.clone());
                 // A Cowboy turn owns delivery from here; the adapter ends the
                 // self-started cycle when it receives the prompt.
@@ -265,6 +269,30 @@ impl Shared {
 
     pub fn snapshot(&self) -> WorkerSnapshot {
         self.snapshot.lock().clone()
+    }
+
+    /// Hand `command` to the ACP thread. A cancellation fences the current
+    /// turn's target process starts as the agent is asked to stop.
+    fn forward(&self, tx: &mpsc::UnboundedSender<AgentCommand>, command: AgentCommand) -> bool {
+        if matches!(
+            command,
+            AgentCommand::Cancel | AgentCommand::CancelTurn { .. }
+        ) && let Some(execution) = &self.execution
+        {
+            execution.cancel_turn();
+        }
+        tx.send(command).is_ok()
+    }
+
+    /// Surface a lost mutation reply: the session holds an effect whose
+    /// outcome on the target is unknown until the owner reviews it.
+    fn mark_uncertain_effect(&self, method: &str) {
+        self.snapshot.lock().uncertain_effect = Some(crate::runtime_wire::UncertainEffect {
+            method: method.to_owned(),
+        });
+        self.emit(RuntimeEvent::Error {
+            message: format!("The outcome of a target {method} is unknown (its reply was lost); review the workspace before continuing"),
+        });
     }
 
     pub fn ack(&self, seq: u64) {
@@ -354,11 +382,24 @@ impl RemoteSink {
                     .current_turn_id
                     .clone()
                     .unwrap_or_else(|| "unknown-turn".to_owned());
-                RuntimeEvent::TurnEnded {
+                let ended = RuntimeEvent::TurnEnded {
                     usage,
-                    turn_id,
+                    turn_id: turn_id.clone(),
                     stop_reason,
+                };
+                // A sandboxed turn completes only once the target proved every
+                // process it started gone (design R3-5, R3-6).
+                if let Some(execution) = &self.shared.execution
+                    && let Some(settled) = execution.finish_turn(&turn_id)
+                {
+                    let shared = Arc::clone(&self.shared);
+                    execution.spawn_settled(async move {
+                        settled.await;
+                        shared.emit(ended);
+                    });
+                    return;
                 }
+                ended
             }
         };
         self.shared.emit(runtime);
@@ -677,7 +718,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
             _ => None,
         })
         .filter(|_| crate::deepseek_cache::supported_behavior(&configuration));
-    let epoch = args.worker_epoch.unwrap_or_else(generated_epoch);
+    let epoch = args.worker_epoch.clone().unwrap_or_else(generated_epoch);
     let executable = current_executable();
     let launch = crate::runtime_wire::StartSession {
         session_id: args.session_id.clone(),
@@ -702,64 +743,16 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         native_fork: args.native_fork.clone().map(Box::new),
     };
     let (notify_tx, notify_rx) = mpsc::unbounded_channel();
-    let mut managed_round = None;
-    let endpoint = if let Some(binding) = &args.execution_binding
-        && managed_child.is_none()
-    {
-        anyhow::ensure!(
-            prepared.execution_jsonrpc,
-            "Provider generation does not support execution environments"
-        );
-        let binding = binding.decode().map_err(anyhow::Error::msg)?;
-        let binding_profile = binding.managed.as_ref().map(|managed| managed.profile);
-        anyhow::ensure!(
-            launch
-                .provider_behavior
-                .as_ref()
-                .and_then(|behavior| behavior.execution.as_ref())
-                .is_some_and(|execution| execution.accepts(
-                    binding.environment.protocol,
-                    &binding.environment.executor_digest
-                )),
-            "Provider generation has not accepted this exact executor"
-        );
-        anyhow::ensure!(
-            binding.runtime.cwd == args.cwd.display().to_string(),
-            "execution runtime directory mismatch"
-        );
-        let client = crate::worker_execution::Client::new(
-            args.session_id.clone(),
-            epoch.clone(),
-            binding,
-            notify_tx.clone(),
-        );
-        if let Some(profile) = binding_profile {
-            let (ready, receiver) = tokio::sync::watch::channel(None);
-            let marker = Arc::new(Mutex::new(None));
-            let (fetch, stored) = (Arc::clone(&client), Arc::clone(&marker));
-            tokio::spawn(async move {
-                let result = fetch.managed_round(profile).await.map(|round| {
-                    *stored.lock() = Some(round);
-                });
-                let _ =
-                    ready.send(Some(result.map_err(|error| {
-                        format!("managed call round is unavailable: {error}")
-                    })));
-            });
-            managed_round = Some(ManagedRound {
-                ready: receiver,
-                marker,
-            });
-        }
-        let endpoint = crate::worker_execution::Endpoint::start(client, &args.cwd).await?;
-        spec.env.insert(
-            crate::worker_execution::DESCRIPTOR_ENV.to_owned(),
-            endpoint.descriptor().display().to_string(),
-        );
-        Some(endpoint)
-    } else {
-        None
-    };
+    let (endpoint, managed_round) = execution_launch::prepare(
+        &args,
+        &launch,
+        &prepared,
+        managed_child.is_some(),
+        &epoch,
+        &notify_tx,
+        &mut spec,
+    )
+    .await?;
     let expected_workspace_identity = workspace_identity(&args.cwd);
     let shared = Arc::new(Shared {
         session_id: args.session_id.clone(),
@@ -801,6 +794,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
             native_cycle_id: None,
             incarnation: None,
             account_unit: None,
+            uncertain_effect: None,
         }),
         outbox: Mutex::new(BTreeMap::new()),
         trace_outbox: Mutex::default(),
@@ -817,6 +811,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         preset_options: prepared.preset_options.clone(),
         observation: Observation::default(),
     });
+    execution_launch::observe(&shared);
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (done_tx, mut done_rx) = mpsc::channel(1);
     let thread_shared = Arc::clone(&shared);
@@ -828,6 +823,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         (None, None) => acp::NativeStart::New,
     };
     let service_auth_projected = args.provider_auth_generation.is_some();
+    let runtime = tokio::runtime::Handle::current();
     std::thread::Builder::new()
         .name(format!("acp-worker-{session_id}"))
         .spawn(move || {
@@ -843,6 +839,11 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
                 cmd_rx,
                 &sink,
             );
+            // Unit loss and teardown end every recorded target process
+            // while the Machine connection still carries the requests.
+            if let Some(execution) = thread_shared.execution.clone() {
+                runtime.block_on(execution_launch::settle(execution));
+            }
             let _ = done_tx.blocking_send(());
         })
         .context("spawning ACP worker thread")?;
@@ -1336,7 +1337,7 @@ pub fn handle_command(
                     return command_ack(shared, command_id, true, Some("duplicate".to_owned()));
                 }
                 if let Some(tx) = cmd_tx.take() {
-                    let _ = tx.send(AgentCommand::Cancel);
+                    shared.forward(&tx, AgentCommand::Cancel);
                 }
                 return command_ack(shared, command_id, true, None);
             }
@@ -1351,7 +1352,7 @@ pub fn handle_command(
         });
     }
     let sent = match (agent_command, cmd_tx.as_ref()) {
-        (Some(command), Some(tx)) => tx.send(command).is_ok(),
+        (Some(command), Some(tx)) => shared.forward(tx, command),
         (Some(_), None) => false,
         (None, _) => true,
     };
@@ -1428,6 +1429,7 @@ pub fn shared() -> (Arc<Shared>, mpsc::UnboundedReceiver<()>) {
                 native_cycle_id: None,
                 incarnation: None,
                 account_unit: None,
+                uncertain_effect: None,
             }),
             outbox: Mutex::new(BTreeMap::new()),
             trace_outbox: Mutex::default(),
@@ -1829,7 +1831,8 @@ mod tests {
         .await
         .unwrap();
         let descriptor: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(endpoint.descriptor()).unwrap()).unwrap();
+            serde_json::from_slice(&std::fs::read(endpoint.descriptor().unwrap()).unwrap())
+                .unwrap();
         let mut request = descriptor["endpoint"]
             .as_str()
             .unwrap()

@@ -303,7 +303,7 @@ async fn native_managed_execution(images: bool) {
     let receipt = std::env::var("COWBOY_TEST_EXECUTION_RECEIPT").unwrap();
     let status = command
         .arg("--descriptor")
-        .arg(endpoint.descriptor())
+        .arg(endpoint.descriptor().unwrap())
         .arg("--runtime")
         .arg(&runtime)
         .arg("--target")

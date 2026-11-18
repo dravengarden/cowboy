@@ -44,6 +44,9 @@ pub struct LaunchSpec {
     /// Set exactly when the signed manifest requires `account_sandbox_v1`:
     /// the daemon starts the Provider, never this worker.
     pub account_sandbox: Option<crate::account_sandbox::Launch>,
+    /// A sandboxed unit's execution transport, set by the worker when the
+    /// session has an execution binding.
+    pub execution_bridge: Option<crate::account_sandbox::ExecutionBridge>,
 }
 
 /// Prepared exact Provider process tree. Session sidecars use `kill_on_drop`
@@ -338,6 +341,7 @@ fn spec_with_custom_default_args(
             package_remove_env: std::collections::BTreeSet::new(),
             package_remove_env_prefixes: std::collections::BTreeSet::new(),
             account_sandbox: None,
+            execution_bridge: None,
         },
         // Default command (npx): `_ARGS` may still override the pinned adapter args.
         None => LaunchSpec {
@@ -351,6 +355,7 @@ fn spec_with_custom_default_args(
             package_remove_env: std::collections::BTreeSet::new(),
             package_remove_env_prefixes: std::collections::BTreeSet::new(),
             account_sandbox: None,
+            execution_bridge: None,
         },
     }
 }
@@ -450,6 +455,7 @@ pub fn remote_generation(id: &str) -> Option<LaunchSpec> {
         package_remove_env: std::collections::BTreeSet::new(),
         package_remove_env_prefixes: std::collections::BTreeSet::new(),
         account_sandbox: None,
+        execution_bridge: None,
     })
 }
 
@@ -591,6 +597,7 @@ async fn prepare_package_launch(
             package_remove_env: package.manifest.runtime.remove_environment,
             package_remove_env_prefixes: package.manifest.runtime.remove_environment_prefixes,
             account_sandbox,
+            execution_bridge: None,
         },
         sidecars,
     })

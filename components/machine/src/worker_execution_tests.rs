@@ -533,7 +533,7 @@ async fn native_worker_execution() {
         .arg("--native-cli")
         .arg(&executor)
         .arg("--descriptor")
-        .arg(endpoint.descriptor())
+        .arg(endpoint.descriptor().unwrap())
         .arg("--runtime")
         .arg(&runtime)
         .arg("--target")

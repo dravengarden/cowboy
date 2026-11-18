@@ -7,7 +7,7 @@ type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 pub(super) async fn connect(endpoint: &Endpoint) -> Socket {
     let descriptor: Value =
-        serde_json::from_slice(&std::fs::read(endpoint.descriptor()).unwrap()).unwrap();
+        serde_json::from_slice(&std::fs::read(endpoint.descriptor().unwrap()).unwrap()).unwrap();
     let mut request = descriptor["endpoint"]
         .as_str()
         .unwrap()

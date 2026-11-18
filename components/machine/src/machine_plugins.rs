@@ -47,6 +47,8 @@ mod operations;
 mod platform_match;
 mod remove_projection;
 mod retirement;
+mod runtime_probe;
+use runtime_probe::probe_provider_runtime;
 mod session_extensions;
 mod telemetry;
 mod uninstall;
@@ -638,6 +640,7 @@ impl MachinePluginStore {
                 runtime_artifacts,
                 guard,
                 self.root.parent(),
+                account_sandbox::sandboxed(&package),
             ))
             .await?;
         let runtime_ms = started.elapsed().as_millis();
@@ -750,6 +753,7 @@ impl MachinePluginStore {
                 &runtime_artifacts,
                 guard,
                 self.root.parent(),
+                false,
             ))
             .await?;
         if matches!(package.payload, PluginPayload::CodeIntelligence(_))
@@ -3764,11 +3768,14 @@ fn write_provider_generation_files(
     Ok(())
 }
 
+/// `sealed_probe`: every component probe must leave its disposable HOME
+/// empty (an account-sandboxed Provider; see `runtime_probe`).
 async fn stage_provider_runtime(
     content: &Path,
     artifacts: &PlatformRuntimeArtifacts,
     guard: &InstallGuard<'_>,
     cache_state: Option<&Path>,
+    sealed_probe: bool,
 ) -> Result<InstalledRuntimeMetadata> {
     guard.check()?;
     let active = content.join("runtime");
@@ -3801,6 +3808,7 @@ async fn stage_provider_runtime(
                 guard,
                 cache_state,
                 Some(content),
+                sealed_probe,
             )
             .await?;
             let executable = staged
@@ -4142,6 +4150,7 @@ async fn stage_runtime_component(
     guard: &InstallGuard<'_>,
     cache_state: Option<&Path>,
     generation_content: Option<&Path>,
+    sealed_probe: bool,
 ) -> Result<StagedRuntimeComponent> {
     guard.check()?;
     let url = reqwest::Url::parse(&artifact.artifact_url)?;
@@ -4207,7 +4216,7 @@ async fn stage_runtime_component(
     };
     let unpack_ms = unpack_started.elapsed().as_millis();
     let probe_started = Instant::now();
-    probe_released_component(&executable, artifact).await?;
+    probe_released_component(&executable, artifact, sealed_probe).await?;
     let probe_ms = probe_started.elapsed().as_millis();
     let verify_started = Instant::now();
     ensure!(
@@ -4286,6 +4295,7 @@ impl Drop for StagedProbeHome {
 async fn probe_released_component(
     executable: &Path,
     artifact: &ReleasedPrivateComponent,
+    sealed: bool,
 ) -> Result<()> {
     let directory = std::env::temp_dir().join(format!(
         "cowboy-component-probe-{:032x}",
@@ -4351,7 +4361,7 @@ async fn probe_released_component(
         status.success(),
         "staged Provider component probe exited {status}"
     );
-    Ok(())
+    runtime_probe::ensure_sealed(&home.0, sealed)
 }
 
 fn runtime_command(package_path: &Path, command: &str) -> Result<PathBuf> {
@@ -4728,30 +4738,6 @@ fn read_installed_runtime(content: &Path) -> Result<InstalledRuntimeMetadata> {
         "unsupported installed Provider runtime metadata"
     );
     Ok(metadata)
-}
-
-async fn probe_provider_runtime(runtime: &RuntimeContract, command: &Path) -> Result<()> {
-    ensure!(
-        runtime.protocol == "agent-client-protocol-1.3",
-        "unsupported Provider driver protocol"
-    );
-    let output = tokio::time::timeout(
-        PROVIDER_PROBE_TIMEOUT,
-        tokio::process::Command::new(command)
-            .arg("--version")
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await
-    .context("Provider staged probe timed out")?
-    .with_context(|| format!("starting Provider entrypoint {}", command.display()))?;
-    ensure!(
-        output.status.success(),
-        "Provider staged probe exited {}: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr).trim()
-    );
-    Ok(())
 }
 
 fn digest_generation_name(digest: &str) -> Result<String> {
@@ -7142,7 +7128,7 @@ mod tests {
             }],
         };
 
-        let error = stage_provider_runtime(&root, &artifacts, &InstallGuard::Legacy, None)
+        let error = stage_provider_runtime(&root, &artifacts, &InstallGuard::Legacy, None, false)
             .await
             .unwrap_err();
         assert!(error.to_string().contains("must use HTTPS"));

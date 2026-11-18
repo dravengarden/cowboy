@@ -185,8 +185,27 @@ login and logout run `login`/`logout` units with the same challenge I/O;
 login completes only when the daemon records the reserved generation
 `signed_in`, and logout clears only the vendor token (`credential_cleared`,
 `history_retained`). A Machine without a reachable daemon reports the Provider
-`incompatible`, and execution bindings stay refused until the execution
-bridge lands ([design](../antigravity-real-accounts-design.md)).
+`incompatible`.
+
+A sandboxed session's execution binding uses no loopback endpoint: the
+worker serves its execution endpoint on the listening `exec.sock` the daemon
+binds into the unit at `/run/cowboy-exec.sock` (same bearer token, one
+connection, 14 MiB frames), and the descriptor the daemon passes the unit as
+its `descriptor` credential names `unix:/run/cowboy-exec.sock`. The endpoint
+is the trusted process ledger: every `process/start` is recorded under the
+current Cowboy turn in the Machine-owned file
+`<state-dir>/execution-ledgers/<session>.json` before it is forwarded; a
+cancellation, turn end, unit loss or teardown fences the turn (later starts
+are refused) and terminates its processes until `process/read` reports them
+exited, or the target reports an id unknown with no start in flight. The
+turn's `TurnEnded` is emitted only after that evidence. A dead worker's
+entries are terminated by the next worker of the same binding. A lost reply
+to a mutation or start marks the session `uncertain_effect` in the worker
+snapshot. The prompt watchdog's hard recycle stops the unit through the
+daemon and waits for its confirmation. Install probes run each vendor
+component sealed (disposable empty HOME, closed environment, nothing may be
+written) and skip the HOME-touching launcher probe
+([design](../antigravity-real-accounts-design.md)).
 
 For `codex-deepseek`, the Service's `DEEPSEEK_API_KEY` projection is explicitly
 forwarded only to the gateway sidecar; it is not added to the ACP adapter's

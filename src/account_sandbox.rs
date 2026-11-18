@@ -102,6 +102,40 @@ impl Launch {
     }
 }
 
+/// Worker wiring: the Machine-owned durable process-ledger file of a
+/// sandboxed session with an execution binding (design R3-5, R3-6).
+pub const EXECUTION_LEDGER_ENV: &str = "COWBOY_EXECUTION_LEDGER";
+/// Directory of the ledger files under the Machine state root.
+pub const EXECUTION_LEDGER_DIR: &str = "execution-ledgers";
+
+/// The ledger file of `session_id` under the Machine state root.
+#[must_use]
+pub fn execution_ledger_file(state_dir: &Path, session_id: &str) -> Option<PathBuf> {
+    (!session_id.is_empty()
+        && session_id.len() <= 128
+        && session_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_".contains(&byte)))
+    .then(|| {
+        state_dir
+            .join(EXECUTION_LEDGER_DIR)
+            .join(format!("{session_id}.json"))
+    })
+}
+
+/// The unit's path of its execution socket (the daemon binds it there).
+pub const UNIT_EXEC_SOCKET: &str = "/run/cowboy-exec.sock";
+
+/// How a sandboxed runtime unit reaches its worker's execution endpoint
+/// (design amendment R3-11): the descriptor the daemon hands the unit as its
+/// `descriptor` credential, and where the worker's endpoint takes the
+/// listening `exec.sock` each started unit returns.
+#[derive(Debug, Clone)]
+pub struct ExecutionBridge {
+    pub descriptor: Vec<u8>,
+    pub listeners: tokio::sync::mpsc::UnboundedSender<OwnedFd>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Account {
     pub key: String,

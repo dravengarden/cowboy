@@ -167,6 +167,7 @@ pub(super) fn worker_snapshot(session_id: &str, worker_epoch: &str) -> WorkerSna
         native_cycle_id: None,
         incarnation: None,
         account_unit: None,
+        uncertain_effect: None,
     }
 }
 

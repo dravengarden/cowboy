@@ -53,7 +53,10 @@ impl AgentProcess {
         sink: &dyn AgentSink,
     ) -> Result<(Self, Pipes)> {
         match &spec.account_sandbox {
-            Some(launch) => Self::start_sandboxed(launch.clone(), session_id, sink).await,
+            Some(launch) => {
+                let bridge = spec.execution_bridge.clone();
+                Self::start_sandboxed(launch.clone(), bridge, session_id, sink).await
+            }
             None => Self::spawn_local(spec, session_id, cwd),
         }
     }
@@ -116,10 +119,12 @@ impl AgentProcess {
     /// session; there is no local fallback.
     async fn start_sandboxed(
         launch: account_sandbox::Launch,
+        bridge: Option<account_sandbox::ExecutionBridge>,
         session_id: &str,
         sink: &dyn AgentSink,
     ) -> Result<(Self, Pipes)> {
         let session = session_id.to_owned();
+        let descriptor = bridge.as_ref().map(|bridge| bridge.descriptor.clone());
         let (client, started) = tokio::task::spawn_blocking(move || -> Result<_> {
             let mut client = account_sandbox::Client::connect(&launch.socket)?;
             let account = client.ensure_account(&launch.service_id, &launch.account_id)?;
@@ -131,7 +136,7 @@ impl AgentProcess {
                     credential_generation: launch.credential_generation,
                     runtime_sha256: &launch.runtime_sha256,
                     session_id: Some(&session),
-                    descriptor: None,
+                    descriptor: descriptor.as_deref(),
                 },
                 &launch.runtime_archive,
             )?;
@@ -148,11 +153,15 @@ impl AgentProcess {
             "account sandbox unit started"
         );
         sink.set_account_unit(session_id, Some(started.handle.clone()));
-        // TODO(3b): bridge the unit's execution listener to the worker's
-        // execution endpoint (docs/antigravity-real-accounts-design.md
-        // [R3-11]); until then the listener is closed and execution bindings
-        // are refused for sandboxed Providers.
-        drop(started.exec_listener);
+        // The unit reaches the worker's execution endpoint only through the
+        // listening socket the daemon bound into it (design R3-11). Without
+        // an execution binding nothing serves it and it is closed here.
+        if let (Some(bridge), Some(listener)) = (&bridge, started.exec_listener) {
+            bridge
+                .listeners
+                .send(listener)
+                .map_err(|_| anyhow::anyhow!("the execution endpoint is gone"))?;
+        }
         let pipes = Pipes {
             stdin: Box::new(tokio::net::unix::pipe::Sender::from_owned_fd(
                 started.stdin,
@@ -175,6 +184,18 @@ impl AgentProcess {
             },
             pipes,
         ))
+    }
+
+    /// How the prompt watchdog hard-recycles this Provider process.
+    pub(super) fn recycler(&self) -> Recycler {
+        match (&self.owner, &self.cgroup) {
+            (Owner::Sandbox(unit), _) => Recycler::Unit {
+                client: Arc::clone(&unit.client),
+                unit: unit.handle.unit.clone(),
+            },
+            (Owner::Local(_), Some(dir)) => Recycler::Cgroup(dir.clone()),
+            (Owner::Local(_), None) => Recycler::Uncontained,
+        }
     }
 
     /// Resolves once the Provider process is gone, describing how.
@@ -239,6 +260,67 @@ impl SandboxUnit {
                 ?outcome,
                 "account sandbox unit stop unconfirmed; closing its owner connection"
             ),
+        }
+    }
+}
+
+/// The prompt watchdog's hard recycle of one Provider process tree.
+pub(super) enum Recycler {
+    /// SIGKILL the local agent's containment cgroup.
+    Cgroup(PathBuf),
+    /// Ask the daemon to stop the account unit and wait for its confirmation.
+    Unit {
+        client: Arc<Mutex<account_sandbox::Client>>,
+        unit: String,
+    },
+    /// A local agent the host could not contain.
+    Uncontained,
+}
+
+impl Recycler {
+    /// End the wedged process tree; `false` when nothing could be done and
+    /// the caller must wait for the prompt to fail on its own.
+    pub(super) async fn hard_recycle(&self, session_id: &str) -> bool {
+        match self {
+            Self::Cgroup(dir) => {
+                tracing::warn!(
+                    session = session_id,
+                    "prompt watchdog: agent will not yield to cancel — recycling"
+                );
+                cgroup::kill_and_remove(dir);
+                true
+            }
+            Self::Unit { client, unit } => {
+                tracing::warn!(
+                    session = session_id,
+                    %unit,
+                    "prompt watchdog: agent will not yield to cancel — stopping its account unit"
+                );
+                let (client, name) = (Arc::clone(client), unit.clone());
+                let stop = tokio::task::spawn_blocking(move || client.lock().stop_unit(&name));
+                match tokio::time::timeout(UNIT_STOP_TIMEOUT, stop).await {
+                    Ok(Ok(Ok(true))) => {
+                        tracing::info!(session = session_id, %unit, "account unit stop confirmed");
+                        true
+                    }
+                    outcome => {
+                        tracing::warn!(
+                            session = session_id,
+                            %unit,
+                            ?outcome,
+                            "account unit stop unconfirmed; the owner connection still ends it"
+                        );
+                        true
+                    }
+                }
+            }
+            Self::Uncontained => {
+                tracing::warn!(
+                    session = session_id,
+                    "prompt watchdog: agent wedged and uncontained — waiting for prompt to fail"
+                );
+                false
+            }
         }
     }
 }
