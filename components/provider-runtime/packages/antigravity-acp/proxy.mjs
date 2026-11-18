@@ -229,30 +229,20 @@ export class AcpProxy {
     await runtime.facade.endTurn(record.sessionId);
     const violation = turn?.violation;
     const uncertain = turn?.uncertain;
-    if (!message.result && violation === undefined) {
-      if (uncertain === undefined) return this.client(message);
-      // The unknown effect is reported on both endings, an error too.
-      const error = message.error ?? { code: -32603, message: "turn failed" };
-      return this.client({
-        ...message,
-        error: {
-          ...error,
-          data: { ...(error.data ?? {}), cowboy: { uncertain_effect: uncertain } },
-        },
-      });
-    }
     const cowboy = {};
-    if (message.result) {
-      cowboy.antigravity_backend = await runtime.evidence.settle(
-        record.cursor,
-        record.sessionId,
-        message.result.stopReason,
-      );
-    }
+    // Every ending is classified, a vendor error too: its log window may
+    // hold a refusal; an error without one is `unknown_refusal`, never a
+    // vendor message the Controller cannot attribute.
+    const backend = await runtime.evidence.settle(
+      record.cursor,
+      record.sessionId,
+      message.result?.stopReason,
+    );
+    cowboy.antigravity_backend =
+      message.result || backend.class !== "ok" ? backend : { ...backend, class: "unknown_refusal" };
     if (uncertain !== undefined) cowboy.uncertain_effect = uncertain;
     if (violation !== undefined) cowboy.policy_violation = violation;
-    const backend = cowboy.antigravity_backend;
-    if (violation !== undefined || backend.class !== "ok") {
+    if (violation !== undefined || cowboy.antigravity_backend.class !== "ok") {
       return this.client({
         jsonrpc: "2.0",
         id,
@@ -261,7 +251,7 @@ export class AcpProxy {
           message:
             violation !== undefined
               ? `${VIOLATION_PREFIX}${violation}`
-              : `${REFUSAL_PREFIX}${backend.class}`,
+              : `${REFUSAL_PREFIX}${cowboy.antigravity_backend.class}`,
           data: { cowboy },
         },
       });

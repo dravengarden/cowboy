@@ -294,7 +294,8 @@ test("a violation survives an agent error reply and unsafe names are not echoed"
   );
   await proxy.fromAgent({ jsonrpc: "2.0", id: 9, error: { code: -32603, message: "cancelled" } });
   assert.equal(client.at(-1).error.message, `${VIOLATION_PREFIX}unknown`);
-  assert.equal(client.at(-1).error.data.cowboy.antigravity_backend, undefined);
+  // The vendor error is classified too: no refusal record proves success.
+  assert.equal(client.at(-1).error.data.cowboy.antigravity_backend.class, "unknown_refusal");
   // Outside a turn there is nothing to end.
   await proxy.fromAgent(
     toolUpdate({
@@ -355,6 +356,19 @@ test("an unknown effect is reported when the turn ends with an error", async () 
   await proxy.fromAgent({ jsonrpc: "2.0", id: 9, error: { code: -32603, message: "stopped" } });
   const error = client.at(-1);
   assert.equal(error.id, 9);
-  assert.equal(error.error.message, "stopped");
+  assert.equal(error.error.message, "antigravity_backend_refusal:unknown_refusal");
   assert.equal(error.error.data.cowboy.uncertain_effect, "process/start");
+});
+
+test("every vendor error ending is classified; an unclassified one is unknown_refusal", async () => {
+  const { proxy, client } = harness();
+  await proxy.fromClient(request(9, "session/prompt", { sessionId: "s", prompt: [] }));
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 9,
+    error: { code: -32603, message: "Internal error: antigravity_backend_refusal:ok" },
+  });
+  const error = client.at(-1).error;
+  assert.equal(error.message, "antigravity_backend_refusal:unknown_refusal");
+  assert.equal(error.data.cowboy.antigravity_backend.class, "unknown_refusal");
 });

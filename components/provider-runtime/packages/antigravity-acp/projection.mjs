@@ -59,15 +59,18 @@ export function guidanceDirectories(top, cwd) {
 
 /**
  * Read at most `room` bytes of one guidance file, only when it is a regular
- * file reached without any symlink: the path is opened first and then must
- * still resolve to itself on the target, so a link anywhere in it (also one
- * swapped in before the open) cannot pull in a file from elsewhere.
+ * file whose canonical path is itself (no symlink anywhere in it) inside the
+ * repository `root`. Symlinks are refused outright. Like the facade's path
+ * checks this is a guardrail, not an isolation boundary: `RunCommand` is a
+ * shell on the same Machine (design "Revision 5 simplification").
  */
-async function readGuidance(facade, file, room) {
+async function readGuidance(facade, file, room, root) {
   const at = pathToFileURL(file).href;
   const call = (method, params) => facade.connection.call(method, params);
   const handleId = `cowboy-${randomUUID()}`;
   try {
+    const canonical = fileURLToPath((await call("fs/canonicalize", { path: at })).path);
+    if (canonical !== file || !inside(root, canonical)) return undefined;
     const metadata = await call("fs/getMetadata", { path: at });
     if (!metadata?.isFile || metadata.isSymlink) return undefined;
     await call("fs/open", { handleId, path: at });
@@ -75,9 +78,6 @@ async function readGuidance(facade, file, room) {
     return undefined;
   }
   try {
-    if (fileURLToPath((await call("fs/canonicalize", { path: at })).path) !== file) {
-      return undefined;
-    }
     const limit = Math.min(PROJECTION_LIMITS.guidanceFile, room);
     const block = await call("fs/readBlock", { handleId, offset: 0, len: limit + 1 });
     const bytes = Buffer.from(block.chunk, "base64");
@@ -130,7 +130,7 @@ export async function buildProjection(facade, cwd) {
         guidance.push(`--- ${file} ---\n[truncated: guidance limit reached]`);
         continue;
       }
-      const read = await readGuidance(facade, file, room);
+      const read = await readGuidance(facade, file, room, git.top ?? cwd);
       if (!read) continue;
       const text = read.text.replaceAll(fence, "[fence]");
       room -= Buffer.byteLength(text);

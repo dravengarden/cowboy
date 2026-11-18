@@ -17,6 +17,12 @@ import {
 } from "node:fs";
 import { createServer } from "node:http";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+// The execution helper the real executor exports to the processes it starts
+// (built by `cargo build -p cowboy-machine --bin cowboy-execution-host`).
+const FILE_HELPER = fileURLToPath(
+  new URL("../../../../target/debug/cowboy-execution-host", import.meta.url),
+);
 import { WebSocketServer } from "ws";
 
 // `virtual` presents `root` under another absolute path, so a test can give
@@ -24,7 +30,13 @@ import { WebSocketServer } from "ws";
 export async function fakeEndpoint(
   socketPath,
   root,
-  { lose = () => false, fail = () => undefined, shell = "/bin/sh", virtual = root } = {},
+  {
+    lose = () => false,
+    fail = () => undefined,
+    shell = "/bin/sh",
+    virtual = root,
+    fileHelper = FILE_HELPER,
+  } = {},
 ) {
   const toReal = (path) => (path.startsWith(virtual) ? root + path.slice(virtual.length) : path);
   const toVirtual = (path) => (path.startsWith(root) ? virtual + path.slice(root.length) : path);
@@ -97,6 +109,7 @@ export async function fakeEndpoint(
       const child = spawn(params.argv[0], params.argv.slice(1).map(toReal), {
         cwd: toReal(fileURLToPath(params.cwd)),
         stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, COWBOY_EXECUTION_FILE_HELPER: fileHelper ?? "" },
       });
       const entry = {
         chunks: [],

@@ -15,7 +15,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { Connection } from "../../execution-connection.mjs";
 import { Facade, LIMITS, Retained, ToolError } from "./facade.mjs";
-import { PUBLISH } from "./facade-tools.mjs";
+import { decodeText, splice } from "./facade-tools.mjs";
 import { buildProjection, guidanceDirectories, parseGit } from "./projection.mjs";
 import { fakeEndpoint } from "./test-endpoint.mjs";
 
@@ -211,18 +211,19 @@ test("RunCommand bounds output and time; StopCommand stops a running command", a
 
 test("a lost mutation reply reports an unknown outcome and ends the turn", async (t) => {
   let lose = false;
+  // The publication's helper start loses its reply.
   const { root, call, uncertain } = await fixture(t, {
-    lose: (method) => lose && method === "fs/writeFile",
+    lose: (method) => lose && method === "process/start",
   });
   lose = true;
   const result = await call("WriteFile", { path: "lost.txt", content: "maybe\n" });
   assert.equal(result.error, true);
   assert.match(result.text, /^outcome unknown/);
-  assert.deepEqual(uncertain, [["s1", "fs/writeFile"]]);
+  assert.deepEqual(uncertain, [["s1", "process/start"]]);
   lose = false;
   const after = await call("ReadFile", { path: "hello.txt" });
   assert.match(after.text, /unknown outcome/);
-  // The staged file may exist on the target; nothing was published or retried.
+  // The fake never ran the lost start; nothing was published or retried.
   assert.throws(() => readFileSync(join(root, "lost.txt")));
 });
 
@@ -274,7 +275,7 @@ test("projection fences repository guidance and bounds Git status", async (t) =>
 test("a worker-reported unknown outcome fences the turn at once", async (t) => {
   const { facade, call, uncertain } = await fixture(t, {
     fail: (method) =>
-      method === "fs/writeFile"
+      method === "process/start"
         ? { code: -32000, message: "result unknown", data: { outcome: "unknown" } }
         : undefined,
   });
@@ -282,8 +283,8 @@ test("a worker-reported unknown outcome fences the turn at once", async (t) => {
   const written = await call("WriteFile", { path: "new.txt", content: "x" });
   assert.equal(written.error, true);
   assert.match(written.text, /outcome unknown/);
-  assert.deepEqual(uncertain, [["s1", "fs/writeFile"]]);
-  assert.equal(turn.uncertain, "fs/writeFile");
+  assert.deepEqual(uncertain, [["s1", "process/start"]]);
+  assert.equal(turn.uncertain, "process/start");
   await assert.rejects(facade.mutate(turn, "fs/createDirectory", {}), ToolError);
 });
 
@@ -344,30 +345,81 @@ test("EditFile refuses invalid UTF-8 and oversized results before allocating", a
   assert.match(grown.text, /larger than 4 MiB/);
 });
 
-test("publication is pinned to its directory and never loses a displaced file", (t) => {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), "agy-publish-")));
-  t.after(() => rmSync(base, { recursive: true, force: true }));
-  const root = join(base, "root");
-  mkdirSync(join(root, "dir"), { recursive: true });
-  mkdirSync(join(base, "outside"));
-  symlinkSync(join(base, "outside"), join(root, "link"));
-  const publish = (dir, name, tmp, digest) =>
-    execFileSync("/bin/sh", ["-c", PUBLISH, "sh", root, dir, name, tmp, digest]).toString().trim();
+test("publication is the execution helper's conditional apply; the original stays on conflict", async (t) => {
+  const { root, call, endpoint } = await fixture(t);
+  assert.match((await call("ReadFile", { path: "hello.txt" })).text, /hello target/);
+  // Someone else changes the file after it was read: nothing is replaced.
+  writeFileSync(join(root, "hello.txt"), "theirs\n");
+  const conflict = await call("EditFile", {
+    path: "hello.txt",
+    old_string: "theirs",
+    new_string: "mine",
+  });
+  assert.equal(conflict.error, true);
+  assert.equal(readFileSync(join(root, "hello.txt"), "utf8"), "theirs\n");
+  assert.match((await call("ReadFile", { path: "hello.txt" })).text, /theirs/);
+  const edited = await call("EditFile", {
+    path: "hello.txt",
+    old_string: "theirs",
+    new_string: "mine",
+  });
+  assert.equal(edited.error, false, edited.text);
+  assert.equal(readFileSync(join(root, "hello.txt"), "utf8"), "mine\n");
+  // A new file in a new directory is created by the same primitive.
+  const created = await call("WriteFile", { path: "new/dir/file.txt", content: "fresh\n" });
+  assert.equal(created.error, false, created.text);
+  assert.equal(readFileSync(join(root, "new/dir/file.txt"), "utf8"), "fresh\n");
+  // Every publication ran the helper (the stale edit was refused before
+  // it); no staged file is left in the tree.
+  const applies = endpoint.calls.filter(
+    (entry) => entry.method === "process/start" && entry.params.argv[2]?.includes("apply"),
+  );
+  assert.equal(applies.length, 2);
+  assert.deepEqual(execFileSync("find", [root, "-name", "*.tmp"]).toString().trim(), "");
+});
+
+test("a missing execution helper writes nothing", async (t) => {
+  const { root, call } = await fixture(t, { fileHelper: null });
+  await call("ReadFile", { path: "hello.txt" });
+  const refused = await call("WriteFile", { path: "hello.txt", content: "x" });
+  assert.equal(refused.error, true);
+  assert.match(refused.text, /execution helper is unavailable/);
+  assert.equal(readFileSync(join(root, "hello.txt"), "utf8"), "hello target\n");
+});
+
+test("EditFile keeps a UTF-8 byte order mark", async (t) => {
+  const { root, call } = await fixture(t);
+  writeFileSync(join(root, "bom.txt"), Buffer.from("\ufeffkeep me\n"));
+  await call("ReadFile", { path: "bom.txt" });
+  const edited = await call("EditFile", {
+    path: "bom.txt",
+    old_string: "keep",
+    new_string: "kept",
+  });
+  assert.equal(edited.error, false, edited.text);
+  const bytes = readFileSync(join(root, "bom.txt"));
+  assert.deepEqual([...bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+  assert.equal(bytes.subarray(3).toString(), "kept me\n");
+  assert.equal(decodeText(Buffer.from("\ufeffa")), "\ufeffa");
+});
+
+test("a splice keeps the shared prefix and suffix", () => {
   const sha = (text) => createHash("sha256").update(text).digest("hex");
-  writeFileSync(join(root, "dir", "f"), "theirs\n");
-  writeFileSync(join(root, "dir", ".t1"), "mine\n");
-  // The current content differs from the base: it is restored in place.
-  assert.equal(publish(join(root, "dir"), "f", ".t1", sha("base\n")), "conflict");
-  assert.equal(readFileSync(join(root, "dir", "f"), "utf8"), "theirs\n");
-  writeFileSync(join(root, "dir", ".t2"), "mine\n");
-  assert.equal(publish(join(root, "dir"), "f", ".t2", sha("theirs\n")), "applied");
-  assert.equal(readFileSync(join(root, "dir", "f"), "utf8"), "mine\n");
-  // A directory that resolves outside the root is refused.
-  writeFileSync(join(base, "outside", ".t3"), "x");
-  assert.equal(publish(join(root, "link"), "f", ".t3", "absent"), "outside");
-  assert.equal(readFileSync(join(base, "outside", ".t3"), "utf8"), "x");
-  // A staged file missing from the pinned directory publishes nothing.
-  assert.equal(publish(join(root, "dir"), "g", ".missing", "absent"), "conflict");
+  assert.deepEqual(splice(Buffer.from("same"), Buffer.from("same")), []);
+  const [one] = splice(Buffer.from("hello world"), Buffer.from("hello there world"));
+  assert.deepEqual([one.offset, one.delete], [6, 0]);
+  assert.equal(Buffer.from(one.insert, "base64").toString(), "there ");
+  assert.equal(sha("x").length, 64);
+});
+
+test("RunCommand validates wait_seconds before it starts anything", async (t) => {
+  const { call, endpoint } = await fixture(t);
+  for (const wait_seconds of [-1, 1.5, 100000]) {
+    const refused = await call("RunCommand", { command: "true", wait_seconds });
+    assert.equal(refused.error, true);
+    assert.match(refused.text, /wait_seconds/);
+  }
+  assert.equal(endpoint.calls.filter((entry) => entry.method === "process/start").length, 0);
 });
 
 test("guidance is read only through symlink-free paths, by a readiness probe", async (t) => {
@@ -381,4 +433,25 @@ test("guidance is read only through symlink-free paths, by a readiness probe", a
   const starts = endpoint.calls.filter((call) => call.method === "process/start");
   assert.ok(starts.length > 0);
   for (const start of starts) assert.match(start.params.processId, /^cowboy-agy-readiness-/);
+});
+
+test("a busy reader never disables a command's deadline", async (t) => {
+  const { facade } = await fixture(t);
+  const session = facade.session("s1");
+  let terminated = 0;
+  facade.terminate = async () => {
+    terminated++;
+    return true;
+  };
+  const running = { processId: "p1", closed: false, busy: true };
+  session.commands.set("p1", running);
+  await facade.expire(session, running);
+  // Busy: the deadline timer is armed again, not dropped.
+  assert.ok(running.timer);
+  assert.equal(terminated, 0);
+  clearTimeout(running.timer);
+  running.busy = false;
+  await facade.expire(session, running);
+  assert.equal(terminated, 1);
+  assert.equal(session.commands.has("p1"), false);
 });

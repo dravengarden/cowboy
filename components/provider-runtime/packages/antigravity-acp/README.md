@@ -46,23 +46,30 @@ places its tree below `proxy/` in the account-sandbox runtime archive and adds
   runs without hooks when `hooks.json` does not parse); descriptor valid; one
   execution connection with a finished handshake; the facade's exact tool
   set; a projection built. The projection's Git probe is a readiness process
-  (`cowboy-agy-readiness-` id) the worker's ledger admits outside any turn,
-  one at a time; guidance files are read only when the opened path still
-  resolves to itself (no symlink in any component). Failure answers
+  the worker's ledger admits outside any turn, one at a time, only while the
+  worker is starting its session (worker state, never the process id);
+  guidance files are read only when they are regular files whose canonical
+  path is themselves (symlinks refused outright) inside the repository.
+  Failure answers
   `cowboy_antigravity_unavailable: <reason>`.
 - Tools: `ReadFile` (≤ 256 KiB per call, offset paging), `ListDirectory`
   (≤ 2,000 entries), `SearchFiles` (target `rg`, ≤ 500 lines, 512 KiB, 30 s),
   `WriteFile`/`EditFile` (only after `ReadFile` in the session; `EditFile`
   refuses text that is not valid UTF-8 and a result over 4 MiB before
-  building it; compare-and-swap on the target's SHA-256 in one shell pinned to
-  the file's directory with `cd -P`: the current file is first renamed aside,
-  the displaced file is hashed, and the staged file is linked into the empty
-  place, so a concurrent writer is never overwritten and a mismatching file
-  is restored; mode kept), `RunCommand` (target shell, default 120 s, maximum
-  600 s, enforced by a timer even when the command is not read again; 256 KiB
-  head and tail; `wait_seconds` returns a `command_id`), `StopCommand` (the
-  handle is kept until the target confirms the process closed). Paths are
-  canonicalized on the target and confined to the workspace root. Tools work
+  building it, and keeps a UTF-8 BOM; publication is the execution helper's
+  conditional `apply` (`$COWBOY_EXECUTION_FILE_HELPER`, the Claude runtime's
+  primitive): it writes only while the file still hashes to what was read,
+  keeps the original until the replacement is in place and leaves the file
+  unchanged or exactly at the result; requests over 48 KiB travel as a
+  one-shot file in `~/.cache/cowboy/file-buffers`), `RunCommand` (target
+  shell, default 120 s, maximum 600 s, enforced by an independent timer even
+  when the command is not read again or a reader is busy; 256 KiB head and
+  tail; `wait_seconds`, validated before anything starts, returns a
+  `command_id`), `StopCommand` (the handle is kept until the target confirms
+  the process closed). Paths are canonicalized on the target and confined to
+  the workspace root as a guardrail against mistakes, not an isolation
+  boundary: `RunCommand` is a shell on the same Machine (design "Revision 5
+  simplification"). Tools work
   only inside a turn; on every turn end the turn is fenced, its admitted
   mutations are awaited and its commands stopped.
 - A lost reply after a mutation (`fs/writeFile`, `fs/createDirectory`,
@@ -75,9 +82,12 @@ places its tree below `proxy/` in the account-sandbox runtime archive and adds
 
 ## Backend evidence
 
-Every `session/prompt` result carries `_meta.cowboy.antigravity_backend`
-(`class`, `successes`, `transient`, `barrier`, `refusals`). Any class but `ok`
-turns the response into JSON-RPC error `-32000` whose message is
+Every `session/prompt` ending, a vendor error too, is classified: a result
+carries `_meta.cowboy.antigravity_backend` (`class`, `successes`,
+`transient`, `barrier`, `refusals`), and an error ending without a refusal
+record settles `unknown_refusal`, so the Controller never sees an
+unattributed vendor error. Any class but `ok` turns the response into
+JSON-RPC error `-32000` whose message is
 `antigravity_backend_refusal:<class>`, matched by Antigravity's signed
 `error_rules`.
 

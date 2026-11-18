@@ -3,7 +3,11 @@
 //
 // `agy` runs on OVH; every workspace tool runs on the session's development
 // Machine through the one execution `Connection` the proxy owns. Paths are
-// canonicalized on the target and confined to the workspace root. A mutation
+// canonicalized on the target and confined to the workspace root. That
+// confinement is a guardrail against mistakes, not an isolation boundary:
+// `RunCommand` already gives the model a shell on the same Machine, and a
+// path can change between the check and its use (design "Revision 5
+// simplification"). A mutation
 // whose reply is lost after it may have been admitted is never retried or
 // resolved by observation: the tool reports `outcome unknown` and the proxy
 // ends the turn (the worker's trusted ledger records `uncertain_effect`).
@@ -11,16 +15,19 @@ import { randomUUID } from "node:crypto";
 import { posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  APPLY,
   decodeText,
   ENV_POLICY,
+  INLINE_APPLY,
   inside,
   LIMITS,
   lost,
   missing,
-  PUBLISH,
+  PAYLOAD_DIRECTORY,
   Retained,
   remoteMessage,
   sha256,
+  splice,
   TOOLS,
   ToolError,
   UncertainEffect,
@@ -28,7 +35,8 @@ import {
   url,
 } from "./facade-tools.mjs";
 
-/** Must match the worker ledger's `READINESS_PREFIX`. */
+/** The process id prefix of readiness probes (diagnostic only: the worker
+ * authorizes the probe from its own state, never from this id). */
 export const READINESS_PREFIX = "cowboy-agy-readiness-";
 
 export {
@@ -335,7 +343,7 @@ export class Facade {
     if (observed !== undefined && observed !== base) {
       throw new ToolError(`${path} changed since it was read; read it again first.`);
     }
-    await this.publish(turn, file, base, bytes);
+    await this.publish(turn, file, current, bytes);
     session.observed.set(file, sha256(bytes));
     return `${current ? "Replaced" : "Created"} ${file} (${bytes.length} bytes)`;
   }
@@ -371,40 +379,94 @@ export class Facade {
     const next = Buffer.from(
       all === true ? text.replaceAll(before, () => after) : text.replace(before, () => after),
     );
-    await this.publish(turn, file, base, next);
+    await this.publish(turn, file, current, next);
     session.observed.set(file, sha256(next));
     return `Edited ${file} (${replaced} replacement${replaced === 1 ? "" : "s"})`;
   }
 
+  /**
+   * Publish `bytes` to `file` only while it still holds `base` (its bytes,
+   * or `undefined` for a new file), through the execution helper's
+   * conditional `apply`: the original stays in place until the replacement
+   * is, and a failure leaves the file unchanged or exactly at the result.
+   */
   async publish(turn, file, base, bytes) {
-    const directory = posix.dirname(file);
-    if (base === "absent") {
-      await this.mutate(turn, "fs/createDirectory", { path: url(directory), recursive: true });
-    }
-    const name = posix.basename(file);
-    const stagedName = `.${name}.cowboy-${randomUUID()}.tmp`;
-    await this.mutate(turn, "fs/writeFile", {
-      path: url(posix.join(directory, stagedName)),
-      dataBase64: bytes.toString("base64"),
+    const expect = sha256(bytes);
+    const request = JSON.stringify({
+      schema: 1,
+      path: file,
+      base: base === undefined ? "absent" : sha256(base),
+      expect,
+      splices: splice(base ?? Buffer.alloc(0), bytes),
+      staleTempSeconds: 3600,
     });
-    const result = await this.runBounded(
-      turn,
-      ["/bin/sh", "-c", PUBLISH, "sh", this.root, directory, name, stagedName, base],
-      {
-        timeoutMs: LIMITS.publishTimeoutMs,
-        maxBytes: 4096,
-        lostIsUncertain: true,
-      },
-    );
-    const outcome = result.stdout.trim();
-    if (outcome === "applied") return;
-    if (outcome === "conflict") {
+    let args;
+    let payload;
+    if (Buffer.byteLength(request) <= INLINE_APPLY) {
+      args = ["--request", Buffer.from(request).toString("base64")];
+    } else {
+      const directory = await this.payloadDirectory(turn);
+      payload = posix.join(directory, `payload-${randomUUID().replaceAll("-", "")}.json`);
+      await this.mutate(turn, "fs/writeFile", {
+        path: url(payload),
+        dataBase64: Buffer.from(request).toString("base64"),
+      });
+      args = ["--request-file", payload];
+    }
+    const result = await this.runBounded(turn, ["/bin/sh", "-c", APPLY, "sh", ...args], {
+      timeoutMs: LIMITS.publishTimeoutMs,
+      maxBytes: 64 * 1024,
+      lostIsUncertain: true,
+    });
+    let outcome;
+    try {
+      outcome = JSON.parse(result.stdout);
+    } catch {
+      outcome = undefined;
+    }
+    if (outcome?.status === "applied") return;
+    if (outcome?.status === "conflict") {
       throw new ToolError("The file changed on the target since it was read; read it again.");
     }
-    if (outcome === "outside") {
-      throw new ToolError(`${file} is no longer inside the workspace root ${this.root}`);
+    if (result.timedOut) {
+      // The helper may still publish: its outcome is unknown.
+      throw new UncertainEffect("file publish");
     }
-    throw new ToolError(`Writing ${file} failed: ${result.stderr.trim().slice(0, 500)}`);
+    if (result.exitCode === 127) {
+      // No helper ran (the executor exports none): nothing was written.
+      if (payload) {
+        await this.mutate(turn, "fs/remove", { path: url(payload), force: true }).catch(() => {});
+      }
+      throw new ToolError(
+        "The workspace Machine's execution helper is unavailable; nothing was written.",
+      );
+    }
+    // A helper error leaves the file unchanged or exactly at the result;
+    // read it again to tell which.
+    const now = await this.current(file).catch(() => null);
+    if (now === null) throw new UncertainEffect("file publish");
+    if (now !== undefined && sha256(now) === expect) return;
+    throw new ToolError(
+      `Writing ${file} failed: ${String(outcome?.error ?? result.stderr.trim()).slice(0, 500)}`,
+    );
+  }
+
+  /** The target's private directory for large helper requests. */
+  async payloadDirectory(turn) {
+    this.payloads ??= this.runBounded(turn, ["/bin/sh", "-c", PAYLOAD_DIRECTORY], {
+      timeoutMs: LIMITS.publishTimeoutMs,
+      maxBytes: 4096,
+    }).then((result) => {
+      const directory = result.stdout.trim();
+      if (result.exitCode !== 0 || !posix.isAbsolute(directory)) {
+        throw new ToolError("The workspace Machine has no private request directory");
+      }
+      return directory;
+    });
+    this.payloads.catch(() => {
+      this.payloads = undefined;
+    });
+    return this.payloads;
   }
 
   /**
@@ -507,6 +569,13 @@ export class Facade {
 
   async runCommand(session, turn, args) {
     const { command, command_id: id, timeout_seconds: timeout, wait_seconds: wait } = args;
+    // Validated before anything starts: a bad argument starts no process.
+    if (
+      wait !== undefined &&
+      (!Number.isInteger(wait) || wait < 0 || wait > LIMITS.commandMaxSeconds)
+    ) {
+      throw new ToolError(`wait_seconds must be between 0 and ${LIMITS.commandMaxSeconds}`);
+    }
     let running;
     if (id !== undefined) {
       if (command !== undefined) throw new ToolError("Give either command or command_id");
@@ -527,9 +596,6 @@ export class Facade {
       // The deadline holds even when nobody reads the command again.
       running.timer = setTimeout(() => this.expire(session, running), seconds * 1000);
       running.timer.unref?.();
-    }
-    if (wait !== undefined && (!Number.isInteger(wait) || wait < 0)) {
-      throw new ToolError("Invalid wait_seconds");
     }
     if (running.busy) throw new ToolError("Another call is reading this command");
     running.busy = true;
@@ -553,9 +619,18 @@ export class Facade {
     }
   }
 
-  /** A command's deadline passed: stop it unless a reader is handling it. */
+  /**
+   * A command's deadline passed: stop it. The timer is independent of
+   * readers: while one is busy it is armed again, so the deadline holds even
+   * when that reader returns before it.
+   */
   async expire(session, running) {
-    if (running.closed || running.busy || session.commands.get(running.processId) !== running) {
+    if (running.closed || session.commands.get(running.processId) !== running) {
+      return;
+    }
+    if (running.busy) {
+      running.timer = setTimeout(() => this.expire(session, running), 1000);
+      running.timer.unref?.();
       return;
     }
     running.busy = true;

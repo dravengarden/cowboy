@@ -28,42 +28,38 @@ export const ENV_POLICY = Object.freeze({
   includeOnly: [],
 });
 
-// Compare-and-swap publish of a staged file on the target, run as one shell
-// process pinned to the file's directory: `cd -P` resolves the directory once
-// and every later operation names only entries of that directory, so a
-// symlink swapped into the path afterwards cannot redirect it, and the
-// directory must still be inside the workspace root. The staged file must be
-// a regular file in that directory. A new file is linked into place without
-// replacing anything. An existing one is first renamed aside (atomically
-// taking it out of place), the displaced file is checked against `base` (a
-// SHA-256), and the staged file is linked into the empty place; a concurrent
-// creator is never overwritten and a mismatching displaced file is restored.
-// Prints `applied`, `conflict` or fails.
-export const PUBLISH = `set -u
-root=$1 dir=$2 name=$3 tmp=$4 base=$5
-cd -P -- "$dir" 2>/dev/null || { echo conflict; exit 0; }
-here=$(pwd -P) || exit 1
-if [ "$root" != / ]; then
-  case "$here/" in "$root"/*) ;; *) echo outside; exit 0 ;; esac
-fi
-if [ -L "$tmp" ] || [ ! -f "$tmp" ]; then echo conflict; exit 0; fi
-if [ "$base" = absent ]; then
-  if ln -P -- "$tmp" "$name" 2>/dev/null; then rm -f -- "$tmp"; echo applied; exit 0; fi
-  rm -f -- "$tmp"; echo conflict; exit 0
-fi
-old="$tmp.displaced"
-if ! mv -T -- "$name" "$old" 2>/dev/null; then rm -f -- "$tmp"; echo conflict; exit 0; fi
-restore() {
-  if ln -P -- "$old" "$name" 2>/dev/null; then rm -f -- "$old"
-  else echo "the displaced file is kept at $here/$old" >&2; fi
+// Conditional publication runs the execution helper's `apply`, the same
+// primitive the Claude runtime publishes buffered edits with: it writes the
+// result only while the file still hashes to the base (or is absent for a
+// new file), creates parents, keeps the original until the replacement is in
+// place, and leaves the file either unchanged or exactly at the expected
+// digest. The executor exports the helper as COWBOY_EXECUTION_FILE_HELPER.
+export const APPLY = 'exec "$COWBOY_EXECUTION_FILE_HELPER" apply "$@"';
+/** Requests up to this size travel inline in the helper's arguments. */
+export const INLINE_APPLY = 48 * 1024;
+/** The private directory request files larger than that are written to. */
+export const PAYLOAD_DIRECTORY = `umask 077 && d="$HOME/.cache/cowboy/file-buffers" && mkdir -p -- "$d" && test -d "$d" && test ! -L "$d" && test -O "$d" && chmod 700 -- "$d" && printf %s "$d"`;
+
+/** The single splice that turns `base` into `written` (shared prefix and suffix kept). */
+export function splice(base, written) {
+  const limit = Math.min(base.length, written.length);
+  let prefix = 0;
+  while (prefix < limit && base[prefix] === written[prefix]) prefix++;
+  let suffix = 0;
+  while (
+    suffix < limit - prefix &&
+    base[base.length - 1 - suffix] === written[written.length - 1 - suffix]
+  )
+    suffix++;
+  if (prefix === base.length && prefix === written.length) return [];
+  return [
+    {
+      offset: prefix,
+      delete: base.length - prefix - suffix,
+      insert: written.subarray(prefix, written.length - suffix).toString("base64"),
+    },
+  ];
 }
-if [ -L "$old" ] || [ ! -f "$old" ]; then rm -f -- "$tmp"; restore; echo conflict; exit 0; fi
-cur=$(sha256sum -- "$old") || { rm -f -- "$tmp"; restore; exit 1; }
-if [ "\${cur%% *}" != "$base" ]; then rm -f -- "$tmp"; restore; echo conflict; exit 0; fi
-chmod --reference="$old" -- "$tmp" 2>/dev/null || true
-if ln -P -- "$tmp" "$name" 2>/dev/null; then rm -f -- "$tmp" "$old"; echo applied; exit 0; fi
-rm -f -- "$tmp" "$old"; echo conflict
-`;
 
 export const TOOLS = [
   {
@@ -182,10 +178,13 @@ export const lost = (error) => !error?.remote && /result unknown/.test(error?.me
  */
 export const unknownOutcome = (error) => lost(error) || error?.remote?.data?.outcome === "unknown";
 
-/** Strict UTF-8 text of `bytes`; never a lossy replacement. */
+/**
+ * Strict UTF-8 text of `bytes`; never a lossy replacement. A leading BOM is
+ * kept in the text, so encoding it again reproduces it.
+ */
 export function decodeText(bytes) {
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
   } catch {
     return undefined;
   }
