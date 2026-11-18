@@ -39,6 +39,35 @@ const MAX_LEDGER_BYTES: u64 = 256 * 1024;
 const MAX_FENCED_TURNS: usize = 64;
 /// The ledger turn the readiness probe is recorded under.
 const READINESS_TURN: &str = "cowboy-readiness";
+/// The endpoint's own request: the agent side reports an uncertain effect
+/// it detected (`UNCERTAIN_REPORT` in the Antigravity facade). Never
+/// forwarded to the target.
+pub const UNCERTAIN_REPORT: &str = "cowboy/uncertainEffect";
+
+/// The only command the readiness window admits, byte for byte the
+/// projection's Git probe (`READINESS_PROBE` in the Antigravity proxy's
+/// `projection.mjs`; a package test keeps both equal):
+/// `/bin/sh -c READINESS_SCRIPT sh <absolute cwd>`.
+pub const READINESS_SCRIPT: &str = r#"cd -- "$1" 2>/dev/null || exit 0
+top=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+printf 'top\t%s\n' "$top"
+printf 'branch\t%s\n' "$(git symbolic-ref --short -q HEAD || git rev-parse --short HEAD 2>/dev/null)"
+git -c core.quotePath=true status --short 2>/dev/null | head -n 201 | sed 's/^/status\t/'
+"#;
+
+/// Whether `params` start exactly the readiness probe.
+fn readiness_probe(params: &Value) -> bool {
+    let Some(argv) = params.get("argv").and_then(Value::as_array) else {
+        return false;
+    };
+    let argv: Vec<&str> = argv.iter().filter_map(Value::as_str).collect();
+    matches!(
+        argv.as_slice(),
+        ["/bin/sh", "-c", script, "sh", cwd]
+            if *script == READINESS_SCRIPT && cwd.starts_with('/')
+    ) && params.get("argv").and_then(Value::as_array).map(Vec::len) == Some(5)
+}
+
 /// Bound of one process's best-effort termination.
 const TERMINATE_BOUND: Duration = Duration::from_secs(5);
 /// Requests that change the target: admitted only inside an active turn,
@@ -79,6 +108,10 @@ struct State {
     fenced: VecDeque<String>,
     /// The worker is starting its session: the readiness probe may run.
     readiness: bool,
+    /// Processes started as readiness probes (bounded by the probes the
+    /// readiness window admits): the only processes whose output carries no
+    /// result the agent acts on. Kept after their exit.
+    probes: HashSet<String>,
     closed: bool,
 }
 
@@ -207,7 +240,13 @@ impl Ledger {
         let turn = match state.active_turn() {
             Some(turn) => turn,
             None if state.readiness && !state.closed => {
-                // The readiness probe: one at a time, never during a turn.
+                // The readiness probe: exactly the projection's Git probe,
+                // one at a time, never during a turn.
+                if !readiness_probe(params) {
+                    return Err(
+                        "only the readiness probe may start before a turn; process start refused",
+                    );
+                }
                 let busy = state.processes.values().any(|turn| turn == READINESS_TURN)
                     || state.admitted.contains_key(READINESS_TURN);
                 if busy {
@@ -225,6 +264,9 @@ impl Ledger {
         }
         if state.processes.len() >= MAX_PROCESSES {
             return Err("session process limit reached; process start refused");
+        }
+        if turn == READINESS_TURN {
+            state.probes.insert(process.clone());
         }
         state.processes.insert(process.clone(), turn.clone());
         state.starting.insert(process);
@@ -255,14 +297,11 @@ impl Ledger {
         }
     }
 
-    /// Whether `process` was started by a Cowboy turn (not the readiness
-    /// probe): its output may carry a result the agent acts on.
-    fn turn_process(&self, process: &str) -> bool {
-        self.state
-            .lock()
-            .processes
-            .get(process)
-            .is_some_and(|turn| turn != READINESS_TURN)
+    /// Whether `process` was not a readiness probe: its output may carry a
+    /// result the agent acts on (a publish's outcome), also after its exit
+    /// was observed. Unknown processes count too (fail closed).
+    fn result_process(&self, process: &str) -> bool {
+        !self.state.lock().probes.contains(process)
     }
 
     pub(super) fn mark_uncertain(&self, method: &str) {
@@ -422,11 +461,33 @@ impl Client {
     /// recorded) first and lost replies mark the session's effect uncertain.
     pub async fn relay(self: &Arc<Self>, method: String, params: Value) -> Value {
         let Some(ledger) = self.ledger().cloned() else {
+            if method == UNCERTAIN_REPORT {
+                return refused("no execution ledger");
+            }
             return self
                 .invoke(method, params)
                 .await
                 .unwrap_or_else(|_| unavailable());
         };
+        if method == UNCERTAIN_REPORT {
+            // The facade detected an unknown outcome every transport call
+            // of which was answered (a timed-out publish): recorded like a
+            // lost reply. Reporting one only parks the session (fail
+            // closed), so the agent side may.
+            let reported = params
+                .get("method")
+                .and_then(Value::as_str)
+                .filter(|reported| {
+                    !reported.is_empty()
+                        && reported.len() <= 64
+                        && reported
+                            .bytes()
+                            .all(|byte| byte.is_ascii_graphic() || byte == b' ')
+                })
+                .unwrap_or("request");
+            ledger.mark_uncertain(reported);
+            return json!({"result": {}});
+        }
         let admitted = match ledger.admit(&method, &params) {
             Ok(admitted) => admitted,
             Err(reason) => return refused(reason),
@@ -435,14 +496,7 @@ impl Client {
         let start = (method == "process/start")
             .then(|| process.clone())
             .flatten();
-        // Decided before the reply: an exit removes the process. A lost
-        // termination, or a lost read of a turn's process (a publish's
-        // outcome), hides a result the agent acts on.
-        let result_carrying = method == "process/terminate"
-            || (method == "process/read"
-                && process
-                    .as_deref()
-                    .is_some_and(|process| ledger.turn_process(process)));
+        let result_carrying = self.carries_result(&method, &params);
         let result = self.invoke_classified(method.clone(), params).await;
         if let Some(admitted) = &admitted {
             ledger.settled(admitted, start.as_deref());
@@ -474,17 +528,29 @@ impl Client {
         }
     }
 
-    /// The reply of `method` never reached the agent side. A mutation or
-    /// termination the target answered (or whose outcome is already
-    /// unknown) then has an effect the agent never learned: the session's
-    /// effect is uncertain.
-    pub(super) fn undelivered(&self, method: &str, reply: &Value) {
+    /// Whether a lost reply of this request hides a result the agent acts
+    /// on: a termination, or a read of any process but a readiness probe
+    /// (a publish's outcome; also the final read after its exit).
+    pub(super) fn carries_result(&self, method: &str, params: &Value) -> bool {
+        let Some(ledger) = self.ledger() else {
+            return false;
+        };
+        method == "process/terminate"
+            || (method == "process/read"
+                && process_id(params).is_none_or(|process| ledger.result_process(&process)))
+    }
+
+    /// The reply of `method` never reached the agent side. A mutation, or a
+    /// result-carrying request ([`Self::carries_result`]), the target
+    /// answered (or whose outcome is already unknown) then has an effect
+    /// the agent never learned: the session's effect is uncertain.
+    pub(super) fn undelivered(&self, method: &str, carries_result: bool, reply: &Value) {
         let Some(ledger) = self.ledger() else {
             return;
         };
         let answered = reply.get("result").is_some()
             || reply.pointer("/error/data/outcome") == Some(&json!("unknown"));
-        if (MUTATIONS.contains(&method) || method == "process/terminate") && answered {
+        if (MUTATIONS.contains(&method) || carries_result) && answered {
             ledger.mark_uncertain(method);
         }
     }

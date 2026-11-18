@@ -17,6 +17,8 @@ use super::Client;
 pub(super) struct Done {
     pub id: Value,
     method: String,
+    /// Decided before the request ran (an exit forgets the process).
+    carries_result: bool,
     reply: Value,
 }
 
@@ -60,9 +62,16 @@ impl Relays {
         let (client, sender) = (Arc::clone(&self.client), self.sender.clone());
         self.pending += 1;
         tokio::spawn(async move {
+            let carries_result = client.carries_result(&method, &params);
             let reply = client.relay(method.clone(), params).await;
-            if let Err(mpsc::error::SendError(done)) = sender.send(Done { id, method, reply }) {
-                client.undelivered(&done.method, &done.reply);
+            let done = Done {
+                id,
+                method,
+                carries_result,
+                reply,
+            };
+            if let Err(mpsc::error::SendError(done)) = sender.send(done) {
+                client.undelivered(&done.method, done.carries_result, &done.reply);
             }
         });
     }
@@ -83,7 +92,8 @@ impl Relays {
 
     /// `done`'s reply never reached the agent side.
     pub fn undelivered(&self, done: &Done) {
-        self.client.undelivered(&done.method, &done.reply);
+        self.client
+            .undelivered(&done.method, done.carries_result, &done.reply);
     }
 }
 
@@ -102,7 +112,7 @@ impl Drop for Relays {
         // running relay has sent its reply.
         tokio::spawn(async move {
             while let Some(done) = receiver.recv().await {
-                client.undelivered(&done.method, &done.reply);
+                client.undelivered(&done.method, done.carries_result, &done.reply);
             }
         });
     }

@@ -267,6 +267,16 @@ impl Shared {
                 snapshot.background_tasks = crate::runtime_wire::background_tasks_count(update);
             }
             RuntimeEvent::Update { update, .. }
+                if crate::runtime_wire::uncertain_effect(update).is_some() =>
+            {
+                if let Some(effect) = crate::runtime_wire::uncertain_effect(update) {
+                    crate::runtime_wire::merge_uncertain_effect(
+                        &mut snapshot.uncertain_effect,
+                        effect,
+                    );
+                }
+            }
+            RuntimeEvent::Update { update, .. }
                 if crate::runtime_wire::native_cycle(update).is_some() =>
             {
                 snapshot.native_cycle_id = crate::runtime_wire::native_cycle(update).flatten();
@@ -300,9 +310,19 @@ impl Shared {
     /// Surface a lost mutation reply: the session holds an effect whose
     /// outcome on the target is unknown until the owner reviews it.
     fn mark_uncertain_effect(&self, method: &str, sequence: u64) {
-        self.snapshot.lock().uncertain_effect = Some(crate::runtime_wire::UncertainEffect {
+        let effect = crate::runtime_wire::UncertainEffect {
             method: method.to_owned(),
             sequence,
+        };
+        crate::runtime_wire::merge_uncertain_effect(
+            &mut self.snapshot.lock().uncertain_effect,
+            effect.clone(),
+        );
+        // Published to the broker and Controller at once, ahead of the turn's
+        // completion, not only in the next handshake's snapshot.
+        self.emit(RuntimeEvent::Update {
+            update: crate::runtime_wire::uncertain_effect_update(&effect),
+            cmid: None,
         });
         self.emit(RuntimeEvent::Error {
             message: format!("The outcome of a target {method} is unknown (its reply was lost); review the workspace before continuing"),

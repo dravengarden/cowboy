@@ -3076,6 +3076,16 @@ impl Broker {
                     crate::runtime_wire::native_cycle(update).flatten();
             }
             RuntimeEvent::Update { update, .. }
+                if crate::runtime_wire::uncertain_effect(update).is_some() =>
+            {
+                if let Some(effect) = crate::runtime_wire::uncertain_effect(update) {
+                    crate::runtime_wire::merge_uncertain_effect(
+                        &mut worker.snapshot.uncertain_effect,
+                        effect,
+                    );
+                }
+            }
+            RuntimeEvent::Update { update, .. }
                 if crate::runtime_wire::current_turn_support(update).is_some() =>
             {
                 worker.snapshot.supports_current_turn =

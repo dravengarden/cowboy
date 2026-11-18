@@ -16,7 +16,13 @@ import test from "node:test";
 import { Connection } from "../../execution-connection.mjs";
 import { Facade, LIMITS, Retained, ToolError } from "./facade.mjs";
 import { decodeText, splice } from "./facade-tools.mjs";
-import { buildProjection, guidanceDirectories, parseGit } from "./projection.mjs";
+import {
+  buildProjection,
+  guidanceDirectories,
+  PROJECTION_LIMITS,
+  parseGit,
+  READINESS_PROBE,
+} from "./projection.mjs";
 import { fakeEndpoint } from "./test-endpoint.mjs";
 
 const hasRg = (() => {
@@ -273,7 +279,7 @@ test("projection fences repository guidance and bounds Git status", async (t) =>
 });
 
 test("a worker-reported unknown outcome fences the turn at once", async (t) => {
-  const { facade, call, uncertain } = await fixture(t, {
+  const { facade, call, uncertain, endpoint } = await fixture(t, {
     fail: (method) =>
       method === "process/start"
         ? { code: -32000, message: "result unknown", data: { outcome: "unknown" } }
@@ -285,6 +291,13 @@ test("a worker-reported unknown outcome fences the turn at once", async (t) => {
   assert.match(written.text, /outcome unknown/);
   assert.deepEqual(uncertain, [["s1", "process/start"]]);
   assert.equal(turn.uncertain, "process/start");
+  // Recorded by the worker's ledger before the tool answered.
+  assert.ok(
+    endpoint.calls.some(
+      (entry) =>
+        entry.method === "cowboy/uncertainEffect" && entry.params.method === "process/start",
+    ),
+  );
   await assert.rejects(facade.mutate(turn, "fs/createDirectory", {}), ToolError);
 });
 
@@ -470,4 +483,14 @@ test("the largest admitted new file fits one execution invocation after double e
   });
   const encoded = Buffer.from(request).toString("base64").length;
   assert.ok(encoded + 64 * 1024 < invocationLimit, `${encoded} bytes leave no framing room`);
+});
+
+test("the readiness probe is exactly the script the worker's ledger admits", () => {
+  const ledger = readFileSync(
+    new URL("../../../../src/worker_execution/ledger.rs", import.meta.url),
+    "utf8",
+  );
+  const admitted = ledger.match(/READINESS_SCRIPT: &str = r#"([\s\S]*?)"#;/)?.[1];
+  assert.equal(admitted, READINESS_PROBE);
+  assert.match(READINESS_PROBE, new RegExp(`head -n ${PROJECTION_LIMITS.statusLines + 1} `));
 });

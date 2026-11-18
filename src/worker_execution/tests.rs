@@ -189,6 +189,10 @@ fn start(id: &str) -> Value {
     json!({"processId": id, "argv": ["sleep", "600"]})
 }
 
+fn probe(id: &str) -> Value {
+    json!({"processId": id, "argv": ["/bin/sh", "-c", super::ledger::READINESS_SCRIPT, "sh", "/target"]})
+}
+
 #[tokio::test]
 async fn a_start_is_recorded_before_it_is_forwarded() {
     let recorded = Arc::new(Mutex::new(None));
@@ -623,16 +627,27 @@ async fn the_unix_endpoint_bounds_frames() {
 async fn the_readiness_probe_runs_only_while_the_worker_starts() {
     let target = Target::new(processes());
     let ledger = ledger(&target.client, None);
-    // While the session starts, one probe may run outside a turn, whatever
-    // its id; a second waits for the first.
+    // While the session starts, only the exact projection probe may run
+    // outside a turn, whatever its id; any other command is refused.
+    let other = target
+        .client
+        .relay("process/start".into(), start("other"))
+        .await;
+    assert!(
+        other["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("only the readiness probe")
+    );
     let first = target
         .client
-        .relay("process/start".into(), start("any-id"))
+        .relay("process/start".into(), probe("any-id"))
         .await;
     assert_eq!(first["result"]["processId"], "any-id");
+    // A second waits for the first.
     let second = target
         .client
-        .relay("process/start".into(), start("second"))
+        .relay("process/start".into(), probe("second"))
         .await;
     assert!(
         second["error"]["message"]
@@ -645,7 +660,7 @@ async fn the_readiness_probe_runs_only_while_the_worker_starts() {
     ledger.set_readiness(false);
     let late = target
         .client
-        .relay("process/start".into(), start("cowboy-agy-readiness-1"))
+        .relay("process/start".into(), probe("cowboy-agy-readiness-1"))
         .await;
     assert!(
         late["error"]["message"]
@@ -726,4 +741,50 @@ async fn a_turns_completion_waits_for_its_admitted_writes() {
         .unwrap()
         .unwrap();
     assert_eq!(target.log(), ["fs/writeFile "]);
+}
+
+#[tokio::test]
+async fn a_lost_read_of_a_turn_process_after_its_exit_is_uncertain() {
+    let fresh = Target::new(processes());
+    let probes = ledger(&fresh.client, None);
+    let target = Target::new(processes());
+    let ledger = ledger(&target.client, None);
+    ledger.begin_turn("turn-1");
+    target
+        .client
+        .relay("process/start".into(), start("publish"))
+        .await;
+    // The exit notification removes the process from the ledger first.
+    ledger.exited("publish");
+    let read = json!({"processId": "publish", "afterSeq": null, "maxBytes": 1, "waitMs": 0});
+    assert!(target.client.carries_result("process/read", &read));
+    target
+        .client
+        .undelivered("process/read", true, &json!({"result": {"exited": true}}));
+    assert_eq!(ledger.uncertain_effect().as_deref(), Some("process/read"));
+    // A readiness probe's output carries no result the agent acts on.
+    fresh
+        .client
+        .relay("process/start".into(), probe("probe-1"))
+        .await;
+    probes.exited("probe-1");
+    let read = json!({"processId": "probe-1"});
+    assert!(!fresh.client.carries_result("process/read", &read));
+}
+
+#[tokio::test]
+async fn an_uncertain_effect_reported_by_the_agent_side_is_recorded_unforwarded() {
+    let target = Target::new(processes());
+    let ledger = ledger(&target.client, None);
+    let reply = target
+        .client
+        .relay(
+            super::ledger::UNCERTAIN_REPORT.into(),
+            json!({"method": "file publish"}),
+        )
+        .await;
+    assert!(reply.get("result").is_some());
+    assert_eq!(ledger.uncertain_effect().as_deref(), Some("file publish"));
+    assert_eq!(ledger.uncertain_sequence(), 1);
+    assert!(target.log().is_empty(), "never forwarded to the target");
 }

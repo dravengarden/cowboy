@@ -35,6 +35,10 @@ import {
   url,
 } from "./facade-tools.mjs";
 
+/** The worker endpoint's own request recording an uncertain effect the
+ * facade detected (`src/worker_execution/ledger.rs`); never forwarded. */
+export const UNCERTAIN_REPORT = "cowboy/uncertainEffect";
+
 /** The process id prefix of readiness probes (diagnostic only: the worker
  * authorizes the probe from its own state, never from this id). */
 export const READINESS_PREFIX = "cowboy-agy-readiness-";
@@ -156,6 +160,11 @@ export class Facade {
     } catch (error) {
       if (error instanceof UncertainEffect) {
         turn.uncertain ??= error.method;
+        // The worker's trusted ledger records it before this tool answers
+        // (so before the turn can end), also when every transport call was
+        // answered (a timed-out publish): the session parks until the owner
+        // acknowledges it. A lost report still ends the turn here.
+        await this.connection.call(UNCERTAIN_REPORT, { method: error.method }).catch(() => {});
         this.onUncertain(sessionId, error.method);
         return failure(
           `outcome unknown: the connection to the workspace Machine was lost after ${error.method} may have been applied. Cowboy ends this turn; do not retry.`,

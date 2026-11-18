@@ -17,11 +17,15 @@ export const PROJECTION_LIMITS = Object.freeze({
 });
 const GUIDANCE_NAMES = ["AGENTS.md", "GEMINI.md"];
 
-const GIT = `cd -- "$1" 2>/dev/null || exit 0
+// The readiness probe, byte for byte the script the worker's ledger admits
+// outside a turn (`READINESS_SCRIPT` in src/worker_execution/ledger.rs):
+// `/bin/sh -c READINESS_PROBE sh <cwd>`, nothing else. The status limit is
+// `PROJECTION_LIMITS.statusLines + 1`.
+export const READINESS_PROBE = `cd -- "$1" 2>/dev/null || exit 0
 top=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 printf 'top\\t%s\\n' "$top"
 printf 'branch\\t%s\\n' "$(git symbolic-ref --short -q HEAD || git rev-parse --short HEAD 2>/dev/null)"
-git -c core.quotePath=true status --short 2>/dev/null | head -n ${PROJECTION_LIMITS.statusLines + 1} | sed 's/^/status\\t/'
+git -c core.quotePath=true status --short 2>/dev/null | head -n 201 | sed 's/^/status\\t/'
 `;
 
 export const ROUTING = [
@@ -97,13 +101,17 @@ export async function buildProjection(facade, cwd) {
   if (!posix.isAbsolute(cwd) || !inside(facade.root, cwd)) {
     throw new Error("Session directory is outside the bound workspace");
   }
-  const probe = await facade.runBounded({ cancelled: false }, ["/bin/sh", "-c", GIT, "sh", cwd], {
-    timeoutMs: PROJECTION_LIMITS.gitTimeoutMs,
-    maxBytes: 256 * 1024,
-    // A bounded readiness probe: it runs before any turn (at startup and at
-    // session/new), which the worker's ledger admits only for this purpose.
-    readiness: true,
-  });
+  const probe = await facade.runBounded(
+    { cancelled: false },
+    ["/bin/sh", "-c", READINESS_PROBE, "sh", cwd],
+    {
+      timeoutMs: PROJECTION_LIMITS.gitTimeoutMs,
+      maxBytes: 256 * 1024,
+      // A bounded readiness probe: it runs before any turn (at startup and at
+      // session/new), which the worker's ledger admits only for this purpose.
+      readiness: true,
+    },
+  );
   const git = parseGit(probe.stdout);
   const fence = `COWBOY_UNTRUSTED_${randomUUID().replaceAll("-", "")}`;
   const environment = [

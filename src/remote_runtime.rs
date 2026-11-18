@@ -1944,6 +1944,11 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
             }
             if previous.is_none_or(|previous| runtime_seq > previous) {
                 native_admission::event(shared, &session_id, &worker_epoch, || {
+                    // Account signals and uncertain effects of an admitted
+                    // epoch are observed even while its transcript is not
+                    // projected (a reset).
+                    turn_end::signal(shared, &session_id, &event);
+                    record_uncertain_effect(shared, &session_id, &event);
                     let resetting = shared.resetting.lock().contains(&session_id);
                     let stale_idle = matches!(
                         event,
@@ -2613,6 +2618,20 @@ fn reconcile_idle_guard(shared: &Shared, session_id: &str, guard_epoch: Option<u
     }
 }
 
+/// Merge a worker's published uncertain effect into its snapshot, by
+/// sequence: an older observation never replaces a newer one.
+fn record_uncertain_effect(shared: &Shared, session_id: &str, event: &RuntimeEvent) {
+    let RuntimeEvent::Update { update, .. } = event else {
+        return;
+    };
+    let Some(effect) = crate::runtime_wire::uncertain_effect(update) else {
+        return;
+    };
+    if let Some(worker) = shared.workers.lock().get_mut(session_id) {
+        crate::runtime_wire::merge_uncertain_effect(&mut worker.uncertain_effect, effect);
+    }
+}
+
 fn update_snapshot_from_event(
     shared: &Shared,
     session_id: &str,
@@ -2762,8 +2781,10 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
             {
                 return; // Consumed by the delivery waiter, not conversation content.
             }
-            if crate::runtime_wire::native_cycle(&update).is_some() {
-                return; // Worker metadata for delivery targets, never a transcript row.
+            if crate::runtime_wire::native_cycle(&update).is_some()
+                || crate::runtime_wire::uncertain_effect(&update).is_some()
+            {
+                return; // Worker metadata, never a transcript row.
             }
             let compact_failure = remote_compact_failure(hub, session_id, &update);
             hub.push_tagged(session_id, Event::Update { update }, cmid);

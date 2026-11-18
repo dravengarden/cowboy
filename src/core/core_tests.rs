@@ -3226,7 +3226,12 @@ fn provider_reload_fixture() -> (Hub, SessionMeta) {
 
 #[test]
 fn a_persistent_account_home_keeps_its_conversation_across_sign_ins() {
-    for (provider, keeps) in [("antigravity", true), ("claude-code", false)] {
+    // Only the same signed Provider generation's persistent home keeps it.
+    for (provider, same_generation, keeps) in [
+        ("antigravity", true, true),
+        ("antigravity", false, false),
+        ("claude-code", true, false),
+    ] {
         let (hub, before) = provider_reload_fixture();
         let account = uuid::Uuid::new_v4().to_string().try_into().unwrap();
         {
@@ -3236,6 +3241,9 @@ fn a_persistent_account_home_keeps_its_conversation_across_sign_ins() {
             session.meta.provider_account_id = account;
             session.meta.provider_auth_generation = Some(1);
             session.meta.status = Status::Exited;
+            if same_generation {
+                session.meta.provider_generation_digest = "new-digest".into();
+            }
         }
         let expected = hub.session_info(&before.id).unwrap().meta;
         let target = crate::provider_account::NativeProfileReceipt {
@@ -3264,7 +3272,7 @@ fn a_persistent_account_home_keeps_its_conversation_across_sign_ins() {
         assert_eq!(
             after.agent_session_id.as_deref(),
             keeps.then_some("native-thread"),
-            "{provider}"
+            "{provider} same generation {same_generation}"
         );
     }
 }

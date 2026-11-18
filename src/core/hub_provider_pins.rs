@@ -250,9 +250,12 @@ impl Hub {
             {
                 return Err("native binding projection scope changed".into());
             }
-            // The account and Provider are verified equal above.
+            // The account and Provider are verified equal above. As in the
+            // durable transition, only a persistent home of the same signed
+            // Provider generation keeps the conversation.
             let keeps =
-                crate::account_controls::keeps_conversation_across_sign_ins(&target.provider_id);
+                crate::account_controls::keeps_conversation_across_sign_ins(&target.provider_id)
+                    && meta.provider_generation_digest == target.generation_digest;
             if meta.provider_auth_generation == Some(target.generation)
                 && meta.provider_version == target.provider_version
                 && meta.provider_generation_digest == target.generation_digest

@@ -164,6 +164,8 @@ export async function fakeEndpoint(
       processes.get(params.processId)?.child.kill("SIGTERM");
       return {};
     },
+    // Answered by the worker endpoint itself (its ledger), never the target.
+    "cowboy/uncertainEffect": () => ({}),
   };
   wss.on("connection", (socket) => {
     socket.on("message", async (bytes) => {

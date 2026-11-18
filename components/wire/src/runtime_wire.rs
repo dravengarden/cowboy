@@ -339,6 +339,48 @@ pub struct DeliveryControls {
 }
 pub const STEERING_RESULT_UPDATE: &str = "cowboy_steering_result";
 
+/// Cowboy-owned `sessionUpdate` publishing a session's newest uncertain
+/// effect as soon as the worker records it (worker metadata, never a
+/// transcript row), so the Controller parks the queue without waiting for a
+/// reconnect's snapshot. Applied monotonically by sequence.
+pub const UNCERTAIN_EFFECT_UPDATE: &str = "cowboy_uncertain_effect";
+
+#[must_use]
+pub fn uncertain_effect_update(effect: &UncertainEffect) -> serde_json::Value {
+    serde_json::json!({
+        "sessionUpdate": UNCERTAIN_EFFECT_UPDATE,
+        "method": effect.method,
+        "sequence": effect.sequence,
+    })
+}
+
+/// The effect carried by an [`UNCERTAIN_EFFECT_UPDATE`], if `update` is one.
+#[must_use]
+pub fn uncertain_effect(update: &serde_json::Value) -> Option<UncertainEffect> {
+    (update.get("sessionUpdate")?.as_str()? == UNCERTAIN_EFFECT_UPDATE).then(|| UncertainEffect {
+        method: update
+            .get("method")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("request")
+            .to_owned(),
+        sequence: update
+            .get("sequence")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
+    })
+}
+
+/// Merge `observed` into `current`: the newest sequence wins and an older
+/// observation never replaces it.
+pub fn merge_uncertain_effect(current: &mut Option<UncertainEffect>, observed: UncertainEffect) {
+    if current
+        .as_ref()
+        .is_none_or(|current| observed.sequence > current.sequence)
+    {
+        *current = Some(observed);
+    }
+}
+
 #[must_use]
 pub fn current_turn_support(update: &serde_json::Value) -> Option<bool> {
     (update.get("sessionUpdate")?.as_str()? == CURRENT_TURN_CAPABILITIES_UPDATE)

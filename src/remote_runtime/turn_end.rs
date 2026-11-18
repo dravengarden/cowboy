@@ -23,16 +23,17 @@ impl RemoteRuntime {
     }
 }
 
-/// A worker event: a `TurnEnded` retires its prompt and is reported to the
-/// listener.
+/// A projected worker event: a `TurnEnded` retires its prompt.
 pub(super) fn ended(shared: &Shared, session: &str, event: &RuntimeEvent) {
-    if let RuntimeEvent::TurnEnded {
-        turn_id,
-        stop_reason,
-        ..
-    } = event
-    {
+    if let RuntimeEvent::TurnEnded { turn_id, .. } = event {
         acknowledge_prompt_finish(shared, session, turn_id);
+    }
+}
+
+/// Report a turn ending of an admitted worker epoch to the listener (account
+/// signals), whether or not the session projects it now (a reset does not).
+pub(super) fn signal(shared: &Shared, session: &str, event: &RuntimeEvent) {
+    if let RuntimeEvent::TurnEnded { stop_reason, .. } = event {
         let listener = shared.turn_ends.lock().clone();
         if let Some(listener) = listener {
             listener(TurnEnd {
@@ -96,6 +97,10 @@ mod tests {
             stop_reason: "EndTurn".into(),
             usage: None,
         };
+        // The listener is told even when the ending is not projected (a
+        // reset); retiring the prompt belongs to the projection.
+        signal(&runtime.shared, "s", &event);
+        assert!(!runtime.pending_for_test().is_empty());
         ended(&runtime.shared, "s", &event);
         assert!(runtime.pending_for_test().is_empty());
         assert_eq!(
