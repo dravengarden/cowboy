@@ -477,7 +477,11 @@ struct UnixFixture {
 
 impl UnixFixture {
     fn new() -> Self {
-        let target = Target::new(processes());
+        Self::with(processes())
+    }
+
+    fn with(handler: Handler) -> Self {
+        let target = Target::new(handler);
         let root = tempfile::tempdir().unwrap();
         let (endpoint, bridge) = Endpoint::start_unix(Arc::clone(&target.client)).unwrap();
         assert!(endpoint.descriptor().is_none());
@@ -604,4 +608,37 @@ async fn readiness_probes_run_outside_turns_one_at_a_time() {
     assert_eq!(ledger.live(), std::slice::from_ref(&first));
     ledger.exited(&first);
     ledger.admit_start(&second).unwrap();
+}
+
+#[tokio::test]
+async fn a_closed_socket_neither_aborts_an_admitted_relay_nor_drops_its_outcome() {
+    let inner = processes();
+    let fixture = UnixFixture::with(Arc::new(move |invocation| {
+        if invocation.method == "fs/writeFile" {
+            Reply::Hold
+        } else {
+            inner(invocation)
+        }
+    }));
+    let ledger = ledger(&fixture.target.client, None);
+    let mut socket = fixture.initialized().await;
+    socket
+        .send(Message::Text(
+            json!({"id": 1, "method": "fs/writeFile",
+                   "params": {"path": "file:///target/a", "dataBase64": ""}})
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    eventually(|| fixture.target.held.lock().len() == 1).await;
+    // The agent side goes away while the target holds the admitted write.
+    drop(socket);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(ledger.uncertain_effect().is_none());
+    // The relay still finishes; its reply reaches nobody, so the effect the
+    // agent never learned is recorded as uncertain.
+    fixture.target.release(json!({"result": {}}));
+    eventually(|| ledger.uncertain_effect().is_some()).await;
+    assert_eq!(ledger.uncertain_effect().as_deref(), Some("fs/writeFile"));
 }

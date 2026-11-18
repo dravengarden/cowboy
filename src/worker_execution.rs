@@ -4,6 +4,7 @@
 //! model tools.
 
 mod ledger;
+mod relay;
 pub use ledger::{LEDGER_ENV, Ledger, MAX_PROCESSES};
 
 use std::collections::{BTreeMap, HashSet};
@@ -639,7 +640,7 @@ where
         .await?;
 
     let (mut writer, mut reader) = socket.split();
-    let mut calls = tokio::task::JoinSet::new();
+    let mut relays = relay::Relays::new(Arc::clone(&client));
     let mut ids = HashSet::new();
     let mut cursor = *client.event_cursor.lock().get_or_insert(event_cursor);
     tracing::info!(event_name = "cowboy.execution.connected", session = %client.session, environment_id = %client.binding.environment.id, cursor, "execution endpoint connected");
@@ -676,17 +677,17 @@ where
                             None | Some(Value::Null) => json!({}),
                             Some(params) => params.clone(),
                         };
-                        let client = Arc::clone(&client);
-                        calls.spawn(async move { (id, client.relay(method, params).await) });
+                        relays.spawn(id, method, params);
                     }
                     _ => bail!("unsupported execution frame"),
                 }
             }
-            result = calls.join_next(), if !calls.is_empty() => {
-                let (id, mut reply) = result.context("execution task missing")??;
-                ids.remove(&id.to_string());
-                reply.as_object_mut().context("invalid execution result")?.insert("id".to_owned(), id);
-                writer.send(Message::Text(reply.to_string().into())).await?;
+            done = relays.next(), if relays.pending() > 0 => {
+                ids.remove(&done.id.to_string());
+                if let Err(error) = writer.send(Message::Text(done.frame()?.into())).await {
+                    relays.undelivered(&done);
+                    return Err(error.into());
+                }
             }
             result = &mut events => {
                 match result? {

@@ -457,6 +457,20 @@ impl Client {
         }
     }
 
+    /// The reply of `method` never reached the agent side. A mutation the
+    /// target answered (or whose outcome is already unknown) then has an
+    /// effect the agent never learned: the session's effect is uncertain.
+    pub(super) fn undelivered(&self, method: &str, reply: &Value) {
+        let Some(ledger) = self.ledger() else {
+            return;
+        };
+        let answered = reply.get("result").is_some()
+            || reply.pointer("/error/data/outcome") == Some(&json!("unknown"));
+        if MUTATIONS.contains(&method) && answered {
+            ledger.mark_uncertain(method);
+        }
+    }
+
     /// Exit notifications the agent side receives are evidence too.
     pub fn observe_event(&self, message: &Value) {
         if let Some(ledger) = self.ledger()
