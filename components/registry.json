@@ -17214,7 +17214,7 @@
                 "version": "0.2.1"
               }
             ],
-            "source_digest": "sha256:e0f9d8981b1b640f05e87f7747ef4d7a8b7ab4bf8f7e36a09fa926960754fe6e"
+            "source_digest": "sha256:b5f0634291d5b56e5b17484164d97dfe87bb61663f913f6a8b76024dd72a8440"
           },
           "codex-deepseek": {
             "component_release": "3.114.0",
