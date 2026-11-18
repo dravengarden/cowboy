@@ -53,6 +53,12 @@ pub(crate) fn validate(manifest: &ProviderManifest) -> Result<()> {
             manifest.runtime.network == Some(RuntimeNetworkPolicy::Ipv4OnlyV1),
             "account sandbox isolation requires the ipv4_only_v1 network policy"
         );
+        // A sidecar would run on the host as the Machine user, outside the
+        // account's unit; nothing of an isolated Provider may.
+        ensure!(
+            manifest.runtime.sidecars.is_empty(),
+            "account sandbox isolation forbids runtime sidecars"
+        );
     }
     Ok(())
 }
@@ -95,10 +101,23 @@ mod tests {
         let error = no_custody.validate().unwrap_err().to_string();
         assert!(error.contains("native-custody"), "{error}");
 
-        let mut no_network = manifest;
+        let mut no_network = manifest.clone();
         no_network.runtime.network = None;
         let error = no_network.validate().unwrap_err().to_string();
         assert!(error.contains("ipv4_only_v1"), "{error}");
+
+        let mut sidecar = manifest;
+        sidecar.runtime.sidecars.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "helper",
+                "component": {"kind": "provider_adapter", "slot": "antigravity"},
+                "transport": {"kind": "loopback_http_v1", "listen_argument": "--listen",
+                              "health_path": "/health", "timeout_ms": 1000},
+            }))
+            .unwrap(),
+        );
+        let error = sidecar.validate().unwrap_err().to_string();
+        assert!(error.contains("forbids runtime sidecars"), "{error}");
     }
 
     #[test]

@@ -610,9 +610,17 @@ fn account_sandbox_launch(
     launch: Option<crate::account_sandbox::Launch>,
 ) -> Result<Option<crate::account_sandbox::Launch>> {
     match runtime.isolation {
-        Some(cowboy_provider_sdk::RuntimeIsolationPolicy::AccountSandboxV1) => launch
-            .map(Some)
-            .context("this Provider runs only in the account sandbox, and the Machine supplied no sandbox launch"),
+        Some(cowboy_provider_sdk::RuntimeIsolationPolicy::AccountSandboxV1) => {
+            // Sidecars start on the host as the worker's user, never in the
+            // account's unit; the signed manifest may not declare any.
+            ensure!(
+                runtime.sidecars.is_empty(),
+                "an account-sandbox Provider cannot start host sidecars"
+            );
+            launch.map(Some).context(
+                "this Provider runs only in the account sandbox, and the Machine supplied no sandbox launch",
+            )
+        }
         None => {
             ensure!(
                 launch.is_none(),
@@ -2191,6 +2199,20 @@ mod account_sandbox_tests {
             account_sandbox_launch(&runtime, Some(launch.clone())).unwrap(),
             Some(launch.clone())
         );
+        let mut with_sidecar = runtime.clone();
+        with_sidecar.sidecars.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "helper",
+                "component": {"kind": "provider_adapter", "slot": "antigravity"},
+                "transport": {"kind": "loopback_http_v1", "listen_argument": "--listen",
+                              "health_path": "/health", "timeout_ms": 1000},
+            }))
+            .unwrap(),
+        );
+        let error = account_sandbox_launch(&with_sidecar, Some(launch.clone()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("host sidecars"), "{error}");
         runtime.isolation = None;
         assert!(account_sandbox_launch(&runtime, Some(launch)).is_err());
         assert_eq!(account_sandbox_launch(&runtime, None).unwrap(), None);
