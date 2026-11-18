@@ -37,7 +37,7 @@ impl Hub {
             && session.meta.owner_user_id == expected.owner_user_id
             && session.config_options.is_none()
         {
-            session.initial_config_options = Some(options);
+            session.config_previews.initial = Some(options);
         }
     }
 
@@ -75,7 +75,7 @@ impl Hub {
             }
         }
         let before = display_config_options(session);
-        session.dormant_config_choices = Some(DormantConfigChoices {
+        session.config_previews.dormant = Some(DormantConfigChoices {
             generation_digest: session.meta.provider_generation_digest.clone(),
             auth_generation: session.meta.provider_auth_generation,
             choices,
@@ -319,7 +319,7 @@ impl Hub {
             }
             self.overlay_config_in_flight(session_id, &mut options);
             s.config_options = Some(options.clone());
-            s.dormant_config_choices = None;
+            s.config_previews.dormant = None;
             (options, corrected.then(|| s.config_preferences.clone()))
         };
         if let Some(tx) = self.inner.store_tx.as_ref() {
@@ -385,6 +385,17 @@ pub(super) fn add_config_choices(
         }
     }
     changed
+}
+
+/// Option previews shown before, or instead of, a current agent snapshot.
+#[derive(Default)]
+pub(super) struct ConfigPreviews {
+    /// Signed defaults/presets before the first ACP snapshot.
+    pub(super) initial: Option<serde_json::Value>,
+    /// Choices of an exited session's pinned generation that its snapshot,
+    /// reported by an earlier generation, lacks; see
+    /// `Hub::set_dormant_config_choices`.
+    pub(super) dormant: Option<DormantConfigChoices>,
 }
 
 /// Display-only choices of an exited session's pinned generation.

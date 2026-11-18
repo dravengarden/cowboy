@@ -36,7 +36,7 @@ mod session_continuation;
 mod session_fork;
 pub use session_fork::{FORK_ORIGIN_UPDATE, ForkPoint, ForkRecord, ForkState};
 mod hub_config;
-use hub_config::{DormantConfigChoices, add_config_choices};
+use hub_config::{ConfigPreviews, add_config_choices};
 mod hub_events;
 mod hub_provider_pins;
 mod hub_queue;
@@ -482,7 +482,7 @@ fn projected_config_options(
 fn display_config_options(session: &Session) -> Option<serde_json::Value> {
     let mut options = stored_config_options(session)?;
     if session.config_options.is_some()
-        && let Some(dormant) = &session.dormant_config_choices
+        && let Some(dormant) = &session.config_previews.dormant
         && dormant.applies_to(session)
     {
         add_config_choices(&mut options, &dormant.choices);
@@ -496,7 +496,7 @@ fn stored_config_options(session: &Session) -> Option<serde_json::Value> {
     if let Some(options) = &session.config_options {
         return Some(options.clone());
     }
-    let mut options = session.initial_config_options.clone()?;
+    let mut options = session.config_previews.initial.clone()?;
     if let Some(preferences) = session.config_preferences.as_object() {
         for (id, value) in preferences {
             set_config_option_current_value(&mut options, id, value);
@@ -670,12 +670,9 @@ struct Session {
     /// new client on connect so the composer dropdowns populate from a fresh
     /// reload.
     config_options: Option<serde_json::Value>,
-    /// Signed defaults/presets before the first ACP snapshot. A preview is
-    /// never persisted or treated as an agent acknowledgement.
-    initial_config_options: Option<serde_json::Value>,
-    /// Display-only choices for an exited session whose snapshot came from an
-    /// earlier Provider generation; see `Hub::set_dormant_config_choices`.
-    dormant_config_choices: Option<DormantConfigChoices>,
+    /// Display-only option previews; never persisted or treated as an agent
+    /// acknowledgement.
+    config_previews: ConfigPreviews,
     /// Session-owned config values. This is deliberately separate from the
     /// latest agent snapshot: an agent's startup defaults must not erase a
     /// user's choice before the service has re-applied it.
@@ -2295,8 +2292,7 @@ impl Hub {
                         next_seq,
                         last_activity: restored_last_activity(last_event_at_ms, now_ms()),
                         config_options,
-                        initial_config_options: None,
-                        dormant_config_choices: None,
+                        config_previews: ConfigPreviews::default(),
                         config_preferences,
                         queue,
                         drafts,
@@ -3120,8 +3116,7 @@ impl Hub {
                     next_seq: 0,
                     last_activity: std::time::Instant::now(),
                     config_options: None,
-                    initial_config_options: None,
-                    dormant_config_choices: None,
+                    config_previews: ConfigPreviews::default(),
                     config_preferences: config_preferences.clone(),
                     queue: Vec::new(),
                     drafts: Vec::new(),

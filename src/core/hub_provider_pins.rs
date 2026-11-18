@@ -270,7 +270,7 @@ impl Hub {
             meta.provider_auth_generation = Some(target.generation);
             meta.provider_behavior = Some(behavior.clone());
             meta.agent_session_id = None;
-            session.initial_config_options = None;
+            session.config_previews.initial = None;
             session.provider_generation_missing = false;
             session.lifecycle_epoch = session.lifecycle_epoch.wrapping_add(1);
         }
@@ -332,7 +332,7 @@ impl Hub {
             session.meta.provider_generation_digest = digest.to_owned();
             session.meta.provider_behavior = Some(behavior.clone());
             session.provider_generation_missing = false;
-            session.initial_config_options = None;
+            session.config_previews.initial = None;
             session.lifecycle_epoch = session.lifecycle_epoch.wrapping_add(1);
             session.meta.clone()
         };
@@ -424,7 +424,7 @@ impl Hub {
             session.meta.provider_version = version.to_owned();
             session.meta.provider_generation_digest = digest.to_owned();
             session.meta.provider_behavior = Some(behavior.clone());
-            session.initial_config_options = None;
+            session.config_previews.initial = None;
             // Auth generation owns the native runtime home. Never replace it
             // with the active installation's credential generation here.
             session.meta.status = Status::Starting;
