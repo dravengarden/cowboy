@@ -120,6 +120,54 @@ provider = "claude-code"
 preset = "sonnet-medium"
 values = { model = "sonnet", effort = "medium" }
 
+# Single-preset Providers. One harness per Provider, so each binding is its own
+# target even when the hosted model is shared.
+[[targets]]
+id = "gemini-3.8-flash:high@antigravity"
+vendor = "google"
+model = "gemini-3.8-flash"
+effort = "high"
+provider = "antigravity"
+preset = "gemini-flash-high"
+values = { model = "gemini-3.8-flash", thought_level = "high" }
+
+[[targets]]
+id = "deepseek-v4.1-flash:max@claude-deepseek"
+vendor = "deepseek"
+model = "deepseek-v4.1-flash"
+effort = "max"
+provider = "claude-deepseek"
+preset = "deepseek-flash-max"
+values = { model = "deepseek-flash[1m]", effort = "max" }
+
+[[targets]]
+id = "deepseek-v4.1-flash:max@codex-deepseek"
+vendor = "deepseek"
+model = "deepseek-v4.1-flash"
+effort = "max"
+provider = "codex-deepseek"
+preset = "deepseek-flash-max"
+values = { model = "deepseek-flash", reasoning_effort = "max" }
+
+[[targets]]
+id = "deepseek-v4.1-flash:max@deepseek-harness"
+vendor = "deepseek"
+model = "deepseek-v4.1-flash"
+effort = "max"
+provider = "deepseek-harness"
+preset = "deepseek-flash-max"
+values = { model = "[\"deepseek-official\",\"deepseek-flash\"]", reasoning_effort = "max" }
+
+# The Grok preset sets no model: it runs the Provider's default model.
+[[targets]]
+id = "grok-provider-default:high@grok"
+vendor = "xai"
+model = "grok-provider-default"
+effort = "high"
+provider = "grok"
+preset = "grok-high"
+values = { reasoning_effort = "high", permission_mode = "always-approve" }
+
 # ---- Market-research-only targets (never recommended) ----
 
 

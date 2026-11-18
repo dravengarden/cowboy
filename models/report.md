@@ -2,44 +2,60 @@
 
 First run of the `model-intel` skill. Scores and tiers are in
 `models/catalog.json`; the agent-facing digest is `models/summary.md`.
-Numbers from sources whose terms forbid redistribution are kept outside the
-repository and appear here only as derived conclusions.
 
-## Decisions the evidence supports
+Inputs: 46 repository observations (`sha256:6afc123d…c04f`) and 164
+reference-only observations kept in local state (`sha256:3cfb64c1…01fc`),
+of which 177 rows were valid and scored. Numbers from sources whose terms
+forbid redistribution are not reproduced here; statements derived from them
+are marked *(local inputs)* and can be checked only against that digest.
 
-1. **Routine Codex reviews do not need Astra Max.** In a paired pilot on three
-   historical inputs with findings, GPT-6.2 Astra Medium and Sol 6.2 Medium
-   each found at least as many serious issues as the original GPT-6 Astra Max
-   review, at roughly a quarter to a half of its tokens and a third of its
-   wall time. This is directional (three inputs, unverified reference set,
-   different model generation for the baseline) and justifies an opt-in
-   review-effort choice, not an automatic default change.
-2. **Keep the current Codex New Session default (Sol 6.2 Medium).** No
-   executable Codex target has enough independent evidence for the
-   `session_default` workload; the public agentic-coding runs that exist
-   place Sol and Astra close together at max effort with Sol cheaper, which is
-   consistent with the current default but does not prove it.
-3. **No Claude recommendation change.** No Claude preset has two independent
-   lineages for agentic coding below max effort, and Fable 5.2 is still in the
-   provisional window. Revisit after 2026-11-23.
+## What the evidence decides
 
-## Baseline: what managed calls used (Hawk Controller, 2026-10-09 → 11-18)
+The catalog determines **no tier for any executable Codex or Claude preset**
+yet, and the signed Recommended order and defaults stay unchanged:
 
-934 managed calls. Astra Max served 593 reviews, 126 design reviews and 24
-analysis calls (about 80% of all calls). Median Astra Max review: 1.8M tokens
-(146k uncached input), 7.8 minutes. The 11 Astra Medium reviews in the ledger
-had a median of 0.15M tokens and 0.9 minutes, but on unpaired inputs.
-Cause: the review selector orders the GPT family Astra first and effort max
-first, and takes the first candidate when no preset is passed
+- Every GPT-6.2 and Claude Fable 5.2 preset is provisional (released within 14
+  days); they are scored for inspection but not ranked until 2026-12-01 and
+  2026-11-23 respectively.
+- The remaining Claude presets and Luna do not share enough independently
+  scored tasks to be ranked against each other (agentic coding below max
+  effort has one public lineage each).
+- The review pilot below is unverified, so it is reported but not scored.
+
+The one determined tier, `analysis` flagship/workhorse `luna-6-max` for
+Codex, is an artifact of Luna being the only non-provisional Codex target; it
+should not be used for routing.
+
+## What the pilot suggests (directional, not scored)
+
+Routine Codex reviews probably do not need Max effort. On three historical
+inputs with findings, GPT-6.2 Astra Medium and Sol 6.2 Medium agreed with
+more of the unverified union of serious findings than the original GPT-6
+Astra Max review, using 27% and 50% of its tokens and 55% and 40% of its wall
+time respectively. This supports offering an opt-in review-effort choice and
+a larger, verified pilot; it does not justify changing the default selector.
+
+## Baseline: what managed calls used
+
+Read-only query of the Hawk Controller ledger (`managed_agent_calls`, 934
+calls created 2026-10-09 → 2026-11-18 06:23 UTC). Astra Max served 593
+reviews, 126 design reviews and 24 analysis calls (about 80% of all calls).
+Median Astra Max review: 1.8M tokens (146k uncached input), 7.8 minutes. The
+11 Astra Medium reviews had a median of 0.15M tokens and 0.9 minutes, on
+unpaired inputs. Cause: the review selector orders the GPT family Astra first
+and effort max first, and takes the first candidate when no preset is passed
 (`components/server/src/server/managed_calls/selection.rs`).
 
-## Review pilot (internal evidence)
+## Review pilot
 
 Four historical Astra Max reviews whose worktrees were still clean and
 unchanged were re-run with the original focus text and base on Sol 6.2
 Medium and Astra Medium. Reference set: the union of serious findings (high,
 or medium with concrete correctness/security/contract impact) across the
-three arms, matched by root cause; findings were not independently verified.
+three arms, matched by root cause. Findings were **not** verified against the
+code, so the figures below measure agreement with an unverified union, and
+false positives are unmeasured. Rows:
+`models/observations/2026-11-cowboy-pilot.jsonl` (`validity = "unverified"`).
 
 | Input | Union | GPT-6 Astra Max | 6.2 Astra Medium | 6.2 Sol Medium |
 | --- | --- | --- | --- | --- |
@@ -47,67 +63,73 @@ three arms, matched by root cause; findings were not independently verified.
 | pr8818 buyer profiles (Suger) | 9 | 3 | 8 | 7 |
 | pr8895 deal suggestions (Suger) | 11 | 7 | 9 | 7 |
 | pr8874 guard (Suger) | 0 | approve | approve | approve |
-| **Recall** | 26 | **54%** | **77%** | **69%** |
-| Tokens (4 inputs) | | 7.88M | 2.13M | 3.96M |
-| Minutes (4 inputs) | | 35.7 | 19.6 | 14.2 |
+| **Agreement with union** | 26 | **54%** | **77%** | **69%** |
+| Tokens (4 inputs) | | 7.88M | 2.13M (27%) | 3.96M (50%) |
+| Minutes (4 inputs) | | 35.7 | 19.6 (55%) | 14.2 (40%) |
 
-Observations:
-- Each arm found serious issues the others missed, so a single review of any
-  preset is not exhaustive. The Max baseline uniquely found the managed
-  conversation-continuation recovery gap and the Account-only Salesforce
-  link case.
+- Each arm found serious issues the others missed. Astra Medium found fewer
+  than the baseline on keeper-idle-retire (3 vs 4); the baseline uniquely
+  found the managed conversation-continuation recovery gap and the
+  Account-only Salesforce link case.
 - Sol Medium used more tokens than Astra Medium on all four inputs but
   finished faster; whether it is cheaper in subscription quota depends on the
   per-model quota rate, which no source here measures.
-- The pr8895 focus listed prior findings to verify, so part of its recall was
-  prompted; only two of its serious findings were new to the Max baseline.
-
-Limitations: three scored inputs; unverified union (false positives are not
-measured); baseline is GPT-6 Astra, not 6.2; no GPT-6.2 Astra Max arm, so the
-pilot cannot say what Max adds on the current generation.
+- The pr8895 focus listed prior findings to verify, so part of its agreement
+  was prompted.
+- Limitations: three scored inputs; unverified union; baseline is GPT-6
+  Astra, not 6.2; no GPT-6.2 Astra Max arm.
 
 ## Public evidence coverage
 
-177 public observations from primary sources (13 redistributable, 164
-reference-only). Lineages per executable target and task:
+Scored lineages per executable target and task (after canonical selection
+and after dropping saturated groups: ARC-AGI-2, GPQA Diamond, Scale
+MCP-Atlas and the vendor-only SWE-bench Pro):
 
 | Target | agentic coding | reasoning | long context | code review | tool use |
 | --- | --- | --- | --- | --- | --- |
 | gpt-6.2-astra:max | 2 | 1 | 0 | 0 | 0 |
-| gpt-6.2-astra:medium | 1 | 1 | 0 | 3 (pilot) | 0 |
+| gpt-6.2-astra:medium | 1 | 1 | 0 | 0 (3 unverified) | 0 |
 | gpt-6.2-sol:max | 2 | 1 | 0 | 0 | 0 |
-| gpt-6.2-sol:medium | 1 | 1 | 0 | 3 (pilot) | 0 |
+| gpt-6.2-sol:medium | 1 | 1 | 0 | 0 (3 unverified) | 0 |
 | gpt-6-luna:max | 2 | 2 | 1 | 0 | 0 |
 | claude-fable-5-2:max | 2 | 2 | 1 | 0 | 0 |
+| claude-fable-5-2:high | 1 | 2 | 1 | 0 | 0 |
 | claude-opus-5-5:high | 1 | 2 | 1 | 0 | 0 |
 | claude-sonnet-5-5:xhigh | 1 | 3 | 1 | 0 | 0 |
+| claude-sonnet-5-5:medium | 1 | 2 | 1 | 0 | 0 |
 
-(Counts after the scorer dropped saturated groups: ARC-AGI-2 and GPQA
-Diamond, whose best scores exceed 0.9, and the vendor-only SWE-bench Pro.)
+Opus 5.5 default, Gemini 3.8 Flash (Antigravity), the three DeepSeek V4.1
+Flash bindings and the Grok preset have no observations yet.
 
-Qualitative findings, without republishing restricted numbers:
+Unverified observations from the local inputs, recorded to guide the next
+refresh rather than as conclusions:
 - Agentic coding at max effort (Terminal-Bench 4.x, two harnesses): GPT-6.2
-  Astra, Sol and Claude Fable 5.2 are within a few points of each other, and
-  their order flips between the tbench.ai leaderboard and Artificial
-  Analysis's run. Treat the frontier as tied on this axis.
-- Cost to run Artificial Analysis's index and ARC cost per task agree on the
-  order: Sol and Luna cheapest, Fable max most expensive.
-- Effort scaling is not monotonic at the top: Opus 5.5 scored higher at high
-  than at max on ARC-AGI-2 (partial coverage).
+  Astra, Sol and Claude Fable 5.2 fall within a few points, and their order
+  differs between the tbench.ai leaderboard and Artificial Analysis's run
+  *(local inputs)*.
+- Artificial Analysis cost to run its index and ARC cost per task order the
+  same models similarly, Sol and Luna cheapest and Fable max most expensive,
+  on different absolute scales *(local inputs)*.
+- Opus 5.5 scored higher at high than at max on ARC-AGI-2 with partial
+  coverage *(local inputs)*.
 
 ## Gaps and next actions
 
 - **Code review:** no public (model, effort) benchmark matches an executable
-  target; ReviewBench ranks agents, SWE-PRBench covers older models. Grow the
-  internal pilot: pair the next ten routine reviews (cheap preset plus the
-  normally selected one) and verify the findings.
+  target; ReviewBench ranks agents, SWE-PRBench covers older models. Verify
+  the pilot's reference findings, then pair the next ten routine reviews
+  (cheaper preset plus the normally selected one).
+- **Below-max efforts:** Artificial Analysis lists some medium/high rows (one
+  lineage per task); the tbench.ai 4.1 leaderboard and ARC rows used here are
+  max or xhigh only. Two independent lineages below max need either another
+  public source or internal pilots.
 - **Tool use, long context, writing:** no usable public rows for current
   targets; MRCR is vendor-only.
-- **Below-max efforts:** public leaderboards publish max effort only, so
-  medium/high presets rely on internal evidence.
+- **Single-preset Providers:** Gemini, DeepSeek and Grok bindings need
+  observations under their own harness before any recommendation.
 - **Subscription cost:** API-equivalent dollars and tokens are not quota.
-  Record per-model quota burn from usage windows before using cost to rank
-  across models with different rates.
+  Record per-model quota burn from usage windows before ranking cost across
+  models with different rates.
 - **Access:** Artificial Analysis tokens-per-task needs a Data API key.
 - **Mapping decisions pending:** Scale MCP-Atlas evaluates models in their API
   default configuration; it is recorded on research targets, not on

@@ -1,13 +1,169 @@
 {
-  "schema": 1,
+  "schema": 2,
   "as_of": "2026-11-18",
-  "observations": 210,
+  "inputs": {
+    "repository": {
+      "count": 46,
+      "digest": "sha256:6afc123d9e37b7613b22b294d71fd359578ad9a0b2a79a1e33696661d095c04f"
+    },
+    "local": {
+      "count": 164,
+      "digest": "sha256:3cfb64c1784b18f632a1988863726e056084300155f09260d5988bb14ff901fc"
+    },
+    "scored_rows": 177
+  },
+  "bindings": [
+    {
+      "id": "gpt-6.2-astra:max",
+      "provider": "codex",
+      "preset": "astra-max",
+      "values": {
+        "model": "gpt-6.2-astra",
+        "reasoning_effort": "max"
+      }
+    },
+    {
+      "id": "gpt-6.2-astra:medium",
+      "provider": "codex",
+      "preset": "astra-medium",
+      "values": {
+        "model": "gpt-6.2-astra",
+        "reasoning_effort": "medium"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol:max",
+      "provider": "codex",
+      "preset": "sol-6-2-max",
+      "values": {
+        "model": "gpt-6.2-sol",
+        "reasoning_effort": "max"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol:medium",
+      "provider": "codex",
+      "preset": "sol-6-2-medium",
+      "values": {
+        "model": "gpt-6.2-sol",
+        "reasoning_effort": "medium"
+      }
+    },
+    {
+      "id": "gpt-6-luna:max",
+      "provider": "codex",
+      "preset": "luna-6-max",
+      "values": {
+        "model": "gpt-6-luna",
+        "reasoning_effort": "max"
+      }
+    },
+    {
+      "id": "claude-fable-5-2:max",
+      "provider": "claude-code",
+      "preset": "fable-max",
+      "values": {
+        "effort": "max",
+        "model": "fable"
+      }
+    },
+    {
+      "id": "claude-fable-5-2:high",
+      "provider": "claude-code",
+      "preset": "fable-high",
+      "values": {
+        "effort": "high",
+        "model": "fable"
+      }
+    },
+    {
+      "id": "claude-opus-5-5:high",
+      "provider": "claude-code",
+      "preset": "opus-high",
+      "values": {
+        "effort": "high",
+        "model": "opus"
+      }
+    },
+    {
+      "id": "claude-opus-5-5:default",
+      "provider": "claude-code",
+      "preset": "opus-default",
+      "values": {
+        "effort": "default",
+        "model": "opus"
+      }
+    },
+    {
+      "id": "claude-sonnet-5-5:xhigh",
+      "provider": "claude-code",
+      "preset": "sonnet-xhigh",
+      "values": {
+        "effort": "xhigh",
+        "model": "sonnet"
+      }
+    },
+    {
+      "id": "claude-sonnet-5-5:medium",
+      "provider": "claude-code",
+      "preset": "sonnet-medium",
+      "values": {
+        "effort": "medium",
+        "model": "sonnet"
+      }
+    },
+    {
+      "id": "gemini-3.8-flash:high@antigravity",
+      "provider": "antigravity",
+      "preset": "gemini-flash-high",
+      "values": {
+        "model": "gemini-3.8-flash",
+        "thought_level": "high"
+      }
+    },
+    {
+      "id": "deepseek-v4.1-flash:max@claude-deepseek",
+      "provider": "claude-deepseek",
+      "preset": "deepseek-flash-max",
+      "values": {
+        "effort": "max",
+        "model": "deepseek-flash[1m]"
+      }
+    },
+    {
+      "id": "deepseek-v4.1-flash:max@codex-deepseek",
+      "provider": "codex-deepseek",
+      "preset": "deepseek-flash-max",
+      "values": {
+        "model": "deepseek-flash",
+        "reasoning_effort": "max"
+      }
+    },
+    {
+      "id": "deepseek-v4.1-flash:max@deepseek-harness",
+      "provider": "deepseek-harness",
+      "preset": "deepseek-flash-max",
+      "values": {
+        "model": "[\"deepseek-official\",\"deepseek-flash\"]",
+        "reasoning_effort": "max"
+      }
+    },
+    {
+      "id": "grok-provider-default:high@grok",
+      "provider": "grok",
+      "preset": "grok-high",
+      "values": {
+        "permission_mode": "always-approve",
+        "reasoning_effort": "high"
+      }
+    }
+  ],
   "dropped_groups": [
-    "arc-agi-2|v2_Semi_Private|arc-standard|score: saturated or flat",
-    "gpqa-diamond|diamond|artificial-analysis|accuracy: saturated or flat",
-    "gpqa-diamond|diamond|epoch-inspect|accuracy: saturated or flat",
-    "mcp-atlas|public-500|scale-seal|pass_rate: saturated or flat",
-    "swe-bench-pro|public|anthropic-internal|resolved_rate: saturated or flat"
+    "arc-agi-2|v2_Semi_Private|arc-standard|score|fraction|1|higher: saturated or flat",
+    "gpqa-diamond|diamond|artificial-analysis|accuracy|fraction|1|higher: saturated or flat",
+    "gpqa-diamond|diamond|epoch-inspect|accuracy|fraction|1|higher: saturated or flat",
+    "mcp-atlas|public-500|scale-seal|pass_rate|fraction|1|higher: saturated or flat",
+    "swe-bench-pro|public|anthropic-internal|resolved_rate|fraction|1|higher: saturated or flat"
   ],
   "unmapped_targets": [],
   "targets": [
@@ -31,7 +187,6 @@
           "mean": 0.637,
           "uncertainty": 0.05,
           "lineages": 2,
-          "independent_lineages": 1,
           "max_age_days": 0,
           "confidence": "medium"
         },
@@ -56,29 +211,10 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.6
-        },
-        "review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.3
-        },
-        "design_review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "analysis": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.3
-        }
-      },
-      "cost_index": 7.577
+      "cost_groups": {
+        "tokens_per_task": 1,
+        "usd_per_task": 3
+      }
     },
     {
       "id": "gpt-6.2-astra:medium",
@@ -100,13 +236,8 @@
           "lineages": 1
         },
         "code_review": {
-          "status": "scored",
-          "mean": 0.736,
-          "uncertainty": 0.098,
-          "lineages": 3,
-          "independent_lineages": 3,
-          "max_age_days": 0,
-          "confidence": "high"
+          "status": "insufficient",
+          "lineages": 0
         },
         "reasoning": {
           "status": "insufficient",
@@ -125,31 +256,9 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "review": {
-          "status": "scored",
-          "mean": 0.736,
-          "uncertainty": 0.098,
-          "lineages": 0,
-          "coverage": 0.7
-        },
-        "design_review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.3
-        },
-        "analysis": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        }
-      },
-      "cost_index": 1.558
+      "cost_groups": {
+        "usd_per_task": 2
+      }
     },
     {
       "id": "gpt-6.2-sol:max",
@@ -171,7 +280,6 @@
           "mean": 0.604,
           "uncertainty": 0.05,
           "lineages": 2,
-          "independent_lineages": 1,
           "max_age_days": 0,
           "confidence": "medium"
         },
@@ -196,29 +304,10 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.6
-        },
-        "review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.3
-        },
-        "design_review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "analysis": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.3
-        }
-      },
-      "cost_index": 3.185
+      "cost_groups": {
+        "tokens_per_task": 1,
+        "usd_per_task": 2
+      }
     },
     {
       "id": "gpt-6.2-sol:medium",
@@ -240,13 +329,8 @@
           "lineages": 1
         },
         "code_review": {
-          "status": "scored",
-          "mean": 0.694,
-          "uncertainty": 0.05,
-          "lineages": 3,
-          "independent_lineages": 3,
-          "max_age_days": 0,
-          "confidence": "high"
+          "status": "insufficient",
+          "lineages": 0
         },
         "reasoning": {
           "status": "insufficient",
@@ -265,31 +349,9 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "review": {
-          "status": "scored",
-          "mean": 0.694,
-          "uncertainty": 0.05,
-          "lineages": 0,
-          "coverage": 0.7
-        },
-        "design_review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.3
-        },
-        "analysis": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        }
-      },
-      "cost_index": 1.501
+      "cost_groups": {
+        "usd_per_task": 1
+      }
     },
     {
       "id": "gpt-6-luna:max",
@@ -310,7 +372,6 @@
           "mean": 0.129,
           "uncertainty": 0.05,
           "lineages": 2,
-          "independent_lineages": 1,
           "max_age_days": 0,
           "confidence": "medium"
         },
@@ -323,7 +384,6 @@
           "mean": 0.25,
           "uncertainty": 0.095,
           "lineages": 2,
-          "independent_lineages": 2,
           "max_age_days": 0,
           "confidence": "medium"
         },
@@ -340,31 +400,10 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.6
-        },
-        "review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.3
-        },
-        "design_review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.5
-        },
-        "analysis": {
-          "status": "scored",
-          "mean": 0.198,
-          "uncertainty": 0.058,
-          "lineages": 0,
-          "coverage": 0.7
-        }
-      },
-      "cost_index": 1.533
+      "cost_groups": {
+        "tokens_per_task": 1,
+        "usd_per_task": 2
+      }
     },
     {
       "id": "claude-fable-5-2:max",
@@ -386,7 +425,6 @@
           "mean": 0.607,
           "uncertainty": 0.05,
           "lineages": 2,
-          "independent_lineages": 1,
           "max_age_days": 0,
           "confidence": "medium"
         },
@@ -399,7 +437,6 @@
           "mean": 0.871,
           "uncertainty": 0.091,
           "lineages": 2,
-          "independent_lineages": 2,
           "max_age_days": 0,
           "confidence": "medium"
         },
@@ -416,31 +453,10 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.6
-        },
-        "review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.3
-        },
-        "design_review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.5
-        },
-        "analysis": {
-          "status": "scored",
-          "mean": 0.758,
-          "uncertainty": 0.056,
-          "lineages": 0,
-          "coverage": 0.7
-        }
-      },
-      "cost_index": 42.627
+      "cost_groups": {
+        "tokens_per_task": 1,
+        "usd_per_task": 2
+      }
     },
     {
       "id": "claude-fable-5-2:high",
@@ -470,7 +486,6 @@
           "mean": 0.798,
           "uncertainty": 0.096,
           "lineages": 2,
-          "independent_lineages": 2,
           "max_age_days": 0,
           "confidence": "medium"
         },
@@ -487,29 +502,9 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "design_review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.5
-        },
-        "analysis": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.4
-        }
-      },
-      "cost_index": 18.681
+      "cost_groups": {
+        "usd_per_task": 2
+      }
     },
     {
       "id": "claude-opus-5-5:high",
@@ -539,7 +534,6 @@
           "mean": 0.624,
           "uncertainty": 0.05,
           "lineages": 2,
-          "independent_lineages": 2,
           "max_age_days": 0,
           "confidence": "medium"
         },
@@ -556,29 +550,9 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "design_review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.5
-        },
-        "analysis": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.4
-        }
-      },
-      "cost_index": 7.737
+      "cost_groups": {
+        "usd_per_task": 2
+      }
     },
     {
       "id": "claude-opus-5-5:default",
@@ -620,29 +594,7 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "design_review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "analysis": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        }
-      },
-      "cost_index": null
+      "cost_groups": {}
     },
     {
       "id": "claude-sonnet-5-5:xhigh",
@@ -672,7 +624,6 @@
           "mean": 0.546,
           "uncertainty": 0.05,
           "lineages": 3,
-          "independent_lineages": 3,
           "max_age_days": 0,
           "confidence": "high"
         },
@@ -689,29 +640,9 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "design_review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.5
-        },
-        "analysis": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.4
-        }
-      },
-      "cost_index": 9.73
+      "cost_groups": {
+        "usd_per_task": 2
+      }
     },
     {
       "id": "claude-sonnet-5-5:medium",
@@ -741,7 +672,6 @@
           "mean": 0.292,
           "uncertainty": 0.075,
           "lineages": 2,
-          "independent_lineages": 2,
           "max_age_days": 0,
           "confidence": "medium"
         },
@@ -758,29 +688,214 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
+      "cost_groups": {
+        "usd_per_task": 2
+      }
+    },
+    {
+      "id": "gemini-3.8-flash:high@antigravity",
+      "vendor": "google",
+      "model": "gemini-3.8-flash",
+      "effort": "high",
+      "provider": "antigravity",
+      "preset": "gemini-flash-high",
+      "values": {
+        "model": "gemini-3.8-flash",
+        "thought_level": "high"
+      },
+      "executable": true,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
           "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
+          "lineages": 0
         },
-        "review": {
+        "code_review": {
           "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
+          "lineages": 0
         },
-        "design_review": {
+        "reasoning": {
           "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.5
+          "lineages": 0
         },
-        "analysis": {
+        "long_context": {
           "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.4
+          "lineages": 0
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
         }
       },
-      "cost_index": 2.267
+      "cost_groups": {}
+    },
+    {
+      "id": "deepseek-v4.1-flash:max@claude-deepseek",
+      "vendor": "deepseek",
+      "model": "deepseek-v4.1-flash",
+      "effort": "max",
+      "provider": "claude-deepseek",
+      "preset": "deepseek-flash-max",
+      "values": {
+        "model": "deepseek-flash[1m]",
+        "effort": "max"
+      },
+      "executable": true,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "cost_groups": {}
+    },
+    {
+      "id": "deepseek-v4.1-flash:max@codex-deepseek",
+      "vendor": "deepseek",
+      "model": "deepseek-v4.1-flash",
+      "effort": "max",
+      "provider": "codex-deepseek",
+      "preset": "deepseek-flash-max",
+      "values": {
+        "model": "deepseek-flash",
+        "reasoning_effort": "max"
+      },
+      "executable": true,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "cost_groups": {}
+    },
+    {
+      "id": "deepseek-v4.1-flash:max@deepseek-harness",
+      "vendor": "deepseek",
+      "model": "deepseek-v4.1-flash",
+      "effort": "max",
+      "provider": "deepseek-harness",
+      "preset": "deepseek-flash-max",
+      "values": {
+        "model": "[\"deepseek-official\",\"deepseek-flash\"]",
+        "reasoning_effort": "max"
+      },
+      "executable": true,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "cost_groups": {}
+    },
+    {
+      "id": "grok-provider-default:high@grok",
+      "vendor": "xai",
+      "model": "grok-provider-default",
+      "effort": "high",
+      "provider": "grok",
+      "preset": "grok-high",
+      "values": {
+        "reasoning_effort": "high",
+        "permission_mode": "always-approve"
+      },
+      "executable": true,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "cost_groups": {}
     },
     {
       "id": "claude-opus-5-5:max",
@@ -796,7 +911,6 @@
           "mean": 0.603,
           "uncertainty": 0.05,
           "lineages": 2,
-          "independent_lineages": 1,
           "max_age_days": 0,
           "confidence": "medium"
         },
@@ -809,7 +923,6 @@
           "mean": 0.741,
           "uncertainty": 0.09,
           "lineages": 2,
-          "independent_lineages": 2,
           "max_age_days": 0,
           "confidence": "medium"
         },
@@ -826,31 +939,10 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.6
-        },
-        "review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.3
-        },
-        "design_review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.5
-        },
-        "analysis": {
-          "status": "scored",
-          "mean": 0.682,
-          "uncertainty": 0.056,
-          "lineages": 0,
-          "coverage": 0.7
-        }
-      },
-      "cost_index": 16.238
+      "cost_groups": {
+        "tokens_per_task": 1,
+        "usd_per_task": 2
+      }
     },
     {
       "id": "claude-opus-5-5:xhigh",
@@ -874,7 +966,6 @@
           "mean": 0.702,
           "uncertainty": 0.09,
           "lineages": 2,
-          "independent_lineages": 2,
           "max_age_days": 0,
           "confidence": "medium"
         },
@@ -891,29 +982,9 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "design_review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.5
-        },
-        "analysis": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.4
-        }
-      },
-      "cost_index": 13.109
+      "cost_groups": {
+        "usd_per_task": 2
+      }
     },
     {
       "id": "claude-opus-5-5:api-default",
@@ -949,29 +1020,7 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "design_review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "analysis": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        }
-      },
-      "cost_index": null
+      "cost_groups": {}
     },
     {
       "id": "claude-sonnet-5-5:max",
@@ -986,7 +1035,6 @@
           "mean": 0.637,
           "uncertainty": 0.05,
           "lineages": 2,
-          "independent_lineages": 1,
           "max_age_days": 0,
           "confidence": "medium"
         },
@@ -999,7 +1047,6 @@
           "mean": 0.654,
           "uncertainty": 0.074,
           "lineages": 2,
-          "independent_lineages": 2,
           "max_age_days": 0,
           "confidence": "medium"
         },
@@ -1016,31 +1063,10 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.6
-        },
-        "review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.3
-        },
-        "design_review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.5
-        },
-        "analysis": {
-          "status": "scored",
-          "mean": 0.647,
-          "uncertainty": 0.047,
-          "lineages": 0,
-          "coverage": 0.7
-        }
-      },
-      "cost_index": 25.226
+      "cost_groups": {
+        "tokens_per_task": 1,
+        "usd_per_task": 2
+      }
     },
     {
       "id": "gemini-4-carbon:high",
@@ -1055,7 +1081,6 @@
           "mean": 0.651,
           "uncertainty": 0.05,
           "lineages": 2,
-          "independent_lineages": 1,
           "max_age_days": 0,
           "confidence": "medium"
         },
@@ -1080,29 +1105,10 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.6
-        },
-        "review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.3
-        },
-        "design_review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "analysis": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.3
-        }
-      },
-      "cost_index": 4.397
+      "cost_groups": {
+        "tokens_per_task": 1,
+        "usd_per_task": 2
+      }
     },
     {
       "id": "gemini-4-argon:high",
@@ -1117,7 +1123,6 @@
           "mean": 0.569,
           "uncertainty": 0.05,
           "lineages": 2,
-          "independent_lineages": 1,
           "max_age_days": 0,
           "confidence": "medium"
         },
@@ -1130,7 +1135,6 @@
           "mean": 0.615,
           "uncertainty": 0.05,
           "lineages": 2,
-          "independent_lineages": 2,
           "max_age_days": 0,
           "confidence": "medium"
         },
@@ -1147,31 +1151,10 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.6
-        },
-        "review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.3
-        },
-        "design_review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.5
-        },
-        "analysis": {
-          "status": "scored",
-          "mean": 0.595,
-          "uncertainty": 0.036,
-          "lineages": 0,
-          "coverage": 0.7
-        }
-      },
-      "cost_index": 3.59
+      "cost_groups": {
+        "tokens_per_task": 1,
+        "usd_per_task": 2
+      }
     },
     {
       "id": "gemini-4-argon:api-default",
@@ -1206,29 +1189,7 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "design_review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "analysis": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        }
-      },
-      "cost_index": null
+      "cost_groups": {}
     },
     {
       "id": "gemini-4-hydrogen:high",
@@ -1243,7 +1204,6 @@
           "mean": 0.545,
           "uncertainty": 0.05,
           "lineages": 2,
-          "independent_lineages": 1,
           "max_age_days": 0,
           "confidence": "medium"
         },
@@ -1268,29 +1228,10 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.6
-        },
-        "review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.3
-        },
-        "design_review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "analysis": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.3
-        }
-      },
-      "cost_index": 2.515
+      "cost_groups": {
+        "tokens_per_task": 1,
+        "usd_per_task": 2
+      }
     },
     {
       "id": "gemini-4-hydrogen:xhigh",
@@ -1325,29 +1266,9 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "design_review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "analysis": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        }
-      },
-      "cost_index": 20.797
+      "cost_groups": {
+        "usd_per_task": 1
+      }
     },
     {
       "id": "grok-4.7:xhigh",
@@ -1362,7 +1283,6 @@
           "mean": 0.272,
           "uncertainty": 0.05,
           "lineages": 2,
-          "independent_lineages": 1,
           "max_age_days": 0,
           "confidence": "medium"
         },
@@ -1375,7 +1295,6 @@
           "mean": 0.365,
           "uncertainty": 0.05,
           "lineages": 2,
-          "independent_lineages": 2,
           "max_age_days": 0,
           "confidence": "medium"
         },
@@ -1392,31 +1311,10 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.6
-        },
-        "review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.3
-        },
-        "design_review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.5
-        },
-        "analysis": {
-          "status": "scored",
-          "mean": 0.325,
-          "uncertainty": 0.036,
-          "lineages": 0,
-          "coverage": 0.7
-        }
-      },
-      "cost_index": 3.712
+      "cost_groups": {
+        "tokens_per_task": 1,
+        "usd_per_task": 2
+      }
     },
     {
       "id": "deepseek-v4.1-flash-1017:max",
@@ -1431,7 +1329,6 @@
           "mean": 0.354,
           "uncertainty": 0.05,
           "lineages": 2,
-          "independent_lineages": 2,
           "max_age_days": 0,
           "confidence": "medium"
         },
@@ -1444,7 +1341,6 @@
           "mean": 0.331,
           "uncertainty": 0.072,
           "lineages": 2,
-          "independent_lineages": 2,
           "max_age_days": 0,
           "confidence": "medium"
         },
@@ -1461,31 +1357,10 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.6
-        },
-        "review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.3
-        },
-        "design_review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.5
-        },
-        "analysis": {
-          "status": "scored",
-          "mean": 0.341,
-          "uncertainty": 0.046,
-          "lineages": 0,
-          "coverage": 0.7
-        }
-      },
-      "cost_index": 1.811
+      "cost_groups": {
+        "tokens_per_task": 1,
+        "usd_per_task": 3
+      }
     },
     {
       "id": "deepseek-v4-pro-0813:max",
@@ -1500,7 +1375,6 @@
           "mean": 0.128,
           "uncertainty": 0.05,
           "lineages": 2,
-          "independent_lineages": 2,
           "max_age_days": 0,
           "confidence": "medium"
         },
@@ -1513,7 +1387,6 @@
           "mean": 0.205,
           "uncertainty": 0.145,
           "lineages": 2,
-          "independent_lineages": 2,
           "max_age_days": 0,
           "confidence": "medium"
         },
@@ -1530,31 +1403,10 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.6
-        },
-        "review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.3
-        },
-        "design_review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.5
-        },
-        "analysis": {
-          "status": "scored",
-          "mean": 0.172,
-          "uncertainty": 0.086,
-          "lineages": 0,
-          "coverage": 0.7
-        }
-      },
-      "cost_index": 3.821
+      "cost_groups": {
+        "tokens_per_task": 1,
+        "usd_per_task": 3
+      }
     },
     {
       "id": "kimi-k3.1-pro:max",
@@ -1589,29 +1441,10 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "design_review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "analysis": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        }
-      },
-      "cost_index": 2.424
+      "cost_groups": {
+        "tokens_per_task": 1,
+        "usd_per_task": 1
+      }
     },
     {
       "id": "kimi-k3:max",
@@ -1646,29 +1479,10 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "design_review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "analysis": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        }
-      },
-      "cost_index": 5.492
+      "cost_groups": {
+        "tokens_per_task": 1,
+        "usd_per_task": 2
+      }
     },
     {
       "id": "gpt-6-astra:max",
@@ -1683,13 +1497,8 @@
           "lineages": 0
         },
         "code_review": {
-          "status": "scored",
-          "mean": 0.545,
-          "uncertainty": 0.087,
-          "lineages": 3,
-          "independent_lineages": 3,
-          "max_age_days": 0,
-          "confidence": "high"
+          "status": "insufficient",
+          "lineages": 0
         },
         "reasoning": {
           "status": "insufficient",
@@ -1708,100 +1517,260 @@
           "lineages": 0
         }
       },
-      "workloads": {
-        "session_default": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        },
-        "review": {
-          "status": "scored",
-          "mean": 0.545,
-          "uncertainty": 0.087,
-          "lineages": 0,
-          "coverage": 0.7
-        },
-        "design_review": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0.3
-        },
-        "analysis": {
-          "status": "insufficient",
-          "lineages": 0,
-          "coverage": 0
-        }
-      },
-      "cost_index": 2.966
+      "cost_groups": {}
     }
   ],
   "tiers": {
-    "claude-code": {
+    "antigravity": {
       "session_default": {
+        "tied_with_flagship": [],
+        "compared_tasks": [],
         "notes": [
-          "no scored executable targets",
-          "not evaluated: fable-max, fable-high, opus-high, opus-default, sonnet-xhigh, sonnet-medium"
+          "candidates do not share enough scored tasks to be ranked"
         ]
       },
       "review": {
+        "tied_with_flagship": [],
+        "compared_tasks": [],
         "notes": [
-          "no scored executable targets",
-          "not evaluated: fable-max, fable-high, opus-high, opus-default, sonnet-xhigh, sonnet-medium"
+          "candidates do not share enough scored tasks to be ranked"
         ]
       },
       "design_review": {
+        "tied_with_flagship": [],
+        "compared_tasks": [],
         "notes": [
-          "no scored executable targets",
-          "not evaluated: fable-max, fable-high, opus-high, opus-default, sonnet-xhigh, sonnet-medium"
+          "candidates do not share enough scored tasks to be ranked"
         ]
       },
       "analysis": {
+        "tied_with_flagship": [],
+        "compared_tasks": [],
         "notes": [
-          "no scored executable targets",
-          "not evaluated: fable-max, fable-high, opus-high, opus-default, sonnet-xhigh, sonnet-medium"
+          "candidates do not share enough scored tasks to be ranked"
+        ]
+      }
+    },
+    "claude-code": {
+      "session_default": {
+        "tied_with_flagship": [],
+        "compared_tasks": [],
+        "notes": [
+          "candidates do not share enough scored tasks to be ranked",
+          "provisional, not ranked: fable-max, fable-high"
+        ]
+      },
+      "review": {
+        "tied_with_flagship": [],
+        "compared_tasks": [],
+        "notes": [
+          "candidates do not share enough scored tasks to be ranked",
+          "provisional, not ranked: fable-max, fable-high"
+        ]
+      },
+      "design_review": {
+        "tied_with_flagship": [],
+        "compared_tasks": [],
+        "notes": [
+          "candidates do not share enough scored tasks to be ranked",
+          "provisional, not ranked: fable-max, fable-high"
+        ]
+      },
+      "analysis": {
+        "tied_with_flagship": [],
+        "compared_tasks": [],
+        "notes": [
+          "candidates do not share enough scored tasks to be ranked",
+          "provisional, not ranked: fable-max, fable-high"
+        ]
+      }
+    },
+    "claude-deepseek": {
+      "session_default": {
+        "tied_with_flagship": [],
+        "compared_tasks": [],
+        "notes": [
+          "candidates do not share enough scored tasks to be ranked"
+        ]
+      },
+      "review": {
+        "tied_with_flagship": [],
+        "compared_tasks": [],
+        "notes": [
+          "candidates do not share enough scored tasks to be ranked"
+        ]
+      },
+      "design_review": {
+        "tied_with_flagship": [],
+        "compared_tasks": [],
+        "notes": [
+          "candidates do not share enough scored tasks to be ranked"
+        ]
+      },
+      "analysis": {
+        "tied_with_flagship": [],
+        "compared_tasks": [],
+        "notes": [
+          "candidates do not share enough scored tasks to be ranked"
         ]
       }
     },
     "codex": {
       "session_default": {
+        "tied_with_flagship": [],
+        "compared_tasks": [
+          "agentic_coding"
+        ],
         "notes": [
-          "no scored executable targets",
-          "not evaluated: astra-max, astra-medium, sol-6-2-max, sol-6-2-medium, luna-6-max"
+          "candidates do not share enough scored tasks to be ranked",
+          "provisional, not ranked: astra-max, astra-medium, sol-6-2-max, sol-6-2-medium"
         ]
       },
       "review": {
-        "flagship": "sol-6-2-medium",
-        "strong": "astra-medium",
-        "strong_tie": true,
-        "workhorse": "sol-6-2-medium",
-        "value": "sol-6-2-medium",
+        "tied_with_flagship": [],
+        "compared_tasks": [
+          "agentic_coding"
+        ],
         "notes": [
-          "flagship and astra-medium are statistically tied",
-          "not evaluated: astra-max, sol-6-2-max, luna-6-max"
+          "candidates do not share enough scored tasks to be ranked",
+          "provisional, not ranked: astra-max, astra-medium, sol-6-2-max, sol-6-2-medium"
         ]
       },
       "design_review": {
+        "tied_with_flagship": [],
+        "compared_tasks": [
+          "reasoning"
+        ],
         "notes": [
-          "no scored executable targets",
-          "not evaluated: astra-max, astra-medium, sol-6-2-max, sol-6-2-medium, luna-6-max"
+          "candidates do not share enough scored tasks to be ranked",
+          "provisional, not ranked: astra-max, astra-medium, sol-6-2-max, sol-6-2-medium"
         ]
       },
       "analysis": {
-        "flagship": "luna-6-max",
-        "strong_tie": false,
-        "workhorse": "luna-6-max",
+        "tied_with_flagship": [],
+        "compared_tasks": [
+          "agentic_coding",
+          "reasoning"
+        ],
         "notes": [
-          "no target with cost evidence clears the value floor",
-          "not evaluated: astra-max, astra-medium, sol-6-2-max, sol-6-2-medium"
+          "no comparable usd_per_task evidence among targets above the value floor",
+          "provisional, not ranked: astra-max, astra-medium, sol-6-2-max, sol-6-2-medium"
+        ],
+        "flagship": "luna-6-max",
+        "workhorse": "luna-6-max"
+      }
+    },
+    "codex-deepseek": {
+      "session_default": {
+        "tied_with_flagship": [],
+        "compared_tasks": [],
+        "notes": [
+          "candidates do not share enough scored tasks to be ranked"
+        ]
+      },
+      "review": {
+        "tied_with_flagship": [],
+        "compared_tasks": [],
+        "notes": [
+          "candidates do not share enough scored tasks to be ranked"
+        ]
+      },
+      "design_review": {
+        "tied_with_flagship": [],
+        "compared_tasks": [],
+        "notes": [
+          "candidates do not share enough scored tasks to be ranked"
+        ]
+      },
+      "analysis": {
+        "tied_with_flagship": [],
+        "compared_tasks": [],
+        "notes": [
+          "candidates do not share enough scored tasks to be ranked"
+        ]
+      }
+    },
+    "deepseek-harness": {
+      "session_default": {
+        "tied_with_flagship": [],
+        "compared_tasks": [],
+        "notes": [
+          "candidates do not share enough scored tasks to be ranked"
+        ]
+      },
+      "review": {
+        "tied_with_flagship": [],
+        "compared_tasks": [],
+        "notes": [
+          "candidates do not share enough scored tasks to be ranked"
+        ]
+      },
+      "design_review": {
+        "tied_with_flagship": [],
+        "compared_tasks": [],
+        "notes": [
+          "candidates do not share enough scored tasks to be ranked"
+        ]
+      },
+      "analysis": {
+        "tied_with_flagship": [],
+        "compared_tasks": [],
+        "notes": [
+          "candidates do not share enough scored tasks to be ranked"
+        ]
+      }
+    },
+    "grok": {
+      "session_default": {
+        "tied_with_flagship": [],
+        "compared_tasks": [],
+        "notes": [
+          "candidates do not share enough scored tasks to be ranked"
+        ]
+      },
+      "review": {
+        "tied_with_flagship": [],
+        "compared_tasks": [],
+        "notes": [
+          "candidates do not share enough scored tasks to be ranked"
+        ]
+      },
+      "design_review": {
+        "tied_with_flagship": [],
+        "compared_tasks": [],
+        "notes": [
+          "candidates do not share enough scored tasks to be ranked"
+        ]
+      },
+      "analysis": {
+        "tied_with_flagship": [],
+        "compared_tasks": [],
+        "notes": [
+          "candidates do not share enough scored tasks to be ranked"
         ]
       }
     }
   },
   "recommendations": {
+    "antigravity": {
+      "order": []
+    },
     "claude-code": {
       "order": []
     },
+    "claude-deepseek": {
+      "order": []
+    },
     "codex": {
+      "order": []
+    },
+    "codex-deepseek": {
+      "order": []
+    },
+    "deepseek-harness": {
+      "order": []
+    },
+    "grok": {
       "order": []
     }
   }

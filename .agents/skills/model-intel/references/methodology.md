@@ -31,8 +31,9 @@ One JSON object per line in `models/observations/<yyyy-mm>.jsonl`:
   `adoption` (usage share) are recorded for the report only.
 - Cost observations use `axis = "cost"` and a metric that says what is
   measured: `usd_per_task` (API-equivalent), `tokens_per_task`, or
-  `minutes_per_task`. The scorer compares targets within one cost group, so
-  keep units identical inside a group.
+  `minutes_per_task`. Each workload names its `cost_metric`; targets are
+  compared only on cost groups (same benchmark, version, harness, metric and
+  unit) they share, so record paired measurements whenever possible.
 - `ceiling` is required for bounded metrics (fractions, percentages). Unbounded
   metrics (Elo, index points) need at least three targets in one group.
 
@@ -46,8 +47,9 @@ One JSON object per line in `models/observations/<yyyy-mm>.jsonl`:
   tiers; re-check it on the next refresh.
 - Alias retargeting (an alias such as `opus` moving to a new snapshot), a
   harness change, a price change or a withdrawn preset invalidates affected
-  observations immediately: retire them by moving to a new lineage rather than
-  editing history.
+  observations immediately: set `validity = "superseded"` (and
+  `superseded_by` when a replacement exists) instead of deleting them. Only
+  `valid` rows (the default) are scored.
 
 ## Internal review pilots
 
@@ -63,15 +65,19 @@ find the same serious defects in this fleet's real reviews?
 3. Per arm record recall of the verified serious set, unsupported findings
    (false positives), tokens and minutes. Record recall as a capability
    observation (`ceiling = 1`), tokens/minutes as cost observations, one
-   lineage per pilot input.
+   lineage per pilot input, and the input id as `benchmark_version` so each
+   input is its own paired group. Until step 2's verification is complete,
+   mark the rows `validity = "unverified"`.
 4. A pilot with fewer than about ten inputs is directional only: say so, and
    do not let it alone move a default.
 
 ## Normalization and tiers
 
-The scorer normalizes bounded metrics as `value / ceiling` and unbounded ones
-by min-max within the group, drops saturated or flat groups, keeps one value
-per lineage (most trusted, then newest), weights lineages by provenance and a
-freshness half-life, and refuses to score a cell below `min_lineages`.
-Workload scores combine task cells by the workload weights and require 70% of
-the weight to be covered. Tier rules are documented in `methodology.toml`.
+The scorer first keeps one row per (target, group, lineage) — most trusted,
+then newest — so mirrors never set a scale or count twice. It normalizes
+bounded metrics as the oriented fraction of their ceiling and unbounded ones
+by min-max within the group (three targets minimum), drops saturated or flat
+groups, weights lineages by provenance and a freshness half-life, and refuses
+to score a cell below `min_lineages`. Candidates for a tier are compared only
+on the weighted tasks they all scored, which must cover
+`min_workload_coverage`. Tier rules are documented in `methodology.toml`.

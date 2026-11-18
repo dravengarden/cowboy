@@ -21,8 +21,9 @@ are changed only through `release-cowboy-plugin`.
 | `models/report.md` | this workflow | detailed report: sources, disagreements, gaps, decisions |
 
 Reference-only measurements (sources whose terms forbid redistribution) stay
-in `$XDG_STATE_HOME/cowboy/model-intel/observations/`; commit only their URL,
-retrieval date and digest in `models/report.md`. Read
+in `$XDG_STATE_HOME/cowboy/model-intel/observations/`. The scorer rejects them
+in `models/observations/`; `catalog.json` records the count and digest of
+both input sets so a later audit can tell whether its inputs are complete. Read
 [sources](references/sources.md) for the source registry and rights.
 
 ## Workflow
@@ -43,11 +44,14 @@ retrieval date and digest in `models/report.md`. Read
    sites are discovery aids, never observations.
 4. **Add internal evidence.** Paired Cowboy pilots on identical review inputs
    are the most relevant evidence for `review` and `design_review`. Record them
-   as `provenance = "internal"`, benchmark `cowboy-review-pilot`; see the
-   methodology for how to adjudicate.
+   as `provenance = "internal"`, benchmark `cowboy-review-pilot`, with
+   `validity = "unverified"` until every reference finding has been checked
+   against the code; unverified rows are reported but never scored.
 5. **Score.** `nix develop -c bun .agents/skills/model-intel/scripts/score.ts
-   --as-of YYYY-MM-DD`. Inspect `dropped_groups`, `unmapped_targets`,
-   insufficient cells and provisional targets before reading any tier.
+   --as-of YYYY-MM-DD`. It refuses to run without the local reference-only
+   inputs; `--repository-only` is for a deliberate partial catalog. Inspect
+   `dropped_groups`, `unmapped_targets`, insufficient cells and provisional
+   targets before reading any tier.
 6. **Write `models/report.md`.** Lead with the decisions the evidence supports,
    then per-Provider tiers, disagreements between sources, provisional models,
    evidence gaps and every source with its retrieval date. State what the
@@ -63,11 +67,12 @@ retrieval date and digest in `models/report.md`. Read
 ## Using the catalog to pick a model
 
 For a single call, prefer the Provider's tier for the matching workload in
-`models/summary.md`: `workhorse` for ordinary work, `flagship` only for high
+`models/summary.md` when one is determined: `workhorse` for ordinary work, `flagship` only for high
 risk (security, permissions, concurrency, persistence, deletion, money, large
 refactors) or after a workhorse result is inconclusive. An explicit user
-choice, session preference or Settings target always wins. Never treat a
-provisional or insufficient target as a recommendation.
+choice, session preference or Settings target always wins. An undetermined
+tier (`?`) means the evidence cannot decide; keep the existing selection
+rather than guessing, and never treat a provisional target as recommended.
 
 ## Guardrails
 
