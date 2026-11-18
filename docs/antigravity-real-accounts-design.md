@@ -1,12 +1,14 @@
 # Antigravity real accounts on OVH — design
 
-Status: design, revision 2, 2026-11-18. Nothing here is implemented. It extends
+Status: design, revision 3, 2026-11-18. Nothing here is implemented. It extends
 [`antigravity-provider-plan.md`](antigravity-provider-plan.md) Phases 3 and 4
 under the
 [Antigravity consumer-subscription boundary](requirements.md#antigravity-consumer-subscription-boundary).
 Revision 1 was design-reviewed by Codex Astra Max (call
-`call-b27d513a33f554b8f7097883`, 18 findings); each finding is answered below
-as **[R1-n]**.
+`call-b27d513a33f554b8f7097883`, 18 findings, **[R1-n]**) and revision 2 too
+(call `call-448741b8535e72fe7823b378`, 18 findings, **[R2-n]**). Findings that
+assume a hostile `ubuntu` process (R2-1, R2-2, R2-4 and the caller parts of
+R2-5) are outside the owner's trust model below; the rest are answered inline.
 
 ## Owner decisions (2026-11-18)
 
@@ -21,120 +23,159 @@ as **[R1-n]**.
 - Isolation is done properly before any real account: an OS identity per
   account, not same-user confinement.
 
-## Why not same-user confinement
+## Trust model (owner decision, 2026-11-18)
 
-Revision 1 confined `agy` with Landlock under the Machine's `ubuntu` user.
-Landlock restricts pathname Unix sockets only from ABI 9; measured ABIs are
-7 (Hawk, 6.18) and 8 (OVH, 7.0), so a confined process could still reach the
-user's D-Bus and systemd manager and start an unconfined process **[R1-1]**.
-Same-user processes of other Providers also keep full access to the tokens
-**[R1-2]**. OVH has passwordless root for the operator and systemd 259, whose
-system units provide per-unit identities and full sandboxing without user
-namespaces (which Ubuntu restricts for unprivileged users).
+The design keeps Cowboy's recorded trust boundary
+([`requirements.md`](requirements.md), [Machine browser](machine-browser.md#account-isolation-core-requirement)):
+root, the Machine supervisor and same-user host processes on a Machine are
+trusted. Revision 2's review asked to treat every `ubuntu` process on OVH as
+hostile; the owner declined that model because no model-driven code runs as
+`ubuntu` on OVH: Claude and Codex sessions there are split-execution runtimes
+whose tools execute on the development Machine, and Antigravity's run in its
+own identity (below). A malicious vendor runtime is trusted to the same degree
+as the Machine itself.
+
+**Untrusted:** every model-driven action of every Provider (tool calls, prompt
+injection, repository content); Google's responses; and each Antigravity
+account's whole process tree (official `agy`, proxy, hooks) relative to every
+other account and to the rest of the host.
+
+**Goals:**
+
+1. No Antigravity account's processes can read, write or use another
+   account's state, or any other Provider's credentials or the Machine's state.
+2. No other Provider's native process reads Antigravity state through ordinary
+   file access (different owner, mode 0700).
+3. Even if an Antigravity hook fails, the model cannot read its own account's
+   OAuth token through `agy`'s tools (two independent denial layers).
+4. Every Antigravity network connection, including login and logout, is IPv4.
+5. No credential leaves OVH; Cowboy never reads it.
+
+## Why separate OS identities
+
+Same-user Landlock confinement (revision 1) fails on these kernels: pathname
+Unix-socket restriction needs Landlock ABI 9, and Hawk reports 7, OVH 8
+**[R1-1]**. Other Providers' same-user processes would keep plain file access
+to the tokens **[R1-2]**.
 
 **Spike on OVH (2026-11-18, transient units, removed afterwards):** a
-`systemd-run --pipe --wait` system unit with `DynamicUser=yes`,
-`User=cowboy-agy-spike-a`, `StateDirectory=`, `ProtectHome=tmpfs`,
-`ProtectSystem=strict`, `PrivateTmp=yes`, `NoNewPrivileges=yes` and
-`RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK` ran as uid 65419; `/home`
-was empty, `/run/user/1000/bus` absent, `socket(AF_INET6)` failed with
-`EAFNOSUPPORT`, stdin/stdout piped through, and the official `agy` 1.5.9
-bound read-only answered `--version` and ACP `initialize`.
+`systemd-run --pipe --wait` system unit with a dedicated identity,
+`ProtectHome=tmpfs`, `ProtectSystem=strict`, `PrivateTmp=yes`,
+`NoNewPrivileges=yes` and `RestrictAddressFamilies=AF_INET AF_UNIX
+AF_NETLINK` saw an empty `/home`, no `/run/user/1000/bus`, failed
+`socket(AF_INET6)` with `EAFNOSUPPORT`, piped stdio, and ran the official
+`agy` 1.5.9 bound read-only (`--version`, ACP `initialize`).
 
 ## Architecture
 
 ```
-Controller ── Machine (ubuntu, user unit) ── worker (ubuntu)
-                     │                          │ stdio (ACP)
-                     │ register / login / ...   │
-                     ▼                          ▼
-          cowboy-account-sandbox (root daemon, Unix socket)
-                     │ systemd-run --pipe (system unit per process)
-                     ▼
-  account unit  User=cowboy-acct-<key> (DynamicUser), StateDirectory
-     agy-proxy (Node, signed)  ── agy acp (official, pinned)
-        └─ facade MCP (stdio) ── execution endpoint (target Machine)
+Controller ── Machine (ubuntu) ── worker (ubuntu)
+                    │                 │ stdio (ACP), unit handle
+                    ▼                 ▼
+        cowboy-account-sandbox (root daemon, Unix socket, group-restricted)
+                    │ systemd-run --pipe (system unit per process)
+                    ▼
+   account unit  User=cga-<key> (static system user)
+      agy-proxy (Node, signed runtime) ── agy acp (official, pinned)
+         └─ facade MCP (in-process, stdio pipe) ── execution endpoint
 ```
 
-### Account sandbox daemon (new, root, OVH host configuration)
+### Sandbox daemon
 
-A small static Rust binary `cowboy-account-sandbox` built on Hawk from the
-Cowboy repository, installed by Columbus `machines/ovh` host configuration
-(with an activation receipt) as `/usr/local/libexec/cowboy/account-sandbox`,
-root-owned, plus a socket-activated root system service listening on
-`/run/cowboy-account-sandbox.sock` (mode 0660, group `cowboy-sandbox`, of which
-`ubuntu` is a member). No sudo rule is added.
+A static Rust binary `cowboy-account-sandbox`, built on Hawk from this
+repository and installed by Columbus `machines/ovh` host configuration with an
+activation receipt (OVH builds nothing), as a socket-activated root system
+service on `/run/cowboy-account-sandbox/socket`, mode 0660, group
+`cowboy-sandbox` (members: `ubuntu`). The caller is the trusted Machine; the
+protocol is still narrow (defense in depth, simple audit):
 
-**The caller is not trusted.** Every process running as `ubuntu` can reach the
-socket, including other Providers' native agents. On OVH the Machine and its
-workers share one cgroup, so the daemon cannot distinguish them. The daemon is
-therefore built so that a hostile caller can at most drive an admitted account
-through the same fixed, policy-enforcing entrypoint the worker uses, never run
-its own code as an account identity or read account state:
+- **Accounts.** `ensure-account <service_id> <account_id>` creates the static
+  system user `cga-<key>` (`key = hex(sha256("cowboy-account-v1" ||
+  service_id || account_id))[..16]`, 20-character names within systemd's
+  31-character limit **[R2-15]**; no shell, no home in `/etc/passwd`, no
+  groups) and the account tree. Removing the account removes the user after
+  its tree.
+- **Runtime store.** `register-runtime` receives the generation's runtime as a
+  bounded archive over the socket (bytes, not a path; never a root reopen of a
+  caller path **[R2-5]**), verifies its SHA-256 against the value the Machine
+  supplies and the vendor `agy` executable's SHA-512 against a root-held
+  allow-list written by the host configuration, unpacks it with no links or
+  special files into `/var/lib/cowboy-account-sandbox/runtime/<sha256>/`
+  (root-owned, read-only), and bounds the store (size and count, retaining
+  every runtime a live unit or a pending cleanup uses) **[R2-18]**.
+- **Fixed argv.** The caller names a mode (`runtime`, `login`, `logout`,
+  `probe`), account key, generation and runtime digest; the daemon builds the
+  command line, environment and unit properties. Per-turn execution
+  descriptors arrive as bytes and are written by the daemon into a private,
+  daemon-created credential file passed with `LoadCredential=` **[R2-5]**.
+- **Replies** are fixed enums, unit handles, and the login unit's own output
+  stream for the challenge; the daemon never returns account file content.
 
-- **Runtime store.** `register-runtime <dir> <sha256>`: the daemon copies the
-  generation's runtime directory (the `agy-proxy` Node archive and the vendor
-  `agy`) into `/var/lib/cowboy-account-sandbox/runtime/<sha256>/`, root-owned,
-  read-only, and refuses unless the content digest matches. It additionally
-  checks the vendor executable's SHA-512 against a root-held allow-list of
-  pinned `agy` releases written by the host configuration. Account units run
-  only from this store.
-- **Fixed argv.** The caller chooses a mode (`runtime`, `login`, `logout`,
-  `probe`), an account key and a generation; the daemon builds the whole
-  command line, environment and unit properties itself. No caller-supplied
-  argv, environment, path or property reaches the unit.
-- **Account keys.** `key = hex(sha256("cowboy-account-v1" || service_id ||
-  account_id))[..20]`; the identity is `cowboy-acct-<key>`. Keys are validated
-  as exactly 20 lowercase hex characters.
-- **Generations.** `create-generation <key>` allocates the next generation
-  directory; `login` runs only once and only on a generation that has never
-  been used; `runtime` only on a generation whose login completed; `logout`
-  and `archive` on a completed one. A caller cannot log another Google account
-  into an existing generation.
-- **No reads.** The daemon never returns file content from an account
-  directory. Its replies are fixed enums (state, generation numbers, exit
-  status), plus the login process's own stdout/stderr stream for the challenge.
+### Account directory layout **[R2-7]**
+
+```
+/var/lib/cowboy-account-sandbox/            root 0711
+  accounts/<key>/                           root 0711
+    meta.json                               root 0600  (generation states, ops)
+    home/                                   cga-<key> 0700  (the account's HOME)
+    units/<invocation>/                     root 0711
+      process-ledger/                       cga-<key> 0700  (facade process IDs)
+```
+
+One persistent home per account: conversations, `installation_id` and caches
+stay across sign-ins, so the account always looks like the same installation
+to Google and history survives sign-out **[R2-13]**. The unit binds only
+`home/` (read-write) and its own `process-ledger/`; nothing else under the
+account or the store is writable, and lifecycle metadata is root-owned outside
+every mount.
+
+### Generations and login **[R2-3, R2-8]**
+
+The Controller remains the single generation authority: it reserves the exact
+generation and request (existing native custody). The daemon records each
+generation idempotently by `(generation, operation_id)`. A `login` unit runs
+only when the account's token file is absent; it writes the token into the
+persistent home. An interrupted login (unit gone without a completed receipt)
+leaves the generation `login_interrupted`; the daemon removes a partial token
+and the Controller may retry with a new request. `runtime` units run only on
+the current `signed_in` generation. Machine-local home checks
+(`native_profile.rs:428,648`) are replaced by daemon receipts.
+
+`owner_declared_v1` binds the generation to the Cowboy account the owner chose;
+the owner is responsible for signing the intended Google account into that
+card's browser. The proxy's mode-specific ACP allow-list **[R2-3]** permits in
+`runtime` mode only `initialize`, `session/new|load|resume|prompt|cancel|
+set_mode|set_model|set_config_option` and notifications, and refuses
+`authenticate`, `logout` and every unknown method, so a runtime cannot change
+or clear the account's sign-in. `login` and `logout` modes run only their own
+fixed exchange.
 
 ### Account units
 
-Each `runtime`, `login`, `logout` or `probe` invocation is one transient system
-unit `cowboy-acct-<key>-<mode>-<nonce>.service`, started with
-`systemd-run --pipe --wait` by the daemon; its stdio is passed back to the
-caller over the socket (`SCM_RIGHTS`) so ACP flows directly between worker and
-unit. Properties:
+Each mode runs as one transient system unit
+`cga-<key>-<mode>-<nonce>.service` started with `systemd-run --pipe`; stdio is
+returned to the worker as daemon-created pipes. Properties:
 
 | Property | Value |
 |---|---|
-| Identity | `DynamicUser=yes`, `User=cowboy-acct-<key>` (stable per account), `Group=` same |
-| State | `StateDirectory=cowboy-accounts/<key>`; `HOME` = `…/<key>/generations/<n>/home`; nothing else writable |
-| Filesystem | `ProtectSystem=strict`, `ProtectHome=tmpfs` (no `/home`, so no `ubuntu` state, no other Provider credential), `PrivateTmp=yes`, `PrivateDevices=yes`, `BindReadOnlyPaths=` the runtime store entry, `ReadWritePaths=` only the generation home, `TemporaryFileSystem=/var/lib/cowboy-accounts` with only this key re-bound |
-| Process | `NoNewPrivileges=yes`, `RestrictSUIDSGID=yes`, `LockPersonality=yes`, `ProtectKernel*`, `ProtectControlGroups=yes`, `RestrictNamespaces=yes`, `SystemCallFilter=@system-service`, `CapabilityBoundingSet=` empty, `RemoveIPC=yes`, `PrivateIPC=yes` |
-| Network | `RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK` (IPv4 only) for every mode, so login and logout are covered **[R1-17 for `agy`]** |
-| Environment | closed: only `HOME`, `PATH`, `LANG`, `TZ`, `TMPDIR`, `AGY_CLI_DISABLE_AUTO_UPDATE=true`, `DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent`, and for `runtime` the execution descriptor path; nothing inherited **[R1-4]** |
-| Credentials | the execution descriptor arrives as `LoadCredential=` from a file the worker created, readable inside only through `$CREDENTIALS_DIRECTORY` **[R1-13]** |
-| Resources | `MemoryMax`, `TasksMax`, `CPUQuota` per unit; one slice per account |
+| Identity | `User=cga-<key>`, `Group=cga-<key>`, `SupplementaryGroups=` none |
+| Filesystem | `ProtectSystem=strict`, `ProtectHome=tmpfs`, `PrivateTmp=yes`, `PrivateDevices=yes`, `TemporaryFileSystem=/var/lib/cowboy-account-sandbox`, `BindPaths=` the account `home` and this unit's ledger, `BindReadOnlyPaths=` the runtime store entry |
+| Process | `NoNewPrivileges=yes`, `RestrictSUIDSGID=yes`, `LockPersonality=yes`, `ProtectKernelTunables/Modules/Logs=yes`, `ProtectControlGroups=yes`, `ProtectClock=yes`, `ProtectHostname=yes`, `RestrictNamespaces=yes`, `RestrictRealtime=yes`, `MemoryDenyWriteExecute=no` (Node JIT), `SystemCallArchitectures=native`, `SystemCallFilter=@system-service`, `CapabilityBoundingSet=` empty, `ProtectProc=invisible`, `ProcSubset=pid`, `PrivateIPC=yes`, `RemoveIPC=yes`, `UMask=0077` |
+| Network | `RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK`; `IPAddressDeny=localhost link-local multicast` so no host loopback service is reachable **[R2-6]**; acceptance enumerates OVH's abstract Unix sockets and pathname sockets reachable from the unit |
+| Environment | closed: `HOME`, `PATH`, `LANG`, `TZ`, `TMPDIR`, `AGY_CLI_DISABLE_AUTO_UPDATE=true`, `DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent`, `CREDENTIALS_DIRECTORY` **[R1-4]** |
+| Resources | per unit `MemoryMax`, `TasksMax`; `Slice=cowboy-accounts-<key>.slice` (at most one `runtime` and one `login`/`logout` unit per account) under `cowboy-accounts.slice` with a host-wide `MemoryMax` and unit count; home size quota checked by the daemon before each start **[R2-18]** |
 
-Different accounts are different uids with 0700 state, separate `/tmp`,
-`/dev/shm`, IPC and no shared bus; `ubuntu` processes cannot read account state
-and account processes cannot read `ubuntu`'s home or another account's state.
-The only shared inputs are the read-only runtime store and the host's
-read-only system tree. The trusted-root exception of `requirements.md` stays:
-root and the daemon can read everything.
-
-### Machine changes
-
-- Antigravity's signed manifest declares `runtime.isolation:
-  "account_sandbox_v1"` (new optional runtime field, SDK floor raised; older
-  hosts reject it). A Machine without a reachable sandbox daemon reports the
-  Provider unavailable and refuses every Antigravity launch, login and logout.
-  There is no fallback to same-user execution; the Hawk local mode is removed.
-- Native generations of a sandboxed Provider keep their Machine-side metadata
-  (receipts, identity, generation numbers) under the Machine state root, but
-  the home itself is the daemon's generation. `native_login`, `native_logout`
-  and cleanup call the daemon instead of `authentication_process`.
-- The worker starts the agent by asking the daemon for a `runtime` unit
-  instead of spawning the entrypoint, and relays the returned stdio.
-- Install probes run through the daemon's `probe` mode.
+**Unit ownership [R2-9].** The daemon ties each unit to the requesting
+connection: when the worker's connection closes, the daemon stops the unit and
+confirms the whole unit is gone (no remaining PIDs, `InvocationID`, boot ID).
+The worker's handle (unit name, `InvocationID`, boot ID) is part of its launch
+record, so the existing teardown and recycle paths ask the daemon to stop and
+confirm instead of killing a child. On Machine start, `list-units` reconciles:
+a unit no live worker claims is stopped. Login and logout receipts report the
+account unit's own exit and the daemon's state transition, not the relay's.
+Machine maintenance and reboot: units are stopped with their workers; reboot
+convergence holds because the daemon is socket-activated and stateless apart
+from `meta.json`.
 
 ## Kill switch and logout **[R1-6]**
 
@@ -143,13 +184,17 @@ root and the daemon can read everything.
   creation checks it (see controls).
 - **Stop.** The daemon `stop-account <key>` stops every unit of the account
   (`systemctl stop` of the account slice) and reports the confirmed unit set.
-- **Native logout without deleting history.** For sandboxed Providers,
-  logout runs `agy-proxy --logout` (ACP `logout`) in a `logout` unit, then the
-  daemon removes **only** the token file name the vendor uses
-  (`.gemini/antigravity-cli/antigravity-oauth-token`) if `agy` left it, and
-  marks the generation `logged_out`; conversations stay. Account removal
-  (owner action) is a separate operation that archives then deletes the
-  generation after an explicit confirmation.
+- **Native logout without deleting history [R2-13].** Logout runs the ACP
+  `logout` exchange in a `logout` unit; the daemon then removes **only** the
+  vendor token file (`.gemini/antigravity-cli/antigravity-oauth-token`) if
+  `agy` left it, and records `credential_cleared, history_retained`. The
+  persistent home keeps conversations and `installation_id`, so the next
+  sign-in continues them. Machine and Controller receipts gain these explicit
+  outcomes instead of equating logout with `profile_cleaned`
+  (`machine_cli/command_login.rs:65`). Account removal (owner action, with
+  confirmation) is a separate destructive operation that requires a prior
+  logout, stops every unit, deletes the account tree and removes the system
+  user.
 - **Offline Machine.** The operation is durable with one operation ID and stays
   pending until the Machine reconnects; the fence holds meanwhile.
 
@@ -164,19 +209,35 @@ spawns `agy acp --disable-telemetry`, relays ACP and rewrites
 - keeps the target path as `cwd`; the unit's mirror directory is an empty
   tmpfs path inside the unit, never a shared runtime directory **[R1-13]**.
 
+**Machine changes.** Antigravity's signed manifest declares
+`runtime.isolation: "account_sandbox_v1"` (new optional runtime field, SDK
+floor raised; older hosts reject it). A Machine without a reachable daemon
+reports the Provider unavailable and refuses every launch, login, logout and
+probe; the Hawk local mode is removed. Native login, logout and cleanup call
+the daemon; the worker starts the agent through it and relays the returned
+pipes; install probes use the `probe` mode.
+
 **Facade identity [R1-5].** MCP server name `cowboy`; exact tool set
 `ReadFile`, `ListDirectory`, `SearchFiles`, `WriteFile`, `EditFile`,
 `RunCommand`, `StopCommand`. The hook allows exactly
 `mcp_cowboy_ReadFile` … `mcp_cowboy_StopCommand` plus `ask_question`, and
 denies everything else, including unknown names. Startup verifies `agy`'s
 tool listing does not contain any other MCP tool. `agy`'s user and workspace
-configuration sources are disabled: `HOME` is a fresh generation (no user
-`hooks.json`, `settings.json`, skills or MCP config besides Cowboy's, written
-read-only by the proxy before `agy` starts and owned by root through the
-runtime store bind), and `--include-default-customizations=false`.
-The hook is `hook.mjs`; a timeout, malformed input, non-zero exit or missing
-Node yields deny (the hook command is wrapped so that any failure prints the
-deny JSON).
+configuration sources are fixed: the daemon bind-mounts read-only, from the
+runtime store, `~/.gemini/config/hooks.json` and
+`~/.gemini/antigravity-cli/settings.json` over the account home, so neither
+the model nor `agy` can change them, and runs `agy` with
+`--include-default-customizations=false`.
+
+**Two denial layers [R2-14].** (1) The `PreToolUse` hook `hook.mjs` allows
+only the exact facade tools and `ask_question`. (2) `settings.json`
+`permissions.deny` lists every built-in file, command, subagent, schedule and
+workflow tool, which `agy` enforces in its permission layer independently of
+hooks. Native acceptance must show, on the pinned `agy`, that a missing,
+timed-out, malformed, crashing and killed hook each still leaves the tool
+denied (or ends the session); if any case fails open on either layer, split
+execution stays unavailable. Even then, both layers failing would expose only
+the account's own home: the unit has no other account's or Provider's data.
 
 **One connection owner [R1-14].** The proxy owns the single
 `execution-connection.mjs` `Connection` (the endpoint admits one connection).
@@ -193,21 +254,26 @@ outside the workspace root after `fs/canonicalize` (symlinks resolved on the
 target) for `ReadFile`/`WriteFile`/`EditFile`/`ListDirectory`; `RunCommand` is a
 shell on the target by design.
 
-**Mutations [R1-11, R1-12].** `WriteFile` and `EditFile` use the execution
-helper's conditional write (compare the observed content hash, publish
-atomically, report a conflict) instead of read-check-write. Each mutation and
-process start gets a proxy-allocated operation ID persisted in the generation
-home before submission; a lost reply leaves the ID `uncertain`, and any further
-mutation of the same path or a new start for the same tool call is refused
-until observation (re-read hash, `process/read`) resolves it. Tested with
-repeated MCP calls and cold `session/load`.
+**Mutations [R1-11, R1-12, R2-16].** `WriteFile` and `EditFile` use the
+execution helper's conditional write (compare the observed content hash,
+publish atomically, report a conflict). The execution protocol carries no
+caller idempotency key, so a mutation or process start whose reply is lost is
+**not** resolved by observation: the facade reports the tool call as
+`outcome unknown`, ends the turn, and marks the session `uncertain_effect`;
+the session's queue parks until the owner reviews the target and continues.
+No automatic retry exists anywhere. Tested with repeated MCP calls and cold
+`session/load`.
 
-**Cancellation [R1-10].** Process IDs are allocated by the proxy before
-`process/start` and recorded with their ACP turn and tool call. ACP
-`session/cancel`, MCP cancellation, proxy shutdown and account stop all send
-`process/terminate` for every live ID of the turn; a start after cancellation
-is refused; termination requests are retried until `process/exited` or the
-target reports the ID unknown.
+**Cancellation [R1-10, R2-10].** The facade allocates each process ID before
+`process/start` and appends it to the unit's `process-ledger/` (bound outside
+the home, readable by the daemon) before sending. Cancel order: mark the turn
+cancelled (no new start); for every ledger ID, wait for its start reply if
+one is in flight, then `process/terminate` until `process/exited`. An unknown
+ID during an in-flight start is not treated as terminated. If the proxy dies,
+the daemon returns the ledger to the worker with the unit's exit, and the
+worker (outside the unit, holding the same execution binding) terminates every
+listed ID through a fresh `Connection` before the turn's reservation is
+released.
 
 **Bounds [R1-16].** `ReadFile` ≤ 256 KiB per call (offset/length paging),
 `ListDirectory` ≤ 2,000 entries, depth 1; `SearchFiles` ≤ 500 matches and
@@ -216,13 +282,19 @@ default timeout 120 s, maximum 600 s; every request below the connection's
 14 MiB frame. Projection: Git status ≤ 200 lines, instruction snapshot ≤ 64 KiB
 total, each file ≤ 16 KiB, explicit `[truncated]` markers.
 
-**Context suppression [R1-15].** The fresh generation home contains no user
-guidance, skills or settings; `--include-default-customizations=false` removes
-built-in customizations. Native acceptance compares deliberately different
-runtime and target contexts (OS, cwd, guidance) across new, load, resume and
-compaction, and asserts that the model reports only the target's. Repository
-text in the projection is fenced as untrusted content, separate from Cowboy's
-routing instructions.
+**Context suppression [R1-15, R2-17].** Native sources of runtime context are
+enumerated and closed: the cwd is an empty unit-private directory with the
+target's path (no files, no Git); the home has no guidance, skills, workflows
+or memories except what Cowboy mounts (`GEMINI.md` absent; `agy`'s own
+`brain/` and memories are per account and contain only that account's
+Antigravity history); `--include-default-customizations=false`. The runtime
+OS equals the target's on Hawk (Linux); a different target OS is refused.
+Acceptance plants distinct canary guidance on the runtime side (a `GEMINI.md`
+in a test home and cwd) and the target, and requires that new, load, resume
+and compacted sessions never surface the runtime canary. If `agy` exposes a
+runtime context source this design does not close, split execution stays
+unavailable. Repository text in the projection is fenced as untrusted
+content, separate from Cowboy's routing instructions.
 
 **Declaration and placement.** `provider.execution-jsonrpc.v1` with the
 executor digest, only after native acceptance on an exact generation; installed
@@ -242,32 +314,41 @@ login completion, session creation **and every dispatch and worker revival**
 new owner send after the time; `suspended` and `blocked` stop the account's
 units and need an explicit owner action to clear.
 
-**One active turn per account [R1-8].** The Controller reserves the account
-slot atomically (durable row: account, session, turn ID) before dispatch;
-the reservation survives restarts and uncertain dispatch. It is released only
-after the worker reports the turn's single terminal ACP response *and* any
-refusal state has been committed. On Controller start, reservations are
-reconciled with live account units (daemon `list-units <key>`); an
-unaccounted unit keeps the slot until it exits or is stopped. Late replies
-after a terminal response are discarded.
+**One active turn per account [R1-8, R2-11].** The Controller reserves the
+account slot atomically (durable row: account, session, turn, worker epoch)
+before dispatch, and records the dispatch and the unit handle (name,
+`InvocationID`, boot ID) the worker reports. The slot is released when one of
+these is durably recorded: the turn's single terminal ACP response with its
+refusal evidence settled; or **proven** loss of the turn's unit (the daemon
+reports the exact invocation gone, or the boot ID changed) after the worker's
+ledger termination, which settles the turn `interrupted` without replaying
+anything; or a reservation that never reached dispatch (no dispatch record),
+settled `not_dispatched`. Anything else keeps the slot and shows the account
+"needs attention"; the owner can force-release after a confirmed account stop.
+Late replies after a terminal record are discarded.
 
-**Refusal evidence [R1-7].** Log-watching is not accepted as authoritative
-until proven. The acceptance phase with the test account records the exact
-`agy` log lines and ACP shapes for a successful turn, `VALIDATION_REQUIRED`
-and `UNSUPPORTED_LOCATION` (both observable without provoking enforcement),
-including how a line is attributed to a turn (conversation/step IDs in the
-log). Only fields that `agy` writes from the backend response (status code and
-reason enum, never model text) are parsed, from the exact process's own log
-file (the unit's private home makes the file unambiguous), with a cursor per
-turn and a bounded reader. Until the suspension and 429 shapes are observed:
-any turn that ends without a positive backend success marker in the log is
-classified `unknown_refusal`, which parks the account and asks the owner;
-this fails closed.
+**Refusal evidence [R1-7, R2-12].** Log-watching is not accepted as
+authoritative until proven. Acceptance with the test account records the exact
+`agy` log lines and ACP shapes for successful turns (single- and multi-step),
+`VALIDATION_REQUIRED` and `UNSUPPORTED_LOCATION` (both observable without
+provoking enforcement), and how each line is attributed to a turn and backend
+step. Parsing reads only backend status fields (code, reason enum), never
+model text, from the unit's own log file with a per-turn cursor and a bounded
+reader. Rules: every backend request of the turn must have a matching success
+record; any refusal record takes precedence over successes; a turn is settled
+only after an evidence-completion barrier (the turn-end record `agy` writes
+after its last backend step, or the unit's exit with the log closed). Missing
+or ambiguous evidence → `unknown_refusal` (parks the account, owner decides).
+A proven infrastructure interruption (unit lost, target lost) is
+`interrupted`, not a refusal.
 
 ## Sign-in
 
 - The account's Machine browser on OVH, with `accounts.machine_browser` and
   the account's `browser_enabled`; one browser identity per account.
+- Browser profile state remains within the recorded same-user trust
+  boundary of the Machine browser (owner decision); browsers of different
+  accounts stay strictly isolated from each other.
 - **[R1-17]** The browser's unit gains
   `RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK` for accounts of a
   Provider whose manifest declares `ipv4_only_v1`, before the first sign-in;
@@ -315,9 +396,10 @@ why.
 ## Residual risks
 
 - Linkage of the accounts by shared egress, host fingerprint and timing.
-- A hostile `ubuntu` process can drive an admitted account through the
-  sandboxed entrypoint (quota use), but cannot read its credential or run code
-  as it; admission, the turn cap and the state fence still apply.
+- Same-user (`ubuntu`) host processes and the Machine are trusted (owner
+  decision): a malicious vendor runtime of another Provider could drive the
+  daemon or the account browser. No model-driven code runs as `ubuntu` on
+  OVH.
 - Workspace tools run with the session's full rights on the development
   Machine.
 - Root on OVH can read every account's state.
