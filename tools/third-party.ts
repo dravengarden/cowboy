@@ -298,6 +298,7 @@ async function upgrade(name: string, tag: string): Promise<void> {
   const work = workTree(name);
   const state = await readState(work);
   await requireClean(work);
+  await requireSeriesShape(work, state);
   await requireRecorded(name, state);
   if (
     state.upgrade ||
