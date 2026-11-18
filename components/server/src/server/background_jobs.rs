@@ -1128,11 +1128,11 @@ pub(super) async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
         superagent::dispatch(state, req).await;
         return;
     }
-    // Named-only accounts: admission, account state, uncertain effects and
-    // the account's single active turn, before anything can revive a worker.
+    // Named-only accounts: admission, account state and uncertain effects,
+    // before anything can revive a worker.
     let gate = provider_accounts::controls::before_dispatch(&state, &req.session_id, req.explicit);
     match gate.await {
-        Ok(account_turn) => dispatch_admitted(state, req, account_turn).await,
+        Ok(()) => dispatch_admitted(state, req).await,
         Err(reason) => {
             // The dispatch ownership is held until the prompt is requeued.
             let DispatchReq {
@@ -1148,11 +1148,7 @@ pub(super) async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
     }
 }
 
-async fn dispatch_admitted(
-    state: Arc<AppState>,
-    req: DispatchReq,
-    mut account_turn: Option<provider_accounts::controls::Turn>,
-) {
+async fn dispatch_admitted(state: Arc<AppState>, req: DispatchReq) {
     let hub = &state.hub;
     let supervisor = &state.supervisor;
     let plugin_lifecycle_fences = &state.plugin_lifecycle_fences;
@@ -1217,18 +1213,6 @@ async fn dispatch_admitted(
         retain(session_id, text, content, cmid, &error);
         return;
     }
-    // An account turn passes its final check and is durably
-    // `may_have_dispatched` (with the prompt's delivery ID) before the prompt
-    // can be enqueued (R3-9); the handoff lock is held to the end, and a path
-    // below that never enqueues it says so.
-    let mut cmid = cmid;
-    let _handoff = match mark_account_turn(account_turn.as_mut(), &mut cmid).await {
-        Ok(handoff) => handoff,
-        Err(reason) => {
-            retain_failed_dispatch(hub, session_id, text, content, cmid, &reason);
-            return;
-        }
-    };
     let plugin_key = provider_fence_key_for_session(hub, &session_id);
     let dispatch_fence = plugin_lifecycle_fences.read();
     if plugin_key
@@ -1236,7 +1220,6 @@ async fn dispatch_admitted(
         .and_then(|key| dispatch_fence.get(key))
         .is_some_and(|state| *state != PluginFenceState::Installing)
     {
-        provider_accounts::controls::unsent(&mut account_turn);
         hub.requeue_prompt(&session_id, text, content, cmid);
         return;
     }
@@ -1247,7 +1230,6 @@ async fn dispatch_admitted(
         && crate::session_context::waits_for_agent(hub, &session_id, cmid.as_deref())
         && !supervisor.has_live_worker(&session_id)
     {
-        provider_accounts::controls::unsent(&mut account_turn);
         match supervisor.wake_for_queued_prompt(&session_id) {
             Ok(()) => {
                 hub.requeue_prompt(&session_id, text, content, cmid);
@@ -1260,7 +1242,6 @@ async fn dispatch_admitted(
     }
     let Some(blocks) = build_prompt_blocks(&text, &content) else {
         tracing::warn!(session = %session_id, "queued prompt had no content; dropping");
-        provider_accounts::controls::unsent(&mut account_turn);
         hub.clear_in_flight(&session_id);
         return;
     };
@@ -1289,22 +1270,10 @@ async fn dispatch_admitted(
             if let Some(trace) = &trace {
                 observability.finish_delivery_trace(trace, false);
             }
-            provider_accounts::controls::unsent(&mut account_turn);
             tracing::warn!(session = %session_id, error = %e, "queued dispatch failed");
             retain(session_id, text, content, cmid, &e);
         }
     }
-}
-
-/// The account turn's final check and mark, with the prompt's delivery ID
-/// (its `cmid`, assigned from the reservation when the prompt has none).
-async fn mark_account_turn(
-    turn: Option<&mut provider_accounts::controls::Turn>,
-    cmid: &mut Option<String>,
-) -> Result<Option<provider_accounts::controls::Handoff>, String> {
-    let Some(turn) = turn else { return Ok(None) };
-    let delivery = cmid.get_or_insert_with(|| turn.id().to_owned()).clone();
-    turn.mark(&delivery).await.map(Some)
 }
 
 /// Restore a prompt that left the durable queue but never reached its runtime.

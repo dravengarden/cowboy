@@ -2554,7 +2554,6 @@ fn handle_machine_command(
         | MachineCommand::Projects { .. }
         | MachineCommand::QueryWorkerExit { .. }
         | MachineCommand::AccountSandboxFence { .. }
-        | MachineCommand::QueryAccountTurnTermination { .. }
         | MachineCommand::AccountSandboxRemove { .. }
         | MachineCommand::AdapterRequest { .. }
         | MachineCommand::InvokePluginHost { .. }

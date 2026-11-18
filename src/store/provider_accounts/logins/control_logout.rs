@@ -7,7 +7,82 @@ use super::native_logout::Completion;
 use super::{Receipt, Registry, Result, StorageBackend, Store};
 use anyhow::ensure;
 
+/// One Machine's sign-in a control logout targets.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LogoutTarget {
+    pub machine_id: String,
+    pub login_operation: String,
+    pub login_request_id: String,
+    pub generation: u64,
+    /// The Machine enrollment the sign-in was dispatched to.
+    pub recipient_fingerprint: String,
+}
+
 impl Store {
+    /// Each Machine's newest dispatched native sign-in of `account` that has
+    /// no recorded logout, whatever its recorded outcome: the Controller's
+    /// receipt is not proof the Machine holds no token, so the Machine's
+    /// daemon decides what the logout clears.
+    pub async fn native_logout_targets(
+        &self,
+        owner: &str,
+        account: &crate::provider_account::ProviderAccountId,
+    ) -> Result<Vec<LogoutTarget>> {
+        let query =
+            "SELECT operation_id,value FROM provider_login_operations WHERE owner_user_id=$1";
+        let rows: Vec<(String, String)> = match &self.backend {
+            StorageBackend::Postgres(db) => {
+                sqlx::query_as(query)
+                    .bind(owner)
+                    .fetch_all(&db.pool)
+                    .await?
+            }
+            StorageBackend::Sqlite(db) => {
+                sqlx::query_as(query)
+                    .bind(owner)
+                    .fetch_all(&db.pool)
+                    .await?
+            }
+        };
+        let mut newest: std::collections::BTreeMap<String, LogoutTarget> =
+            std::collections::BTreeMap::new();
+        for (operation, value) in rows {
+            let Ok(login) = serde_json::from_str::<Receipt>(&value) else {
+                continue;
+            };
+            let (Some(generation), Some(fingerprint)) = (
+                login.native_generation,
+                login.dispatch_recipient_fingerprint.clone(),
+            ) else {
+                continue;
+            };
+            if login.input.account_id != *account
+                || login.dispatch_rejection.is_some()
+                || login.native_logout.is_some()
+            {
+                continue;
+            }
+            let machine = login.input.machine_id.clone();
+            if newest
+                .get(&machine)
+                .is_some_and(|known| known.generation >= generation)
+            {
+                continue;
+            }
+            newest.insert(
+                machine.clone(),
+                LogoutTarget {
+                    machine_id: machine,
+                    login_operation: operation,
+                    login_request_id: login.request_id,
+                    generation,
+                    recipient_fingerprint: fingerprint,
+                },
+            );
+        }
+        Ok(newest.into_values().collect())
+    }
+
     /// Record the Machine's logout outcome for the login `login_operation`.
     /// Evidence is recorded whatever the account's current control state:
     /// the Machine has already acted. An exact replay is read-only; a
@@ -49,11 +124,20 @@ impl Store {
                     tx.commit().await?;
                     return Ok(login);
                 }
-                let signed_in = login.native_completion.as_ref().is_some_and(|native| {
-                    native.machine_id == completion.machine_id
-                        && native.recipient_fingerprint == completion.recipient_fingerprint
-                        && native.profile.generation == scope.generation
-                });
+                // A completed sign-in, or a dispatched one whose completion the
+                // Controller never recorded (the daemon may still hold its
+                // token), bound to the enrollment it was dispatched to.
+                let signed_in = match login.native_completion.as_ref() {
+                    Some(native) => {
+                        native.machine_id == completion.machine_id
+                            && native.recipient_fingerprint == completion.recipient_fingerprint
+                            && native.profile.generation == scope.generation
+                    }
+                    None => {
+                        login.dispatch_recipient_fingerprint.as_ref()
+                            == Some(&completion.recipient_fingerprint)
+                    }
+                };
                 ensure!(
                     login.input.account_id == scope.account_id
                         && login.provider_id == scope.provider_id

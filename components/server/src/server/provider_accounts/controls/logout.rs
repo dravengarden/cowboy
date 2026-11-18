@@ -49,6 +49,20 @@ pub(in crate::server) struct Target {
     pub updated_at_ms: i64,
 }
 
+/// Why the Machine's logout evidence was not recorded.
+enum Recording {
+    Rejected(String),
+    Transient(String),
+}
+
+impl Recording {
+    fn detail(self) -> String {
+        match self {
+            Self::Rejected(detail) | Self::Transient(detail) => detail,
+        }
+    }
+}
+
 pub(in crate::server) fn logout_key(account: &str) -> String {
     format!(
         "{}{account}",
@@ -91,44 +105,31 @@ impl Controls {
         }
         let account = control.account_id.as_str();
         let operation_id = logout_operation_id(account, control.revision);
-        if self
-            .logout_record(account)
-            .is_some_and(|record| record.operation_id == operation_id)
-        {
-            self.run_logouts();
-            return Ok(());
-        }
         let id: ProviderAccountId = account.parse().map_err(|_| "account_unavailable")?;
-        let now = now_ms();
-        let mut targets = Vec::new();
-        for machine in self
+        // Every Machine's newest dispatched sign-in, not only completed
+        // receipts: a token may remain where the Controller recorded none.
+        let found = self
             .store
-            .account_native_machines(account)
+            .native_logout_targets(owner, &id)
             .await
-            .map_err(|_| "unavailable")?
-        {
-            let Some((login_operation, completion)) = self
-                .store
-                .native_login_for_session(owner, &id, &machine)
-                .await
-                .map_err(|_| "unavailable")?
-            else {
-                continue;
-            };
-            targets.push(Target {
-                machine_id: machine,
-                login_operation,
-                login_request_id: completion.profile.request_id.clone(),
-                generation: completion.profile.generation,
-                recipient_fingerprint: completion.recipient_fingerprint.clone(),
+            .map_err(|_| "unavailable")?;
+        let now = now_ms();
+        let targets = found
+            .into_iter()
+            .map(|target| Target {
+                machine_id: target.machine_id,
+                login_operation: target.login_operation,
+                login_request_id: target.login_request_id,
+                generation: target.generation,
+                recipient_fingerprint: target.recipient_fingerprint,
                 state: LogoutTargetState::Pending,
                 dispatched: false,
                 credential_cleared: None,
                 history_retained: None,
                 detail: None,
                 updated_at_ms: now,
-            });
-        }
+            })
+            .collect();
         let record = Record {
             operation_id,
             owner_user_id: owner.to_owned(),
@@ -138,7 +139,17 @@ impl Controls {
             targets,
         };
         {
+            // Decided and written under the writer lock: a repeated request
+            // for the same block never rewrites (rolls back) its progress.
             let _write = self.cache.writes.lock().await;
+            if self
+                .logout_record(account)
+                .is_some_and(|current| current.operation_id == record.operation_id)
+            {
+                drop(_write);
+                self.run_logouts();
+                return Ok(());
+            }
             self.write_logout(account, &record).await?;
         }
         tracing::info!(
@@ -279,7 +290,15 @@ impl Controls {
             login_request_id: target.login_request_id.clone(),
             operation_id: operation.to_owned(),
         };
-        let observation = match self.env.native_logout(machine.to_owned(), request).await {
+        let observation = match self
+            .env
+            .native_logout(
+                machine.to_owned(),
+                target.recipient_fingerprint.clone(),
+                request,
+            )
+            .await
+        {
             Ok(observation) => observation,
             Err(detail) => {
                 tracing::warn!(account, machine, %detail, "account logout unconfirmed; retrying");
@@ -295,11 +314,15 @@ impl Controls {
             target.credential_cleared = observation.credential_cleared;
             target.history_retained = observation.history_retained;
             target.state = match (observation.succeeded, &recorded) {
+                // A receipt-store failure is transient: the target stays
+                // pending and the same operation is retried; the Machine
+                // replays its recorded outcome.
+                (Some(_), Err(Recording::Transient(_))) => LogoutTargetState::Pending,
                 (_, Err(_)) | (None, _) => LogoutTargetState::Unconfirmed,
                 (Some(true), Ok(())) => LogoutTargetState::SignedOut,
                 (Some(false), Ok(())) => LogoutTargetState::Failed,
             };
-            target.detail = recorded.err();
+            target.detail = recorded.err().map(Recording::detail);
         })
         .await;
         tracing::info!(
@@ -319,9 +342,11 @@ impl Controls {
         record: &Record,
         target: &Target,
         observation: &NativeLogoutObservation,
-    ) -> Result<(), String> {
+    ) -> Result<(), Recording> {
         if observation.succeeded.is_none() {
-            return Err("the Machine could not establish the logout outcome".into());
+            return Err(Recording::Rejected(
+                "the Machine could not establish the logout outcome".into(),
+            ));
         }
         let completion = Completion {
             revocation_operation: record.operation_id.clone(),
@@ -333,7 +358,19 @@ impl Controls {
             .record_control_logout(&record.owner_user_id, &target.login_operation, &completion)
             .await
             .map(drop)
-            .map_err(|error| error.to_string())
+            .map_err(|error| {
+                let detail = error.to_string();
+                // The store's own refusals are definitive; anything else
+                // (a database outage) is retried.
+                if detail.starts_with("native_logout_")
+                    || detail == "account_unavailable"
+                    || detail == "invalid_native_logout_completion"
+                {
+                    Recording::Rejected(detail)
+                } else {
+                    Recording::Transient(detail)
+                }
+            })
     }
 
     /// The owner-facing projection of an account's logout (no fingerprints

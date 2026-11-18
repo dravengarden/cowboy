@@ -20,15 +20,10 @@ const CONFIRM: Partial<Record<ControlAction, { title: string; body: string; butt
     body: "Runs the Provider's own sign-out in this account's sandbox on each signed-in Machine and removes only its credential. Its conversations and history stay, and the account remains. An offline Machine signs out when it reconnects. Signing in again needs the account unblocked.",
     button: "Sign out",
   },
-  force_release: {
-    title: "Force release the active turn?",
-    body: "The account's units are confirmed stopped, but the turn's outcome could not be settled. Releasing lets another turn of this account start; the released turn is not resent.",
-    button: "Force release",
-  },
 };
 
 /** Account controls of a named-only (Antigravity) account card: state,
- * active turn, usage, admission and the owner's kill switch. */
+ * the session using it, usage, admission and the owner's kill switch. */
 export function AccountControlsPanel({ control, observation, disabled, onChange }: {
   control: AccountControl;
   /** The account's cached usage/sign-in observation, if any. */
@@ -42,7 +37,7 @@ export function AccountControlsPanel({ control, observation, disabled, onChange 
   const sessions = useStoreSelector((state) => state.sessions);
   const badge = accountStateBadge(control, signInObservation(observation));
   const actions = controlActions(control);
-  const turnSession = control.turn ? sessions.find((session) => session.id === control.turn?.session_id) : undefined;
+  const holder = control.in_use_by ? sessions.find((session) => session.id === control.in_use_by) : undefined;
   const pendingFences = control.fences.filter((fence) => fence.state !== "confirmed");
   const logout = logoutStatus(control.logout);
   async function run(action: ControlAction) {
@@ -58,11 +53,11 @@ export function AccountControlsPanel({ control, observation, disabled, onChange 
   return <Stack spacing={0.75} data-account-controls={control.account_id} data-account-state={control.state}>
     <ProviderAccountStatus label={badge.label} tone={badge.tone === "success" ? "success" : badge.tone === "default" ? "default" : "warning"}
       {...(badge.detail ? { detail: badge.detail } : {})} />
-    {control.turn && <Typography variant="caption" color="text.secondary" data-account-turn>
-      In use by 1 turn ·{" "}
+    {control.in_use_by && <Typography variant="caption" color="text.secondary" data-account-in-use>
+      In use by{" "}
       <Link component="button" type="button" variant="caption" sx={{ verticalAlign: "baseline" }}
-        onClick={() => requestPickSession(control.turn!.session_id, turnSession)}>
-        {turnSession?.title || control.turn.session_id}
+        onClick={() => requestPickSession(control.in_use_by!, holder)}>
+        {holder?.title || control.in_use_by}
       </Link>
     </Typography>}
     <Typography variant="caption" color="text.secondary">Usage · Not available</Typography>
@@ -83,7 +78,6 @@ export function AccountControlsPanel({ control, observation, disabled, onChange 
       {actions.unblock && <Button size="small" disabled={off} onClick={() => void run("unblock")}>Unblock</Button>}
       {actions.logout && <Button size="small" disabled={off} onClick={() => setConfirming("logout")}>Sign out…</Button>}
       {actions.stopUnits && <Button size="small" disabled={off} onClick={() => void run("stop_units")}>Stop units</Button>}
-      {actions.forceRelease && <Button size="small" color="error" disabled={off} onClick={() => setConfirming("force_release")}>Force release…</Button>}
     </Stack>
     {actions.clear && controlReasonText(control.reason) && <Typography variant="caption" color="text.secondary">
       Reason · {controlReasonText(control.reason)}

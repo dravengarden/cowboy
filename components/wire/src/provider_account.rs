@@ -249,39 +249,6 @@ pub struct AccountFenceObservation {
     pub stopped: Vec<String>,
 }
 
-/// The Controller's question to a session's runtime Machine about one
-/// dispatched account turn whose worker is gone: is every process of its
-/// execution target proven gone (R3-6, R3-10)? Answered only by
-/// `AccountTurnTerminationObserved`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AccountTurnTerminationQuery {
-    pub account_id: ProviderAccountId,
-    pub provider_id: String,
-    pub session_id: String,
-    /// The worker incarnation the turn was marked with (empty while its
-    /// dispatch revived the session).
-    pub worker_epoch: String,
-    /// The prompt's delivery ID (its `cmid`).
-    pub delivery_id: String,
-}
-
-/// The worker/Machine ledger's evidence about the execution target of one
-/// reserved turn on its original binding. Without it no loss of a dispatched
-/// turn is proven.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TargetTermination {
-    /// Every process of the turn's execution target exited: no worker of
-    /// the turn's epoch runs, the session's process ledger holds nothing and
-    /// no account unit of the session survives its worker.
-    pub terminated: bool,
-    /// The backend class reconciled from the unit's closed log, when the
-    /// log was closed and its evidence settled.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub closed_log_class: Option<String>,
-}
-
 /// What the Controller asks a Machine's account-sandbox daemon
 /// (`remove_account`) when a named-only account is revoked: stop every unit
 /// of the account, then remove its persistent home and system user.

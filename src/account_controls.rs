@@ -1,12 +1,13 @@
 //! Account controls of named-only Providers (Antigravity): the durable
-//! per-account state, the one-turn reservation and the settlement rules
+//! per-account state and the transitions backend signals cause
 //! (`docs/antigravity-real-accounts-design.md`, "Account controls", "Kill
-//! switch and logout", amendments R3-4, R3-9, R3-10, R3-16).
+//! switch and logout" and "Revision 5 simplification").
 //!
 //! This module is pure policy over the stored records; the Controller's
 //! dispatcher, reconciler and owner actions apply it. Nothing here reads
-//! model text: a turn is classified only from the proxy's closed refusal and
-//! violation codes in its terminal record.
+//! model text: a turn ending is classified only from the proxy's closed
+//! refusal and violation codes. One runtime per account (the daemon's unit
+//! limit) bounds an account to one turn, so no turn is reserved or settled.
 
 use serde::{Deserialize, Serialize};
 
@@ -97,7 +98,7 @@ impl AccountState {
         }
     }
 
-    /// An automatic transition (turn settlement) never replaces a more
+    /// An automatic transition (a backend signal) never replaces a more
     /// severe state; only the owner lowers one.
     #[must_use]
     pub const fn severity(self) -> u8 {
@@ -112,10 +113,11 @@ impl AccountState {
         }
     }
 
-    /// Whether entering this state stops the account's units.
+    /// Whether entering this state stops the account's units. A policy
+    /// violation enters `NeedsAttention` and stops them too.
     #[must_use]
     pub const fn stops_units(self) -> bool {
-        matches!(self, Self::Suspended | Self::Blocked)
+        matches!(self, Self::Suspended | Self::Blocked | Self::NeedsAttention)
     }
 
     /// The owner-facing explanation of a parked queue.
@@ -150,70 +152,6 @@ pub struct Control {
     pub until_ms: Option<i64>,
     pub updated_at_ms: i64,
     pub revision: i64,
-}
-
-/// A durable reservation of an account's single active turn (R3-9).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReservationState {
-    /// Taken before dispatch; nothing has left the Controller.
-    Reserved,
-    /// Persisted before the prompt is enqueued to the worker: the backend
-    /// may have received it.
-    MayHaveDispatched,
-}
-
-impl ReservationState {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Reserved => "reserved",
-            Self::MayHaveDispatched => "may_have_dispatched",
-        }
-    }
-
-    #[must_use]
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "reserved" => Some(Self::Reserved),
-            "may_have_dispatched" => Some(Self::MayHaveDispatched),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Reservation {
-    pub account_id: String,
-    pub owner_user_id: String,
-    pub session_id: String,
-    /// The Controller-generated reservation ID; never a caller's value.
-    pub turn_id: String,
-    /// The prompt's delivery ID (its `cmid`), set when the turn is marked:
-    /// the worker reports it with the turn's terminal record.
-    pub delivery_id: String,
-    /// The worker incarnation known when the turn was marked; empty while
-    /// the dispatch revives the session.
-    pub worker_epoch: String,
-    /// The session's runtime Machine when the turn was marked: the original
-    /// binding its termination evidence must come from.
-    pub machine_id: String,
-    /// The session's newest event sequence before this turn: its terminal
-    /// record is the first turn end after it.
-    pub after_seq: i64,
-    pub state: ReservationState,
-    pub created_at_ms: i64,
-    pub updated_at_ms: i64,
-    /// The turn's terminal record, as delivered by the worker incarnation
-    /// that ran it (matched on session, delivery ID and worker epoch).
-    pub terminal: Option<Terminal>,
-}
-
-/// The terminal record of a reserved turn.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Terminal {
-    pub worker_epoch: String,
-    pub stop_reason: String,
 }
 
 /// A Machine fence the Controller owes the account's daemon.
@@ -287,7 +225,7 @@ pub enum Gate {
     Park(String),
 }
 
-/// Everything the dispatch gate decides on, read before the reservation.
+/// Everything the dispatch gate decides on.
 #[derive(Clone, Copy, Debug)]
 pub struct GateInput<'a> {
     pub admitted: bool,
@@ -299,7 +237,7 @@ pub struct GateInput<'a> {
     pub now_ms: i64,
 }
 
-/// The dispatch gate of one prompt (before its reservation).
+/// The dispatch gate of one prompt.
 #[must_use]
 pub fn gate(input: &GateInput<'_>) -> Gate {
     if !input.admitted {
@@ -357,34 +295,18 @@ pub fn revival_allowed(
     }
 }
 
-/// Whether another session's reservation holds the account's slot.
-#[must_use]
-pub fn slot_reason(reservation: &Reservation, session_id: &str) -> Option<String> {
-    (reservation.session_id != session_id).then(|| {
-        format!(
-            "another turn of this Antigravity account is running (session {})",
-            reservation.session_id
-        )
-    })
-}
-
-/// How a reserved turn ended, from Controller evidence only.
+/// What a turn ending says about its account (the proxy's structured
+/// result, `docs/antigravity-real-accounts-design.md`, "Revision 5").
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum TurnOutcome {
-    /// The turn's terminal record without a refusal: the proxy settled its
-    /// backend evidence as `ok` (or the client cancelled it).
-    Completed,
+pub enum Signal {
+    /// A normal ending, or the proxy settled the backend evidence `ok`.
+    None,
     /// The proxy settled a refusal class.
     Refused(AccountState),
     /// The proxy saw a built-in tool execute.
     PolicyViolation(String),
-    /// A terminal error with no settled backend evidence.
-    Unproven,
-    /// Proven loss of the turn's unit; `evidence_complete` only when the
-    /// unit's backend evidence settled `ok` before it was lost.
-    UnitLost { evidence_complete: bool },
-    /// Nothing left the Controller: the dispatch never enqueued the prompt.
-    NotDispatched,
+    /// An error ending (or stop reason) the proxy did not classify.
+    Unclassified,
 }
 
 /// The ACP stop reasons of a turn that ended normally (`Debug` of
@@ -398,21 +320,21 @@ const COMPLETED_STOP_REASONS: [&str; 5] = [
     "Cancelled",
 ];
 
-/// Classify a terminal record's stop reason. A refusal or violation counts
+/// Classify a turn ending's stop reason. A refusal or violation counts
 /// only as the proxy's validated structured result: the error message is
 /// exactly the proxy's closed code and its data carries the same code in
 /// `cowboy` (`proxy.mjs`). Vendor text that merely contains a code, and
-/// every unclassified error, is unproven.
+/// every unclassified error, is [`Signal::Unclassified`].
 #[must_use]
-pub fn classify_stop_reason(stop_reason: &str) -> TurnOutcome {
+pub fn classify_stop_reason(stop_reason: &str) -> Signal {
     let Some(error) = stop_reason.strip_prefix("error: ") else {
         return if COMPLETED_STOP_REASONS.contains(&stop_reason) {
-            TurnOutcome::Completed
+            Signal::None
         } else {
-            TurnOutcome::Unproven
+            Signal::Unclassified
         };
     };
-    proxy_result(error).unwrap_or(TurnOutcome::Unproven)
+    proxy_result(error).unwrap_or(Signal::Unclassified)
 }
 
 fn closed_code(code: &str) -> Option<&str> {
@@ -426,14 +348,14 @@ fn closed_code(code: &str) -> Option<&str> {
 
 /// The proxy's structured result: `<prefix><code>: <data>`, where `data` is
 /// the JSON-RPC error data the ACP error display appends.
-fn proxy_result(error: &str) -> Option<TurnOutcome> {
+fn proxy_result(error: &str) -> Option<Signal> {
     let (message, data) = error.split_once(": ")?;
     let data: serde_json::Value = serde_json::from_str(data).ok()?;
     let cowboy = data.get("cowboy")?.as_object()?;
     let violation = cowboy.get("policy_violation");
     if let Some(tool) = message.strip_prefix(VIOLATION_PREFIX) {
         let tool = closed_code(tool)?;
-        return (violation?.as_str()? == tool).then(|| TurnOutcome::PolicyViolation(tool.into()));
+        return (violation?.as_str()? == tool).then(|| Signal::PolicyViolation(tool.into()));
     }
     let class = closed_code(message.strip_prefix(REFUSAL_PREFIX)?)?;
     if violation.is_some() || cowboy.get("antigravity_backend")?.get("class")?.as_str()? != class {
@@ -442,113 +364,46 @@ fn proxy_result(error: &str) -> Option<TurnOutcome> {
     match AccountState::from_backend_class(class) {
         // The proxy never reports `ok` as an error.
         AccountState::Ok => None,
-        state => Some(TurnOutcome::Refused(state)),
+        state => Some(Signal::Refused(state)),
     }
 }
 
-/// The worker/Machine ledger's evidence about the execution target of one
-/// reserved turn on its original binding (`MachineCommand::
-/// QueryAccountTurnTermination`; see `docs/antigravity-real-accounts-design.md`,
-/// R3-10). Without it no loss of a dispatched turn is proven.
-pub use crate::provider_account::TargetTermination;
-
-/// The outcome of a dispatched turn whose worker is gone without a terminal
-/// record: only proven termination of its execution target settles it, and
-/// only the closed log's evidence decides how (R3-10).
+/// The account transition a signal causes: the state to enter (never lower
+/// than the current one; the store compares), its reason, and whether the
+/// account's units stop. `None` changes nothing.
 #[must_use]
-pub fn unit_loss_outcome(evidence: Option<&TargetTermination>) -> Option<TurnOutcome> {
-    let evidence = evidence.filter(|evidence| evidence.terminated)?;
-    Some(
-        match evidence.closed_log_class.as_deref().and_then(closed_code) {
-            Some(class) => match AccountState::from_backend_class(class) {
-                AccountState::Ok => TurnOutcome::UnitLost {
-                    evidence_complete: true,
-                },
-                state => TurnOutcome::Refused(state),
-            },
-            None => TurnOutcome::UnitLost {
-                evidence_complete: false,
-            },
-        },
-    )
+pub fn signal_transition(signal: &Signal) -> Option<Transition> {
+    let (state, reason) = match signal {
+        Signal::None => return None,
+        Signal::Refused(state) => (*state, state.as_str().to_owned()),
+        Signal::PolicyViolation(tool) => (
+            AccountState::NeedsAttention,
+            format!("policy_violation:{tool}"),
+        ),
+        Signal::Unclassified => (AccountState::UnknownRefusal, "unknown_refusal".to_owned()),
+    };
+    Some(Transition {
+        state,
+        reason,
+        stop_units: state.stops_units(),
+    })
 }
 
-/// The effect of settling a reservation.
+/// An automatic account transition.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Settlement {
-    /// Release the account's slot.
-    pub release: bool,
-    /// The settled outcome name, for receipts and logs.
-    pub settled: &'static str,
-    /// The account state to enter, with its reason; `None` keeps it.
-    pub state: Option<(AccountState, String)>,
-    /// Stop every unit of the account.
+pub struct Transition {
+    pub state: AccountState,
+    pub reason: String,
     pub stop_units: bool,
 }
 
-/// Settle `reservation` with `outcome` (R1-8, R3-9, R3-10).
+/// The owner-facing explanation of why another session of the account may
+/// not start: the daemon runs one runtime per account.
 #[must_use]
-pub fn settle(state: ReservationState, outcome: &TurnOutcome) -> Settlement {
-    let enter = |account: AccountState, reason: &str| Some((account, reason.to_owned()));
-    match outcome {
-        // Only a reservation that never reached `may_have_dispatched` can
-        // settle not_dispatched; anything else keeps the slot.
-        TurnOutcome::NotDispatched if state == ReservationState::Reserved => Settlement {
-            release: true,
-            settled: "not_dispatched",
-            state: None,
-            stop_units: false,
-        },
-        TurnOutcome::NotDispatched => Settlement {
-            release: false,
-            settled: "unsettled",
-            state: enter(AccountState::NeedsAttention, "dispatch_unproven"),
-            stop_units: false,
-        },
-        TurnOutcome::Completed => Settlement {
-            release: true,
-            settled: "completed",
-            state: None,
-            stop_units: false,
-        },
-        TurnOutcome::Refused(account) => Settlement {
-            release: true,
-            settled: "refused",
-            state: enter(*account, account.as_str()),
-            stop_units: account.stops_units(),
-        },
-        TurnOutcome::PolicyViolation(tool) => Settlement {
-            release: true,
-            settled: "policy_violation",
-            state: enter(
-                AccountState::NeedsAttention,
-                &format!("policy_violation:{tool}"),
-            ),
-            stop_units: true,
-        },
-        TurnOutcome::Unproven => Settlement {
-            release: true,
-            settled: "unknown_refusal",
-            state: enter(AccountState::UnknownRefusal, "unknown_refusal"),
-            stop_units: false,
-        },
-        TurnOutcome::UnitLost {
-            evidence_complete: true,
-        } => Settlement {
-            release: true,
-            settled: "interrupted",
-            state: None,
-            stop_units: false,
-        },
-        TurnOutcome::UnitLost {
-            evidence_complete: false,
-        } => Settlement {
-            release: true,
-            settled: "unknown_refusal",
-            state: enter(AccountState::UnknownRefusal, "unit_lost_without_evidence"),
-            stop_units: false,
-        },
-    }
+pub fn in_use_reason(account_name: &str, session_id: &str) -> String {
+    format!(
+        "Antigravity \u{b7} {account_name} is in use by another session ({session_id}); hibernate it first"
+    )
 }
 
 /// Owner actions on an account's controls.
@@ -564,9 +419,6 @@ pub enum OwnerAction {
     Unblock,
     /// Retry the account's unconfirmed Machine fences.
     StopUnits,
-    /// Release a turn slot whose settlement cannot be proven; requires a
-    /// confirmed account stop.
-    ForceRelease,
     /// History-preserving native logout of a blocked, stopped account.
     Logout,
 }
@@ -584,8 +436,7 @@ pub fn owner_transition(
         (OwnerAction::Clear, AccountState::Blocked) => Err("account_blocked_use_unblock"),
         (OwnerAction::Clear, AccountState::Ok) => Ok(None),
         (OwnerAction::Clear, _) => Ok(Some(AccountState::Ok)),
-        (OwnerAction::StopUnits | OwnerAction::ForceRelease, _)
-        | (OwnerAction::Logout, AccountState::Blocked) => Ok(None),
+        (OwnerAction::StopUnits, _) | (OwnerAction::Logout, AccountState::Blocked) => Ok(None),
         (OwnerAction::Logout, _) => Err("account_not_blocked"),
     }
 }

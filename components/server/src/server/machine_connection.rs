@@ -1259,8 +1259,7 @@ fn install_machine_runtime(
     if let Some(store) = state.store.as_ref() {
         runtime.attach_native_admission(machine_id.clone(), store.clone());
     }
-    runtime
-        .set_turn_terminal_listener(super::provider_accounts::controls::terminal_listener(state));
+    runtime.set_turn_end_listener(super::provider_accounts::controls::turn_end_listener(state));
     router.install(machine_id.clone(), Arc::clone(&runtime));
     tokio::spawn(async move {
         match RemoteBootstrap::from_stream(label, runtime_core).await {

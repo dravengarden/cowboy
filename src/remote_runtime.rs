@@ -28,7 +28,7 @@ mod broker_protocol;
 mod native_admission;
 mod reset_admission;
 mod startup_watch;
-pub mod turn_terminal;
+pub mod turn_end;
 mod worker_authority;
 use crate::runtime_wire::{
     CoreCommand, Frame, FrameReader, PROTOCOL_VERSION, PeerRole, RuntimeEvent, StartSession,
@@ -148,7 +148,7 @@ pub struct Shared {
     auth_recipient_key: Option<String>,
     telemetry: Mutex<Option<(String, crate::observability::Observability)>>,
     native_store: Mutex<Option<(String, crate::store::Store)>>,
-    turn_terminals: Mutex<Option<turn_terminal::Listener>>,
+    turn_ends: Mutex<Option<turn_end::Listener>>,
 }
 
 pub struct RemoteRuntime {
@@ -260,7 +260,7 @@ impl RemoteRuntime {
                 auth_recipient_key,
                 telemetry: Mutex::new(None),
                 native_store: Mutex::new(None),
-                turn_terminals: Mutex::new(None),
+                turn_ends: Mutex::new(None),
             }),
             notify_rx: Mutex::new(Some(notify_rx)),
         })
@@ -330,7 +330,7 @@ impl RemoteRuntime {
                 auth_recipient_key: None,
                 telemetry: Mutex::new(None),
                 native_store: Mutex::new(None),
-                turn_terminals: Mutex::new(None),
+                turn_ends: Mutex::new(None),
             }),
             notify_rx: Mutex::new(Some(notify_rx)),
         })
@@ -1986,7 +1986,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                         {
                             let _ = waiter.send(outcome.to_owned());
                         }
-                        turn_terminal::ended(shared, &session_id, &worker_epoch, &event);
+                        turn_end::ended(shared, &session_id, &event);
                         update_snapshot_from_event(shared, &session_id, runtime_seq, &event);
                         if let RuntimeEvent::Status {
                             state: WorkerState::Crashed | WorkerState::Exited,

@@ -2,7 +2,7 @@
 
 use super::*;
 
-mod account_turn;
+mod account_remove;
 
 pub(super) fn handle(
     command: MachineCommand,
@@ -140,17 +140,10 @@ pub(super) fn handle(
         MachineCommand::AccountSandboxFence { request_id, fence } => {
             tokio::spawn(account_sandbox_fence(providers, events, request_id, fence));
         }
-        MachineCommand::QueryAccountTurnTermination { request_id, query } => {
-            tokio::spawn(account_turn::termination(
-                providers,
-                durable_state,
-                events,
-                request_id,
-                query,
-            ));
-        }
         MachineCommand::AccountSandboxRemove { request_id, remove } => {
-            tokio::spawn(account_turn::remove(providers, events, request_id, remove));
+            tokio::spawn(account_remove::remove(
+                providers, events, request_id, remove,
+            ));
         }
         MachineCommand::AdapterRequest {
             request_id,

@@ -14,27 +14,6 @@ CREATE TABLE IF NOT EXISTS provider_account_controls (
     revision BIGINT NOT NULL CHECK (revision >= 1)
 );
 
--- The account's single active turn (R1-8, R2-11, R3-9): taken atomically
--- before dispatch, 'may_have_dispatched' before the prompt is enqueued.
--- turn_id is Controller-generated; delivery_id is the prompt's cmid the
--- worker reports with its terminal record, which is recorded only from the
--- worker epoch the turn was marked with.
-CREATE TABLE IF NOT EXISTS provider_account_turns (
-    account_id TEXT PRIMARY KEY CHECK (length(account_id) BETWEEN 1 AND 64),
-    owner_user_id TEXT NOT NULL,
-    session_id TEXT NOT NULL,
-    turn_id TEXT NOT NULL CHECK (length(turn_id) BETWEEN 1 AND 256),
-    delivery_id TEXT NOT NULL DEFAULT '' CHECK (length(delivery_id) <= 256),
-    worker_epoch TEXT NOT NULL,
-    machine_id TEXT NOT NULL DEFAULT '',
-    after_seq BIGINT NOT NULL,
-    state TEXT NOT NULL CHECK (state IN ('reserved', 'may_have_dispatched')),
-    created_at_ms BIGINT NOT NULL,
-    updated_at_ms BIGINT NOT NULL,
-    terminal_epoch TEXT,
-    terminal_stop_reason TEXT CHECK (length(terminal_stop_reason) <= 8192)
-);
-
 -- Machine fences the Controller owes an account's daemon; one current
 -- operation per Machine, retried with the same operation ID until confirmed.
 CREATE TABLE IF NOT EXISTS provider_account_fences (

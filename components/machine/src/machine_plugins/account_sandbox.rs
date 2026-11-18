@@ -218,28 +218,6 @@ impl MachinePluginStore {
         })
     }
 
-    /// The daemon's record of `account` (a named account of an
-    /// account-sandbox Provider); `None` when the daemon never created it, so
-    /// it runs no unit of it. A missing account is never created here.
-    pub fn account_sandbox_units_of(
-        &self,
-        provider: &str,
-        account: &crate::provider_account::ProviderAccountId,
-    ) -> Result<Option<daemon::AccountUnits>> {
-        ensure!(
-            !account.is_default() && crate::provider_account::named_only(provider),
-            "account sandbox records exist only for named accounts of account-sandbox Providers"
-        );
-        let (socket, service) = self.sandbox_host()?;
-        match daemon::Client::connect(socket)?
-            .list_units(&daemon::account_key(service, account.as_str()))
-        {
-            Ok(units) => Ok(Some(units)),
-            Err(error) if daemon::DaemonError::code_of(&error) == Some("not_found") => Ok(None),
-            Err(error) => Err(error),
-        }
-    }
-
     /// Remove a revoked account's persistent home and system user. The
     /// revocation has stopped its sessions and logged out its credential;
     /// the account fence `remove_account` requires is set here first (an
@@ -270,8 +248,9 @@ impl MachinePluginStore {
     /// Confirm with the daemon that no unit of `session` remains, from the
     /// session's durable worker launch record rather than the worker's
     /// snapshot (a lost worker reports none): every unit the daemon recorded
-    /// for the session is stopped and confirmed gone. A session whose bound
-    /// Provider is not sandboxed has no unit.
+    /// for the session is stopped and confirmed gone, and no unrecorded unit
+    /// of the account is alive. A session whose bound Provider is not
+    /// sandboxed has no unit.
     pub fn confirm_session_account_units_gone(&self, session: &str) -> Result<()> {
         let Some(receipt) = self.account_worker_exit(session)? else {
             return Ok(());
@@ -311,6 +290,14 @@ impl MachinePluginStore {
                 unit.unit
             );
         }
+        // A unit of the account the daemon holds no record of (its own
+        // reconciliation stops it) may still be this session's: the worker's
+        // exit stays unconfirmed until it is gone.
+        ensure!(
+            units.unrecorded.is_empty(),
+            "unrecorded account sandbox units remain: {}",
+            units.unrecorded.join(", ")
+        );
         Ok(())
     }
 

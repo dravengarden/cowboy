@@ -6,6 +6,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 mod control_logout;
+pub use control_logout::LogoutTarget;
 mod discovery;
 mod dispatch;
 mod native_admission;

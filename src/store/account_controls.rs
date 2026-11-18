@@ -1,14 +1,11 @@
 //! Durable account controls of named-only Providers (`crate::account_controls`):
-//! the per-account state, the single active-turn reservation and the Machine
-//! fences the Controller owes each account's daemon. Every state change that
+//! the per-account state and the Machine fences the Controller owes each
+//! account's daemon. Every state change that
 //! requires fences writes them in the same transaction, so a fence is never
 //! lost between the durable state and the Machine command.
 
 use super::{PostgresStorage, SqliteStorage, StorageBackend, Store};
-use crate::account_controls::{
-    AccountState, Control, Fence, FenceState, Reservation, ReservationState, Terminal,
-    fence_operation_id,
-};
+use crate::account_controls::{AccountState, Control, Fence, FenceState, fence_operation_id};
 use crate::provider_account::AccountFenceAction;
 use anyhow::{Context as _, Result};
 
@@ -38,50 +35,21 @@ pub struct StateChange<'a> {
     pub now_ms: i64,
 }
 
-/// One reservation, identified on every transition by account, session,
-/// Controller-generated turn ID and (once marked) worker epoch.
-#[derive(Clone, Copy, Debug)]
-pub struct TurnKey<'a> {
-    pub session_id: &'a str,
-    pub turn_id: &'a str,
-    pub worker_epoch: &'a str,
-    /// Match only a reservation still in this state.
-    pub only: Option<ReservationState>,
-}
-
-/// An automatic settlement of an account (a reserved turn's outcome or an
-/// unsettled turn), applied in one transaction: the state change (never
-/// lowering a more severe state, never replacing `blocked`), its stop fences
-/// and the reservation's release.
+/// An automatic transition of an account (a backend signal), applied in one
+/// transaction: the state change (never lowering a more severe state, never
+/// replacing `blocked`) and its stop fences.
 #[derive(Clone, Debug)]
-pub struct Settle<'a> {
+pub struct Raise<'a> {
     pub account_id: &'a str,
     pub owner_user_id: &'a str,
     pub provider_id: &'a str,
-    /// The reservation this settles; nothing is written once it no longer
-    /// holds the account's slot.
-    pub turn: Option<TurnKey<'a>>,
-    /// Delete the reservation.
-    pub release: bool,
     /// The state to raise the account to, with its reason and end.
-    pub state: Option<(AccountState, &'a str, Option<i64>)>,
+    pub state: (AccountState, &'a str, Option<i64>),
     /// Stop every unit of the account even when the state is not raised.
     pub stop_units: bool,
     /// The account's Machines, for the stop fences.
     pub machines: &'a [String],
     pub now_ms: i64,
-}
-
-/// What a [`Settle`] wrote.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Settled {
-    /// The reservation no longer matched: nothing was written.
-    Stale,
-    Applied {
-        /// The account state was raised (or rewritten to queue stop fences).
-        state_written: bool,
-        released: bool,
-    },
 }
 
 type ControlRow = (
@@ -94,25 +62,6 @@ type ControlRow = (
     i64,
     i64,
 );
-type TurnRow = (
-    String,
-    String,
-    String,
-    String,
-    String,
-    String,
-    String,
-    i64,
-    String,
-    i64,
-    i64,
-    Option<String>,
-    Option<String>,
-);
-
-const TURN_COLUMNS: &str = "account_id, owner_user_id, session_id, turn_id, delivery_id, \
-     worker_epoch, machine_id, after_seq, state, created_at_ms, updated_at_ms, terminal_epoch, \
-     terminal_stop_reason";
 type FenceRow = (String, String, String, String, String, String, i64);
 
 fn control(row: ControlRow) -> Result<Control> {
@@ -125,29 +74,6 @@ fn control(row: ControlRow) -> Result<Control> {
         until_ms: row.5,
         updated_at_ms: row.6,
         revision: row.7,
-    })
-}
-
-fn turn(row: TurnRow) -> Result<Reservation> {
-    Ok(Reservation {
-        account_id: row.0,
-        owner_user_id: row.1,
-        session_id: row.2,
-        turn_id: row.3,
-        delivery_id: row.4,
-        worker_epoch: row.5,
-        machine_id: row.6,
-        after_seq: row.7,
-        state: ReservationState::parse(&row.8).context("unknown stored reservation state")?,
-        created_at_ms: row.9,
-        updated_at_ms: row.10,
-        terminal: row
-            .11
-            .zip(row.12)
-            .map(|(worker_epoch, stop_reason)| Terminal {
-                worker_epoch,
-                stop_reason,
-            }),
     })
 }
 
@@ -201,64 +127,10 @@ impl Store {
         dispatch!(self, account_control(account_id))
     }
 
-    pub async fn account_turns(&self) -> Result<Vec<Reservation>> {
-        dispatch!(self, account_turns())
-    }
-
-    /// Take the account's slot for `turn`, atomically. Returns the holder:
-    /// `turn` itself when it was free, else the existing reservation.
-    pub async fn reserve_account_turn(&self, turn: &Reservation) -> Result<Reservation> {
-        dispatch!(self, reserve_account_turn(turn))
-    }
-
-    /// `reserved` -> `may_have_dispatched` for exactly this account,
-    /// session and turn, before its prompt is enqueued, recording the
-    /// prompt's delivery ID, worker epoch and runtime Machine. `false` when
-    /// the reservation is not this turn's.
-    pub async fn mark_account_turn_dispatched(
-        &self,
-        account_id: &str,
-        key: &TurnKey<'_>,
-        (delivery_id, machine_id): (&str, &str),
-        now_ms: i64,
-    ) -> Result<bool> {
-        dispatch!(
-            self,
-            mark_account_turn_dispatched(account_id, key, (delivery_id, machine_id), now_ms)
-        )
-    }
-
-    /// Record the terminal record a worker delivered for `delivery_id` of
-    /// `session_id`, only on a dispatched reservation of that delivery whose
-    /// worker epoch is this one (or was not known when it was marked).
-    pub async fn record_account_turn_terminal(
-        &self,
-        session_id: &str,
-        delivery_id: &str,
-        worker_epoch: &str,
-        stop_reason: &str,
-        now_ms: i64,
-    ) -> Result<bool> {
-        dispatch!(
-            self,
-            record_account_turn_terminal(
-                session_id,
-                delivery_id,
-                worker_epoch,
-                stop_reason,
-                now_ms
-            )
-        )
-    }
-
-    /// Release exactly this turn's slot.
-    pub async fn release_account_turn(&self, account_id: &str, key: &TurnKey<'_>) -> Result<bool> {
-        dispatch!(self, release_account_turn(account_id, key))
-    }
-
-    /// Apply one automatic settlement atomically (see [`Settle`]).
-    pub async fn settle_account(&self, settle: &Settle<'_>) -> Result<Settled> {
-        dispatch!(self, settle_account(settle))
+    /// Apply one automatic transition atomically (see [`Raise`]); `true`
+    /// when anything was written.
+    pub async fn raise_account_state(&self, raise: &Raise<'_>) -> Result<bool> {
+        dispatch!(self, raise_account_state(raise))
     }
 
     pub async fn account_fences(&self) -> Result<Vec<Fence>> {
@@ -398,148 +270,16 @@ macro_rules! implementation {
                 row.map(control).transpose()
             }
 
-            pub(super) async fn account_turns(&self) -> Result<Vec<Reservation>> {
-                let rows: Vec<TurnRow> = sqlx::query_as(&format!(
-                    "SELECT {TURN_COLUMNS} FROM provider_account_turns ORDER BY account_id"
-                ))
-                .fetch_all(&self.pool)
-                .await
-                .context("SELECT account turns")?;
-                rows.into_iter().map(turn).collect()
-            }
-
-            pub(super) async fn reserve_account_turn(&self, wanted: &Reservation) -> Result<Reservation> {
-                let mut tx = self.pool.begin_with($begin).await.context("begin account turn")?;
-                sqlx::query(
-                    "INSERT INTO provider_account_turns(account_id, owner_user_id, session_id, \
-                     turn_id, delivery_id, worker_epoch, after_seq, state, created_at_ms, \
-                     updated_at_ms) VALUES ($1, $2, $3, $4, '', $5, $6, 'reserved', $7, $7) \
-                     ON CONFLICT(account_id) DO NOTHING",
-                )
-                .bind(&wanted.account_id)
-                .bind(&wanted.owner_user_id)
-                .bind(&wanted.session_id)
-                .bind(&wanted.turn_id)
-                .bind(&wanted.worker_epoch)
-                .bind(wanted.after_seq)
-                .bind(wanted.created_at_ms)
-                .execute(&mut *tx)
-                .await
-                .context("INSERT account turn")?;
-                let row: TurnRow = sqlx::query_as(&format!(
-                    "SELECT {TURN_COLUMNS} FROM provider_account_turns WHERE account_id = $1"
-                ))
-                .bind(&wanted.account_id)
-                .fetch_one(&mut *tx)
-                .await
-                .context("SELECT account turn holder")?;
-                tx.commit().await.context("commit account turn")?;
-                turn(row)
-            }
-
-            pub(super) async fn mark_account_turn_dispatched(
-                &self,
-                account_id: &str,
-                key: &TurnKey<'_>,
-                (delivery_id, machine_id): (&str, &str),
-                now_ms: i64,
-            ) -> Result<bool> {
-                let result = sqlx::query(
-                    "UPDATE provider_account_turns SET state = 'may_have_dispatched', \
-                     delivery_id = $4, worker_epoch = $5, updated_at_ms = $6, machine_id = $7 \
-                     WHERE account_id = $1 AND session_id = $2 AND turn_id = $3 \
-                     AND state = 'reserved'",
-                )
-                .bind(account_id)
-                .bind(key.session_id)
-                .bind(key.turn_id)
-                .bind(bounded(delivery_id, 256))
-                .bind(key.worker_epoch)
-                .bind(now_ms)
-                .bind(machine_id)
-                .execute(&self.pool)
-                .await
-                .context("UPDATE account turn dispatched")?;
-                Ok(result.rows_affected() == 1)
-            }
-
-            pub(super) async fn record_account_turn_terminal(
-                &self,
-                session_id: &str,
-                delivery_id: &str,
-                worker_epoch: &str,
-                stop_reason: &str,
-                now_ms: i64,
-            ) -> Result<bool> {
-                if delivery_id.is_empty() || worker_epoch.is_empty() {
-                    return Ok(false);
-                }
-                let result = sqlx::query(
-                    "UPDATE provider_account_turns SET terminal_epoch = $3, \
-                     terminal_stop_reason = $4, updated_at_ms = $5 \
-                     WHERE session_id = $1 AND delivery_id = $2 \
-                     AND state = 'may_have_dispatched' AND terminal_stop_reason IS NULL \
-                     AND (worker_epoch = $3 OR worker_epoch = '')",
-                )
-                .bind(session_id)
-                .bind(delivery_id)
-                .bind(worker_epoch)
-                .bind(stop_reason.chars().take(8192).collect::<String>())
-                .bind(now_ms)
-                .execute(&self.pool)
-                .await
-                .context("UPDATE account turn terminal")?;
-                Ok(result.rows_affected() == 1)
-            }
-
-            pub(super) async fn release_account_turn(
-                &self,
-                account_id: &str,
-                key: &TurnKey<'_>,
-            ) -> Result<bool> {
-                let result = sqlx::query(
-                    "DELETE FROM provider_account_turns WHERE account_id = $1 AND session_id = $2 \
-                     AND turn_id = $3 AND ($4 IS NULL OR state = $4)",
-                )
-                .bind(account_id)
-                .bind(key.session_id)
-                .bind(key.turn_id)
-                .bind(key.only.map(ReservationState::as_str))
-                .execute(&self.pool)
-                .await
-                .context("DELETE account turn")?;
-                Ok(result.rows_affected() == 1)
-            }
-
-            pub(super) async fn settle_account(&self, settle: &Settle<'_>) -> Result<Settled> {
-                let mut tx = self.pool.begin_with($begin).await.context("begin account settlement")?;
-                if let Some(key) = settle.turn {
-                    let held: Option<String> = sqlx::query_scalar(
-                        "SELECT state FROM provider_account_turns WHERE account_id = $1 \
-                         AND session_id = $2 AND turn_id = $3 AND worker_epoch = $4",
-                    )
-                    .bind(settle.account_id)
-                    .bind(key.session_id)
-                    .bind(key.turn_id)
-                    .bind(key.worker_epoch)
-                    .fetch_optional(&mut *tx)
-                    .await
-                    .context("SELECT settled account turn")?;
-                    let holds = held.as_deref().and_then(ReservationState::parse).is_some_and(
-                        |state| key.only.is_none_or(|only| only == state),
-                    );
-                    if !holds {
-                        return Ok(Settled::Stale);
-                    }
-                }
+            pub(super) async fn raise_account_state(&self, raise: &Raise<'_>) -> Result<bool> {
+                let mut tx = self.pool.begin_with($begin).await.context("begin account raise")?;
                 let current: Option<(String, String, Option<i64>, i64)> = sqlx::query_as(
                     "SELECT state, reason, until_ms, revision FROM provider_account_controls \
                      WHERE account_id = $1",
                 )
-                .bind(settle.account_id)
+                .bind(raise.account_id)
                 .fetch_optional(&mut *tx)
                 .await
-                .context("SELECT account control for settlement")?;
+                .context("SELECT account control for raise")?;
                 let (current_state, current_reason, current_until, revision) = match current {
                     Some((state, reason, until, revision)) => (
                         AccountState::parse(&state).context("unknown stored account state")?,
@@ -551,63 +291,44 @@ macro_rules! implementation {
                 };
                 // Compared inside the transaction: an owner's block (or any
                 // more severe state) written meanwhile is never replaced.
-                let raised = settle.state.filter(|(next, ..)| {
-                    current_state != AccountState::Blocked
-                        && next.severity() >= current_state.severity()
-                });
-                let mut state_written = false;
-                if raised.is_some() || settle.stop_units {
-                    let (state, reason, until) = raised.map_or(
-                        (current_state, current_reason, current_until),
-                        |(next, reason, until)| (next, bounded(reason, 256), until),
-                    );
-                    let revision = revision.saturating_add(1);
-                    let written = Control {
-                        account_id: settle.account_id.to_owned(),
-                        owner_user_id: settle.owner_user_id.to_owned(),
-                        provider_id: settle.provider_id.to_owned(),
-                        state,
-                        reason,
-                        until_ms: until,
-                        updated_at_ms: settle.now_ms,
-                        revision,
-                    };
-                    write_control(&mut tx, &written).await?;
-                    if settle.stop_units || state.stops_units() {
-                        for machine in settle.machines {
-                            write_fence(
-                                &mut tx,
-                                settle.account_id,
-                                machine,
-                                AccountFenceAction::Stop,
-                                revision,
-                                settle.now_ms,
-                            )
-                            .await?;
-                        }
+                let (next, reason, until) = raise.state;
+                let raised = current_state != AccountState::Blocked
+                    && next.severity() >= current_state.severity();
+                if !raised && !raise.stop_units {
+                    return Ok(false);
+                }
+                let (state, reason, until) = if raised {
+                    (next, bounded(reason, 256), until)
+                } else {
+                    (current_state, current_reason, current_until)
+                };
+                let revision = revision.saturating_add(1);
+                let written = Control {
+                    account_id: raise.account_id.to_owned(),
+                    owner_user_id: raise.owner_user_id.to_owned(),
+                    provider_id: raise.provider_id.to_owned(),
+                    state,
+                    reason,
+                    until_ms: until,
+                    updated_at_ms: raise.now_ms,
+                    revision,
+                };
+                write_control(&mut tx, &written).await?;
+                if raise.stop_units || state.stops_units() {
+                    for machine in raise.machines {
+                        write_fence(
+                            &mut tx,
+                            raise.account_id,
+                            machine,
+                            AccountFenceAction::Stop,
+                            revision,
+                            raise.now_ms,
+                        )
+                        .await?;
                     }
-                    state_written = true;
                 }
-                let mut released = false;
-                if let (Some(key), true) = (settle.turn, settle.release) {
-                    let result = sqlx::query(
-                        "DELETE FROM provider_account_turns WHERE account_id = $1 \
-                         AND session_id = $2 AND turn_id = $3 AND worker_epoch = $4",
-                    )
-                    .bind(settle.account_id)
-                    .bind(key.session_id)
-                    .bind(key.turn_id)
-                    .bind(key.worker_epoch)
-                    .execute(&mut *tx)
-                    .await
-                    .context("DELETE settled account turn")?;
-                    released = result.rows_affected() == 1;
-                }
-                tx.commit().await.context("commit account settlement")?;
-                Ok(Settled::Applied {
-                    state_written,
-                    released,
-                })
+                tx.commit().await.context("commit account raise")?;
+                Ok(true)
             }
 
             pub(super) async fn account_fences(&self) -> Result<Vec<Fence>> {

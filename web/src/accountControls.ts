@@ -8,7 +8,6 @@ export type AccountControlState =
   | "ok" | "verification_required" | "location_unsupported" | "rate_limited"
   | "suspended" | "blocked" | "unknown_refusal" | "needs_attention";
 
-export interface AccountControlTurn { session_id: string; turn_id: string; state: string; created_at_ms: number }
 export interface AccountControlFence { machine_id: string; action: string; state: string; detail?: string | null }
 export interface UncertainEffect { session_id: string; method: string; sequence: number }
 export interface AccountLogoutTarget {
@@ -28,7 +27,8 @@ export interface AccountControl {
   reason?: string | null;
   until_ms?: number | null;
   revision: number;
-  turn?: AccountControlTurn | null;
+  /** The session whose live worker holds the account's single runtime. */
+  in_use_by?: string | null;
   fences: AccountControlFence[];
   stop_confirmed: boolean;
   uncertain_effects: UncertainEffect[];
@@ -50,7 +50,7 @@ function validControl(value: unknown): value is AccountControl {
   return record(value) && text(value.account_id) && text(value.provider_id) && typeof value.admitted === "boolean" &&
     text(value.state) && optional(value.reason, (reason) => typeof reason === "string") &&
     optional(value.until_ms, number) && number(value.revision) && typeof value.stop_confirmed === "boolean" &&
-    optional(value.turn, (turn) => record(turn) && text(turn.session_id) && text(turn.turn_id) && text(turn.state)) &&
+    optional(value.in_use_by, text) &&
     Array.isArray(value.fences) && value.fences.every((fence) => record(fence) && text(fence.machine_id) && text(fence.action) && text(fence.state)) &&
     Array.isArray(value.uncertain_effects) && value.uncertain_effects.every((effect) =>
       record(effect) && text(effect.session_id) && text(effect.method) && number(effect.sequence)) &&
@@ -101,7 +101,7 @@ export function controlReasonText(reason: string | null | undefined): string | u
     owner_unblock: "Unblocked by the owner",
     owner_clear: "Cleared by the owner",
     owner_send_after_rate_limit: "Resumed by an owner send",
-    turn_unsettled: "A turn's outcome could not be settled",
+    unknown_refusal: "A turn ended without a classified backend outcome",
   };
   return known[reason] ?? reason.replaceAll("_", " ");
 }
@@ -132,7 +132,7 @@ export function accountStateBadge(control: AccountControl, signIn: "signed_in" |
 }
 
 export interface ControlActions {
-  clear: boolean; block: boolean; unblock: boolean; logout: boolean; stopUnits: boolean; forceRelease: boolean;
+  clear: boolean; block: boolean; unblock: boolean; logout: boolean; stopUnits: boolean;
 }
 
 /** Which owner actions the card offers now (the Controller rechecks each). */
@@ -147,7 +147,6 @@ export function controlActions(control: AccountControl): ControlActions {
     unblock: blocked,
     logout: blocked && control.stop_confirmed && !loggedOutThisBlock,
     stopUnits: control.fences.some((fence) => fence.state !== "confirmed"),
-    forceRelease: Boolean(control.turn) && control.stop_confirmed,
   };
 }
 
@@ -168,7 +167,8 @@ export function logoutStatus(logout: AccountLogout | null | undefined): string |
 }
 
 /** Why a new session cannot use this named-only account, if it cannot:
- * only admitted, signed-in, `ok` accounts are choosable. */
+ * only admitted, signed-in, `ok` accounts no other session runs are
+ * choosable. */
 export function pickerUnavailableReason(control: AccountControl | undefined, loginReason: string | undefined, now = Date.now()): string | undefined {
   if (!control) return "Account state not loaded";
   if (!control.admitted) return "Not admitted for sessions";
@@ -176,12 +176,14 @@ export function pickerUnavailableReason(control: AccountControl | undefined, log
     const badge = accountStateBadge(control, undefined, now);
     return badge.detail && control.state !== "blocked" ? `${badge.label} · ${badge.detail}` : badge.label;
   }
+  // One runtime per account: another session's live worker holds it.
+  if (control.in_use_by) return `In use by another session (${control.in_use_by}); hibernate it first`;
   return loginReason;
 }
 
 export interface ParkedReason {
   text: string;
-  /** Another session holds the account's active turn. */
+  /** Another session's live runtime holds the account. */
   waitingFor?: string | undefined;
   /** An uncertain target effect needs the owner's acknowledgement. */
   uncertain?: UncertainEffect | undefined;
@@ -201,8 +203,8 @@ export function sessionParkedReason(control: AccountControl | undefined, session
     const badge = accountStateBadge(control, undefined, now);
     return { text: badge.detail ? `${badge.label} · ${badge.detail}` : badge.label };
   }
-  if (control?.turn && control.turn.session_id !== session) {
-    return { text: "Waiting for the account's active turn in another session.", waitingFor: control.turn.session_id };
+  if (control?.in_use_by && control.in_use_by !== session) {
+    return { text: "In use by another session; hibernate it first.", waitingFor: control.in_use_by };
   }
   if (wait) return { text: wait.startsWith(WAIT_PREFIX) ? wait.slice(WAIT_PREFIX.length) : wait };
   return undefined;
@@ -218,7 +220,7 @@ export function controlErrorText(code: string | undefined): string {
     case "expected_revision_required":
     case "revision_conflict": return "The account changed. Review its refreshed state and try again.";
     case "permission_denied": return "Only the Service owner can change admission.";
-    case "no_account_turn": return "No turn holds this account.";
+    case "antigravity_account_in_use": return "In use by another session; hibernate it first.";
     case "no_uncertain_effect": return "Nothing is waiting for acknowledgement.";
     case "uncertain_effect_changed": return "Another uncertain effect arrived. Review it before acknowledging.";
     case "outcome_unknown": return "The outcome is not confirmed. Check the account before retrying.";
@@ -226,12 +228,12 @@ export function controlErrorText(code: string | undefined): string {
   }
 }
 
-export type ControlAction = "admit" | "unadmit" | "clear" | "block" | "unblock" | "stop_units" | "force_release" | "logout";
+export type ControlAction = "admit" | "unadmit" | "clear" | "block" | "unblock" | "stop_units" | "logout";
 
 /** The request body of one control action. */
 export function controlRequest(action: ControlAction, control: AccountControl): { action: ControlAction; expected_revision?: number; confirm?: boolean } {
   if (action === "clear" || action === "unblock") return { action, expected_revision: control.revision };
-  if (action === "block" || action === "force_release" || action === "logout") return { action, confirm: true };
+  if (action === "block" || action === "logout") return { action, confirm: true };
   return { action };
 }
 

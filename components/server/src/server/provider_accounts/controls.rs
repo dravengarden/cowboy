@@ -1,42 +1,42 @@
 //! Account controls of named-only Providers (Antigravity) on the Controller
 //! (`docs/antigravity-real-accounts-design.md`, "Account controls", "Kill
-//! switch and logout"). The policy lives in `crate::account_controls`; the
-//! durable records in `crate::store::account_controls`. This module applies
-//! them at every boundary:
+//! switch and logout" and "Revision 5 simplification"). The policy lives in
+//! `crate::account_controls`; the durable records in
+//! `crate::store::account_controls`. This module applies them at every
+//! boundary:
 //!
 //! - admission (`accounts.antigravity_admitted`) and the kill switch at
 //!   login start and completion, session creation ([`super::named_only_admitted`]),
 //!   every prompt dispatch ([`Controls::before_dispatch`]) and every worker
-//!   revival ([`revival_gate`]);
-//! - the account's single active turn: reserved before dispatch under a
-//!   Controller-generated ID, marked `may_have_dispatched` with the prompt's
-//!   delivery ID and worker epoch in a final eligibility check serialized
-//!   with every control write ([`Turn::mark`]), settled by the reconciler from
-//!   the terminal record of exactly that delivery and epoch, or from the
-//!   execution target's termination evidence;
+//!   launch or revival ([`revival_gate`]);
+//! - one runtime per account: the daemon refuses a second runtime unit, and
+//!   the launch gate explains it before a second session of the account
+//!   starts or wakes ("in use by session X; hibernate it first");
+//! - backend signals: a governed session's turn ending moves its account to
+//!   the state the proxy's structured result names; nothing waits for or is
+//!   settled by a turn ending;
 //! - Machine fences that stop or admit the account's units.
 //!
 //! Prompts never leave the durable queue while parked: a refused dispatch
 //! requeues its prompt with the reason as the session's visible wait.
 use super::*;
 use crate::account_controls::{
-    self as policy, AccountState, Control, Fence, FenceState, Gate, GateInput, Reservation,
-    TargetTermination,
+    self as policy, AccountState, Control, Fence, FenceState, Gate, GateInput,
 };
 use crate::core::SessionMeta;
 use crate::provider_account::{
     AccountFenceAction, AccountFenceObservation, AccountFenceRequest, ProviderAccountId,
 };
-use crate::store::account_controls::{StateChange, TurnKey};
+use crate::store::account_controls::StateChange;
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 mod dispatch;
 pub(in crate::server) mod http;
 mod logout;
 mod reconcile;
-pub(in crate::server) use dispatch::{Handoff, Turn, before_dispatch, handoff, unsent};
-pub(in crate::server) use reconcile::{start, terminal_listener};
+pub(in crate::server) use dispatch::{before_dispatch, handoff};
+pub(in crate::server) use reconcile::{start, turn_end_listener};
 
 /// What the controls observe of the rest of the Controller. [`AppEnv`] is
 /// the production binding; tests substitute their own.
@@ -44,7 +44,6 @@ pub(in crate::server) trait Env: Send + Sync + 'static {
     /// A session's metadata and whether a prompt of it is in flight.
     fn session(&self, id: &str) -> Option<(SessionMeta, bool)>;
     fn sessions(&self) -> Vec<SessionMeta>;
-    fn last_event_seq(&self, session: &str) -> u64;
     fn live_worker(&self, session: &str) -> bool;
     fn worker(&self, session: &str) -> Option<crate::runtime_wire::WorkerSnapshot>;
     fn machine_connected(&self, machine: &str) -> bool;
@@ -57,24 +56,18 @@ pub(in crate::server) trait Env: Send + Sync + 'static {
         request: AccountFenceRequest,
     ) -> futures::future::BoxFuture<'static, Result<AccountFenceObservation, String>>;
     /// Run one native logout on `machine` (the Machine's existing native
-    /// logout command; sandboxed accounts use the daemon's logout unit).
+    /// logout command; sandboxed accounts use the daemon's logout unit), only
+    /// while the Machine's enrollment is the one that holds the credential
+    /// (`recipient_fingerprint`), so a re-enrolled Machine never certifies it.
     fn native_logout(
         &self,
         machine: String,
+        recipient_fingerprint: String,
         request: crate::provider_account::NativeLogoutRequest,
     ) -> futures::future::BoxFuture<
         'static,
         Result<crate::provider_account::NativeLogoutObservation, String>,
     >;
-    /// The worker/Machine ledger's evidence about the execution target of a
-    /// dispatched turn of `provider` on its original binding
-    /// (`turn.machine_id`, worker epoch and delivery ID). `None`: no
-    /// evidence, so no loss is proven.
-    fn termination(
-        &self,
-        turn: &Reservation,
-        provider: &str,
-    ) -> futures::future::BoxFuture<'static, Option<TargetTermination>>;
 }
 
 /// The production [`Env`].
@@ -88,10 +81,6 @@ impl Env for AppEnv {
 
     fn sessions(&self) -> Vec<SessionMeta> {
         self.0.hub.session_list()
-    }
-
-    fn last_event_seq(&self, session: &str) -> u64 {
-        self.0.hub.last_event_seq(session).unwrap_or(0)
     }
 
     fn live_worker(&self, session: &str) -> bool {
@@ -139,6 +128,7 @@ impl Env for AppEnv {
     fn native_logout(
         &self,
         machine: String,
+        recipient_fingerprint: String,
         request: crate::provider_account::NativeLogoutRequest,
     ) -> futures::future::BoxFuture<
         'static,
@@ -146,6 +136,15 @@ impl Env for AppEnv {
     > {
         let state = Arc::clone(&self.0);
         Box::pin(async move {
+            let store = state.store.as_ref().ok_or("unavailable")?;
+            let key = store
+                .machine_encryption_public_key(&machine)
+                .await
+                .map_err(|_| "unavailable".to_owned())?
+                .ok_or_else(|| "machine_unavailable".to_owned())?;
+            if crate::admin::hex_sha256(key.as_bytes()) != recipient_fingerprint {
+                return Err("machine_enrollment_changed".to_owned());
+            }
             let (connection, _) = state
                 .machine_control
                 .connection_protocol(&machine)
@@ -154,52 +153,13 @@ impl Env for AppEnv {
                 state
                     .machine_control
                     .begin_native_logout(&connection, &machine, &request)?;
-            pending.await
-        })
-    }
-
-    fn termination(
-        &self,
-        turn: &Reservation,
-        provider: &str,
-    ) -> futures::future::BoxFuture<'static, Option<TargetTermination>> {
-        // Asked of the turn's original runtime Machine only: its worker
-        // registry, the session's durable process ledger and the account
-        // daemon's units decide. An unanswered query proves nothing, so the
-        // reservation keeps the account's slot.
-        let state = Arc::clone(&self.0);
-        let machine = turn.machine_id.clone();
-        let query = turn
-            .account_id
-            .parse::<ProviderAccountId>()
-            .ok()
-            .map(
-                |account_id| crate::provider_account::AccountTurnTerminationQuery {
-                    account_id,
-                    provider_id: provider.to_owned(),
-                    session_id: turn.session_id.clone(),
-                    worker_epoch: turn.worker_epoch.clone(),
-                    delivery_id: turn.delivery_id.clone(),
-                },
-            );
-        Box::pin(async move {
-            let query = query.filter(|_| !machine.is_empty())?;
-            match state
-                .machine_control
-                .account_turn_termination(&machine, &query)
-                .await
-            {
-                Ok(observation) => Some(observation),
-                Err(detail) => {
-                    tracing::debug!(
-                        session = %query.session_id,
-                        %machine,
-                        detail,
-                        "account turn termination unproven"
-                    );
-                    None
-                }
+            let observation = pending.await?;
+            // Evidence from a connection replaced meanwhile (a re-enrolled
+            // Machine) is never recorded.
+            if !state.machine_control.is_current(&connection) {
+                return Err("machine_connection_replaced".to_owned());
             }
+            Ok(observation)
         })
     }
 }
@@ -209,16 +169,19 @@ impl Env for AppEnv {
 #[derive(Default)]
 pub(in crate::server) struct Cache {
     controls: parking_lot::RwLock<HashMap<String, Control>>,
-    turns: parking_lot::RwLock<HashMap<String, Reservation>>,
     fences: parking_lot::RwLock<Vec<Fence>>,
-    /// Turns whose dispatch runs in this process: their `reserved` rows are
-    /// not orphans of an earlier Controller.
-    dispatching: parking_lot::Mutex<HashSet<String>>,
+    /// Account display names (`label`), for the in-use explanation.
+    labels: parking_lot::RwLock<HashMap<String, String>>,
     /// Fence operations with a Machine command in flight.
     fencing: parking_lot::Mutex<HashSet<String>>,
     /// Serializes this process's control writers (state, admission, logout)
-    /// with every dispatch's final eligibility check and handoff.
+    /// with every dispatch's eligibility check and handoff.
     writes: Arc<tokio::sync::Mutex<()>>,
+    /// Refresh ordering: a load applies only when no load that started
+    /// later already applied, so an older snapshot never replaces a newer
+    /// one (a block is never reopened by a slow concurrent refresh).
+    loads_started: AtomicU64,
+    load_applied: parking_lot::Mutex<u64>,
     loaded: AtomicBool,
 }
 
@@ -227,8 +190,8 @@ impl Cache {
         self.controls.read().get(account).cloned()
     }
 
-    fn turn(&self, account: &str) -> Option<Reservation> {
-        self.turns.read().get(account).cloned()
+    fn label(&self, account: &str) -> Option<String> {
+        self.labels.read().get(account).cloned()
     }
 
     fn account_fences(&self, account: &str) -> Vec<Fence> {
@@ -269,6 +232,18 @@ pub(in crate::server) async fn blocked(
         .await
         .map(|control| control.is_some_and(|control| control.state == AccountState::Blocked))
         .map_err(|_| "unavailable")
+}
+
+/// The session of `account` whose worker is live, from the Controller's
+/// state (the daemon runs one runtime per account).
+pub(in crate::server) fn in_use(state: &AppState, account: &ProviderAccountId) -> Option<String> {
+    state
+        .hub
+        .session_list()
+        .into_iter()
+        .filter(|meta| governed(meta) && meta.provider_account_id == *account)
+        .find(|meta| state.supervisor.has_live_worker(&meta.id))
+        .map(|meta| meta.id)
 }
 
 fn governed(meta: &SessionMeta) -> bool {
@@ -334,35 +309,105 @@ impl Controls {
     }
 
     /// Reload every record from the store. A failed reload marks the view
-    /// unloaded, so no synchronous gate admits from a stale snapshot.
+    /// unloaded, so no synchronous gate admits from a stale snapshot. Loads
+    /// apply in the order they started, and a control record never moves
+    /// back to a lower revision.
     pub(in crate::server) async fn refresh(&self) -> Result<(), String> {
         let unavailable = |_| "account controls are unavailable".to_owned();
+        let started = self.cache.loads_started.fetch_add(1, Ordering::AcqRel) + 1;
         let loaded = async {
             Ok::<_, String>((
                 self.store.account_controls().await.map_err(unavailable)?,
-                self.store.account_turns().await.map_err(unavailable)?,
                 self.store.account_fences().await.map_err(unavailable)?,
             ))
         }
         .await;
-        let (controls, turns, fences) = match loaded {
+        self.apply(started, loaded)?;
+        self.refresh_labels().await;
+        Ok(())
+    }
+
+    /// Apply one load in start order (see [`Self::refresh`]).
+    fn apply(
+        &self,
+        started: u64,
+        loaded: Result<(Vec<Control>, Vec<Fence>), String>,
+    ) -> Result<(), String> {
+        let mut applied = self.cache.load_applied.lock();
+        if *applied > started {
+            // A load that started later already applied a newer snapshot.
+            return loaded.map(drop);
+        }
+        let (controls, fences) = match loaded {
             Ok(loaded) => loaded,
             Err(error) => {
                 self.cache.loaded.store(false, Ordering::Release);
                 return Err(error);
             }
         };
-        *self.cache.controls.write() = controls
+        *applied = started;
+        let mut cached = self.cache.controls.write();
+        let mut next: HashMap<String, Control> = controls
             .into_iter()
             .map(|control| (control.account_id.clone(), control))
             .collect();
-        *self.cache.turns.write() = turns
-            .into_iter()
-            .map(|turn| (turn.account_id.clone(), turn))
-            .collect();
+        for (account, current) in cached.iter() {
+            if let Some(loaded) = next.get(account)
+                && loaded.revision < current.revision
+            {
+                next.insert(account.clone(), current.clone());
+            }
+        }
+        *cached = next;
         *self.cache.fences.write() = fences;
         self.cache.loaded.store(true, Ordering::Release);
         Ok(())
+    }
+
+    /// Learn the display names of governed sessions' accounts not yet known.
+    async fn refresh_labels(&self) {
+        let missing: BTreeSet<String> = self
+            .env
+            .sessions()
+            .into_iter()
+            .filter(|meta| {
+                governed(meta)
+                    && self
+                        .cache
+                        .label(meta.provider_account_id.as_str())
+                        .is_none()
+            })
+            .filter_map(|meta| meta.owner_user_id)
+            .collect();
+        for owner in missing {
+            if let Ok(registry) = self.store.provider_accounts(&owner).await {
+                self.learn_labels(&registry);
+            }
+        }
+    }
+
+    fn learn_labels(&self, registry: &crate::store::provider_accounts::Registry) {
+        let mut labels = self.cache.labels.write();
+        for account in &registry.accounts {
+            labels.insert(account.id.as_str().to_owned(), account.label.clone());
+        }
+    }
+
+    /// The other session of `meta`'s account whose worker is live: the
+    /// daemon runs one runtime per account, so `meta` may not start now.
+    pub(in crate::server) fn in_use_by(
+        &self,
+        account: &ProviderAccountId,
+        except: &str,
+    ) -> Option<String> {
+        self.env
+            .sessions()
+            .into_iter()
+            .filter(|other| {
+                governed(other) && other.provider_account_id == *account && other.id != except
+            })
+            .find(|other| self.env.live_worker(&other.id))
+            .map(|other| other.id)
     }
 
     /// The session's unacknowledged uncertain effect: the live worker
@@ -420,12 +465,10 @@ impl Controls {
         if !self.cache.loaded.load(Ordering::Acquire) {
             return Some("account controls are loading".into());
         }
-        if let Gate::Park(reason) = self.gate(meta, false) {
-            return Some(reason);
+        match self.gate(meta, false) {
+            Gate::Park(reason) => Some(reason),
+            Gate::Proceed { .. } => None,
         }
-        self.cache
-            .turn(meta.provider_account_id.as_str())
-            .and_then(|turn| policy::slot_reason(&turn, &meta.id))
     }
 
     pub(in crate::server) fn revival_gate(&self, meta: &SessionMeta) -> Result<(), String> {
@@ -441,12 +484,23 @@ impl Controls {
             control.as_ref(),
             now_ms(),
         )
-        .map_err(|reason| wait(&reason))
+        .map_err(|reason| wait(&reason))?;
+        // One runtime per account: another session's live worker holds it.
+        if let Some(holder) = self.in_use_by(&meta.provider_account_id, &meta.id) {
+            let label = self
+                .cache
+                .label(meta.provider_account_id.as_str())
+                .unwrap_or_else(|| meta.provider_account_id.as_str().to_owned());
+            return Err(wait(&policy::in_use_reason(&label, &holder)));
+        }
+        Ok(())
     }
 
-    /// The Machines that may run units of `account`: its native generations,
-    /// the runtime Machines of its sessions and their execution targets. A
-    /// failed lookup is an error, never an empty (unfenced) set.
+    /// The Machines that may run units of `account`: those holding its
+    /// sandbox (its native generations' credential Machines) and its
+    /// sessions' runtime Machines. Execution targets never run account units
+    /// and are not fenced. A failed lookup is an error, never an empty
+    /// (unfenced) set.
     async fn account_machines(&self, account: &str) -> Result<Vec<String>, &'static str> {
         let mut machines: BTreeSet<String> = self
             .store
@@ -455,25 +509,13 @@ impl Controls {
             .map_err(|_| "unavailable")?
             .into_iter()
             .collect();
-        for meta in self.env.sessions() {
-            if !governed(&meta) || meta.provider_account_id.as_str() != account {
-                continue;
-            }
-            if let Some(record) = &meta.execution_binding {
-                machines.extend(
-                    record
-                        .decode()
-                        .ok()
-                        .map(|binding| binding.environment.machine_id)
-                        .or_else(|| {
-                            record
-                                .recovery()
-                                .map(|intent| intent.previous.environment.machine_id)
-                        }),
-                );
-            }
-            machines.insert(meta.machine_id);
-        }
+        machines.extend(
+            self.env
+                .sessions()
+                .into_iter()
+                .filter(|meta| governed(meta) && meta.provider_account_id.as_str() == account)
+                .map(|meta| meta.machine_id),
+        );
         machines.remove("local");
         Ok(machines.into_iter().collect())
     }
@@ -508,12 +550,6 @@ impl Controls {
             Some(_) => self.account_machines(&control.account_id).await?,
             None => Vec::new(),
         };
-        // Lifting the kill switch first cancels every logout target the
-        // Machines were never asked, so no later block can fire it.
-        if control.state == AccountState::Blocked && next != AccountState::Blocked {
-            self.cancel_undispatched_logouts(&control.account_id)
-                .await?;
-        }
         let written = self
             .store
             .set_account_state(&StateChange {
@@ -530,6 +566,14 @@ impl Controls {
             .await
             .map_err(|_| "outcome_unknown")?
             .ok_or("revision_conflict")?;
+        // Lifting the kill switch cancels every logout target the Machines
+        // were never asked, still under the writer lock (logout delivery
+        // decides under it too), so no later block can fire it. Only a
+        // written unblock does: a refused one leaves a valid logout intact.
+        if control.state == AccountState::Blocked && next != AccountState::Blocked {
+            self.cancel_undispatched_logouts(&control.account_id)
+                .await?;
+        }
         // Refreshed before the lock is released: every reader serialized
         // behind it sees this write.
         let _ = self.refresh().await;
@@ -544,39 +588,33 @@ impl Controls {
         Ok(written)
     }
 
-    /// Apply one automatic settlement of `turn` atomically: the state change
+    /// Apply one backend signal of `account` atomically: the state change
     /// (compared with the stored state in the same transaction, so it never
-    /// lowers a more severe state or replaces the owner's block), its stop
-    /// fences and the release. A failure writes nothing and keeps the slot.
-    async fn settle(
+    /// lowers a more severe state or replaces the owner's block) and its stop
+    /// fences. A failure writes nothing.
+    pub(in crate::server) async fn raise(
         &self,
-        turn: &Reservation,
-        key: TurnKey<'_>,
+        account: &str,
+        owner: &str,
         provider: &str,
-        settlement: &policy::Settlement,
-    ) -> Result<crate::store::account_controls::Settled, &'static str> {
-        let state = settlement.state.as_ref().map(|(next, reason)| {
-            let until = (*next == AccountState::RateLimited)
-                .then(|| now_ms().saturating_add(policy::DEFAULT_RATE_LIMIT_MS));
-            (*next, reason.as_str(), until)
-        });
-        let stops = settlement.stop_units || state.is_some_and(|(next, ..)| next.stops_units());
+        transition: &policy::Transition,
+    ) -> Result<bool, &'static str> {
+        let until = (transition.state == AccountState::RateLimited)
+            .then(|| now_ms().saturating_add(policy::DEFAULT_RATE_LIMIT_MS));
         let write = self.cache.writes.lock().await;
-        let machines = if stops {
-            self.account_machines(&turn.account_id).await?
+        let machines = if transition.stop_units {
+            self.account_machines(account).await?
         } else {
             Vec::new()
         };
-        let settled = self
+        let written = self
             .store
-            .settle_account(&crate::store::account_controls::Settle {
-                account_id: &turn.account_id,
-                owner_user_id: &turn.owner_user_id,
+            .raise_account_state(&crate::store::account_controls::Raise {
+                account_id: account,
+                owner_user_id: owner,
                 provider_id: provider,
-                turn: Some(key),
-                release: settlement.release,
-                state,
-                stop_units: settlement.stop_units,
+                state: (transition.state, &transition.reason, until),
+                stop_units: transition.stop_units,
                 machines: &machines,
                 now_ms: now_ms(),
             })
@@ -584,8 +622,16 @@ impl Controls {
             .map_err(|_| "outcome_unknown")?;
         let _ = self.refresh().await;
         drop(write);
+        if written {
+            tracing::info!(
+                account,
+                state = transition.state.as_str(),
+                reason = transition.reason,
+                "account control state raised by a backend signal"
+            );
+        }
         self.run_fences();
-        Ok(settled)
+        Ok(written)
     }
 
     /// Every unit of the account is confirmed stopped on every Machine.
@@ -624,11 +670,7 @@ impl Controls {
                     "until_ms": control.as_ref().and_then(|c| c.until_ms),
                     "updated_at_ms": control.as_ref().map(|c| c.updated_at_ms),
                     "revision": control.as_ref().map_or(0, |c| c.revision),
-                    "turn": self.cache.turn(account).map(|turn| json!({
-                        "session_id": turn.session_id, "turn_id": turn.turn_id,
-                        "state": turn.state.as_str(), "created_at_ms": turn.created_at_ms,
-                        "terminal": turn.terminal.is_some(),
-                    })),
+                    "in_use_by": self.in_use_by(id, ""),
                     "fences": self.cache.account_fences(account).iter().map(|fence| json!({
                         "machine_id": fence.machine_id, "action": fence.action,
                         "state": fence.state, "detail": fence.detail,
@@ -670,7 +712,10 @@ pub(in crate::server) fn read_value(
         .collect();
     of(state).map_or_else(
         || json!({"loaded": false, "accounts": []}),
-        |controls| controls.read_value(&accounts),
+        |controls| {
+            controls.learn_labels(registry);
+            controls.read_value(&accounts)
+        },
     )
 }
 

@@ -16,7 +16,6 @@ pub(in crate::server) enum Action {
     Block,
     Unblock,
     StopUnits,
-    ForceRelease,
     /// History-preserving native logout after a confirmed kill switch.
     Logout,
 }
@@ -30,7 +29,7 @@ pub(in crate::server) struct ControlRequest {
     #[serde(default)]
     expected_revision: Option<i64>,
     /// Required by the actions that interrupt running work or sign the
-    /// account out (block, force_release, logout).
+    /// account out (block, logout).
     #[serde(default)]
     confirm: bool,
 }
@@ -95,7 +94,6 @@ pub(in crate::server) async fn apply(
             set_admitted(state, &id, request.action == Action::Admit).await?;
         }
         Action::StopUnits => controls.run_fences(),
-        Action::ForceRelease => controls.force_release(&control, request.confirm).await?,
         Action::Logout => {
             controls
                 .request_logout(&control, user, request.confirm)
@@ -148,57 +146,6 @@ pub(in crate::server) async fn apply(
 }
 
 impl Controls {
-    /// Release a turn slot the reconciler cannot settle. Only after every
-    /// unit of the account is confirmed stopped and the ledger proved the
-    /// turn's execution target terminated on its original binding; the
-    /// closed log's evidence still decides the account's state.
-    pub(in crate::server) async fn force_release(
-        &self,
-        control: &Control,
-        confirm: bool,
-    ) -> Result<(), &'static str> {
-        if !confirm {
-            return Err("confirmation_required");
-        }
-        if !self.stop_confirmed(&control.account_id) {
-            return Err("account_stop_unconfirmed");
-        }
-        let turn = self
-            .cache
-            .turn(&control.account_id)
-            .ok_or("no_account_turn")?;
-        let outcome = policy::unit_loss_outcome(
-            self.env
-                .termination(&turn, &control.provider_id)
-                .await
-                .as_ref(),
-        )
-        .ok_or("turn_termination_unconfirmed")?;
-        let key = TurnKey {
-            session_id: &turn.session_id,
-            turn_id: &turn.turn_id,
-            worker_epoch: &turn.worker_epoch,
-            only: Some(turn.state),
-        };
-        let settled = self
-            .settle(
-                &turn,
-                key,
-                &control.provider_id,
-                &policy::settle(turn.state, &outcome),
-            )
-            .await?;
-        if settled == crate::store::account_controls::Settled::Stale {
-            return Err("revision_conflict");
-        }
-        tracing::warn!(
-            account = %control.account_id,
-            session = %turn.session_id,
-            "owner force-released an account turn after a confirmed stop and proven termination"
-        );
-        Ok(())
-    }
-
     /// Acknowledge exactly the session's current uncertain effect, durably,
     /// before its parked queue is released.
     pub(in crate::server) async fn acknowledge(
@@ -209,13 +156,20 @@ impl Controls {
         if self.env.session(session).is_none() {
             return Err("session_not_found");
         }
+        // Serialized with every other writer of the record, and decided on
+        // the record as it is now: only exactly the newest observed sequence
+        // is acknowledged, and a newer observation is never overwritten.
+        let _write = self.cache.writes.lock().await;
         let (method, current) = self.uncertain(session).ok_or("no_uncertain_effect")?;
         if current != sequence {
             return Err("uncertain_effect_changed");
         }
         let key = uncertain_key(session);
         let mut record = self.env.setting(&key).unwrap_or_else(|| json!({}));
-        record["observed"] = json!(record["observed"].as_u64().unwrap_or(0).max(sequence));
+        if record["observed"].as_u64().unwrap_or(0) > sequence {
+            return Err("uncertain_effect_changed");
+        }
+        record["observed"] = json!(sequence);
         record["method"] = json!(method);
         record["acknowledged"] = json!(sequence);
         record["acknowledged_at_ms"] = json!(now_ms());

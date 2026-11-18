@@ -269,3 +269,63 @@ async fn unblocking_before_the_machine_is_reached_cancels_the_logout() {
             .is_some()
     );
 }
+
+#[tokio::test]
+async fn a_re_enrolled_machine_never_certifies_a_logout() {
+    let (fake, controls, _root) = fixture().await;
+    let (account, _) = signed_in(&controls.store).await;
+    let ok = initial(account.as_str(), OWNER, "claude-code");
+    let blocked = controls
+        .enter(&ok, AccountState::Blocked, "owner_block", None, None, false)
+        .await
+        .unwrap();
+    fake.connected.lock().insert(MACHINE.into());
+    controls.run_fences();
+    settle(&controls).await;
+    *fake.enrollment.lock() = Some("another-enrollment".into());
+    controls
+        .request_logout(&blocked, OWNER, true)
+        .await
+        .unwrap();
+    settle_logouts(&controls).await;
+    assert!(fake.logouts.lock().is_empty());
+    let value = controls.logout_value(account.as_str());
+    assert_eq!(value["state"], "pending");
+    assert_eq!(value["targets"][0]["detail"], "machine_enrollment_changed");
+}
+
+#[tokio::test]
+async fn a_refused_unblock_keeps_a_valid_pending_logout() {
+    let (fake, controls, _root) = fixture().await;
+    let (account, _) = signed_in(&controls.store).await;
+    let ok = initial(account.as_str(), OWNER, "claude-code");
+    let blocked = controls
+        .enter(&ok, AccountState::Blocked, "owner_block", None, None, false)
+        .await
+        .unwrap();
+    fake.connected.lock().insert(MACHINE.into());
+    controls.run_fences();
+    settle(&controls).await;
+    fake.connected.lock().clear();
+    controls
+        .request_logout(&blocked, OWNER, true)
+        .await
+        .unwrap();
+    // An unblock against a stale revision is refused and cancels nothing.
+    let current = controls.cache.control(account.as_str()).unwrap();
+    assert_eq!(
+        controls
+            .enter(
+                &current,
+                AccountState::Ok,
+                "owner_unblock",
+                None,
+                Some(current.revision - 1),
+                false,
+            )
+            .await,
+        Err("revision_conflict")
+    );
+    let record = controls.logout_record(account.as_str()).unwrap();
+    assert_eq!(record.targets[0].state, LogoutTargetState::Pending);
+}

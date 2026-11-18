@@ -94,9 +94,8 @@ pub(in crate::server) async fn dispatch(state: Arc<AppState>, req: crate::core::
 }
 
 /// Hand a supervised prompt to its target worker through the same account
-/// gate as every other dispatch: admission, account state, uncertain
-/// effects and the account's single active turn, reserved and marked with
-/// this delivery before the handoff and settled from its terminal record.
+/// gate as every other dispatch: admission, account state and uncertain
+/// effects.
 async fn deliver(
     state: &Arc<AppState>,
     context: &DispatchContext,
@@ -104,7 +103,7 @@ async fn deliver(
     cmid: &str,
 ) -> Result<(), String> {
     let target = context.target();
-    super::super::provider_accounts::controls::handoff(state, target, cmid, || {
+    super::super::provider_accounts::controls::handoff(state, target, || {
         let key = super::super::provider_fence_key_for_session(&state.hub, target);
         let fences = state.plugin_lifecycle_fences.read();
         if key

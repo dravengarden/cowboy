@@ -1,17 +1,11 @@
-//! The account-controls reconciler: settles every reservation from the
-//! terminal record of exactly its delivery and worker epoch, or from proven
-//! termination of its execution target (R1-8, R3-9, R3-10), records
-//! uncertain effects the workers report, and delivers pending Machine
-//! fences. It runs at Controller start, then every few seconds; every step
-//! is idempotent.
+//! The account-controls reconciler: applies backend signals from governed
+//! sessions' turn endings, records uncertain effects the workers report, and
+//! delivers pending Machine fences and logouts. It runs at Controller start,
+//! then every few seconds; every step is idempotent.
 use super::*;
-use crate::account_controls::{ReservationState, TurnOutcome};
-use crate::remote_runtime::turn_terminal::TurnTerminal;
+use crate::remote_runtime::turn_end::TurnEnd;
 
 const TICK: std::time::Duration = std::time::Duration::from_secs(3);
-/// A dispatched turn with no terminal record, no running turn and no proven
-/// unit loss for this long keeps its slot and asks for the owner.
-pub(super) const UNSETTLED_AFTER_MS: i64 = 120_000;
 
 pub(in crate::server) fn start(state: &Arc<AppState>) {
     // Every launch, revive, reset, reload and replacement of a governed
@@ -42,195 +36,75 @@ pub(in crate::server) fn start(state: &Arc<AppState>) {
     });
 }
 
-/// The listener a runtime calls with every terminal record: a governed
-/// session's record is stored on the reservation of exactly its delivery
-/// and worker epoch, never on another turn's.
-pub(in crate::server) fn terminal_listener(
+/// The listener a runtime calls with every turn ending: a governed
+/// session's ending moves its account to the state the proxy's structured
+/// result names (a backend signal; nothing is settled by it).
+pub(in crate::server) fn turn_end_listener(
     state: &Arc<AppState>,
-) -> crate::remote_runtime::turn_terminal::Listener {
+) -> crate::remote_runtime::turn_end::Listener {
     let weak = Arc::downgrade(state);
-    Arc::new(move |terminal: TurnTerminal| {
+    Arc::new(move |end: TurnEnd| {
         let Some(state) = weak.upgrade() else { return };
-        let governed = state
+        let Some(meta) = state
             .hub
-            .session_info(&terminal.session_id)
-            .is_some_and(|info| governed(&info.meta));
-        if !governed {
+            .session_info(&end.session_id)
+            .map(|info| info.meta)
+            .filter(governed)
+        else {
             return;
-        }
+        };
+        let Some(transition) =
+            policy::signal_transition(&policy::classify_stop_reason(&end.stop_reason))
+        else {
+            return;
+        };
         let Some(controls) = of(&state) else { return };
         drop(state);
-        tokio::spawn(async move { controls.record_terminal(&terminal).await });
+        tokio::spawn(async move { controls.signal(&meta, &transition).await });
     })
 }
 
-/// What the Controller can prove about a turn now.
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum Observation {
-    Settle(TurnOutcome),
-    Running,
-    Attention,
-}
-
 impl Controls {
-    /// Store one terminal record on its reservation (see [`terminal_listener`]).
-    pub(super) async fn record_terminal(&self, terminal: &TurnTerminal) {
-        let Some(delivery) = terminal.cmid.as_deref() else {
+    /// Apply one backend signal of `meta`'s account.
+    pub(super) async fn signal(&self, meta: &SessionMeta, transition: &policy::Transition) {
+        if meta.provider_account_id.is_default() {
             return;
-        };
-        match self
-            .store
-            .record_account_turn_terminal(
-                &terminal.session_id,
-                delivery,
-                &terminal.worker_epoch,
-                &terminal.stop_reason,
-                now_ms(),
+        }
+        let owner = meta.owner_user_id.clone().unwrap_or_default();
+        if let Err(error) = self
+            .raise(
+                meta.provider_account_id.as_str(),
+                &owner,
+                &meta.provider,
+                transition,
             )
             .await
         {
-            Ok(true) => {
-                let _ = self.refresh().await;
-            }
-            Ok(false) => {}
-            Err(error) => {
-                tracing::warn!(%error, "recording an account turn's terminal record failed")
-            }
+            tracing::warn!(
+                account = %meta.provider_account_id.as_str(),
+                session = %meta.id,
+                error,
+                "recording an account's backend signal failed"
+            );
         }
     }
 
-    /// One reconciliation pass; at Controller start it also settles every
-    /// reservation an earlier Controller left `reserved`.
+    /// One reconciliation pass: record uncertain effects, deliver fences and
+    /// logouts.
     pub(in crate::server) async fn tick(&self) {
         if self.refresh().await.is_err() {
             return;
         }
-        self.observe_uncertain_effects();
-        let turns: Vec<Reservation> = self.cache.turns.read().values().cloned().collect();
-        for turn in turns {
-            if self.cache.dispatching.lock().contains(&turn.turn_id) {
-                continue;
-            }
-            self.settle_turn(&turn).await;
-        }
+        self.observe_uncertain_effects().await;
         self.run_fences();
         self.run_logouts();
     }
 
-    /// Observe one reservation. Only the terminal record of exactly its
-    /// delivery and worker epoch, or proven termination of its execution
-    /// target, settles it; anything else waits or asks the owner.
-    pub(super) async fn observe(&self, turn: &Reservation, now: i64) -> Observation {
-        let provider = self
-            .cache
-            .control(&turn.account_id)
-            .map_or_else(|| "antigravity".to_owned(), |control| control.provider_id);
-        if turn.state == ReservationState::Reserved {
-            // Not dispatching in this process: an earlier Controller reserved
-            // it and stopped before `may_have_dispatched`.
-            return Observation::Settle(TurnOutcome::NotDispatched);
-        }
-        if let Some(terminal) = &turn.terminal
-            && (turn.worker_epoch.is_empty() || terminal.worker_epoch == turn.worker_epoch)
-        {
-            return Observation::Settle(policy::classify_stop_reason(&terminal.stop_reason));
-        }
-        let lost = match self.env.session(&turn.session_id) {
-            // The session is gone without the turn's terminal record.
-            None => true,
-            Some((meta, in_flight)) => {
-                if in_flight || matches!(meta.status, Status::Busy | Status::Starting) {
-                    return Observation::Running;
-                }
-                // A replaced worker incarnation can never end this turn.
-                !self.env.live_worker(&turn.session_id)
-                    || (!turn.worker_epoch.is_empty()
-                        && self
-                            .env
-                            .worker(&turn.session_id)
-                            .is_some_and(|worker| worker.worker_epoch != turn.worker_epoch))
-            }
-        };
-        if lost {
-            // A stopped or replaced worker proves nothing about its
-            // execution target: only the ledger's termination record of the
-            // original binding settles the turn, and only its closed log
-            // decides how.
-            if let Some(outcome) =
-                policy::unit_loss_outcome(self.env.termination(turn, &provider).await.as_ref())
-            {
-                return Observation::Settle(outcome);
-            }
-        }
-        if now.saturating_sub(turn.updated_at_ms) > UNSETTLED_AFTER_MS {
-            Observation::Attention
-        } else {
-            Observation::Running
-        }
-    }
-
-    pub(super) async fn settle_turn(&self, turn: &Reservation) {
-        let provider = self.cache.control(&turn.account_id).map_or_else(
-            || {
-                self.env
-                    .session(&turn.session_id)
-                    .map_or_else(|| "antigravity".to_owned(), |(meta, _)| meta.provider)
-            },
-            |control| control.provider_id,
-        );
-        let mut key = TurnKey {
-            session_id: &turn.session_id,
-            turn_id: &turn.turn_id,
-            worker_epoch: &turn.worker_epoch,
-            only: Some(turn.state),
-        };
-        let (outcome, settlement) = match self.observe(turn, now_ms()).await {
-            Observation::Running => return,
-            Observation::Attention => {
-                let current = self
-                    .cache
-                    .control(&turn.account_id)
-                    .map_or(AccountState::Ok, |control| control.state);
-                if current.severity() >= AccountState::NeedsAttention.severity() {
-                    return;
-                }
-                let attention = policy::Settlement {
-                    release: false,
-                    settled: "unsettled",
-                    state: Some((AccountState::NeedsAttention, "turn_unsettled".into())),
-                    stop_units: false,
-                };
-                (None, attention)
-            }
-            Observation::Settle(outcome) => {
-                let settlement = policy::settle(turn.state, &outcome);
-                (Some(outcome), settlement)
-            }
-        };
-        if outcome == Some(TurnOutcome::NotDispatched) {
-            key.only = Some(ReservationState::Reserved);
-        }
-        match self.settle(turn, key, &provider, &settlement).await {
-            Ok(crate::store::account_controls::Settled::Applied { released: true, .. }) => {
-                tracing::info!(
-                    account = %turn.account_id,
-                    session = %turn.session_id,
-                    settled = settlement.settled,
-                    "account turn settled"
-                );
-            }
-            Ok(_) => {}
-            Err(error) => tracing::warn!(
-                account = %turn.account_id,
-                error,
-                "account turn settlement failed; the slot stays held"
-            ),
-        }
-    }
-
     /// Record each governed session's newest uncertain effect durably, so a
     /// dormant session stays parked until the owner acknowledges it.
-    fn observe_uncertain_effects(&self) {
+    async fn observe_uncertain_effects(&self) {
+        // Serialized with the owner's acknowledgement of the same record.
+        let _write = self.cache.writes.lock().await;
         for meta in self.env.sessions() {
             if !governed(&meta) {
                 continue;
@@ -286,21 +160,36 @@ impl Controls {
         let Ok(account_id) = fence.account_id.parse::<ProviderAccountId>() else {
             return;
         };
-        let control = self.cache.control(&fence.account_id);
         // The daemon orders fences by the control revision that wrote them
         // and refuses an older one (`conflict`): a delayed admit can never
-        // undo a newer confirmed stop.
-        let revision = control
-            .as_ref()
-            .and_then(|control| policy::fence_revision(fence, control.revision));
-        let provider_id =
-            control.map_or_else(|| "antigravity".to_owned(), |control| control.provider_id);
+        // undo a newer confirmed stop. A fence whose originating revision
+        // cannot be established is never sent unordered; it stays pending
+        // and is retried.
+        let Some((revision, provider_id)) =
+            self.cache.control(&fence.account_id).and_then(|control| {
+                Some((
+                    policy::fence_revision(fence, control.revision)?,
+                    control.provider_id,
+                ))
+            })
+        else {
+            tracing::warn!(
+                account = %fence.account_id,
+                machine = %fence.machine_id,
+                "account fence revision unknown; retrying"
+            );
+            let _ = self
+                .store
+                .record_account_fence(fence, false, "fence revision unknown", now_ms())
+                .await;
+            return;
+        };
         let request = AccountFenceRequest {
             operation_id: fence.operation_id.clone(),
             provider_id,
             account_id,
             action: fence.action,
-            revision,
+            revision: Some(revision),
         };
         let result = self.env.fence(fence.machine_id.clone(), request).await;
         // A refusal, including the daemon's `conflict` for a superseded

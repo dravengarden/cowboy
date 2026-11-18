@@ -19,7 +19,6 @@ const TABLES: &[&str] = &[
     "provider_account_operations",
     "provider_account_stops",
     "provider_account_controls",
-    "provider_account_turns",
     "provider_account_fences",
     "provider_account_grants",
     "provider_grant_routes",
