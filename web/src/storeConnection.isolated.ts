@@ -141,6 +141,18 @@ test("an open socket is live only after bootstrap completes", async () => {
   await until(() => store.getSyncStatus().phase === "live");
 });
 
+test("a focus commit does not reopen the session selected by the click", () => {
+  const socket = FakeSocket.all.at(-1)!;
+  const first = socket.sent.length;
+  store.openSession("focused");
+  store.openSession("focused", { reassert: false });
+  store.openSession("restored", { reassert: false });
+  store.openSession("restored");
+  const opens = socket.sent.slice(first).map((data) => JSON.parse(data))
+    .filter((frame) => frame.type === "open_session");
+  expect(opens.map((frame) => frame.session_id)).toEqual(["focused", "restored", "restored"]);
+});
+
 test("capacity admission presents waiting with the queue position", async () => {
   const before = FakeSocket.all.length;
   store.retrySyncNow();

@@ -4945,10 +4945,10 @@ function optimisticMessage(
 // id is re-asserted on every reconnect (see connect's onopen). Cheap + a
 // server-side no-op when the agent is already alive, so it's fine to call on
 // every navigation.
-export function openSession(id: string): void {
+export function openSession(id: string, { reassert = true } = {}): void {
+  if (!reassert && openedSessionId === id) return;
   openedSessionId = id;
-  // The opened session is P1: background prefetch yields to it. A prefetch
-  // of this very session keeps running; `hydrateSession` reuses it.
+  // Keep an in-flight prefetch for this session and yield other work to it.
   prefetch.cancel(id);
   touchTranscriptSession(id);
   send({ type: "open_session", session_id: id });

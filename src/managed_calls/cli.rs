@@ -370,6 +370,11 @@ pub struct ReviewArgs {
     /// One of the reviewer's presets (model and reasoning) for this review.
     #[arg(long)]
     preset: Option<String>,
+    /// Declared risk. `high` (security, permissions, concurrency,
+    /// persistence, deletion, money, large refactors) makes an automatic
+    /// preset start at Max; `routine` follows the Settings review effort.
+    #[arg(long, value_parser = ["routine", "high"])]
+    risk: Option<String>,
     /// Return once the review is admitted. Cowboy queues one notice into
     /// this session when it ends; end your turn, then read
     /// `cowboy call result <call_id>`. Use this when a shell command cannot
@@ -447,6 +452,9 @@ fn review_request(args: &ReviewArgs, focus: &str) -> Result<Request, String> {
     }
     if args.notify {
         request["labels"][super::review::NOTIFY] = json!("parent");
+    }
+    if let Some(risk) = &args.risk {
+        request["labels"][super::review::RISK] = json!(risk);
     }
     Request::parse(request.to_string().as_bytes()).map_err(|reason| reason.to_string())
 }
@@ -773,6 +781,7 @@ mod tests {
             ask: false,
             agent: "auto".into(),
             preset: None,
+            risk: None,
             notify: false,
             timeout_min: 20,
         }
@@ -799,6 +808,10 @@ mod tests {
             selected.labels["selection_reason"],
             choice.reason.as_deref().unwrap()
         );
+        assert!(!selected.labels.contains_key(super::super::review::RISK));
+        choice.risk = Some("high".into());
+        let risky = review_request(&choice, "").unwrap();
+        assert_eq!(risky.labels[super::super::review::RISK], "high");
         choice.title = Some("x".repeat(257));
         assert!(review_request(&choice, "").is_err());
         let focused = review_request(&review_args(true), "Check the migration order").unwrap();

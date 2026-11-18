@@ -586,14 +586,9 @@ export function Transcript({
   magneticHaptics?: boolean;
 }): React.JSX.Element {
   const managesScrollHistory = historyPaging === "scroll";
-  // Memoized on `timeline` identity: `applyEnvelope` (store.ts) only hands us a
-  // new array when a new event actually lands, so this O(n) fold runs once per
-  // event — NOT on every scroll-driven re-render. Stable item identities also
-  // let the `memo`'d `ItemView` rows skip re-rendering.
-  // Keep receiving canonical envelopes while native scrolling owns the viewport,
-  // but present one stable snapshot until momentum/smooth scrolling settles.
-  // This removes Markdown/layout work from WebKit's scrolling frames without
-  // dropping or delaying transport data; the latest timeline flushes atomically.
+  // Freeze presentation while native scrolling owns the viewport, then flush
+  // the latest timeline atomically. Stable envelope identities keep scrolling
+  // from re-deriving items or re-rendering their Markdown.
   const [renderPausedForScroll, setRenderPausedForScroll] = useState(false);
   const renderPausedRef = useRef(false);
   const presentedTimelineRef = useRef(timeline);
@@ -2321,6 +2316,17 @@ export function Transcript({
     setFollowingLive(stick.current);
     if (stick.current) resetSticky(sessionId);
     else setSticky(sessionId, false);
+    if (desktopNavigation && managesScrollHistory && stick.current) {
+      // A fresh live edge has no historical offset to converge on. Let the
+      // column-reverse layout anchor the new rows, then correct any drift.
+      viewportRestoreActiveRef.current = false;
+      const frame = requestAnimationFrame(() => {
+        const scroller = parentRef.current;
+        if (scroller && stick.current) pinTranscriptToLatest(scroller);
+        requestVisibleScrollbackBoundaryRef.current();
+      });
+      return () => cancelAnimationFrame(frame);
+    }
     let raf = 0;
     let tries = 0;
     let stableFrames = 0;
@@ -2366,10 +2372,9 @@ export function Transcript({
         previousHeight = el.scrollHeight;
       }
       tries += 1;
-      // Lazy Markdown, fonts, images and deep history paging can commit well
-      // after the first dozen frames. Hold the Desktop restore skeleton until
-      // the requested offset is genuinely stable. An eight-second ceiling
-      // keeps a missing anchor recoverable; reader input cancels immediately.
+      // Lazy Markdown, fonts, images and deeper pages can commit after the
+      // first frames. Keep the restore skeleton until the offset stabilizes
+      // or the bounded restore window runs out. Reader input cancels it.
       if (shouldContinueTranscriptViewportRestore({ tries, stableFrames })) {
         raf = requestAnimationFrame(position);
       } else {
@@ -2532,24 +2537,14 @@ export function Transcript({
     return () => cancelAnimationFrame(raf);
   }, [managesScrollHistory, pageId, sessionId, working]);
 
-  // After a PRESENTED timeline change. Normally this fires per streamed chunk;
-  // while native scrolling is active presentation is frozen, then the latest
-  // canonical timeline is flushed atomically when scrolling settles. Keying
-  // this effect to `presentedTimeline` (not the continuously advancing backing
-  // `timeline`) is essential: the flush must restore the detached anchor before
-  // paint, otherwise the accumulated streamed content visibly shifts the reader
-  // once at every scroll-settle boundary.
-  // STUCK: follow the bottom, scrollTop 0 (a no-op when the native bottom anchor
-  // already held it there, a safety net if it didn't).
-  // DETACHED: hold the reader's view against the streaming bottom bubble's upward
-  // growth by re-asserting the freeze anchor (column-reverse's native anchor only
-  // pins the bottom, which is exactly what a scrolled-up reader does NOT want).
-  // Pre-paint (layout effect) so the correction lands without a visible jump.
+  // On each presented update, restore a detached reading anchor before paint.
+  // While native scrolling owns the viewport the presentation is frozen, so
+  // only its atomic catch-up reasserts the anchor.
   useLayoutEffect(() => {
     const el = parentRef.current;
     if (!el) return;
     if (stick.current) {
-      pinTranscriptToLatest(el);
+      if (!desktopNavigation || !managesScrollHistory) pinTranscriptToLatest(el);
       // Stuck → no live anchor; clear so the next detach captures fresh (never
       // restores to a stale, pre-re-stick position → a jump).
       freezeRef.current.key = null;
@@ -2574,7 +2569,12 @@ export function Transcript({
     // viewport didn't resize) nor `scroll` fires. Re-measure AFTER paint: the
     // newly visible contained rows lay out over the next frame, so
     // `scrollHeight` is briefly stale this layout pass.
-    const sRaf = requestAnimationFrame(() => reportScrollableRef.current());
+    const sRaf = requestAnimationFrame(() => {
+      if (desktopNavigation && managesScrollHistory && stick.current && !viewportRestoreActiveRef.current) {
+        pinTranscriptToLatest(el);
+      }
+      reportScrollableRef.current();
+    });
     return () => cancelAnimationFrame(sRaf);
   }, [presentedTimeline]);
 

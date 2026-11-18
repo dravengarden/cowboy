@@ -37,8 +37,134 @@ impl Hub {
             && session.meta.owner_user_id == expected.owner_user_id
             && session.config_options.is_none()
         {
-            session.initial_config_options = Some(options);
+            session.config_previews.initial = Some(options);
         }
+    }
+
+    /// Offer an exited session choices its pinned Provider generation has
+    /// but its snapshot lacks: a session moved to another generation while
+    /// exited keeps the snapshot its previous generation reported until a
+    /// worker starts. The choices are display-only: never persisted, never
+    /// part of [`Self::persisted_config_options`] (and so never replayed as a
+    /// capability), shown only while the session stays exited on the same
+    /// generation and login, and dropped by the next agent snapshot. A user's
+    /// selection among them is an ordinary preference, which the next worker
+    /// validates against its own report. Returns whether the display changed.
+    pub fn set_dormant_config_choices(
+        &self,
+        expected: &SessionMeta,
+        snapshot: &serde_json::Value,
+        choices: std::collections::BTreeMap<String, Vec<serde_json::Value>>,
+    ) -> bool {
+        let mut sessions = self.inner.sessions.lock();
+        let Some(session) = sessions.get_mut(&expected.id) else {
+            return false;
+        };
+        // The choices were derived from `snapshot`; a worker report that
+        // replaced it in the meantime is newer than them.
+        if session.meta.status != Status::Exited
+            || session.in_flight
+            || session.config_options.as_ref() != Some(snapshot)
+            || session.meta.provider != expected.provider
+            || session.meta.provider_account_id != expected.provider_account_id
+            || session.meta.provider_version != expected.provider_version
+            || session.meta.provider_generation_digest != expected.provider_generation_digest
+            || session.meta.provider_auth_generation != expected.provider_auth_generation
+            || session.meta.machine_id != expected.machine_id
+            || session.meta.owner_user_id != expected.owner_user_id
+        {
+            return false;
+        }
+        let before = display_config_options(session);
+        // Every completed lookup replaces the previous one, an empty one too.
+        session.config_previews.dormant = (!choices.is_empty()
+            && !session.config_previews.reported_by_current(&session.meta))
+        .then(|| DormantConfigChoices {
+            generation_digest: session.meta.provider_generation_digest.clone(),
+            auth_generation: session.meta.provider_auth_generation,
+            choices,
+        });
+        let after = display_config_options(session);
+        if before == after {
+            return false;
+        }
+        // Publish under the session lock so a worker snapshot that replaces
+        // this one is always broadcast after it.
+        if let Some(options) = projected_config_options(
+            &session.meta.provider,
+            session.meta.provider_behavior.as_ref(),
+            &session.config_preferences,
+            after,
+        ) {
+            self.fanout(Outbound::ConfigOptions {
+                session_id: expected.id.clone(),
+                options,
+            });
+        }
+        true
+    }
+
+    /// Whether this Controller saw `meta`'s exact generation and login report
+    /// the session's current snapshot; such a snapshot needs no dormant
+    /// choices. `None` after a restart, when the producer is unknown.
+    #[must_use]
+    pub fn config_reported_by_current(&self, meta: &SessionMeta) -> Option<bool> {
+        let sessions = self.inner.sessions.lock();
+        let session = sessions.get(&meta.id)?;
+        session
+            .config_previews
+            .reported_by
+            .as_ref()
+            .map(|_| session.config_previews.reported_by_current(&session.meta))
+    }
+
+    /// Model choices reported by live workers (Running or Busy) of sessions on
+    /// `meta`'s exact, nonempty Provider release, Machine, owner, account and
+    /// login, excluding managed children. Read under one lock with each
+    /// session's identity, so a reload cannot pair one release's identity with
+    /// another's options. `None` when no such worker has reported options.
+    #[must_use]
+    pub fn live_config_peers(&self, meta: &SessionMeta) -> Option<Vec<serde_json::Value>> {
+        if meta.provider_version.is_empty() || meta.provider_generation_digest.is_empty() {
+            return None;
+        }
+        let sessions = self.inner.sessions.lock();
+        let peers = sessions
+            .values()
+            .filter(|peer| {
+                let p = &peer.meta;
+                p.id != meta.id
+                    && matches!(p.status, Status::Running | Status::Busy)
+                    && p.execution_binding
+                        .as_ref()
+                        .is_none_or(|binding| binding.managed().is_none())
+                    && p.provider == meta.provider
+                    && p.provider_account_id == meta.provider_account_id
+                    && p.provider_auth_generation == meta.provider_auth_generation
+                    && p.provider_version == meta.provider_version
+                    && p.provider_generation_digest == meta.provider_generation_digest
+                    && p.machine_id == meta.machine_id
+                    && p.owner_user_id == meta.owner_user_id
+                    && peer.config_previews.reported_by_current(p)
+            })
+            .filter_map(|peer| peer.config_options.clone())
+            .collect::<Vec<_>>();
+        (!peers.is_empty()).then_some(peers)
+    }
+
+    /// The options as the agent reported them, without dormant display
+    /// choices: for views not scoped to the session's owner.
+    #[must_use]
+    pub fn reported_config_options(&self, session_id: &str) -> Option<serde_json::Value> {
+        let sessions = self.inner.sessions.lock();
+        sessions.get(session_id).and_then(|session| {
+            projected_config_options(
+                &session.meta.provider,
+                session.meta.provider_behavior.as_ref(),
+                &session.config_preferences,
+                stored_config_options(session),
+            )
+        })
     }
 
     /// Return only the last agent-backed options snapshot. Unlike
@@ -104,7 +230,7 @@ impl Hub {
         ) {
             return Err("configuration values must be a string id or boolean".to_owned());
         }
-        let (preferences, options, persist_options) = {
+        {
             let mut sessions = self.inner.sessions.lock();
             let Some(session) = sessions.get_mut(session_id) else {
                 return Err(format!("unknown session {session_id:?}"));
@@ -126,46 +252,50 @@ impl Hub {
                     config_id.clone(),
                     (value.clone(), std::time::Instant::now()),
                 );
-            let mut options = projected_config_options(
-                &session.meta.provider,
-                session.meta.provider_behavior.as_ref(),
-                &session.config_preferences,
-                display_config_options(session),
-            );
-            let options = options.as_mut().and_then(|options| {
-                set_config_option_current_value(options, &config_id, &value)
-                    .then(|| options.clone())
-            });
-            if let Some(options) = &options
+            let project = |options| {
+                let mut options = projected_config_options(
+                    &session.meta.provider,
+                    session.meta.provider_behavior.as_ref(),
+                    &session.config_preferences,
+                    options,
+                );
+                options.as_mut().and_then(|options| {
+                    set_config_option_current_value(options, &config_id, &value)
+                        .then(|| options.clone())
+                })
+            };
+            // Persist what the agent reported, never dormant display choices.
+            let stored = project(stored_config_options(session));
+            let options = project(display_config_options(session));
+            if let Some(stored) = stored
                 && session.config_options.is_some()
             {
-                session.config_options = Some(options.clone());
+                session.config_options = Some(stored);
             }
-            (
-                session.config_preferences.clone(),
-                options,
-                session.config_options.is_some(),
-            )
-        };
-        if let Some(tx) = self.inner.store_tx.as_ref() {
-            let _ = tx.send(StoreWrite::UpdateConfigPreferences {
-                session_id: session_id.to_owned(),
-                preferences,
-            });
-        }
-        if let Some(options) = options {
-            if let Some(tx) = self.inner.store_tx.as_ref()
-                && persist_options
-            {
-                let _ = tx.send(StoreWrite::UpdateConfigOptions {
+            // Enqueue the writes, then publish, under the session lock: a
+            // racing selection is then both stored and broadcast after this
+            // one, and a worker snapshot replacing either (or a dormant
+            // overlay) is broadcast after it.
+            if let Some(tx) = self.inner.store_tx.as_ref() {
+                let _ = tx.send(StoreWrite::UpdateConfigPreferences {
                     session_id: session_id.to_owned(),
-                    options: options.clone(),
+                    preferences: session.config_preferences.clone(),
+                });
+                if options.is_some()
+                    && let Some(stored) = session.config_options.clone()
+                {
+                    let _ = tx.send(StoreWrite::UpdateConfigOptions {
+                        session_id: session_id.to_owned(),
+                        options: stored,
+                    });
+                }
+            }
+            if let Some(options) = options {
+                self.fanout(Outbound::ConfigOptions {
+                    session_id: session_id.to_owned(),
+                    options,
                 });
             }
-            self.fanout(Outbound::ConfigOptions {
-                session_id: session_id.to_owned(),
-                options,
-            });
         }
         Ok(())
     }
@@ -255,6 +385,15 @@ impl Hub {
             }
             self.overlay_config_in_flight(session_id, &mut options);
             s.config_options = Some(options.clone());
+            s.config_previews.dormant = None;
+            // An exited session's report is a replay of a past worker, which
+            // may have run an earlier generation than the one now pinned.
+            s.config_previews.reported_by = (s.meta.status != Status::Exited).then(|| {
+                (
+                    s.meta.provider_generation_digest.clone(),
+                    s.meta.provider_auth_generation,
+                )
+            });
             (options, corrected.then(|| s.config_preferences.clone()))
         };
         if let Some(tx) = self.inner.store_tx.as_ref() {
@@ -273,5 +412,91 @@ impl Hub {
             session_id: session_id.to_owned(),
             options,
         });
+    }
+}
+
+/// Append each addition `{value, name}` to the flat choice list of the option
+/// with the same id when no choice has its value. Grouped choice lists are left
+/// alone: an ungrouped entry would change how the agent's groups render.
+pub(super) fn add_config_choices(
+    snapshot: &mut serde_json::Value,
+    additions: &std::collections::BTreeMap<String, Vec<serde_json::Value>>,
+) -> bool {
+    let Some(options) = snapshot.as_array_mut() else {
+        return false;
+    };
+    let mut changed = false;
+    for option in options {
+        let Some(id) = option.get("id").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let Some(additions) = additions.get(id) else {
+            continue;
+        };
+        let Some(choices) = option
+            .get_mut("options")
+            .and_then(serde_json::Value::as_array_mut)
+        else {
+            continue;
+        };
+        if choices
+            .iter()
+            .any(|choice| choice.get("options").is_some() || choice.get("value").is_none())
+        {
+            continue;
+        }
+        for addition in additions {
+            let Some(value) = addition.get("value") else {
+                continue;
+            };
+            if !choices
+                .iter()
+                .any(|choice| choice.get("value") == Some(value))
+            {
+                choices.push(addition.clone());
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
+/// Option previews shown before, or instead of, a current agent snapshot.
+#[derive(Default)]
+pub(super) struct ConfigPreviews {
+    /// Signed defaults/presets before the first ACP snapshot.
+    pub(super) initial: Option<serde_json::Value>,
+    /// Choices of an exited session's pinned generation that its snapshot,
+    /// reported by an earlier generation, lacks; see
+    /// `Hub::set_dormant_config_choices`.
+    pub(super) dormant: Option<DormantConfigChoices>,
+    /// The generation digest and login of the worker that reported the
+    /// current snapshot, when this Controller saw it.
+    pub(super) reported_by: Option<(String, Option<u64>)>,
+}
+
+impl ConfigPreviews {
+    fn reported_by_current(&self, meta: &SessionMeta) -> bool {
+        self.reported_by.as_ref().is_some_and(|(digest, login)| {
+            *digest == meta.provider_generation_digest && *login == meta.provider_auth_generation
+        })
+    }
+}
+
+/// Display-only choices of an exited session's pinned generation.
+pub(super) struct DormantConfigChoices {
+    generation_digest: String,
+    auth_generation: Option<u64>,
+    pub(super) choices: std::collections::BTreeMap<String, Vec<serde_json::Value>>,
+}
+
+impl DormantConfigChoices {
+    /// Only while the session stays exited on the generation and login the
+    /// choices were gathered for.
+    pub(super) fn applies_to(&self, session: &Session) -> bool {
+        session.meta.status == Status::Exited
+            && !session.in_flight
+            && session.meta.provider_generation_digest == self.generation_digest
+            && session.meta.provider_auth_generation == self.auth_generation
     }
 }

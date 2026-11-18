@@ -58,6 +58,8 @@
     "tools/publish-plugin-release.ts",
     "tools/third-party.ts",
     "tools/third-party_test.ts",
-    "tools/lib/third-party.ts"
+    "tools/lib/third-party.ts",
+    ".agents/skills/model-intel/scripts/score.ts",
+    ".agents/skills/model-intel/scripts/score_test.ts"
   ]
 }

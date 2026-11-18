@@ -60,6 +60,11 @@ pub const SESSION_CONTEXT_ROLLOVER_PREFIX: &str = "session_context_rollover:";
 pub const AGENT_TOOLS_PREFIX: &str = "agent_tools:";
 /// A session's agent tools override; the session id follows.
 pub const SESSION_TOOLS_PREFIX: &str = "session_tools:";
+/// Routine review effort for one agent kind, kept outside the schema-one
+/// Tools document so older readers never see it; the agent id follows.
+pub const AGENT_REVIEW_EFFORT_PREFIX: &str = "agent_review_effort:";
+/// A session's routine review effort override; the session id follows.
+pub const SESSION_REVIEW_EFFORT_PREFIX: &str = "session_review_effort:";
 /// Explicit MCP selections are session-owned; cloning a session grants none.
 pub const SESSION_MCP_BINDINGS_PREFIX: &str = "session_mcp_bindings:";
 /// The directory MCP default resolved at creation and its visible outcome.
@@ -86,6 +91,7 @@ pub const SESSION_STATE_PREFIXES: &[&str] = &[
     SESSION_CONFIG_REVERT_PREFIX,
     SESSION_MCP_BINDINGS_PREFIX,
     SESSION_MCP_DEFAULT_PREFIX,
+    SESSION_REVIEW_EFFORT_PREFIX,
 ];
 
 #[must_use]
@@ -111,6 +117,8 @@ pub fn is_persisted_setting_key(key: &str) -> bool {
             SESSION_CONTEXT_ROLLOVER_PREFIX,
             AGENT_TOOLS_PREFIX,
             SESSION_TOOLS_PREFIX,
+            AGENT_REVIEW_EFFORT_PREFIX,
+            SESSION_REVIEW_EFFORT_PREFIX,
             SESSION_MCP_BINDINGS_PREFIX,
             SESSION_MCP_DEFAULT_PREFIX,
             SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX,
@@ -149,6 +157,8 @@ pub fn examples() -> Vec<String> {
         format!("{SESSION_CONTEXT_ROLLOVER_PREFIX}sess-1"),
         format!("{AGENT_TOOLS_PREFIX}codex"),
         format!("{SESSION_TOOLS_PREFIX}sess-1"),
+        format!("{AGENT_REVIEW_EFFORT_PREFIX}codex"),
+        format!("{SESSION_REVIEW_EFFORT_PREFIX}sess-1"),
         format!("{SESSION_MCP_BINDINGS_PREFIX}sess-1"),
         format!("{SESSION_MCP_DEFAULT_PREFIX}sess-1"),
         format!("{SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX}sess-1"),
@@ -171,6 +181,8 @@ mod tests {
             SESSION_PROVIDER_AUTO_UPDATE_PREFIX,
             AGENT_TOOLS_PREFIX,
             SESSION_TOOLS_PREFIX,
+            AGENT_REVIEW_EFFORT_PREFIX,
+            SESSION_REVIEW_EFFORT_PREFIX,
             SESSION_MCP_BINDINGS_PREFIX,
             SESSION_MCP_DEFAULT_PREFIX,
             SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX,

@@ -964,6 +964,11 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       "mobile detail result missing",
     );
     check(text().includes("gpt-6-astra · max") && text().includes("Finished") && text().includes("Ample quota"), "details show model, effort, finish and choice reason");
+    const browserTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    check(
+      text().includes(`Browser time zone${browserTimeZone}`),
+      "execution details identify the browser as the source of the displayed time zone",
+    );
     backButton()!.click();
     await until(
       () =>

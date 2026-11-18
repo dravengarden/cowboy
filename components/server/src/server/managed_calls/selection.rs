@@ -3,7 +3,7 @@
 use crate::usage::UsageSnapshot;
 use serde_json::{Value, json};
 
-pub(super) const GUIDANCE: &str = "For Review/Design Review, use providers[].review_candidates in order: session preferences override Settings defaults. Only Opus, Fable, Astra and SOL participate. Choose the first preferred family with fresh sufficient account AND model quota; prefer Max within that family. Do not skip a preferred family merely because another is stronger. Unknown/stale quota is not ample; inspect windows and reset times before choosing. Explicit user choice takes precedence within the allowed list. Pass --agent, --preset and --reason; explain any skipped preference. No silent fallback after a failed call: diagnose before retrying. Analysis/image calls are unaffected. usedPercent is USED; resetsAt is epoch seconds. Large quota payloads: use cowboy.usage.read.";
+pub(super) const GUIDANCE: &str = "For Review/Design Review, use providers[].review_candidates in order: session preferences override Settings defaults. Only Opus, Fable, Astra and SOL participate. review_candidates is the routine order: review_preferences.*_effort (max or standard) orders effort inside a family. Declare risk:'high' (security, permissions, concurrency, persistence, deletion, money, large refactors) so an omitted preset starts at Max in the first family; an explicit preset still wins. Choose the first preferred family with fresh sufficient account AND model quota. Do not skip a preferred family merely because another is stronger. Unknown/stale quota is not ample; inspect windows and reset times before choosing. Explicit user choice takes precedence within the allowed list. Pass --agent, --preset and --reason; explain any skipped preference. No silent fallback after a failed call: diagnose before retrying. Analysis/image calls are unaffected. usedPercent is USED; resetsAt is epoch seconds. Large quota payloads: use cowboy.usage.read.";
 
 pub(super) fn family(model: &str) -> Option<&'static str> {
     if model == "opus" || model.starts_with("claude-opus-") {
@@ -41,12 +41,16 @@ pub(super) fn candidates(
     presets: &Value,
     provider: &str,
     preference: &super::super::agent_tools::ReviewPreferences,
+    high_risk: bool,
 ) -> Vec<Value> {
-    let order = if provider == "codex" {
-        &preference.gpt
+    use super::super::agent_tools::ReviewEffort;
+    let (order, effort_policy) = if provider == "codex" {
+        (&preference.gpt, preference.gpt_effort)
     } else {
-        &preference.claude
+        (&preference.claude, preference.claude_effort)
     };
+    // High-risk reviews keep the strongest-first order whatever the policy.
+    let standard = !high_risk && effort_policy == ReviewEffort::Standard;
     let mut choices: Vec<_> = presets
         .as_array()
         .into_iter()
@@ -58,12 +62,12 @@ pub(super) fn candidates(
                 .as_str()
                 .or(preset["values"]["effort"].as_str())
                 .unwrap_or("default");
-            let effort_rank = match effort {
-                "max" => 0,
-                "xhigh" => 1,
-                "high" => 2,
-                "default" => 3,
-                "medium" => 4,
+            let effort_rank = match (standard, effort) {
+                (false, "max") | (true, "medium") => 0,
+                (false, "xhigh") | (true, "default") => 1,
+                (_, "high") => 2,
+                (false, "default") | (true, "xhigh") => 3,
+                (false, "medium") | (true, "max") => 4,
                 _ => 5,
             };
             Some((rank, effort_rank, preset.clone()))
@@ -113,13 +117,13 @@ mod tests {
         ]);
         let mut preference = super::super::super::agent_tools::ReviewPreferences::default();
         let ids = |p: &super::super::super::agent_tools::ReviewPreferences| {
-            candidates(&presets, "claude-code", p)
+            candidates(&presets, "claude-code", p, false)
                 .iter()
                 .map(|v| v["id"].as_str().unwrap().to_owned())
                 .collect::<Vec<_>>()
         };
         assert_eq!(ids(&preference), ["opus-high", "opus-default", "fable-max"]);
-        let choices = candidates(&presets, "claude-code", &preference);
+        let choices = candidates(&presets, "claude-code", &preference, false);
         assert_eq!(review_preset(&choices, None).unwrap(), "opus-high");
         assert_eq!(
             review_preset(&choices, Some("fable-max")).unwrap(),
@@ -135,6 +139,33 @@ mod tests {
         preference.claude = vec!["opus".into()];
         assert!(!ids(&preference).iter().any(|v| v.contains("fable")));
         assert_eq!(family("gpt-6.1-sol"), Some("sol"));
+        let gpt = json!([
+            {"id":"astra-max","values":{"model":"gpt-6.2-astra","reasoning_effort":"max"}},
+            {"id":"astra-medium","values":{"model":"gpt-6.2-astra","reasoning_effort":"medium"}},
+            {"id":"sol-max","values":{"model":"gpt-6.2-sol","reasoning_effort":"max"}},
+            {"id":"sol-medium","values":{"model":"gpt-6.2-sol","reasoning_effort":"medium"}}
+        ]);
+        let order = |p: &super::super::super::agent_tools::ReviewPreferences, high: bool| {
+            candidates(&gpt, "codex", p, high)
+                .iter()
+                .map(|v| v["id"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+        let mut gpt_preference = super::super::super::agent_tools::ReviewPreferences::default();
+        assert_eq!(
+            order(&gpt_preference, false),
+            ["astra-max", "astra-medium", "sol-max", "sol-medium"]
+        );
+        gpt_preference.gpt_effort = super::super::super::agent_tools::ReviewEffort::Standard;
+        // Family order still wins; only the effort order within it changes.
+        assert_eq!(
+            order(&gpt_preference, false),
+            ["astra-medium", "astra-max", "sol-medium", "sol-max"]
+        );
+        assert_eq!(
+            order(&gpt_preference, true),
+            ["astra-max", "astra-medium", "sol-max", "sol-medium"]
+        );
         assert_eq!(family("gpt-6-astra"), Some("astra"));
         assert_eq!(family("gpt-6-luna"), None);
     }

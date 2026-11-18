@@ -4,12 +4,14 @@
 
 use cowboy_provider_sdk::ConfigurationPreset;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 use super::AppState;
 use crate::core::SessionMeta;
 
 fn same_scope(left: &SessionMeta, right: &SessionMeta) -> bool {
     left.provider == right.provider
+        && left.provider_account_id == right.provider_account_id
         && left.provider_version == right.provider_version
         && left.provider_generation_digest == right.provider_generation_digest
         && left.provider_auth_generation == right.provider_auth_generation
@@ -19,6 +21,17 @@ fn same_scope(left: &SessionMeta, right: &SessionMeta) -> bool {
             .execution_binding
             .as_ref()
             .is_none_or(|binding| binding.managed().is_none())
+}
+
+/// [`prepare`] for a client or Agent reading the session's settings: also
+/// offers an exited session the model choices of its pinned generation. Not
+/// for configuration writes, whose ACP waiters a preview broadcast carrying
+/// the previous selection would resolve.
+pub(super) fn prepare_for_view(state: &AppState, session_id: &str) {
+    match state.hub.persisted_config_options(session_id) {
+        Some(snapshot) => carry_model_choices(state, session_id, &snapshot),
+        None => prepare(state, session_id),
+    }
 }
 
 pub(super) fn prepare(state: &AppState, session_id: &str) {
@@ -63,6 +76,139 @@ pub(super) fn prepare(state: &AppState, session_id: &str) {
         observed.as_ref(),
     );
     state.hub.set_initial_config_options(&meta, options);
+}
+
+/// An exited session keeps the options its last worker reported, which may
+/// come from an earlier Provider generation: a dormant re-pin or an operator
+/// update moves the session without starting a worker. Offer, for display
+/// only, the model choices of the generation it is pinned to now, so its
+/// settings and Recommended cards match what its next start runs.
+///
+/// Sources, without starting anything: the snapshots of sessions with a live
+/// worker on the same exact generation, Machine, owner, account and login
+/// (the native model list depends on the login). Only when there is none, the
+/// generation's signed preset models, if the snapshot is known to come from
+/// another generation, or, when its producer is unknown (after a Controller
+/// restart), if it lacks the generation's signed default model and so
+/// predates it. A snapshot this Controller saw the pinned generation report
+/// needs nothing.
+fn carry_model_choices(state: &AppState, session_id: &str, snapshot: &Value) {
+    let Some(info) = state.hub.session_info(session_id) else {
+        return;
+    };
+    let meta = info.meta;
+    if meta.status != crate::core::Status::Exited || is_managed(&meta) {
+        return;
+    }
+    let model_ids = model_option_ids(snapshot);
+    if model_ids.is_empty() {
+        return;
+    }
+    let reported_by_current = state.hub.config_reported_by_current(&meta);
+    let mut choices = BTreeMap::<String, Vec<Value>>::new();
+    if reported_by_current == Some(true) {
+        // Nothing to add; still replace an earlier lookup below.
+    } else if let Some(peers) = state.hub.live_config_peers(&meta) {
+        for options in &peers {
+            collect_model_choices(options, &model_ids, &mut choices);
+        }
+    } else if let Some(package) = state.provider_catalog.package(
+        &meta.provider,
+        &meta.provider_version,
+        &meta.provider_generation_digest,
+    ) && let Some(behavior) = meta.provider_behavior.as_ref()
+    {
+        let predates = reported_by_current == Some(false)
+            || model_ids.iter().any(|id| {
+                behavior
+                    .default_preferences
+                    .get(id)
+                    .and_then(|value| serde_json::to_value(value).ok())
+                    .is_some_and(|default| !offers(snapshot, id, &default))
+            });
+        if predates {
+            for preset in &package.manifest.configuration.presets {
+                for id in &model_ids {
+                    if let Some(value) = preset.values.get(id) {
+                        let name = preset
+                            .name
+                            .split(" · ")
+                            .next()
+                            .filter(|name| !name.is_empty())
+                            .map_or_else(|| label(value), str::to_owned);
+                        let entry = choices.entry(id.clone()).or_default();
+                        if !entry.iter().any(|choice| choice["value"] == json!(value)) {
+                            entry.push(json!({"value": value, "name": name}));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    state
+        .hub
+        .set_dormant_config_choices(&meta, snapshot, choices);
+}
+
+fn is_managed(meta: &SessionMeta) -> bool {
+    meta.execution_binding
+        .as_ref()
+        .is_some_and(|binding| binding.managed().is_some())
+}
+
+/// The Web picker's rule: the `model` category, or the legacy `model` id
+/// when the agent reports no category.
+fn is_model_option(option: &Value) -> bool {
+    option["category"] == "model" || (option["category"].is_null() && option["id"] == "model")
+}
+
+fn model_option_ids(options: &Value) -> Vec<String> {
+    options
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|option| is_model_option(option))
+        .filter_map(|option| option["id"].as_str().map(str::to_owned))
+        .collect()
+}
+
+fn offers(options: &Value, id: &str, value: &Value) -> bool {
+    options.as_array().into_iter().flatten().any(|option| {
+        option["id"] == id
+            && option["options"]
+                .as_array()
+                .is_some_and(|choices| choices.iter().any(|choice| &choice["value"] == value))
+    })
+}
+
+/// Only flat, named string choices: never a peer's selection or a group.
+fn collect_model_choices(
+    options: &Value,
+    ids: &[String],
+    additions: &mut BTreeMap<String, Vec<Value>>,
+) {
+    for option in options.as_array().into_iter().flatten() {
+        if !is_model_option(option) {
+            continue;
+        }
+        let Some(id) = option["id"]
+            .as_str()
+            .filter(|id| ids.iter().any(|known| known == id))
+        else {
+            continue;
+        };
+        for choice in option["options"].as_array().into_iter().flatten() {
+            if choice["value"].is_string() && choice["name"].is_string() {
+                let choices = additions.entry(id.to_owned()).or_default();
+                if !choices
+                    .iter()
+                    .any(|known| known["value"] == choice["value"])
+                {
+                    choices.push(json!({"value": choice["value"], "name": choice["name"]}));
+                }
+            }
+        }
+    }
 }
 
 fn model_matches(options: &Value, preferences: &Value) -> bool {
@@ -215,5 +361,34 @@ mod tests {
             &json!([{"id":"model","category":"model","currentValue":"large"}]),
             &json!({"model":"small"})
         ));
+    }
+
+    #[test]
+    fn peer_model_choices_carry_names_but_never_selections_or_other_options() {
+        let peer = json!([
+            {"id":"model","category":"model","currentValue":"gpt-6.2-astra","options":[
+                {"value":"gpt-6.2-sol","name":"6.2 Sol","description":"fast"},
+                {"value":"gpt-6.2-astra","name":"6.2 Astra"},
+                {"group":"Other","options":[]}
+            ]},
+            {"id":"reasoning_effort","category":"thought_level","currentValue":"ultra",
+             "options":[{"value":"ultra","name":"Ultra"}]}
+        ]);
+        let ids = model_option_ids(&peer);
+        assert_eq!(ids, vec!["model".to_owned()]);
+        let mut additions = BTreeMap::new();
+        collect_model_choices(&peer, &ids, &mut additions);
+        collect_model_choices(&peer, &ids, &mut additions);
+        assert_eq!(additions.len(), 1);
+        assert_eq!(
+            additions["model"],
+            vec![
+                json!({"value":"gpt-6.2-sol","name":"6.2 Sol"}),
+                json!({"value":"gpt-6.2-astra","name":"6.2 Astra"}),
+            ]
+        );
+        assert!(offers(&peer, "model", &json!("gpt-6.2-sol")));
+        assert!(!offers(&peer, "model", &json!("gpt-6.1-sol")));
+        assert!(!offers(&peer, "reasoning_effort", &json!("gpt-6.2-sol")));
     }
 }

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Model Intel"
+  short_description: "Objective model/effort evidence, tiers and recommendations"
+  default_prompt: "Use $model-intel to audit the model catalog, refresh evidence if needed, and propose Recommended preset changes."

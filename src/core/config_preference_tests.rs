@@ -397,3 +397,126 @@ fn deepseek_context_option_is_projected_after_the_model() {
     assert_eq!(options[2]["currentValue"], true);
     assert_eq!(options[3]["id"], "reasoning_effort");
 }
+
+#[test]
+fn dormant_choices_are_display_only_and_end_with_the_next_agent_snapshot() {
+    let hub = Hub::new();
+    hub.create_local_session(
+        "dormant".to_owned(),
+        "codex".to_owned(),
+        "/tmp".to_owned(),
+        "test".to_owned(),
+        SessionOrigin::Web,
+        false,
+    );
+    let reported = serde_json::json!([
+        {"id": "model", "category": "model", "currentValue": "gpt-6.1-sol",
+         "options": [{"value": "gpt-6.1-sol", "name": "6.1 Sol"}]},
+        {"id": "mode", "currentValue": "ask",
+         "options": [{"group": "Profiles", "options": [{"value": "ask", "name": "Ask"}]}]},
+    ]);
+    hub.set_config_options("dormant", reported.clone());
+    let repin = |hub: &Hub, digest: &str| {
+        hub.inner
+            .sessions
+            .lock()
+            .get_mut("dormant")
+            .unwrap()
+            .meta
+            .provider_generation_digest = digest.to_owned();
+        hub.session_info("dormant").unwrap().meta
+    };
+    let choices = || -> std::collections::BTreeMap<String, Vec<serde_json::Value>> {
+        [
+            (
+                "model".to_owned(),
+                vec![
+                    serde_json::json!({"value": "gpt-6.1-sol", "name": "duplicate"}),
+                    serde_json::json!({"value": "gpt-6.2-sol", "name": "6.2 Sol"}),
+                ],
+            ),
+            (
+                "mode".to_owned(),
+                vec![serde_json::json!({"value": "bypass", "name": "Bypass"})],
+            ),
+        ]
+        .into()
+    };
+    let shown = |hub: &Hub| {
+        hub.config_options("dormant").unwrap()[0]["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|choice| choice["value"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+
+    // A session with a worker reports its own options.
+    hub.set_status("dormant", Status::Running, None);
+    let live = hub.session_info("dormant").unwrap().meta;
+    assert!(!hub.set_dormant_config_choices(&live, &reported, choices()));
+
+    hub.set_status("dormant", Status::Exited, None);
+    // The pinned generation reported this snapshot: nothing to add.
+    let current = hub.session_info("dormant").unwrap().meta;
+    assert_eq!(hub.config_reported_by_current(&current), Some(true));
+    assert!(!hub.set_dormant_config_choices(&current, &reported, choices()));
+
+    // Moved to another generation while exited.
+    let meta = repin(&hub, "sha256:next");
+    assert_eq!(hub.config_reported_by_current(&meta), Some(false));
+    let mut moved = meta.clone();
+    moved.provider_generation_digest = "sha256:other".to_owned();
+    assert!(!hub.set_dormant_config_choices(&moved, &reported, choices()));
+    // Choices derived from a snapshot a worker has since replaced.
+    assert!(!hub.set_dormant_config_choices(&meta, &serde_json::json!([]), choices()));
+
+    assert!(hub.set_dormant_config_choices(&meta, &reported, choices()));
+    assert_eq!(shown(&hub), ["gpt-6.1-sol", "gpt-6.2-sol"]);
+    // Never persisted, so never replayed as an agent capability.
+    assert_eq!(hub.persisted_config_options("dormant").unwrap(), reported);
+    // Grouped choices keep the agent's grouping.
+    assert_eq!(
+        hub.config_options("dormant").unwrap()[1]["options"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(!hub.set_dormant_config_choices(&meta, &reported, choices()));
+    // An empty lookup replaces the previous one.
+    assert!(hub.set_dormant_config_choices(&meta, &reported, Default::default()));
+    assert_eq!(shown(&hub), ["gpt-6.1-sol"]);
+    assert!(hub.set_dormant_config_choices(&meta, &reported, choices()));
+
+    // Selecting one is an ordinary preference; the stored snapshot keeps only
+    // what the agent reported, with the selection as its current value.
+    hub.set_config_preference(
+        "dormant",
+        "model".to_owned(),
+        serde_json::json!("gpt-6.2-sol"),
+    )
+    .unwrap();
+    let stored = hub.persisted_config_options("dormant").unwrap();
+    assert_eq!(stored[0]["currentValue"], "gpt-6.2-sol");
+    assert_eq!(stored[0]["options"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        hub.config_preferences("dormant").unwrap()["model"],
+        "gpt-6.2-sol"
+    );
+
+    // Hidden while a worker runs, and gone after its first snapshot.
+    hub.set_status("dormant", Status::Starting, None);
+    assert_eq!(shown(&hub), ["gpt-6.1-sol"]);
+    hub.set_config_options("dormant", reported.clone());
+    hub.set_status("dormant", Status::Exited, None);
+    assert_eq!(shown(&hub), ["gpt-6.1-sol"]);
+    let current = hub.session_info("dormant").unwrap().meta;
+    assert_eq!(hub.config_reported_by_current(&current), Some(true));
+
+    // A report replayed for an exited session may come from a past worker of
+    // an earlier generation: its producer is unknown, not the pinned one.
+    let meta = repin(&hub, "sha256:later");
+    hub.set_config_options("dormant", reported);
+    assert_eq!(hub.config_reported_by_current(&meta), None);
+}

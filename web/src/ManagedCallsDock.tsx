@@ -552,7 +552,7 @@ export function CallDetailView({
         <DetailRow label="Started" value={call.started_at_ms == null ? "Not recorded" : new Date(call.started_at_ms).toLocaleString()} />
         <DetailRow label="Finished" value={call.finished_at_ms == null ? (callActive(call.state) ? "In progress" : "Not recorded") : new Date(call.finished_at_ms).toLocaleString()} />
         <DetailRow label="Elapsed" value={call.started_at_ms == null ? "Not recorded" : elapsedLabel(call.started_at_ms, call.finished_at_ms ?? (callActive(call.state) ? Date.now() : call.updated_at_ms))} />
-        <DetailRow label="Time zone" value={Intl.DateTimeFormat().resolvedOptions().timeZone} />
+        <DetailRow label="Browser time zone" value={Intl.DateTimeFormat().resolvedOptions().timeZone} />
         <DetailRow
           label="Updated"
           value={new Date(call.updated_at_ms).toLocaleString()}

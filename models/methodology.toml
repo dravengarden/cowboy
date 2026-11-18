@@ -1,0 +1,96 @@
+# Model evidence methodology (schema 1).
+#
+# Versioned, reviewable inputs to `.agents/skills/model-intel/scripts/score.ts`.
+# Changing a weight, floor, margin or task mapping changes every derived tier:
+# review the diff of models/catalog.json together with this file.
+
+schema = 1
+
+# Canonical effort vocabulary. Observations keep the native key/value; this
+# list only orders efforts for display and tie-breaking.
+efforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "default"]
+
+[provenance]
+# Weight of one lineage by who ran the measurement.
+independent = 1.0   # the publisher ran the evaluation with its own harness
+third_party = 0.7   # a re-run or reproduction by someone other than the vendor
+vendor = 0.25       # vendor-reported (launch posts, model cards)
+internal = 1.0      # Cowboy's own paired pilots on real workloads
+
+[freshness]
+half_life_days = 60
+# A model released less than this many days before the snapshot is provisional:
+# its cells are scored for inspection, but it never becomes a tier or a default.
+provisional_days = 14
+
+[evidence]
+# A (target, task) cell needs at least this many distinct lineages to be scored.
+min_lineages = 2
+# Candidates are ranked only on the weighted tasks they all scored; that
+# common set must cover at least this share of the workload weight.
+min_workload_coverage = 0.7
+# Lineages for high confidence, and the maximum age (days) of the newest one.
+high_confidence_lineages = 3
+high_confidence_max_age_days = 45
+# Drop a benchmark group when its median value exceeds this fraction of the
+# metric's ceiling, or the observed spread is below min_spread (saturated).
+saturation_fraction = 0.9
+min_spread = 0.03
+# Minimum uncertainty of every scored cell: a handful of lineages never
+# justifies more confidence than this, however well they agree.
+uncertainty_floor = 0.05
+
+# Task taxonomy. Each benchmark (by stable key) contributes to exactly one task.
+# Preference arenas and adoption share are separate axes and never map here.
+[tasks.agentic_coding]
+benchmarks = ["swe-bench-pro", "terminal-bench", "aa-coding-index"]
+[tasks.code_review]
+benchmarks = ["reviewbench", "swe-prbench", "cowboy-review-pilot"]
+[tasks.reasoning]
+benchmarks = ["arc-agi-2", "hle", "gpqa-diamond", "aa-intelligence-index"]
+[tasks.long_context]
+benchmarks = ["aa-long-context", "mrcr"]
+[tasks.tool_use]
+benchmarks = ["tau2-bench", "mcp-atlas"]
+[tasks.writing]
+benchmarks = ["ifbench"]
+
+# Workloads are the task mixes routing and recommendations optimize for.
+# `weights` must sum to 1. Tier rules (all scores are normalized to [0, 1] and
+# computed on the candidates' common scored tasks):
+#   flagship  = highest conservative estimate (mean - uncertainty)
+#   strong    = first target whose conservative estimate is below flagship by
+#               at least tie_margin; closer ones are listed as tied
+#   workhorse = cheapest target, by `cost_metric`, among those whose mean is
+#               within noninferiority_margin of the flagship mean
+#   value     = cheapest target among those whose mean is at least value_floor
+# "Cheapest" requires a direct paired comparison (shared cost groups) with
+# every other candidate; otherwise the tier stays undetermined.
+# usd_per_task is API-equivalent dollars, not subscription quota.
+[workloads.session_default]
+weights = { agentic_coding = 0.6, tool_use = 0.2, long_context = 0.2 }
+cost_metric = "usd_per_task"
+noninferiority_margin = 0.08
+value_floor = 0.55
+tie_margin = 0.03
+
+[workloads.review]
+weights = { code_review = 0.7, agentic_coding = 0.3 }
+cost_metric = "tokens_per_task"
+noninferiority_margin = 0.05
+value_floor = 0.6
+tie_margin = 0.03
+
+[workloads.design_review]
+weights = { reasoning = 0.5, code_review = 0.3, long_context = 0.2 }
+cost_metric = "tokens_per_task"
+noninferiority_margin = 0.05
+value_floor = 0.6
+tie_margin = 0.03
+
+[workloads.analysis]
+weights = { reasoning = 0.4, agentic_coding = 0.3, long_context = 0.3 }
+cost_metric = "usd_per_task"
+noninferiority_margin = 0.1
+value_floor = 0.5
+tie_margin = 0.03

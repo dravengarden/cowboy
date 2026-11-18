@@ -276,7 +276,8 @@ pub const ACTION_SDK: &str = r#"// cowboy_execute({action,arguments,operation});
 //   for a small one read sessions.search/history yourself. Verify paths, commands and numbers in source.
 // Images: discover calls.capabilities({capability:"image.generate"}); send only task + input paths.
 // calls.result returns verified artifact paths on the execution machine, never image bytes.
-// review.start: {focus?:string,design?:boolean,provider?:"auto"|"codex"|"claude-code",files?:string[],root?:string,preset?:string,title?:string,reason?:string,task?:string,base?:string,fresh?:boolean,notify?:boolean}
+// review.start: {focus?:string,design?:boolean,provider?:"auto"|"codex"|"claude-code",files?:string[],root?:string,preset?:string,title?:string,reason?:string,task?:string,base?:string,fresh?:boolean,notify?:boolean,risk?:"routine"|"high"}
+// risk:"high" for the risks named in review_selection: an omitted preset starts at Max.
 // notify:true queues one Cowboy notice into this session when the call ends (idle: new turn;
 // busy: next turn). End your turn instead of polling calls.wait; then read calls.result.
 // task (stable id: letters, digits, -_. up to 128, e.g. "f01-awaiting-merge"; prose goes in focus)

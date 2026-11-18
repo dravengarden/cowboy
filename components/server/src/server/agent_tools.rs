@@ -16,7 +16,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::{AppState, AuthenticatedProductRequest, session_is_visible};
-use crate::core::settings_keys::{AGENT_TOOLS_PREFIX, SESSION_TOOLS_PREFIX};
+mod effort_store;
+pub(super) use effort_store::store_session;
 
 pub(super) const SCHEMA: u16 = 1;
 /// Agents a managed call can start. Each must declare the read-only profile.
@@ -179,6 +180,22 @@ pub(super) struct CallsOverride {
 pub(super) struct ReviewPreferences {
     pub claude: Vec<String>,
     pub gpt: Vec<String>,
+    /// Effort order within a family for reviews not declared high risk.
+    /// High-risk reviews always try Max first. Absent in older stores.
+    #[serde(default)]
+    pub claude_effort: ReviewEffort,
+    #[serde(default)]
+    pub gpt_effort: ReviewEffort,
+}
+
+/// `max` keeps the historical strongest-first order; `standard` starts at
+/// medium/default effort and escalates only through the remaining presets.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ReviewEffort {
+    #[default]
+    Max,
+    Standard,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -188,6 +205,10 @@ pub(super) struct ReviewOverride {
     pub claude: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpt: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_effort: Option<ReviewEffort>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpt_effort: Option<ReviewEffort>,
 }
 
 impl ReviewOverride {
@@ -198,6 +219,12 @@ impl ReviewOverride {
         if let Some(order) = &self.gpt {
             defaults.gpt = order.clone();
         }
+        if let Some(effort) = self.claude_effort {
+            defaults.claude_effort = effort;
+        }
+        if let Some(effort) = self.gpt_effort {
+            defaults.gpt_effort = effort;
+        }
         defaults
     }
 }
@@ -207,6 +234,8 @@ impl Default for ReviewPreferences {
         Self {
             claude: vec!["opus".into(), "fable".into()],
             gpt: vec!["astra".into(), "sol".into()],
+            claude_effort: ReviewEffort::Max,
+            gpt_effort: ReviewEffort::Max,
         }
     }
 }
@@ -243,6 +272,21 @@ mod review_preferences_tests {
         let inherited = changed_defaults.overlay(&sparse).calls.review;
         assert_eq!(inherited.claude, ["fable"]);
         assert_eq!(inherited.gpt, ["sol"]);
+        assert_eq!(inherited.gpt_effort, ReviewEffort::Max);
+        let effort: SessionTools = serde_json::from_value(json!({
+            "schema":1,"calls":{"review":{"gpt_effort":"standard"}}
+        }))
+        .unwrap();
+        let tuned = AgentTools::builtin("codex").overlay(&effort).calls.review;
+        assert_eq!(
+            (tuned.gpt_effort, tuned.claude_effort, tuned.gpt),
+            (
+                ReviewEffort::Standard,
+                ReviewEffort::Max,
+                ReviewPreferences::default().gpt
+            )
+        );
+        assert!(serde_json::from_value::<ReviewOverride>(json!({"gpt_effort":"min"})).is_err());
         let mut session: SessionTools = serde_json::from_value(json!({
             "schema":1,"calls":{"review":{"claude":["fable","opus"],"gpt":["sol"]}}
         }))
@@ -420,7 +464,7 @@ pub(super) fn agent_defaults(state: &AppState, agent: &str) -> (AgentTools, bool
 }
 
 fn hub_agent_defaults(hub: &crate::core::Hub, agent: &str) -> (AgentTools, bool) {
-    hub.setting(&format!("{AGENT_TOOLS_PREFIX}{agent}"))
+    effort_store::agent_document(hub, agent)
         .and_then(|value| serde_json::from_value::<AgentTools>(value).ok())
         .filter(AgentTools::validate)
         .map_or_else(
@@ -434,7 +478,7 @@ pub(super) fn session_override(state: &AppState, session: &str) -> SessionTools 
 }
 
 fn hub_session_override(hub: &crate::core::Hub, session: &str) -> SessionTools {
-    hub.setting(&format!("{SESSION_TOOLS_PREFIX}{session}"))
+    effort_store::session_document(hub, session)
         .and_then(|value| serde_json::from_value::<SessionTools>(value).ok())
         .filter(SessionTools::validate)
         .unwrap_or(SessionTools {
@@ -636,9 +680,7 @@ pub(super) fn allow_session(
     if targets != current.targets {
         session.calls.targets = Some(targets);
     }
-    state
-        .hub
-        .set_setting(format!("{SESSION_TOOLS_PREFIX}{}", meta.id), json!(session));
+    effort_store::store_session(&state.hub, &meta.id, Some(json!(session)));
 }
 
 /// A requested agent resolved against the session's policy, before readiness.
@@ -771,7 +813,7 @@ fn option_choices(state: &AppState, agent: &str) -> serde_json::Value {
                     .as_ref()
                     .is_none_or(|b| b.managed_child().is_none())
         })
-        .find_map(|meta| state.hub.config_options(&meta.id))
+        .find_map(|meta| state.hub.reported_config_options(&meta.id))
         .and_then(|value| value.as_array().cloned())
         .unwrap_or_default();
     let mut preset_values: std::collections::BTreeMap<String, Vec<String>> = Default::default();
@@ -899,12 +941,10 @@ pub(super) async fn configure_agent(
     {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    state.hub.set_setting(
-        format!("{AGENT_TOOLS_PREFIX}{agent}"),
-        update
-            .settings
-            .as_ref()
-            .map_or(serde_json::Value::Null, |settings| json!(settings)),
+    effort_store::store_agent(
+        &state.hub,
+        &agent,
+        update.settings.as_ref().map(|settings| json!(settings)),
     );
     let (settings, customized) = agent_defaults(&state, &agent);
     Json(json!({"schema": SCHEMA, "agent": agent, "settings": settings, "customized": customized}))
@@ -961,13 +1001,10 @@ pub(super) async fn configure_session(
     if !update.validate() {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    state.hub.set_setting(
-        format!("{SESSION_TOOLS_PREFIX}{session}"),
-        if update.is_empty() {
-            serde_json::Value::Null
-        } else {
-            json!(update)
-        },
+    effort_store::store_session(
+        &state.hub,
+        &session,
+        (!update.is_empty()).then(|| json!(update)),
     );
     Json(session_view(&state, &info.meta)).into_response()
 }

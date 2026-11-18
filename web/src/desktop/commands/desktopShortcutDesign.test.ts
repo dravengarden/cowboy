@@ -32,7 +32,9 @@ const vimRuntime = await readFile(
 test("workspace prefix has priority after IME and exclusive overlays", () => {
   const arbitration = provider.indexOf("desktopWorkspaceSequenceOwnsKey(");
   const ime = provider.indexOf("desktopImeOwnsKey(event)");
-  const overlay = provider.indexOf("if (desktopOverlayOwnsShortcuts(document)) {");
+  const overlay = provider.indexOf("if (overlayOwnsKeys) {");
+  const typing = provider.indexOf("codeMirrorOwnsPrintableKey(event,");
+  const overlayLookup = provider.indexOf("const overlayOwnsKeys = desktopOverlayOwnsShortcuts(document)");
   // The modal grammar runs before the strict IME gate, but only for keys
   // desktopKeyIntent does not give to a composition.
   const modal = provider.indexOf("handleDesktopModalKey(event, modal)");
@@ -47,6 +49,7 @@ test("workspace prefix has priority after IME and exclusive overlays", () => {
     "for (const command of commands.current.values())",
   );
   assert(arbitration >= 0 && arbitration < ime);
+  assert(typing > 0 && typing < overlayLookup);
   assert(ime < overlay);
   assert(overlay < prefix);
   assert(prefix < direct);

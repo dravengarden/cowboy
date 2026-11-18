@@ -40,6 +40,14 @@ test("review preferences inherit defaults and persist only an explicit override"
     review: { claude: ["fable"], gpt: ["sol", "astra"] },
   } });
   assertEquals(withMemoryKey(withWireKey(changed)), changed);
+  // An older Controller omits the effort keys; that means Max, not a change.
+  const effort = { ...configured, calls: { ...configured.calls,
+    review: { ...configured.calls.review, gpt_effort: "standard" as const } } };
+  assertEquals(overrideFor(configured, effort), { schema: 1, calls: {
+    review: { gpt_effort: "standard" },
+  } });
+  assertEquals(overrideFor(configured, { ...configured, calls: { ...configured.calls,
+    review: { ...configured.calls.review, claude_effort: "max" as const } } }), { schema: 1 });
 });
 
 test("session tools serialize writes across surfaces and release after failures", async () => {

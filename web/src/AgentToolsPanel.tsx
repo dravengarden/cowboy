@@ -39,6 +39,8 @@ import {
   type ToolOption,
   type ToolPreset,
   sameFamily,
+  type ReviewEffort,
+  type ReviewPreferences,
   type ToolsCatalog,
   useRemoteDocument,
   withTarget,
@@ -89,6 +91,56 @@ function Heading(
     >
       {children}
     </Typography>
+  );
+}
+
+/** Reviewer family order and routine effort for each agent kind. */
+function ReviewPreferenceRows(
+  { review: current, disabled, onChange }: {
+    review: ReviewPreferences | undefined;
+    disabled: boolean;
+    onChange: (review: ReviewPreferences) => void;
+  },
+): React.JSX.Element {
+  return (
+    <>
+      <Heading>Review preference</Heading>
+      {(["claude", "gpt"] as const).map((family) => {
+        const review = current ?? DEFAULT_REVIEW_PREFERENCES;
+        const models: [string, string] = family === "claude" ? ["opus", "fable"] : ["astra", "sol"];
+        const label = (model: string) => ({ opus: "Opus", fable: "Fable", astra: "Astra", sol: "SOL" })[model];
+        const choices = [models, [...models].reverse(), [models[0]], [models[1]]];
+        return (
+          <Row key={family} label={family === "claude" ? "Claude reviewer" : "GPT reviewer"}
+            description="Preferred model first; alternatives only when quota or availability requires it">
+            <Select size="small" value={review[family].join(",")} disabled={disabled}
+              inputProps={{ "aria-label": `${family === "claude" ? "Claude" : "GPT"} review preference` }}
+              onChange={(event) => onChange({ ...review, [family]: event.target.value.split(",") })}>
+              {choices.map((order) => <MenuItem key={order.join(",")} value={order.join(",")}>
+                {order.length === 1 ? `${label(order[0]!)} only` : order.map(label).join(" → ")}
+              </MenuItem>)}
+            </Select>
+          </Row>
+        );
+      })}
+      {/* Older Controllers omit effort and reject it on write. */}
+      {current?.claude_effort !== undefined && (["claude", "gpt"] as const).map((family) => {
+        const review = current;
+        const key = family === "claude" ? "claude_effort" : "gpt_effort";
+        const name = family === "claude" ? "Claude" : "GPT";
+        return (
+          <Row key={key} label={`${name} routine effort`}
+            description="Reviews declared high risk always start at Max">
+            <Select size="small" value={review[key] ?? "max"} disabled={disabled}
+              inputProps={{ "aria-label": `${name} routine review effort` }}
+              onChange={(event) => onChange({ ...review, [key]: event.target.value as ReviewEffort })}>
+              <MenuItem value="max">Max first</MenuItem>
+              <MenuItem value="standard">Standard first</MenuItem>
+            </Select>
+          </Row>
+        );
+      })}
+    </>
   );
 }
 
@@ -389,25 +441,8 @@ export function AgentToolsEditor(
   const names = targets.map((target) => agentLabel(target.agent));
   return (
     <Box data-agent-tools-editor sx={{ color: "text.primary" }}>
-      <Heading>Review preference</Heading>
-      {(["claude", "gpt"] as const).map((family) => {
-        const review = calls.review ?? DEFAULT_REVIEW_PREFERENCES;
-        const models: [string, string] = family === "claude" ? ["opus", "fable"] : ["astra", "sol"];
-        const label = (model: string) => ({ opus: "Opus", fable: "Fable", astra: "Astra", sol: "SOL" })[model];
-        const choices = [models, [...models].reverse(), [models[0]], [models[1]]];
-        return (
-          <Row key={family} label={family === "claude" ? "Claude reviewer" : "GPT reviewer"}
-            description="Preferred model first; alternatives only when quota or availability requires it">
-            <Select size="small" value={review[family].join(",")} disabled={disabled}
-              inputProps={{ "aria-label": `${family === "claude" ? "Claude" : "GPT"} review preference` }}
-              onChange={(event) => setCalls({ review: { ...review, [family]: event.target.value.split(",") } })}>
-              {choices.map((order) => <MenuItem key={order.join(",")} value={order.join(",")}>
-                {order.length === 1 ? `${label(order[0]!)} only` : order.map(label).join(" → ")}
-              </MenuItem>)}
-            </Select>
-          </Row>
-        );
-      })}
+      <ReviewPreferenceRows review={calls.review} disabled={disabled}
+        onChange={(review) => setCalls({ review })} />
       <Heading>Agent calls</Heading>
       <Row
         label="Allow calls"

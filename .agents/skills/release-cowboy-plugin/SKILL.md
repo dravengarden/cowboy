@@ -36,7 +36,8 @@ Recommended cards are already configuration: edit the selected
 `plugins/<id>/provider.json` → `configuration_presets`, not a model list in
 Cowboy Web. A configuration-only change still needs a new signed Plugin release
 and Catalog verification. Use the reference to decide whether runtime pins or
-new-session defaults also need changing. A request to design this workflow does
+new-session defaults also need changing. Base the order and default on the
+evidence audit of the `model-intel` skill rather than on model strength alone. A request to design this workflow does
 not itself request an upstream upgrade or production Plugin publication.
 
 ## Plugin kinds

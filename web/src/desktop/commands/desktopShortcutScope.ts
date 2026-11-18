@@ -1,4 +1,5 @@
 import { desktopImeOwnsKey } from "./imeShortcut";
+import { matchesShortcut, parseShortcut } from "./shortcut";
 
 interface QueryRoot {
   querySelector(selectors: string): unknown;
@@ -13,6 +14,28 @@ export function desktopOverlayOwnsShortcuts(root: QueryRoot): boolean {
   return root.querySelector(
     "[data-desktop-shortcut-scope='exclusive'], [role='dialog'][aria-modal='true'], .MuiPopover-root",
   ) !== null;
+}
+
+/** A printable CodeMirror input can bypass workspace navigation. Preserve any
+ * direct command that explicitly opted into editor input. */
+export function codeMirrorOwnsPrintableKey(
+  event: KeyboardEvent,
+  commands: Iterable<{
+    shortcut?: string;
+    allowInEditor?: boolean | ((target: EventTarget | null) => boolean);
+  }>,
+  mac: boolean,
+): boolean {
+  if (
+    event.key.length !== 1 || event.metaKey || event.ctrlKey || event.altKey ||
+    !(event.target instanceof Element && event.target.matches(".cm-content[contenteditable='true']"))
+  ) return false;
+  for (const { shortcut, allowInEditor } of commands) {
+    if (shortcut && allowInEditor && matchesShortcut(parseShortcut(shortcut), event, mac)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**
