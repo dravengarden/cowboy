@@ -4501,7 +4501,7 @@ mod tests {
         assert!(
             config_commands
                 .iter()
-                .any(|(id, value)| *id == "model" && **value == serde_json::json!("gpt-6.1-sol"))
+                .any(|(id, value)| *id == "model" && **value == serde_json::json!("gpt-6.2-sol"))
         );
         assert!(
             config_commands
