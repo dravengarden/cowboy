@@ -204,7 +204,8 @@ fn command_supported_for_readmission(
         && session.provider_version == binding.target.provider_version
         && session.provider_generation_digest == binding.target.generation_digest
         && session.provider_auth_generation == Some(binding.target.generation)
-        && session.agent_session_id.is_none()
+        && (session.agent_session_id.is_none()
+            || crate::account_controls::keeps_conversation_across_sign_ins(&session.provider))
 }
 
 pub(super) fn acknowledge(

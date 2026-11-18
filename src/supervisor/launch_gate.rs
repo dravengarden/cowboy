@@ -19,3 +19,12 @@ impl Supervisor {
         gate.map_or(Ok(()), |gate| gate(session_id))
     }
 }
+
+/// A trashed session never launches, resumes or replaces a worker: every
+/// wake path (open, send, queue drain, schedule, wakeup, reload) passes here.
+pub(super) fn refuse_trashed(hub: &crate::core::Hub, session_id: &str) -> Result<(), String> {
+    if hub.session_is_trashed(session_id) {
+        return Err(crate::core::TRASHED_SESSION_REFUSAL.to_owned());
+    }
+    Ok(())
+}

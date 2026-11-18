@@ -17,6 +17,25 @@ pub const VIOLATION_PREFIX: &str = "antigravity_policy_violation:";
 /// How long a rate limit holds when the backend gave no reset time.
 pub const DEFAULT_RATE_LIMIT_MS: i64 = 60 * 60 * 1000;
 
+/// Whether a session's native conversation survives a re-login of the same
+/// account: a named-only Provider's account sandbox keeps one persistent
+/// home across credential generations (R3-13), so a verified same-account
+/// transition keeps the conversation ID. Every other native Provider signs
+/// each generation into its own home, where the old ID does not exist.
+#[must_use]
+pub fn keeps_conversation_across_sign_ins(provider: &str) -> bool {
+    crate::provider_account::named_only(provider)
+}
+
+impl crate::model::SessionMeta {
+    /// A dormant session awaiting native readmission still holds a native
+    /// conversation its new credential generation cannot resume.
+    #[must_use]
+    pub fn discards_conversation_on_readmission(&self) -> bool {
+        self.agent_session_id.is_some() && !keeps_conversation_across_sign_ins(&self.provider)
+    }
+}
+
 /// The durable state of one account. Anything but `Ok` parks every queue of
 /// the account; `Suspended`, `Blocked` and a detected policy violation also
 /// stop its units on every Machine.

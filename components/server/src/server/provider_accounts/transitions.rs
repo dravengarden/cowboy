@@ -154,7 +154,8 @@ pub(super) async fn complete(
                 && meta.provider_version == admission.target.provider_version
                 && meta.provider_generation_digest == admission.target.generation_digest
                 && meta.provider_auth_generation == Some(admission.target.generation)
-                && meta.agent_session_id.is_none()
+                && (crate::account_controls::keeps_conversation_across_sign_ins(&meta.provider)
+                    || meta.agent_session_id.is_none())
                 && meta.cwd == session.cwd
                 && meta.execution_binding == session.execution_binding
                 && meta.system == session.system

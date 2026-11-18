@@ -15,6 +15,7 @@
 
 mod delivery;
 pub mod launch_gate;
+use launch_gate::refuse_trashed;
 
 use parking_lot::Mutex;
 use std::path::PathBuf;
@@ -902,7 +903,10 @@ impl Supervisor {
     ) -> Result<StartSession, String> {
         let mut declaration = self.session_declaration(session_id, Some(target))?;
         declaration.adopt_only = true;
-        declaration.agent_session_id = None;
+        // Only a persistent account home keeps the native conversation.
+        if !crate::account_controls::keeps_conversation_across_sign_ins(&target.provider_id) {
+            declaration.agent_session_id = None;
+        }
         Ok(declaration)
     }
 
@@ -1487,15 +1491,6 @@ impl Supervisor {
             .runtime(&machine_id)
             .ok_or_else(|| format!("machine {machine_id:?} is not connected"))
     }
-}
-
-/// A trashed session never launches, resumes or replaces a worker: every
-/// wake path (open, send, queue drain, schedule, wakeup, reload) passes here.
-fn refuse_trashed(hub: &crate::core::Hub, session_id: &str) -> Result<(), String> {
-    if hub.session_is_trashed(session_id) {
-        return Err(crate::core::TRASHED_SESSION_REFUSAL.to_owned());
-    }
-    Ok(())
 }
 
 #[cfg(test)]

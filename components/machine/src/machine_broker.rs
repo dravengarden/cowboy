@@ -33,6 +33,7 @@ pub mod deletions;
 mod incarnations;
 mod mcp_launch;
 mod namespace;
+mod readmission;
 mod systemd_exit;
 mod worker_environment;
 mod worker_launch;
@@ -2417,20 +2418,7 @@ impl Broker {
         );
         let previous = self.sessions.lock().get(id).cloned();
         if let Some(mut previous) = previous {
-            // Permit only the selected binding and native-thread reset. All
-            // workspace, extension and execution placement fields must agree.
-            previous
-                .provider_version
-                .clone_from(&session.provider_version);
-            previous
-                .provider_generation_digest
-                .clone_from(&session.provider_generation_digest);
-            previous.provider_auth_generation = session.provider_auth_generation;
-            previous
-                .provider_behavior
-                .clone_from(&session.provider_behavior);
-            previous.agent_session_id = None;
-            previous.adopt_only = true;
+            readmission::rebind(&mut previous, &session);
             ensure!(previous == session, "readmission changed session context");
         } else {
             ensure!(
