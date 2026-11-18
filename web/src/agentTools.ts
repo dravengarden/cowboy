@@ -31,9 +31,17 @@ export interface CallsPolicy {
   self_images?: boolean;
 }
 
-export interface ReviewPreferences { claude: string[]; gpt: string[] }
+/** Effort order inside a family for reviews not declared high risk. */
+export type ReviewEffort = "max" | "standard";
+export interface ReviewPreferences {
+  claude: string[];
+  gpt: string[];
+  /** Absent from older Controllers, which always try Max first. */
+  claude_effort?: ReviewEffort;
+  gpt_effort?: ReviewEffort;
+}
 export const DEFAULT_REVIEW_PREFERENCES: ReviewPreferences = {
-  claude: ["opus", "fable"], gpt: ["astra", "sol"],
+  claude: ["opus", "fable"], gpt: ["astra", "sol"], claude_effort: "max", gpt_effort: "max",
 };
 
 export interface AgentTools {
@@ -217,6 +225,12 @@ export function overrideFor(
     const order = (next.calls.review ?? DEFAULT_REVIEW_PREFERENCES)[family];
     if (JSON.stringify(order) !== JSON.stringify((defaults.calls.review ?? DEFAULT_REVIEW_PREFERENCES)[family])) {
       review[family] = order;
+    }
+  }
+  for (const key of ["claude_effort", "gpt_effort"] as const) {
+    const effort = (next.calls.review ?? DEFAULT_REVIEW_PREFERENCES)[key] ?? "max";
+    if (effort !== ((defaults.calls.review ?? DEFAULT_REVIEW_PREFERENCES)[key] ?? "max")) {
+      review[key] = effort;
     }
   }
   if (Object.keys(review).length > 0) calls.review = review;

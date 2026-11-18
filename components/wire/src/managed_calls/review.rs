@@ -12,6 +12,9 @@ pub const REUSE: &str = "review_reuse";
 /// Label value `parent` asks the Controller to queue one completion notice
 /// into the parent session instead of the parent polling `calls.wait`.
 pub const NOTIFY: &str = "notify";
+/// Declared review risk: `routine` or `high`. It orders the effort of the
+/// Controller's automatic preset choice; it never authorizes a model.
+pub const RISK: &str = "review_risk";
 
 pub fn valid_base(base: &str) -> bool {
     matches!(base.len(), 40 | 64) && base.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -19,6 +22,12 @@ pub fn valid_base(base: &str) -> bool {
 
 pub fn validate(request: &Request) -> bool {
     let labels = &request.labels;
+    if labels.get(RISK).is_some_and(|risk| {
+        !matches!(risk.as_str(), "routine" | "high")
+            || !matches!(request.purpose, Purpose::Review | Purpose::DesignReview)
+    }) {
+        return false;
+    }
     if ![TASK, BASE, REUSE]
         .iter()
         .any(|key| labels.contains_key(*key))
@@ -153,6 +162,23 @@ mod tests {
         request.output = super::super::OutputFormat::JsonSchema {
             schema: json!({"type":"object"}),
         };
+        assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn declared_risk_is_closed_and_review_only() {
+        let mut request = request();
+        for (risk, ok) in [("routine", true), ("high", true), ("urgent", false)] {
+            request.labels.insert(RISK.into(), risk.into());
+            assert_eq!(request.validate().is_ok(), ok, "{risk}");
+        }
+        request.labels.insert(RISK.into(), "high".into());
+        for key in [TASK, BASE, REUSE] {
+            request.labels.remove(key);
+        }
+        request.output = super::super::OutputFormat::Text {};
+        assert!(request.validate().is_ok());
+        request.purpose = Purpose::Analysis;
         assert!(request.validate().is_err());
     }
 

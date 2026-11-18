@@ -689,7 +689,7 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             "quota_account": readiness.generation.as_ref().and_then(|generation| state.provider_catalog.account_usage_provider(provider, &generation.version, &generation.digest)),
             // `--preset` choices; the session's Tools choose otherwise.
             "presets": agent_tools::presets(state, provider),
-            "review_candidates": super::selection::candidates(&agent_tools::presets(state, provider), provider, &policy.review).iter().filter_map(|p| p["id"].as_str()).collect::<Vec<_>>(),
+            "review_candidates": super::selection::candidates(&agent_tools::presets(state, provider), provider, &policy.review, false).iter().filter_map(|p| p["id"].as_str()).collect::<Vec<_>>(),
             "access": ["read-only"],
             "output": if readiness.structured_output { json!(["text","json_schema"]) } else { json!(["text"]) },
             "conversation": ["fresh","continue"],
@@ -904,10 +904,15 @@ async fn start(
             crate::managed_calls::Purpose::Review | crate::managed_calls::Purpose::DesignReview
         )
     {
+        let high_risk = request
+            .labels
+            .get(crate::managed_calls::review::RISK)
+            .is_some_and(|risk| risk == "high");
         let choices = super::selection::candidates(
             &agent_tools::presets(state, &target.agent),
             &target.agent,
             &policy.review,
+            high_risk,
         );
         // Generic Tools pins apply to ordinary calls. Review uses its own
         // ordered list unless this invocation explicitly names a signed preset.

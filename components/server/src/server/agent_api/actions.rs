@@ -49,6 +49,9 @@ struct CallInput {
     fresh: bool,
     #[serde(default)]
     notify: bool,
+    /// review.start only: `routine` or `high`; orders automatic effort.
+    #[serde(default)]
+    risk: Option<String>,
 }
 
 const SESSIONS_ALONE: &str = "sessions makes a fresh analysis call over recorded history only; omit purpose (or pass analysis), capability, child_session_id, files and root";
@@ -197,11 +200,19 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, Cal
             || input.design
             || input.task.is_some()
             || input.base.is_some()
-            || input.fresh)
+            || input.fresh
+            || input.risk.is_some())
     {
         return Err(refuse(
-            "focus, design, task, base and fresh belong to review.start",
+            "focus, design, task, base, fresh and risk belong to review.start",
         ));
+    }
+    if input
+        .risk
+        .as_deref()
+        .is_some_and(|risk| !matches!(risk, "routine" | "high"))
+    {
+        return Err(refuse("risk must be routine or high"));
     }
     if input.task.is_some() != input.base.is_some() {
         return Err(refuse(TASK_NEEDS_BASE));
@@ -271,6 +282,9 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, Cal
     }
     if input.notify {
         labels.insert(crate::managed_calls::review::NOTIFY, "parent".to_owned());
+    }
+    if let Some(risk) = input.risk {
+        labels.insert(crate::managed_calls::review::RISK, risk);
     }
     let mut output = json!({"format":"text"});
     if let (Some(task), Some(base)) = (input.task, input.base) {
@@ -1253,6 +1267,25 @@ mod tests {
         assert_ne!(
             document_operation("a", "one"),
             document_operation("a", "two")
+        );
+    }
+
+    #[test]
+    fn review_risk_is_a_closed_review_only_label() {
+        let Action::Start { request, .. } =
+            call_action("review.start", json!({"risk":"high"}), "op").unwrap()
+        else {
+            panic!("expected start");
+        };
+        assert_eq!(request.labels[crate::managed_calls::review::RISK], "high");
+        assert!(call_action("review.start", json!({"risk":"urgent"}), "op").is_err());
+        assert!(
+            call_action(
+                "calls.start",
+                json!({"instruction":"x","risk":"high"}),
+                "op"
+            )
+            .is_err()
         );
     }
 

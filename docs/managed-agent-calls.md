@@ -305,10 +305,24 @@ duplicates, cross-family entries and weaker models are rejected. These DB-backed
 preferences apply to future Review/Design Review calls, never running calls or
 ordinary analysis/image calls. Claude and GPT share the same Controller contract.
 
+Each kind also has a routine effort, `claude_effort` / `gpt_effort`: `max`
+(built-in, the historical strongest-first order: max, xhigh, high, default,
+medium) or `standard` (medium, default, high, xhigh, max). It reorders presets
+only inside a family; the family order above still wins. A review declares
+its risk with MCP `review.start` `risk` or `cowboy review --risk`, carried as
+the reserved label `review_risk` (`routine` or `high`) so older gateways
+transport it unchanged. `high` always uses the strongest-first order;
+`routine` or an omitted risk follows the configured effort. Risk orders the
+Controller's automatic choice and never authorizes a model: an explicit
+preset is still limited to the allowed families. The stored request keeps
+the declared risk beside the resolved preset. The defaults keep the previous
+behavior until a person opts a kind into `standard`.
+
 Capabilities exposes effective `review_preferences` and each Provider's ordered
-signed preset IDs in `review_candidates` (metadata stays in `presets`). The calling model chooses the first preferred family
-whose fresh account and model quota permits review, preferring Max within that
-family. Greater strength alone is not a reason to skip the preferred family.
+signed preset IDs in `review_candidates` in routine order (metadata stays in
+`presets`); a high-risk review reorders effort Max first within each family. The calling model chooses the first preferred family
+whose fresh account and model quota permits review, following the candidate
+order for the review's declared risk within that family. Greater strength alone is not a reason to skip the preferred family.
 The Controller excludes models outside the configured list; without an explicit
 preset it selects the first preferred signed preset. Generic Tools target pins
 remain inputs to ordinary calls; they do not override Review preferences.
@@ -323,7 +337,8 @@ and `reason` directly.
 
 AI configuration uses the existing on-demand `control.describe` contracts for
 `tools.defaults_set` and `tools.session_set`. The field is
-`calls.review: {claude:["opus","fable"],gpt:["astra","sol"]}`. Read the current
+`calls.review: {claude:["opus","fable"],gpt:["astra","sol"],claude_effort:"max",gpt_effort:"max"}`
+(the effort keys are optional and default to `max`). Read the current
 Tools document, preserve unrelated fields, and omit the session override to
 inherit. Existing authorization, DB persistence and operation receipts apply.
 
