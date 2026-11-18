@@ -162,6 +162,8 @@
           ./src/logs
           ./src/composition
           ./tests/fixtures/composition-v1.json
+          ./src/account_sandbox.rs
+          ./src/account_sandbox_tests.rs
           ./src/claude_shell.rs
           ./src/cgroup.rs
           ./src/cgroup
@@ -259,6 +261,7 @@
         ./build.rs
         ./worker-generation.txt
         ./src/acp.rs
+        ./src/acp_process.rs
         ./src/acp_subagents.rs
         ./src/agent_model.rs
         ./src/agent_sink.rs
@@ -291,6 +294,9 @@
         ./src/worker.rs
         ./src/worker
         ./src/worker_execution.rs
+        ./src/worker_execution
+        ./src/account_sandbox.rs
+        ./src/account_sandbox_tests.rs
         ./src/worker_telemetry.rs
         ./src/bin/cowboy-acp-worker.rs
       ] ++ plugin-contract-files ++ [
