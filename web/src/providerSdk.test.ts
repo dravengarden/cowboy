@@ -136,6 +136,17 @@ test("native identity recipes require the new SDK and bounded native output path
   assertThrows(() => validateProviderManifest(ipv4Old));
   ipv4Old.sdk_version = "3.4.0";
   validateProviderManifest(ipv4Old);
+  // Native custody fences older readers; Provider SDK 3.5.0.
+  const custody = structuredClone(ipv4);
+  custody.sdk_version = "3.5.0";
+  custody.runtime.required_capabilities = [
+    ...custody.runtime.required_capabilities,
+    "provider.native-custody.v1",
+  ];
+  validateProviderManifest(custody);
+  const custodyOld = structuredClone(custody);
+  custodyOld.sdk_version = "3.4.0";
+  assertThrows(() => validateProviderManifest(custodyOld));
   // JWT claims and sole-member paths are Provider SDK 3.3.0 recipes.
   for (const extended of [
     { ...identity, subject_path: ["tokens", "id_token"], subject_claim: ["auth", "user_id"] },

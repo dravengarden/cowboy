@@ -1606,6 +1606,27 @@ impl ProviderManifest {
                 "native identity claims and sole-member paths require Provider SDK 3.3.0 or newer"
             );
         }
+        if self
+            .runtime
+            .required_capabilities
+            .contains(&RuntimeCapability::ProviderNativeCustodyV1)
+        {
+            ensure!(
+                semver::Version::parse(&self.sdk_version)? >= semver::Version::new(3, 5, 0),
+                "native custody requires Provider SDK 3.5.0 or newer"
+            );
+            ensure!(
+                self.authentication.required && self.authentication.native_accounts(),
+                "native custody requires authenticated native account methods"
+            );
+            ensure!(
+                self.authentication.environment_projection.is_empty()
+                    && self.authentication.methods.iter().all(|method| {
+                        matches!(method.executor, AuthExecutor::CommandV1 { .. })
+                    }),
+                "native custody admits only native command logins"
+            );
+        }
         if self.runtime.network.is_some() {
             ensure!(
                 semver::Version::parse(&self.sdk_version)? >= semver::Version::new(3, 4, 0),
@@ -4173,6 +4194,35 @@ mod tests {
             serde_json::to_value(RuntimeNetworkPolicy::Ipv4OnlyV1).unwrap(),
             serde_json::json!("ipv4_only_v1")
         );
+    }
+
+    #[test]
+    fn native_custody_requires_sdk_3_5_and_native_command_logins() {
+        let source: StandardProviderSource =
+            serde_json::from_str(include_str!("../../../plugins/antigravity/provider.json"))
+                .unwrap();
+        let mut manifest = source.compile().unwrap();
+        assert!(
+            manifest
+                .runtime
+                .required_capabilities
+                .contains(&RuntimeCapability::ProviderNativeCustodyV1)
+        );
+        build_package(manifest.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(RuntimeCapability::ProviderNativeCustodyV1).unwrap(),
+            serde_json::json!("provider.native-custody.v1")
+        );
+        let mut old = manifest.clone();
+        old.sdk_version = "3.4.0".into();
+        let error = old.validate().unwrap_err().to_string();
+        assert!(error.contains("Provider SDK 3.5.0"), "{error}");
+        for method in &mut manifest.authentication.methods {
+            method.native_identity = None;
+            method.native_logout = None;
+        }
+        let error = manifest.validate().unwrap_err().to_string();
+        assert!(error.contains("native account methods"), "{error}");
     }
 
     #[test]

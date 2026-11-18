@@ -76,6 +76,7 @@ pub(super) async fn resolve_for_create(
     // scope; other accounts serve exactly their own Provider.
     let scope = state.provider_catalog.portable_account_scope(provider);
     let id = registry.resolve_in_scope(provider, &scope, explicit)?;
+    named_only_admitted(state, provider, &id)?;
     if !id.is_default() {
         allow_named_creation(
             named_session_provider(state, provider),
@@ -85,6 +86,28 @@ pub(super) async fn resolve_for_create(
         )?;
     }
     Ok(id)
+}
+
+/// A named-only Provider (Antigravity) has no default account, and admits
+/// sign-ins and sessions only while its owner-controlled test gate is open.
+pub(super) fn named_only_admitted(
+    state: &AppState,
+    provider: &str,
+    account: &crate::provider_account::ProviderAccountId,
+) -> Result<(), &'static str> {
+    if !crate::provider_account::named_only(provider) {
+        return Ok(());
+    }
+    if account.is_default() {
+        return Err("named_account_required");
+    }
+    if !state
+        .service_config
+        .get(&crate::config::schema::ACCOUNT_ANTIGRAVITY_ADMISSION)
+    {
+        return Err("antigravity_admission_not_enabled");
+    }
+    Ok(())
 }
 
 /// Providers whose named accounts have a credential path: a signed native

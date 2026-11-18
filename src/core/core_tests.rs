@@ -4437,3 +4437,33 @@ async fn session_broadcast_errors_are_persisted_outside_the_transcript() {
     assert!(message.len() <= 4 * 1024);
     assert_eq!(message, "你".repeat(message.chars().count()));
 }
+
+#[tokio::test]
+async fn antigravity_drafts_are_never_scheduled_or_fired() {
+    let hub = Hub::new();
+    hub.create_local_session(
+        "agy".to_owned(),
+        "antigravity".to_owned(),
+        "/tmp".to_owned(),
+        "t".to_owned(),
+        SessionOrigin::Web,
+        false,
+    );
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    hub.set_dispatch_tx(tx);
+    hub.schedule_draft(
+        "agy",
+        None,
+        Some("later".into()),
+        "later".into(),
+        vec![],
+        1,
+        crate::model::Delivery::Back,
+    );
+    let drafts = hub.queue_and_drafts("agy", |_| true).unwrap().1;
+    assert_eq!(drafts.len(), 1);
+    assert!(drafts[0].schedule.is_none());
+    hub.fire_scheduled_draft("agy", &drafts[0].id);
+    assert!(rx.try_recv().is_err());
+    assert_eq!(hub.queue_and_drafts("agy", |_| true).unwrap().1.len(), 1);
+}

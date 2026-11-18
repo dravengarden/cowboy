@@ -3,7 +3,7 @@
   "id": "codex",
   "version": "3.6.2",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.4.0",
+  "sdk_version": "3.5.0",
   "display": {
     "name": "Codex",
     "vendor": "OpenAI",

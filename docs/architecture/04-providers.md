@@ -158,12 +158,17 @@ Cowboy-owned `owned_archive` recipe ships the `agy-launch` shell launcher with
 Cowboy's `hooks.json`. The launcher disables `agy`'s self-rewriting
 auto-update (`AGY_CLI_DISABLE_AUTO_UPDATE=true`), points D-Bus at a socket that
 cannot exist so the token stays a 0600 file in the account home, installs the
-hooks that deny `schedule`, `swarm` and `run_workflow`, and execs the sibling
+hooks that deny `schedule`, `swarm`, `run_workflow` and the subagent tools
+(only for an `acp` session; version probes never touch the HOME), and execs the sibling
 `provider_cli` component of the same generation. Login (`--cowboy-login`) and
 logout (`--cowboy-logout`, an ACP `logout` request to `agy`) run through the
 same launcher. Antigravity is native-only and named-only: every account is an
 owner-declared native login on one Machine, and the default account is refused
-(`named_only` in `components/wire/src/provider_account.rs`).
+(`named_only` in `components/wire/src/provider_account.rs`). Its manifest
+signs `provider.native-custody.v1` so older readers refuse it, legacy
+package-less `npx`/`PATH` launches and probes skip it, its drafts are never
+scheduled, and `accounts.antigravity_admission` (default off) gates every
+sign-in and session.
 
 For `codex-deepseek`, the Service's `DEEPSEEK_API_KEY` projection is explicitly
 forwarded only to the gateway sidecar; it is not added to the ACP adapter's

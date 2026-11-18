@@ -73,7 +73,6 @@ fn adapter_index() -> &'static AdapterIndex {
 struct NpmCatalog {
     #[cfg(feature = "machine-host")]
     by_component: BTreeMap<String, BTreeMap<String, &'static str>>,
-    #[cfg(feature = "full")]
     by_plugin: BTreeMap<String, &'static str>,
 }
 
@@ -97,11 +96,11 @@ pub fn npx_package_for_plugin(plugin_id: &str) -> &'static str {
         .unwrap_or_else(|| panic!("{plugin_id} provider.json must declare an npm launch package"))
 }
 
-/// Whether a package-less build may launch `plugin_id` through `npx`. A
-/// Provider whose runtime is not an npm package (Antigravity's vendor binary)
-/// has no legacy launch path and runs only from its exact signed generation.
+/// Whether a package-less build may launch or probe `plugin_id` through
+/// `npx` or a host `PATH` command. A Provider whose runtime is not an npm
+/// package (Antigravity's vendor binary) has no legacy path at all: it runs
+/// and is inventoried only from its exact, digest-verified signed generation.
 #[must_use]
-#[cfg(feature = "full")]
 pub fn has_npx_package(plugin_id: &str) -> bool {
     npm_catalog().by_plugin.contains_key(plugin_id)
 }
@@ -117,7 +116,6 @@ fn npm_catalog() -> &'static NpmCatalog {
     VALUE.get_or_init(|| {
         #[cfg(feature = "machine-host")]
         let mut by_component = BTreeMap::new();
-        #[cfg(feature = "full")]
         let mut by_plugin = BTreeMap::new();
         for (plugin_id, source) in npm_payloads() {
             #[cfg(feature = "machine-host")]
@@ -125,17 +123,13 @@ fn npm_catalog() -> &'static NpmCatalog {
             #[cfg(not(feature = "machine-host"))]
             let components = None;
             let package = collect_npm_packages(plugin_id, source, components);
-            #[cfg(feature = "full")]
             if let Some(package) = package {
                 by_plugin.entry(plugin_id.to_owned()).or_insert(package);
             }
-            #[cfg(not(feature = "full"))]
-            let _ = package;
         }
         NpmCatalog {
             #[cfg(feature = "machine-host")]
             by_component,
-            #[cfg(feature = "full")]
             by_plugin,
         }
     })
@@ -261,6 +255,9 @@ pub fn path_detect() -> Vec<PathDetect> {
     let index = adapter_index();
     let mut detects = Vec::new();
     for (plugin_id, source) in npm_payloads() {
+        if !has_npx_package(plugin_id) {
+            continue;
+        }
         let Some(&slot) = index.plugin_to_slot.get(plugin_id) else {
             continue;
         };
@@ -301,6 +298,9 @@ fn entrypoints() -> &'static BTreeMap<&'static str, &'static str> {
 pub fn occupancy_slots() -> Vec<&'static str> {
     let mut slots = Vec::new();
     for (plugin_id, _) in adapter_hosts() {
+        if !has_npx_package(plugin_id) {
+            continue;
+        }
         let Some(slot) = adapter_slot_for_provider(plugin_id) else {
             continue;
         };
@@ -1674,11 +1674,10 @@ mod tests {
         assert!(!detect.iter().any(|row| row.plugin_id == "codex-deepseek"));
         assert_eq!(
             occupancy_slots(),
-            ["antigravity", "claude", "codex", "deepseek-harness", "grok"]
+            ["claude", "codex", "deepseek-harness", "grok"]
         );
-        // The legacy occupancy probe may run a host `antigravity --version`;
-        // that exits without writing state or starting `agy`'s updater.
-        assert_eq!(cli_command_for_slot("antigravity"), Some("antigravity"));
+        // Never probe or launch an unpinned host `antigravity`/`agy-launch`.
+        assert!(!detect.iter().any(|row| row.plugin_id == "antigravity"));
         assert_eq!(cli_command_for_slot("claude"), Some("claude"));
         assert_eq!(cli_command_for_slot("codex"), Some("codex"));
         assert_eq!(

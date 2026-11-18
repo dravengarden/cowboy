@@ -394,6 +394,24 @@ mod tests {
     }
 
     #[test]
+    fn named_only_providers_sign_the_native_custody_capability() {
+        // Readers that predate the named-only fence must refuse the package,
+        // so its signed manifest names a capability they cannot parse.
+        let source: cowboy_provider_sdk::StandardProviderSource =
+            serde_json::from_str(include_str!("../../../plugins/antigravity/provider.json"))
+                .unwrap();
+        let manifest = source.compile().unwrap();
+        assert!(named_only(&manifest.id) && native_only(&manifest.id));
+        assert!(
+            manifest
+                .runtime
+                .required_capabilities
+                .contains(&cowboy_provider_sdk::RuntimeCapability::ProviderNativeCustodyV1)
+        );
+        assert_eq!(NAMED_ONLY_PROVIDERS, ["antigravity"]);
+    }
+
+    #[test]
     fn private_scope_rejects_links_without_touching_the_target() {
         use std::fs;
         use std::os::unix::fs::{PermissionsExt as _, symlink};

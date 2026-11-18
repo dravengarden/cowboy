@@ -3,7 +3,7 @@
   "id": "antigravity",
   "version": "0.1.0",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.4.0",
+  "sdk_version": "3.5.0",
   "display": {
     "name": "Antigravity",
     "vendor": "Google",
@@ -97,7 +97,7 @@
         "id": "cowboy-antigravity-launch",
         "version": "1.0.0",
         "source": "cowboy:components/provider-runtime/packages/antigravity-launch",
-        "integrity": "sha256:f1415c8375c55b2bce637f4e9c17fd416e5237a9138b02fb8028dcaed67b47d4",
+        "integrity": "sha256:637faf8ce2a74c5d5a4dad71a875b2609d7b90eb5770d5f74c18e79961ecc023",
         "private": true
       },
       {
@@ -131,7 +131,8 @@
       }
     ],
     "required_capabilities": [
-      "provider.runtime.v1"
+      "provider.runtime.v1",
+      "provider.native-custody.v1"
     ],
     "network": "ipv4_only_v1"
   },

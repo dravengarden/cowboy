@@ -3,7 +3,7 @@
   "id": "codex-deepseek",
   "version": "3.1.63",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.4.0",
+  "sdk_version": "3.5.0",
   "display": {
     "name": "Codex · DeepSeek",
     "vendor": "DeepSeek",

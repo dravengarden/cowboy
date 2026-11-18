@@ -16,4 +16,10 @@ pub enum RuntimeCapability {
     ProviderManagedProfilesV1,
     #[serde(rename = "provider.managed-image.v1")]
     ProviderManagedImageV1,
+    /// Every account is a named, Machine-local native login: no default
+    /// account and no credential in the Controller candidate, vault or
+    /// replica pipeline. Hosts that predate this fence must refuse the
+    /// package rather than treat its logins as portable.
+    #[serde(rename = "provider.native-custody.v1")]
+    ProviderNativeCustodyV1,
 }

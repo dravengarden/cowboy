@@ -2,11 +2,11 @@
   "cowboy-unattended-gate": {
     "PreToolUse": [
       {
-        "matcher": "^(schedule|swarm|run_workflow)$",
+        "matcher": "^(schedule|swarm|run_workflow|invoke_subagent|define_subagent|manage_subagents)$",
         "hooks": [
           {
             "type": "command",
-            "command": "printf '%s\\n' '{\"decision\":\"deny\",\"reason\":\"Cowboy disables unattended and fan-out tools for Antigravity sessions.\"}'",
+            "command": "printf '%s\\n' '{\"decision\":\"deny\",\"reason\":\"Cowboy disables unattended, fan-out and subagent tools for Antigravity sessions.\"}'",
             "timeout": 10
           }
         ]

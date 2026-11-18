@@ -283,6 +283,22 @@ restart, logout, kill switch, and two-account isolation if Phase 1.3 passed.
 - Configuration: ACP `configOptions` ids `model` and `thought_level`; default
   preset Gemini 3.8 Flash · High. Not offered to managed calls (no
   `managed_profiles`, not a `CALL_TARGETS` member).
+- Codex Astra Max review (call `call-0c43947387086ddb8138f08d`) findings and
+  fixes: older SDK 3.4.0 readers would have treated the logins as portable, so
+  the manifest now signs `provider.native-custody.v1` (provider-sdk 3.5.0);
+  the install probe ran `agy-launch --version` with the Machine user's HOME, so
+  only `acp` sessions install hooks; legacy `PATH`/occupancy probes and `npx`
+  launches skip Providers without an npm runtime; `invoke_subagent`,
+  `define_subagent` and `manage_subagents` are denied; Cowboy draft schedules
+  never arm or fire for Antigravity; `accounts.antigravity_admission` (default
+  off) gates sign-ins and sessions until acceptance and soak. Deferred: account
+  removal deletes the whole native home including `agy` conversations (as for
+  Claude); the kill switch must not use that cleanup. Native login/logout
+  still lacks the IPv4 restriction; required before OVH login (Phase 4).
+  Managed-call completion notices into an Antigravity session are untriaged.
+- Live check: ACP `logout` from a copied home removed only that local token
+  file; the original home's grant kept working, so logout does not revoke the
+  Google grant.
 - Remaining for Phase 3: deploy with the 3.113.0 OVH maintenance, publish the
   release, Hawk acceptance with the test account (named login through Cowboy,
   keyring untouched, sessions, resume, logout), per-account concurrency caps,

@@ -408,6 +408,7 @@ async fn prepare(
             .service_config
             .get(&crate::config::schema::ACCOUNT_NATIVE_CLAUDE_LOGIN),
     )?;
+    super::named_only_admitted(state, &account.provider_id, &account_id)?;
     let method = package
         .manifest
         .authentication

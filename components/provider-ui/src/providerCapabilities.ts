@@ -6,6 +6,7 @@ export const PROVIDER_CAPABILITIES = [
   "provider.mcp-bindings.v1",
   "provider.managed-profiles.v1",
   "provider.managed-image.v1",
+  "provider.native-custody.v1",
 ] as const;
 export type ProviderCapability = (typeof PROVIDER_CAPABILITIES)[number];
 export const providerCapabilities = new Set<string>(PROVIDER_CAPABILITIES);

@@ -8,8 +8,9 @@
 #   bypassing the pinned, signed release (only the value `true` works).
 # - D-Bus points at a socket that cannot exist, so `agy` keeps its 0600 token
 #   file under this HOME instead of the user's login keyring.
-# - Runtime sessions get Cowboy's PreToolUse hooks, which deny unattended and
-#   fan-out tools (`schedule`, `swarm`, `run_workflow`).
+# - ACP runtime sessions get Cowboy's PreToolUse hooks, which deny unattended,
+#   fan-out and background-subagent tools (`schedule`, `swarm`,
+#   `run_workflow`, `invoke_subagent`, `define_subagent`, `manage_subagents`).
 #
 # The vendor binary is the sibling `provider_cli` component of the same signed
 # Provider generation; the Machine installs every component of a generation
@@ -45,6 +46,11 @@ case "${1-}" in
     exit
     ;;
 esac
+# Only an ACP runtime session owns its account home. Version and other probes
+# may run with the Machine user's real HOME and must never write to it.
+if [ "${1-}" != "acp" ]; then
+  exec "$agy" "$@"
+fi
 config="$HOME/.gemini/config"
 mkdir -p "$config"
 cp "$hooks" "$config/.hooks.json.$$"

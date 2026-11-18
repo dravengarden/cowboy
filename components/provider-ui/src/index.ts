@@ -29,7 +29,7 @@ export const PROVIDER_UI_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_HOST_SCHEMA_MIN_VERSION = 1 as const;
 export const PROVIDER_HOST_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_MACHINE_CONTRACT_VERSION = 4 as const;
-export const PROVIDER_SDK_VERSION = "3.4.0" as const;
+export const PROVIDER_SDK_VERSION = "3.5.0" as const;
 export {
   type TelemetryBackendContract,
   validateTelemetryBackendContract,
@@ -1295,6 +1295,12 @@ export function validateProviderManifest(input: unknown): asserts input is Provi
     capabilities.has("provider.gateway.v1") !== declaresGateway
   ) {
     throw new Error("Unknown or missing Provider runtime capability");
+  }
+  if (
+    capabilities.has("provider.native-custody.v1") &&
+    compareProviderVersions(String(full.sdk_version), "3.5.0") < 0
+  ) {
+    throw new Error("Provider native custody requires SDK 3.5.0");
   }
   const execution = runtime.behavior.execution;
   const declaresExecution = execution !== undefined && execution !== null;
