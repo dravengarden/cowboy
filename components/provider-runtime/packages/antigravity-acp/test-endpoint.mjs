@@ -24,7 +24,7 @@ import { WebSocketServer } from "ws";
 export async function fakeEndpoint(
   socketPath,
   root,
-  { lose = () => false, shell = "/bin/sh", virtual = root } = {},
+  { lose = () => false, fail = () => undefined, shell = "/bin/sh", virtual = root } = {},
 ) {
   const toReal = (path) => (path.startsWith(virtual) ? root + path.slice(virtual.length) : path);
   const toVirtual = (path) => (path.startsWith(root) ? virtual + path.slice(root.length) : path);
@@ -161,6 +161,8 @@ export async function fakeEndpoint(
       try {
         const method = methods[frame.method];
         if (!method) throw { code: -32601, message: "unknown method" };
+        const failure = fail(frame.method, frame.params);
+        if (failure) throw failure;
         reply = { id: frame.id, result: await method(frame.params) };
       } catch (error) {
         reply = {
@@ -171,6 +173,7 @@ export async function fakeEndpoint(
               : {
                   code: Number.isInteger(error?.code) ? error.code : -32600,
                   message: String(error?.message),
+                  ...(error?.data ? { data: error.data } : {}),
                 },
         };
       }

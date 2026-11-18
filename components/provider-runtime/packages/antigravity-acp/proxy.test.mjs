@@ -347,3 +347,14 @@ test("calls past the per-turn name bound cannot hide a built-in", async () => {
   );
   assert.equal(agent.filter((message) => message.method === "session/cancel").length, 1);
 });
+
+test("an unknown effect is reported when the turn ends with an error", async () => {
+  const { proxy, client } = harness();
+  await proxy.fromClient(request(9, "session/prompt", { sessionId: "s", prompt: [] }));
+  proxy.uncertain("s", "process/start");
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 9, error: { code: -32603, message: "stopped" } });
+  const error = client.at(-1);
+  assert.equal(error.id, 9);
+  assert.equal(error.error.message, "stopped");
+  assert.equal(error.error.data.cowboy.uncertain_effect, "process/start");
+});

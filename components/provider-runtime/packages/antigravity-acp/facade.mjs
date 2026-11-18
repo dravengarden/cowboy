@@ -7,210 +7,38 @@
 // whose reply is lost after it may have been admitted is never retried or
 // resolved by observation: the tool reports `outcome unknown` and the proxy
 // ends the turn (the worker's trusted ledger records `uncertain_effect`).
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { posix } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import {
+  decodeText,
+  ENV_POLICY,
+  inside,
+  LIMITS,
+  lost,
+  missing,
+  PUBLISH,
+  Retained,
+  remoteMessage,
+  sha256,
+  TOOLS,
+  ToolError,
+  UncertainEffect,
+  unknownOutcome,
+  url,
+} from "./facade-tools.mjs";
 
-export const LIMITS = Object.freeze({
-  readBytes: 256 * 1024,
-  wholeFile: 8 * 1024 * 1024,
-  listEntries: 2000,
-  searchMatches: 500,
-  searchBytes: 512 * 1024,
-  searchTimeoutMs: 30_000,
-  commandOutput: 256 * 1024,
-  commandDefaultSeconds: 120,
-  commandMaxSeconds: 600,
-  writeBytes: 4 * 1024 * 1024,
-  publishTimeoutMs: 30_000,
-});
+/** Must match the worker ledger's `READINESS_PREFIX`. */
+export const READINESS_PREFIX = "cowboy-agy-readiness-";
 
-// Commands see the target user's whole environment, as a Claude or Codex
-// session's commands do on the same Machine.
-const ENV_POLICY = Object.freeze({
-  inherit: "all",
-  ignoreDefaultExcludes: true,
-  exclude: [],
-  set: {},
-  includeOnly: [],
-});
-
-// Compare-and-swap publish of a staged file on the target: the target must
-// still hold exactly `base` (a SHA-256, or `absent`). A new file is linked
-// into place without replacing anything; an existing one is replaced by
-// rename with its mode kept. Prints `applied`, `conflict` or fails.
-const PUBLISH = `set -u
-t=$1 tmp=$2 base=$3
-if [ "$base" = absent ]; then
-  if [ ! -e "$t" ] && [ ! -L "$t" ] && ln -- "$tmp" "$t" 2>/dev/null; then
-    rm -f -- "$tmp"; echo applied; exit 0
-  fi
-  rm -f -- "$tmp"; echo conflict; exit 0
-fi
-if [ -L "$t" ] || [ ! -f "$t" ]; then rm -f -- "$tmp"; echo conflict; exit 0; fi
-cur=$(sha256sum -- "$t") || { rm -f -- "$tmp"; exit 1; }
-if [ "\${cur%% *}" != "$base" ]; then rm -f -- "$tmp"; echo conflict; exit 0; fi
-chmod --reference="$t" -- "$tmp" 2>/dev/null || true
-mv -f -- "$tmp" "$t" || { rm -f -- "$tmp"; exit 1; }
-echo applied
-`;
-
-const TOOLS = [
-  {
-    name: "ReadFile",
-    description:
-      "Read a file of the workspace. Returns at most 256 KiB per call; use offset to page through larger files.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        path: { type: "string", description: "Path relative to the workspace root, or absolute" },
-        offset: { type: "integer", minimum: 0, description: "Byte offset to start at" },
-        length: { type: "integer", minimum: 1, maximum: LIMITS.readBytes },
-      },
-      required: ["path"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "ListDirectory",
-    description: "List one directory of the workspace (not recursive, at most 2000 entries).",
-    inputSchema: {
-      type: "object",
-      properties: { path: { type: "string", description: "Directory; default the root" } },
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "SearchFiles",
-    description:
-      "Search file contents with ripgrep. Returns at most 500 matching lines and 512 KiB; stops after 30 s.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        pattern: { type: "string", description: "Regular expression (ripgrep syntax)" },
-        path: { type: "string", description: "File or directory to search; default the root" },
-        glob: { type: "string", description: "Only search files matching this glob" },
-        ignore_case: { type: "boolean" },
-      },
-      required: ["pattern"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "WriteFile",
-    description:
-      "Create a file, or replace a file you read in this session with ReadFile. Fails if the file changed since it was read.",
-    inputSchema: {
-      type: "object",
-      properties: { path: { type: "string" }, content: { type: "string" } },
-      required: ["path", "content"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "EditFile",
-    description:
-      "Replace text in a file you read in this session with ReadFile. old_string must occur exactly once unless replace_all is true.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        path: { type: "string" },
-        old_string: { type: "string" },
-        new_string: { type: "string" },
-        replace_all: { type: "boolean" },
-      },
-      required: ["path", "old_string", "new_string"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "RunCommand",
-    description:
-      "Run a shell command in the workspace root. Waits up to wait_seconds (default: until it ends); a command still running returns its command_id, which RunCommand continues and StopCommand stops. Output keeps at most 256 KiB (head and tail).",
-    inputSchema: {
-      type: "object",
-      properties: {
-        command: { type: "string" },
-        command_id: { type: "string", description: "Continue reading a running command" },
-        timeout_seconds: { type: "integer", minimum: 1, maximum: LIMITS.commandMaxSeconds },
-        wait_seconds: { type: "integer", minimum: 0, maximum: LIMITS.commandMaxSeconds },
-      },
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "StopCommand",
-    description: "Stop a running command started by RunCommand.",
-    inputSchema: {
-      type: "object",
-      properties: { command_id: { type: "string" } },
-      required: ["command_id"],
-      additionalProperties: false,
-    },
-  },
-];
-export const TOOL_NAMES = Object.freeze(TOOLS.map((tool) => tool.name));
-
-/** A tool failure with a message the model may see. */
-export class ToolError extends Error {}
-/** A request whose reply was lost after the target may have applied it. */
-export class UncertainEffect extends Error {
-  constructor(method) {
-    super(`outcome unknown: ${method}`);
-    this.method = method;
-  }
-}
-
-const url = (path) => pathToFileURL(path).href;
-const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
-const missing = (error) => error?.remote?.code === -32004;
-const lost = (error) => !error?.remote && /result unknown/.test(error?.message ?? "");
-
-export function inside(root, path) {
-  return path === root || path.startsWith(root === "/" ? "/" : `${root}/`);
-}
-
-function remoteMessage(error) {
-  const message = error?.remote?.message;
-  return typeof message === "string" ? message.slice(0, 500) : "the target refused the request";
-}
-
-/** Output kept from one command: its head and its tail, in arrival order. */
-export class Retained {
-  constructor(limit) {
-    this.half = Math.floor(limit / 2);
-    this.head = [];
-    this.headSize = 0;
-    this.tail = Buffer.alloc(0);
-    this.omitted = 0;
-  }
-
-  push(bytes) {
-    if (this.headSize < this.half) {
-      const part = bytes.subarray(0, this.half - this.headSize);
-      this.head.push(part);
-      this.headSize += part.length;
-      bytes = bytes.subarray(part.length);
-    }
-    if (!bytes.length) return;
-    const tail = Buffer.concat([this.tail, bytes]);
-    const excess = Math.max(0, tail.length - this.half);
-    this.omitted += excess;
-    this.tail = tail.subarray(excess);
-  }
-
-  /** Everything retained since the last take, then reset. */
-  take() {
-    const head = Buffer.concat(this.head).toString("utf8");
-    const gap = this.omitted ? `\n[cowboy: ${this.omitted} bytes of output omitted]\n` : "";
-    const text = head + gap + this.tail.toString("utf8");
-    this.head = [];
-    this.headSize = 0;
-    this.tail = Buffer.alloc(0);
-    this.omitted = 0;
-    return text;
-  }
-}
+export {
+  inside,
+  LIMITS,
+  Retained,
+  TOOL_NAMES,
+  ToolError,
+  UncertainEffect,
+} from "./facade-tools.mjs";
 
 export class Facade {
   /**
@@ -253,19 +81,45 @@ export class Facade {
   }
 
   beginTurn(sessionId) {
-    this.session(sessionId).turn = { cancelled: false, uncertain: undefined };
+    this.session(sessionId).turn = {
+      cancelled: false,
+      ended: false,
+      uncertain: undefined,
+      inflight: new Set(),
+    };
   }
 
-  /** The turn ended or was cancelled: no new effects, stop its commands. */
+  /**
+   * The turn ended or was cancelled. On every terminal path the turn is
+   * fenced first (no new effect is admitted, also by a tool call still
+   * running), then its admitted mutations are awaited and its commands
+   * stopped. A command whose termination is not confirmed stays tracked.
+   */
   async endTurn(sessionId, { cancelled = false } = {}) {
     const session = this.session(sessionId);
-    if (session.turn) {
-      session.turn.cancelled ||= cancelled;
-      if (!cancelled) session.turn = undefined;
+    const turn = session.turn;
+    if (turn) {
+      turn.cancelled ||= cancelled;
+      if (!cancelled) {
+        turn.ended = true;
+        session.turn = undefined;
+      }
+      await Promise.allSettled([...turn.inflight]);
     }
     const commands = [...session.commands.values()];
-    session.commands.clear();
-    await Promise.all(commands.map((command) => this.terminate(command).catch(() => {})));
+    await Promise.all(
+      commands.map(async (command) => {
+        if (await this.terminate(command).catch(() => false)) {
+          this.forget(session, command);
+        }
+      }),
+    );
+  }
+
+  /** Stop tracking a command whose process is gone. */
+  forget(session, command) {
+    clearTimeout(command.timer);
+    session.commands.delete(command.processId);
   }
 
   /** One MCP `tools/call`, answered as an MCP tool result. */
@@ -277,7 +131,7 @@ export class Facade {
     if (turn.uncertain) {
       return failure(`The turn ended: an earlier ${turn.uncertain} has an unknown outcome.`);
     }
-    if (turn.cancelled) return failure("The turn was cancelled.");
+    if (turn.cancelled || turn.ended) return failure("The turn was cancelled.");
     if (args === null || typeof args !== "object" || Array.isArray(args)) args = {};
     const handlers = {
       ReadFile: () => this.readFile(session, args),
@@ -293,7 +147,7 @@ export class Facade {
       return { content: [{ type: "text", text: await handlers[name]() }] };
     } catch (error) {
       if (error instanceof UncertainEffect) {
-        turn.uncertain = error.method;
+        turn.uncertain ??= error.method;
         this.onUncertain(sessionId, error.method);
         return failure(
           `outcome unknown: the connection to the workspace Machine was lost after ${error.method} may have been applied. Cowboy ends this turn; do not retry.`,
@@ -315,13 +169,27 @@ export class Facade {
     }
   }
 
+  /**
+   * One request that may change the target. It is admitted only while the
+   * turn is open; an unknown outcome fences the turn at once, so a
+   * concurrent tool call of the same turn admits nothing after it.
+   */
   async mutate(turn, method, params) {
-    if (turn.cancelled || turn.uncertain) throw new ToolError("The turn was cancelled.");
+    if (turn.cancelled || turn.ended || turn.uncertain) {
+      throw new ToolError("The turn was cancelled.");
+    }
+    const call = this.connection.call(method, params);
+    turn.inflight?.add(call);
     try {
-      return await this.connection.call(method, params);
+      return await call;
     } catch (error) {
-      if (lost(error)) throw new UncertainEffect(method);
+      if (unknownOutcome(error)) {
+        turn.uncertain ??= method;
+        throw new UncertainEffect(method);
+      }
       throw error;
+    } finally {
+      turn.inflight?.delete(call);
     }
   }
 
@@ -485,19 +353,26 @@ export class Facade {
     if (observed === undefined)
       throw new ToolError(`Read ${path} with ReadFile before editing it.`);
     if (observed !== base) throw new ToolError(`${path} changed since it was read; read it again.`);
-    const text = current.toString();
-    const count = text.split(before).length - 1;
+    // Editing as text must never rewrite bytes that are not valid UTF-8.
+    const text = decodeText(current);
+    if (text === undefined) throw new ToolError(`${path} is not valid UTF-8 text; edit refused`);
+    let count = 0;
+    for (let at = text.indexOf(before); at >= 0; at = text.indexOf(before, at + before.length)) {
+      count++;
+    }
     if (count === 0) throw new ToolError("old_string was not found");
     if (count > 1 && all !== true) {
       throw new ToolError(`old_string occurs ${count} times; make it unique or set replace_all`);
     }
+    // The result's size is known before anything is allocated for it.
+    const replaced = all === true ? count : 1;
+    const size = current.length + replaced * (Buffer.byteLength(after) - Buffer.byteLength(before));
+    if (size > LIMITS.writeBytes) throw new ToolError("the result is larger than 4 MiB");
     const next = Buffer.from(
-      all === true ? text.split(before).join(after) : text.replace(before, () => after),
+      all === true ? text.replaceAll(before, () => after) : text.replace(before, () => after),
     );
-    if (next.length > LIMITS.writeBytes) throw new ToolError("the result is larger than 4 MiB");
     await this.publish(turn, file, base, next);
     session.observed.set(file, sha256(next));
-    const replaced = all === true ? count : 1;
     return `Edited ${file} (${replaced} replacement${replaced === 1 ? "" : "s"})`;
   }
 
@@ -506,14 +381,15 @@ export class Facade {
     if (base === "absent") {
       await this.mutate(turn, "fs/createDirectory", { path: url(directory), recursive: true });
     }
-    const staged = posix.join(directory, `.${posix.basename(file)}.cowboy-${randomUUID()}.tmp`);
+    const name = posix.basename(file);
+    const stagedName = `.${name}.cowboy-${randomUUID()}.tmp`;
     await this.mutate(turn, "fs/writeFile", {
-      path: url(staged),
+      path: url(posix.join(directory, stagedName)),
       dataBase64: bytes.toString("base64"),
     });
     const result = await this.runBounded(
       turn,
-      ["/bin/sh", "-c", PUBLISH, "sh", file, staged, base],
+      ["/bin/sh", "-c", PUBLISH, "sh", this.root, directory, name, stagedName, base],
       {
         timeoutMs: LIMITS.publishTimeoutMs,
         maxBytes: 4096,
@@ -525,11 +401,19 @@ export class Facade {
     if (outcome === "conflict") {
       throw new ToolError("The file changed on the target since it was read; read it again.");
     }
+    if (outcome === "outside") {
+      throw new ToolError(`${file} is no longer inside the workspace root ${this.root}`);
+    }
     throw new ToolError(`Writing ${file} failed: ${result.stderr.trim().slice(0, 500)}`);
   }
 
-  async start(turn, argv) {
-    const processId = `cowboy-agy-${randomUUID()}`;
+  /**
+   * Start `argv` on the target. A `readiness` probe (the projection's Git
+   * state) runs outside any turn: the worker's ledger admits and tracks it
+   * by its id prefix, one at a time.
+   */
+  async start(turn, argv, { readiness = false } = {}) {
+    const processId = `${readiness ? READINESS_PREFIX : "cowboy-agy-"}${randomUUID()}`;
     const result = await this.mutate(turn, "process/start", {
       processId,
       argv,
@@ -555,7 +439,7 @@ export class Facade {
         waitMs,
       });
     } catch (error) {
-      if (lostIsUncertain && lost(error)) throw new UncertainEffect("process/read");
+      if (lostIsUncertain && unknownOutcome(error)) throw new UncertainEffect("process/read");
       throw error;
     }
     const chunks = [];
@@ -571,18 +455,24 @@ export class Facade {
     return chunks;
   }
 
+  /** Terminate `process`; `true` only once the target confirmed it closed. */
   async terminate(process) {
-    if (process.closed) return;
+    if (process.closed) return true;
     await this.connection.call("process/terminate", { processId: process.processId });
     const deadline = Date.now() + 5000;
     while (!process.closed && Date.now() < deadline) {
       await this.read(process, 500, { lostIsUncertain: false });
     }
+    return process.closed;
   }
 
   /** Run a process to its end within bounds; stdout and stderr apart. */
-  async runBounded(turn, argv, { timeoutMs, maxBytes, maxLines, lostIsUncertain = true }) {
-    const process = await this.start(turn, argv);
+  async runBounded(
+    turn,
+    argv,
+    { timeoutMs, maxBytes, maxLines, lostIsUncertain = true, readiness = false },
+  ) {
+    const process = await this.start(turn, argv, { readiness });
     const out = { stdout: [], stderr: [], size: 0, lines: 0 };
     const deadline = Date.now() + timeoutMs;
     let truncated = false;
@@ -634,6 +524,9 @@ export class Facade {
       running.deadline = Date.now() + seconds * 1000;
       running.output = new Retained(LIMITS.commandOutput);
       session.commands.set(running.processId, running);
+      // The deadline holds even when nobody reads the command again.
+      running.timer = setTimeout(() => this.expire(session, running), seconds * 1000);
+      running.timer.unref?.();
     }
     if (wait !== undefined && (!Number.isInteger(wait) || wait < 0)) {
       throw new ToolError("Invalid wait_seconds");
@@ -649,12 +542,30 @@ export class Facade {
       let status;
       if (running.closed) status = `Exit code: ${running.exitCode ?? "unknown"}`;
       else if (Date.now() >= running.deadline) {
-        await this.terminate(running);
-        status = "Timed out; the command was stopped.";
+        status = (await this.terminate(running))
+          ? "Timed out; the command was stopped."
+          : `Timed out; stopping it is not yet confirmed (command_id: ${running.processId}).`;
       } else status = `Still running (command_id: ${running.processId}).`;
-      if (running.closed || Date.now() >= running.deadline)
-        session.commands.delete(running.processId);
+      if (running.closed) this.forget(session, running);
       return `${status}\n${running.output.take()}`;
+    } finally {
+      running.busy = false;
+    }
+  }
+
+  /** A command's deadline passed: stop it unless a reader is handling it. */
+  async expire(session, running) {
+    if (running.closed || running.busy || session.commands.get(running.processId) !== running) {
+      return;
+    }
+    running.busy = true;
+    try {
+      if (await this.terminate(running).catch(() => false)) this.forget(session, running);
+      else {
+        // Not confirmed yet: try again; the handle stays until it is.
+        running.timer = setTimeout(() => this.expire(session, running), 5000);
+        running.timer.unref?.();
+      }
     } finally {
       running.busy = false;
     }
@@ -663,13 +574,16 @@ export class Facade {
   async stopCommand(session, { command_id: id }) {
     const running = typeof id === "string" ? session.commands.get(id) : undefined;
     if (!running) throw new ToolError(`No running command ${String(id)}`);
-    session.commands.delete(id);
+    let closed;
     try {
-      await this.terminate(running);
+      closed = await this.terminate(running);
     } catch (error) {
-      if (lost(error)) throw new UncertainEffect("process/terminate");
+      if (unknownOutcome(error)) throw new UncertainEffect("process/terminate");
       throw error;
     }
+    // The handle is kept until the target confirmed the process closed.
+    if (!closed) return `Stopping ${id} is not yet confirmed; call StopCommand again.`;
+    this.forget(session, running);
     return `Stopped ${id}.\n${running.output.take()}`;
   }
 }

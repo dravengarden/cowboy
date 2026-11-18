@@ -228,7 +228,19 @@ export class AcpProxy {
     this.turns.delete(record.sessionId);
     await runtime.facade.endTurn(record.sessionId);
     const violation = turn?.violation;
-    if (!message.result && violation === undefined) return this.client(message);
+    const uncertain = turn?.uncertain;
+    if (!message.result && violation === undefined) {
+      if (uncertain === undefined) return this.client(message);
+      // The unknown effect is reported on both endings, an error too.
+      const error = message.error ?? { code: -32603, message: "turn failed" };
+      return this.client({
+        ...message,
+        error: {
+          ...error,
+          data: { ...(error.data ?? {}), cowboy: { uncertain_effect: uncertain } },
+        },
+      });
+    }
     const cowboy = {};
     if (message.result) {
       cowboy.antigravity_backend = await runtime.evidence.settle(
@@ -237,7 +249,7 @@ export class AcpProxy {
         message.result.stopReason,
       );
     }
-    if (turn?.uncertain) cowboy.uncertain_effect = turn.uncertain;
+    if (uncertain !== undefined) cowboy.uncertain_effect = uncertain;
     if (violation !== undefined) cowboy.policy_violation = violation;
     const backend = cowboy.antigravity_backend;
     if (violation !== undefined || backend.class !== "ok") {

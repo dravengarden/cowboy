@@ -6,7 +6,7 @@
 // content, fenced apart from Cowboy's own routing instructions.
 import { randomUUID } from "node:crypto";
 import { posix } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { inside } from "./facade.mjs";
 
 export const PROJECTION_LIMITS = Object.freeze({
@@ -57,25 +57,37 @@ export function guidanceDirectories(top, cwd) {
   return directories;
 }
 
+/**
+ * Read at most `room` bytes of one guidance file, only when it is a regular
+ * file reached without any symlink: the path is opened first and then must
+ * still resolve to itself on the target, so a link anywhere in it (also one
+ * swapped in before the open) cannot pull in a file from elsewhere.
+ */
 async function readGuidance(facade, file, room) {
-  let metadata;
+  const at = pathToFileURL(file).href;
+  const call = (method, params) => facade.connection.call(method, params);
+  const handleId = `cowboy-${randomUUID()}`;
   try {
-    metadata = await facade.connection.call("fs/getMetadata", { path: pathToFileURL(file).href });
+    const metadata = await call("fs/getMetadata", { path: at });
+    if (!metadata?.isFile || metadata.isSymlink) return undefined;
+    await call("fs/open", { handleId, path: at });
   } catch {
     return undefined;
   }
-  if (!metadata?.isFile) return undefined;
-  const limit = Math.min(PROJECTION_LIMITS.guidanceFile, room);
-  const bytes =
-    metadata.size <= 1024 * 1024
-      ? Buffer.from(
-          (await facade.connection.call("fs/readFile", { path: pathToFileURL(file).href }))
-            .dataBase64,
-          "base64",
-        )
-      : await facade.readBlock(file, 0, limit + 1);
-  const cut = bytes.length > limit;
-  return { text: bytes.subarray(0, limit).toString(), cut, size: bytes.length };
+  try {
+    if (fileURLToPath((await call("fs/canonicalize", { path: at })).path) !== file) {
+      return undefined;
+    }
+    const limit = Math.min(PROJECTION_LIMITS.guidanceFile, room);
+    const block = await call("fs/readBlock", { handleId, offset: 0, len: limit + 1 });
+    const bytes = Buffer.from(block.chunk, "base64");
+    const cut = bytes.length > limit;
+    return { text: bytes.subarray(0, limit).toString(), cut, size: bytes.length };
+  } catch {
+    return undefined;
+  } finally {
+    await call("fs/close", { handleId }).catch(() => {});
+  }
 }
 
 /** Build the projection for a session whose target directory is `cwd`. */
@@ -88,6 +100,9 @@ export async function buildProjection(facade, cwd) {
   const probe = await facade.runBounded({ cancelled: false }, ["/bin/sh", "-c", GIT, "sh", cwd], {
     timeoutMs: PROJECTION_LIMITS.gitTimeoutMs,
     maxBytes: 256 * 1024,
+    // A bounded readiness probe: it runs before any turn (at startup and at
+    // session/new), which the worker's ledger admits only for this purpose.
+    readiness: true,
   });
   const git = parseGit(probe.stdout);
   const fence = `COWBOY_UNTRUSTED_${randomUUID().replaceAll("-", "")}`;

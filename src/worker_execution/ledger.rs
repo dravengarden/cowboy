@@ -34,6 +34,12 @@ const SCHEMA: u16 = 1;
 pub const MAX_PROCESSES: usize = 256;
 const MAX_LEDGER_BYTES: u64 = 256 * 1024;
 const MAX_FENCED_TURNS: usize = 64;
+/// Process ids of the facade's bounded readiness probes (the projection's Git
+/// state). They run outside any turn, one at a time, and are recorded and
+/// ended like every other process.
+pub const READINESS_PREFIX: &str = "cowboy-agy-readiness-";
+/// The ledger turn readiness probes are recorded under.
+const READINESS_TURN: &str = "cowboy-readiness";
 const RETRY_INITIAL: Duration = Duration::from_millis(250);
 const RETRY_MAX: Duration = Duration::from_secs(15);
 /// Requests whose lost reply leaves an unknown effect on the target.
@@ -165,8 +171,23 @@ impl Ledger {
     /// Record a start before it is forwarded, or say why it is refused.
     pub fn admit_start(&self, process: &str) -> Result<(), &'static str> {
         let mut state = self.state.lock();
-        let Some(turn) = state.current_turn.clone() else {
-            return Err("no Cowboy turn is running; process start refused");
+        let readiness = process.starts_with(READINESS_PREFIX);
+        let turn = if readiness {
+            // Independently tracked: never part of a turn, one at a time.
+            if state
+                .record
+                .processes
+                .values()
+                .any(|entry| entry.turn == READINESS_TURN)
+            {
+                return Err("a readiness probe is already running; process start refused");
+            }
+            READINESS_TURN.to_owned()
+        } else {
+            let Some(turn) = state.current_turn.clone() else {
+                return Err("no Cowboy turn is running; process start refused");
+            };
+            turn
         };
         if state.fenced(&turn) {
             return Err("the turn was cancelled or ended; process start refused");
@@ -348,8 +369,14 @@ fn refused(message: &str) -> Value {
     json!({"error": {"code": -32000, "message": message}})
 }
 
+/// The request may have been admitted before its reply was lost: its effect
+/// is unknown, typed so the agent side never reads it as a refusal.
 fn unavailable() -> Value {
-    refused("Execution unavailable or result unknown; no local fallback and no replay")
+    json!({"error": {
+        "code": -32000,
+        "message": "Execution unavailable or result unknown; no local fallback and no replay",
+        "data": {"outcome": "unknown"},
+    }})
 }
 
 fn exited(reply: &Value) -> bool {
@@ -418,7 +445,11 @@ impl Client {
                 reply
             }
             Err(admitted) => {
-                if let Some(method) = mutation.filter(|_| admitted) {
+                if !admitted {
+                    // Refused before it was sent: nothing can have happened.
+                    return refused("Execution unavailable; the request was not sent");
+                }
+                if let Some(method) = mutation {
                     ledger.mark_uncertain(&method);
                 }
                 unavailable()

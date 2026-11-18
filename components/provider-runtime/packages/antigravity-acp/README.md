@@ -45,20 +45,33 @@ places its tree below `proxy/` in the account-sandbox runtime archive and adds
   the runtime's, not writable and with Cowboy's gate shape (`agy` silently
   runs without hooks when `hooks.json` does not parse); descriptor valid; one
   execution connection with a finished handshake; the facade's exact tool
-  set; a projection built. Failure answers
+  set; a projection built. The projection's Git probe is a readiness process
+  (`cowboy-agy-readiness-` id) the worker's ledger admits outside any turn,
+  one at a time; guidance files are read only when the opened path still
+  resolves to itself (no symlink in any component). Failure answers
   `cowboy_antigravity_unavailable: <reason>`.
 - Tools: `ReadFile` (≤ 256 KiB per call, offset paging), `ListDirectory`
   (≤ 2,000 entries), `SearchFiles` (target `rg`, ≤ 500 lines, 512 KiB, 30 s),
-  `WriteFile`/`EditFile` (only after `ReadFile` in the session; compare-and-swap
-  on the target's SHA-256, staged file published by rename or link, mode
-  kept), `RunCommand` (target shell, default 120 s, maximum 600 s, 256 KiB
-  head and tail; `wait_seconds` returns a `command_id`), `StopCommand`. Paths
-  are canonicalized on the target and confined to the workspace root.
-  Tools work only inside a turn; a turn's commands stop at its end or cancel.
+  `WriteFile`/`EditFile` (only after `ReadFile` in the session; `EditFile`
+  refuses text that is not valid UTF-8 and a result over 4 MiB before
+  building it; compare-and-swap on the target's SHA-256 in one shell pinned to
+  the file's directory with `cd -P`: the current file is first renamed aside,
+  the displaced file is hashed, and the staged file is linked into the empty
+  place, so a concurrent writer is never overwritten and a mismatching file
+  is restored; mode kept), `RunCommand` (target shell, default 120 s, maximum
+  600 s, enforced by a timer even when the command is not read again; 256 KiB
+  head and tail; `wait_seconds` returns a `command_id`), `StopCommand` (the
+  handle is kept until the target confirms the process closed). Paths are
+  canonicalized on the target and confined to the workspace root. Tools work
+  only inside a turn; on every turn end the turn is fenced, its admitted
+  mutations are awaited and its commands stopped.
 - A lost reply after a mutation (`fs/writeFile`, `fs/createDirectory`,
-  `process/start`, a command read or terminate) may have been applied: the
-  tool answers `outcome unknown`, the proxy sends `session/cancel` and adds
-  `_meta.cowboy.uncertain_effect` to the turn's result. Nothing is retried.
+  `process/start`, a command read or terminate), or the worker's typed
+  `error.data.outcome: "unknown"`, may have been applied: the turn is fenced
+  at once (a concurrent tool call admits nothing more), the tool answers
+  `outcome unknown`, the proxy sends `session/cancel` and adds
+  `cowboy.uncertain_effect` to the turn's result `_meta`, or to its error's
+  `data` when the turn ends with an error. Nothing is retried.
 
 ## Backend evidence
 
@@ -77,7 +90,9 @@ becomes `unknown`), with `data.cowboy.policy_violation` beside the backend
 evidence, even when `agy` answers the cancelled prompt with an error. The
 Controller then marks the account `needs_attention` and stops its units.
 Which field `agy` 1.5.9 uses for the tool name in `tool_call` updates is an
-acceptance item; a call without a name is not detected.
+acceptance item; a call that runs without an attributable name (none, an
+unknown `toolCallId`, or past the 1,024 names a turn remembers) is a
+violation `unknown`.
 
 The proxy reads only its own `agy` process's log
 (`$HOME/.gemini/antigravity-cli/log/acp-server-<time>-<pid>.log`) from the

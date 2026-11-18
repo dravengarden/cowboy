@@ -406,7 +406,9 @@ async fn lost_mutation_replies_mark_the_effect_uncertain_durably() {
             json!({"path": "file:///target/a", "dataBase64": ""}),
         )
         .await;
-    assert!(lost.get("error").is_some());
+    // The unknown outcome is typed for the agent side, unlike a refusal.
+    assert_eq!(lost.pointer("/error/data/outcome"), Some(&json!("unknown")));
+    assert!(refused.pointer("/error/data").is_none());
     assert_eq!(ledger.uncertain_effect().as_deref(), Some("fs/writeFile"));
     assert_eq!(*observed.lock(), [("fs/writeFile".to_owned(), 1)]);
     drop(target);
@@ -586,4 +588,20 @@ async fn the_unix_endpoint_bounds_frames() {
     assert!(!matches!(closed, Some(Ok(Message::Text(_)))));
     // The connection slot is free again.
     let _again = fixture.initialized().await;
+}
+
+#[tokio::test]
+async fn readiness_probes_run_outside_turns_one_at_a_time() {
+    let target = Target::new(Arc::new(|_| completed(json!({"result": {}}))));
+    let ledger = ledger(&target.client, None);
+    // No turn runs while a session is created; only a readiness probe starts.
+    assert!(ledger.admit_start("cowboy-agy-plain").is_err());
+    let first = format!("{}1", super::ledger::READINESS_PREFIX);
+    let second = format!("{}2", super::ledger::READINESS_PREFIX);
+    ledger.admit_start(&first).unwrap();
+    assert!(ledger.admit_start(&second).is_err());
+    // It is recorded like every process and ends with the target's evidence.
+    assert_eq!(ledger.live(), std::slice::from_ref(&first));
+    ledger.exited(&first);
+    ledger.admit_start(&second).unwrap();
 }

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   mkdirSync,
   mkdtempSync,
@@ -13,7 +14,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { Connection } from "../../execution-connection.mjs";
-import { Facade, LIMITS, Retained } from "./facade.mjs";
+import { Facade, LIMITS, Retained, ToolError } from "./facade.mjs";
+import { PUBLISH } from "./facade-tools.mjs";
 import { buildProjection, guidanceDirectories, parseGit } from "./projection.mjs";
 import { fakeEndpoint } from "./test-endpoint.mjs";
 
@@ -267,4 +269,116 @@ test("projection fences repository guidance and bounds Git status", async (t) =>
     branch: "dev",
     status: [" M a"],
   });
+});
+
+test("a worker-reported unknown outcome fences the turn at once", async (t) => {
+  const { facade, call, uncertain } = await fixture(t, {
+    fail: (method) =>
+      method === "fs/writeFile"
+        ? { code: -32000, message: "result unknown", data: { outcome: "unknown" } }
+        : undefined,
+  });
+  const turn = facade.session("s1").turn;
+  const written = await call("WriteFile", { path: "new.txt", content: "x" });
+  assert.equal(written.error, true);
+  assert.match(written.text, /outcome unknown/);
+  assert.deepEqual(uncertain, [["s1", "fs/writeFile"]]);
+  assert.equal(turn.uncertain, "fs/writeFile");
+  await assert.rejects(facade.mutate(turn, "fs/createDirectory", {}), ToolError);
+});
+
+test("a normally ended turn admits no further mutation from a running tool", async (t) => {
+  const { facade } = await fixture(t);
+  const turn = facade.session("s1").turn;
+  await facade.endTurn("s1");
+  assert.equal(turn.ended, true);
+  await assert.rejects(facade.mutate(turn, "fs/createDirectory", {}), ToolError);
+});
+
+test("a command's deadline holds without polling; an unconfirmed stop keeps it", async (t) => {
+  const { facade, call } = await fixture(t);
+  const started = await call("RunCommand", {
+    command: "sleep 30",
+    timeout_seconds: 1,
+    wait_seconds: 0,
+  });
+  assert.match(started.text, /Still running/);
+  const session = facade.session("s1");
+  assert.equal(session.commands.size, 1);
+  const deadline = Date.now() + 8000;
+  while (session.commands.size && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert.equal(session.commands.size, 0, "the expired command was stopped");
+  const stubborn = await call("RunCommand", {
+    command: "trap '' TERM; echo ready; sleep 8",
+    wait_seconds: 1,
+  });
+  assert.match(stubborn.text, /ready/);
+  const id = /command_id: (\S+)\)/.exec(stubborn.text)[1];
+  const stopped = await call("StopCommand", { command_id: id });
+  assert.match(stopped.text, /not yet confirmed/);
+  assert.equal(session.commands.has(id), true);
+});
+
+test("EditFile refuses invalid UTF-8 and oversized results before allocating", async (t) => {
+  const { root, call } = await fixture(t);
+  writeFileSync(join(root, "latin1.txt"), Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]));
+  await call("ReadFile", { path: "latin1.txt" });
+  const edit = await call("EditFile", { path: "latin1.txt", old_string: "caf", new_string: "x" });
+  assert.equal(edit.error, true);
+  assert.match(edit.text, /not valid UTF-8/);
+  assert.deepEqual(
+    readFileSync(join(root, "latin1.txt")),
+    Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]),
+  );
+  writeFileSync(join(root, "many.txt"), "a".repeat(1024 * 1024));
+  await call("ReadFile", { path: "many.txt" });
+  const grown = await call("EditFile", {
+    path: "many.txt",
+    old_string: "a",
+    new_string: "bbbbb",
+    replace_all: true,
+  });
+  assert.equal(grown.error, true);
+  assert.match(grown.text, /larger than 4 MiB/);
+});
+
+test("publication is pinned to its directory and never loses a displaced file", (t) => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "agy-publish-")));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const root = join(base, "root");
+  mkdirSync(join(root, "dir"), { recursive: true });
+  mkdirSync(join(base, "outside"));
+  symlinkSync(join(base, "outside"), join(root, "link"));
+  const publish = (dir, name, tmp, digest) =>
+    execFileSync("/bin/sh", ["-c", PUBLISH, "sh", root, dir, name, tmp, digest]).toString().trim();
+  const sha = (text) => createHash("sha256").update(text).digest("hex");
+  writeFileSync(join(root, "dir", "f"), "theirs\n");
+  writeFileSync(join(root, "dir", ".t1"), "mine\n");
+  // The current content differs from the base: it is restored in place.
+  assert.equal(publish(join(root, "dir"), "f", ".t1", sha("base\n")), "conflict");
+  assert.equal(readFileSync(join(root, "dir", "f"), "utf8"), "theirs\n");
+  writeFileSync(join(root, "dir", ".t2"), "mine\n");
+  assert.equal(publish(join(root, "dir"), "f", ".t2", sha("theirs\n")), "applied");
+  assert.equal(readFileSync(join(root, "dir", "f"), "utf8"), "mine\n");
+  // A directory that resolves outside the root is refused.
+  writeFileSync(join(base, "outside", ".t3"), "x");
+  assert.equal(publish(join(root, "link"), "f", ".t3", "absent"), "outside");
+  assert.equal(readFileSync(join(base, "outside", ".t3"), "utf8"), "x");
+  // A staged file missing from the pinned directory publishes nothing.
+  assert.equal(publish(join(root, "dir"), "g", ".missing", "absent"), "conflict");
+});
+
+test("guidance is read only through symlink-free paths, by a readiness probe", async (t) => {
+  const { base, root, facade, endpoint } = await fixture(t);
+  writeFileSync(join(base, "outside", "AGENTS.md"), "OUTSIDE_GUIDANCE\n");
+  symlinkSync(join(base, "outside", "AGENTS.md"), join(root, "AGENTS.md"));
+  writeFileSync(join(root, "GEMINI.md"), "inside guidance\n");
+  const projection = await buildProjection(facade, root);
+  assert.doesNotMatch(projection, /OUTSIDE_GUIDANCE/);
+  assert.match(projection, /inside guidance/);
+  const starts = endpoint.calls.filter((call) => call.method === "process/start");
+  assert.ok(starts.length > 0);
+  for (const start of starts) assert.match(start.params.processId, /^cowboy-agy-readiness-/);
 });

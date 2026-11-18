@@ -188,6 +188,7 @@
         "evidence.mjs",
         "facade.mjs",
         "facade-relay.mjs",
+        "facade-tools.mjs",
         "hook.mjs",
         "projection.mjs",
         "proxy.mjs",
