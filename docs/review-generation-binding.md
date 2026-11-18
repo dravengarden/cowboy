@@ -67,26 +67,29 @@ reuse of unchecked verdicts.
   runnable generation (`preset_unavailable` otherwise); a review's must then
   also be one of that generation's reviewer candidates
   (`review_model_not_allowed`).
-- `claim` re-resolves readiness (unchanged) and, for a review, resolves the
-  admitted preset on the generation it pins. If an update landed while the
-  call waited (for example for approval) and the ID is missing or no longer a
-  reviewer family, or (for a fresh review) not a family the session's review
-  preferences list, the call fails `preset_unavailable` /
-  `review_model_not_allowed` before any snapshot or worker; the caller
-  submits again and admission ranks the new generation. A continuation keeps
-  its child's preset, as admission does.
-- Claim does not silently re-rank an automatic choice. The ledger `Record`
-  denies unknown fields, so recording whether the preset was automatic would
-  make a rolled-back Controller unable to read new records; the rare
-  update-during-wait case fails visibly instead.
+- A fresh review records the generation its preset was chosen on in the
+  existing `provider_version` / `provider_generation_digest` fields at
+  admission (no new ledger field, so a rolled-back Controller still reads
+  every record). If readiness at claim reports another digest (for example
+  an update landed while the call waited for approval), the call fails
+  `generation_changed` before any snapshot or worker; an id that a release
+  remapped to another model or effort can therefore never run under the
+  admitted receipt. The caller submits again and admission ranks the new
+  generation. Claim does not silently re-rank.
+- Claim also resolves the preset on the pinned generation: it must still be
+  a signed reviewer preset and, for a fresh review, a family the session's
+  review preferences list (`preset_unavailable` /
+  `review_model_not_allowed`). A continuation keeps its child's preset and
+  generation, as admission does.
 
 ### B. Freeze a managed child's generation
 
 - `repin_workerless_provider` refuses managed children, matching the live
   reload refusal. This covers both dormant and missing-generation re-pin.
-  A managed child whose generation was uninstalled cannot continue: the
-  missing-generation note is kept for managed children, and claim fails such
-  a continuation `conversation_unavailable` before preparing a round.
+  A managed child whose generation was uninstalled cannot continue; its next
+  round fails to start (`provider_startup_failed`). The missing-generation
+  note is cleared for managed children so it does not expedite update
+  passes; it is process-local and could go stale, so claim does not read it.
 - Defense in depth: `configuration::ready` fails `generation_changed` when
   the child's `meta.provider_version/digest` differs from the record's
   claimed values, before `start_registered_session`.
@@ -95,21 +98,25 @@ reuse of unchecked verdicts.
 
 - `config_revert::apply` refuses managed children for every client and Agent
   API entry point (`managed child configuration is owned by its call`); MCP
-  `sessions.configure` reports it as `managed_child_configuration` rather
-  than a bare `rejected`. The runner keeps writing preferences through
+  `sessions.configure` returns a definite `rejected` receipt carrying
+  `managed_child_configuration` (never an unknown outcome), and clients
+  cannot edit a managed child's queued prompt (`Hub::client_edit`): the
+  prompt is the call's durable request and its reusable review identity. The runner keeps writing preferences through
   `apply_preset`.
 - The Hub persists queues, so a managed prompt queued before a Controller
   restart drains when its child is ready. With B and the refusal above, that
   worker runs the same generation and replays the same runner-written
   preferences the previous process confirmed, so no new gate is needed. The
   runner withdraws a still-queued prompt that must never start: a review
-  admitted without a preset (fails `review_model_not_allowed`) and a call
-  whose cancellation was accepted (finishes `Cancelled` immediately, so
-  resuming the queue during the stop grace cannot run it). A finished call
+  that would fail the reviewer check now, such as one admitted without a
+  signed reviewer preset (fails `review_model_not_allowed`), and a call
+  whose cancellation was accepted (Running → Stopping → Cancelled at once,
+  so resuming the queue during the stop grace cannot run it). A finished call
   also withdraws any leftover prompt.
 - A refused continuation's child is hibernated, never deleted: deletion
   would tombstone the retained conversation on a Machine with the deletion
-  writer. Fresh children are still deleted.
+  writer. Fresh children are still deleted. The decision uses the request
+  the caller already loaded, never a fallible re-read.
 - An earlier revision held every queued managed prompt behind an in-memory
   release set. Review showed it could strand a prompt (dispatch requeue,
   ordinary sessions using the prefix, a predecessor's orphaned row) or let a
@@ -158,6 +165,23 @@ and the preference write, so A, B and D share one validation.
   keeps owning its identity; pass `fresh:true` to run a new review.
 - `configuration::ready` keeps its existing preference/observation
   handshake; it is not rewritten here.
+- Queue and delivery layer (pre-existing, needs its own design): a queued
+  row's removal is persisted asynchronously, so a Controller crash after
+  Machine acceptance can restore a row for work already accepted; a queued
+  row drained by a replacement worker relies on its replay of the
+  runner-written preferences, which skips unsupported options; a prompt can
+  be dispatched between an accepted cancellation and the runner's next
+  poll; a terminal call's leftover row survives a crash between the ledger
+  write and settlement; and a queued row on an exited worker or a full
+  dispatch channel is not retried. The rules above narrow, but do not close,
+  these windows.
+- A refused continuation whose worker is still starting cannot be
+  hibernated yet; idle hibernation reclaims it later.
+- Capabilities publish presets from the read-only profile's generation. An
+  image call whose image profile runs elsewhere validates against that
+  image generation, so an advertised id can be refused there.
+- The ACP configuration bridge of a child agent is not changed; managed
+  children run read-only profiles.
 
 ## Tests
 

@@ -271,9 +271,10 @@ async fn repin_missing(state: &Arc<AppState>) {
             continue;
         };
         let meta = info.meta;
-        // A managed child never changes generation. Keep the note: a
-        // continuation reads it to refuse the conversation up front.
+        // A managed child never changes generation: its next round fails to
+        // start instead. Drop the note so it does not expedite update passes.
         if state.hub.is_managed_child(&meta.id) {
+            state.hub.clear_provider_generation_missing(&meta.id);
             continue;
         }
         // Keep the note while something transient blocks the move.

@@ -1,4 +1,4 @@
-//! Managed call children: Controller-owned prompts and generation evidence.
+//! Managed call children: Controller-owned prompts.
 
 use super::*;
 
@@ -28,14 +28,17 @@ impl Hub {
         removed
     }
 
-    /// Whether this session's last launch was refused because its pinned
-    /// Provider generation is no longer installed on its Machine.
-    pub fn provider_generation_missing(&self, session_id: &str) -> bool {
-        self.inner
-            .sessions
-            .lock()
-            .get(session_id)
-            .is_some_and(|s| s.provider_generation_missing)
+    /// A client's queue edit. A managed call's queued prompt is its durable
+    /// request: an edit would run other instructions under its (reusable)
+    /// receipt, so a managed child's queue is never edited by a client.
+    pub fn client_edit(
+        &self,
+        session_id: &str,
+        id: &str,
+        text: String,
+        content: Vec<serde_json::Value>,
+    ) -> bool {
+        !self.is_managed_child(session_id) && self.edit_queued(session_id, id, text, content)
     }
 
     pub fn is_managed_child(&self, session_id: &str) -> bool {

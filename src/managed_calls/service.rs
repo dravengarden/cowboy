@@ -15,6 +15,10 @@ pub struct Choice {
     pub preset: Option<String>,
     /// `explicit` or `auto`.
     pub selection: &'static str,
+    /// The `(version, digest)` a fresh call's preset was chosen on. Claim
+    /// refuses to pin another one, so the admitted values are the executed
+    /// values; the call is resubmitted instead.
+    pub generation: Option<(String, String)>,
 }
 
 impl Choice {
@@ -23,6 +27,7 @@ impl Choice {
         Self {
             preset: None,
             selection: "explicit",
+            generation: None,
         }
     }
 }
@@ -91,11 +96,12 @@ impl Ledger {
             );
             return Ok(original);
         }
-        let (child, preset, selection) = match &request.conversation {
+        let (child, preset, selection, generation) = match &request.conversation {
             Conversation::Fresh {} => (
                 fresh_child_id,
                 choice.preset.clone(),
                 Some(choice.selection.to_owned()),
+                choice.generation.clone(),
             ),
             Conversation::Continue { child_session_id } => {
                 let previous = self
@@ -123,6 +129,7 @@ impl Ledger {
                     child_session_id.as_str(),
                     previous.preset,
                     previous.selection,
+                    None,
                 )
             }
         };
@@ -148,10 +155,11 @@ impl Ledger {
             provider_account_id: None,
             input_revision: None,
             result: None,
-            // The child's own runtime is chosen when the call is claimed.
+            // The child's own runtime is chosen when the call is claimed; a
+            // fresh call records the generation its preset was chosen on.
             runtime_machine_id: None,
-            provider_version: None,
-            provider_generation_digest: None,
+            provider_version: generation.as_ref().map(|(version, _)| version.clone()),
+            provider_generation_digest: generation.map(|(_, digest)| digest),
             child_cursor: None,
             input_files: Vec::new(),
             cancel_requested_at_ms: None,
@@ -370,6 +378,7 @@ mod tests {
         let luna = Choice {
             preset: Some("luna-6-max".into()),
             selection: "explicit",
+            generation: None,
         };
         let first = ledger
             .admit("codex", &analysis, "call-1", "child-1", &luna)
@@ -437,6 +446,7 @@ mod tests {
                 &Choice {
                     preset: Some("astra-max".into()),
                     selection: "explicit",
+                    generation: None,
                 },
             )
             .await
@@ -495,6 +505,7 @@ mod tests {
                 &Choice {
                     preset: Some("weaker-default".into()),
                     selection: "auto",
+                    generation: None,
                 },
             )
             .await

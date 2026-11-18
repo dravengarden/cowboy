@@ -939,6 +939,7 @@ async fn start(
     let choice = crate::managed_calls::service::Choice {
         preset: target.recorded_preset(),
         selection,
+        generation: generation.filter(|_| request.purpose.is_review()),
     };
     // Continuation admission holds the child lifecycle fence while it
     // rechecks the child and inserts, so retirement cannot interleave.

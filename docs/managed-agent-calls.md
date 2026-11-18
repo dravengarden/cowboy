@@ -338,8 +338,9 @@ passed the reviewer allowlist.
 
 Review selection, claim, worker start, prompt delivery, recovery and reuse
 are bound to one Provider generation: admission and capabilities rank the
-generation readiness would launch; claim refuses a preset that is no reviewer
-on the generation it pins; managed children are never re-pinned or configured
+generation readiness would launch; claim refuses a review whose generation
+changed since admission or whose preset is no reviewer on the generation it
+pins; managed children are never re-pinned or configured
 by anyone but their call; a still-queued prompt of a cancelled call or of a
 preset-less legacy review is withdrawn before it can start; and only schema-2
 review results from a signed reviewer run are reused. See

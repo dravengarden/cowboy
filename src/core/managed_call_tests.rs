@@ -187,6 +187,9 @@ fn a_withdrawn_managed_prompt_never_reaches_a_worker() {
     hub.submit_managed_prompt("child", "call-1", "review".into());
     assert!(hub.managed_turn("child", 0).unwrap().prompted);
     // Another call's id leaves it alone.
+    let queued = hub.inner.sessions.lock()["child"].queue[0].id.clone();
+    assert!(!hub.client_edit("child", &queued, "other".into(), Vec::new()));
+    assert!(!hub.client_edit("child", &queued, String::new(), Vec::new()));
     assert!(!hub.discard_managed_prompt("child", "call-2"));
     assert!(hub.managed_turn("child", 0).unwrap().prompted);
     assert!(hub.discard_managed_prompt("child", "call-1"));
@@ -213,7 +216,6 @@ fn a_dormant_managed_child_is_never_re_pinned() {
             hub.repin_dormant_provider(&before, "9.9.9", "newer", &behavior, None)
         };
         assert!(refused.unwrap_err().contains("managed child"));
-        assert_eq!(hub.provider_generation_missing("child"), missing);
         let after = hub.session_info("child").unwrap().meta;
         assert_eq!(after.provider_version, "3.4.0");
         assert_eq!(after.provider_generation_digest, "generation");

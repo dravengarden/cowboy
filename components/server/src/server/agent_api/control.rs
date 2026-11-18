@@ -739,22 +739,37 @@ fn command(name: &str) -> Option<(&'static str, &'static str)> {
     })
 }
 
-/// [`command_value`] plus refusals the command path could only report as a
-/// bare `rejected`: a managed child's configuration belongs to its call.
-fn checked_command_value(
-    state: &AppState,
+/// A product command through the Web command path, which reports only
+/// accepted/rejected. A managed child's configuration belongs to its call:
+/// that definite refusal is a rejected receipt with its reason, never an
+/// unknown outcome.
+fn run_command(
+    state: &Arc<AppState>,
+    auth: &web::AuthenticatedProductRequest,
     name: &str,
     input: &Value,
     operation: &str,
-) -> Result<Value, &'static str> {
+) -> Result<Value, String> {
     if name == "sessions.configure"
         && input["session_id"]
             .as_str()
             .is_some_and(|id| state.hub.is_managed_child(id))
     {
-        return Err("managed_child_configuration");
+        return Ok(json!({"status":"rejected","error":"managed_child_configuration"}));
     }
-    command_value(name, input, operation)
+    let value = command_value(name, input, operation)?;
+    let mut principal = auth.principal.clone();
+    principal.role = AdminRole::Operator;
+    let accepted = web::handle_command(
+        state,
+        &principal,
+        &value.to_string(),
+        &mut HashMap::new(),
+        None,
+    );
+    Ok(
+        json!({"status":if accepted {"accepted"} else {"rejected"},"completion":"observe domain state"}),
+    )
 }
 
 fn command_value(name: &str, input: &Value, operation: &str) -> Result<Value, &'static str> {
@@ -1174,20 +1189,7 @@ async fn dispatch(
         return Ok(json!({"status":"accepted","refreshing":snapshot.refreshing}));
     }
     if command(name).is_some() {
-        let operation = operation.ok_or("read_only")?;
-        let value = checked_command_value(state, name, &input, operation)?;
-        let mut principal = auth.principal.clone();
-        principal.role = AdminRole::Operator;
-        let accepted = web::handle_command(
-            state,
-            &principal,
-            &value.to_string(),
-            &mut HashMap::new(),
-            None,
-        );
-        return Ok(
-            json!({"status":if accepted {"accepted"} else {"rejected"},"completion":"observe domain state"}),
-        );
+        return run_command(state, auth, name, &input, operation.ok_or("read_only")?);
     }
     if name == "sessions.create" {
         let body = input

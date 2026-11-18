@@ -1021,7 +1021,7 @@ pub(super) fn queue_command(
             content,
             cmid,
         } => {
-            if !state.hub.edit_queued(&session_id, &id, text, content) {
+            if !state.hub.client_edit(&session_id, &id, text, content) {
                 report_stale_row(state, &session_id, cmid.as_deref());
             }
             Ok(())
