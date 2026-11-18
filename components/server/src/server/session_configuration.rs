@@ -69,66 +69,68 @@ pub(super) fn prepare(state: &AppState, session_id: &str) {
 
 /// An exited session keeps the options its last worker reported, which may
 /// come from an earlier Provider generation: a dormant re-pin or an operator
-/// update moves the session without starting a worker. Offer the model choices
-/// of the generation it is pinned to now, so its settings and Recommended
-/// cards match what its next start runs. Sources, without starting anything:
-/// the snapshots of other sessions on the same exact generation, Machine,
-/// owner and account (the native model list depends on the account), and,
-/// when the snapshot lacks the generation's signed default model and therefore
-/// predates it, the generation's signed preset models. The next worker
-/// snapshot replaces all of it.
+/// update moves the session without starting a worker. Offer, for display
+/// only, the model choices of the generation it is pinned to now, so its
+/// settings and Recommended cards match what its next start runs.
+///
+/// Sources, without starting anything: the snapshots of sessions with a live
+/// worker on the same exact generation, Machine, owner, account and login
+/// (the native model list depends on the login); only when there is none,
+/// and the snapshot lacks the generation's signed default model and so
+/// predates it, the generation's signed preset models. An upgrade that keeps
+/// its default model therefore shows new models once one session runs it.
 fn carry_model_choices(state: &AppState, session_id: &str, snapshot: &Value) {
     let Some(info) = state.hub.session_info(session_id) else {
         return;
     };
     let meta = info.meta;
-    if meta.status != crate::core::Status::Exited
-        || meta
-            .execution_binding
-            .as_ref()
-            .is_some_and(|binding| binding.managed().is_some())
-    {
+    if meta.status != crate::core::Status::Exited || is_managed(&meta) {
         return;
     }
     let model_ids = model_option_ids(snapshot);
     if model_ids.is_empty() {
         return;
     }
-    let mut additions = BTreeMap::<String, Vec<Value>>::new();
-    let peers = state.hub.session_list().into_iter().filter(|peer| {
-        peer.id != meta.id
-            && peer.provider == meta.provider
-            && peer.provider_account_id == meta.provider_account_id
-            && peer.provider_version == meta.provider_version
-            && peer.provider_generation_digest == meta.provider_generation_digest
-            && peer.machine_id == meta.machine_id
-            && peer.owner_user_id == meta.owner_user_id
-    });
-    // Live workers first: their snapshot is certainly of this generation.
-    let (live, dormant): (Vec<_>, Vec<_>) =
-        peers.partition(|peer| peer.status != crate::core::Status::Exited);
-    for peer in live.into_iter().chain(dormant) {
+    let mut choices = BTreeMap::<String, Vec<Value>>::new();
+    let mut live_peer = false;
+    for peer in state.hub.session_list() {
+        // A live worker's snapshot is its own; a dormant or starting peer may
+        // still hold an earlier generation's.
+        if peer.id == meta.id
+            || !matches!(
+                peer.status,
+                crate::core::Status::Running | crate::core::Status::Busy
+            )
+            || is_managed(&peer)
+            || peer.provider != meta.provider
+            || peer.provider_account_id != meta.provider_account_id
+            || peer.provider_auth_generation != meta.provider_auth_generation
+            || peer.provider_version != meta.provider_version
+            || peer.provider_generation_digest != meta.provider_generation_digest
+            || peer.machine_id != meta.machine_id
+            || peer.owner_user_id != meta.owner_user_id
+        {
+            continue;
+        }
         if let Some(options) = state.hub.persisted_config_options(&peer.id) {
-            collect_model_choices(&options, &model_ids, &mut additions);
+            live_peer = true;
+            collect_model_choices(&options, &model_ids, &mut choices);
         }
     }
-    if let Some(package) = state.provider_catalog.package(
-        &meta.provider,
-        &meta.provider_version,
-        &meta.provider_generation_digest,
-    ) && let Some(behavior) = meta.provider_behavior.as_ref()
+    if !live_peer
+        && let Some(package) = state.provider_catalog.package(
+            &meta.provider,
+            &meta.provider_version,
+            &meta.provider_generation_digest,
+        )
+        && let Some(behavior) = meta.provider_behavior.as_ref()
     {
-        let defaults = &behavior.default_preferences;
         let predates = model_ids.iter().any(|id| {
-            defaults
+            behavior
+                .default_preferences
                 .get(id)
                 .and_then(|value| serde_json::to_value(value).ok())
-                .is_some_and(|default| {
-                    !offers(snapshot, id, &default)
-                        && !additions
-                            .get(id)
-                            .is_some_and(|choices| choices.iter().any(|c| c["value"] == default))
-                })
+                .is_some_and(|default| !offers(snapshot, id, &default))
         });
         if predates {
             for preset in &package.manifest.configuration.presets {
@@ -140,18 +142,24 @@ fn carry_model_choices(state: &AppState, session_id: &str, snapshot: &Value) {
                             .next()
                             .filter(|name| !name.is_empty())
                             .map_or_else(|| label(value), str::to_owned);
-                        let choices = additions.entry(id.clone()).or_default();
-                        if !choices.iter().any(|choice| choice["value"] == json!(value)) {
-                            choices.push(json!({"value": value, "name": name}));
+                        let entry = choices.entry(id.clone()).or_default();
+                        if !entry.iter().any(|choice| choice["value"] == json!(value)) {
+                            entry.push(json!({"value": value, "name": name}));
                         }
                     }
                 }
             }
         }
     }
-    if !additions.is_empty() {
-        state.hub.add_dormant_config_choices(&meta, &additions);
+    if !choices.is_empty() {
+        state.hub.set_dormant_config_choices(&meta, choices);
     }
+}
+
+fn is_managed(meta: &SessionMeta) -> bool {
+    meta.execution_binding
+        .as_ref()
+        .is_some_and(|binding| binding.managed().is_some())
 }
 
 fn model_option_ids(options: &Value) -> Vec<String> {

@@ -399,7 +399,7 @@ fn deepseek_context_option_is_projected_after_the_model() {
 }
 
 #[test]
-fn a_dormant_snapshot_gains_choices_without_changing_selections() {
+fn dormant_choices_are_display_only_and_end_with_the_next_agent_snapshot() {
     let hub = Hub::new();
     hub.create_local_session(
         "dormant".to_owned(),
@@ -409,53 +409,83 @@ fn a_dormant_snapshot_gains_choices_without_changing_selections() {
         SessionOrigin::Web,
         false,
     );
-    hub.set_config_options(
-        "dormant",
-        serde_json::json!([
-            {"id": "model", "category": "model", "currentValue": "gpt-6.1-sol",
-             "options": [{"value": "gpt-6.1-sol", "name": "6.1 Sol"}]},
-            {"id": "mode", "currentValue": "ask",
-             "options": [{"group": "Profiles", "options": [{"value": "ask", "name": "Ask"}]}]},
-        ]),
-    );
+    let reported = serde_json::json!([
+        {"id": "model", "category": "model", "currentValue": "gpt-6.1-sol",
+         "options": [{"value": "gpt-6.1-sol", "name": "6.1 Sol"}]},
+        {"id": "mode", "currentValue": "ask",
+         "options": [{"group": "Profiles", "options": [{"value": "ask", "name": "Ask"}]}]},
+    ]);
+    hub.set_config_options("dormant", reported.clone());
     let meta = hub.session_info("dormant").unwrap().meta;
-    let additions: std::collections::BTreeMap<String, Vec<serde_json::Value>> = [
-        (
-            "model".to_owned(),
-            vec![
-                serde_json::json!({"value": "gpt-6.1-sol", "name": "duplicate"}),
-                serde_json::json!({"value": "gpt-6.2-sol", "name": "6.2 Sol"}),
-            ],
-        ),
-        (
-            "mode".to_owned(),
-            vec![serde_json::json!({"value": "bypass", "name": "Bypass"})],
-        ),
-    ]
-    .into();
+    let choices = || -> std::collections::BTreeMap<String, Vec<serde_json::Value>> {
+        [
+            (
+                "model".to_owned(),
+                vec![
+                    serde_json::json!({"value": "gpt-6.1-sol", "name": "duplicate"}),
+                    serde_json::json!({"value": "gpt-6.2-sol", "name": "6.2 Sol"}),
+                ],
+            ),
+            (
+                "mode".to_owned(),
+                vec![serde_json::json!({"value": "bypass", "name": "Bypass"})],
+            ),
+        ]
+        .into()
+    };
+    let shown = |hub: &Hub| {
+        hub.config_options("dormant").unwrap()[0]["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|choice| choice["value"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
 
     // A session with a worker reports its own options.
     hub.set_status("dormant", Status::Running, None);
     let live = hub.session_info("dormant").unwrap().meta;
-    assert!(!hub.add_dormant_config_choices(&live, &additions));
+    assert!(!hub.set_dormant_config_choices(&live, choices()));
 
     hub.set_status("dormant", Status::Exited, None);
     let mut moved = meta.clone();
     moved.provider_generation_digest = "sha256:other".to_owned();
-    assert!(!hub.add_dormant_config_choices(&moved, &additions));
+    assert!(!hub.set_dormant_config_choices(&moved, choices()));
 
-    assert!(hub.add_dormant_config_choices(&meta, &additions));
-    let options = hub.persisted_config_options("dormant").unwrap();
-    assert_eq!(options[0]["currentValue"], "gpt-6.1-sol");
-    assert_eq!(
-        options[0]["options"],
-        serde_json::json!([
-            {"value": "gpt-6.1-sol", "name": "6.1 Sol"},
-            {"value": "gpt-6.2-sol", "name": "6.2 Sol"},
-        ])
-    );
+    assert!(hub.set_dormant_config_choices(&meta, choices()));
+    assert_eq!(shown(&hub), ["gpt-6.1-sol", "gpt-6.2-sol"]);
+    // Never persisted, so never replayed as an agent capability.
+    assert_eq!(hub.persisted_config_options("dormant").unwrap(), reported);
     // Grouped choices keep the agent's grouping.
-    assert_eq!(options[1]["options"].as_array().unwrap().len(), 1);
-    // Idempotent: a second open changes nothing.
-    assert!(!hub.add_dormant_config_choices(&meta, &additions));
+    assert_eq!(
+        hub.config_options("dormant").unwrap()[1]["options"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(!hub.set_dormant_config_choices(&meta, choices()));
+
+    // Selecting one is an ordinary preference; the stored snapshot keeps only
+    // what the agent reported, with the selection as its current value.
+    hub.set_config_preference(
+        "dormant",
+        "model".to_owned(),
+        serde_json::json!("gpt-6.2-sol"),
+    )
+    .unwrap();
+    let stored = hub.persisted_config_options("dormant").unwrap();
+    assert_eq!(stored[0]["currentValue"], "gpt-6.2-sol");
+    assert_eq!(stored[0]["options"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        hub.config_preferences("dormant").unwrap()["model"],
+        "gpt-6.2-sol"
+    );
+
+    // Hidden while a worker runs, and gone after its first snapshot.
+    hub.set_status("dormant", Status::Starting, None);
+    assert_eq!(shown(&hub), ["gpt-6.1-sol"]);
+    hub.set_config_options("dormant", reported);
+    hub.set_status("dormant", Status::Exited, None);
+    assert_eq!(shown(&hub), ["gpt-6.1-sol"]);
 }

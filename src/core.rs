@@ -36,6 +36,7 @@ mod session_continuation;
 mod session_fork;
 pub use session_fork::{FORK_ORIGIN_UPDATE, ForkPoint, ForkRecord, ForkState};
 mod hub_config;
+use hub_config::{DormantConfigChoices, add_config_choices};
 mod hub_events;
 mod hub_provider_pins;
 mod hub_queue;
@@ -479,6 +480,19 @@ fn projected_config_options(
 }
 
 fn display_config_options(session: &Session) -> Option<serde_json::Value> {
+    let mut options = stored_config_options(session)?;
+    if session.config_options.is_some()
+        && let Some(dormant) = &session.dormant_config_choices
+        && dormant.applies_to(session)
+    {
+        add_config_choices(&mut options, &dormant.choices);
+    }
+    Some(options)
+}
+
+/// What the Controller treats as the session's options: the agent's last
+/// snapshot, else the signed preview. Never includes dormant display choices.
+fn stored_config_options(session: &Session) -> Option<serde_json::Value> {
     if let Some(options) = &session.config_options {
         return Some(options.clone());
     }
@@ -659,6 +673,9 @@ struct Session {
     /// Signed defaults/presets before the first ACP snapshot. A preview is
     /// never persisted or treated as an agent acknowledgement.
     initial_config_options: Option<serde_json::Value>,
+    /// Display-only choices for an exited session whose snapshot came from an
+    /// earlier Provider generation; see `Hub::set_dormant_config_choices`.
+    dormant_config_choices: Option<DormantConfigChoices>,
     /// Session-owned config values. This is deliberately separate from the
     /// latest agent snapshot: an agent's startup defaults must not erase a
     /// user's choice before the service has re-applied it.
@@ -2279,6 +2296,7 @@ impl Hub {
                         last_activity: restored_last_activity(last_event_at_ms, now_ms()),
                         config_options,
                         initial_config_options: None,
+                        dormant_config_choices: None,
                         config_preferences,
                         queue,
                         drafts,
@@ -3103,6 +3121,7 @@ impl Hub {
                     last_activity: std::time::Instant::now(),
                     config_options: None,
                     initial_config_options: None,
+                    dormant_config_choices: None,
                     config_preferences: config_preferences.clone(),
                     queue: Vec::new(),
                     drafts: Vec::new(),
