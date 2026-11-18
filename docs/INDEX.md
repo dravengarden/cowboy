@@ -67,6 +67,7 @@ primary phone/desktop product path.
 - [`mcp-plugin-authoring.md`](mcp-plugin-authoring.md) — Third-party MCP Plugin procedure: contract, sources, build/sign/publish, install and session grant
 - [`managed-agent-calls.md`](managed-agent-calls.md) — Parent-scoped cross-Provider Calls implementation, CLI and desktop/mobile lifecycle UI, with production acceptance boundaries
 - [`managed-native-capabilities.md`](managed-native-capabilities.md) — General Calls extension contract, on-demand image generation/editing, isolated native profiles, verified cross-machine artifacts and token costs
+- [`releases/antigravity-3-113-rollout-2026-11-18.md`](releases/antigravity-3-113-rollout-2026-11-18.md) — Component release 3.113.0 fleet rollout — 2026-11-18
 - [`releases/native-calls-images-2026-10-18.md`](releases/native-calls-images-2026-10-18.md) — Native image Calls source, signed Plugin closure, exact-artifact validation, worker maintenance and recovery boundaries
 - [`requirements.md`](requirements.md) — Normative Provider package, authentication, installation, ownership and OVH Remote deployment invariants
 - [`secure-connectivity-design.md`](secure-connectivity-design.md) — Option 1 security/reliability priorities and deferred Option 2 roadmap with unresolved PWA bootstrap questions

@@ -1,0 +1,91 @@
+{
+ "schema": 1,
+ "source_revision": "70c38af1c8be6d3e63332936e3e379397066d518",
+ "machine_release": "/nix/store/k4abd87rk721w7k4z2r326jn377z7k40-cowboy-machine-release",
+ "controller_release": "/nix/store/m4100z93lak0xvi5ffy6jkik3zamy201-cowboy-controller-release",
+ "worker_generation": "worker-1fec2efa29b92198de12",
+ "production_activation": true,
+ "tests": [
+  {
+   "name": "worker-codex",
+   "receipt_sha256": "69352bb9601d084b260a8683bb773da770f7da5e0817e8e810d01176937c963e",
+   "schema": "cowboy.execution-worker-conformance/v1",
+   "accepted": true,
+   "checks": 34
+  },
+  {
+   "name": "worker-claude",
+   "receipt_sha256": "b2ea2713267bc5736f14d55468b3143724f3fbc218aad68c8ee509ce32c61568",
+   "schema": "cowboy.claude-execution-worker-conformance/v1",
+   "accepted": true,
+   "checks": 96
+  },
+  {
+   "name": "managed-claude",
+   "receipt_sha256": "1d1016e87897901a71d8aa26f1fda59be9327662635c5a369d2a6a68a6e89c65",
+   "schema": "cowboy.claude-managed-execution-conformance/v1",
+   "accepted": true,
+   "checks": 7
+  },
+  {
+   "name": "session",
+   "receipt_sha256": "79d0e0538a601e5ccd1f2143b1cec11ec02517e3772f72880d9555bdda2ad336",
+   "schema": "cowboy.execution-session-conformance/v1",
+   "accepted": true,
+   "checks": 39
+  },
+  {
+   "name": "logs",
+   "receipt_sha256": "da677c2c421b8316c30b7d29b891c2d83b02570c32b770304d4c3118fdbedb97",
+   "schema": "cowboy.logs-conformance/v1",
+   "accepted": true,
+   "checks": 11
+  },
+  {
+   "name": "code",
+   "receipt_sha256": "67f6bfd0a553171ad205523652fa58855fe85eaa8c00fd234d9659798c199a53",
+   "schema": "dravengarden.cowboy.code-buffer-connected-conformance/v17",
+   "accepted": true,
+   "checks": 38
+  },
+  {
+   "name": "agent-codex",
+   "receipt_sha256": "7fe83f6cc8e845ea32ec62556b4c45820afba4dc49bae0163e7f499a3c11f592",
+   "plugin": "codex 3.6.2",
+   "previous": "3.6.1",
+   "probes": [
+    "codex 0.166.0 passed",
+    "codex-acp 2.7.0 passed"
+   ]
+  },
+  {
+   "name": "agent-claude-code",
+   "receipt_sha256": "b5d1634a1ce78d7fd074f0e79d1fae08442b31374f88bd713965788c37acbb61",
+   "plugin": "claude-code 3.20.45",
+   "previous": "3.20.44",
+   "probes": [
+    "claude 2.1.326 passed",
+    "claude-agent-acp 0.107.3 passed"
+   ]
+  },
+  {
+   "name": "agent-grok",
+   "receipt_sha256": "163ecd4c88cfee5d532c8632c71127d84da937c0c7766b434e4ec3a728d3c03e",
+   "plugin": "grok 3.2.2",
+   "previous": "3.2.1",
+   "probes": [
+    "grok 1.0.77 passed"
+   ]
+  },
+  {
+   "name": "agent-codex",
+   "receipt_sha256": "b9acf217cb7e0eef26da44450b3548922cc22eeaa4a8ea2351417cb40576909b",
+   "plugin": "codex 3.6.3",
+   "previous": "3.6.1",
+   "probes": [
+    "codex 0.166.0 passed",
+    "codex-acp 2.7.0 passed"
+   ]
+  }
+ ]
+}
