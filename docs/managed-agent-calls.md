@@ -324,7 +324,13 @@ signed preset IDs in `review_candidates` in routine order (metadata stays in
 whose fresh account and model quota permits review, following the candidate
 order for the review's declared risk within that family. Greater strength alone is not a reason to skip the preferred family.
 The Controller excludes models outside the configured list; without an explicit
-preset it selects the first preferred signed preset. Generic Tools target pins
+preset it selects the first preferred signed preset. Admission reads the latest
+Catalog, so the runner checks again when it applies the preset from the exact
+generation it executes: a Review/Design Review whose resolved model is not in
+an allowed family for that Provider, or that has no preset, fails with
+`review_model_not_allowed` before the worker starts. A continued Review/Design
+Review must continue a child that was itself admitted as a review; analysis
+shares the read-only runtime profile but never passed the reviewer allowlist. Generic Tools target pins
 remain inputs to ordinary calls; they do not override Review preferences.
 Quota assessment remains the calling agent's responsibility, with no fixed
 percentage router or automatic retry. Explicit preset choices must

@@ -17,6 +17,11 @@ impl From<&'static str> for Failure {
 
 pub(super) async fn ready(state: &AppState, store: &Store, record: &Record) -> Result<(), Failure> {
     let child = &record.child_session_id;
+    // Without a preset the child would run its default model, which the
+    // reviewer allowlist never vetted.
+    if record.purpose.is_review() && record.preset.is_none() {
+        return Err("review_model_not_allowed".into());
+    }
     // Reapply the immutable call intent on recovery too: option reconciliation
     // may have retired an unsupported value since the original registration.
     if record.preset.is_some() {

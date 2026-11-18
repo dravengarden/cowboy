@@ -640,6 +640,9 @@ fn apply_preset(
                 .map(|(id, value)| (id, json!(value)))
                 .collect()
         };
+    if record.purpose.is_review() && !review_model_allowed(state, record, &values) {
+        return Err("review_model_not_allowed");
+    }
     for (config_id, value) in values {
         state
             .hub
@@ -647,6 +650,44 @@ fn apply_preset(
             .map_err(|_| "preset_unavailable")?;
     }
     Ok(())
+}
+
+/// Admission validated the preset against the latest Catalog; the executed
+/// generation's values decide the model. A review runs only on a family the
+/// parent session currently allows for this Provider.
+fn review_model_allowed(
+    state: &AppState,
+    record: &Record,
+    values: &std::collections::BTreeMap<String, Value>,
+) -> bool {
+    state
+        .hub
+        .session_info(&record.placement.parent_session_id)
+        .is_some_and(|parent| {
+            reviewer_family_allowed(
+                &record.provider,
+                values.get("model").and_then(Value::as_str),
+                &super::super::agent_tools::effective(state, &parent.meta)
+                    .calls
+                    .review,
+            )
+        })
+}
+
+fn reviewer_family_allowed(
+    provider: &str,
+    model: Option<&str>,
+    review: &super::super::agent_tools::ReviewPreferences,
+) -> bool {
+    let Some(family) = model.and_then(super::selection::family) else {
+        return false;
+    };
+    let allowed = if provider == "codex" {
+        &review.gpt
+    } else {
+        &review.claude
+    };
+    allowed.iter().any(|candidate| candidate == family)
 }
 
 /// A transient preparation failure; the same launch is repeated.
@@ -1211,6 +1252,35 @@ fn settle(state: &AppState, record: &Record) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_executed_model_must_be_an_allowed_reviewer_family() {
+        let mut review = super::super::super::agent_tools::ReviewPreferences::default();
+        assert!(reviewer_family_allowed(
+            "codex",
+            Some("gpt-6.2-astra"),
+            &review
+        ));
+        assert!(!reviewer_family_allowed(
+            "codex",
+            Some("gpt-6-luna"),
+            &review
+        ));
+        assert!(!reviewer_family_allowed("codex", None, &review));
+        assert!(reviewer_family_allowed(
+            "claude-code",
+            Some("fable"),
+            &review
+        ));
+        review.gpt = vec!["sol".into()];
+        assert!(!reviewer_family_allowed(
+            "codex",
+            Some("gpt-6.2-astra"),
+            &review
+        ));
+        // A Claude model is never an allowed GPT reviewer.
+        assert!(!reviewer_family_allowed("codex", Some("opus"), &review));
+    }
 
     #[tokio::test]
     #[allow(clippy::too_many_lines)] // One durable timeline covers timeout, recovery and continuation.
