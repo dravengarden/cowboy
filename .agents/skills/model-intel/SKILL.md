@@ -49,7 +49,9 @@ both input sets so a later audit can tell whether its inputs are complete. Read
    against the code; unverified rows are reported but never scored.
 5. **Score.** `nix develop -c bun .agents/skills/model-intel/scripts/score.ts
    --as-of YYYY-MM-DD`. It refuses to run without the local reference-only
-   inputs; `--repository-only` is for a deliberate partial catalog. Inspect
+   inputs or with fewer observations than the committed catalog;
+   `--repository-only` (ignores local inputs) and `--allow-input-reduction`
+   are deliberate overrides. Rows measured after `--as-of` are excluded. Inspect
    `dropped_groups`, `unmapped_targets`, insufficient cells and provisional
    targets before reading any tier.
 6. **Write `models/report.md`.** Lead with the decisions the evidence supports,

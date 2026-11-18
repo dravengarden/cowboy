@@ -4,8 +4,9 @@ First run of the `model-intel` skill. Scores and tiers are in
 `models/catalog.json`; the agent-facing digest is `models/summary.md`.
 
 Inputs: 46 repository observations (`sha256:6afc123d…c04f`) and 164
-reference-only observations kept in local state (`sha256:3cfb64c1…01fc`),
-of which 177 rows were valid and scored. Numbers from sources whose terms
+reference-only observations kept in local state (`sha256:3cfb64c1…01fc`).
+After canonical selection 177 valid rows remained, and 83 capability rows
+survived normalization (the rest were cost rows or in dropped groups). Numbers from sources whose terms
 forbid redistribution are not reproduced here; statements derived from them
 are marked *(local inputs)* and can be checked only against that digest.
 
@@ -22,18 +23,19 @@ yet, and the signed Recommended order and defaults stay unchanged:
   effort has one public lineage each).
 - The review pilot below is unverified, so it is reported but not scored.
 
-The one determined tier, `analysis` flagship/workhorse `luna-6-max` for
-Codex, is an artifact of Luna being the only non-provisional Codex target; it
-should not be used for routing.
+Luna is the only rankable non-provisional Codex target; a single candidate
+is never tiered, so no Codex workload has a tier until GPT-6.2 matures.
 
 ## What the pilot suggests (directional, not scored)
 
-Routine Codex reviews probably do not need Max effort. On three historical
-inputs with findings, GPT-6.2 Astra Medium and Sol 6.2 Medium agreed with
-more of the unverified union of serious findings than the original GPT-6
-Astra Max review, using 27% and 50% of its tokens and 55% and 40% of its wall
-time respectively. This supports offering an opt-in review-effort choice and
-a larger, verified pilot; it does not justify changing the default selector.
+On the three historical inputs with findings, GPT-6.2 Astra Medium and Sol
+6.2 Medium each agreed with more of the unverified union of serious findings
+(77% and 69%) than the original GPT-6 Astra Max review (54%). Across all four
+inputs they used 27% and 50% of its tokens and 55% and 40% of its wall time.
+The comparison confounds model generation (GPT-6 vs 6.2) with effort and uses
+an unverified reference set, so it says nothing yet about Max versus Medium
+on one model. It justifies a verified same-model pilot and an opt-in
+review-effort choice, not a change to the default selector.
 
 ## Baseline: what managed calls used
 
@@ -119,12 +121,15 @@ refresh rather than as conclusions:
   target; ReviewBench ranks agents, SWE-PRBench covers older models. Verify
   the pilot's reference findings, then pair the next ten routine reviews
   (cheaper preset plus the normally selected one).
-- **Below-max efforts:** Artificial Analysis lists some medium/high rows (one
-  lineage per task); the tbench.ai 4.1 leaderboard and ARC rows used here are
-  max or xhigh only. Two independent lineages below max need either another
-  public source or internal pilots.
-- **Tool use, long context, writing:** no usable public rows for current
-  targets; MRCR is vendor-only.
+- **Agentic coding below max:** every below-max preset (Astra/Sol Medium,
+  Fable High, Opus High, Sonnet XHigh/Medium) has one lineage; the tbench.ai
+  4.1 and ARC rows used here are max or xhigh only. A second independent
+  source or internal pilots are needed.
+- **Reasoning for GPT-6.2:** one lineage per preset; Claude presets and Luna
+  already have two or more.
+- **Long context:** insufficient rather than absent — at most one lineage
+  (AA-LCR) per target, none for GPT-6.2. MRCR is vendor-only.
+- **Tool use, writing:** no usable public rows for current targets.
 - **Single-preset Providers:** Gemini, DeepSeek and Grok bindings need
   observations under their own harness before any recommendation.
 - **Subscription cost:** API-equivalent dollars and tokens are not quota.

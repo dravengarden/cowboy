@@ -10,7 +10,11 @@
       "count": 164,
       "digest": "sha256:3cfb64c1784b18f632a1988863726e056084300155f09260d5988bb14ff901fc"
     },
-    "scored_rows": 177
+    "canonical_rows": 177,
+    "normalized_capability_rows": 83,
+    "excluded_after_snapshot": 0,
+    "methodology": "sha256:e0479617d64d43d54ffbde9ba9dd6d71d8db233c4273bb3d68ca51099525b7ba",
+    "targets": "sha256:4b0171a49f08943e98b08fc17b701ead2c76fadfe2f6b32dbb817b77b97975bb"
   },
   "bindings": [
     {
@@ -1653,11 +1657,9 @@
           "reasoning"
         ],
         "notes": [
-          "no comparable usd_per_task evidence among targets above the value floor",
+          "only luna-6-max is rankable; tiers need two candidates",
           "provisional, not ranked: astra-max, astra-medium, sol-6-2-max, sol-6-2-medium"
-        ],
-        "flagship": "luna-6-max",
-        "workhorse": "luna-6-max"
+        ]
       }
     },
     "codex-deepseek": {

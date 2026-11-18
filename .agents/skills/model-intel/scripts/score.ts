@@ -248,12 +248,14 @@ export function costRatio(a: Candidate, b: Candidate): number | null {
 type Ranked = { c: Candidate; mean: number; uncertainty: number };
 // The cheapest candidate must be directly comparable with every other one.
 function cheapest(pool: Ranked[]): Ranked | undefined {
-  const winners = pool.filter((x) =>
-    pool.every((y) => {
-      if (y === x) return true;
-      const r = costRatio(x.c, y.c);
-      return r !== null && r <= 1;
-    }),
+  const winners = pool.filter(
+    (x) =>
+      x.c.costs.size > 0 &&
+      pool.every((y) => {
+        if (y === x) return true;
+        const r = costRatio(x.c, y.c);
+        return r !== null && r <= 1;
+      }),
   );
   return winners.sort((a, b) => b.mean - a.mean || a.c.preset.localeCompare(b.c.preset))[0];
 }
@@ -264,6 +266,13 @@ export function tiers(candidates: Candidate[], wl: Workload, minCoverage: number
   if (candidates.length === 0) return { ...base, notes: ["no admissible executable targets"] };
   if (!scores) {
     return { ...base, notes: ["candidates do not share enough scored tasks to be ranked"] };
+  }
+  // An uncontested candidate is not evidence of being the best choice.
+  if (scores.length < 2) {
+    return {
+      ...base,
+      notes: [`only ${scores[0].c.preset} is rankable; tiers need two candidates`],
+    };
   }
   const conservative = (s: Ranked) => s.mean - s.uncertainty;
   const ranked = [...scores].sort(
@@ -333,12 +342,15 @@ const binding = (t: Target) => ({
   values: sortKeys(t.values ?? {}),
 });
 
+export type ConfigDigests = { methodology: string; targets: string };
+
 export function buildCatalog(
   m: Methodology,
   targets: Target[],
   repo: Inputs,
   local: Inputs,
   asOf: string,
+  config: ConfigDigests = { methodology: "", targets: "" },
 ) {
   const all = [...repo.rows, ...local.rows];
   const ids = new Set<string>();
@@ -350,7 +362,13 @@ export function buildCatalog(
   const unmapped = [
     ...new Set(all.filter((o) => !known.has(o.target)).map((o) => o.target)),
   ].sort();
-  const rows = canonical(all, m);
+  // Unmapped targets and evidence measured after the snapshot never shape
+  // scales or weights for mapped targets.
+  const future = all.filter((o) => o.measured_at > asOf).length;
+  const rows = canonical(
+    all.filter((o) => known.has(o.target) && o.measured_at <= asOf),
+    m,
+  );
   const { values, dropped } = normalize(rows, m);
   const taskOf = new Map(
     Object.entries(m.tasks).flatMap(([t, d]) => d.benchmarks.map((b) => [b, t] as const)),
@@ -420,7 +438,10 @@ export function buildCatalog(
     inputs: {
       repository: { count: repo.count, digest: repo.digest },
       local: { count: local.count, digest: local.digest },
-      scored_rows: rows.length,
+      canonical_rows: rows.length,
+      normalized_capability_rows: values.size,
+      excluded_after_snapshot: future,
+      ...config,
     },
     bindings: targets.filter((t) => t.provider && t.preset).map(binding),
     dropped_groups: dropped,
@@ -462,12 +483,22 @@ export function audit(
   c: Catalog,
   targets: Target[],
   manifests: Record<string, Manifest>,
-  current: { repository: string; local: string | null },
+  current: { repository: string; local: string | null } & Partial<ConfigDigests>,
   asOf: string,
+  provisionalDays = 14,
 ): string[] {
   const findings: string[] = [];
   const age = Math.round(days(c.as_of, asOf));
   if (age > 30) findings.push(`catalog is ${age} days old`);
+  for (const key of ["methodology", "targets"] as const) {
+    if (current[key] !== undefined && current[key] !== c.inputs[key]) {
+      findings.push(`${key}.toml changed since the catalog was generated`);
+    }
+  }
+  const matured = c.targets
+    .filter((t) => t.provisional && t.released && days(t.released, asOf) >= provisionalDays)
+    .map((t) => t.id);
+  if (matured.length) findings.push(`provisional window ended for ${matured.join(", ")}; refresh`);
   if (current.repository !== c.inputs.repository.digest) {
     findings.push("repository observations changed since the catalog was generated");
   }
@@ -543,14 +574,16 @@ function main(argv: string[]) {
   const asOf = arg("--as-of") ?? new Date().toISOString().slice(0, 10);
   const state = process.env.XDG_STATE_HOME ?? join(process.env.HOME ?? "", ".local/state");
   const localDir = arg("--local-observations") ?? join(state, "cowboy/model-intel/observations");
-  const m = Bun.TOML.parse(
-    readFileSync(join(root, "methodology.toml"), "utf8"),
-  ) as unknown as Methodology;
-  const targets = (
-    Bun.TOML.parse(readFileSync(join(root, "targets.toml"), "utf8")) as { targets: Target[] }
-  ).targets;
+  const methodologyText = readFileSync(join(root, "methodology.toml"), "utf8");
+  const targetsText = readFileSync(join(root, "targets.toml"), "utf8");
+  const config = { methodology: digest(methodologyText), targets: digest(targetsText) };
+  const m = Bun.TOML.parse(methodologyText) as unknown as Methodology;
+  const targets = (Bun.TOML.parse(targetsText) as { targets: Target[] }).targets;
+  const repositoryOnly = argv.includes("--repository-only");
   const repo = readObservations(join(root, "observations"), false);
-  const local = readObservations(localDir, true);
+  const empty: Inputs = { rows: [], count: 0, digest: digest(""), present: false };
+  const local =
+    repositoryOnly && !argv.includes("--audit") ? empty : readObservations(localDir, true);
   if (argv.includes("--audit")) {
     const committed = join(root, "catalog.json");
     const findings = existsSync(committed)
@@ -558,8 +591,9 @@ function main(argv: string[]) {
           JSON.parse(readFileSync(committed, "utf8")) as Catalog,
           targets,
           agentManifests(),
-          { repository: repo.digest, local: local.present ? local.digest : null },
+          { repository: repo.digest, local: local.present ? local.digest : null, ...config },
           asOf,
+          m.freshness.provisional_days,
         )
       : ["no committed models/catalog.json"];
     console.log(JSON.stringify({ as_of: asOf, findings }, null, 2));
@@ -567,13 +601,29 @@ function main(argv: string[]) {
     return;
   }
   // Refuse to replace the published catalog from a partial input set.
-  if (!local.present && !argv.includes("--repository-only")) {
-    console.error(
-      `local observations missing at ${localDir}; pass --repository-only to score repository rows alone`,
-    );
+  const fail = (message: string) => {
+    console.error(message);
     process.exit(2);
+  };
+  if (!repo.present || repo.count === 0)
+    fail(`no repository observations under ${root}/observations`);
+  if (!repositoryOnly && local.count === 0) {
+    fail(
+      `no local observations at ${localDir}; pass --repository-only to score repository rows alone`,
+    );
   }
-  const catalog = buildCatalog(m, targets, repo, local, asOf);
+  const committed = join(root, "catalog.json");
+  if (existsSync(committed) && !argv.includes("--allow-input-reduction")) {
+    const previous = (JSON.parse(readFileSync(committed, "utf8")) as Catalog).inputs;
+    const reduced =
+      repo.count < previous.repository.count ||
+      (!repositoryOnly && local.count < previous.local.count);
+    if (reduced)
+      fail(
+        "fewer observations than the committed catalog; pass --allow-input-reduction if intended",
+      );
+  }
+  const catalog = buildCatalog(m, targets, repo, local, asOf, config);
   const text = `${JSON.stringify(catalog, null, 2)}\n`;
   writeFileSync(join(root, "catalog.json"), text);
   writeFileSync(join(root, "summary.md"), summary(catalog));

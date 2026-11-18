@@ -36,7 +36,8 @@ high_confidence_max_age_days = 45
 # metric's ceiling, or the observed spread is below min_spread (saturated).
 saturation_fraction = 0.9
 min_spread = 0.03
-# Uncertainty floor for a cell scored from exactly min_lineages lineages.
+# Minimum uncertainty of every scored cell: a handful of lineages never
+# justifies more confidence than this, however well they agree.
 uncertainty_floor = 0.05
 
 # Task taxonomy. Each benchmark (by stable key) contributes to exactly one task.

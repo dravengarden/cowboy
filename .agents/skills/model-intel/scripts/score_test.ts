@@ -141,23 +141,52 @@ test("candidates are ranked only on their common tasks", () => {
   assertEquals(t.notes, ["candidates do not share enough scored tasks to be ranked"]);
 });
 
+const pair = (t: string, v: number) => [
+  obs({ target: t, value: v }),
+  obs({ target: t, value: v, benchmark: "pilot" }),
+];
+
 test("provisional models are scored but never tiered", () => {
-  const o = [
-    obs({ target: "new", value: 0.8 }),
-    obs({ target: "new", value: 0.8, benchmark: "pilot" }),
-    obs({ target: "old", value: 0.6 }),
-    obs({ target: "old", value: 0.6, benchmark: "pilot" }),
-  ];
   const c = buildCatalog(
     m,
-    [target("new", "2026-11-17"), target("old", "2026-09-01")],
-    inputs(o),
+    [target("new", "2026-11-17"), target("old", "2026-09-01"), target("older", "2026-08-01")],
+    inputs([...pair("new", 0.8), ...pair("old", 0.6), ...pair("older", 0.4)]),
     inputs([]),
     "2026-11-18",
   );
   assertEquals(c.targets[0].tasks.code_review.status, "scored");
-  assertEquals(c.tiers.p.session_default.flagship, "old");
+  assertEquals(
+    [c.tiers.p.session_default.flagship, c.tiers.p.session_default.strong],
+    ["old", "older"],
+  );
   assertEquals(c.tiers.p.session_default.notes.at(-1), "provisional, not ranked: new");
+});
+
+test("a single rankable candidate gets no tier", () => {
+  const t = tiers([cand("only", 0.8, { g: 1 })], wl, 0.7);
+  assertEquals(t.flagship, undefined);
+  assertEquals(t.notes, ["only only is rankable; tiers need two candidates"]);
+});
+
+test("a cost tier needs cost evidence even for one qualifying candidate", () => {
+  const t = tiers([cand("a", 0.8, {}), cand("b", 0.3, {})], wl, 0.7);
+  assertEquals([t.flagship, t.workhorse, t.value], ["a", undefined, undefined]);
+});
+
+test("unmapped and post-snapshot rows do not shape mapped scores", () => {
+  const typo = obs({ target: "typo", value: 0.95 });
+  const late = obs({ target: "a", value: 0.95, measured_at: "2026-12-01" });
+  const c = buildCatalog(
+    m,
+    [target("a", "2026-01-01"), target("b", "2026-01-01")],
+    inputs([...pair("a", 0.7), ...pair("b", 0.5), typo, late]),
+    inputs([]),
+    "2026-11-18",
+  );
+  assertEquals(c.dropped_groups, []);
+  assertEquals(c.unmapped_targets, ["typo"]);
+  assertEquals(c.inputs.excluded_after_snapshot, 1);
+  assertEquals(c.targets[0].tasks.code_review.mean, 0.7);
 });
 
 test("repository observations must be redistributable", () => {
@@ -167,6 +196,21 @@ test("repository observations must be redistributable", () => {
   writeFileSync(join(dir, "x.jsonl"), `${JSON.stringify(row)}\n`);
   assertThrows(() => readObservations(dir, false));
   assertEquals(readObservations(dir, true).count, 1);
+});
+
+test("audit asks for a refresh when a provisional window ends", () => {
+  const c = buildCatalog(m, [target("new", "2026-11-17")], inputs([]), inputs([]), "2026-11-18");
+  const findings = audit(
+    c,
+    [target("new", "2026-11-17")],
+    {},
+    { repository: "sha256:x", local: "sha256:x" },
+    "2026-12-02",
+  );
+  assertEquals(findings, [
+    "provisional window ended for new; refresh",
+    "p/new: target has no signed preset",
+  ]);
 });
 
 test("audit covers untargeted Providers, TOML drift and the leading card order", () => {
@@ -187,11 +231,12 @@ test("audit covers untargeted Providers, TOML drift and the leading card order",
       },
       grok: { configuration_presets: [{ id: "grok-high", values: {} }] },
     },
-    { repository: "sha256:x", local: null },
+    { repository: "sha256:x", local: null, methodology: "changed", targets: "" },
     "2026-11-18",
   );
   assertEquals(findings, [
     "catalog is 48 days old",
+    "methodology.toml changed since the catalog was generated",
     "local reference-only observations unavailable; local inputs not verified",
     "targets.toml bindings changed since the catalog was generated",
     "grok/grok-high: signed preset has no evaluation target",
