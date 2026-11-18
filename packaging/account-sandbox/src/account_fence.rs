@@ -139,19 +139,22 @@ impl Daemon {
         })))
     }
 
+    /// Confirm no unit of the account runs. A systemd inspection error is
+    /// never a confirmation: the stop stays unconfirmed.
     pub(crate) fn ensure_none_live(&self, key: &str) -> Outcome<()> {
-        let live: Vec<String> = self
+        let mut live = Vec::new();
+        for unit in self
             .host
             .list_units(&format!("{}-*", ids::user_name(key)))?
-            .into_iter()
-            .filter(|unit| {
-                self.host
-                    .unit_status(unit)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|status| status.is_live())
-            })
-            .collect();
+        {
+            if self
+                .host
+                .unit_status(&unit)?
+                .is_some_and(|status| status.is_live())
+            {
+                live.push(unit);
+            }
+        }
         if live.is_empty() {
             Ok(())
         } else {
@@ -163,7 +166,10 @@ impl Daemon {
     }
 
     /// Adopt the account's fence tombstone into its metadata (under the
-    /// account lock) and then drop the tombstone.
+    /// account lock) and then drop the tombstone. Restart safe: the metadata
+    /// records the tombstone it adopted, so one left behind by a crash before
+    /// its removal is only removed, and a tombstone never replaces a fence
+    /// of a newer control revision the metadata already applied.
     pub(crate) fn adopt_tombstone(
         &self,
         key: &str,
@@ -173,10 +179,31 @@ impl Daemon {
         let Some(tombstone) = fence::load(self.root.as_fd(), key)? else {
             return Ok(());
         };
-        meta.fence_epoch = meta.fence_epoch.max(tombstone.fence_epoch);
-        meta.fenced = tombstone.fenced.map(|_| meta.fence_epoch);
-        meta.disposition = tombstone.disposition;
-        Self::save(dir, meta)?;
+        let mark = tombstone.mark();
+        if meta.adopted_tombstone.as_ref() != Some(&mark) {
+            let revision = |disposition: Option<&fence::Disposition>| {
+                disposition.map(|disposition| disposition.revision)
+            };
+            let newer = match (
+                revision(tombstone.disposition.as_ref()),
+                revision(meta.disposition.as_ref()),
+            ) {
+                (Some(tombstone), Some(meta)) => tombstone > meta,
+                (Some(_), None) => true,
+                // An unrevisioned stop only tightens an account no
+                // revisioned control owns.
+                (None, current) => tombstone.fenced.is_some() && current.is_none(),
+            };
+            meta.fence_epoch = meta.fence_epoch.max(tombstone.fence_epoch);
+            if newer {
+                meta.fenced = tombstone.fenced.map(|_| meta.fence_epoch);
+                if tombstone.disposition.is_some() {
+                    meta.disposition = tombstone.disposition;
+                }
+            }
+            meta.adopted_tombstone = Some(mark);
+            Self::save(dir, meta)?;
+        }
         fence::remove(self.root.as_fd(), key)?;
         Ok(())
     }

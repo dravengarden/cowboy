@@ -267,3 +267,119 @@ fn runtimes_are_probed_by_the_daemon_owned_identity() {
         Code::NotFound
     );
 }
+
+#[test]
+fn a_timed_out_start_cannot_submit_its_unit_after_the_stop() {
+    let f = fixture();
+    f.host.defer_submission.store(true, Ordering::Relaxed);
+    assert_eq!(code(f.start(Mode::Probe, 0)), Code::Internal);
+    let unit = f
+        .host
+        .state()
+        .spawned
+        .last()
+        .unwrap()
+        .iter()
+        .find_map(|arg| arg.strip_prefix("--unit="))
+        .unwrap()
+        .to_owned();
+    // The client was ended before the stop was confirmed: it never submits.
+    assert!(!f.host.submit(&unit));
+    assert!(f.host.unit_status_of(&unit).is_none());
+    assert!(f.meta().units.is_empty());
+    f.host.defer_submission.store(false, Ordering::Relaxed);
+    f.start(Mode::Probe, 0).unwrap();
+}
+
+#[test]
+fn a_systemd_inspection_error_never_confirms_a_stop() {
+    let f = fixture();
+    let unit = unit_of(&f.start(Mode::Probe, 0).unwrap());
+    f.host.status_failures.store(1, Ordering::Relaxed);
+    assert!(f.call(fence("stop", &f.key, Some(1))).is_err());
+    assert!(f.host.unit_status_of(&unit).is_some());
+    // Retried, it confirms.
+    let stopped = f.call(fence("stop", &f.key, Some(1))).unwrap();
+    assert_eq!(stopped["fenced"], true);
+    assert!(f.host.unit_status_of(&unit).is_none());
+}
+
+#[test]
+fn a_stale_tombstone_never_undoes_a_newer_fence() {
+    let f = fixture();
+    let key = ids::derive_key("svc", "stale");
+    // An admit before the account exists leaves a tombstone ...
+    f.call(fence("admit", &key, Some(1))).unwrap();
+    let tombstone = f
+        .config
+        .state_root
+        .join("fences")
+        .join(format!("{key}.json"));
+    let saved = std::fs::read(&tombstone).unwrap();
+    let ensure = || {
+        f.call(Request::EnsureAccount {
+            service_id: "svc".into(),
+            account_id: "stale".into(),
+        })
+        .unwrap()
+    };
+    ensure();
+    // ... a crash between adoption and its removal leaves it behind, and a
+    // newer stop applies to the account meanwhile.
+    std::fs::write(&tombstone, &saved).unwrap();
+    f.call(fence("stop", &key, Some(2))).unwrap();
+    ensure();
+    assert!(!tombstone.exists());
+    let probe = f.call(Request::Start {
+        key: key.clone(),
+        mode: Mode::Probe,
+        credential_generation: 0,
+        runtime_sha256: f.sha.clone(),
+        session_id: None,
+        descriptor_b64: None,
+    });
+    assert_eq!(code(probe), Code::Fenced);
+}
+
+#[test]
+fn a_removal_keeps_the_accounts_lock() {
+    let f = fixture();
+    let before = f.daemon.lock(&f.key);
+    f.call(fence("stop", &f.key, None)).unwrap();
+    f.call(Request::RemoveAccount {
+        key: f.key.clone(),
+        operation_id: Some("remove-1".into()),
+    })
+    .unwrap();
+    assert!(Arc::ptr_eq(&before, &f.daemon.lock(&f.key)));
+}
+
+#[test]
+fn the_sweeper_retries_a_partial_token_cleanup() {
+    let f = fixture();
+    let dir = safefs::open_root(&f.account_dir()).unwrap();
+    let mut meta = f.meta();
+    meta.credential.generation = 1;
+    meta.credential.state = CredentialState::LoginInterrupted;
+    meta.cleanups
+        .push(meta::Cleanup::PartialToken { generation: 1 });
+    meta::save(dir.as_fd(), &meta).unwrap();
+    std::fs::create_dir_all(f.token().parent().unwrap()).unwrap();
+    std::fs::write(f.token(), b"partial").unwrap();
+    f.daemon.sweep_units();
+    assert!(!f.token().exists());
+    assert!(f.meta().cleanups.is_empty());
+}
+
+#[test]
+fn an_unknown_invocation_of_a_live_unit_is_never_reported_dead() {
+    let f = fixture();
+    let unit = unit_of(&f.start(Mode::Probe, 0).unwrap());
+    let dir = safefs::open_root(&f.account_dir()).unwrap();
+    let mut meta = f.meta();
+    meta.units[0].invocation_id = None;
+    meta::save(dir.as_fd(), &meta).unwrap();
+    let state = f.call(Request::UnitState { unit }).unwrap();
+    assert_eq!(state["alive"], true);
+    assert_eq!(state["requires_reconciliation"], true);
+}

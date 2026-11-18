@@ -20,6 +20,8 @@ pub struct State {
     pub exits: HashMap<String, Option<i32>>,
     pub spawned: Vec<Vec<String>>,
     pub stdio: Vec<UnitStdio>,
+    /// Units whose `systemd-run` client was killed.
+    pub killed: HashSet<String>,
     next_invocation: u64,
 }
 
@@ -34,6 +36,10 @@ pub struct FakeHost {
     pub free: AtomicU64,
     /// The next this many `stop_unit` calls fail.
     pub stop_failures: AtomicU64,
+    /// `systemd-run` clients submit their unit only on [`FakeHost::submit`].
+    pub defer_submission: std::sync::atomic::AtomicBool,
+    /// The next this many `unit_status` calls fail.
+    pub status_failures: AtomicU64,
 }
 
 impl FakeHost {
@@ -42,7 +48,22 @@ impl FakeHost {
             inner: Arc::default(),
             free: AtomicU64::new(u64::MAX),
             stop_failures: AtomicU64::new(0),
+            defer_submission: std::sync::atomic::AtomicBool::new(false),
+            status_failures: AtomicU64::new(0),
         })
+    }
+
+    /// A deferred client submits its unit now; `false` when it was killed
+    /// first (a killed client never submits).
+    pub fn submit(&self, unit: &str) -> bool {
+        let mut state = self.state();
+        if state.killed.contains(unit) {
+            return false;
+        }
+        state.next_invocation += 1;
+        let invocation = format!("{:032x}", state.next_invocation);
+        state.units.insert(unit.to_owned(), invocation);
+        true
     }
 
     pub fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -89,6 +110,17 @@ impl UnitChild for FakeChild {
             }
             state = self.inner.signal.wait(state).unwrap();
         }
+    }
+
+    fn canceller(&self) -> Box<dyn Fn() + Send + Sync> {
+        let (inner, unit) = (Arc::clone(&self.inner), self.unit.clone());
+        Box::new(move || {
+            let mut state = inner.state.lock().unwrap();
+            state.killed.insert(unit.clone());
+            state.exits.entry(unit.clone()).or_insert(None);
+            drop(state);
+            inner.signal.notify_all();
+        })
     }
 }
 
@@ -137,9 +169,11 @@ impl Host for FakeHost {
             .unwrap()
             .to_owned();
         let mut state = self.state();
-        state.next_invocation += 1;
-        let invocation = format!("{:032x}", state.next_invocation);
-        state.units.insert(unit.clone(), invocation);
+        if !self.defer_submission.load(Ordering::Relaxed) {
+            state.next_invocation += 1;
+            let invocation = format!("{:032x}", state.next_invocation);
+            state.units.insert(unit.clone(), invocation);
+        }
         state.spawned.push(argv.to_vec());
         state.stdio.push(stdio);
         Ok(Box::new(FakeChild {
@@ -149,9 +183,17 @@ impl Host for FakeHost {
     }
 
     fn unit_status(&self, unit: &str) -> Result<Option<UnitStatus>> {
+        if self
+            .status_failures
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            bail!("systemctl show {unit} failed");
+        }
         Ok(self.state().units.get(unit).map(|invocation| UnitStatus {
             active_state: "active".into(),
             invocation_id: Some(invocation.clone()),
+            job_pending: false,
         }))
     }
 

@@ -10,18 +10,25 @@ use anyhow::{Context as _, Result, bail, ensure};
 
 use crate::config::Tools;
 
-/// A unit's systemd state, `None` from [`Host::unit_status`] when unloaded.
+/// A unit's systemd state, `None` from [`Host::unit_status`] when unloaded
+/// (`LoadState=not-found`), the only state that proves no invocation of it
+/// exists or can start without a new submission.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnitStatus {
     pub active_state: String,
     pub invocation_id: Option<String>,
+    /// systemd holds a queued job for the unit (`Job=` is set): an inactive
+    /// unit with a pending start job is about to run.
+    pub job_pending: bool,
 }
 
 impl UnitStatus {
-    /// Whether processes of the unit may still exist.
+    /// Whether processes of the unit may still exist or are about to.
+    /// `inactive` or `failed` alone is not proof: a queued job may still
+    /// start it.
     #[must_use]
     pub fn is_live(&self) -> bool {
-        !matches!(self.active_state.as_str(), "inactive" | "failed")
+        self.job_pending || !matches!(self.active_state.as_str(), "inactive" | "failed")
     }
 }
 
@@ -29,6 +36,9 @@ impl UnitStatus {
 pub trait UnitChild: Send {
     /// Wait for the unit to finish; its exit status, `None` when killed.
     fn wait(&mut self) -> Result<Option<i32>>;
+    /// End the `systemd-run` client itself (not the unit): once it is gone
+    /// it can no longer submit the unit, so a later status is final.
+    fn canceller(&self) -> Box<dyn Fn() + Send + Sync>;
 }
 
 /// The unit-side ends of the daemon-created pipes.
@@ -110,6 +120,19 @@ struct SystemdRun(std::process::Child);
 impl UnitChild for SystemdRun {
     fn wait(&mut self) -> Result<Option<i32>> {
         Ok(self.0.wait()?.code())
+    }
+
+    fn canceller(&self) -> Box<dyn Fn() + Send + Sync> {
+        let pid = i32::try_from(self.0.id())
+            .ok()
+            .and_then(rustix::process::Pid::from_raw);
+        Box::new(move || {
+            if let Some(pid) = pid {
+                // The client has not been reaped (its waiter owns it), so
+                // the pid still names it.
+                let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+            }
+        })
     }
 }
 
@@ -210,7 +233,7 @@ impl Host for SystemHost {
             &self.tools.systemctl,
             &[
                 "show",
-                "--property=LoadState,ActiveState,InvocationID",
+                "--property=LoadState,ActiveState,InvocationID,Job",
                 "--",
                 unit,
             ],
@@ -228,9 +251,11 @@ impl Host for SystemHost {
             return Ok(None);
         }
         let invocation = field("InvocationID");
+        let job = field("Job");
         Ok(Some(UnitStatus {
             active_state: field("ActiveState"),
             invocation_id: (!invocation.is_empty()).then_some(invocation),
+            job_pending: !job.is_empty() && job != "0",
         }))
     }
 

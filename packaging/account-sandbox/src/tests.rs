@@ -32,10 +32,16 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
+    fixture_with(|_| {})
+}
+
+/// A fixture whose configuration `adjust` changes first.
+fn fixture_with(adjust: impl FnOnce(&mut Config)) -> Fixture {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().to_owned();
     let mut config = test_config(&root);
     config.stop_timeout_secs = 2;
+    adjust(&mut config);
     let host = FakeHost::new();
     let daemon = Daemon::new(config.clone(), host.clone(), false).unwrap();
     daemon.reconcile().unwrap();
@@ -224,12 +230,12 @@ fn runtime_needs_the_current_signed_in_generation() {
 }
 
 #[test]
-fn unit_limits_hold_per_account() {
+fn one_runtime_per_account_by_default() {
     let f = fixture();
+    assert_eq!(f.config.max_runtime_units, 1);
     f.sign_in(1);
-    for _ in 0..4 {
-        f.start(Mode::Runtime, 1).unwrap();
-    }
+    f.start(Mode::Runtime, 1).unwrap();
+    // A second session of the account is refused: `limit`.
     assert_eq!(code(f.start(Mode::Runtime, 1)), Code::Limit);
     assert_eq!(code(f.start(Mode::Probe, 1)), Code::Limit);
 }
@@ -291,7 +297,8 @@ fn interrupted_login_removes_only_its_partial_token() {
 
 #[test]
 fn authentication_transitions_stop_runtime_units_first() {
-    let f = fixture();
+    // Several units of one account (a raised `max_runtime_units`).
+    let f = fixture_with(|config| config.max_runtime_units = 4);
     f.sign_in(1);
     let a = f.start(Mode::Runtime, 1).unwrap()["unit"]
         .as_str()
@@ -405,7 +412,8 @@ fn the_fence_blocks_starts_until_admitted() {
 
 #[test]
 fn closing_the_connection_stops_its_units() {
-    let f = fixture();
+    // Several units of one account (a raised `max_runtime_units`).
+    let f = fixture_with(|config| config.max_runtime_units = 4);
     f.sign_in(1);
     let other = f.daemon.connect(0);
     let mine = f.start_on(&other, Mode::Runtime, 1).unwrap()["unit"]

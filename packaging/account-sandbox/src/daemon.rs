@@ -402,14 +402,18 @@ impl Daemon {
         )?)
     }
 
-    /// Remove only the vendor token file; `true` when it existed.
+    /// Remove only the vendor token file; `true` when it existed. The
+    /// removal is durable (its directory is synced) before this returns, so
+    /// a logout never certifies a removal a crash could undo.
     pub(crate) fn remove_token(home: &OwnedFd) -> Outcome<bool> {
         let path = format!("{GEMINI_DIR}/{GEMINI_STATE_DIR}");
         if !safefs::exists(home.as_fd(), &path)? {
             return Ok(false);
         }
         let state = safefs::open_dir(home.as_fd(), &path, STRICT)?;
-        Ok(safefs::remove_file(state.as_fd(), TOKEN_FILE)?)
+        let removed = safefs::remove_file(state.as_fd(), TOKEN_FILE)?;
+        rustix::fs::fsync(&state).context("sync the token directory")?;
+        Ok(removed)
     }
 
     fn register_runtime(
@@ -555,6 +559,17 @@ impl Daemon {
             self.host.stop_unit(unit)?;
         }
         let exit = self.wait_exit(unit, timeout);
+        let starting = meta
+            .units
+            .iter()
+            .any(|record| record.unit == unit && record.phase == meta::UnitPhase::Starting);
+        if starting && !self.exited(unit) {
+            // Its `systemd-run` client may still submit it: never confirmed.
+            return Err(fail(
+                Code::Internal,
+                format!("{unit}: its submission is not confirmed ended"),
+            ));
+        }
         self.confirm_gone(unit, timeout)?;
         if let Some(index) = meta.units.iter().position(|record| record.unit == unit) {
             let record = meta.units.remove(index);
@@ -589,6 +604,34 @@ impl Daemon {
         record: &UnitRecord,
         exit: Option<i32>,
     ) {
+        let same_generation = meta.credential.generation == record.credential_generation;
+        let login = record.mode == Mode::Login
+            && same_generation
+            && meta.credential.state == CredentialState::LoginRunning;
+        // A login's outcome is the token's presence after a clean exit. An
+        // inspection error is unconfirmed, never a failed login: the record
+        // stays (nothing is settled, no token is deleted) and the sweeper
+        // settles it again.
+        let signed_in = if login && exit == Some(0) {
+            match self
+                .open_home(dir, &meta.key)
+                .and_then(|home| Self::token_present(&home))
+            {
+                Ok(token) => token,
+                Err(error) => {
+                    eprintln!(
+                        "cowboy-account-sandbox: login outcome of {} unconfirmed: {error}",
+                        record.unit
+                    );
+                    if !meta.units.iter().any(|other| other.unit == record.unit) {
+                        meta.units.push(record.clone());
+                    }
+                    return;
+                }
+            }
+        } else {
+            false
+        };
         if let Ok(units_dir) = safefs::open_dir(self.run.as_fd(), UNITS_DIR, STRICT) {
             let _ = safefs::remove_tree(units_dir.as_fd(), &record.nonce);
         }
@@ -596,15 +639,8 @@ impl Daemon {
         if let Some(owned) = guard(&self.owned).get_mut(&record.connection) {
             owned.retain(|(_, unit)| unit != &record.unit);
         }
-        let credential = &mut meta.credential;
-        let same_generation = credential.generation == record.credential_generation;
         match record.mode {
-            Mode::Login if same_generation && credential.state == CredentialState::LoginRunning => {
-                let signed_in = exit == Some(0)
-                    && self
-                        .open_home(dir, &meta.key)
-                        .and_then(|home| Self::token_present(&home))
-                        .unwrap_or(false);
+            Mode::Login if login => {
                 if signed_in {
                     meta.credential.state = CredentialState::SignedIn;
                 } else {
@@ -615,7 +651,7 @@ impl Daemon {
                 }
             }
             Mode::Logout
-                if same_generation && credential.state == CredentialState::LogoutRunning =>
+                if same_generation && meta.credential.state == CredentialState::LogoutRunning =>
             {
                 meta.credential.state = CredentialState::LogoutPending;
                 meta.cleanups.push(Cleanup::LogoutToken {
@@ -724,6 +760,9 @@ impl Daemon {
                         failed = Some(error);
                     }
                 }
+                // Interrupted-login token cleanups that failed are retried
+                // here, not only at activation.
+                self.run_cleanups(dir, meta);
                 Self::save(dir, meta)?;
                 failed.map_or(Ok(()), Err)
             });
@@ -816,10 +855,13 @@ impl Daemon {
         let live = status
             .as_ref()
             .is_some_and(crate::host::UnitStatus::is_live);
-        let same_invocation = status
+        // An unknown invocation (either side) of a live unit is not proof the
+        // recorded one ended: it counts as alive and needs reconciliation.
+        let observed = status
             .as_ref()
-            .and_then(|status| status.invocation_id.as_ref())
-            == record.invocation_id.as_ref();
+            .and_then(|status| status.invocation_id.as_ref());
+        let unknown = observed.is_none() || record.invocation_id.is_none();
+        let same_invocation = unknown || observed == record.invocation_id.as_ref();
         Ok(json!({
             "unit": record.unit,
             "mode": record.mode,
@@ -829,6 +871,7 @@ impl Daemon {
             "session_id": record.session_id,
             "state": status.map_or_else(|| "gone".to_owned(), |status| status.active_state),
             "alive": live && same_invocation && record.boot_id == self.boot_id,
+            "requires_reconciliation": live && unknown,
             "owned": guard(&self.live_connections).contains(&record.connection),
         }))
     }

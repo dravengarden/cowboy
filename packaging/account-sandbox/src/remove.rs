@@ -27,15 +27,12 @@ use crate::safefs::{self, STRICT};
 
 impl Daemon {
     pub(crate) fn remove_account(&self, key: &str, operation_id: Option<&str>) -> Outcome<Reply> {
-        let result = {
-            let lock = self.lock(key);
-            let _guard = guard(&lock);
-            self.remove_locked(key, operation_id)
-        };
-        if result.is_ok() {
-            guard(&self.locks).remove(key);
-        }
-        result
+        // The account's keyed lock stays in the map: removing the entry
+        // while another request holds or waits on it would let a later
+        // request create a second, independent lock for the same account.
+        let lock = self.lock(key);
+        let _guard = guard(&lock);
+        self.remove_locked(key, operation_id)
     }
 
     fn remove_locked(&self, key: &str, operation_id: Option<&str>) -> Outcome<Reply> {

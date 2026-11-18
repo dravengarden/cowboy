@@ -39,6 +39,11 @@ pub struct AccountMeta {
     /// The last revisioned fence operation applied (see [`crate::fence`]).
     #[serde(default)]
     pub disposition: Option<crate::fence::Disposition>,
+    /// The fence tombstone this metadata already adopted: a tombstone left
+    /// behind by a crash between adoption and its removal is recognized and
+    /// never applied over a newer fence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adopted_tombstone: Option<crate::fence::TombstoneMark>,
 }
 
 /// The account's credential generation (R3-8).
@@ -134,6 +139,7 @@ impl AccountMeta {
             cleanups: Vec::new(),
             last_logout: None,
             disposition: None,
+            adopted_tombstone: None,
         }
     }
 

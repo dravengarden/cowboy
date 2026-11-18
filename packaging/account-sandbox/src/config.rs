@@ -46,7 +46,9 @@ pub struct Config {
     pub ip_deny: Vec<String>,
     /// `IPAddressAllow=` entries (the resolver stub).
     pub ip_allow: Vec<String>,
-    /// Runtime-class units (`runtime`, `probe`) per account.
+    /// Runtime-class units (`runtime`, `probe`) per account. One by default:
+    /// an account runs one runtime, so at most one turn of it can run
+    /// (design "Revision 5 simplification"); a second start is `limit`.
     pub max_runtime_units: usize,
     /// `MemoryMax=` of each unit.
     pub unit_memory_max: String,
@@ -97,7 +99,7 @@ impl Default for Config {
             .map(str::to_owned)
             .to_vec(),
             ip_allow: vec!["127.0.0.53/32".to_owned()],
-            max_runtime_units: 4,
+            max_runtime_units: 1,
             unit_memory_max: "3G".to_owned(),
             unit_tasks_max: 512,
             unit_tmp_size: "256M".to_owned(),
@@ -226,7 +228,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(config.ip_deny, ["40.160.141.233/32"]);
-        assert_eq!(config.max_runtime_units, 4);
+        assert_eq!(config.max_runtime_units, 1);
         assert!(serde_json::from_str::<Config>(r#"{"bogus":1}"#).is_err());
         assert!(serde_json::from_str::<Config>(r#"{"tools":{"bogus":"/x"}}"#).is_err());
     }

@@ -104,6 +104,26 @@ impl FenceOp<'_> {
     }
 }
 
+/// The identity of an adopted tombstone (see `AccountMeta::adopted_tombstone`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TombstoneMark {
+    pub fence_epoch: u64,
+    pub fenced: Option<u64>,
+    pub disposition: Option<Disposition>,
+}
+
+impl Tombstone {
+    #[must_use]
+    pub fn mark(&self) -> TombstoneMark {
+        TombstoneMark {
+            fence_epoch: self.fence_epoch,
+            fenced: self.fenced,
+            disposition: self.disposition.clone(),
+        }
+    }
+}
+
 /// The fence state of an account without metadata.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

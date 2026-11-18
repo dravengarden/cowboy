@@ -59,7 +59,7 @@ Every field is optional; unknown fields are rejected.
 | `free_space_reserve_bytes` | `8589934592` (8 GiB) | Free space required on `state_root` before `ensure_account` and every start |
 | `ip_deny` | `["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","100.64.0.0/10"]` | Extra `IPAddressDeny=` entries; `localhost link-local multicast` are always denied. OVH adds its public address, e.g. `40.160.141.233/32` |
 | `ip_allow` | `["127.0.0.53/32"]` | `IPAddressAllow=` (the resolver stub) |
-| `max_runtime_units` | `4` | `runtime`/`probe` units per account (plus at most one `login`/`logout` unit, fixed) |
+| `max_runtime_units` | `1` | `runtime`/`probe` units per account (plus at most one `login`/`logout` unit, fixed). One runtime per account bounds it to one turn; a second start is `limit` (design "Revision 5 simplification") |
 | `unit_memory_max` | `"3G"` | `MemoryMax=` per unit |
 | `unit_tasks_max` | `512` | `TasksMax=` per unit |
 | `unit_tmp_size` | `"256M"` | Size of each unit's `/tmp` and of its separate `/var/tmp` (both tmpfs) |
@@ -126,9 +126,25 @@ top of every registration in flight above `free_space_reserve_bytes`
 (`insufficient_space`); at most two registrations stage at once (`limit`).
 
 A unit record is kept until systemd confirms the recorded invocation is no
-longer active: the `systemd-run` client ending is not enough. `unit_state` of a
-unit systemd runs without a record reports `alive: true` and
-`requires_reconciliation: true`; `stop_unit` stops and confirms it.
+longer active: the `systemd-run` client ending is not enough, and neither is
+`ActiveState=inactive` alone: a unit with a queued job (`Job=` set) counts as
+live, and only `LoadState=not-found` or an inactive/failed unit without a job
+is gone. A systemd inspection error never confirms a stop. A recorded unit
+whose `InvocationID` is unknown on either side is reported `alive` with
+`requires_reconciliation: true`, never dead. `unit_state` of a unit systemd
+runs without a record reports `alive: true` and `requires_reconciliation:
+true`; `stop_unit` stops and confirms it.
+
+When a start's `InvocationID` never appears, the daemon ends the
+`systemd-run` client itself before it stops the unit, so the client can no
+longer submit it after the stop is confirmed; until the client's exit is
+observed the record stays `Starting` and is never confirmed stopped.
+
+A login unit's outcome is the token's presence after a clean exit; an
+inspection error leaves the record for the sweeper rather than failing the
+login (no token is deleted on an error). The 2 s sweep also retries failed
+partial-token cleanups. `logout_cleanup` syncs the token's directory after the
+unlink before it reports the token removed.
 
 ### Runtime archives
 
@@ -195,7 +211,10 @@ image is mounted; everything beneath it uses the full set again.
   (`account_present: false`); `ensure_account` adopts it before the account
   can start a unit, and `remove_account` leaves one with the account's fence
   state. `stop_account` therefore never answers `not_found`: its success is
-  always durable fence evidence.
+  always durable fence evidence. Adoption is restart safe: `meta.json`
+  records the tombstone it adopted (`adopted_tombstone`), so one a crash left
+  behind is only removed, and a tombstone never replaces a disposition of a
+  newer revision.
 - `logout_cleanup` checks `credential_generation` under the same account lock
   as the token removal. An older generation is `superseded` (a later login
   required its token absent) and removes nothing; a newer one is
@@ -207,7 +226,9 @@ image is mounted; everything beneath it uses the full set again.
   user and deletes `meta.json` last, so a retry after a crash finishes the
   same removal. An account without metadata has no home: its units are
   stopped, a remaining user is removed and the removal is confirmed (a
-  `replayed` one when the tombstone records the same `operation_id`).
+  `replayed` one when the tombstone records the same `operation_id`). The
+  account's keyed lock is never dropped, so no second lock of the account can
+  exist while a request holds or waits on it.
 
 ## Known limits
 

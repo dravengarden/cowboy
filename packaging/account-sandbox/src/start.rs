@@ -24,7 +24,10 @@ use crate::units::{self, UnitSpec};
 const EXEC_SOCKET: &str = "exec.sock";
 const DESCRIPTOR_FILE: &str = "descriptor";
 const POLL: Duration = Duration::from_millis(5);
+#[cfg(not(test))]
 const INVOCATION_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(test)]
+const INVOCATION_TIMEOUT: Duration = Duration::from_millis(300);
 
 pub struct StartRequest<'a> {
     pub key: &'a str,
@@ -232,6 +235,7 @@ impl Daemon {
                     return Err(error.into());
                 }
             };
+            let cancel_submission = child.canceller();
             {
                 let daemon = Arc::clone(self);
                 let (key, unit) = (key.to_owned(), unit.clone());
@@ -243,7 +247,16 @@ impl Daemon {
             let invocation_id = match self.await_invocation(&unit) {
                 Ok(invocation) => invocation,
                 Err(failure) => {
-                    let _ = self.stop_and_confirm(dir, meta, &unit);
+                    // The client may still submit the unit: end it first and
+                    // stop the unit only once it is gone, so no submission
+                    // can follow the confirmation. Until then the record
+                    // stays `Starting` and is never confirmed stopped.
+                    cancel_submission();
+                    let timeout = Duration::from_secs(self.config.stop_timeout_secs);
+                    let _ = self.wait_exit(&unit, timeout);
+                    if self.exited(&unit) {
+                        let _ = self.stop_and_confirm(dir, meta, &unit);
+                    }
                     let _ = Self::save(dir, meta);
                     return Err(failure);
                 }
