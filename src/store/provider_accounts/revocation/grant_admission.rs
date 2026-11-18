@@ -135,9 +135,15 @@ pub(super) fn validate_login_cleanup(
     }
     if let Some(native) = &login.native_logout {
         let scope = &native.observation.request;
+        // This revocation's own logout, or a completed logout of the kill
+        // switch (its control operation) that already ended the generation:
+        // the Machine refuses a second logout of it.
+        let control_logout = native
+            .revocation_operation
+            .starts_with(crate::account_controls::LOGOUT_OPERATION_PREFIX);
         ensure!(
-            native.revocation_operation == operation
-                && scope.operation_id == operation
+            (native.revocation_operation == operation || control_logout)
+                && scope.operation_id == native.revocation_operation
                 && native.machine_id == target.machine_id
                 && scope.account_id == revocation.account_id
                 && scope.provider_id == login.provider_id

@@ -9,11 +9,16 @@ struct Fake {
     connected: parking_lot::Mutex<bool>,
     answer: parking_lot::Mutex<Option<Result<RemoveObservation, String>>>,
     asked: parking_lot::Mutex<Vec<(String, RemoveRequest)>>,
+    enrollment: parking_lot::Mutex<Option<String>>,
 }
 
 impl Remover for Fake {
     fn connection(&self, _machine: &str) -> Option<Box<dyn Fn() -> bool + Send + Sync>> {
         (*self.connected.lock()).then(|| Box::new(|| true) as Box<dyn Fn() -> bool + Send + Sync>)
+    }
+
+    fn enrollment(&self, _machine: &str) -> futures::future::BoxFuture<'static, Option<String>> {
+        Box::pin(std::future::ready(self.enrollment.lock().clone()))
     }
 
     fn remove(
@@ -55,6 +60,12 @@ async fn a_revoked_named_only_account_completes_only_after_its_sandbox_is_remove
         ["machine"]
     );
     let fake = Fake::default();
+    let key = store
+        .machine_encryption_public_key("machine")
+        .await
+        .unwrap()
+        .unwrap();
+    *fake.enrollment.lock() = Some(crate::admin::hex_sha256(key.as_bytes()));
     // Offline, or a Machine that cannot remove accounts yet: pending.
     let pending = run(&store, &fake, "owner", "revoke").await.unwrap();
     assert_eq!(pending[0].state, State::Pending);
@@ -113,12 +124,24 @@ async fn a_revoked_named_only_account_completes_only_after_its_sandbox_is_remove
             .await
             .unwrap()
     );
-    // The confirmed receipt is recorded once; later passes do not ask again.
+    // A re-enrolled Machine never certifies the removal.
     *fake.answer.lock() = Some(Ok(RemoveObservation {
         request: request.clone(),
         home_removed: true,
         user_removed: true,
     }));
+    let enrolled = fake.enrollment.lock().replace("another-enrollment".into());
+    let refused = run(&store, &fake, "owner", "revoke").await.unwrap();
+    assert_eq!(refused[0].state, State::Pending);
+    assert!(
+        refused[0]
+            .detail
+            .as_deref()
+            .unwrap()
+            .contains("machine_enrollment_changed")
+    );
+    *fake.enrollment.lock() = enrolled;
+    // The confirmed receipt is recorded once; later passes do not ask again.
     let removed = run(&store, &fake, "owner", "revoke").await.unwrap();
     assert_eq!(removed[0].state, State::Removed);
     let asked = fake.asked.lock().len();

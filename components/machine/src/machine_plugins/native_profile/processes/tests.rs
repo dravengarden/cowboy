@@ -400,7 +400,9 @@ async fn an_abandoned_sandboxed_login_takes_the_daemon_record_of_its_generation(
         &socket,
         vec![units("logging_in", true), units("signed_in", false)],
     );
-    let recover = || store.recover_abandoned_native_logins("claude-code", "login-2");
+    // The login's own retry recovers it: only the daemon knows its outcome.
+    let own = profile.request.clone();
+    let recover = || store.recover_abandoned_native_logins("claude-code", &own);
     // Its login unit is still being stopped: the reservation stays.
     recover().await.unwrap();
     assert!(

@@ -62,22 +62,35 @@ pub(super) async fn run(
         let crate::machine_plugins::LogoutPreparation::Observed(outcome) = prepared else {
             unreachable!()
         };
-        if outcome.is_none()
-            && let Some(digest) = providers
-                .native_logout_sandbox_digest(provider, generation)
-                .map_err(|_| "native logout reconciliation failed".to_owned())?
+        if let Some(digest) = providers
+            .native_logout_sandbox_digest(provider, generation)
+            .map_err(|_| "native logout reconciliation failed".to_owned())?
         {
-            // A sandboxed logout left pending by an outage or a lost reply:
-            // settle it against the daemon's record of this generation.
-            let logout = native_sandbox::reconcile_logout(
-                providers,
-                provider,
-                &digest,
-                (generation, operation),
-                true,
-            )
-            .await?;
-            return finish_sandbox(providers, provider, (generation, login, operation), logout);
+            if outcome.is_none() {
+                // A sandboxed logout left pending by an outage or a lost
+                // reply: settle it against the daemon's record of this
+                // generation.
+                let logout = native_sandbox::reconcile_logout(
+                    providers,
+                    provider,
+                    &digest,
+                    (generation, operation),
+                    true,
+                )
+                .await?;
+                return finish_sandbox(providers, provider, (generation, login, operation), logout);
+            }
+            if outcome == Some(true) {
+                // A replay keeps the daemon's cleanup evidence: its token
+                // cleanup is idempotent per operation and answers again.
+                let receipt =
+                    native_sandbox::replay_cleanup(providers, generation, operation).await?;
+                cleanup(providers, provider, generation, login, operation)?;
+                return Ok(Outcome {
+                    succeeded: outcome,
+                    sandbox: receipt,
+                });
+            }
         }
         if outcome == Some(true) {
             cleanup(providers, provider, generation, login, operation)?;

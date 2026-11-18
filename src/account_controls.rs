@@ -18,11 +18,14 @@ pub const VIOLATION_PREFIX: &str = "antigravity_policy_violation:";
 /// How long a rate limit holds when the backend gave no reset time.
 pub const DEFAULT_RATE_LIMIT_MS: i64 = 60 * 60 * 1000;
 
-/// Whether a session's native conversation survives a re-login of the same
-/// account: a named-only Provider's account sandbox keeps one persistent
-/// home across credential generations (R3-13), so a verified same-account
-/// transition keeps the conversation ID. Every other native Provider signs
-/// each generation into its own home, where the old ID does not exist.
+/// Whether a session's native conversation may survive a re-login of the
+/// same account: a named-only Provider's account sandbox keeps one
+/// persistent home across credential generations on its Machine (R3-13).
+/// Every other native Provider signs each generation into its own home,
+/// where the old ID does not exist. The durable transition additionally
+/// keeps it only on the same Machine and the same signed Provider generation
+/// (`native_admission`), so a historical home of another generation never
+/// resumes a conversation it does not hold.
 #[must_use]
 pub fn keeps_conversation_across_sign_ins(provider: &str) -> bool {
     crate::provider_account::named_only(provider)
@@ -441,6 +444,9 @@ pub fn owner_transition(
     }
 }
 
+/// The prefix of every kill-switch logout operation ID.
+pub const LOGOUT_OPERATION_PREFIX: &str = "account-logout-";
+
 /// The idempotent operation ID of the kill switch's native logout: one per
 /// control revision, so a retry (or a Machine that reconnects later) repeats
 /// the same request and the Machine replays its recorded outcome.
@@ -450,7 +456,7 @@ pub fn logout_operation_id(account_id: &str, revision: i64) -> String {
     let scope = serde_json::to_vec(&("account-logout", account_id, revision))
         .expect("logout scope serializes");
     let digest = sha2::Sha256::digest(scope);
-    let mut id = String::from("account-logout-");
+    let mut id = String::from(LOGOUT_OPERATION_PREFIX);
     for byte in &digest[..16] {
         use std::fmt::Write as _;
         let _ = write!(id, "{byte:02x}");

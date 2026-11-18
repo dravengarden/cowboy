@@ -28,6 +28,11 @@ pub struct Evidence {
     pub machine_id: String,
     pub observation: RemoveObservation,
     pub observed_at_ms: i64,
+    /// The Machine enrollment that answered: one that dispatched a planned
+    /// sign-in of the account there, so a re-enrolled Machine never
+    /// certifies the removal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipient_fingerprint: Option<String>,
 }
 
 /// The deterministic operation ID of one Machine's removal.
@@ -50,7 +55,10 @@ fn provider(receipt: &Receipt) -> Option<&str> {
 }
 
 /// The Machines that may hold the account's sandbox: every Machine it signed
-/// in on or ran a session on. Empty for any other Provider.
+/// in on. The daemon creates an account's sandbox only where its credential
+/// lives, and a session runs only on a Machine holding a sign-in, so session
+/// placements add none. Empty for any other Provider. A Machine that never
+/// ran the account's sandbox answers the removal confirmed (nothing exists).
 #[must_use]
 pub fn required_machines(receipt: &Receipt) -> BTreeSet<String> {
     let (Some(plan), Some(provider)) = (receipt.revocation.as_ref(), provider(receipt)) else {
@@ -62,11 +70,6 @@ pub fn required_machines(receipt: &Receipt) -> BTreeSet<String> {
     plan.logins
         .iter()
         .map(|target| target.machine_id.clone())
-        .chain(
-            plan.sessions
-                .iter()
-                .filter_map(|target| target.machine_id.clone()),
-        )
         .filter(|machine| machine != "local")
         .collect()
 }
@@ -118,6 +121,22 @@ impl Store {
                 && request(&receipt, revocation, &evidence.machine_id).as_ref() == Some(&evidence.observation.request),
                 "account_removal_scope_mismatch");
             ensure!(evidence.observation.home_removed && evidence.observation.user_removed, "account_removal_unconfirmed");
+            // Bound to the enrollment that dispatched a planned sign-in there.
+            let mut enrolled = BTreeSet::new();
+            for target in receipt.revocation.iter().flat_map(|plan| &plan.logins)
+                .filter(|target| target.machine_id == evidence.machine_id)
+            {
+                let login: Option<String> = sqlx::query_scalar("SELECT value FROM provider_login_operations WHERE owner_user_id=$1 AND operation_id=$2")
+                    .bind(owner).bind(&target.operation_id).fetch_optional(&mut *tx).await?;
+                if let Some(login) = login.and_then(|value| serde_json::from_str::<super::super::logins::Receipt>(&value).ok()) {
+                    enrolled.extend(login.dispatch_recipient_fingerprint);
+                }
+            }
+            let key: Option<String> = sqlx::query_scalar(concat!("SELECT encryption_public_key FROM machines WHERE id=$1 AND ", $revoked, " IS NULL"))
+                .bind(&evidence.machine_id).fetch_optional(&mut *tx).await?.flatten();
+            let current = key.map(|key| crate::digest::hex_sha256(key.as_bytes()));
+            ensure!(current.as_ref().is_some_and(|current| enrolled.contains(current))
+                && evidence.recipient_fingerprint == current, "machine_enrollment_changed");
             let value: String = sqlx::query_scalar("SELECT value FROM provider_account_registries WHERE owner_user_id=$1")
                 .bind(owner).fetch_one(&mut *tx).await?;
             let registry: Registry = serde_json::from_str(&value)?;

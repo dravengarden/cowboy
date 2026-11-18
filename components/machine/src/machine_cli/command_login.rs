@@ -37,10 +37,18 @@ pub(super) fn handle(command: MachineCommand, context: MachineCommandContext) {
                     Ok(store)
                 });
             tokio::spawn(async move {
-                let observation = match scoped {
+                let mut observation = match scoped {
                     Ok(store) => native_logout::observe(&store, logout).await,
                     Err(_) => None,
                 };
+                // A Controller below the account-sandbox protocol denies the
+                // sandbox cleanup fields; it never sent a sandboxed logout.
+                if protocol < crate::machine_protocol::ACCOUNT_FENCE_PROTOCOL_VERSION
+                    && let Some(observation) = observation.as_mut()
+                {
+                    observation.credential_cleared = None;
+                    observation.history_retained = None;
+                }
                 let _ = events.send(MachineEvent::NativeLogoutObserved {
                     request_id,
                     observation,

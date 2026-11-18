@@ -35,6 +35,8 @@ pub(super) trait Remover: Send + Sync {
     /// Whether `machine` is connected; the closure checks it is still the
     /// same connection when the receipt is recorded.
     fn connection(&self, machine: &str) -> Option<Box<dyn Fn() -> bool + Send + Sync>>;
+    /// The fingerprint of `machine`'s current enrollment.
+    fn enrollment(&self, machine: &str) -> futures::future::BoxFuture<'static, Option<String>>;
     fn remove(
         &self,
         machine: &str,
@@ -55,6 +57,19 @@ impl Remover for MachineRemover {
         Some(Box::new(move || {
             state.machine_control.is_current(&connection)
         }))
+    }
+
+    fn enrollment(&self, machine: &str) -> futures::future::BoxFuture<'static, Option<String>> {
+        let (state, machine) = (Arc::clone(&self.0), machine.to_owned());
+        Box::pin(async move {
+            let key = state
+                .store
+                .as_ref()?
+                .machine_encryption_public_key(&machine)
+                .await
+                .ok()??;
+            Some(crate::admin::hex_sha256(key.as_bytes()))
+        })
     }
 
     fn remove(
@@ -116,6 +131,9 @@ async fn remove_one(
     let Some(current) = remover.connection(machine) else {
         return (State::Pending, Some("machine_offline".into()));
     };
+    let Some(enrollment) = remover.enrollment(machine).await else {
+        return (State::Pending, Some("machine_unavailable".into()));
+    };
     let observation = match tokio::time::timeout(
         std::time::Duration::from_secs(20),
         remover.remove(machine, request),
@@ -136,6 +154,7 @@ async fn remove_one(
         machine_id: machine.to_owned(),
         observation,
         observed_at_ms: crate::usage::now_ms(),
+        recipient_fingerprint: Some(enrollment),
     };
     match store
         .record_provider_account_removal(owner, operation, &evidence, current)

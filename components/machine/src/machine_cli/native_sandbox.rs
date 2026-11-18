@@ -76,7 +76,8 @@ async fn start(
 
 /// Reconcile the exact credential `generation` with the daemon after an
 /// unknown start or end of its `mode` unit: wait (bounded, retrying transport
-/// failures) until no such unit is alive, then return the daemon's record.
+/// failures) until the daemon finalized every such unit, then return its
+/// record.
 /// `None` when the daemon could not confirm it in time.
 async fn settle(
     providers: &MachinePluginStore,
@@ -88,13 +89,10 @@ async fn settle(
         let deadline = std::time::Instant::now() + UNIT_END_TIMEOUT;
         loop {
             match providers.account_sandbox_units() {
-                Ok(units)
-                    if !units.units.iter().any(|unit| {
-                        unit.mode == mode && unit.credential_generation == generation && unit.alive
-                    }) =>
-                {
-                    return Some(units);
-                }
+                // Finalized: the daemon settled every unit record of the
+                // generation (its exit observed and the credential state
+                // committed), not merely systemd reporting it gone.
+                Ok(units) if finalized(&units, mode, generation) => return Some(units),
                 Ok(_) => {}
                 Err(error) if refused(&error) => return None,
                 Err(_) => {}
@@ -108,6 +106,21 @@ async fn settle(
     .await
     .ok()
     .flatten()
+}
+
+/// Whether the daemon finalized every `mode` unit of `generation`: no record
+/// of one remains and the credential is not mid-transition for it.
+fn finalized(units: &daemon::AccountUnits, mode: daemon::Mode, generation: u64) -> bool {
+    let recorded = units
+        .units
+        .iter()
+        .any(|unit| unit.mode == mode && unit.credential_generation == generation);
+    let running = units.credential.generation == generation
+        && matches!(
+            units.credential.state.as_str(),
+            "login_running" | "logout_running"
+        );
+    !recorded && !running
 }
 
 fn login_status(signed_in: bool) -> ExitStatus {
@@ -235,22 +248,16 @@ pub(super) struct Logout {
 }
 
 /// Run the logout unit, then let the daemon remove only the vendor token of
-/// `generation`. Only a definitive daemon refusal is a failed logout; an
-/// outage or a lost reply keeps the logout pending (`Err`) and the retry of
-/// the same operation reconciles it with [`reconcile_logout`].
+/// `generation`. A refused or unknown start is reconciled with the daemon's
+/// record ([`reconcile_logout`]): a generation holding no signed-in token is
+/// cleaned up, a signed-in one stays pending (`Err`), and only the daemon's
+/// refusal of the cleanup itself is a failed logout.
 pub(super) async fn logout(
     providers: &MachinePluginStore,
     provider: &str,
     digest: &str,
     (generation, operation): (u64, &str),
 ) -> Result<Logout, String> {
-    let failed = |detail: String| {
-        tracing::warn!(provider, generation, %detail, "account sandbox logout failed");
-        Logout {
-            succeeded: false,
-            receipt: None,
-        }
-    };
     let (unit, started) = match start(
         providers,
         provider,
@@ -264,7 +271,15 @@ pub(super) async fn logout(
         Err(StartFailure {
             refused: true,
             detail,
-        }) => return Ok(failed(detail)),
+        }) => {
+            // The daemon refuses a logout unit of a generation that holds no
+            // signed-in credential (a failed first login, or one already
+            // superseded): its token cleanup still settles the logout, so a
+            // revocation can finish. A signed-in generation stays pending.
+            tracing::warn!(provider, generation, %detail, "account sandbox logout refused; reconciling");
+            return reconcile_logout(providers, provider, digest, (generation, operation), false)
+                .await;
+        }
         Err(StartFailure { detail, .. }) => {
             tracing::warn!(provider, generation, %detail, "account sandbox logout start unknown");
             return reconcile_logout(providers, provider, digest, (generation, operation), false)
@@ -328,6 +343,16 @@ fn cleaned(receipt: Option<daemon::LogoutCleanup>) -> Logout {
             .is_some_and(|receipt| receipt.credential_cleared),
         receipt,
     }
+}
+
+/// The daemon's recorded token cleanup of a finished logout `operation`
+/// (its replay); an unknown outcome is `Err`.
+pub(super) async fn replay_cleanup(
+    providers: &MachinePluginStore,
+    generation: u64,
+    operation: &str,
+) -> Result<Option<daemon::LogoutCleanup>, String> {
+    cleanup(providers, generation, operation).await
 }
 
 /// The daemon's token cleanup for `generation`. The daemon verifies the
@@ -419,6 +444,37 @@ mod tests {
         assert!(refused(&refusal("fenced")));
         assert!(!refused(&refusal("internal")));
         assert!(!refused(&anyhow::anyhow!("connection reset")));
+    }
+
+    #[test]
+    fn an_outcome_waits_for_the_daemon_to_finalize_the_unit() {
+        let record = |state: &str, units: serde_json::Value| -> daemon::AccountUnits {
+            serde_json::from_value(serde_json::json!({
+                "key": "k", "boot_id": "b", "fenced": null,
+                "credential": {"generation": 4, "state": state},
+                "units": units, "unrecorded": [],
+            }))
+            .unwrap()
+        };
+        let dead = serde_json::json!([{"unit": "cga-k-login-1.service", "mode": "login",
+            "invocation_id": "i", "boot_id": "b", "credential_generation": 4,
+            "session_id": null, "state": "gone", "alive": false, "owned": true}]);
+        // systemd reports the unit gone, but its record is not settled yet.
+        assert!(!finalized(
+            &record("login_running", dead),
+            daemon::Mode::Login,
+            4
+        ));
+        assert!(!finalized(
+            &record("login_running", serde_json::json!([])),
+            daemon::Mode::Login,
+            4
+        ));
+        assert!(finalized(
+            &record("signed_in", serde_json::json!([])),
+            daemon::Mode::Login,
+            4
+        ));
     }
 
     #[tokio::test]

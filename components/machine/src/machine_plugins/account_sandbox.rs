@@ -223,7 +223,9 @@ impl MachinePluginStore {
     /// the account fence `remove_account` requires is set here first (an
     /// unrevisioned stop only tightens and stops every unit of the account),
     /// then the daemon removes both under the revocation's operation ID, so
-    /// a retry is the same removal's replay. A daemon refusal is an error.
+    /// a retry is the same removal's replay. A daemon refusal is an error. A
+    /// Machine without an account sandbox, or whose daemon never created the
+    /// account, holds nothing of it and answers the removal confirmed.
     pub fn account_sandbox_remove(
         &self,
         request: &crate::provider_account::AccountRemoveRequest,
@@ -233,10 +235,26 @@ impl MachinePluginStore {
                 && crate::provider_account::named_only(&request.provider_id),
             "account removal applies only to named accounts of account-sandbox Providers"
         );
+        if self.account_sandbox.get().is_none() {
+            // No account sandbox was ever configured here, so none of the
+            // account exists (a historical sign-in ran unsandboxed).
+            return Ok(crate::provider_account::AccountRemoveObservation {
+                request: request.clone(),
+                home_removed: true,
+                user_removed: true,
+            });
+        }
         let (socket, service) = self.sandbox_host()?;
         let key = daemon::account_key(service, request.account_id.as_str());
         let mut client = daemon::Client::connect(socket)?;
-        client.stop_account(&key, None)?;
+        match client.stop_account(&key, None) {
+            // The daemon never created the account: `remove_account`
+            // confirms its absence (and any leftover user's removal).
+            Err(error) if daemon::DaemonError::code_of(&error) == Some("not_found") => {}
+            other => {
+                other?;
+            }
+        }
         let removed = client.remove_account(&key, &request.operation_id)?;
         Ok(crate::provider_account::AccountRemoveObservation {
             request: request.clone(),

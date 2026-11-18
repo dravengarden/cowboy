@@ -156,7 +156,14 @@ pub(in crate::machine_plugins) fn build(
     generation: &Path,
 ) -> Result<Archive> {
     let entries = entries(components)?;
-    let temporary = generation.join(format!(".{ARCHIVE_NAME}.{}", std::process::id()));
+    // A name of its own: a concurrent first use builds the same archive
+    // into another file, and each atomically renames its complete copy; a
+    // failed build removes only its own file.
+    let temporary = generation.join(format!(
+        ".{ARCHIVE_NAME}.{}.{:032x}",
+        std::process::id(),
+        rand::random::<u128>()
+    ));
     let result = write(&entries, &temporary).and_then(|sha256| {
         let path = generation.join(ARCHIVE_NAME);
         fs::rename(&temporary, &path)?;
@@ -466,6 +473,33 @@ mod tests {
         );
         let digest = format!("{:x}", Sha256::digest(fs::read(&archive.path).unwrap()));
         assert_eq!(digest, archive.sha256);
+    }
+
+    #[test]
+    fn concurrent_first_uses_never_remove_each_others_archive() {
+        let root = tempfile::tempdir().unwrap();
+        let components = std::sync::Arc::new(fixture(root.path()));
+        let generation = tempfile::tempdir().unwrap();
+        let built: Vec<_> = (0..8)
+            .map(|_| {
+                let (components, generation) = (
+                    std::sync::Arc::clone(&components),
+                    generation.path().to_owned(),
+                );
+                std::thread::spawn(move || build(&components, &generation).unwrap())
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|task| task.join().unwrap())
+            .collect();
+        let digest = format!("{:x}", Sha256::digest(fs::read(&built[0].path).unwrap()));
+        assert!(built.iter().all(|archive| archive.sha256 == digest));
+        // Only the archive remains: no temporary of any build is left behind.
+        let names: Vec<_> = fs::read_dir(generation.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, [std::ffi::OsString::from(ARCHIVE_NAME)]);
     }
 
     /// The trampolines resolve the proxy tree from their own location.
