@@ -68,6 +68,17 @@ turns the response into JSON-RPC error `-32000` whose message is
 `antigravity_backend_refusal:<class>`, matched by Antigravity's signed
 `error_rules`.
 
+Detection behind the gate: an ACP `tool_call`/`tool_call_update` whose tool
+(its `name`, remembered per `toolCallId` within the turn) is outside the
+allow-list and reaches `in_progress` or `completed` means a built-in tool ran.
+The proxy sends `session/cancel` and ends the turn with error `-32000`
+`antigravity_policy_violation:<tool>` (a name outside `[A-Za-z0-9_.-]{1,128}`
+becomes `unknown`), with `data.cowboy.policy_violation` beside the backend
+evidence, even when `agy` answers the cancelled prompt with an error. The
+Controller then marks the account `needs_attention` and stops its units.
+Which field `agy` 1.5.9 uses for the tool name in `tool_call` updates is an
+acceptance item; a call without a name is not detected.
+
 The proxy reads only its own `agy` process's log
 (`$HOME/.gemini/antigravity-cli/log/acp-server-<time>-<pid>.log`) from the
 byte offset at the turn's start (window ≤ 4 MiB). Lines matched, observed with

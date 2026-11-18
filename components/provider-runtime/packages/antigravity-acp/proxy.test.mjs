@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AcpProxy, REFUSAL_PREFIX } from "./proxy.mjs";
+import { AcpProxy, REFUSAL_PREFIX, VIOLATION_PREFIX } from "./proxy.mjs";
 
 function harness({
   ready = true,
@@ -226,4 +226,83 @@ test("cancel and an unknown facade outcome end the turn", async () => {
   assert.equal(client.at(-1).result._meta.cowboy.uncertain_effect, "fs/writeFile");
   proxy.uncertain("s", "fs/writeFile");
   assert.equal(agent.filter((message) => message.method === "session/cancel").length, 2);
+});
+
+const toolUpdate = (update) => ({
+  jsonrpc: "2.0",
+  method: "session/update",
+  params: { sessionId: "s", update },
+});
+
+test("a built-in tool that executes ends the turn as a policy violation", async () => {
+  const { proxy, agent, client } = harness();
+  await proxy.fromClient(request(9, "session/prompt", { sessionId: "s", prompt: [] }));
+  // Facade tools and pending or failed built-ins are not violations.
+  await proxy.fromAgent(
+    toolUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "a",
+      name: "mcp_cowboy_ReadFile",
+      status: "completed",
+    }),
+  );
+  await proxy.fromAgent(
+    toolUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "b",
+      name: "read_file",
+      status: "pending",
+    }),
+  );
+  await proxy.fromAgent(
+    toolUpdate({ sessionUpdate: "tool_call_update", toolCallId: "b", status: "failed" }),
+  );
+  assert.equal(agent.filter((message) => message.method === "session/cancel").length, 0);
+  // The update that reports it running names the call only by its ID.
+  await proxy.fromAgent(
+    toolUpdate({ sessionUpdate: "tool_call_update", toolCallId: "b", status: "in_progress" }),
+  );
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    method: "session/cancel",
+    params: { sessionId: "s" },
+  });
+  // Updates still reach the worker.
+  assert.equal(client.at(-1).method, "session/update");
+  await proxy.fromAgent(
+    toolUpdate({ sessionUpdate: "tool_call_update", toolCallId: "b", status: "completed" }),
+  );
+  assert.equal(agent.filter((message) => message.method === "session/cancel").length, 1);
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 9, result: { stopReason: "cancelled" } });
+  const error = client.at(-1);
+  assert.equal(error.id, 9);
+  assert.equal(error.error.message, `${VIOLATION_PREFIX}read_file`);
+  assert.equal(error.error.data.cowboy.policy_violation, "read_file");
+  assert.equal(error.error.data.cowboy.antigravity_backend.class, "ok");
+});
+
+test("a violation survives an agent error reply and unsafe names are not echoed", async () => {
+  const { proxy, client } = harness();
+  await proxy.fromClient(request(9, "session/prompt", { sessionId: "s", prompt: [] }));
+  await proxy.fromAgent(
+    toolUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "x",
+      name: "run command; rm -rf",
+      status: "completed",
+    }),
+  );
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 9, error: { code: -32603, message: "cancelled" } });
+  assert.equal(client.at(-1).error.message, `${VIOLATION_PREFIX}unknown`);
+  assert.equal(client.at(-1).error.data.cowboy.antigravity_backend, undefined);
+  // Outside a turn there is nothing to end.
+  await proxy.fromAgent(
+    toolUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "y",
+      name: "read_file",
+      status: "completed",
+    }),
+  );
+  assert.equal(client.at(-1).method, "session/update");
 });

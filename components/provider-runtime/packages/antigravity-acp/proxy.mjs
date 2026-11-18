@@ -22,6 +22,17 @@ export const RUNTIME_NOTIFICATIONS = Object.freeze(["session/cancel"]);
 export const AGENT_REQUESTS = Object.freeze(["session/request_permission"]);
 export const AGENT_NOTIFICATIONS = Object.freeze(["session/update"]);
 export const REFUSAL_PREFIX = "antigravity_backend_refusal:";
+/** A built-in tool executed despite the gate: the turn ends with this error. */
+export const VIOLATION_PREFIX = "antigravity_policy_violation:";
+/** Tool call states that mean the tool ran (or is running). */
+const EXECUTED = new Set(["in_progress", "completed"]);
+/** Tool call names remembered per turn (tool_call_update omits the name). */
+const MAX_TOOL_CALLS = 1024;
+
+/** A tool name safe to put in a closed error code. */
+function toolCode(name) {
+  return /^[A-Za-z0-9_.-]{1,128}$/.test(name) ? name : "unknown";
+}
 
 const SESSION_REQUESTS = new Set(["session/new", "session/load", "session/resume"]);
 
@@ -111,7 +122,12 @@ export class AcpProxy {
       }
       record.sessionId = sessionId;
       record.cursor = await runtime.evidence.mark();
-      this.turns.set(sessionId, { id, uncertain: undefined });
+      this.turns.set(sessionId, {
+        id,
+        uncertain: undefined,
+        violation: undefined,
+        tools: new Map(),
+      });
       runtime.facade.beginTurn(sessionId);
     }
     this.pending.set(id, record);
@@ -127,6 +143,29 @@ export class AcpProxy {
     this.agent(message);
   }
 
+  /**
+   * Detection behind the gate (design "Account controls", step 5): an ACP
+   * tool call outside the allow-list that reached `in_progress` or
+   * `completed` means a built-in tool ran. The turn is cancelled and ends
+   * with a policy-violation error; the Controller stops the account.
+   */
+  observe(params) {
+    const sessionId = params?.sessionId;
+    const update = params?.update;
+    const turn = this.turns.get(sessionId);
+    if (!turn || !["tool_call", "tool_call_update"].includes(update?.sessionUpdate)) return;
+    const id = update.toolCallId;
+    if (typeof update.name === "string" && typeof id === "string") {
+      if (turn.tools.size < MAX_TOOL_CALLS || turn.tools.has(id)) turn.tools.set(id, update.name);
+    }
+    const name = typeof update.name === "string" ? update.name : turn.tools.get(id);
+    if (name === undefined || ALLOWED_TOOLS.includes(name) || !EXECUTED.has(update.status)) return;
+    if (turn.violation !== undefined) return;
+    turn.violation = toolCode(name);
+    this.log(`built-in tool ${turn.violation} executed; ending the turn`);
+    this.agent({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });
+  }
+
   /** A facade call's effect became unknown: end that session's turn. */
   uncertain(sessionId, method) {
     const turn = this.turns.get(sessionId);
@@ -140,6 +179,7 @@ export class AcpProxy {
     const { id, method } = message;
     if (typeof method === "string") {
       if (id === undefined) {
+        if (method === "session/update") this.observe(message.params);
         if (AGENT_NOTIFICATIONS.includes(method)) this.client(message);
         return;
       }
@@ -183,21 +223,29 @@ export class AcpProxy {
     const turn = this.turns.get(record.sessionId);
     this.turns.delete(record.sessionId);
     await runtime.facade.endTurn(record.sessionId);
-    if (!message.result) return this.client(message);
-    const backend = await runtime.evidence.settle(
-      record.cursor,
-      record.sessionId,
-      message.result.stopReason,
-    );
-    const cowboy = { antigravity_backend: backend };
+    const violation = turn?.violation;
+    if (!message.result && violation === undefined) return this.client(message);
+    const cowboy = {};
+    if (message.result) {
+      cowboy.antigravity_backend = await runtime.evidence.settle(
+        record.cursor,
+        record.sessionId,
+        message.result.stopReason,
+      );
+    }
     if (turn?.uncertain) cowboy.uncertain_effect = turn.uncertain;
-    if (backend.class !== "ok") {
+    if (violation !== undefined) cowboy.policy_violation = violation;
+    const backend = cowboy.antigravity_backend;
+    if (violation !== undefined || backend.class !== "ok") {
       return this.client({
         jsonrpc: "2.0",
         id,
         error: {
           code: -32000,
-          message: `${REFUSAL_PREFIX}${backend.class}`,
+          message:
+            violation !== undefined
+              ? `${VIOLATION_PREFIX}${violation}`
+              : `${REFUSAL_PREFIX}${backend.class}`,
           data: { cowboy },
         },
       });

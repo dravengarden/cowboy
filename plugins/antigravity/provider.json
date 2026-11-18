@@ -118,6 +118,15 @@
           "user_detail": "Cowboy could not prove Google's outcome for this turn from the account's log. Review the account before continuing.",
           "classification": "antigravity-unknown-refusal",
           "keep_worker_alive": true
+        },
+        {
+          "when": {
+            "op": "contains",
+            "value": "antigravity_policy_violation:"
+          },
+          "user_detail": "A built-in Antigravity tool ran despite Cowboy's gate. The turn was ended and the account's units are being stopped; review the account before continuing.",
+          "classification": "antigravity-policy-violation",
+          "keep_worker_alive": true
         }
       ]
     },
@@ -150,7 +159,7 @@
         "id": "cowboy-antigravity-acp",
         "version": "1.0.0",
         "source": "cowboy:components/provider-runtime/packages/antigravity-acp",
-        "integrity": "sha256:3e6a57badab9eadc44fd30254e429bb642835a4bad4f696e901caeedbfaa20d6",
+        "integrity": "sha256:18377903172de8ed70e84c524c93862a145f3a28e3af253e290d136a15a84cd8",
         "private": true
       },
       {
