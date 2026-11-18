@@ -4,6 +4,7 @@ use crate::store::provider_accounts::{Change, Mutation, MutationResult};
 use serde_json::{Value, json};
 
 pub(super) mod browser;
+pub(super) mod controls;
 pub(super) mod legacy_adoption;
 pub(super) mod lifecycle;
 pub(super) mod login;
@@ -89,7 +90,8 @@ pub(super) async fn resolve_for_create(
 }
 
 /// A named-only Provider (Antigravity) has no default account, and admits
-/// sign-ins and sessions only while its owner-controlled test gate is open.
+/// sign-ins and sessions only for accounts the Service admits
+/// (`accounts.antigravity_admitted`) and the owner has not blocked.
 pub(super) fn named_only_admitted(
     state: &AppState,
     provider: &str,
@@ -101,11 +103,11 @@ pub(super) fn named_only_admitted(
     if account.is_default() {
         return Err("named_account_required");
     }
-    if !state
-        .service_config
-        .get(&crate::config::schema::ACCOUNT_ANTIGRAVITY_ADMISSION)
-    {
-        return Err("antigravity_admission_not_enabled");
+    if !controls::admitted(state, account) {
+        return Err("antigravity_account_not_admitted");
+    }
+    if controls::blocked(state, account) {
+        return Err("antigravity_account_blocked");
     }
     Ok(())
 }
@@ -140,7 +142,7 @@ fn portable_credentials(
         .collect()
 }
 
-pub(super) async fn read_value(state: &AppState, owner: &str) -> Result<Value, &'static str> {
+pub(super) async fn read_value(state: &Arc<AppState>, owner: &str) -> Result<Value, &'static str> {
     let store = state.store.as_ref().ok_or("unavailable")?;
     let registry = store
         .provider_accounts(owner)
@@ -178,7 +180,10 @@ pub(super) async fn read_value(state: &AppState, owner: &str) -> Result<Value, &
         "legacy_browsers":browser::legacy::list_value(state, owner).await?,
         // Owner-defined shared browser profiles and the family of each
         // Provider (a share holds at most one member per family).
-        "browser_shares":shares,"browser_share_families":families}),
+        "browser_shares":shares,"browser_share_families":families,
+        // Named-only (Antigravity) accounts: admission, durable state and
+        // reason, the active turn, Machine fences and uncertain effects.
+        "account_controls":controls::read_value(state, &registry)}),
     )
 }
 

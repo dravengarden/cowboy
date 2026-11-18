@@ -129,13 +129,15 @@ pub(super) fn observe(shared: &Arc<super::Shared>) {
         return;
     };
     if let Some(method) = ledger.uncertain_effect() {
-        shared.snapshot.lock().uncertain_effect =
-            Some(crate::runtime_wire::UncertainEffect { method });
+        shared.snapshot.lock().uncertain_effect = Some(crate::runtime_wire::UncertainEffect {
+            method,
+            sequence: ledger.uncertain_sequence(),
+        });
     }
     let weak = Arc::downgrade(shared);
-    ledger.set_observer(Box::new(move |method| {
+    ledger.set_observer(Box::new(move |method, sequence| {
         if let Some(shared) = weak.upgrade() {
-            shared.mark_uncertain_effect(method);
+            shared.mark_uncertain_effect(method, sequence);
         }
     }));
 }

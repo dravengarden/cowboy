@@ -7,8 +7,11 @@ step 3b (Unix execution bridge, trusted process ledger in the worker endpoint,
 sealed install probes, daemon-confirmed watchdog recycle; see
 [Providers](architecture/04-providers.md)) and step 4 (the `agy-proxy` ACP
 proxy and the Cowboy MCP facade,
-[`cowboy-antigravity-acp`](../components/provider-runtime/packages/antigravity-acp/README.md));
-queue parking on `uncertain_effect` and controls remain. Split execution stays
+[`cowboy-antigravity-acp`](../components/provider-runtime/packages/antigravity-acp/README.md))
+and step 5a (the Controller's account controls, queue parking on
+`uncertain_effect` and the kill switch; see
+[Controller account controls](#controller-account-controls-step-5a)); the
+controls UI (step 5b) remains. Split execution stays
 unavailable: native acceptance on 2026-11-18 found that `settings.json`
 `permissions.deny` does not deny built-in tools in `agy acp` 1.5.9, so the
 second denial layer of [R2-14] does not hold (see "Step 4 acceptance"). It extends
@@ -497,6 +500,67 @@ why.
 - **[R3-16] Several idle sessions.** Each session has its own runtime unit
   (at most 4 per account plus 1 authentication unit); the one-turn limit is
   enforced by the Controller's reservation, not by the unit count.
+
+## Controller account controls (step 5a)
+
+Implemented as specified in "Account controls", "Kill switch and logout" and
+R3-4, R3-9, R3-10, R3-13 and R3-16, with these concrete choices:
+
+- **Admission.** `accounts.antigravity_admitted` (Service, live, at most 16
+  account IDs) replaces the boolean. `named_only_admitted` (login start,
+  native login completion and its recovery, session creation) also refuses a
+  blocked account; the dispatcher's account gate checks it before any
+  execution recovery or revival, and the wake/recovery admission of
+  `session_maintenance` (`revival_gate`) refuses every revival of a governed
+  session that is not admitted or not `ok`.
+- **Records** (migration `0085` / SQLite `0059`):
+  `provider_account_controls` (state, bounded reason, `until_ms`, revision),
+  `provider_account_turns` (one row per account: session, turn = the prompt's
+  `cmid`, worker epoch, the session's event cursor `after_seq`, state
+  `reserved | may_have_dispatched`) and `provider_account_fences` (one current
+  fence per account and Machine, `stop | admit`, `pending | confirmed`). A
+  state change writes its fences in the same transaction.
+- **Parking.** A refused dispatch requeues the prompt unchanged and shows the
+  reason as the session's resource wait; the maintenance loop rechecks the
+  cached controls before draining again. Any state but `ok`, a missing
+  admission, another session's turn or an unacknowledged uncertain effect
+  parks. A rate limit (default one hour; the proxy reports no reset time)
+  parks until `until_ms`; after it only an explicit owner send (send, send
+  now) resumes the account, an automatic drain does not.
+- **One active turn.** The dispatcher reserves the account before any
+  preparation, persists `may_have_dispatched` before the Provider lifecycle
+  fence and the enqueue, and releases the slot when a path never enqueued the
+  prompt (a requeue before the send, or the enqueue's synchronous refusal:
+  positive in-process proof, not inferred absence). The reconciler (every 3 s
+  and at start) settles a `may_have_dispatched` turn only from the first turn
+  end after `after_seq` (classified by the proxy's closed codes) or from proven
+  loss: the Machine reports a sandboxed worker stopped only after the daemon
+  confirmed its unit gone, and a connected Machine shows no live worker for a
+  stopped session. No backend evidence survives a lost unit, so loss settles
+  `unknown_refusal`. A `reserved` row no process is dispatching settles
+  `not_dispatched`; anything else keeps the slot and, after 2 minutes, marks
+  the account `needs_attention`. Settlement never lowers a more severe state
+  and never replaces `blocked`.
+- **Fences.** `MachineCommand::AccountSandboxFence` (Machine protocol 48) asks
+  the Machine's daemon for `stop_account` or `admit_account`; only the typed
+  `AccountSandboxFenceObserved` for the same request confirms it, and
+  `stop_account` answers only after it confirmed every unit gone. The
+  operation ID is derived from the account, Machine, action and control
+  revision, so retries after a lost reply repeat the same request; pending
+  fences are retried while the Machine is connected. The Machines are the
+  account's native generations plus its sessions' runtime Machines.
+- **Kill switch.** `block` (with confirmation) writes `blocked` and the stop
+  fences first, then the fences stop and confirm the units; `unblock` writes
+  `ok` with admit fences. `force_release` of an unsettled turn requires every
+  fence of the account to be a confirmed stop. History-preserving logout is
+  not part of the kill switch yet: the native logout path exists only inside
+  account revocation.
+- **Detection.** `suspended` and a policy violation (`needs_attention`,
+  reason `policy_violation:<tool>`) stop the account's units like a block.
+- **Uncertain effects.** The worker ledger counts lost replies
+  (`UncertainEffect.sequence`); the Controller records the newest observed
+  sequence per session durably and parks that session until the owner
+  acknowledges exactly that sequence.
 
 ## Step 4 acceptance (Hawk, 2026-11-18)
 

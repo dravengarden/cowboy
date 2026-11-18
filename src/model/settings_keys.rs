@@ -39,6 +39,8 @@ pub const SESSION_RESOURCE_WAIT_PREFIX: &str = "session_resource_wait:";
 pub const SESSION_QUEUE_PAUSED_PREFIX: &str = "session_queue_paused:";
 pub const SESSION_DELIVERY_POLICY_PREFIX: &str = "session_delivery_policy:";
 pub const SESSION_DELIVERY_HOLD_PREFIX: &str = "session_delivery_hold:";
+/// The uncertain-effect sequence the owner acknowledged; the session id follows.
+pub const SESSION_UNCERTAIN_EFFECT_ACK_PREFIX: &str = "session_uncertain_effect_ack:";
 pub const SESSION_CONTEXT_PREFIX: &str = "session_context:";
 /// The prompt that carries a session's linked context; the session id follows.
 pub const SESSION_CONTEXT_CARRIER_PREFIX: &str = "session_context_carrier:";
@@ -73,6 +75,7 @@ pub const SESSION_STATE_PREFIXES: &[&str] = &[
     SESSION_QUEUE_PAUSED_PREFIX,
     SESSION_DELIVERY_POLICY_PREFIX,
     SESSION_DELIVERY_HOLD_PREFIX,
+    SESSION_UNCERTAIN_EFFECT_ACK_PREFIX,
     SESSION_CONTEXT_PREFIX,
     SESSION_CONTEXT_CARRIER_PREFIX,
     SESSION_CONTINUED_FROM_PREFIX,
@@ -95,6 +98,7 @@ pub fn is_persisted_setting_key(key: &str) -> bool {
             SESSION_QUEUE_PAUSED_PREFIX,
             SESSION_DELIVERY_POLICY_PREFIX,
             SESSION_DELIVERY_HOLD_PREFIX,
+            SESSION_UNCERTAIN_EFFECT_ACK_PREFIX,
             SESSION_CONTEXT_PREFIX,
             SESSION_CONTEXT_CARRIER_PREFIX,
             SESSION_CONTINUED_FROM_PREFIX,
@@ -131,6 +135,7 @@ pub fn examples() -> Vec<String> {
         format!("{SESSION_QUEUE_PAUSED_PREFIX}sess-1"),
         format!("{SESSION_DELIVERY_POLICY_PREFIX}sess-1"),
         format!("{SESSION_DELIVERY_HOLD_PREFIX}sess-1"),
+        format!("{SESSION_UNCERTAIN_EFFECT_ACK_PREFIX}sess-1"),
         format!("{SESSION_CONTEXT_PREFIX}sess-1"),
         format!("{SESSION_CONTEXT_CARRIER_PREFIX}sess-1"),
         format!("{SESSION_CONTINUED_FROM_PREFIX}sess-1"),

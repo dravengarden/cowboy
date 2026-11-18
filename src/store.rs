@@ -37,6 +37,7 @@ use futures::TryStreamExt as _;
 use sqlx::Row as _;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
+pub mod account_controls;
 pub mod agent_api_operations;
 mod browser_devices;
 mod cardea_operations;

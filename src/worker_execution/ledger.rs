@@ -50,8 +50,12 @@ const MUTATIONS: &[&str] = &[
 struct Record {
     schema: u16,
     session_id: String,
-    /// The first mutation whose reply was lost after possible admission.
+    /// The latest mutation whose reply was lost after possible admission.
     uncertain_effect: Option<String>,
+    /// How many mutations lost their reply; the Controller parks the
+    /// session's queue until the owner acknowledged this sequence.
+    #[serde(default)]
+    uncertain_sequence: u64,
     processes: BTreeMap<String, Recorded>,
 }
 
@@ -81,7 +85,7 @@ impl State {
 }
 
 /// Told the method of the first mutation whose effect became unknown.
-pub type Observer = Box<dyn Fn(&str) + Send + Sync>;
+pub type Observer = Box<dyn Fn(&str, u64) + Send + Sync>;
 
 pub struct Ledger {
     path: Option<PathBuf>,
@@ -141,10 +145,16 @@ impl Ledger {
         self.state.lock().current_turn.clone()
     }
 
-    /// The method of the first mutation whose effect is unknown.
+    /// The method of the latest mutation whose effect is unknown.
     #[must_use]
     pub fn uncertain_effect(&self) -> Option<String> {
         self.state.lock().record.uncertain_effect.clone()
+    }
+
+    /// How many mutations of this session lost their reply.
+    #[must_use]
+    pub fn uncertain_sequence(&self) -> u64 {
+        self.state.lock().record.uncertain_sequence
     }
 
     #[must_use]
@@ -204,16 +214,15 @@ impl Ledger {
 
     fn mark_uncertain(&self, method: &str) {
         let mut state = self.state.lock();
-        if state.record.uncertain_effect.is_some() {
-            return;
-        }
         state.record.uncertain_effect = Some(method.to_owned());
+        state.record.uncertain_sequence = state.record.uncertain_sequence.saturating_add(1);
+        let sequence = state.record.uncertain_sequence;
         if let Err(error) = self.persist(&state) {
             tracing::warn!(%error, "execution ledger update failed");
         }
         drop(state);
         if let Some(observer) = self.observer.get() {
-            observer(method);
+            observer(method, sequence);
         }
     }
 

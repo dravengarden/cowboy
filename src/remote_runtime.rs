@@ -531,6 +531,13 @@ impl RemoteRuntime {
         self.shared.connected.load(Ordering::Acquire)
     }
 
+    /// The latest snapshot this runtime holds for `session_id`, connected
+    /// or retained. Read-only evidence, never permission to act.
+    #[must_use]
+    pub fn worker_snapshot(&self, session_id: &str) -> Option<WorkerSnapshot> {
+        self.shared.workers.lock().get(session_id).cloned()
+    }
+
     #[must_use]
     pub fn has_worker(&self, session_id: &str) -> bool {
         self.shared

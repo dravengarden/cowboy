@@ -102,6 +102,11 @@ pub(super) fn provider_routes() -> Router<Arc<AppState>> {
                 .post(provider_accounts::login::start)
                 .layer(DefaultBodyLimit::max(16 * 1024)),
         )
+        .route(
+            "/api/provider-accounts/{account_id}/controls",
+            post(provider_accounts::controls::http::http_control)
+                .layer(DefaultBodyLimit::max(16 * 1024)),
+        )
         .merge(provider_browser_routes())
         .route("/api/usage", get(api_usage).post(api_usage_refresh))
         .route("/api/usage/executors", get(api_usage_executors))
@@ -554,6 +559,10 @@ fn session_tool_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/sessions/{id}/tools",
             get(agent_tools::session).put(agent_tools::configure_session),
+        )
+        .route(
+            "/api/sessions/{id}/uncertain-effect/acknowledge",
+            post(provider_accounts::controls::http::http_acknowledge),
         )
         .merge(mcp_bindings::routes())
 }

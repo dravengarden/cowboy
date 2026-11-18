@@ -248,6 +248,8 @@ pub(super) fn spawn_dispatcher(
     dispatch_rx: mpsc::Receiver<DispatchReq>,
 ) -> tokio::task::JoinHandle<()> {
     super::mcp_bindings::launch::start(state);
+    // Account controls settle reservations and fences the dispatcher relies on.
+    super::provider_accounts::controls::start(state);
     state.runtime_health.set_dispatcher(true);
     let dispatcher_health = Arc::clone(&state.runtime_health);
     let dispatcher_state = Arc::clone(state);

@@ -383,7 +383,9 @@ async fn lost_mutation_replies_mark_the_effect_uncertain_durably() {
     let ledger = ledger(&target.client, Some(path.clone()));
     let observed = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&observed);
-    ledger.set_observer(Box::new(move |method| seen.lock().push(method.to_owned())));
+    ledger.set_observer(Box::new(move |method, sequence| {
+        seen.lock().push((method.to_owned(), sequence));
+    }));
     // A refusal before admission had no effect.
     let refused = target
         .client
@@ -406,10 +408,12 @@ async fn lost_mutation_replies_mark_the_effect_uncertain_durably() {
         .await;
     assert!(lost.get("error").is_some());
     assert_eq!(ledger.uncertain_effect().as_deref(), Some("fs/writeFile"));
-    assert_eq!(*observed.lock(), ["fs/writeFile"]);
+    assert_eq!(*observed.lock(), [("fs/writeFile".to_owned(), 1)]);
     drop(target);
     let reopened = Ledger::open("session", Some(path)).unwrap();
     assert_eq!(reopened.uncertain_effect().as_deref(), Some("fs/writeFile"));
+    // Each lost reply advances the sequence the owner acknowledges.
+    assert_eq!(reopened.uncertain_sequence(), 1);
     assert!(Ledger::open("other", Some(root.path().join("session.json"))).is_err());
 }
 

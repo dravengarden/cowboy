@@ -150,12 +150,16 @@ pub struct WorkerSnapshot {
     pub uncertain_effect: Option<UncertainEffect>,
 }
 
-/// The first target request of a session whose reply was lost after it may
+/// The latest target request of a session whose reply was lost after it may
 /// have been admitted; its effect is unknown until the owner reviews it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UncertainEffect {
     pub method: String,
+    /// How many requests of the session lost their reply. The Controller
+    /// parks the queue until the owner acknowledged this sequence.
+    #[serde(default)]
+    pub sequence: u64,
 }
 
 /// One unit of the `cowboy-account-sandbox` daemon: its transient systemd

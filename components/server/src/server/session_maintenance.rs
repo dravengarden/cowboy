@@ -138,6 +138,15 @@ fn execution_target_connected(state: &AppState, meta: &crate::core::SessionMeta)
     state.machine_control.operation_connection(&target).is_ok()
 }
 
+/// A named-only account parks the session's queue: show why and skip it.
+fn account_parked(state: &Arc<AppState>, meta: &crate::core::SessionMeta) -> bool {
+    let reason = provider_accounts::controls::parked_reason(state, meta);
+    if let Some(reason) = &reason {
+        wait(&state.hub, &meta.id, reason);
+    }
+    reason.is_some()
+}
+
 pub(super) fn clear_wait(hub: &Hub, session: &str) {
     hub.set_resource_wait(session, None);
     hub.set_explicit_wait(session, false);
@@ -190,6 +199,7 @@ fn admit(state: &Arc<AppState>, session: &str) -> Result<Box<dyn Send>, String> 
         .hub
         .session_info(session)
         .ok_or("Session no longer exists")?;
+    provider_accounts::controls::revival_gate(state, &info.meta)?;
     let machine = &info.meta.machine_id;
     if machine == "local" {
         return Ok(Box::new(()));
@@ -215,6 +225,7 @@ pub(super) fn reload_lease(state: &Arc<AppState>, session: &str) -> Result<Box<d
     if !holds_worker_slot(&state.runtime_router, &info.meta) {
         return admit(state, session);
     }
+    provider_accounts::controls::revival_gate(state, &info.meta)?;
     session_reclaim::decisions(&info.meta.machine_id)
         .try_lock_owned()
         .map(|guard| Box::new(guard) as Box<dyn Send>)
@@ -311,7 +322,7 @@ pub(super) fn start(state: &Arc<AppState>) {
                 {
                     // Avoid popping/re-persisting the entire message on every
                     // blocked tick. The dispatcher still atomically rechecks.
-                    if !execution_target_connected(&state, meta) {
+                    if !execution_target_connected(&state, meta) || account_parked(&state, meta) {
                         continue;
                     }
                     if !holds_worker_slot(&state.runtime_router, meta) {

@@ -166,6 +166,8 @@ pub(in crate::server) async fn accept_native_completion(
             .ok_or("authentication_request_unavailable")?;
         validate_executor(current, &state.machine_control, connection, profile)?;
     }
+    // Admission and the kill switch also hold at login completion.
+    super::super::named_only_admitted(state, &profile.provider_id, &profile.account_id)?;
     store
         .record_native_login_completion(&executor.owner_user_id, &operation, &completion)
         .await

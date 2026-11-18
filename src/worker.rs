@@ -286,9 +286,10 @@ impl Shared {
 
     /// Surface a lost mutation reply: the session holds an effect whose
     /// outcome on the target is unknown until the owner reviews it.
-    fn mark_uncertain_effect(&self, method: &str) {
+    fn mark_uncertain_effect(&self, method: &str, sequence: u64) {
         self.snapshot.lock().uncertain_effect = Some(crate::runtime_wire::UncertainEffect {
             method: method.to_owned(),
+            sequence,
         });
         self.emit(RuntimeEvent::Error {
             message: format!("The outcome of a target {method} is unknown (its reply was lost); review the workspace before continuing"),

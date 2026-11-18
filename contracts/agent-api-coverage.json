@@ -158,6 +158,8 @@
     "provider_accounts::usage::read": "accounts.usage",
     "provider_accounts::usage::refresh": "usage.refresh",
     "provider_accounts::browser::http_state": "accounts.browser",
+    "provider_accounts::controls::http::http_control": "accounts.control",
+    "provider_accounts::controls::http::http_acknowledge": "sessions.acknowledge_uncertain_effect",
     "provider_accounts::browser::http_open": "accounts.browser_open",
     "provider_accounts::browser::http_navigate": "accounts.browser_navigate",
     "provider_accounts::browser::http_snapshot": "accounts.browser_snapshot",

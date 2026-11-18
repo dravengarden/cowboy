@@ -14,6 +14,7 @@ use axum::{
 use serde::Deserialize;
 use tower::ServiceExt as _;
 
+mod account_routes;
 mod browser_routes;
 mod context_routes;
 
@@ -691,7 +692,8 @@ fn route(name: &str) -> Option<(&'static str, &'static str, MethodRouter<Arc<App
         ),
         _ => {
             return context_routes::context_route(name)
-                .or_else(|| browser_routes::browser_route(name));
+                .or_else(|| browser_routes::browser_route(name))
+                .or_else(|| account_routes::account_route(name));
         }
     })
 }

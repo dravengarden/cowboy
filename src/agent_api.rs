@@ -195,6 +195,14 @@ pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login.
 // card's browser key; label, browser and share move; it becomes the default of its scope.
 // list().legacy_adoption is {card:{provider_id,state:available|resumable|completed,account_id}}.
 // Replay the SAME operation to resume. Receipt: cowboy_receipt({domain:"adoptions",operation}).
+// Antigravity (named-only) accounts: list().account_controls.accounts[] is {account_id,provider_id,admitted,
+// state:ok|verification_required|location_unsupported|rate_limited|suspended|blocked|unknown_refusal|needs_attention,
+// reason,until_ms,revision,turn:{session_id,turn_id,state:reserved|may_have_dispatched}|null,
+// fences:{machine_id,action:stop|admit,state:pending|confirmed,detail}[],stop_confirmed,uncertain_effects:{session_id,method,sequence}[]}.
+// Any non-ok state, a missing admission or another session's turn parks the account's queues (prompts stay
+// queued; the session's wait shows why). One turn per account. A rate limit resumes on a new owner send after until_ms.
+// Owner actions via control.apply accounts.control {account,body:{action,expected_revision?,confirm?}};
+// sessions.acknowledge_uncertain_effect {session_id,body:{sequence}} releases a queue parked by an unknown target effect.
 // Write: cowboy_execute({action:"accounts.update",operation,arguments:{expected_revision,change:AccountChange}}).
 export type AccountChange =
  | {type:"create";provider_id:string;label:string}

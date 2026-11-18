@@ -1128,6 +1128,36 @@ pub(super) async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
         superagent::dispatch(state, req).await;
         return;
     }
+    // Named-only accounts: admission, account state, uncertain effects and
+    // the account's single active turn, before anything can revive a worker.
+    let gate = provider_accounts::controls::before_dispatch(
+        &state,
+        &req.session_id,
+        req.cmid.as_deref(),
+        req.explicit,
+    );
+    match gate.await {
+        Ok(account_turn) => dispatch_admitted(state, req, account_turn).await,
+        Err(reason) => {
+            // The dispatch ownership is held until the prompt is requeued.
+            let DispatchReq {
+                session_id,
+                text,
+                content,
+                cmid,
+                ownership: _ownership,
+                ..
+            } = req;
+            retain_failed_dispatch(&state.hub, session_id, text, content, cmid, &reason);
+        }
+    }
+}
+
+async fn dispatch_admitted(
+    state: Arc<AppState>,
+    req: DispatchReq,
+    mut account_turn: Option<provider_accounts::controls::Turn>,
+) {
     let hub = &state.hub;
     let supervisor = &state.supervisor;
     let plugin_lifecycle_fences = &state.plugin_lifecycle_fences;
@@ -1192,6 +1222,14 @@ pub(super) async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
         retain(session_id, text, content, cmid, &error);
         return;
     }
+    // An account turn is durably `may_have_dispatched` before the prompt can
+    // be enqueued (R3-9); a path below that never enqueues it says so.
+    if let Some(turn) = account_turn.as_mut()
+        && let Err(reason) = turn.mark().await
+    {
+        retain_failed_dispatch(hub, session_id, text, content, cmid, &reason);
+        return;
+    }
     let plugin_key = provider_fence_key_for_session(hub, &session_id);
     let dispatch_fence = plugin_lifecycle_fences.read();
     if plugin_key
@@ -1199,6 +1237,7 @@ pub(super) async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
         .and_then(|key| dispatch_fence.get(key))
         .is_some_and(|state| *state != PluginFenceState::Installing)
     {
+        provider_accounts::controls::unsent(&mut account_turn);
         hub.requeue_prompt(&session_id, text, content, cmid);
         return;
     }
@@ -1209,6 +1248,7 @@ pub(super) async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
         && crate::session_context::waits_for_agent(hub, &session_id, cmid.as_deref())
         && !supervisor.has_live_worker(&session_id)
     {
+        provider_accounts::controls::unsent(&mut account_turn);
         match supervisor.wake_for_queued_prompt(&session_id) {
             Ok(()) => {
                 hub.requeue_prompt(&session_id, text, content, cmid);
@@ -1221,6 +1261,7 @@ pub(super) async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
     }
     let Some(blocks) = build_prompt_blocks(&text, &content) else {
         tracing::warn!(session = %session_id, "queued prompt had no content; dropping");
+        provider_accounts::controls::unsent(&mut account_turn);
         hub.clear_in_flight(&session_id);
         return;
     };
@@ -1249,6 +1290,7 @@ pub(super) async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
             if let Some(trace) = &trace {
                 observability.finish_delivery_trace(trace, false);
             }
+            provider_accounts::controls::unsent(&mut account_turn);
             tracing::warn!(session = %session_id, error = %e, "queued dispatch failed");
             retain(session_id, text, content, cmid, &e);
         }

@@ -689,6 +689,21 @@ session creation, registration and usage all require the host runtime policy
 (`--provider-runtime-machine claude-code=<machine>`, OVH on Hawk) to admit the
 Machine.
 
+Antigravity accounts carry account controls in `accounts.list().account_controls`
+(`{loaded, accounts:[{account_id, provider_id, admitted, state, reason,
+until_ms, revision, turn, fences, stop_confirmed, uncertain_effects}]}`; see
+the [design](antigravity-real-accounts-design.md#controller-account-controls-step-5a)).
+Owner actions use `control.apply` `accounts.control {account, body:{action,
+expected_revision?, confirm?}}` (`POST /api/provider-accounts/{id}/controls`):
+`block` (kill switch, `confirm: true`), `unblock` and `clear` (both need the
+control `expected_revision`), `stop_units` (retry unconfirmed fences),
+`force_release` (`confirm: true`, only after a confirmed account stop), and
+`admit`/`unadmit` (Service owner; edits `accounts.antigravity_admitted` through
+the checked Service configuration writer). A queue parked by an uncertain
+target effect is released with `sessions.acknowledge_uncertain_effect
+{session_id, body:{sequence}}` (`POST /api/sessions/{id}/uncertain-effect/acknowledge`)
+after the owner reviewed the workspace.
+
 A legacy default card (`openai`, `xai`, `deepseek`) becomes a named account
 without a new sign-in: `POST /api/provider-accounts/legacy/{card}/adopt` with
 `operation`, or `accounts.adopt_legacy {card}` with

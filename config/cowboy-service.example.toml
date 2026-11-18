@@ -41,11 +41,11 @@ schema = 1
 # Disabling refuses new logins; existing receipt recovery and cleanup remain available.
 # boolean (true or false); applies live.
 # native_claude_login = false
-# Admit Antigravity sign-ins and sessions for the dedicated test account.
-# Keep off for real accounts until acceptance, concurrency caps, suspension
-# handling and soak pass. Disabling refuses new logins and sessions.
-# boolean (true or false); applies live.
-# antigravity_admission = false
+# Antigravity account IDs admitted to sign in, create sessions and run turns.
+# Checked at login start and completion, session creation, every prompt dispatch
+# and every worker revival. Removing an ID parks its queues; nothing is deleted.
+# array of at most 16 distinct lowercase slug identifiers; applies live.
+# antigravity_admitted = []
 # Allow owners to open Machine browsers for accounts they enabled one for.
 # Requires the machine_browser Plugin and its host policy on the Machine.
 # Disabling refuses new opens and closes viewer streams; snapshots are kept.
