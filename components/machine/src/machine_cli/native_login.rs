@@ -79,78 +79,70 @@ async fn run(
     else {
         return Err("native command login required".into());
     };
-    apply_auth_preflight(&prepared.home, &preflight)
-        .map_err(|_| "native login preflight failed; profile remains reserved".to_owned())?;
-    for step in &preflight {
-        if let cowboy_provider_sdk::AuthPreflight::EnvFileKeyRequiredV1 { key, .. } = step
-            && let Ok(value) = std::env::var(key)
-        {
-            environment.entry(key.clone()).or_insert(value);
-        }
-    }
-    let mut process = authentication_process(
-        &prepared.command,
-        &arguments,
-        &environment,
-        &terminal,
-        &prepared.home,
-    );
-    process
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true);
-    let containment = login_process::Containment::prepare(&mut process)
-        .map_err(|_| "native login containment unavailable; profile remains reserved".to_owned())?;
-    providers
-        .bind_native_login_process(provider, spec.generation, request, containment.identity())
-        .map_err(|_| "native login process ownership persistence failed".to_owned())?;
-    let child = login.spawn(request, deadline, &mut process)?;
-    let _ = events.send(MachineEvent::LoginState {
-        request_id: request.into(),
-        provider: provider.into(),
-        state: AuthState::Pending,
-        account_label: None,
-        detail: Some("starting native browser authorization".into()),
-    });
-    let mut url = None;
-    let mut code = None;
-    let mut sent = false;
-    let expires_at_ms = unix_ms().saturating_add(login_process::TIMEOUT.as_millis() as i64);
-    let status = login_process::run_contained(
-        child,
-        &mut login.cancel,
-        &mut login.input,
-        deadline,
-        |line| {
-            let (next_url, next_code) = login_challenge_tokens(&line);
-            if next_url.is_some() {
-                url = next_url;
-            }
-            if next_code.is_some() {
-                code = next_code;
-            }
-            let device = challenge == cowboy_provider_sdk::AuthChallenge::DeviceCode;
-            if !sent
-                && (!device || code.is_some())
-                && let Some(url) = url.clone()
+    let mut relay = ChallengeRelay {
+        request,
+        provider,
+        device: challenge == cowboy_provider_sdk::AuthChallenge::DeviceCode,
+        events,
+        url: None,
+        code: None,
+        sent: false,
+        expires_at_ms: unix_ms().saturating_add(login_process::TIMEOUT.as_millis() as i64),
+    };
+    let status = if let Some(digest) = &prepared.sandbox_generation {
+        relay.starting();
+        native_sandbox::login(
+            providers,
+            provider,
+            digest,
+            (spec.generation, request),
+            login,
+            deadline,
+            |line| {
+                relay.line(&line);
+            },
+        )
+        .await?
+    } else {
+        apply_auth_preflight(&prepared.home, &preflight)
+            .map_err(|_| "native login preflight failed; profile remains reserved".to_owned())?;
+        for step in &preflight {
+            if let cowboy_provider_sdk::AuthPreflight::EnvFileKeyRequiredV1 { key, .. } = step
+                && let Ok(value) = std::env::var(key)
             {
-                let _ = events.send(MachineEvent::LoginChallenge {
-                    request_id: request.into(),
-                    provider: provider.into(),
-                    verification_url: url,
-                    user_code: code.clone(),
-                    input_required: !device,
-                    input_label: None,
-                    secret_input: false,
-                    expires_at_ms,
-                });
-                sent = true;
+                environment.entry(key.clone()).or_insert(value);
             }
-        },
-        containment,
-    )
-    .await;
+        }
+        let mut process = authentication_process(
+            &prepared.command,
+            &arguments,
+            &environment,
+            &terminal,
+            &prepared.home,
+        );
+        process
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+        let containment = login_process::Containment::prepare(&mut process).map_err(|_| {
+            "native login containment unavailable; profile remains reserved".to_owned()
+        })?;
+        providers
+            .bind_native_login_process(provider, spec.generation, request, containment.identity())
+            .map_err(|_| "native login process ownership persistence failed".to_owned())?;
+        let child = login.spawn(request, deadline, &mut process)?;
+        relay.starting();
+        login_process::run_contained(
+            child,
+            &mut login.cancel,
+            &mut login.input,
+            deadline,
+            |line| relay.line(&line),
+            containment,
+        )
+        .await
+    };
     // run() returns Cleanup whenever the leader's wait is unconfirmed. All
     // other returned outcomes have reaped the leader, including cancellation.
     // Persist before checking cancellation or emitting a transient event.
@@ -185,6 +177,57 @@ async fn run(
     events
         .send(MachineEvent::NativeProfileCompleted { profile })
         .map_err(|_| "Controller disconnected; native completion retained locally".into())
+}
+
+/// Publishes the login challenge once its URL (and, for a device flow, its
+/// code) appeared in the authentication process's output.
+struct ChallengeRelay<'a> {
+    request: &'a str,
+    provider: &'a str,
+    device: bool,
+    events: &'a tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+    url: Option<String>,
+    code: Option<String>,
+    sent: bool,
+    expires_at_ms: i64,
+}
+
+impl ChallengeRelay<'_> {
+    fn starting(&self) {
+        let _ = self.events.send(MachineEvent::LoginState {
+            request_id: self.request.into(),
+            provider: self.provider.into(),
+            state: AuthState::Pending,
+            account_label: None,
+            detail: Some("starting native browser authorization".into()),
+        });
+    }
+
+    fn line(&mut self, line: &str) {
+        let (next_url, next_code) = login_challenge_tokens(line);
+        if next_url.is_some() {
+            self.url = next_url;
+        }
+        if next_code.is_some() {
+            self.code = next_code;
+        }
+        if !self.sent
+            && (!self.device || self.code.is_some())
+            && let Some(url) = self.url.clone()
+        {
+            let _ = self.events.send(MachineEvent::LoginChallenge {
+                request_id: self.request.into(),
+                provider: self.provider.into(),
+                verification_url: url,
+                user_code: self.code.clone(),
+                input_required: !self.device,
+                input_label: None,
+                secret_input: false,
+                expires_at_ms: self.expires_at_ms,
+            });
+            self.sent = true;
+        }
+    }
 }
 
 #[cfg(test)]

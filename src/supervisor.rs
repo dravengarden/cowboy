@@ -1573,6 +1573,7 @@ mod tests {
             background_tasks: None,
             native_cycle_id: None,
             incarnation: None,
+            account_unit: None,
         }
     }
 

@@ -66,6 +66,8 @@ async fn native_logout_old_success_is_reconciled_until_cleanup_is_recorded() {
                         succeeded: Some(true),
                         profile_cleaned,
                         process_trees_exited: false,
+                        credential_cleared: None,
+                        history_retained: None,
                     }),
                 },
             );
@@ -137,6 +139,8 @@ async fn native_logout_lost_response_retries_original_scope_and_records_observat
             observation: Some(NativeLogoutObservation {
                 profile_cleaned: true,
                 process_trees_exited: false,
+                credential_cleared: None,
+                history_retained: None,
                 request: original.clone(),
                 succeeded: Some(true),
             }),
@@ -164,6 +168,8 @@ async fn native_logout_lost_response_retries_original_scope_and_records_observat
                 observation: Some(NativeLogoutObservation {
                     profile_cleaned: true,
                     process_trees_exited: false,
+                    credential_cleared: None,
+                    history_retained: None,
                     request: logout,
                     succeeded: Some(true),
                 }),
@@ -285,6 +291,8 @@ async fn native_logout_reconciles_typed_results_and_recovers_without_redispatch(
                     observation: Some(NativeLogoutObservation {
                         profile_cleaned: succeeded == Some(true),
                         process_trees_exited: false,
+                        credential_cleared: None,
+                        history_retained: None,
                         request: logout,
                         succeeded,
                     }),

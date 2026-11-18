@@ -119,6 +119,7 @@ impl MachinePluginStore {
             home,
             command,
             method,
+            sandbox_generation: profile.account_sandbox.then(|| profile.digest.clone()),
         })))
     }
 

@@ -15,6 +15,8 @@
 #[cfg(all(not(target_env = "msvc"), not(target_family = "wasm")))]
 pub use tikv_jemallocator::Jemalloc;
 
+#[cfg(any(feature = "full", feature = "machine-host"))]
+pub mod account_sandbox;
 #[cfg(feature = "full")]
 pub mod acp;
 #[cfg(feature = "full")]

@@ -381,6 +381,8 @@ async fn native_logout_requires_typed_matching_reply_on_original_connection() {
             succeeded: Some(true),
             profile_cleaned: true,
             process_trees_exited: false,
+            credential_cleared: None,
+            history_retained: None,
         };
         if mode == "scope" {
             observation.request.generation += 1;

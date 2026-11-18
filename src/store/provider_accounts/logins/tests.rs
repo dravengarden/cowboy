@@ -140,6 +140,8 @@ async fn native_logout_receipt_is_scoped_idempotent_and_survives_restart() {
         observation: crate::provider_account::NativeLogoutObservation {
             profile_cleaned: true,
             process_trees_exited: true,
+            credential_cleared: None,
+            history_retained: None,
             request: crate::provider_account::NativeLogoutRequest {
                 account_id: input.account_id.clone(),
                 provider_id: "claude-code".into(),

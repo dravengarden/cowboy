@@ -10,7 +10,9 @@ use tokio::time::Instant;
 pub(super) const TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 mod output;
+mod pipes;
 pub(super) use crate::cgroup::Containment;
+pub(super) use pipes::drive_pipes;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Failure {

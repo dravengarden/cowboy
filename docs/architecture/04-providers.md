@@ -170,6 +170,24 @@ package-less `npx`/`PATH` launches and probes skip it, its drafts are never
 scheduled, and `accounts.antigravity_admission` (default off) gates every
 sign-in and session.
 
+Antigravity 0.2.0 also signs `runtime.isolation: "account_sandbox_v1"`
+(Provider SDK 3.6.0, requires native custody and `ipv4_only_v1`). Every
+process of an account then runs as that account's own system identity in a
+unit of the host's `cowboy-account-sandbox` daemon
+([`packaging/account-sandbox/README.md`](../../packaging/account-sandbox/README.md)),
+never as the Machine user. The Machine (`--account-sandbox-socket`, default
+`/run/cowboy-account-sandbox/control.sock`) builds one runtime archive per
+installed generation (`bin/agy`, the launcher tree, `policy/hooks.json`,
+`policy/settings.json`) and registers it once; the worker starts a `runtime`
+unit on the session's native credential generation and relays ACP over the
+returned pipes, and teardown confirms the unit gone with the daemon. Native
+login and logout run `login`/`logout` units with the same challenge I/O;
+login completes only when the daemon records the reserved generation
+`signed_in`, and logout clears only the vendor token (`credential_cleared`,
+`history_retained`). A Machine without a reachable daemon reports the Provider
+`incompatible`, and execution bindings stay refused until the execution
+bridge lands ([design](../antigravity-real-accounts-design.md)).
+
 For `codex-deepseek`, the Service's `DEEPSEEK_API_KEY` projection is explicitly
 forwarded only to the gateway sidecar; it is not added to the ACP adapter's
 environment. For `claude-deepseek`, the same portable bundle is materialized as

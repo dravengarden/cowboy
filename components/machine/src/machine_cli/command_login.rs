@@ -38,34 +38,7 @@ pub(super) fn handle(command: MachineCommand, context: MachineCommandContext) {
                 });
             tokio::spawn(async move {
                 let observation = match scoped {
-                    Ok(store) => {
-                        let _observation = store.native_observation_guard().await;
-                        native_logout::run(
-                            &store,
-                            &logout.provider_id,
-                            logout.generation,
-                            &logout.login_request_id,
-                            &logout.operation_id,
-                        )
-                        .await
-                        .ok()
-                        .map(|succeeded| {
-                            crate::provider_account::NativeLogoutObservation {
-                                process_trees_exited: succeeded.is_some()
-                                    && store
-                                        .native_auth_trees_exited(
-                                            &logout.provider_id,
-                                            logout.generation,
-                                            &logout.login_request_id,
-                                            &logout.operation_id,
-                                        )
-                                        .unwrap_or(false),
-                                request: logout,
-                                succeeded,
-                                profile_cleaned: succeeded == Some(true),
-                            }
-                        })
-                    }
+                    Ok(store) => native_logout::observe(&store, logout).await,
                     Err(_) => None,
                 };
                 let _ = events.send(MachineEvent::NativeLogoutObserved {

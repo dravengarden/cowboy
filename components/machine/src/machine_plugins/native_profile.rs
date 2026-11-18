@@ -12,6 +12,9 @@ pub struct PreparedNativeLogin {
     pub home: PathBuf,
     pub command: PathBuf,
     pub method: cowboy_provider_sdk::AuthMethod,
+    /// The generation digest whose runtime the account-sandbox daemon runs
+    /// this login or logout in; `None` for a local native process.
+    pub sandbox_generation: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,6 +46,10 @@ struct Profile {
     logout: Option<logout::Record>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     process: Option<processes::Reservation>,
+    /// The Provider runs in the account sandbox: the daemon holds the home
+    /// and the credential evidence; `home` here is an empty reservation.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    account_sandbox: bool,
 }
 
 impl MachinePluginStore {
@@ -308,6 +315,7 @@ impl MachinePluginStore {
             login_succeeded: false,
             logout: None,
             process: Some(processes::Reservation::new()?),
+            account_sandbox: account_sandbox::sandboxed(&package),
         };
         atomic_write(
             &directory.join("profile.json"),
@@ -322,6 +330,7 @@ impl MachinePluginStore {
             home,
             command,
             method: auth.clone(),
+            sandbox_generation: profile.account_sandbox.then(|| profile.digest.clone()),
         })
     }
 
@@ -424,10 +433,7 @@ impl MachinePluginStore {
             4096,
         )?)?;
         ensure!(identity == bound, "native profile identity mismatch");
-        ensure!(
-            fs::symlink_metadata(directory.join("home"))?.is_dir(),
-            "native profile home is missing or linked"
-        );
+        self.native_home_evidence(profile.account_sandbox, generation, &directory.join("home"))?;
         Ok(NativeProfileReceipt {
             account_id: profile.account,
             provider_id: profile.provider,
@@ -646,12 +652,22 @@ impl MachinePluginStore {
         )?)?;
         ensure!(identity == bound, "native profile identity mismatch");
         let home = directory.join("home");
-        ensure!(
-            fs::symlink_metadata(&home)?.is_dir(),
-            "native profile home is missing or linked"
-        );
+        self.native_home_evidence(profile.account_sandbox, generation, &home)?;
         prepare_private_directory(&home)?;
         Ok(home)
+    }
+
+    /// A local native home must exist; a sandboxed Provider's home lives in
+    /// the daemon, whose signed-in credential generation is the evidence.
+    fn native_home_evidence(&self, sandboxed: bool, generation: u64, home: &Path) -> Result<()> {
+        if sandboxed {
+            return self.account_sandbox_signed_in(generation);
+        }
+        ensure!(
+            fs::symlink_metadata(home)?.is_dir(),
+            "native profile home is missing or linked"
+        );
+        Ok(())
     }
 }
 
@@ -1133,6 +1149,7 @@ pub(in crate::machine_plugins) mod tests {
             login_succeeded: true,
             logout: None,
             process: None,
+            account_sandbox: false,
         };
         fs::write(
             directory.join("profile.json"),

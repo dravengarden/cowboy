@@ -540,6 +540,15 @@ impl AgentSink for RemoteSink {
         });
     }
 
+    fn set_account_unit(
+        &self,
+        _session_id: &str,
+        unit: Option<crate::runtime_wire::AccountUnitHandle>,
+    ) {
+        self.shared.snapshot.lock().account_unit = unit;
+        let _ = self.shared.notify.send(());
+    }
+
     fn schedule_wakeup(&self, _session_id: &str, delay_seconds: i64, prompt: String) {
         self.shared.emit(RuntimeEvent::ScheduleWakeup {
             delay_seconds,
@@ -791,6 +800,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
             background_tasks: Some(0),
             native_cycle_id: None,
             incarnation: None,
+            account_unit: None,
         }),
         outbox: Mutex::new(BTreeMap::new()),
         trace_outbox: Mutex::default(),
@@ -1417,6 +1427,7 @@ pub fn shared() -> (Arc<Shared>, mpsc::UnboundedReceiver<()>) {
                 background_tasks: None,
                 native_cycle_id: None,
                 incarnation: None,
+                account_unit: None,
             }),
             outbox: Mutex::new(BTreeMap::new()),
             trace_outbox: Mutex::default(),

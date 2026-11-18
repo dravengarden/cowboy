@@ -12,6 +12,8 @@
     clippy::must_use_candidate
 )]
 
+mod account_sandbox;
+pub use account_sandbox::AccountConnection;
 mod artifact_cache;
 mod auth_export;
 mod auth_refresh;
@@ -315,6 +317,7 @@ pub struct MachinePluginStore {
     device_config: std::sync::Arc<std::sync::OnceLock<crate::config::Handle>>,
     /// The worker build new sessions launch with; see `worker_contract`.
     worker_command: std::sync::Arc<parking_lot::Mutex<Option<PathBuf>>>,
+    account_sandbox: std::sync::Arc<std::sync::OnceLock<account_sandbox::Host>>,
     browser_drain: machine_browser::DrainSlot,
     #[cfg(test)]
     runtime_verifications: std::sync::Arc<AtomicU64>,
@@ -383,6 +386,7 @@ impl MachinePluginStore {
             operations: std::sync::Arc::new(operations),
             runtime_proofs: std::sync::Arc::default(),
             device_config: std::sync::Arc::default(),
+            account_sandbox: std::sync::Arc::default(),
             browser_drain: std::sync::Arc::default(),
             worker_command: std::sync::Arc::default(),
             #[cfg(test)]
@@ -1587,20 +1591,9 @@ impl MachinePluginStore {
         auth_generation: Option<u64>,
         generation_digest: &str,
     ) -> Result<ProviderLaunchContext> {
-        let provider_id = &package.manifest.id;
         let payload = matching_payload(package, &self.platform, &self.architecture)?;
-        let auth = &package.manifest.authentication;
-        let home = if auth.required {
-            let generation = auth_generation.context("session has no Provider auth generation")?;
-            Some(self.prepare_launch_auth_home(
-                provider_id,
-                package,
-                generation,
-                generation_digest,
-            )?)
-        } else {
-            None
-        };
+        let (account_sandbox, home) =
+            self.launch_account(package, auth_generation, generation_digest)?;
         let mut environment = BTreeMap::new();
         if let Some(current) = home.as_ref().and_then(|home| home.parent()) {
             let env_path = current.join("environment.json");
@@ -1692,6 +1685,7 @@ impl MachinePluginStore {
                 .clone(),
             home,
             network: package.manifest.runtime.network,
+            account_sandbox,
         })
     }
 
@@ -1705,43 +1699,6 @@ impl MachinePluginStore {
             && package.manifest.authentication.native_accounts()
             && (crate::provider_account::native_only(&package.manifest.id)
                 || self.native_profile_bound(&package.manifest.id, generation))
-    }
-
-    /// Directory of each projected credential file in the one runtime
-    /// projection that owns the credential bytes. Historical generations link
-    /// their copies to it, so this is the single directory a Provider CLI may
-    /// use to serialize its own token refresh across live sessions.
-    fn credential_directories(
-        &self,
-        package: &ProviderPackage,
-        native_home: Option<&Path>,
-    ) -> Result<BTreeMap<String, String>> {
-        let auth = &package.manifest.authentication;
-        if !auth.required || auth.credential_files.is_empty() {
-            return Ok(BTreeMap::new());
-        }
-        if let Some(native_home) = native_home {
-            return Self::native_credential_directories(package, native_home);
-        }
-        let Some(canonical) = self.canonical_runtime_projection(package)? else {
-            return Ok(BTreeMap::new());
-        };
-        let home = canonical.join("home");
-        let mut directories = BTreeMap::new();
-        for credential in &auth.credential_files {
-            let path = home.join(&credential.relative_path);
-            ensure_within(&home, &path)?;
-            let directory = path
-                .parent()
-                .context("projected credential has no directory")?;
-            fs::create_dir_all(directory)?;
-            set_directory_chain_permissions(&home, directory)?;
-            directories.insert(
-                credential.bundle_key.clone(),
-                directory.to_string_lossy().into_owned(),
-            );
-        }
-        Ok(directories)
     }
 
     fn prepare_launch_auth_home(
@@ -2510,6 +2467,7 @@ impl MachinePluginStore {
                         ProviderMaterializationState::Failed
                     }
                 });
+        let unavailable = self.account_sandbox_unavailable(&package);
         let detail = (materialization_state == ProviderMaterializationState::Failed).then(|| {
             "Provider credential projection no longer matches its Service generation; waiting for credential reconciliation."
                 .to_owned()
@@ -2521,13 +2479,17 @@ impl MachinePluginStore {
             generation_digest: digest,
             installation_revision: None,
             contract_fingerprint,
-            state: PluginInstallationState::Active,
+            state: unavailable
+                .as_ref()
+                .map_or(PluginInstallationState::Active, |_| {
+                    PluginInstallationState::Incompatible
+                }),
             rollback_generation_digest: rollback,
             active_session_leases: 0,
             auth_generation,
             replica_state,
             materialization_state,
-            detail,
+            detail: unavailable.or(detail),
         }))
     }
 

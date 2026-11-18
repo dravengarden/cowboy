@@ -172,6 +172,12 @@ impl Broker {
             if let Some(home) = &provider.home {
                 session_environment.push(("HOME", home.display().to_string()));
             }
+            if let Some(launch) = &provider.account_sandbox {
+                session_environment.push((
+                    crate::account_sandbox::LAUNCH_ENV,
+                    serde_json::to_string(launch)?,
+                ));
+            }
         }
         Ok(session_environment)
     }
@@ -227,6 +233,16 @@ pub(super) fn validate_launch_placement(
         );
     }
     super::mcp_launch::validate(session, provider.as_ref())?;
+    // TODO(step 3b): the execution endpoint's Unix socket bridge and trusted
+    // process ledger (docs/antigravity-real-accounts-design.md [R3-5, R3-6,
+    // R3-11]). Until then a sandboxed Provider runs no execution binding.
+    ensure!(
+        session.execution_binding.is_none()
+            || provider
+                .as_ref()
+                .is_none_or(|provider| provider.account_sandbox.is_none()),
+        "account-sandboxed Providers do not yet support execution bindings"
+    );
     if let Some(installed) = &provider {
         ensure!(
             session.provider_version == installed.version,

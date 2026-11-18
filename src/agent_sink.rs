@@ -45,6 +45,14 @@ pub trait AgentSink: Send + Sync + 'static {
     /// The cycle the agent runs on its own with no Cowboy turn, or `None`
     /// when it ends. Current-turn delivery addresses exactly this cycle.
     fn set_native_cycle(&self, _session_id: &str, _cycle_id: Option<&str>) {}
+    /// The account-sandbox unit now running this session's Provider; part
+    /// of the worker's launch record so teardown can confirm it gone.
+    fn set_account_unit(
+        &self,
+        _session_id: &str,
+        _unit: Option<crate::runtime_wire::AccountUnitHandle>,
+    ) {
+    }
     fn schedule_wakeup(&self, session_id: &str, delay_seconds: i64, prompt: String);
     fn session_is_system(&self, session_id: &str) -> bool;
     /// Immutable native profile, independent of the system-session UI flag.

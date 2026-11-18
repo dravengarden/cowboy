@@ -193,6 +193,13 @@ pub struct NativeLogoutObservation {
     /// crash recovery alone must not manufacture this completion evidence.
     #[serde(default)]
     pub process_trees_exited: bool,
+    /// Account sandbox only: the daemon removed the vendor token. Logout
+    /// never deletes the account's persistent home.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_cleared: Option<bool>,
+    /// Account sandbox only: the account's history stays in its home.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_retained: Option<bool>,
 }
 
 /// Prepare one private directory without following a symlink for either the

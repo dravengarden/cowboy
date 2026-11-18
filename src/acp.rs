@@ -1277,6 +1277,9 @@ fn load_session_request(
     LoadSessionRequest::new(session_id, cwd).meta(provider_session_meta(provider_id))
 }
 
+#[path = "acp_process.rs"]
+mod process;
+
 #[path = "acp_subagents.rs"]
 mod subagents;
 
@@ -2889,52 +2892,10 @@ async fn agent_main(
         std::path::absolute(&cwd).with_context(|| format!("resolving cwd {}", cwd.display()))?;
     tracing::info!(provider = spec.id, session = session_id, cwd = %cwd.display(), "spawning agent");
 
-    let mut command = Command::new(&spec.command);
-    command.args(&spec.args);
-    for (key, _) in std::env::vars_os() {
-        if key
-            .to_str()
-            .is_some_and(|name| spec.removes_inherited_env(name))
-        {
-            command.env_remove(key);
-        }
-    }
-    command.envs(&spec.env);
-    if let Some((key, value)) = deepseek_session_environment(
-        &spec.id,
-        session_id,
-        spec.env.get("ANTHROPIC_CUSTOM_HEADERS").map(String::as_str),
-        std::env::var(crate::deepseek_cache::SESSION_POLICY_ENV)
-            .ok()
-            .as_deref(),
-    ) {
-        command.env(key, value);
-    }
-    // Every return from `agent_main` ends this session owner. Do not rely on a
-    // Provider noticing stdin EOF promptly: a wedged adapter could otherwise
-    // outlive its worker on macOS, where Linux cgroup cleanup is unavailable.
-    command.kill_on_drop(true);
-    let mut child = command
-        .current_dir(&cwd)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("spawning provider {} ({})", spec.id, spec.command))?;
-
-    // Contain the agent + everything it forks in its own cgroup so a wedged turn's
-    // orphaned subprocesses (e.g. a detached `until …; do sleep; done` poll loop)
-    // can be reaped wholesale on teardown / recycle. Best-effort: None ⇒ the agent
-    // runs uncontained (see crate::cgroup). Done before the agent forks anything.
-    let agent_cgroup = child.id().and_then(|pid| {
-        let dir = cgroup::create(session_id)?;
-        cgroup::add_pid(&dir, pid);
-        Some(dir)
-    });
-
-    let child_stdin = child.stdin.take().context("child stdin")?;
-    let child_stdout = child.stdout.take().context("child stdout")?;
-    let child_stderr = child.stderr.take().context("child stderr")?;
+    let (mut process, pipes) =
+        process::AgentProcess::spawn(spec, session_id, &cwd, sink.as_ref()).await?;
+    let agent_cgroup = process.cgroup.clone();
+    let child_stderr = pipes.stderr;
     let stderr_session = session_id.to_owned();
     let stderr_provider = spec.id.clone();
     let stderr_task = tokio::spawn(async move {
@@ -2976,7 +2937,7 @@ async fn agent_main(
     // (handled in the notification closure), and ext methods are sent with
     // their wire name verbatim (no `_`-prefix mangling to undo), so there is
     // nothing left to rewrite on either stream.
-    let transport = ByteStreams::new(child_stdin.compat_write(), child_stdout.compat());
+    let transport = ByteStreams::new(pipes.stdin.compat_write(), pipes.stdout.compat());
 
     let (prompt_cancellation, _) = watch::channel(0_u64);
     let memory = crate::acp_memory::AcpMemory::open(&spec.id);
@@ -3259,25 +3220,18 @@ async fn agent_main(
     let result = tokio::select! {
         biased;
         r = conn => r.map_err(|e| anyhow::anyhow!("acp connection: {e}")),
-        status = child.wait() => Err(anyhow::anyhow!(
-            "agent subprocess exited mid-session ({})",
-            match status {
-                Ok(s) => s.to_string(),
-                Err(e) => format!("wait failed: {e}"),
-            }
+        status = process.exited() => Err(anyhow::anyhow!(
+            "agent subprocess exited mid-session ({status})"
         )),
         timeout = watchdog => Err(anyhow::Error::new(timeout)),
     };
 
-    // Keep the child alive for the whole connection; dropping it here lets the
-    // agent see stdin EOF and exit (a no-op if it already exited above).
-    drop(child);
-    // Reap the whole agent subtree (the agent + any setsid-detached children it
-    // leaked) and remove the leaf. Covers EVERY exit path — clean teardown, a
-    // crashed/Exited race, or a watchdog hard-recycle that already SIGKILLed it.
-    if let Some(dir) = &agent_cgroup {
-        cgroup::kill_and_remove(dir);
-    }
+    // Keep the process alive for the whole connection. Shutdown ends it and
+    // reaps the whole agent subtree (the agent + any setsid-detached children
+    // it leaked) on EVERY exit path — clean teardown, a crashed/Exited race, or
+    // a watchdog hard-recycle that already SIGKILLed it; a sandboxed unit is
+    // stopped and confirmed by its daemon.
+    process.shutdown().await;
     stderr_task.abort();
     result
 }

@@ -2,14 +2,55 @@
 use super::*;
 use std::process::Stdio;
 
-/// Returns historical native command success, never whole-account revocation.
+/// Historical native command success, never whole-account revocation, and
+/// for an account-sandboxed Provider the daemon's token cleanup receipt.
+pub(super) struct Outcome {
+    pub succeeded: Option<bool>,
+    pub sandbox: Option<crate::account_sandbox::LogoutCleanup>,
+}
+
+/// Run the logout and project its outcome for the Controller.
+pub(super) async fn observe(
+    store: &MachinePluginStore,
+    logout: crate::provider_account::NativeLogoutRequest,
+) -> Option<crate::provider_account::NativeLogoutObservation> {
+    let _observation = store.native_observation_guard().await;
+    let outcome = run(
+        store,
+        &logout.provider_id,
+        logout.generation,
+        &logout.login_request_id,
+        &logout.operation_id,
+    )
+    .await
+    .ok()?;
+    let succeeded = outcome.succeeded;
+    let receipt = outcome.sandbox.as_ref();
+    Some(crate::provider_account::NativeLogoutObservation {
+        process_trees_exited: succeeded.is_some()
+            && store
+                .native_auth_trees_exited(
+                    &logout.provider_id,
+                    logout.generation,
+                    &logout.login_request_id,
+                    &logout.operation_id,
+                )
+                .unwrap_or(false),
+        request: logout,
+        succeeded,
+        profile_cleaned: succeeded == Some(true),
+        credential_cleared: receipt.map(|receipt| receipt.credential_cleared),
+        history_retained: receipt.map(|receipt| receipt.history_retained),
+    })
+}
+
 pub(super) async fn run(
     providers: &MachinePluginStore,
     provider: &str,
     generation: u64,
     login: &str,
     operation: &str,
-) -> Result<Option<bool>, String> {
+) -> Result<Outcome, String> {
     providers
         .recover_native_auth_processes(provider, generation, login, operation)
         .await
@@ -24,8 +65,25 @@ pub(super) async fn run(
         if outcome == Some(true) {
             cleanup(providers, provider, generation, login, operation)?;
         }
-        return Ok(outcome);
+        return Ok(Outcome {
+            succeeded: outcome,
+            sandbox: None,
+        });
     };
+    if let Some(digest) = &prepared.sandbox_generation {
+        // The daemon owns the unit; its confirmed end is the tree evidence.
+        let logout = native_sandbox::logout(providers, provider, digest, generation).await?;
+        providers
+            .record_native_logout_tree_exit(provider, generation, operation, logout.succeeded)
+            .map_err(|_| "native logout outcome persistence failed".to_owned())?;
+        if logout.succeeded {
+            cleanup(providers, provider, generation, login, operation)?;
+        }
+        return Ok(Outcome {
+            succeeded: Some(logout.succeeded),
+            sandbox: logout.receipt,
+        });
+    }
     let cowboy_provider_sdk::AuthExecutor::CommandV1 {
         arguments,
         environment,
@@ -72,7 +130,10 @@ pub(super) async fn run(
     if status.success() {
         cleanup(providers, provider, generation, login, operation)?;
     }
-    Ok(Some(status.success()))
+    Ok(Outcome {
+        succeeded: Some(status.success()),
+        sandbox: None,
+    })
 }
 
 fn cleanup(

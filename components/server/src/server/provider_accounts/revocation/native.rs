@@ -95,6 +95,8 @@ async fn deliver(
             .context("login_enrollment_unknown")?,
         observation: NativeLogoutObservation {
             process_trees_exited: false,
+            credential_cleared: None,
+            history_retained: None,
             profile_cleaned: false,
             request: NativeLogoutRequest {
                 account_id: login.input.account_id,

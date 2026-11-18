@@ -1,6 +1,9 @@
 # Antigravity real accounts on OVH — design
 
-Status: design, revision 4, 2026-11-18. Nothing here is implemented. It extends
+Status: design, revision 4, 2026-11-18. Implemented so far: the sandbox
+daemon (`packaging/account-sandbox/`) and Machine step 3a (manifest isolation,
+runtime archive, worker launch, native login/logout through the daemon); the
+execution bridge, trusted process ledger, proxy and controls remain. It extends
 [`antigravity-provider-plan.md`](antigravity-provider-plan.md) Phases 3 and 4
 under the
 [Antigravity consumer-subscription boundary](requirements.md#antigravity-consumer-subscription-boundary).

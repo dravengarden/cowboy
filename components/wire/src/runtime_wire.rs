@@ -137,6 +137,23 @@ pub struct WorkerSnapshot {
     /// It is storage identity for comparison, never authorization.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub incarnation: Option<String>,
+    /// The account-sandbox unit running this worker's Provider process, for
+    /// a Provider whose signed manifest requires `account_sandbox_v1`. The
+    /// Machine confirms with the daemon that it is gone before it reports
+    /// the worker stopped. Absent for every other Provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_unit: Option<AccountUnitHandle>,
+}
+
+/// One unit of the `cowboy-account-sandbox` daemon: its transient systemd
+/// unit name and the exact invocation and boot that started it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountUnitHandle {
+    pub unit: String,
+    /// `None` only when the unit finished before its invocation was observed.
+    pub invocation_id: Option<String>,
+    pub boot_id: String,
 }
 
 /// Cowboy-owned `sessionUpdate` carrying the native background-task level.
@@ -1149,6 +1166,7 @@ mod tests {
             background_tasks: None,
             native_cycle_id: None,
             incarnation: None,
+            account_unit: None,
         }
     }
 

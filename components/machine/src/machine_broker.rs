@@ -26,6 +26,7 @@ use crate::runtime_wire::{
     StartSession, WorkerCommand, WorkerSnapshot, WorkerState, negotiate, read_frame, write_frame,
 };
 
+mod account_unit;
 mod account_worker;
 mod cleanups;
 pub mod deletions;
@@ -632,6 +633,7 @@ impl Broker {
                 background_tasks: None,
                 native_cycle_id: None,
                 incarnation: None,
+                account_unit: None,
             });
         }
         for snapshot in &mut snapshots {
@@ -1274,6 +1276,7 @@ impl Broker {
                     background_tasks: None,
                     native_cycle_id: None,
                     incarnation: None,
+                    account_unit: None,
                 },
                 acked_runtime_seq: 0,
                 last_seen: Instant::now(),
@@ -2818,6 +2821,10 @@ impl Broker {
             .await
         {
             tracing::error!(session = session_id, %error, "durable worker containment stop unconfirmed");
+            self.cancelled_sessions.lock().insert(session_id.to_owned());
+            return false;
+        }
+        if !self.confirm_account_unit_gone(session_id).await {
             self.cancelled_sessions.lock().insert(session_id.to_owned());
             return false;
         }
@@ -6133,6 +6140,7 @@ mod tests {
                 background_tasks: None,
                 native_cycle_id: None,
                 incarnation: None,
+                account_unit: None,
             },
             1,
         );
@@ -10547,6 +10555,7 @@ mod tests {
                     background_tasks: None,
                     native_cycle_id: None,
                     incarnation: None,
+                    account_unit: None,
                 }),
             },
         )

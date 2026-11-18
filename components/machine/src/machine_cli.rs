@@ -45,6 +45,7 @@ use login_sessions::{LoginConnection, LoginIo, request_login_cancel, submit_logi
 pub(crate) use login_sessions::{LoginSession, LoginSessions};
 mod native_login;
 mod native_logout;
+mod native_sandbox;
 #[cfg(target_os = "linux")]
 mod observation;
 mod projects;
@@ -392,6 +393,14 @@ pub struct Args {
     /// Unix socket of the Cowboy-managed versioned Zed adapter payload.
     #[arg(long, env = "COWBOY_MACHINE_ZED_ADAPTER_SOCKET")]
     zed_adapter_socket: Option<PathBuf>,
+    /// Control socket of the host's `cowboy-account-sandbox` daemon, which
+    /// runs every process of an `account_sandbox_v1` Provider.
+    #[arg(
+        long,
+        env = "COWBOY_MACHINE_ACCOUNT_SANDBOX_SOCKET",
+        default_value = crate::account_sandbox::DEFAULT_SOCKET
+    )]
+    account_sandbox_socket: PathBuf,
     /// Unix socket of the Cowboy-managed filesystem/Git adapter payload.
     #[arg(long, env = "COWBOY_MACHINE_CODE_ADAPTER_SOCKET")]
     code_adapter_socket: Option<PathBuf>,
@@ -524,7 +533,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         bootstrap_acp_generation.clone(),
     )?);
     let (providers, _code_maintenance, browsers) =
-        start_plugin_runtime(&args.state_dir, &device_config).await?;
+        start_plugin_runtime(&args, &device_config).await?;
     // Reader floor 6a420ff5 is accepted for both components and Hawk's cold
     // bootstrap. Unadmitted Machines still open read-only without adoption.
     const INSTALLATION_TRACKING_ENABLED: bool = true;
@@ -768,18 +777,20 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
 /// manager on top of it. Units of a previous Machine process are adopted or
 /// stopped before any Controller can address them.
 async fn start_plugin_runtime(
-    state_dir: &Path,
+    args: &Args,
     device_config: &crate::config::Handle,
 ) -> anyhow::Result<(
     Arc<MachinePluginStore>,
     tokio::task::JoinHandle<()>,
     Arc<crate::machine_browser::BrowserManager>,
 )> {
+    let state_dir = &args.state_dir;
     let providers = Arc::new(MachinePluginStore::new(
         state_dir,
         current_platform(),
         std::env::consts::ARCH.to_owned(),
     )?);
+    providers.set_account_sandbox(args.account_sandbox_socket.clone(), args.service_id.clone());
     let code_maintenance = providers.configure_code_maintenance(device_config.clone());
     let browsers = crate::machine_browser::BrowserManager::new(
         state_dir,

@@ -41,6 +41,9 @@ pub struct LaunchSpec {
     /// Owned isolation rules supplied by a signed Provider package.
     pub package_remove_env: std::collections::BTreeSet<String>,
     pub package_remove_env_prefixes: std::collections::BTreeSet<String>,
+    /// Set exactly when the signed manifest requires `account_sandbox_v1`:
+    /// the daemon starts the Provider, never this worker.
+    pub account_sandbox: Option<crate::account_sandbox::Launch>,
 }
 
 /// Prepared exact Provider process tree. Session sidecars use `kill_on_drop`
@@ -334,6 +337,7 @@ fn spec_with_custom_default_args(
             remove_env_prefixes: Vec::new(),
             package_remove_env: std::collections::BTreeSet::new(),
             package_remove_env_prefixes: std::collections::BTreeSet::new(),
+            account_sandbox: None,
         },
         // Default command (npx): `_ARGS` may still override the pinned adapter args.
         None => LaunchSpec {
@@ -346,6 +350,7 @@ fn spec_with_custom_default_args(
             remove_env_prefixes: Vec::new(),
             package_remove_env: std::collections::BTreeSet::new(),
             package_remove_env_prefixes: std::collections::BTreeSet::new(),
+            account_sandbox: None,
         },
     }
 }
@@ -444,6 +449,7 @@ pub fn remote_generation(id: &str) -> Option<LaunchSpec> {
         remove_env_prefixes: Vec::new(),
         package_remove_env: std::collections::BTreeSet::new(),
         package_remove_env_prefixes: std::collections::BTreeSet::new(),
+        account_sandbox: None,
     })
 }
 
@@ -488,6 +494,10 @@ async fn prepare_package_launch(
         .find(|payload| payload.os == os && payload.architecture == architecture)
         .context("Provider package does not support this worker platform")?;
     let commands = verified_component_commands(&package_path, payload)?;
+    let account_sandbox = account_sandbox_launch(
+        &package.manifest.runtime,
+        crate::account_sandbox::Launch::from_env()?,
+    )?;
     let command = commands
         .get(&payload.launch_command)
         .context("Provider launch command is absent from the Machine binding")?
@@ -580,9 +590,30 @@ async fn prepare_package_launch(
             remove_env_prefixes: Vec::new(),
             package_remove_env: package.manifest.runtime.remove_environment,
             package_remove_env_prefixes: package.manifest.runtime.remove_environment_prefixes,
+            account_sandbox,
         },
         sidecars,
     })
+}
+
+/// A Provider whose signed manifest requires the account sandbox runs only
+/// through the daemon launch its Machine prepared, never as a local process.
+fn account_sandbox_launch(
+    runtime: &cowboy_provider_sdk::RuntimeContract,
+    launch: Option<crate::account_sandbox::Launch>,
+) -> Result<Option<crate::account_sandbox::Launch>> {
+    match runtime.isolation {
+        Some(cowboy_provider_sdk::RuntimeIsolationPolicy::AccountSandboxV1) => launch
+            .map(Some)
+            .context("this Provider runs only in the account sandbox, and the Machine supplied no sandbox launch"),
+        None => {
+            ensure!(
+                launch.is_none(),
+                "an account sandbox launch was supplied for an unisolated Provider"
+            );
+            Ok(None)
+        }
+    }
 }
 
 fn projected_auth_environment(
@@ -2125,5 +2156,36 @@ mod tests {
             assert_eq!(expected.get_or_insert_with(|| path.clone()), &path);
         }
         std::fs::remove_dir_all(&root).expect("remove concurrent test home");
+    }
+}
+
+#[cfg(test)]
+mod account_sandbox_tests {
+    use super::account_sandbox_launch;
+
+    #[test]
+    fn sandboxed_providers_require_the_machine_launch_and_others_refuse_it() {
+        let source: cowboy_provider_sdk::StandardProviderSource =
+            serde_json::from_str(include_str!("../../plugins/antigravity/provider.json")).unwrap();
+        let mut runtime = source.compile().unwrap().runtime;
+        let launch = crate::account_sandbox::Launch {
+            socket: crate::account_sandbox::DEFAULT_SOCKET.into(),
+            service_id: "service".into(),
+            account_id: "account".into(),
+            credential_generation: 1,
+            runtime_sha256: "a".repeat(64),
+            runtime_archive: "/state/runtime.tar".into(),
+        };
+        let error = account_sandbox_launch(&runtime, None)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("only in the account sandbox"), "{error}");
+        assert_eq!(
+            account_sandbox_launch(&runtime, Some(launch.clone())).unwrap(),
+            Some(launch.clone())
+        );
+        runtime.isolation = None;
+        assert!(account_sandbox_launch(&runtime, Some(launch)).is_err());
+        assert_eq!(account_sandbox_launch(&runtime, None).unwrap(), None);
     }
 }
