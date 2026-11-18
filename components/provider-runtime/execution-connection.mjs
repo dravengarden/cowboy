@@ -41,7 +41,7 @@ export class Connection {
   async connect() {
     const connection = this;
     const descriptor = this.descriptor;
-    const socket = new WebSocket(descriptor.endpoint, {
+    const socket = new WebSocket(executionUrl(descriptor.endpoint), {
       headers: { Authorization: `Bearer ${descriptor.bearer_token}` },
       maxPayload: 14 * 1024 * 1024,
       handshakeTimeout: 10000,
@@ -172,6 +172,19 @@ export class Connection {
     for (const listener of this.listeners) listener({ method: "closed" });
     this.socket?.terminate();
   }
+}
+
+// An account-sandboxed unit reaches its worker's endpoint only through the
+// Unix socket the daemon bound into it (`unix:/run/cowboy-exec.sock`); every
+// other descriptor names a loopback `ws://` endpoint, used unchanged.
+export function executionUrl(endpoint) {
+  if (typeof endpoint !== "string") throw new Error("Invalid execution endpoint");
+  if (!endpoint.startsWith("unix:")) return endpoint;
+  const path = endpoint.slice("unix:".length);
+  if (!isAbsolute(path) || path.includes(":") || path.includes("\0") || path.length > 107) {
+    throw new Error("Invalid execution endpoint");
+  }
+  return `ws+unix:${path}:/`;
 }
 
 // Normalize before comparing reconnects; JSON property order is not identity.

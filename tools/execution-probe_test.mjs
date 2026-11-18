@@ -8,7 +8,11 @@ import {
 } from "../components/provider-runtime/execution-probe.mjs";
 import { codexMcpBindings, bindingConfiguration } from "../plugins/codex/runtime/bindings.mjs";
 
-import { Connection } from "../components/provider-runtime/execution-connection.mjs";
+import { Connection, executionUrl } from "../components/provider-runtime/execution-connection.mjs";
+import { createServer } from "node:http";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const identity = {
   command: "/nix/store/test-cli/bin/cowboy",
@@ -228,3 +232,66 @@ for (const mode of ["changed-identity", "reordered-identity"]) {
     }
   });
 }
+
+test("a unix: endpoint connects over the named socket with the bearer token", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "cowboy-exec-"));
+  const path = join(directory, "exec.sock");
+  const server = createServer();
+  const wss = new WebSocketServer({ noServer: true });
+  const seen = [];
+  server.on("upgrade", (request, socket, head) => {
+    seen.push(request.headers.authorization);
+    if (request.headers.authorization !== `Bearer ${"b".repeat(64)}`) {
+      socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      return;
+    }
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      ws.on("message", (bytes) => {
+        const frame = JSON.parse(bytes.toString());
+        if (frame.id === undefined) return;
+        const result =
+          frame.method === "initialize"
+            ? {
+                sessionId: "unix-session",
+                environmentInfo: {
+                  executorVersion: "0.159.3",
+                  platformOs: "linux",
+                  cwd: "file:///target",
+                  shell: { path: "/bin/bash" },
+                },
+              }
+            : { echoed: frame.method };
+        ws.send(JSON.stringify({ id: frame.id, result }));
+      });
+    });
+  });
+  server.listen(path);
+  await once(server, "listening");
+  t.after(() => {
+    for (const socket of wss.clients) socket.terminate();
+    server.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const descriptor = {
+    schema: 1,
+    endpoint: `unix:${path}`,
+    bearer_token: "b".repeat(64),
+    binding: { environment: { id: "target-env" }, workspace: { cwd: "/target" } },
+  };
+  const connection = await Connection.open(descriptor);
+  t.after(() => connection.close());
+  assert.equal(connection.sessionId, "unix-session");
+  assert.deepEqual(await connection.call("fs/readFile", {}), { echoed: "fs/readFile" });
+  await assert.rejects(() =>
+    Connection.open({ ...descriptor, bearer_token: "c".repeat(64) }, { requestTimeoutMs: 2000 }),
+  );
+  assert.deepEqual(seen, [`Bearer ${"b".repeat(64)}`, `Bearer ${"c".repeat(64)}`]);
+});
+
+test("execution endpoints keep ws:// unchanged and validate unix: paths", () => {
+  assert.equal(executionUrl("ws://127.0.0.1:9/"), "ws://127.0.0.1:9/");
+  assert.equal(executionUrl("unix:/run/cowboy-exec.sock"), "ws+unix:/run/cowboy-exec.sock:/");
+  for (const bad of ["unix:relative.sock", "unix:/a:b", "unix:/a\0b", 7]) {
+    assert.throws(() => executionUrl(bad), /Invalid execution endpoint/);
+  }
+});

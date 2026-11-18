@@ -92,7 +92,11 @@ logout and probe) as that account's own system identity through the host's
 and the `ipv4_only_v1` network policy. Older hosts reject the unknown field;
 a Machine without a reachable daemon reports the Provider unavailable.
 Antigravity 0.2.0 declares it; its launcher 1.1.0 adds the `settings.json`
-built-in tool denial list and runs from the daemon's runtime archive. Every
+built-in tool denial list and runs from the daemon's runtime archive. The
+shared `execution-connection.mjs` of provider-runtime 1.3.2 also connects to
+`unix:` execution endpoints (the socket a sandboxed unit reaches its worker
+through); `ws://` endpoints are unchanged, so the Claude and Codex runtimes
+that bundle it keep their behavior. Every
 other Plugin pins the SDKs and advances one patch version without behavior
 changes: claude-code 3.20.47, claude-deepseek 3.1.65, codex 3.6.5,
 codex-deepseek 3.1.65, deepseek-harness 1.0.23, github 0.2.14, grok 3.2.4,
