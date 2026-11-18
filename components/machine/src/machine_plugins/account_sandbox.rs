@@ -204,6 +204,53 @@ impl MachinePluginStore {
         })
     }
 
+    /// Confirm with the daemon that no unit of `session` remains, from the
+    /// session's durable worker launch record rather than the worker's
+    /// snapshot (a lost worker reports none): every unit the daemon recorded
+    /// for the session is stopped and confirmed gone. A session whose bound
+    /// Provider is not sandboxed has no unit.
+    pub fn confirm_session_account_units_gone(&self, session: &str) -> Result<()> {
+        let Some(receipt) = self.account_worker_exit(session)? else {
+            return Ok(());
+        };
+        let Some(binding) = &receipt.binding else {
+            return Ok(());
+        };
+        let (provider, digest) = binding.provider_generation();
+        // A retained generation decides; without it, a named-only Provider
+        // is assumed sandboxed so a lost unit is never skipped.
+        let isolated = self.package_for_generation(provider, digest).map_or_else(
+            |_| crate::provider_account::named_only(provider),
+            |(package, _)| sandboxed(&package),
+        );
+        if !isolated {
+            return Ok(());
+        }
+        let account = self.for_account(&receipt.account)?;
+        let units = match account.account_sandbox_units() {
+            Ok(units) => units,
+            // The daemon has no such account, so it runs no unit of it.
+            Err(error) if daemon::DaemonError::code_of(&error) == Some("not_found") => {
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        let (socket, _) = self.sandbox_host()?;
+        let mut client = daemon::Client::connect(socket)?;
+        for unit in units
+            .units
+            .iter()
+            .filter(|unit| unit.session_id.as_deref() == Some(session))
+        {
+            ensure!(
+                client.stop_unit(&unit.unit)?,
+                "the account sandbox did not stop {}",
+                unit.unit
+            );
+        }
+        Ok(())
+    }
+
     /// Confirm with the daemon that `unit` is gone, stopping it if a lost
     /// worker left it running.
     pub fn confirm_account_unit_gone(&self, unit: &str) -> Result<()> {
@@ -354,5 +401,68 @@ mod tests {
         for request in server.join().unwrap() {
             assert_eq!(request, serde_json::json!({"op": "list_units", "key": key}));
         }
+    }
+
+    #[test]
+    fn a_lost_workers_units_are_found_by_its_session_record() {
+        let root = tempfile::tempdir().unwrap();
+        let socket = root.path().join("control.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let unit = |name: &str, session: &str| {
+            serde_json::json!({"unit": name, "mode": "runtime", "invocation_id": "i",
+                "boot_id": "b", "credential_generation": 7, "session_id": session,
+                "state": "active", "alive": true, "owned": false})
+        };
+        let units = serde_json::json!({"ok": true, "result": {
+            "key": "k", "boot_id": "b", "fenced": null,
+            "credential": {"generation": 7, "state": "signed_in"},
+            "units": [unit("cga-k-runtime-1.service", "lost"),
+                      unit("cga-k-runtime-2.service", "other")],
+            "unrecorded": [],
+        }});
+        let server = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for reply in [
+                units,
+                serde_json::json!({"ok": true, "result": {"unit": "u", "stopped": true}}),
+            ] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut line = String::new();
+                std::io::BufReader::new(&stream)
+                    .read_line(&mut line)
+                    .unwrap();
+                requests.push(serde_json::from_str::<serde_json::Value>(&line).unwrap());
+                writeln!(stream, "{reply}").unwrap();
+            }
+            requests
+        });
+        let store = store(root.path());
+        store.set_account_sandbox(socket, Some("service".into()));
+        let launch = |session: &str, provider: &str| -> crate::runtime_wire::StartSession {
+            serde_json::from_value(serde_json::json!({
+                "session_id": session, "provider": provider,
+                "provider_account_id": uuid::Uuid::new_v4().to_string(),
+                "provider_version": "1", "provider_generation_digest": "digest",
+                "provider_auth_generation": 7, "cwd": "/fixture", "generation": "worker"
+            }))
+            .unwrap()
+        };
+        // No worker snapshot: the durable launch record names the session.
+        store
+            .begin_bound_account_worker(&launch("lost", "antigravity"))
+            .unwrap();
+        store.confirm_session_account_units_gone("lost").unwrap();
+        let requests = server.join().unwrap();
+        assert_eq!(requests[0]["op"], "list_units");
+        assert_eq!(
+            requests[1],
+            serde_json::json!({"op": "stop_unit", "unit": "cga-k-runtime-1.service"})
+        );
+        // An unsandboxed binding and an unknown session have no unit.
+        store
+            .begin_bound_account_worker(&launch("codex", "codex"))
+            .unwrap();
+        store.confirm_session_account_units_gone("codex").unwrap();
+        store.confirm_session_account_units_gone("unknown").unwrap();
     }
 }

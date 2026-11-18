@@ -43,6 +43,11 @@ pub struct WorkerBinding {
 }
 
 impl WorkerBinding {
+    /// The bound Provider id and its generation digest.
+    pub(crate) fn provider_generation(&self) -> (&str, &str) {
+        (&self.provider, &self.digest)
+    }
+
     fn from_launch(launch: &crate::runtime_wire::StartSession) -> Result<Self> {
         let binding = Self {
             provider: launch.provider.clone(),
