@@ -766,17 +766,13 @@ pub struct RuntimeContract {
     /// processes are not yet covered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network: Option<RuntimeNetworkPolicy>,
+    /// Signed process isolation every Provider process must run under.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<RuntimeIsolationPolicy>,
 }
 
-/// Closed network policies a host must enforce on the Provider process tree,
-/// or refuse to launch it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RuntimeNetworkPolicy {
-    /// Only IPv4, Unix and netlink sockets; a vendor that judges location by
-    /// address must see the host's stable IPv4 egress.
-    Ipv4OnlyV1,
-}
+mod runtime_policy;
+pub use runtime_policy::{RuntimeIsolationPolicy, RuntimeNetworkPolicy};
 
 /// A closed runtime value DSL. Plain strings remain ergonomic literals while
 /// host bindings are explicitly tagged, linked, and validated at package build
@@ -1607,12 +1603,7 @@ impl ProviderManifest {
             );
         }
         native_identity::validate_native_custody(self)?;
-        if self.runtime.network.is_some() {
-            ensure!(
-                semver::Version::parse(&self.sdk_version)? >= semver::Version::new(3, 4, 0),
-                "runtime network policies require Provider SDK 3.4.0 or newer"
-            );
-        }
+        runtime_policy::validate(self)?;
         if self.authentication.methods.iter().any(|method| {
             method
                 .native_identity

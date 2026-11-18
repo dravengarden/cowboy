@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "antigravity",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.5.0",
+  "sdk_version": "3.6.0",
   "display": {
     "name": "Antigravity",
     "vendor": "Google",
@@ -134,7 +134,8 @@
       "provider.runtime.v1",
       "provider.native-custody.v1"
     ],
-    "network": "ipv4_only_v1"
+    "network": "ipv4_only_v1",
+    "isolation": "account_sandbox_v1"
   },
   "authentication": {
     "schema_version": 1,
