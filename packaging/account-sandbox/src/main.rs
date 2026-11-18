@@ -82,6 +82,9 @@ fn serve(arguments: &[String]) -> Result<()> {
             other => bail!("unknown argument {other}\n{USAGE}"),
         }
     }
+    if !rustix::process::geteuid().is_root() {
+        bail!("serve must run as root");
+    }
     let config = match &config_path {
         Some(path) => config::Config::load(path, true)?,
         None => config::Config::load(std::path::Path::new(config::DEFAULT_CONFIG_PATH), false)?,
@@ -98,9 +101,6 @@ fn serve(arguments: &[String]) -> Result<()> {
         (Some(_), Some(_)) => bail!("--socket conflicts with socket activation"),
         (None, None) => bail!("no socket: start through socket activation or pass --socket"),
     };
-    if !rustix::process::geteuid().is_root() {
-        bail!("serve must run as root");
-    }
     let host = Arc::new(host::SystemHost {
         tools: config.tools.clone(),
     });
