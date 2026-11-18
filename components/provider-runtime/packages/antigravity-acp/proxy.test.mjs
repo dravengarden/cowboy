@@ -306,3 +306,44 @@ test("a violation survives an agent error reply and unsafe names are not echoed"
   );
   assert.equal(client.at(-1).method, "session/update");
 });
+
+test("an executed tool the turn cannot attribute is a violation", async () => {
+  const { proxy, agent, client } = harness();
+  await proxy.fromClient(request(9, "session/prompt", { sessionId: "s", prompt: [] }));
+  // An update without a name for a call the turn never saw named.
+  await proxy.fromAgent(
+    toolUpdate({ sessionUpdate: "tool_call_update", toolCallId: "ghost", status: "completed" }),
+  );
+  assert.equal(agent.filter((message) => message.method === "session/cancel").length, 1);
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 9, result: { stopReason: "cancelled" } });
+  assert.equal(client.at(-1).error.message, `${VIOLATION_PREFIX}unknown`);
+});
+
+test("calls past the per-turn name bound cannot hide a built-in", async () => {
+  const { proxy, agent } = harness();
+  await proxy.fromClient(request(9, "session/prompt", { sessionId: "s", prompt: [] }));
+  for (let index = 0; index < 1024; index++) {
+    await proxy.fromAgent(
+      toolUpdate({
+        sessionUpdate: "tool_call",
+        toolCallId: `f${index}`,
+        name: "mcp_cowboy_ReadFile",
+        status: "pending",
+      }),
+    );
+  }
+  await proxy.fromAgent(
+    toolUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "late",
+      name: "mcp_cowboy_ReadFile",
+      status: "pending",
+    }),
+  );
+  assert.equal(agent.filter((message) => message.method === "session/cancel").length, 0);
+  // Its later update names it only by ID, which the full map never stored.
+  await proxy.fromAgent(
+    toolUpdate({ sessionUpdate: "tool_call_update", toolCallId: "late", status: "in_progress" }),
+  );
+  assert.equal(agent.filter((message) => message.method === "session/cancel").length, 1);
+});

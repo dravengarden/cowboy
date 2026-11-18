@@ -30,7 +30,10 @@ test("a successful multi-step turn is ok only with its barrier", () => {
   // Another session's barrier is not this turn's.
   assert.equal(classify(parseRecords(ok, REFUSED_SESSION)).class, "unknown_refusal");
   assert.equal(classify([]).class, "unknown_refusal");
-  assert.equal(classify([], { stopReason: "cancelled" }).class, "ok");
+  // A cancelled turn is ok only after its barrier: without it, its backend
+  // steps may still run or refuse.
+  assert.equal(classify([], { stopReason: "cancelled" }).class, "unknown_refusal");
+  assert.equal(classify([{ kind: "barrier" }], { stopReason: "cancelled" }).class, "ok");
 });
 
 test("a retried transient failure is not a refusal; a retried 429 is", () => {
@@ -42,6 +45,11 @@ test("a retried transient failure is not a refusal; a retried 429 is", () => {
   assert.equal(settled.successes, 4);
   const limited = retry.replace("UNAVAILABLE (code 503)", "RESOURCE_EXHAUSTED (code 429)");
   assert.equal(classify(parseRecords(limited, session)).class, "rate_limited");
+  // A retried code that is not known to be transient is never passed as ok.
+  const unexpected = retry.replace("UNAVAILABLE (code 503)", "FAILED_PRECONDITION (code 400)");
+  const parked = classify(parseRecords(unexpected, session));
+  assert.equal(parked.class, "unknown_refusal");
+  assert.equal(parked.transient, 0);
 });
 
 test("VALIDATION_REQUIRED is attributed from the process's structured error", () => {

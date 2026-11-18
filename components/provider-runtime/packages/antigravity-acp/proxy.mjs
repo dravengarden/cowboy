@@ -159,9 +159,13 @@ export class AcpProxy {
       if (turn.tools.size < MAX_TOOL_CALLS || turn.tools.has(id)) turn.tools.set(id, update.name);
     }
     const name = typeof update.name === "string" ? update.name : turn.tools.get(id);
-    if (name === undefined || ALLOWED_TOOLS.includes(name) || !EXECUTED.has(update.status)) return;
+    if (!EXECUTED.has(update.status)) return;
+    // A tool that ran must be attributable to a facade tool. One without a
+    // name, with an unknown call ID or past the per-turn name bound cannot
+    // be, so it is a violation like a named built-in.
+    if (name !== undefined && ALLOWED_TOOLS.includes(name)) return;
     if (turn.violation !== undefined) return;
-    turn.violation = toolCode(name);
+    turn.violation = name === undefined ? "unknown" : toolCode(name);
     this.log(`built-in tool ${turn.violation} executed; ending the turn`);
     this.agent({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });
   }

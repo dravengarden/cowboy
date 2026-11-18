@@ -95,8 +95,9 @@ byte offset at the turn's start (window ≤ 4 MiB). Lines matched, observed with
 Only `code`, `status` and `ErrorInfo.reason` are read; message text never is.
 Rules: a turn is `ok` only with its barrier and at least one success record
 and no refusal record. Refusal records are step failures, request failures
-and retried attempts with code 401, 403 or 429; retried 5xx attempts count as
-`transient` only. A step failure without a reason takes the reason of the
+and retried attempts with any code but 500, 502, 503 or 504; only those
+retried attempts count as `transient` (an unknown retried code is never
+assumed transient). A step failure without a reason takes the reason of the
 latest request failure with the same status and code earlier in the same log
 (`agy` logs `VALIDATION_REQUIRED` once, from its background quota request,
 and each refused turn repeats only `PERMISSION_DENIED (code 403)`).
@@ -105,8 +106,9 @@ and each refused turn repeats only `PERMISSION_DENIED (code 403)`).
 other refusal → `unknown_refusal`; several refusals settle by precedence
 `suspended` > `verification_required` > `location_unsupported` >
 `unknown_refusal` > `rate_limited`. No barrier within 10 s, no log or an
-oversized window → `unknown_refusal`. A cancelled turn without a refusal
-record is `ok`. `suspended` has no matcher: no suspension line has been
+oversized window → `unknown_refusal`. A cancelled turn with its barrier and without a
+refusal record is `ok`; a cancelled turn without its barrier is ambiguous and
+settles `unknown_refusal`. `suspended` has no matcher: no suspension line has been
 observed, so a suspension settles `unknown_refusal`. A request whose failure
 `agy` never logs cannot be seen; the success count is not matched against
 issued requests.

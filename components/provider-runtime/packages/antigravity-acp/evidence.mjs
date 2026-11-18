@@ -39,8 +39,11 @@ const STEP_FAILURE = new RegExp(
 const RETRY = new RegExp(
   `${PREFIX}run\\.go:\\d+\\] Run: attempt \\d+ failed \\(([A-Z_]+) \\(code (\\d{3})\\)`,
 );
-// Retried failures that are still account refusals, not transient capacity.
-const REFUSING_CODES = new Set([401, 403, 429]);
+// The only retried failures that count as transient backend capacity; every
+// other retried failure (an account refusal, or a code not known here) is
+// evidence of a refusal and parks the account rather than passing as ok.
+const TRANSIENT_CODES = new Set([500, 502, 503, 504]);
+const transient = (record) => record.kind === "retry" && TRANSIENT_CODES.has(record.code);
 // A failed backend request whose structured error follows as JSON lines.
 const REQUEST_FAILURE = new RegExp(
   `${PREFIX}http_helpers\\.go:\\d+\\] Failed to make code assist backend request \\((https://[^)\\s]+)\\): \\{$`,
@@ -148,7 +151,7 @@ export function classify(records, { prior = [], stopReason } = {}) {
   const refusals = [];
   for (const record of records) {
     if (record.kind === "request_failure") refusals.push(record);
-    if (record.kind === "retry" && !REFUSING_CODES.has(record.code)) continue;
+    if (transient(record)) continue;
     if (record.kind === "step_failure" || record.kind === "retry") {
       const source = known.findLast(
         (failure) =>
@@ -162,9 +165,7 @@ export function classify(records, { prior = [], stopReason } = {}) {
   const evidence = {
     successes,
     barrier,
-    transient: records.filter(
-      (record) => record.kind === "retry" && !REFUSING_CODES.has(record.code),
-    ).length,
+    transient: records.filter(transient).length,
     refusals: refusals.map(({ status, code, reasons }) => ({
       status: status ?? null,
       code: code ?? null,
@@ -175,10 +176,13 @@ export function classify(records, { prior = [], stopReason } = {}) {
     const classes = new Set(refusals.map(refusalClass));
     return { class: PRECEDENCE.find((name) => classes.has(name)), ...evidence };
   }
-  // A turn the client cancelled may end before any backend step; it is not
-  // a refusal and carries no refusal record.
+  // Without the barrier the turn's backend steps may still be running or
+  // refusing: the outcome is ambiguous and parks the account, cancelled or
+  // not. A turn the client cancelled after its barrier may have had no
+  // backend step at all; it is not a refusal.
+  if (!barrier) return { class: "unknown_refusal", ...evidence };
   if (stopReason === "cancelled") return { class: "ok", ...evidence };
-  if (!barrier || successes === 0) return { class: "unknown_refusal", ...evidence };
+  if (successes === 0) return { class: "unknown_refusal", ...evidence };
   return { class: "ok", ...evidence };
 }
 
