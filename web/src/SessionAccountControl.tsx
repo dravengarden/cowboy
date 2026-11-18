@@ -2,8 +2,8 @@ import { Alert, Box, Button, Link, Stack, Typography } from "@mui/material";
 import WarningAmberRounded from "@mui/icons-material/WarningAmberRounded";
 import { useEffect, useState } from "react";
 import {
-  acknowledgeUncertainEffect, type AccountControl, accountControl, accountStateBadge, type ParkedReason,
-  sessionParkedReason, signInObservation, type UncertainEffect,
+  type AcknowledgementTarget, acknowledgementTarget, acknowledgeUncertainEffect, type AccountControl, accountControl,
+  accountStateBadge, type ParkedReason, sessionParkedReason, signInObservation, type UncertainEffect,
 } from "./accountControls";
 import { glyphSize, desktopSize } from "./surface/desktopSize";
 import { mobileComposerPanelHeaderMinHeight } from "./mobileComposerPrimitives";
@@ -35,33 +35,39 @@ export function useSessionAccountControl(session: SessionMeta | undefined): {
   return { control, parked, title: `${provider} · ${identity?.label ?? ""}`, refresh };
 }
 
-/** Acknowledge one uncertain target effect after the owner checked it. */
+/** Acknowledge one uncertain target effect after the owner checked it. The
+ * sheet acknowledges exactly the session, method and sequence it showed when
+ * it opened; a change meanwhile invalidates it. */
 export function UncertainEffectAcknowledge({ session, effect, onDone, size = "small" }: {
   session: string; effect: UncertainEffect; onDone: () => void; size?: "small" | "medium";
 }): React.JSX.Element {
-  const [open, setOpen] = useState(false);
+  const [shown, setShown] = useState<AcknowledgementTarget | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  async function acknowledge() {
+  const target = acknowledgementTarget(shown, session, effect);
+  const stale = shown !== undefined && target === undefined;
+  function open() { setError(""); setShown({ session, method: effect.method, sequence: effect.sequence }); }
+  async function acknowledge(target: AcknowledgementTarget) {
     setBusy(true); setError("");
-    try { await acknowledgeUncertainEffect(session, effect.sequence); setOpen(false); }
+    try { await acknowledgeUncertainEffect(target.session, target.sequence); setShown(undefined); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Not acknowledged."); }
     finally { setBusy(false); onDone(); }
   }
   return <>
-    <Button size={size} onClick={() => setOpen(true)} data-uncertain-effect-acknowledge={effect.sequence}>Acknowledge…</Button>
-    <ConfirmSheet open={open} onClose={() => setOpen(false)} title="Acknowledge an uncertain effect?"
+    <Button size={size} onClick={open} data-uncertain-effect-acknowledge={effect.sequence}>Acknowledge…</Button>
+    <ConfirmSheet open={shown !== undefined} onClose={() => setShown(undefined)} title="Acknowledge an uncertain effect?"
       actions={<Stack direction="row" spacing={1}>
-        <Button onClick={() => setOpen(false)}>Cancel</Button>
-        <Button variant="contained" disabled={busy} onClick={() => void acknowledge()}>I checked the target</Button>
+        <Button onClick={() => setShown(undefined)}>Cancel</Button>
+        <Button variant="contained" disabled={busy || !target} onClick={() => target && void acknowledge(target)}>I checked the target</Button>
       </Stack>}>
       <Stack spacing={1}>
         <Typography variant="body2">
-          The reply to a <Box component="code">{effect.method}</Box> request was lost, so Cowboy cannot tell whether it changed its target.
+          The reply to a <Box component="code">{shown?.method ?? effect.method}</Box> request was lost, so Cowboy cannot tell whether it changed its target.
         </Typography>
         <Typography variant="body2">
           Check the target in the workspace first (the file or the command's effect). Acknowledging releases this session's queue; Cowboy never resends the request.
         </Typography>
+        {stale && <Alert severity="warning" data-uncertain-effect-changed>The uncertain effect changed. Close this and review it again.</Alert>}
         {error && <Alert severity="warning">{error}</Alert>}
       </Stack>
     </ConfirmSheet>
