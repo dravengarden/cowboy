@@ -96,7 +96,15 @@ built-in tool denial list and runs from the daemon's runtime archive. The
 shared `execution-connection.mjs` of provider-runtime 1.3.2 also connects to
 `unix:` execution endpoints (the socket a sandboxed unit reaches its worker
 through); `ws://` endpoints are unchanged, so the Claude and Codex runtimes
-that bundle it keep their behavior. Every
+that bundle it keep their behavior. Its lock adds the Cowboy-owned `node_npm`
+package `cowboy-antigravity-acp` 1.0.0 (a `cowboy:` source whose integrity
+binds its own files and the shared modules it bundles; no primary registry
+package): Antigravity's `agy-proxy` ACP proxy, tool facade and `PreToolUse`
+hook, its second `provider_adapter` (`antigravity-proxy`), which the Machine
+places below `proxy/` in the account-sandbox runtime archive. The launcher
+drops its `settings.json` (the policy now ships with the proxy), and
+Antigravity's `error_rules` classify `antigravity_backend_refusal:<class>`
+turn errors. Every
 other Plugin pins the SDKs and advances one patch version without behavior
 changes: claude-code 3.20.47, claude-deepseek 3.1.65, codex 3.6.5,
 codex-deepseek 3.1.65, deepseek-harness 1.0.23, github 0.2.14, grok 3.2.4,
