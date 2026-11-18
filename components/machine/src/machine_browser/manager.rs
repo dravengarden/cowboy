@@ -169,6 +169,7 @@ struct InstanceParts {
     geometry: Geometry,
     last_snapshot: Option<(u64, i64)>,
     capacity: Option<CapacityGuard>,
+    network: Option<BrowserNetwork>,
 }
 
 /// One running (or starting) browser instance.
@@ -190,6 +191,8 @@ pub struct Instance {
     plan: Arc<MachineBrowserRuntimePlan>,
     settings: Settings,
     report: ReadyReport,
+    /// The network policy the unit enforces (R3-15).
+    network: Option<BrowserNetwork>,
     control: tokio::sync::Mutex<Control>,
     /// Serializes navigations (liveness check, verification, launcher
     /// command) of one instance.
@@ -236,6 +239,7 @@ impl Instance {
             plan: parts.plan,
             settings: parts.settings,
             report: parts.report,
+            network: parts.network,
             control: tokio::sync::Mutex::new(parts.control),
             navigation: tokio::sync::Mutex::new(()),
             live: parking_lot::Mutex::new(Live {
@@ -305,6 +309,7 @@ impl Instance {
             geometry: self.live.lock().geometry,
             scale: self.scale,
             ready: self.report.clone(),
+            network: self.network,
         }
     }
 

@@ -117,6 +117,7 @@ async fn fixture() -> Fixture {
         },
         last_snapshot: None,
         capacity: manager.capacity.try_reserve(1),
+        network: None,
     }));
     *manager.slot(&account).instance.lock() = Some(Arc::clone(&instance));
     Fixture {
@@ -480,4 +481,61 @@ async fn an_account_s_lifecycle_commands_run_in_arrival_order() {
     let record =
         state_file::read_control(&fixture.manager.account_dir(&fixture.account).unwrap()).unwrap();
     assert_eq!(record.last_operation.unwrap().operation_id, "op-23");
+}
+
+#[tokio::test]
+async fn an_open_never_reuses_a_unit_with_another_network_policy() {
+    let fixture = fixture().await;
+    let viewport = Viewport {
+        width: 1280,
+        height: 800,
+        scale: 1,
+    };
+    // The record persists the policy the unit was started with; earlier
+    // records without one read as unrestricted.
+    let record = fixture.instance.record(&fixture.manager.boot_id);
+    assert_eq!(record.network, None);
+    let mut value = serde_json::to_value(&record).unwrap();
+    assert!(value.get("network").is_none());
+    value["network"] = serde_json::json!("ipv4_only_v1");
+    let restricted: state_file::InstanceRecord = serde_json::from_value(value).unwrap();
+    assert_eq!(restricted.network, Some(BrowserNetwork::Ipv4OnlyV1));
+    // The same policy reuses the running unit.
+    let reused = fixture
+        .manager
+        .open(
+            "o1",
+            fixture.account.clone(),
+            "inst-1".into(),
+            Purpose::Tab,
+            viewport,
+            None,
+        )
+        .await;
+    assert_eq!(reused.instance.incarnation, fixture.instance.incarnation);
+    assert!(fixture.units.terminations().is_empty());
+    // An IPv4-only open replaces the unrestricted unit.
+    fixture.units.make_stoppable("cowboy-browser-inst-1");
+    let replaced = fixture
+        .manager
+        .open(
+            "o2",
+            fixture.account.clone(),
+            "inst-1".into(),
+            Purpose::Tab,
+            viewport,
+            Some(BrowserNetwork::Ipv4OnlyV1),
+        )
+        .await;
+    assert_eq!(replaced.state, State::Hibernated);
+    assert!(!fixture.units.terminations().is_empty());
+    assert!(
+        !fixture
+            .manager
+            .slot(&fixture.account)
+            .instance
+            .lock()
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &fixture.instance))
+    );
 }

@@ -28,7 +28,20 @@ impl BrowserManager {
             if existing.instance_id != instance_id {
                 return hibernated(Reason::Busy);
             }
-            return existing.state(Some(request_id.to_owned()));
+            if existing.network == network {
+                return existing.state(Some(request_id.to_owned()));
+            }
+            // The running unit enforces another network policy than this
+            // open requires (an adopted unit of an earlier Machine records
+            // none): replace it instead of reusing a weaker sandbox.
+            tracing::warn!(event_name = "browser.open.network_changed",
+                browser_account = %account_id.as_str(), running = ?existing.network,
+                requested = ?network, "browser instance replaced for its network policy");
+            self.stop_instance(&existing, Reason::Superseded, true, None)
+                .await;
+            if slot.instance.lock().is_some() {
+                return hibernated(Reason::Busy);
+            }
         }
         let _lifecycle = slot.lifecycle.lock().await;
         if slot.instance.lock().is_some() {
@@ -309,6 +322,7 @@ impl BrowserManager {
                     .current_generation
                     .zip(record.current_generation_at_ms),
                 capacity: None,
+                network,
             }));
             self.verify_started(&instance, status.main_pid)?;
             state_file::write_instance(&self.state_dir, &instance.record(&self.boot_id))
