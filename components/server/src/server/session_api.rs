@@ -835,7 +835,7 @@ pub(super) async fn api_session_bootstrap(
     Path(session_id): Path<String>,
     Query(query): Query<SessionBootstrapQuery>,
 ) -> Response {
-    session_configuration::prepare(&state, &session_id);
+    session_configuration::prepare_for_view(&state, &session_id);
     let since_seq = query.since_seq;
     let subagent_state =
         background_tasks::subagent_state(&state.hub, state.store.as_ref(), &session_id, since_seq)

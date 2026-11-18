@@ -230,7 +230,7 @@ impl Hub {
         ) {
             return Err("configuration values must be a string id or boolean".to_owned());
         }
-        let (preferences, options, persist_options) = {
+        {
             let mut sessions = self.inner.sessions.lock();
             let Some(session) = sessions.get_mut(session_id) else {
                 return Err(format!("unknown session {session_id:?}"));
@@ -272,34 +272,30 @@ impl Hub {
             {
                 session.config_options = Some(stored);
             }
-            // Publish under the session lock, like a dormant overlay, so a
-            // worker snapshot replacing either is always broadcast after it.
-            if let Some(options) = &options {
+            // Enqueue the writes, then publish, under the session lock: a
+            // racing selection is then both stored and broadcast after this
+            // one, and a worker snapshot replacing either (or a dormant
+            // overlay) is broadcast after it.
+            if let Some(tx) = self.inner.store_tx.as_ref() {
+                let _ = tx.send(StoreWrite::UpdateConfigPreferences {
+                    session_id: session_id.to_owned(),
+                    preferences: session.config_preferences.clone(),
+                });
+                if options.is_some()
+                    && let Some(stored) = session.config_options.clone()
+                {
+                    let _ = tx.send(StoreWrite::UpdateConfigOptions {
+                        session_id: session_id.to_owned(),
+                        options: stored,
+                    });
+                }
+            }
+            if let Some(options) = options {
                 self.fanout(Outbound::ConfigOptions {
                     session_id: session_id.to_owned(),
-                    options: options.clone(),
+                    options,
                 });
             }
-            (
-                session.config_preferences.clone(),
-                options.is_some(),
-                session.config_options.clone(),
-            )
-        };
-        if let Some(tx) = self.inner.store_tx.as_ref() {
-            let _ = tx.send(StoreWrite::UpdateConfigPreferences {
-                session_id: session_id.to_owned(),
-                preferences,
-            });
-        }
-        if options
-            && let Some(tx) = self.inner.store_tx.as_ref()
-            && let Some(stored) = persist_options
-        {
-            let _ = tx.send(StoreWrite::UpdateConfigOptions {
-                session_id: session_id.to_owned(),
-                options: stored,
-            });
         }
         Ok(())
     }
@@ -390,10 +386,14 @@ impl Hub {
             self.overlay_config_in_flight(session_id, &mut options);
             s.config_options = Some(options.clone());
             s.config_previews.dormant = None;
-            s.config_previews.reported_by = Some((
-                s.meta.provider_generation_digest.clone(),
-                s.meta.provider_auth_generation,
-            ));
+            // An exited session's report is a replay of a past worker, which
+            // may have run an earlier generation than the one now pinned.
+            s.config_previews.reported_by = (s.meta.status != Status::Exited).then(|| {
+                (
+                    s.meta.provider_generation_digest.clone(),
+                    s.meta.provider_auth_generation,
+                )
+            });
             (options, corrected.then(|| s.config_preferences.clone()))
         };
         if let Some(tx) = self.inner.store_tx.as_ref() {

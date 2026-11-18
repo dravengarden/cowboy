@@ -11,6 +11,7 @@ use crate::core::SessionMeta;
 
 fn same_scope(left: &SessionMeta, right: &SessionMeta) -> bool {
     left.provider == right.provider
+        && left.provider_account_id == right.provider_account_id
         && left.provider_version == right.provider_version
         && left.provider_generation_digest == right.provider_generation_digest
         && left.provider_auth_generation == right.provider_auth_generation
@@ -22,9 +23,19 @@ fn same_scope(left: &SessionMeta, right: &SessionMeta) -> bool {
             .is_none_or(|binding| binding.managed().is_none())
 }
 
+/// [`prepare`] for a client or Agent reading the session's settings: also
+/// offers an exited session the model choices of its pinned generation. Not
+/// for configuration writes, whose ACP waiters a preview broadcast carrying
+/// the previous selection would resolve.
+pub(super) fn prepare_for_view(state: &AppState, session_id: &str) {
+    match state.hub.persisted_config_options(session_id) {
+        Some(snapshot) => carry_model_choices(state, session_id, &snapshot),
+        None => prepare(state, session_id),
+    }
+}
+
 pub(super) fn prepare(state: &AppState, session_id: &str) {
-    if let Some(snapshot) = state.hub.persisted_config_options(session_id) {
-        carry_model_choices(state, session_id, &snapshot);
+    if state.hub.persisted_config_options(session_id).is_some() {
         return;
     }
     let Some(info) = state.hub.session_info(session_id) else {

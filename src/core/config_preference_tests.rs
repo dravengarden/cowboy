@@ -508,7 +508,15 @@ fn dormant_choices_are_display_only_and_end_with_the_next_agent_snapshot() {
     // Hidden while a worker runs, and gone after its first snapshot.
     hub.set_status("dormant", Status::Starting, None);
     assert_eq!(shown(&hub), ["gpt-6.1-sol"]);
-    hub.set_config_options("dormant", reported);
+    hub.set_config_options("dormant", reported.clone());
     hub.set_status("dormant", Status::Exited, None);
     assert_eq!(shown(&hub), ["gpt-6.1-sol"]);
+    let current = hub.session_info("dormant").unwrap().meta;
+    assert_eq!(hub.config_reported_by_current(&current), Some(true));
+
+    // A report replayed for an exited session may come from a past worker of
+    // an earlier generation: its producer is unknown, not the pinned one.
+    let meta = repin(&hub, "sha256:later");
+    hub.set_config_options("dormant", reported);
+    assert_eq!(hub.config_reported_by_current(&meta), None);
 }
