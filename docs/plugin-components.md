@@ -104,7 +104,10 @@ hook, its second `provider_adapter` (`antigravity-proxy`), which the Machine
 places below `proxy/` in the account-sandbox runtime archive. The launcher
 drops its `settings.json` (the policy now ships with the proxy), and
 Antigravity's `error_rules` classify `antigravity_backend_refusal:<class>`
-turn errors. Every
+turn errors.
+The proxy also ends a turn in which a built-in tool ran with
+`antigravity_policy_violation:<tool>` (detection behind the gate), which a
+further error rule classifies. Every
 other Plugin pins the SDKs and advances one patch version without behavior
 changes: claude-code 3.20.47, claude-deepseek 3.1.65, codex 3.6.5,
 codex-deepseek 3.1.65, deepseek-harness 1.0.23, github 0.2.14, grok 3.2.4,
