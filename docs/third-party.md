@@ -48,8 +48,9 @@ hand; edit the expanded Git work tree and export it.
 
 `check` requires every Plugin whose `provider.json` pins the package to be a
 declared consumer at the same version, and a package with deltas to have a
-source consumer. The files of a package are part of each source consumer's
-release input: changing a delta requires a new Plugin version.
+source consumer. The files of a package, and the tool that verifies and
+applies them, are part of each source consumer's release input: changing a
+delta or that tool requires a new Plugin version.
 
 ## Delta ledger
 
@@ -77,7 +78,8 @@ git commit --fixup <delta commit>  # or a change to an existing delta
 cd - && nix develop -c bun tools/third-party.ts export codex-acp
 ```
 
-`export` squashes fixups, renders the series deterministically, and refuses
+`export` squashes fixups, renders the series deterministically (ignoring
+user and system Git configuration), and refuses
 commits without a complete ledger. Commit the patches with the Cowboy code
 that uses them. `drop <name> <id>` removes one delta from the work tree.
 

@@ -103,18 +103,29 @@ async function applySeries(work: string, base: string, patchFiles: string[]): Pr
 async function renderSeries(work: string, base: string): Promise<Map<string, string>> {
   const output = await mkdtemp(join(tmpdir(), "third-party-export-"));
   try {
-    await git(
-      work,
-      "format-patch",
-      "--quiet",
-      "--zero-commit",
-      "--no-signature",
-      "--no-stat",
-      "--full-index",
-      "--no-numbered",
-      "-o",
-      output,
-      `${base}..HEAD`,
+    // Ignore user and system Git configuration (format.thread, coverLetter,
+    // diff.algorithm, renames...) so the same commits always render the same bytes.
+    await run(
+      "git",
+      [
+        "-C",
+        work,
+        "format-patch",
+        "--quiet",
+        "--no-thread",
+        "--no-renames",
+        "--diff-algorithm=myers",
+        "--zero-commit",
+        "--no-signature",
+        "--no-stat",
+        "--full-index",
+        "--no-numbered",
+        "-o",
+        output,
+        `${base}..HEAD`,
+      ],
+      undefined,
+      { ...COMMITTER, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
     );
     const rendered = new Map<string, string>();
     const files = (await readdir(output)).sort();
@@ -170,6 +181,7 @@ async function exportSeries(name: string): Promise<void> {
   const work = workTree(name);
   const state = await readState(work);
   await requireClean(work);
+  await requireSeriesShape(work, state);
   const pending = (await git(work, "log", "--format=%s", `${seriesBase(state)}..HEAD`))
     .split("\n")
     .some((subject) => /^(fixup|squash|amend)! /.test(subject));
@@ -182,12 +194,12 @@ async function exportSeries(name: string): Promise<void> {
     );
   }
   const rendered = await renderSeries(work, seriesBase(state));
+  if (state.upgrade) await recordUpgrade(name, work, state);
   const directory = join(packageRoot(name), PATCHES);
   await rm(directory, { recursive: true, force: true });
   if (rendered.size > 0) await mkdir(directory);
   for (const [file, text] of rendered) await writeFile(join(directory, file), text);
   if (state.upgrade) {
-    await recordUpgrade(name, work, state);
     delete state.upgrade;
     await writeState(work, state);
   }
@@ -196,10 +208,35 @@ async function exportSeries(name: string): Promise<void> {
   console.log(`${name}: exported ${rendered.size} deltas to third_party/${name}/${PATCHES}`);
 }
 
+/**
+ * The work tree must be on its branch with the series base as an ancestor. An
+ * aborted upgrade rebase leaves the old base in history: reject it instead of
+ * recording the new upstream pin for commits that were never rebased.
+ */
+async function requireSeriesShape(work: string, state: WorkState): Promise<void> {
+  const branch = (
+    await git(work, "symbolic-ref", "--quiet", "--short", "HEAD").catch(() => "")
+  ).trim();
+  if (branch !== BRANCH) throw new Error(`${work} must be on branch ${BRANCH}`);
+  const base = seriesBase(state);
+  const onBase = await git(work, "merge-base", "--is-ancestor", base, "HEAD").then(
+    () => true,
+    () => false,
+  );
+  if (!onBase) {
+    throw new Error(
+      state.upgrade
+        ? `the upgrade to ${state.upgrade.to.tag} was not completed (rebase aborted?); rerun checkout --force and upgrade`
+        : `${work} no longer contains its base ${base}; rerun checkout --force`,
+    );
+  }
+}
+
 async function drop(name: string, id: string): Promise<void> {
   const work = workTree(name);
   const state = await readState(work);
   await requireClean(work);
+  await requireSeriesShape(work, state);
   const commits = (
     await git(
       work,
@@ -313,22 +350,40 @@ async function recordUpgrade(name: string, work: string, state: WorkState): Prom
   } finally {
     await rm(cache, { recursive: true, force: true });
   }
+  // Everything that can fail runs before the manifest, base ref and state change.
+  const head = (await git(work, "rev-parse", "HEAD")).trim();
+  const previous = (await git(work, "rev-parse", "cowboy/previous")).trim();
+  const rangeDiff = await compareSeries(work, from.commit, previous, to.commit, head);
+  const report = upgradeReportPath(name, to.tag);
+  const prior = existsSync(report) ? await readFile(report, "utf8") : "";
+  await writeFile(report, `${prior}\n## Delta range-diff\n\n${rangeDiff}`);
+  await writeFile(join(packageRoot(name), MANIFEST), JSON.stringify(next, null, 2) + "\n");
+  await git(work, "update-ref", BASE_REF, to.commit);
   state.base = to.commit;
   state.tag = to.tag;
-  await git(work, "update-ref", BASE_REF, to.commit);
-  await writeFile(join(packageRoot(name), MANIFEST), JSON.stringify(next, null, 2) + "\n");
-  const rangeDiff = await git(
-    work,
-    "range-diff",
-    "--no-color",
-    `${from.commit}..cowboy/previous`,
-    `${to.commit}..HEAD`,
-  );
-  const report = upgradeReportPath(name, to.tag);
-  await writeFile(report, `${await readFile(report, "utf8")}\n## Delta range-diff\n\n${rangeDiff}`);
   console.log(
     `${name}: ${from.tag} -> ${to.tag}; consumers must now pin ${next.version}. Report: ${report}`,
   );
+}
+
+/** range-diff of two series; git refuses an empty range, so report additions or removals instead. */
+async function compareSeries(
+  work: string,
+  oldBase: string,
+  oldHead: string,
+  newBase: string,
+  newHead: string,
+): Promise<string> {
+  const oldEmpty = oldHead === oldBase;
+  const newEmpty = newHead === newBase;
+  if (oldEmpty && newEmpty) return "(no deltas on either side)\n";
+  if (oldEmpty || newEmpty) {
+    const [label, from, to] = oldEmpty
+      ? ["added", newBase, newHead]
+      : ["removed", oldBase, oldHead];
+    return `# every delta ${label}\n${await git(work, "log", "--reverse", "--no-color", "--patch", `${from}..${to}`)}`;
+  }
+  return git(work, "range-diff", "--no-color", `${oldBase}..${oldHead}`, `${newBase}..${newHead}`);
 }
 
 async function status(names: string[]): Promise<void> {
@@ -364,13 +419,32 @@ async function status(names: string[]): Promise<void> {
 /** Code-level review of a series change: range-diff between the series at `base` and the working tree. */
 async function diff(name: string, base: string): Promise<void> {
   const current = await readUpstream(name);
-  // A package new at `base` compares against an empty series on the current pin.
-  const recorded = await run("git", [
-    "-C",
-    REPOSITORY,
-    "show",
-    `${base}:third_party/${name}/${MANIFEST}`,
-  ]).catch(() => null);
+  const commit = (
+    await run("git", [
+      "-C",
+      REPOSITORY,
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      `${base}^{commit}`,
+    ]).catch(() => {
+      throw new Error(`--base ${base} is not a commit`);
+    })
+  ).trim();
+  // A package absent at a valid `base` compares against an empty series on the current pin.
+  const present = (
+    await run("git", [
+      "-C",
+      REPOSITORY,
+      "ls-tree",
+      "--name-only",
+      commit,
+      `third_party/${name}/${MANIFEST}`,
+    ])
+  ).trim();
+  const recorded = present
+    ? await run("git", ["-C", REPOSITORY, "show", `${commit}:third_party/${name}/${MANIFEST}`])
+    : null;
   const previous: Upstream = recorded === null ? current : JSON.parse(recorded);
   if (validateUpstream(name, previous as unknown as Record<string, unknown>).length) {
     throw new Error(`${base}:third_party/${name}/${MANIFEST} is invalid`);
@@ -379,13 +453,25 @@ async function diff(name: string, base: string): Promise<void> {
   try {
     const old = join(scratch, "old");
     await mkdir(old);
-    const listed = await run("git", [
-      "-C",
-      REPOSITORY,
-      "ls-tree",
-      "--name-only",
-      `${base}:third_party/${name}/${PATCHES}`,
-    ]).catch(() => "");
+    const listed = !present
+      ? ""
+      : (
+            await run("git", [
+              "-C",
+              REPOSITORY,
+              "ls-tree",
+              "--name-only",
+              `${commit}:third_party/${name}/`,
+            ])
+          ).includes(`${PATCHES}\n`)
+        ? await run("git", [
+            "-C",
+            REPOSITORY,
+            "ls-tree",
+            "--name-only",
+            `${commit}:third_party/${name}/${PATCHES}`,
+          ])
+        : "";
     const oldFiles: string[] = [];
     for (const file of listed.trim().split("\n").filter(Boolean)) {
       const path = join(old, file);
@@ -395,7 +481,7 @@ async function diff(name: string, base: string): Promise<void> {
           "-C",
           REPOSITORY,
           "show",
-          `${base}:third_party/${name}/${PATCHES}/${file}`,
+          `${commit}:third_party/${name}/${PATCHES}/${file}`,
         ]),
       );
       oldFiles.push(path);
@@ -407,27 +493,9 @@ async function diff(name: string, base: string): Promise<void> {
       join(packageRoot(name), PATCHES, delta.file),
     );
     const newHead = await applySeries(work, current.commit, newFiles);
-    // range-diff refuses an empty range; then every delta is added or removed.
-    if (oldHead === previous.commit || newHead === current.commit) {
-      const [label, from, to] =
-        oldHead === previous.commit
-          ? ["added", current.commit, newHead]
-          : ["removed", previous.commit, oldHead];
-      console.log(`# every delta ${label}`);
-      process.stdout.write(
-        await git(work, "log", "--reverse", "--no-color", "--patch", `${from}..${to}`),
-      );
-    } else {
-      process.stdout.write(
-        await git(
-          work,
-          "range-diff",
-          "--no-color",
-          `${previous.commit}..${oldHead}`,
-          `${current.commit}..${newHead}`,
-        ),
-      );
-    }
+    process.stdout.write(
+      await compareSeries(work, previous.commit, oldHead, current.commit, newHead),
+    );
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }

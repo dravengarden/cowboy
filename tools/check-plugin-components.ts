@@ -17,6 +17,12 @@ import {
   validatePluginComponentClosure,
   validateReleaseHistory,
 } from "./plugin-component-closure.ts";
+
+export const THIRD_PARTY_TOOL_FILES = [
+  "tools/third-party.ts",
+  "tools/lib/third-party.ts",
+  "tools/lib/command.ts",
+];
 export { validateReleaseHistory } from "./plugin-component-closure.ts";
 
 interface ComponentRegistry {
@@ -357,6 +363,8 @@ export async function thirdPartySourceFiles(pluginRoot: string): Promise<string[
       files.push(...(await repositorySourceFiles(`third_party/${name}`)));
     }
   }
+  // The tool that verifies and applies the series is part of the same input.
+  if (files.length > 0) files.push(...THIRD_PARTY_TOOL_FILES);
   return files;
 }
 
