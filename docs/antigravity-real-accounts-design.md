@@ -754,22 +754,39 @@ query and force release of "Controller account controls (step 5a)" and the
   arrives as `unknown_refusal`. The raise is one transaction compared with
   the stored state: it never lowers a more severe state and never replaces
   `blocked`. `suspended`, `blocked` and `needs_attention` write stop fences.
-  A rate limit holds one hour and only an explicit owner send resumes it.
+  A rate limit holds one hour and only an explicit owner send resumes it,
+  and only the expired rate limit that authorized that send (compared by
+  revision in the write) is cleared. A signal is registered before the
+  turn ending is acknowledged; the account's dispatches and revivals park
+  until it commits, and a failed write is retried, never dropped.
 - **Cache and fences.** Control reloads apply in the order they started and
   never move a record to a lower revision, so a slow reload cannot reopen a
-  blocked account. Fences go only to Machines that can hold the account's
+  blocked account; a failed reload also advances the order, so only a later
+  successful one restores availability. Fences go only to Machines that can hold the account's
   sandbox (its sign-in Machines and its sessions' runtime Machines), never to
   execution targets, and a fence whose originating revision cannot be
-  established is not sent unordered; it stays pending.
+  established is not sent unordered; it stays pending. A stopped account's
+  fence list is completed by the reconciler: a Machine that gained the
+  account after the stop was written (a first sign-in racing the block)
+  gets a stop fence of the current revision. Login rechecks the block once
+  its native generation is durable.
 - **Ledger.** The readiness window is open while the worker's session is
   `Starting` (until `Ready`/`Running` or the first turn): one probe at a
-  time, whatever its id. `fs/writeFile`, `fs/remove`, `fs/copy`,
+  time, whatever its id, and only the projection's exact Git probe
+  (`/bin/sh -c <READINESS_SCRIPT> sh <cwd>`). `fs/writeFile`, `fs/remove`, `fs/copy`,
   `fs/createDirectory` and `process/start` need the active turn; a turn's
   completion is reported after its admitted requests drained and its
   processes were asked to terminate (bounded, 5 s per process). The ledger
   file keeps only the uncertain effect and its sequence. A lost reply of a
-  mutation, of `process/terminate`, or of a `process/read` of a turn's
-  process (a publish's outcome) is an uncertain effect; acknowledgement
+  mutation, of `process/terminate`, or of a `process/read` of any process
+  but a readiness probe (a publish's outcome, also after its exit) is an
+  uncertain effect, and so is one the facade detects with every reply
+  received (a timed-out publish), which it reports to the ledger
+  (`cowboy/uncertainEffect`) before the tool answers. The worker publishes
+  each new sequence at once (`cowboy_uncertain_effect`), every copy merges
+  it by sequence, the Controller writes its observation durably under the
+  writer lock the acknowledgement holds, and the prompt handoff rechecks
+  the account gate after any asynchronous recovery. Acknowledgement
   records exactly the newest sequence and never overwrites a newer
   observation.
 - **Logout.** Targets are every Machine's newest dispatched sign-in without a
@@ -777,14 +794,34 @@ query and force release of "Controller account controls (step 5a)" and the
   daemon's credential state decides what is cleared). Delivery requires the
   Machine's current enrollment to be the one the sign-in was dispatched to.
   A receipt-store failure keeps the target pending; an unblock cancels
-  undispatched targets only once the unblock is written. A completed kill
-  switch logout satisfies a later revocation's login cleanup.
+  undispatched targets only once the unblock is written, and a delivery
+  refused before enqueue stays undispatched. Only the block that requested a
+  logout dispatches it (its exact revision). A later block's logout keeps
+  the operation of an earlier one that may have reached the Machine for the
+  same generation. A completed kill switch logout satisfies a later
+  revocation's login cleanup.
 - **Removal.** Required only on the account's sign-in Machines (the daemon
   creates a sandbox only where the credential lives), recorded only from the
-  enrollment that dispatched a planned sign-in there. A Machine without an
-  account sandbox, or whose daemon never created the account, confirms that
+  enrollment that dispatched a planned sign-in there, and sent only to it. A
+  Machine whose planned sign-ins were all refused before enqueue needs no
+  removal. A Machine without the daemon (no socket and no sandboxed native
+  profile), or whose daemon never created the account, confirms that
   nothing exists. A refused logout start (a failed first login) is settled by
-  the daemon's token cleanup, so revocation can finish.
+  the daemon's token cleanup, which certifies an unused generation only
+  with no token present, so revocation can finish.
+- **Daemon.** `max_runtime_units` other than 1 is a configuration error.
+  Loopback, link-local, multicast, RFC 1918 and `100.64.0.0/10` are always
+  denied; `ip_deny` only appends (the host's public address). A unit counts
+  as live while its cgroup still holds a process. A unit whose
+  `systemd-run` client ended stays owned until systemd confirms its
+  invocation gone; a `Starting` record of an earlier boot is retired, one of
+  this boot without an observed client end stays held. `systemd-run` is
+  cancelled through a pidfd. Created and removed directories, unpacked
+  runtime files and their directories are synced before they are relied
+  on; a damaged registered runtime is replaced.
+- **Facade write limit.** WriteFile and EditFile accept at most 3 MiB: the
+  bytes are base64 twice on the way to the helper and must fit one 7 MiB
+  execution invocation.
 - **Conversations.** A re-login keeps the native conversation only on the
   same Machine and the same signed Provider generation; a home of another
   generation (one that predates the sandbox) never resumes it.
