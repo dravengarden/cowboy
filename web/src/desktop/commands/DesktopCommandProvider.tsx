@@ -20,6 +20,7 @@ import { assertMacShortcutAllowed } from "./macShortcutPolicy";
 import { assertChromeShortcutAllowed } from "./chromeShortcutPolicy";
 import { desktopImeOwnsKey } from "./imeShortcut";
 import {
+  codeMirrorOwnsPrintableKey,
   desktopOverlayOwnsShortcuts,
   remoteViewerOwnsKey,
   swallowLeaderSpaceKeyUp,
@@ -546,14 +547,6 @@ export function DesktopCommandProvider(
         leaderArmed.current,
         isImeComposing(),
       );
-      // Composition is an exclusive native-input transaction. `isComposing`
-      // is not reliable for every macOS keydown (the first and final events can
-      // straddle compositionstart/end), so consult the shared lifecycle and
-      // native text-service markers too. Those markers remain IME-owned even
-      // when modal focus currently sits on non-editable chrome. Never let a
-      // stale Ctrl-W / gg chord move focus while marked text exists. The sole
-      // exception is the non-editable Vim Normal sink when no real shared
-      // composition exists; it deliberately receives physical Vim commands.
       // Menus and listboxes (FOCUS.md "Menus"): Vim letters become the
       // native keys MUI handles, then re-enter here as those keys.
       if (!leaderArmed.current && desktopMenuNavigationKey(event)) {
@@ -567,12 +560,17 @@ export function DesktopCommandProvider(
         clearPendingJumpChord();
         return;
       }
-      // The modal grammar (FOCUS.md "Modals"): Insert/Normal, hjkl, digits
-      // for tabs. It resolves keys with desktopKeyIntent, so an idle CJK
-      // input source on dialog chrome still moves by physical key while a
-      // real composition keeps every key. An armed dialog leader goes first.
+      // Plain typing in CodeMirror needs neither modal nor workspace navigation.
       if (
-        !leaderArmed.current && desktopOverlayOwnsShortcuts(document) &&
+        textEditorOwnsKey && !leaderArmed.current && pendingJumpChord.current === null &&
+        workspace.selectedSplitter === null && desktopKeyIntent(event).owner === "text" &&
+        codeMirrorOwnsPrintableKey(event, commands.current.values(), isMac)
+      ) return;
+      const overlayOwnsKeys = desktopOverlayOwnsShortcuts(document);
+      // Modal navigation accepts physical keys from idle IMEs. Composition
+      // and an armed leader have their own handlers.
+      if (
+        !leaderArmed.current && overlayOwnsKeys &&
         desktopKeyIntent(event).owner !== "ime"
       ) {
         const modal = popupOwnsKeys() ? null : topmostModal();
@@ -581,6 +579,8 @@ export function DesktopCommandProvider(
           return;
         }
       }
+      // Use the shared composition lifecycle because macOS keydowns can
+      // straddle compositionstart/end, even while DOM focus sits on chrome.
       if (
         desktopImeOwnsKey(event) && !workspaceSequenceOwnsKey
       ) {
@@ -602,7 +602,7 @@ export function DesktopCommandProvider(
       }
       // A visible configuration popover advertises and owns its own J/K/H/L
       // map. Relinquish the workspace prefix before it consumes those keys.
-      if (desktopOverlayOwnsShortcuts(document)) {
+      if (overlayOwnsKeys) {
         clearPendingJumpChord();
         // A modal has its own leader: every control in it gets a mnemonic
         // label. Menus, listboxes and popovers keep their own keys.

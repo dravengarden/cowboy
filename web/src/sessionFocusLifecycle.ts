@@ -86,6 +86,6 @@ export function useSessionFocusLifecycle({
   // id (not the meta object) so status churn doesn't re-fire it; reconnects
   // are handled by the store re-asserting the open id on every onopen.
   useEffect(() => {
-    if (active) openSession(active.id);
+    if (active) openSession(active.id, { reassert: false });
   }, [active?.id]);
 }
