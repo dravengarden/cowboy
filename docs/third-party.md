@@ -125,3 +125,4 @@ import repository modules. `check --apply` runs the same preparation as a gate.
 | Package | Consumers | Deltas |
 | --- | --- | --- |
 | `codex-acp` | `plugins/codex` (source), `plugins/codex-deepseek` (registry) | See [`third_party/codex-acp/patches`](../third_party/codex-acp/patches) and the [Codex runtime notes](../plugins/codex/runtime/README.md) |
+| `claude-agent-acp` | `plugins/claude-code`, `plugins/claude-deepseek` (registry) | None; tracked for `status` and upgrades |

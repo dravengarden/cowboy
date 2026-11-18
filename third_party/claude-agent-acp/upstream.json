@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "name": "claude-agent-acp",
+  "repository": "https://github.com/agentclientprotocol/claude-agent-acp",
+  "version": "0.107.3",
+  "tag": "v0.107.3",
+  "commit": "7ad73cceb932a5d150dae30e26b8dd5a5ab2da0c",
+  "archive_sha256": "0879b94ec4ca2a59946c28c8209de91969ceba29ad37fcf487a704c23786faf2",
+  "pinned_files": {},
+  "release_tag_pattern": "^v\\d+\\.\\d+\\.\\d+$",
+  "consumers": [
+    {
+      "path": "plugins/claude-code",
+      "mode": "registry"
+    },
+    {
+      "path": "plugins/claude-deepseek",
+      "mode": "registry"
+    }
+  ]
+}
