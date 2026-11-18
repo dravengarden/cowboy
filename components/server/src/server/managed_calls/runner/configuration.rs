@@ -24,7 +24,7 @@ pub(super) async fn ready(state: &AppState, store: &Store, record: &Record) -> R
     }
     // Reapply the immutable call intent on recovery too: option reconciliation
     // may have retired an unsupported value since the original registration.
-    if record.preset.is_some() {
+    let applied = if record.preset.is_some() {
         apply_preset(
             state,
             record,
@@ -36,15 +36,21 @@ pub(super) async fn ready(state: &AppState, store: &Store, record: &Record) -> R
                 .provider_generation_digest
                 .as_deref()
                 .ok_or("preset_unavailable")?,
-        )?;
-    }
+        )?
+    } else {
+        None
+    };
     // Capture before native startup: later option reconciliation may retire an
     // unsupported preference. That must not turn an explicit choice into a
-    // successful default-model call.
-    let expected = state
-        .hub
-        .config_preferences(child)
-        .ok_or("configuration_unavailable")?;
+    // successful default-model call. A review confirms exactly the values
+    // that passed the reviewer check, not whatever preferences hold later.
+    let expected = match applied {
+        Some(values) if record.purpose.is_review() => values,
+        _ => state
+            .hub
+            .config_preferences(child)
+            .ok_or("configuration_unavailable")?,
+    };
     state
         .supervisor
         .start_registered_session(child)

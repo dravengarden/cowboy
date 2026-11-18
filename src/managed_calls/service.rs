@@ -111,9 +111,10 @@ impl Ledger {
                         && previous.access == request.access
                         && previous.purpose.profile() == request.purpose.profile()
                         // Analysis shares the read-only profile but not the
-                        // reviewer allowlist: a review continues only a child
-                        // that was itself admitted as a review.
-                        && (!request.purpose.is_review() || previous.purpose.is_review()),
+                        // reviewer allowlist. Keeping every round of a child on
+                        // the same side means its latest call shows how it was
+                        // created: a review continues only a review child.
+                        && request.purpose.is_review() == previous.purpose.is_review(),
                     "managed child unavailable or incompatible"
                 );
                 // A new Tools default must not replace the original model on
