@@ -131,6 +131,9 @@ fn builtin_with_env_and_shell(
         .filter(|(window, compact)| *window > 0 && *compact > 0 && *compact <= *window);
     let mut m = HashMap::new();
     for plugin_id in crate::plugin_runtime_args::launch_plugin_ids() {
+        if !crate::plugin_runtime_args::has_npx_package(plugin_id) {
+            continue;
+        }
         let extra = crate::plugin_runtime_args::cli_arguments(plugin_id);
         let npx = crate::plugin_runtime_args::npx_prefix(plugin_id);
         let mut default_args: Vec<&str> = npx.into_iter().collect();

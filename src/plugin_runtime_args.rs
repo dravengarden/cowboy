@@ -97,6 +97,15 @@ pub fn npx_package_for_plugin(plugin_id: &str) -> &'static str {
         .unwrap_or_else(|| panic!("{plugin_id} provider.json must declare an npm launch package"))
 }
 
+/// Whether a package-less build may launch `plugin_id` through `npx`. A
+/// Provider whose runtime is not an npm package (Antigravity's vendor binary)
+/// has no legacy launch path and runs only from its exact signed generation.
+#[must_use]
+#[cfg(feature = "full")]
+pub fn has_npx_package(plugin_id: &str) -> bool {
+    npm_catalog().by_plugin.contains_key(plugin_id)
+}
+
 #[must_use]
 #[cfg(feature = "full")]
 pub fn npx_prefix(plugin_id: &str) -> [&'static str; 2] {
@@ -1820,6 +1829,8 @@ mod tests {
         assert_eq!(loopback_catalog("claude-deepseek"), None);
         assert_eq!(available_loopback_catalog("claude-deepseek"), None);
         assert!(launch_plugin_ids().contains(&"grok"));
+        assert!(has_npx_package("grok"));
+        assert!(!has_npx_package("antigravity"));
         assert!(cli_arguments("codex-deepseek").is_empty());
         assert!(!cli_arguments("grok").is_empty());
         assert!(remove_environment("claude-deepseek").contains(&"ENABLE_CLAUDEAI_MCP_SERVERS"));
