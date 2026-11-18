@@ -21,6 +21,7 @@ import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { sessionAccountIdentity } from "./accountIdentity";
 import { sessionAccountQuota } from "./usageAccounts";
 import { useNativeAccountUsage } from "./nativeAccountUsage";
+import { AccountParkedStatus } from "./SessionAccountControl";
 
 const USAGE_POLL_MS = 60_000;
 
@@ -106,13 +107,17 @@ export function ProviderQuotaStatus({
     await requestUsageRefresh(account);
   }, [account, named, native.refresh]);
 
-  if (exhausted.length === 0) return null;
+  // A governed (Antigravity) session's parked queue explains itself here.
+  const parked = <AccountParkedStatus sessionId={sessionId} desktop={desktop} />;
+  if (exhausted.length === 0) return parked;
   const activeTurn = status === "busy";
   const details = exhausted.map(limitDetail).join(" · ");
   const identity = session && sessionAccountIdentity(accounts, session);
   const displayName = identity?.label ?? providerName(provider, providerVersion, providerDigest);
 
   return (
+    <>
+    {parked}
     <ProviderQuotaStatusRow
       displayName={displayName}
       details={details}
@@ -121,6 +126,7 @@ export function ProviderQuotaStatus({
       refreshing={refreshing}
       {...(serviceAccount || named?.available ? { refresh } : {})}
     />
+    </>
   );
 }
 

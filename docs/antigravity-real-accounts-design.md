@@ -572,6 +572,27 @@ R3-4, R3-9, R3-10, R3-13 and R3-16, with these concrete choices:
   sequence per session durably and parks that session until the owner
   acknowledges exactly that sequence.
 
+## Account UX (step 5b)
+
+- `accounts.list()` adds `named_only_providers`; the Web reads it so a
+  named-only Provider never offers a default account.
+- **Account card** (`AccountControlsPanel`): title `Antigravity · <name>`,
+  the state badge (sign-in observation for `ok`; reason and `until` for the
+  others), "In use by 1 turn" with the holder session, usage "Not available",
+  the Google notice, the Admitted switch, Clear state (with its reason),
+  Block / Unblock, Sign out (blocked, stop confirmed), Stop units (pending
+  fences), Force release (turn held, stop confirmed); Block, Sign out and
+  Force release confirm first. Sign-in, Machine browser and Remove account
+  stay the existing controls; "Use by default" is hidden.
+- **Picker**: no default entry and nothing preselected; an account is
+  choosable only when admitted, signed in and `ok`, otherwise listed disabled
+  with the reason.
+- **Session**: Session Settings show the account state; a parked queue (or an
+  uncertain effect) shows why in Settings and in the composer's register line,
+  with Acknowledge for an uncertain effect (method shown; the target must be
+  checked first; nothing is resent).
+- **Sign-in dialog** copy is Provider-neutral.
+
 ## Step 4 acceptance (Hawk, 2026-11-18)
 
 Run with the dedicated test account's home, the official `agy` 1.5.9, no

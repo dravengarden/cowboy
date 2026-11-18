@@ -1,0 +1,117 @@
+import { Alert, Box, Button, Link, Stack, Typography } from "@mui/material";
+import WarningAmberRounded from "@mui/icons-material/WarningAmberRounded";
+import { useEffect, useState } from "react";
+import {
+  acknowledgeUncertainEffect, type AccountControl, accountControl, accountStateBadge, type ParkedReason,
+  sessionParkedReason, signInObservation, type UncertainEffect,
+} from "./accountControls";
+import { glyphSize, desktopSize } from "./surface/desktopSize";
+import { mobileComposerPanelHeaderMinHeight } from "./mobileComposerPrimitives";
+import type { SessionMeta } from "./protocol";
+import { ConfirmSheet } from "./Sheet";
+import { requestPickSession } from "./sessionPickRequest";
+import { useStoreSelector } from "./store";
+import { useSubscriptionAccounts } from "./subscriptionAccounts";
+import { sessionAccountIdentity } from "./accountIdentity";
+import { useNativeAccountUsage } from "./nativeAccountUsage";
+import { providerName } from "./providerPresentation";
+
+/** The governed account of a session and why its queue is parked. */
+export function useSessionAccountControl(session: SessionMeta | undefined): {
+  control: AccountControl | undefined; parked: ParkedReason | undefined; title: string; refresh: () => Promise<void>;
+} {
+  const { data, refresh } = useSubscriptionAccounts();
+  const scoped = session && data?.dataset.user_id === session.owner_user_id ? data : undefined;
+  const control = session ? accountControl(scoped, session.provider_account_id) : undefined;
+  const wait = session?.resource_wait;
+  // The queue's wait is pushed with the session; the controls are not.
+  useEffect(() => { if (control && wait !== undefined) void refresh(); }, [wait, control !== undefined, refresh]);
+  // Only a queued prompt is parked; an uncertain effect parks the session
+  // even before the owner sends again.
+  const reason = control && session ? sessionParkedReason(control, session.id, wait) : undefined;
+  const parked = reason && (wait || reason.uncertain) ? reason : undefined;
+  const identity = session ? sessionAccountIdentity(data, session) : undefined;
+  const provider = session ? providerName(session.provider, session.provider_version, session.provider_generation_digest) : "";
+  return { control, parked, title: `${provider} · ${identity?.label ?? ""}`, refresh };
+}
+
+/** Acknowledge one uncertain target effect after the owner checked it. */
+export function UncertainEffectAcknowledge({ session, effect, onDone, size = "small" }: {
+  session: string; effect: UncertainEffect; onDone: () => void; size?: "small" | "medium";
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function acknowledge() {
+    setBusy(true); setError("");
+    try { await acknowledgeUncertainEffect(session, effect.sequence); setOpen(false); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Not acknowledged."); }
+    finally { setBusy(false); onDone(); }
+  }
+  return <>
+    <Button size={size} onClick={() => setOpen(true)} data-uncertain-effect-acknowledge={effect.sequence}>Acknowledge…</Button>
+    <ConfirmSheet open={open} onClose={() => setOpen(false)} title="Acknowledge an uncertain effect?"
+      actions={<Stack direction="row" spacing={1}>
+        <Button onClick={() => setOpen(false)}>Cancel</Button>
+        <Button variant="contained" disabled={busy} onClick={() => void acknowledge()}>I checked the target</Button>
+      </Stack>}>
+      <Stack spacing={1}>
+        <Typography variant="body2">
+          The reply to a <Box component="code">{effect.method}</Box> request was lost, so Cowboy cannot tell whether it changed its target.
+        </Typography>
+        <Typography variant="body2">
+          Check the target in the workspace first (the file or the command's effect). Acknowledging releases this session's queue; Cowboy never resends the request.
+        </Typography>
+        {error && <Alert severity="warning">{error}</Alert>}
+      </Stack>
+    </ConfirmSheet>
+  </>;
+}
+
+function ParkedText({ parked }: { parked: ParkedReason }): React.JSX.Element {
+  const sessions = useStoreSelector((state) => state.sessions);
+  if (!parked.waitingFor) return <>{parked.text}</>;
+  const holder = sessions.find((item) => item.id === parked.waitingFor);
+  return <>
+    Waiting for the account's active turn in{" "}
+    <Link component="button" type="button" variant="caption" sx={{ verticalAlign: "baseline" }}
+      onClick={() => requestPickSession(parked.waitingFor!, holder)}>{holder?.title || parked.waitingFor}</Link>
+  </>;
+}
+
+/** Session Settings: the account's state and why its queue is parked. */
+export function SessionAccountState({ session }: { session: SessionMeta }): React.JSX.Element | null {
+  const { control, parked, refresh } = useSessionAccountControl(session);
+  const { accounts } = useNativeAccountUsage();
+  if (!control) return null;
+  const badge = accountStateBadge(control, signInObservation(accounts.find((item) => item.account_id === control.account_id)));
+  return <Stack spacing={0.5} data-session-account-state={control.state}>
+    <Typography variant="caption" color={badge.tone === "success" ? "success.main" : badge.tone === "default" ? "text.secondary" : "warning.main"}>
+      {badge.label}{badge.detail ? ` · ${badge.detail}` : ""}{control.admitted ? "" : " · Not admitted"}
+    </Typography>
+    {parked && <Typography variant="caption" color="warning.main" data-session-parked><ParkedText parked={parked} /></Typography>}
+    {parked?.uncertain && <Box><UncertainEffectAcknowledge session={session.id} effect={parked.uncertain} onDone={() => void refresh()} /></Box>}
+  </Stack>;
+}
+
+/** The composer's register line for a parked governed session; paint-only
+ * like the quota line it sits beside. */
+export function AccountParkedStatus({ sessionId, desktop }: { sessionId: string; desktop: boolean }): React.JSX.Element | null {
+  const session = useStoreSelector((state) => state.sessions.find((item) => item.id === sessionId));
+  const { parked, title, refresh } = useSessionAccountControl(session);
+  if (!session || !parked) return null;
+  return <Stack data-account-parked-status data-composer-stack-slot="quota" role="status" aria-live="polite"
+    direction="row" alignItems="center" spacing={0.75}
+    sx={{
+      flexShrink: 0, width: "100%", minWidth: 0, boxSizing: "border-box", px: desktop ? 1 : 1.5,
+      minHeight: desktop ? desktopSize(28) : mobileComposerPanelHeaderMinHeight,
+      ...(desktop && { borderBottom: 1, borderColor: "divider" }),
+    }}>
+    <WarningAmberRounded sx={{ fontSize: glyphSize(16), flexShrink: 0, color: "warning.main" }} />
+    <Typography variant="caption" component="span" sx={{ flex: 1, minWidth: 0, color: "text.secondary", overflowWrap: "anywhere" }}>
+      <Box component="span" sx={{ color: "text.primary", fontWeight: 650 }}>{title}</Box>
+      {" · "}<ParkedText parked={parked} />
+    </Typography>
+    {parked.uncertain && <UncertainEffectAcknowledge session={session.id} effect={parked.uncertain} onDone={() => void refresh()} />}
+  </Stack>;
+}

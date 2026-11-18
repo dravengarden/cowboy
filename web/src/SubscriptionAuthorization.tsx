@@ -26,7 +26,7 @@ export function SubscriptionAuthorization({ label, link, challenge, busy, checki
   return <Stack spacing={1.5} data-subscription-authorization={label}>
     <Typography variant="body2">
       Open the sign-in page in the Machine browser of <strong>{label}</strong>.
-      On Claude’s page, check that you are authorizing this account.
+      On the Provider’s page, check that you are signing in to the account you intend for this card.
     </Typography>
     {scope && machine
       ? <LinkBrowserEntry owner={scope.owner} dataset={scope.dataset} account={scope.account}

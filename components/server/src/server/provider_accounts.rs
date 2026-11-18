@@ -182,7 +182,9 @@ pub(super) async fn read_value(state: &Arc<AppState>, owner: &str) -> Result<Val
         // Provider (a share holds at most one member per family).
         "browser_shares":shares,"browser_share_families":families,
         // Named-only (Antigravity) accounts: admission, durable state and
-        // reason, the active turn, Machine fences and uncertain effects.
+        // reason, the active turn, Machine fences, uncertain effects and the
+        // kill switch's logout. Their Providers have no default account.
+        "named_only_providers":crate::provider_account::NAMED_ONLY_PROVIDERS,
         "account_controls":controls::read_value(state, &registry)}),
     )
 }

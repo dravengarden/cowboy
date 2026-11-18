@@ -3,6 +3,7 @@ import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import { productSessionSignal } from "./productSessionEnd";
 import { productSyncPrincipal } from "./productSyncIdentity";
 import { type SubscriptionDisplay, validSubscriptionDisplay } from "./subscriptionDisplay";
+import { type AccountControls, validAccountControls } from "./accountControls";
 
 export interface SubscriptionAccount {
   id: string;
@@ -95,6 +96,11 @@ export interface SubscriptionSnapshot {
   /** Legacy default cards that move into a named account without a new
    * sign-in: card → its Provider, adoption state and account id. */
   legacy_adoption?: Record<string, LegacyAdoption>;
+  /** Providers whose sessions need a named account (Antigravity). */
+  named_only_providers?: string[];
+  /** Their accounts' admission, state, active turn, fences, uncertain
+   * effects and logout (`accounts.list().account_controls`). */
+  account_controls?: AccountControls;
 }
 export interface LegacyAdoption { provider_id: string; state: "available" | "resumable" | "completed"; account_id: string }
 
@@ -168,6 +174,8 @@ export function validSubscriptionSnapshot(value: unknown, owner: string | undefi
     (value.portable_credentials === undefined || (Array.isArray(value.portable_credentials) && value.portable_credentials.every(validPortableCredential))) &&
     (value.subscription_providers === undefined || (Array.isArray(value.subscription_providers) && value.subscription_providers.every(text))) &&
     (value.legacy_adoption === undefined || (record(value.legacy_adoption) && Object.values(value.legacy_adoption).every(validLegacyAdoption))) &&
+    (value.named_only_providers === undefined || (Array.isArray(value.named_only_providers) && value.named_only_providers.every(text))) &&
+    (value.account_controls === undefined || validAccountControls(value.account_controls)) &&
     typeof value.session_admission === "string" && record(registry.defaults) && Object.values(registry.defaults).every(text) &&
     Array.isArray(registry.accounts) && registry.accounts.every((account: unknown) => record(account) &&
       text(account.id) && text(account.provider_id) && text(account.label) && typeof account.enabled === "boolean" &&

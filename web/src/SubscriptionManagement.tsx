@@ -17,6 +17,9 @@ import { browserErrorText } from "./machineBrowser/api";
 import { ProviderAccountIdentity, providerAccountCardSx } from "./ProviderAccountIdentity";
 import { legacySubscriptionLabel, validLegacyLabels, validSubscriptionLabel } from "./subscriptionDisplay";
 import { providerDefault, type SubscriptionSnapshot as Snapshot, validSubscriptionSnapshot } from "./subscriptionAccounts";
+import { accountControl } from "./accountControls";
+import { AccountControlsPanel } from "./AccountControlsPanel";
+import { useNativeAccountUsage } from "./nativeAccountUsage";
 export { validSubscriptionSnapshot } from "./subscriptionAccounts";
 export { validSubscriptionLabel } from "./subscriptionDisplay";
 
@@ -107,6 +110,7 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
   const [label, setLabel] = useState("");
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<string[]>([]);
+  const native = useNativeAccountUsage(snapshot?.registry.revision);
   const lock = useRef(false);
   const alive = useRef(false);
   const loading = useRef(0);
@@ -234,11 +238,13 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
   };
   const named: SubscriptionCards["named"] = snapshot?.registry.accounts.filter((account) => !snapshot.revoked_accounts?.includes(account.id)).map((account) => {
     const entry = providers.find((entry) => entry.provider_id === account.provider_id);
+    const control = accountControl(snapshot, account.id);
+    const providerLabel = entry?.manifest.display.name ?? account.provider_id;
     return { id: account.id, provider: account.provider_id,
     content: <Paper key={`${owner}:${snapshot.dataset.dataset_id}:${account.id}`} variant="outlined" sx={providerAccountCardSx} data-subscription-account={account.id}>
       <Stack spacing={1}>
-        <ProviderAccountIdentity manifests={entry ? [entry.manifest] : []} title={account.label}
-          summary={`${entry?.manifest.display.name ?? account.provider_id}${snapshot.registry.defaults[account.provider_id] === account.id ? " · Default" : ""}${account.revoking ? " · Removal requested" : !account.enabled ? " · Disabled" : ""}`}
+        <ProviderAccountIdentity manifests={entry ? [entry.manifest] : []} title={control ? `${providerLabel} · ${account.label}` : account.label}
+          summary={`${providerLabel}${snapshot.registry.defaults[account.provider_id] === account.id ? " · Default" : ""}${account.revoking ? " · Removal requested" : !account.enabled ? " · Disabled" : ""}`}
           actions={<Button size="small" aria-expanded={editing.includes(account.id)} onClick={() => setEditing((old) => old.includes(account.id) ? old.filter((id) => id !== account.id) : [...old, account.id])}>{editing.includes(account.id) ? "Done" : "Manage"}</Button>}>
           {owner && (snapshot.portable_providers?.includes(account.provider_id)
             ? <SubscriptionApiKey account={account.id} credential={snapshot.portable_credentials?.find((item) => item.account_id === account.id)}
@@ -248,6 +254,8 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
               vault={snapshot.subscription_providers?.includes(account.provider_id) ? snapshot.portable_credentials?.find((item) => item.account_id === account.id) ?? null : undefined}
               onSignedIn={() => void load()}
               expanded={editing.includes(account.id)} disabled={disabled || !account.enabled || Boolean(account.revoking)} />)}
+          {control && <AccountControlsPanel control={control} disabled={disabled || Boolean(account.revoking)} onChange={() => void load()}
+            observation={native.accounts.find((item) => item.account_id === account.id && item.provider_id === account.provider_id)} />}
         </ProviderAccountIdentity>
         {editing.includes(account.id) && <Stack spacing={1}>
           <Stack direction="row" spacing={1}>
@@ -256,7 +264,7 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
           </Stack>
           <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
             <Button disabled={disabled || account.revoking} onClick={() => save({ type: "set_enabled", id: account.id, enabled: !account.enabled })}>{account.revoking ? "Revoked access" : account.enabled ? "Disable" : "Enable"}</Button>
-            <Button disabled={disabled || !account.enabled || snapshot.registry.defaults[account.provider_id] === account.id || !providerSubscriptionEnabled(snapshot, account.provider_id)} onClick={() => save({ type: "set_default", provider_id: account.provider_id, id: account.id })}>Use by default</Button>
+            {!control && <Button disabled={disabled || !account.enabled || snapshot.registry.defaults[account.provider_id] === account.id || !providerSubscriptionEnabled(snapshot, account.provider_id)} onClick={() => save({ type: "set_default", provider_id: account.provider_id, id: account.id })}>Use by default</Button>}
             {snapshot.registry.defaults[account.provider_id] === account.id && <Button disabled={disabled} onClick={() => save({ type: "set_default", provider_id: account.provider_id, id: "default" })}>Use existing account by default</Button>}
             {owner && <SubscriptionBrowserActions account={account} owner={owner} dataset={snapshot.dataset.dataset_id} disabled={disabled} shared={sharedBrowser(snapshot, account.id)}
               onSetBrowserEnabled={(enabled) => save({ type: "set_browser_enabled", id: account.id, enabled })} />}

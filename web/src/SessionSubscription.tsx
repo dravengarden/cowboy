@@ -6,9 +6,10 @@ import { useNativeAccountUsage } from "./nativeAccountUsage";
 import { loadUsageSnapshot, useStoreSelector } from "./store";
 import { providerUsage, subscriptionQuotaHint } from "./usageLimits";
 import { accountServes, providerDefault } from "./subscriptionAccounts";
+import { accountControl, type ControlledAccounts, namedOnlyProvider, pickerUnavailableReason, validAccountControls } from "./accountControls";
 
 interface Account { id: string; provider_id: string; label: string; enabled: boolean }
-interface Accounts {
+interface Accounts extends ControlledAccounts {
   registry: { accounts: Account[]; defaults: Record<string, string> }; display_preferences?: SubscriptionDisplay;
   session_admission: string; session_providers?: string[]; portable_scopes?: string[][];
 }
@@ -37,6 +38,8 @@ export function subscriptionLoginReason(
 
 export function subscriptionAllowed(data: Accounts | undefined, provider: string, choice: string): boolean {
   if (!data) return false;
+  // A named-only Provider (Antigravity) has no default account.
+  if (namedOnlyProvider(data, provider) && (!choice || choice === "default")) return false;
   const id = choice || providerDefault(data, provider) || "default";
   if (id === "default") return true;
   return providerSubscriptionEnabled(data, provider) && data.registry.accounts.some((account) =>
@@ -52,6 +55,22 @@ function subscriptionUnavailableReason(data: Accounts | undefined, provider: str
   if (data?.session_admission !== "enabled") return "Session access not enabled";
   if (!data.session_providers?.includes(provider)) return "Additional accounts not supported by this Provider";
   return undefined;
+}
+
+/** The choosable accounts of the picker. A named-only Provider lists only
+ * its named accounts: admitted, signed-in, `ok` ones enabled, every other
+ * one disabled with its reason, and nothing preselected. */
+export function subscriptionChoices(data: Accounts | undefined, provider: string, loginReason: (id: string) => string | undefined, now = Date.now()) {
+  const accounts = data?.registry.accounts.filter((account) => accountServes(data, account.provider_id, provider)) ?? [];
+  const namedOnly = namedOnlyProvider(data, provider);
+  const defaultId = providerDefault(data, provider) ?? "default";
+  const legacyLabel = legacySubscriptionLabel(data?.display_preferences, provider);
+  return [...namedOnly ? [] : [{ id: "default", label: legacyLabel }], ...accounts].map((account) => ({
+    ...account,
+    label: `${account.label}${data && !namedOnly && account.id === defaultId ? " · Default" : ""}`,
+    reason: subscriptionUnavailableReason(data, provider, account.id) ??
+      (namedOnly ? pickerUnavailableReason(accountControl(data, account.id), loginReason(account.id), now) : loginReason(account.id)),
+  }));
 }
 
 /** One shared creation field for desktop and mobile; never selects a Machine. */
@@ -76,10 +95,12 @@ export function useSessionSubscription(active: boolean, provider: string, prefer
     : native.accounts.find((item) => item.account_id === id && item.provider_id === provider)?.usage);
   // A usable preferred account (the directory's latest session) precedes the
   // registry default; an unavailable one falls back instead of blocking.
-  const hinted = preferred && subscriptionAllowed(data, provider, preferred) && !loginReason(preferred) ? preferred : "";
+  const namedOnly = namedOnlyProvider(data, provider);
+  const hinted = !namedOnly && preferred && subscriptionAllowed(data, provider, preferred) && !loginReason(preferred) ? preferred : "";
   // Resolve the default in this snapshot. Creation must submit the exact
   // account shown in the field, even if another client changes the default.
-  const value = choice || hinted || (data ? providerDefault(data, provider) || "default" : "");
+  // A named-only Provider's account is never preselected.
+  const value = choice || hinted || (data && !namedOnly ? providerDefault(data, provider) || "default" : "");
   useEffect(() => {
     if (!active) return;
     const changed = (event: Event) => {
@@ -107,7 +128,10 @@ export function useSessionSubscription(active: boolean, provider: string, prefer
           typeof next.session_admission !== "string" || (next.session_providers !== undefined &&
             (!Array.isArray(next.session_providers) || !next.session_providers.every((id) => typeof id === "string"))) ||
           (next.portable_scopes !== undefined && (!Array.isArray(next.portable_scopes) ||
-            !next.portable_scopes.every((scope) => Array.isArray(scope) && scope.every((id) => typeof id === "string"))))) throw new Error("invalid response");
+            !next.portable_scopes.every((scope) => Array.isArray(scope) && scope.every((id) => typeof id === "string")))) ||
+          (next.named_only_providers !== undefined && (!Array.isArray(next.named_only_providers) ||
+            !next.named_only_providers.every((id) => typeof id === "string"))) ||
+          (next.account_controls !== undefined && !validAccountControls(next.account_controls))) throw new Error("invalid response");
         if (!abort.signal.aborted) setData(next);
       }).catch(() => { if (!abort.signal.aborted) setError(true); });
     return () => abort.abort();
@@ -117,7 +141,9 @@ export function useSessionSubscription(active: boolean, provider: string, prefer
     hinted: !choice && Boolean(hinted),
     /** The user picked a subscription instead of the default. */
     chosen: Boolean(choice),
-    allowed: (subscriptionAllowed(data, provider, value) && !loginReason(value)) || (error && value === "default"),
+    allowed: (subscriptionAllowed(data, provider, value) && !(namedOnly
+      ? pickerUnavailableReason(accountControl(data, value), loginReason(value))
+      : loginReason(value))) || (error && value === "default" && !namedOnly),
     loginReason,
     quota,
     select: (id: string) => select({ provider, id }),
@@ -129,25 +155,20 @@ export function SessionSubscription({ state, disabled, desktop, helperText }: {
   state: ReturnType<typeof useSessionSubscription>; disabled: boolean; desktop: boolean;
   helperText?: string | undefined;
 }): React.JSX.Element {
-  const accounts = state.data?.registry.accounts.filter((account) => accountServes(state.data, account.provider_id, state.provider)) ?? [];
-  const defaultId = providerDefault(state.data, state.provider) ?? "default";
-  const legacyLabel = legacySubscriptionLabel(state.data?.display_preferences, state.provider);
   const selectedId = state.value;
-  const choices = [{ id: "default", label: legacyLabel }, ...accounts].map((account) => ({
-    ...account,
-    label: `${account.label}${state.data && account.id === defaultId ? " · Default" : ""}`,
-    reason: subscriptionUnavailableReason(state.data, state.provider, account.id) ?? state.loginReason(account.id),
-    quota: state.quota(account.id),
+  const namedOnly = namedOnlyProvider(state.data, state.provider);
+  const choices = subscriptionChoices(state.data, state.provider, state.loginReason).map((account) => ({
+    ...account, quota: namedOnly ? undefined : state.quota(account.id),
   }));
   const selected = choices.find((account) => account.id === selectedId);
-  const placeholder = selectedId ? "Account unavailable" : state.error ? "Choose a subscription" : "Loading subscriptions…";
+  const placeholder = selectedId ? "Account unavailable" : state.error || (state.data && namedOnly) ? "Choose an account" : "Loading subscriptions…";
   return (
     <Stack spacing={0.5} data-session-subscription>
       <TextField select fullWidth size={desktop ? "small" : "medium"} label="Subscription"
         slotProps={{ select: { displayEmpty: true, renderValue: () => selected?.label ?? placeholder }, inputLabel: { shrink: true } }}
         value={selectedId} disabled={disabled || (!state.data && !state.error)}
         error={state.error || Boolean(state.data && !state.allowed)}
-        helperText={state.error ? "Could not load subscriptions." : !state.data ? "Loading subscriptions…" : !state.allowed ? selected?.reason ?? "Account unavailable" : helperText ?? selected?.quota ?? "Independent of the selected Machine."}
+        helperText={state.error ? "Could not load subscriptions." : !state.data ? "Loading subscriptions…" : !state.allowed ? selected?.reason ?? (namedOnly && !selectedId ? "Choose a signed-in, admitted account." : "Account unavailable") : helperText ?? selected?.quota ?? "Independent of the selected Machine."}
         onChange={(event) => state.select(event.target.value)}>
         {!selected && <MenuItem value={selectedId} disabled>{placeholder}</MenuItem>}
         {choices.map((account) => <MenuItem key={account.id} value={account.id} disabled={Boolean(account.reason)}>

@@ -10,6 +10,7 @@ import { sessionProviderUsageRows } from "./sessionSettingsPresentation";
 import { useStoreSelector } from "./store";
 import { useCallClock } from "./managedCalls";
 import { providerName } from "./providerPresentation";
+import { SessionAccountState } from "./SessionAccountControl";
 
 /** Session binding is immutable. In particular a named account must never mount
  * the Service credential editor or consume its Provider-wide quota collector. */
@@ -40,6 +41,7 @@ export function SessionAccountDetails({ session }: { session: SessionMeta }): Re
         {native.accounts.some((item) => item.account_id === account.id && item.refreshing) ? " · Refreshing…" : ""}
       </Typography>
       {scoped && !account.available && <Typography variant="caption" color="warning.main">{account.description}</Typography>}
+      <SessionAccountState session={session} />
       {rows.length ? rows.map((row) => <Box key={row.id}>
         <Stack direction="row" justifyContent="space-between" spacing={1}>
           <Typography variant="caption" color="text.secondary">{row.label}</Typography>
