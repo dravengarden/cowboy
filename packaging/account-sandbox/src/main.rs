@@ -17,6 +17,7 @@ mod meta;
 mod probe;
 mod protocol;
 mod raw;
+mod remove;
 mod safefs;
 mod server;
 mod start;

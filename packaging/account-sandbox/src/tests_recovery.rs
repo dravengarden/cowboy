@@ -89,8 +89,11 @@ fn a_stop_before_the_account_exists_fences_its_first_unit() {
 fn a_removed_account_keeps_its_fence() {
     let f = fixture();
     f.call(fence("stop", &f.key, Some(3))).unwrap();
-    f.call(Request::RemoveAccount { key: f.key.clone() })
-        .unwrap();
+    f.call(Request::RemoveAccount {
+        key: f.key.clone(),
+        operation_id: None,
+    })
+    .unwrap();
     f.call(Request::EnsureAccount {
         service_id: "svc".into(),
         account_id: "acct".into(),

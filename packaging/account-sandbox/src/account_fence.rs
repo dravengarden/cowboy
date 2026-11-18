@@ -139,7 +139,7 @@ impl Daemon {
         })))
     }
 
-    fn ensure_none_live(&self, key: &str) -> Outcome<()> {
+    pub(crate) fn ensure_none_live(&self, key: &str) -> Outcome<()> {
         let live: Vec<String> = self
             .host
             .list_units(&format!("{}-*", ids::user_name(key)))?
@@ -181,13 +181,20 @@ impl Daemon {
         Ok(())
     }
 
-    /// Keep a removed account's fence so a recreated account stays fenced.
-    pub(crate) fn keep_tombstone(&self, key: &str, meta: &AccountMeta) -> Outcome<()> {
+    /// Keep a removed account's fence so a recreated account stays fenced,
+    /// with the removal that is about to delete its metadata.
+    pub(crate) fn keep_tombstone(
+        &self,
+        key: &str,
+        meta: &AccountMeta,
+        removal: fence::Removal,
+    ) -> Outcome<()> {
         let tombstone = fence::Tombstone {
             schema: 0,
             fence_epoch: meta.fence_epoch,
             fenced: meta.fenced,
             disposition: meta.disposition.clone(),
+            removal: Some(removal),
         };
         fence::save(self.root.as_fd(), key, &tombstone)?;
         Ok(())

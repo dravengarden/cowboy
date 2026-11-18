@@ -112,6 +112,18 @@ pub struct Tombstone {
     pub fence_epoch: u64,
     pub fenced: Option<u64>,
     pub disposition: Option<Disposition>,
+    /// The `remove_account` that removed the account, kept so a retry of the
+    /// same operation is answered as its replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removal: Option<Removal>,
+}
+
+/// A completed or started removal of an account's home and system user.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Removal {
+    pub operation_id: Option<String>,
+    pub user: String,
 }
 
 fn file_name(key: &str) -> String {
@@ -220,6 +232,7 @@ mod tests {
             fence_epoch: 2,
             fenced: Some(2),
             disposition: op(FenceAction::Stop, 1, "s1").disposition(),
+            removal: None,
         };
         save(root.as_fd(), "0123456789abcdef", &tombstone).unwrap();
         let loaded = load(root.as_fd(), "0123456789abcdef").unwrap().unwrap();

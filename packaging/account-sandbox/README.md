@@ -97,7 +97,7 @@ each: `{"ok":true,"result":{...}}` or
 | `list_units` | `key` | `units` (each with `alive`, `owned`), `unrecorded`, `credential`, `fenced`, `boot_id` |
 | `unit_state` | `unit` | `recorded`, `state`, `alive`, `owned`, `invocation_id`, `boot_id`, `current_boot_id`; unrecorded units add `requires_reconciliation` |
 | `logout_cleanup` | `key`, `credential_generation`, optional `operation_id` | `credential_generation`, `token_removed`, `credential_cleared`, `history_retained`, `superseded`, `operation_id` |
-| `remove_account` | `key` | `removed` |
+| `remove_account` | `key`, optional `operation_id` | `removed`, `home_removed`, `user_removed`, `operation_id`, `replayed` |
 
 `key = hex(sha256("cowboy-account-v1" || 0x00 || service_id || 0x00 || account_id))[..16]`.
 
@@ -202,8 +202,12 @@ image is mounted; everything beneath it uses the full set again.
   `precondition`; repeating a completed cleanup of the current generation
   returns `token_removed: false`.
 - `remove_account` requires the fence, a logged-out (or never signed-in)
-  account and no token; it stops units, unmounts and deletes the tree, then
-  removes the user.
+  account and no token; it stops units, records the removal in the fence
+  tombstone, unmounts and deletes the tree except `meta.json`, removes the
+  user and deletes `meta.json` last, so a retry after a crash finishes the
+  same removal. An account without metadata has no home: its units are
+  stopped, a remaining user is removed and the removal is confirmed (a
+  `replayed` one when the tombstone records the same `operation_id`).
 
 ## Known limits
 

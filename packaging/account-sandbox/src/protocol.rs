@@ -107,6 +107,10 @@ pub enum Request {
     },
     RemoveAccount {
         key: String,
+        /// The caller's idempotent operation; a retry of the completed
+        /// removal is answered as its replay.
+        #[serde(default)]
+        operation_id: Option<String>,
     },
 }
 
@@ -246,14 +250,15 @@ fn validate(request: &Request) -> Result<()> {
         }
         Request::LogoutCleanup {
             key, operation_id, ..
-        } => {
+        }
+        | Request::RemoveAccount { key, operation_id } => {
             ids::validate_key(key)?;
             if let Some(operation_id) = operation_id {
                 ids::validate_id("operation_id", operation_id)?;
             }
             Ok(())
         }
-        Request::ListUnits { key } | Request::RemoveAccount { key } => ids::validate_key(key),
+        Request::ListUnits { key } => ids::validate_key(key),
     }
 }
 

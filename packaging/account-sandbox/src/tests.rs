@@ -488,7 +488,10 @@ fn remove_account_requires_fence_and_logout() {
     let f = fixture();
     f.sign_in(1);
     assert_eq!(
-        code(f.call(Request::RemoveAccount { key: f.key.clone() })),
+        code(f.call(Request::RemoveAccount {
+            key: f.key.clone(),
+            operation_id: None,
+        })),
         Code::Precondition
     );
     f.call(Request::StopAccount {
@@ -498,7 +501,10 @@ fn remove_account_requires_fence_and_logout() {
     })
     .unwrap();
     assert_eq!(
-        code(f.call(Request::RemoveAccount { key: f.key.clone() })),
+        code(f.call(Request::RemoveAccount {
+            key: f.key.clone(),
+            operation_id: None,
+        })),
         Code::Precondition
     );
     f.call(Request::LogoutCleanup {
@@ -507,11 +513,65 @@ fn remove_account_requires_fence_and_logout() {
         operation_id: None,
     })
     .unwrap();
-    f.call(Request::RemoveAccount { key: f.key.clone() })
-        .unwrap();
+    f.call(Request::RemoveAccount {
+        key: f.key.clone(),
+        operation_id: None,
+    })
+    .unwrap();
     assert!(!f.account_dir().exists());
     assert!(!f.host.state().mounted.contains(&f.home()));
     assert_eq!(f.host.state().removed_users, [format!("cga-{}", f.key)]);
+}
+
+#[test]
+fn a_removal_is_idempotent_per_operation_and_finishes_after_a_crash() {
+    let f = fixture();
+    f.sign_in(1);
+    f.call(Request::StopAccount {
+        key: f.key.clone(),
+        revision: None,
+        operation_id: None,
+    })
+    .unwrap();
+    f.call(Request::LogoutCleanup {
+        key: f.key.clone(),
+        credential_generation: 1,
+        operation_id: None,
+    })
+    .unwrap();
+    let remove = |operation: &str| {
+        f.call(Request::RemoveAccount {
+            key: f.key.clone(),
+            operation_id: Some(operation.into()),
+        })
+    };
+    let first = remove("revoke-1").unwrap();
+    assert_eq!(
+        (
+            first["home_removed"].as_bool(),
+            first["user_removed"].as_bool()
+        ),
+        (Some(true), Some(true))
+    );
+    assert_eq!(first["replayed"], false);
+    // A retry after a lost reply is the same removal's replay.
+    let again = remove("revoke-1").unwrap();
+    assert_eq!(again["replayed"], true);
+    assert_eq!(again["operation_id"], "revoke-1");
+    // A crash after the tree went but before the user did: the retry
+    // removes the user it recorded.
+    let user = format!("cga-{}", f.key);
+    f.host.state().users.insert(user.clone(), (4242, 4242));
+    let finished = remove("revoke-1").unwrap();
+    assert_eq!(finished["user_removed"], true);
+    assert!(!f.host.state().users.contains_key(&user));
+    // The fence survives the removal, so a recreated account stays fenced.
+    f.call(Request::EnsureAccount {
+        service_id: "svc".into(),
+        account_id: "acct".into(),
+    })
+    .unwrap();
+    assert!(f.meta().fenced.is_some());
 }
 
 #[test]

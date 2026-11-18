@@ -104,7 +104,7 @@ pub struct Daemon {
     instance: String,
     pub(crate) boot_id: String,
     pub(crate) mask_var_run: bool,
-    locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    pub(crate) locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     pub(crate) store_lock: RwLock<()>,
     live_connections: Mutex<HashSet<String>>,
     pub(crate) owned: Mutex<HashMap<String, Vec<(String, String)>>>,
@@ -282,7 +282,9 @@ impl Daemon {
                 credential_generation,
                 operation_id,
             } => self.logout_cleanup(&key, credential_generation, operation_id.as_deref()),
-            Request::RemoveAccount { key } => self.remove_account(&key),
+            Request::RemoveAccount { key, operation_id } => {
+                self.remove_account(&key, operation_id.as_deref())
+            }
         }
     }
 
@@ -919,56 +921,6 @@ impl Daemon {
             Self::save(dir, meta)?;
             Ok(receipt(removed, false))
         })
-    }
-
-    fn remove_account(&self, key: &str) -> Outcome<Reply> {
-        let result = self.with_account(key, |dir, meta| {
-            if meta.fenced.is_none() {
-                return Err(fail(
-                    Code::Precondition,
-                    "remove_account requires a fenced account",
-                ));
-            }
-            if !matches!(
-                meta.credential.state,
-                CredentialState::SignedOut
-                    | CredentialState::LoggedOut
-                    | CredentialState::LoginInterrupted
-            ) {
-                return Err(fail(
-                    Code::Precondition,
-                    "remove_account requires a logged-out account",
-                ));
-            }
-            self.stop_all(dir, meta, |_| true)?;
-            Self::save(dir, meta)?;
-            self.keep_tombstone(key, meta)?;
-            let paths = self.paths(key);
-            if self.host.is_mounted(&paths.home)? {
-                let home = self.open_home(dir, key)?;
-                if Self::token_present(&home)? {
-                    return Err(fail(
-                        Code::Precondition,
-                        "a token is present; run logout_cleanup first",
-                    ));
-                }
-                drop(home);
-                self.host.unmount(&paths.home)?;
-            }
-            for name in safefs::list(dir.as_fd())? {
-                if name != meta::META_FILE {
-                    safefs::remove_tree(dir.as_fd(), &name)?;
-                }
-            }
-            let accounts = self.accounts()?;
-            safefs::remove_tree(accounts.as_fd(), key)?;
-            self.host.remove_user(&meta.user)?;
-            Ok(Reply::value(json!({ "key": key, "removed": true })))
-        });
-        if result.is_ok() {
-            guard(&self.locks).remove(key);
-        }
-        result
     }
 
     /// Activation reconciliation (R3-12): remount images, stop every unit no
