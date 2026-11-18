@@ -139,7 +139,7 @@ fn account_registration_and_queries_round_trip() {
             "unit": "u", "recorded": false, "state": "gone", "alive": false, "owned": false,
             "current_boot_id": "boot",
         })),
-        ok(json!({"key": KEY, "fence_epoch": 2, "stopped": []})),
+        ok(json!({"key": KEY, "fence_epoch": 2, "fenced": true, "stopped": []})),
         ok(json!({"key": KEY, "fence_epoch": 2, "fenced": false})),
         ok(json!({
             "key": KEY, "credential_generation": 3, "token_removed": true,
@@ -157,12 +157,28 @@ fn account_registration_and_queries_round_trip() {
     assert!(units.credential.signed_in(3) && !units.credential.signed_in(2));
     assert_eq!(units.units[0].mode, Mode::Runtime);
     assert!(!client.unit_state("u").unwrap().alive);
-    assert_eq!(client.stop_account(KEY).unwrap().fence_epoch, 2);
-    assert_eq!(client.admit_account(KEY).unwrap().key, KEY);
-    let cleanup = client.logout_cleanup(KEY).unwrap();
+    let order = FenceOrder {
+        revision: 7,
+        operation_id: "fence-7",
+    };
+    assert_eq!(
+        client.stop_account(KEY, Some(order)).unwrap().fence_epoch,
+        2
+    );
+    assert_eq!(client.admit_account(KEY, None).unwrap().key, KEY);
+    let cleanup = client.logout_cleanup(KEY, 3, Some("logout-op")).unwrap();
     assert!(cleanup.credential_cleared && cleanup.history_retained);
     drop(client);
     let requests = fake.server.join().unwrap();
+    assert_eq!(
+        requests[requests.len() - 3],
+        json!({"op": "stop_account", "key": KEY, "revision": 7, "operation_id": "fence-7"})
+    );
+    assert_eq!(
+        requests[requests.len() - 1],
+        json!({"op": "logout_cleanup", "key": KEY, "credential_generation": 3,
+               "operation_id": "logout-op"})
+    );
     assert_eq!(
         requests[0],
         json!({"op": "ensure_account", "service_id": "service", "account_id": "account"})

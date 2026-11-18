@@ -219,6 +219,9 @@ pub struct UnitState {
     pub state: String,
     pub alive: bool,
     pub owned: bool,
+    /// systemd runs this unit without a daemon record (stop it).
+    #[serde(default)]
+    pub requires_reconciliation: bool,
     #[serde(default)]
     pub invocation_id: Option<String>,
     #[serde(default)]
@@ -230,9 +233,30 @@ pub struct UnitState {
 pub struct AccountFence {
     pub key: String,
     pub fence_epoch: u64,
+    /// Whether the account's fence is durably set after the operation.
+    pub fenced: bool,
     /// Units `stop_account` stopped and confirmed gone.
     #[serde(default)]
     pub stopped: Vec<String>,
+    /// The operation repeated the applied disposition.
+    #[serde(default)]
+    pub replayed: bool,
+    /// `false` when the fence is held by a tombstone of an account the
+    /// daemon has not created; `ensure_account` adopts it.
+    #[serde(default = "present")]
+    pub account_present: bool,
+}
+
+fn present() -> bool {
+    true
+}
+
+/// The Controller's ordering of one fence operation: the account control's
+/// revision and the operation's idempotent id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FenceOrder<'a> {
+    pub revision: u64,
+    pub operation_id: &'a str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -242,6 +266,9 @@ pub struct LogoutCleanup {
     pub token_removed: bool,
     pub credential_cleared: bool,
     pub history_retained: bool,
+    /// A newer credential generation exists; nothing was removed.
+    #[serde(default)]
+    pub superseded: bool,
 }
 
 /// One sequential connection to the daemon.
@@ -327,14 +354,31 @@ impl Client {
         Ok(value.get("stopped").and_then(Value::as_bool) == Some(true))
     }
 
-    /// Fence the account and stop every unit of it.
-    pub fn stop_account(&mut self, key: &str) -> Result<AccountFence> {
-        self.call(&json!({"op": "stop_account", "key": key}))
+    /// Fence the account and stop every unit of it. A success is durable
+    /// fence evidence, also for an account the daemon has not created.
+    pub fn stop_account(
+        &mut self,
+        key: &str,
+        order: Option<FenceOrder<'_>>,
+    ) -> Result<AccountFence> {
+        let fence: AccountFence = self.call(&fence_request("stop_account", key, order))?;
+        ensure!(
+            fence.fenced,
+            "the account sandbox did not report the fence set"
+        );
+        Ok(fence)
     }
 
-    /// Clear the account's fence.
-    pub fn admit_account(&mut self, key: &str) -> Result<AccountFence> {
-        self.call(&json!({"op": "admit_account", "key": key}))
+    /// Clear the account's fence; an older `order` than the applied one is
+    /// refused (`conflict`).
+    pub fn admit_account(
+        &mut self,
+        key: &str,
+        order: Option<FenceOrder<'_>>,
+    ) -> Result<AccountFence> {
+        let fence: AccountFence = self.call(&fence_request("admit_account", key, order))?;
+        ensure!(!fence.fenced, "the account sandbox kept the fence set");
+        Ok(fence)
     }
 
     pub fn list_units(&mut self, key: &str) -> Result<AccountUnits> {
@@ -345,9 +389,26 @@ impl Client {
         self.call(&json!({"op": "unit_state", "unit": unit}))
     }
 
-    /// Remove only the vendor token after a logout unit; history stays.
-    pub fn logout_cleanup(&mut self, key: &str) -> Result<LogoutCleanup> {
-        self.call(&json!({"op": "logout_cleanup", "key": key}))
+    /// Remove only the vendor token of credential `generation` after its
+    /// logout unit; history stays. The daemon checks the generation under
+    /// the same lock as the removal, so a newer credential is never cleared.
+    pub fn logout_cleanup(
+        &mut self,
+        key: &str,
+        generation: u64,
+        operation_id: Option<&str>,
+    ) -> Result<LogoutCleanup> {
+        let mut request =
+            json!({"op": "logout_cleanup", "key": key, "credential_generation": generation});
+        if let Some(operation_id) = operation_id {
+            request["operation_id"] = json!(operation_id);
+        }
+        let cleanup: LogoutCleanup = self.call(&request)?;
+        ensure!(
+            cleanup.credential_generation == generation,
+            "the account sandbox cleaned another credential generation"
+        );
+        Ok(cleanup)
     }
 
     fn call<T: serde::de::DeserializeOwned>(&mut self, request: &Value) -> Result<T> {
@@ -490,6 +551,15 @@ fn started(value: Value, fds: Vec<OwnedFd>) -> Result<Started> {
 /// service_id || 0x00 || account_id))[..16]`. Evidence queries use it
 /// without `ensure_account`, which would create a missing account.
 #[must_use]
+fn fence_request(op: &str, key: &str, order: Option<FenceOrder<'_>>) -> Value {
+    let mut request = json!({"op": op, "key": key});
+    if let Some(order) = order {
+        request["revision"] = json!(order.revision);
+        request["operation_id"] = json!(order.operation_id);
+    }
+    request
+}
+
 pub fn account_key(service_id: &str, account_id: &str) -> String {
     use sha2::Digest as _;
     let mut hasher = sha2::Sha256::new();

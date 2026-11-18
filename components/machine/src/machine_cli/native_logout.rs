@@ -62,6 +62,23 @@ pub(super) async fn run(
         let crate::machine_plugins::LogoutPreparation::Observed(outcome) = prepared else {
             unreachable!()
         };
+        if outcome.is_none()
+            && let Some(digest) = providers
+                .native_logout_sandbox_digest(provider, generation)
+                .map_err(|_| "native logout reconciliation failed".to_owned())?
+        {
+            // A sandboxed logout left pending by an outage or a lost reply:
+            // settle it against the daemon's record of this generation.
+            let logout = native_sandbox::reconcile_logout(
+                providers,
+                provider,
+                &digest,
+                (generation, operation),
+                true,
+            )
+            .await?;
+            return finish_sandbox(providers, provider, (generation, login, operation), logout);
+        }
         if outcome == Some(true) {
             cleanup(providers, provider, generation, login, operation)?;
         }
@@ -72,17 +89,9 @@ pub(super) async fn run(
     };
     if let Some(digest) = &prepared.sandbox_generation {
         // The daemon owns the unit; its confirmed end is the tree evidence.
-        let logout = native_sandbox::logout(providers, provider, digest, generation).await?;
-        providers
-            .record_native_logout_tree_exit(provider, generation, operation, logout.succeeded)
-            .map_err(|_| "native logout outcome persistence failed".to_owned())?;
-        if logout.succeeded {
-            cleanup(providers, provider, generation, login, operation)?;
-        }
-        return Ok(Outcome {
-            succeeded: Some(logout.succeeded),
-            sandbox: logout.receipt,
-        });
+        let logout =
+            native_sandbox::logout(providers, provider, digest, (generation, operation)).await?;
+        return finish_sandbox(providers, provider, (generation, login, operation), logout);
     }
     let cowboy_provider_sdk::AuthExecutor::CommandV1 {
         arguments,
@@ -133,6 +142,25 @@ pub(super) async fn run(
     Ok(Outcome {
         succeeded: Some(status.success()),
         sandbox: None,
+    })
+}
+
+/// Persist a confirmed sandboxed logout outcome.
+fn finish_sandbox(
+    providers: &MachinePluginStore,
+    provider: &str,
+    (generation, login, operation): (u64, &str, &str),
+    logout: native_sandbox::Logout,
+) -> Result<Outcome, String> {
+    providers
+        .record_native_logout_tree_exit(provider, generation, operation, logout.succeeded)
+        .map_err(|_| "native logout outcome persistence failed".to_owned())?;
+    if logout.succeeded {
+        cleanup(providers, provider, generation, login, operation)?;
+    }
+    Ok(Outcome {
+        succeeded: Some(logout.succeeded),
+        sandbox: logout.receipt,
     })
 }
 

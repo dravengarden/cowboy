@@ -123,6 +123,23 @@ impl MachinePluginStore {
         })))
     }
 
+    /// The Provider generation digest of an account-sandboxed profile whose
+    /// logout outcome is still unknown; `None` otherwise.
+    pub fn native_logout_sandbox_digest(
+        &self,
+        provider: &str,
+        generation: u64,
+    ) -> Result<Option<String>> {
+        let _guard = self.auth_candidates.lock();
+        let (_, profile) = self.read_native_profile_for_cleanup(provider, generation)?;
+        Ok((profile.account_sandbox
+            && profile
+                .logout
+                .as_ref()
+                .is_some_and(|record| record.succeeded.is_none()))
+        .then(|| profile.digest.clone()))
+    }
+
     pub fn record_native_logout_exit(
         &self,
         provider: &str,

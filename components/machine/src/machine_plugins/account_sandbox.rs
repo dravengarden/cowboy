@@ -143,12 +143,27 @@ impl MachinePluginStore {
         })
     }
 
+    /// The daemon socket and this named account's key.
+    pub fn account_sandbox_address(&self) -> Result<(PathBuf, String)> {
+        let (socket, service) = self.sandbox_host()?;
+        Ok((
+            socket.to_path_buf(),
+            daemon::account_key(service, self.account_id.as_str()),
+        ))
+    }
+
+    /// The daemon's record of this named account: its credential and units.
+    /// A missing account is never created here (`not_found`).
+    pub fn account_sandbox_units(&self) -> Result<daemon::AccountUnits> {
+        let (socket, service) = self.sandbox_host()?;
+        daemon::Client::connect(socket)?
+            .list_units(&daemon::account_key(service, self.account_id.as_str()))
+    }
+
     /// The daemon's evidence that `generation` is this account's current
     /// signed-in credential. A missing account is never created here.
     pub(super) fn account_sandbox_signed_in(&self, generation: u64) -> Result<()> {
-        let (socket, service) = self.sandbox_host()?;
-        let units = daemon::Client::connect(socket)?
-            .list_units(&daemon::account_key(service, self.account_id.as_str()))?;
+        let units = self.account_sandbox_units()?;
         ensure!(
             units.credential.signed_in(generation),
             "the account sandbox holds no signed-in credential of generation {generation}"
@@ -157,8 +172,11 @@ impl MachinePluginStore {
     }
 
     /// Fence or admit one account in the daemon for the Controller's account
-    /// controls. `stop_account` answers only after it confirmed every unit of
-    /// the account gone; an account the daemon never created has no unit.
+    /// controls. `stop_account` answers only after the fence is durable (as
+    /// a tombstone for an account the daemon has not created yet, which the
+    /// account adopts when it is created) and every unit of the account is
+    /// confirmed gone; a daemon refusal, including `not_found`, is never a
+    /// confirmation.
     pub fn account_sandbox_fence(
         &self,
         request: &crate::provider_account::AccountFenceRequest,
@@ -172,23 +190,18 @@ impl MachinePluginStore {
         let (socket, service) = self.sandbox_host()?;
         let key = daemon::account_key(service, request.account_id.as_str());
         let mut client = daemon::Client::connect(socket)?;
-        let result = match request.action {
-            AccountFenceAction::Stop => client.stop_account(&key),
-            AccountFenceAction::Admit => client.admit_account(&key),
+        // The wire request carries no control revision yet, so these
+        // operations are unordered; see `daemon::FenceOrder`.
+        let fence = match request.action {
+            AccountFenceAction::Stop => client.stop_account(&key, None)?,
+            AccountFenceAction::Admit => client.admit_account(&key, None)?,
         };
-        let observation = |fence_epoch, stopped| AccountFenceObservation {
+        Ok(AccountFenceObservation {
             request: request.clone(),
-            fence_epoch,
-            fenced: fence_epoch.is_some() && request.action == AccountFenceAction::Stop,
-            stopped,
-        };
-        match result {
-            Ok(fence) => Ok(observation(Some(fence.fence_epoch), fence.stopped)),
-            Err(error) if daemon::DaemonError::code_of(&error) == Some("not_found") => {
-                Ok(observation(None, Vec::new()))
-            }
-            Err(error) => Err(error),
-        }
+            fence_epoch: Some(fence.fence_epoch),
+            fenced: fence.fenced,
+            stopped: fence.stopped,
+        })
     }
 
     /// Confirm with the daemon that `unit` is gone, stopping it if a lost
@@ -251,7 +264,8 @@ mod tests {
             let mut requests = Vec::new();
             for reply in [
                 serde_json::json!({"ok": true, "result": {
-                    "key": "k", "fence_epoch": 4, "stopped": ["cga-k-runtime-1.service"]}}),
+                    "key": "k", "fence_epoch": 4, "fenced": true,
+                    "stopped": ["cga-k-runtime-1.service"]}}),
                 serde_json::json!({"ok": false, "error": {
                     "code": "not_found", "message": "unknown account"}}),
                 serde_json::json!({"ok": false, "error": {
@@ -281,11 +295,11 @@ mod tests {
         assert_eq!(stopped.fence_epoch, Some(4));
         assert!(stopped.fenced);
         assert_eq!(stopped.stopped, ["cga-k-runtime-1.service"]);
-        // An account the daemon never created has no unit to stop.
-        let absent = store
+        // A daemon refusal is never fence evidence, `not_found` included.
+        let error = store
             .account_sandbox_fence(&request(AccountFenceAction::Admit))
-            .unwrap();
-        assert_eq!((absent.fence_epoch, absent.fenced), (None, false));
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("not_found"), "{error:#}");
         let error = store
             .account_sandbox_fence(&request(AccountFenceAction::Stop))
             .unwrap_err();
