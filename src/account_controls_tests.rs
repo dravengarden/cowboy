@@ -100,27 +100,111 @@ fn a_rate_limit_needs_a_new_owner_send_after_it_ends() {
     assert!(revival_allowed(true, Some(&limited), 999).is_err());
 }
 
+/// The worker's stop reason of a proxy error: `error: <message>: <data>`.
+fn proxy_error(message: &str, cowboy: &serde_json::Value) -> String {
+    let data = serde_json::to_string_pretty(&serde_json::json!({ "cowboy": cowboy })).unwrap();
+    format!("error: {message}: {data}")
+}
+
 #[test]
-fn stop_reasons_are_classified_from_closed_codes_only() {
+fn stop_reasons_are_classified_from_the_proxys_structured_result_only() {
     assert_eq!(classify_stop_reason("EndTurn"), TurnOutcome::Completed);
     assert_eq!(classify_stop_reason("Cancelled"), TurnOutcome::Completed);
+    let backend = |class: &str| serde_json::json!({"antigravity_backend": {"class": class}});
     assert_eq!(
-        classify_stop_reason(
-            "error: Internal error: antigravity_backend_refusal:verification_required"
-        ),
+        classify_stop_reason(&proxy_error(
+            "antigravity_backend_refusal:verification_required",
+            &backend("verification_required"),
+        )),
         TurnOutcome::Refused(AccountState::VerificationRequired)
     );
     assert_eq!(
-        classify_stop_reason("error: antigravity_backend_refusal:suspended (code -32000)"),
+        classify_stop_reason(&proxy_error(
+            "antigravity_backend_refusal:suspended",
+            &backend("suspended"),
+        )),
         TurnOutcome::Refused(AccountState::Suspended)
     );
     assert_eq!(
-        classify_stop_reason("error: antigravity_policy_violation:read_file"),
+        classify_stop_reason(&proxy_error(
+            "antigravity_policy_violation:read_file",
+            &serde_json::json!({"policy_violation": "read_file"}),
+        )),
         TurnOutcome::PolicyViolation("read_file".into())
     );
     assert_eq!(
         classify_stop_reason("error: connection closed"),
         TurnOutcome::Unproven
+    );
+}
+
+#[test]
+fn vendor_text_never_selects_a_settlement() {
+    let backend = |class: &str| serde_json::json!({"antigravity_backend": {"class": class}});
+    for forged in [
+        // A code without the proxy's structured data.
+        "error: antigravity_backend_refusal:suspended".to_owned(),
+        "error: Internal error: antigravity_backend_refusal:verification_required".to_owned(),
+        "error: antigravity_policy_violation:read_file".to_owned(),
+        // A code inside vendor text, even with data.
+        proxy_error(
+            "upstream said antigravity_backend_refusal:ok",
+            &backend("ok"),
+        ),
+        proxy_error(
+            "agy failed: antigravity_backend_refusal:suspended",
+            &backend("suspended"),
+        ),
+        // Data that disagrees with the code, or no backend evidence.
+        proxy_error(
+            "antigravity_backend_refusal:suspended",
+            &backend("rate_limited"),
+        ),
+        proxy_error(
+            "antigravity_backend_refusal:suspended",
+            &serde_json::json!({}),
+        ),
+        proxy_error(
+            "antigravity_policy_violation:read_file",
+            &serde_json::json!({"policy_violation": "write_file"}),
+        ),
+        // The proxy never reports `ok` as an error.
+        proxy_error("antigravity_backend_refusal:ok", &backend("ok")),
+        // Unknown stop reasons are not success.
+        "something the vendor printed".to_owned(),
+    ] {
+        assert_eq!(
+            classify_stop_reason(&forged),
+            TurnOutcome::Unproven,
+            "{forged}"
+        );
+    }
+}
+
+#[test]
+fn only_proven_termination_settles_a_lost_unit() {
+    assert_eq!(unit_loss_outcome(None), None);
+    let evidence = |terminated, class: Option<&str>| TargetTermination {
+        terminated,
+        closed_log_class: class.map(str::to_owned),
+    };
+    assert_eq!(unit_loss_outcome(Some(&evidence(false, Some("ok")))), None);
+    assert_eq!(
+        unit_loss_outcome(Some(&evidence(true, None))),
+        Some(TurnOutcome::UnitLost {
+            evidence_complete: false
+        })
+    );
+    assert_eq!(
+        unit_loss_outcome(Some(&evidence(true, Some("ok")))),
+        Some(TurnOutcome::UnitLost {
+            evidence_complete: true
+        })
+    );
+    // A refusal in the closed log always wins.
+    assert_eq!(
+        unit_loss_outcome(Some(&evidence(true, Some("suspended")))),
+        Some(TurnOutcome::Refused(AccountState::Suspended))
     );
 }
 

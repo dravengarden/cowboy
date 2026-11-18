@@ -8,9 +8,12 @@
 //!   login start and completion, session creation ([`super::named_only_admitted`]),
 //!   every prompt dispatch ([`Controls::before_dispatch`]) and every worker
 //!   revival ([`revival_gate`]);
-//! - the account's single active turn: reserved before dispatch, marked
-//!   `may_have_dispatched` before the prompt is enqueued ([`Turn::mark`]),
-//!   settled by the reconciler from the turn's terminal record;
+//! - the account's single active turn: reserved before dispatch under a
+//!   Controller-generated ID, marked `may_have_dispatched` with the prompt's
+//!   delivery ID and worker epoch in a final eligibility check serialized
+//!   with every control write ([`Turn::mark`]), settled by the reconciler from
+//!   the terminal record of exactly that delivery and epoch, or from the
+//!   execution target's termination evidence;
 //! - Machine fences that stop or admit the account's units.
 //!
 //! Prompts never leave the durable queue while parked: a refused dispatch
@@ -18,20 +21,22 @@
 use super::*;
 use crate::account_controls::{
     self as policy, AccountState, Control, Fence, FenceState, Gate, GateInput, Reservation,
-    ReservationState,
+    TargetTermination,
 };
 use crate::core::SessionMeta;
 use crate::provider_account::{
     AccountFenceAction, AccountFenceObservation, AccountFenceRequest, ProviderAccountId,
 };
-use crate::store::account_controls::StateChange;
+use crate::store::account_controls::{StateChange, TurnKey};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+mod dispatch;
 pub(in crate::server) mod http;
 mod logout;
 mod reconcile;
-pub(in crate::server) use reconcile::start;
+pub(in crate::server) use dispatch::{Handoff, Turn, before_dispatch, handoff, unsent};
+pub(in crate::server) use reconcile::{start, terminal_listener};
 
 /// What the controls observe of the rest of the Controller. [`AppEnv`] is
 /// the production binding; tests substitute their own.
@@ -39,8 +44,6 @@ pub(in crate::server) trait Env: Send + Sync + 'static {
     /// A session's metadata and whether a prompt of it is in flight.
     fn session(&self, id: &str) -> Option<(SessionMeta, bool)>;
     fn sessions(&self) -> Vec<SessionMeta>;
-    /// The stop reason of the first turn end after `after_seq`.
-    fn turn_end(&self, session: &str, after_seq: u64) -> Option<String>;
     fn last_event_seq(&self, session: &str) -> u64;
     fn live_worker(&self, session: &str) -> bool;
     fn worker(&self, session: &str) -> Option<crate::runtime_wire::WorkerSnapshot>;
@@ -63,6 +66,13 @@ pub(in crate::server) trait Env: Send + Sync + 'static {
         'static,
         Result<crate::provider_account::NativeLogoutObservation, String>,
     >;
+    /// The worker/Machine ledger's evidence about the execution target of a
+    /// dispatched turn on its original binding (`turn.machine_id`, worker
+    /// epoch and delivery ID). `None`: no evidence, so no loss is proven.
+    fn termination(
+        &self,
+        turn: &Reservation,
+    ) -> futures::future::BoxFuture<'static, Option<TargetTermination>>;
 }
 
 /// The production [`Env`].
@@ -76,10 +86,6 @@ impl Env for AppEnv {
 
     fn sessions(&self) -> Vec<SessionMeta> {
         self.0.hub.session_list()
-    }
-
-    fn turn_end(&self, session: &str, after_seq: u64) -> Option<String> {
-        self.0.hub.managed_turn(session, after_seq)?.stop_reason
     }
 
     fn last_event_seq(&self, session: &str) -> u64 {
@@ -149,6 +155,18 @@ impl Env for AppEnv {
             pending.await
         })
     }
+
+    fn termination(
+        &self,
+        turn: &Reservation,
+    ) -> futures::future::BoxFuture<'static, Option<TargetTermination>> {
+        // The termination ledger is the account-sandbox daemon's (queried on
+        // `turn.machine_id` by account, session, worker epoch and delivery
+        // ID). Until a Machine answers that query, no loss is proven and the
+        // reservation keeps the account's slot.
+        let _ = turn;
+        Box::pin(std::future::ready(None))
+    }
 }
 
 /// The Controller's view of the durable records, refreshed after every write
@@ -163,8 +181,9 @@ pub(in crate::server) struct Cache {
     dispatching: parking_lot::Mutex<HashSet<String>>,
     /// Fence operations with a Machine command in flight.
     fencing: parking_lot::Mutex<HashSet<String>>,
-    /// Serializes this process's state writers.
-    writes: tokio::sync::Mutex<()>,
+    /// Serializes this process's control writers (state, admission, logout)
+    /// with every dispatch's final eligibility check and handoff.
+    writes: Arc<tokio::sync::Mutex<()>>,
     loaded: AtomicBool,
 }
 
@@ -201,13 +220,20 @@ pub(in crate::server) fn admitted(state: &AppState, account: &ProviderAccountId)
             .any(|id| id == account.as_str())
 }
 
-/// The kill switch, checked wherever admission is (login, session creation).
-pub(in crate::server) fn blocked(state: &AppState, account: &ProviderAccountId) -> bool {
+/// The kill switch, checked wherever admission is (login, session creation),
+/// read from the store: an unloaded or stale cache is never permission.
+pub(in crate::server) async fn blocked(
+    state: &AppState,
+    account: &ProviderAccountId,
+) -> Result<bool, &'static str> {
     state
-        .extensions
-        .account_controls
-        .control(account.as_str())
-        .is_some_and(|control| control.state == AccountState::Blocked)
+        .store
+        .as_ref()
+        .ok_or("unavailable")?
+        .account_control(account.as_str())
+        .await
+        .map(|control| control.is_some_and(|control| control.state == AccountState::Blocked))
+        .map_err(|_| "unavailable")
 }
 
 fn governed(meta: &SessionMeta) -> bool {
@@ -266,115 +292,31 @@ pub(in crate::server) fn revival_gate(
         .revival_gate(meta)
 }
 
-/// The account gate of one dispatch (see [`Controls::before_dispatch`]).
-pub(in crate::server) async fn before_dispatch(
-    state: &Arc<AppState>,
-    session: &str,
-    cmid: Option<&str>,
-    explicit: bool,
-) -> Result<Option<Turn>, String> {
-    let governed = state
-        .hub
-        .session_info(session)
-        .is_some_and(|info| governed(&info.meta));
-    if !governed {
-        return Ok(None);
-    }
-    of(state)
-        .ok_or_else(|| wait("account controls need the durable store"))?
-        .before_dispatch(session, cmid, explicit)
-        .await
-}
-
-/// Report a dispatch's prompt as never enqueued (see [`Turn::unsent`]).
-pub(in crate::server) fn unsent(turn: &mut Option<Turn>) {
-    if let Some(turn) = turn.as_mut() {
-        turn.unsent();
-    }
-}
-
-/// A reserved turn of this process's dispatch. Dropping it releases the
-/// reservation unless [`Turn::mark`] made it `may_have_dispatched` and the
-/// prompt was not reported [`Turn::unsent`].
-pub(in crate::server) struct Turn {
-    controls: Controls,
-    account: String,
-    session: String,
-    turn_id: String,
-    marked: bool,
-    unsent: bool,
-}
-
-impl Turn {
-    /// Persist `may_have_dispatched` before the prompt is enqueued.
-    pub(in crate::server) async fn mark(&mut self) -> Result<(), String> {
-        let epoch = self
-            .controls
-            .env
-            .worker(&self.session)
-            .map(|worker| worker.worker_epoch)
-            .unwrap_or_default();
-        match self
-            .controls
-            .store
-            .mark_account_turn_dispatched(&self.account, &self.turn_id, &epoch, now_ms())
-            .await
-        {
-            Ok(true) => {
-                self.marked = true;
-                let _ = self.controls.refresh().await;
-                Ok(())
-            }
-            Ok(false) => Err(wait("the account's turn reservation changed")),
-            Err(_) => Err(wait("account controls are unavailable")),
-        }
-    }
-
-    /// This dispatch never enqueued the prompt: the enqueue refused it
-    /// synchronously, or a path before it requeued the prompt. That is the
-    /// Controller's positive, in-process proof that nothing left it, so the
-    /// slot is released like a `reserved` one when the guard drops.
-    pub(in crate::server) fn unsent(&mut self) {
-        self.unsent = true;
-    }
-}
-
-impl Drop for Turn {
-    fn drop(&mut self) {
-        let release = if self.unsent {
-            None
-        } else if self.marked {
-            self.controls.cache.dispatching.lock().remove(&self.turn_id);
-            return;
-        } else {
-            Some(ReservationState::Reserved)
-        };
-        // The reconciler skips this turn until the release is durable.
-        let controls = self.controls.clone();
-        let (account, turn) = (self.account.clone(), self.turn_id.clone());
-        tokio::spawn(async move {
-            let _ = controls
-                .store
-                .release_account_turn(&account, &turn, release)
-                .await;
-            let _ = controls.refresh().await;
-            controls.cache.dispatching.lock().remove(&turn);
-        });
-    }
-}
-
 impl Controls {
     #[cfg(test)]
     pub(in crate::server) fn new(env: Arc<dyn Env>, store: Store, cache: Arc<Cache>) -> Self {
         Self { env, store, cache }
     }
 
-    /// Reload every record from the store.
+    /// Reload every record from the store. A failed reload marks the view
+    /// unloaded, so no synchronous gate admits from a stale snapshot.
     pub(in crate::server) async fn refresh(&self) -> Result<(), String> {
         let unavailable = |_| "account controls are unavailable".to_owned();
-        let controls = self.store.account_controls().await.map_err(unavailable)?;
-        let turns = self.store.account_turns().await.map_err(unavailable)?;
-        let fences = self.store.account_fences().await.map_err(unavailable)?;
+        let loaded = async {
+            Ok::<_, String>((
+                self.store.account_controls().await.map_err(unavailable)?,
+                self.store.account_turns().await.map_err(unavailable)?,
+                self.store.account_fences().await.map_err(unavailable)?,
+            ))
+        }
+        .await;
+        let (controls, turns, fences) = match loaded {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                self.cache.loaded.store(false, Ordering::Release);
+                return Err(error);
+            }
+        };
         *self.cache.controls.write() = controls
             .into_iter()
             .map(|control| (control.account_id.clone(), control))
@@ -467,110 +409,38 @@ impl Controls {
         .map_err(|reason| wait(&reason))
     }
 
-    /// The account gate of one dispatch: admission, account state, uncertain
-    /// effects and the account's single active turn. `Err` is the session's
-    /// visible wait; the caller requeues the prompt unchanged.
-    pub(in crate::server) async fn before_dispatch(
-        &self,
-        session: &str,
-        cmid: Option<&str>,
-        explicit: bool,
-    ) -> Result<Option<Turn>, String> {
-        let Some((meta, _)) = self.env.session(session) else {
-            return Ok(None);
-        };
-        if !governed(&meta) {
-            return Ok(None);
-        }
-        if meta.provider_account_id.is_default() {
-            return Err(wait("a named Antigravity account is required"));
-        }
-        self.refresh().await.map_err(|reason| wait(&reason))?;
-        let account = meta.provider_account_id.as_str().to_owned();
-        match self.gate(&meta, explicit) {
-            Gate::Park(reason) => return Err(wait(&reason)),
-            Gate::Proceed {
-                clears_rate_limit: true,
-            } => {
-                let control = self
-                    .cache
-                    .control(&account)
-                    .ok_or_else(|| wait("the account's state changed; send again"))?;
-                self.enter(
-                    &control,
-                    AccountState::Ok,
-                    "owner_send_after_rate_limit",
-                    None,
-                    Some(control.revision),
-                    false,
-                )
-                .await
-                .map_err(|_| wait("the account's state changed; send again"))?;
-            }
-            Gate::Proceed { .. } => {}
-        }
-        let turn_id = cmid.map_or_else(|| format!("turn-{}", uuid::Uuid::new_v4()), str::to_owned);
-        let now = now_ms();
-        // Registered before the row exists, so the reconciler never takes
-        // this reservation for an orphan of an earlier Controller.
-        self.cache.dispatching.lock().insert(turn_id.clone());
-        let wanted = Reservation {
-            account_id: account.clone(),
-            owner_user_id: meta.owner_user_id.clone().unwrap_or_default(),
-            session_id: session.to_owned(),
-            turn_id: turn_id.clone(),
-            worker_epoch: String::new(),
-            after_seq: i64::try_from(self.env.last_event_seq(session)).unwrap_or(i64::MAX),
-            state: ReservationState::Reserved,
-            created_at_ms: now,
-            updated_at_ms: now,
-        };
-        let holder = self.store.reserve_account_turn(&wanted).await;
-        let _ = self.refresh().await;
-        let refused = match &holder {
-            Ok(holder)
-                if holder.turn_id == turn_id && holder.state == ReservationState::Reserved =>
-            {
-                None
-            }
-            Ok(holder) => Some(policy::slot_reason(holder, session).unwrap_or_else(|| {
-                "the previous turn of this session is still being settled".into()
-            })),
-            Err(_) => Some("account controls are unavailable".into()),
-        };
-        if let Some(reason) = refused {
-            self.cache.dispatching.lock().remove(&turn_id);
-            return Err(wait(&reason));
-        }
-        Ok(Some(Turn {
-            controls: self.clone(),
-            account,
-            session: session.to_owned(),
-            turn_id,
-            marked: false,
-            unsent: false,
-        }))
-    }
-
-    /// The Machines that may run units of `account`: its native generations
-    /// and the runtime Machines of its sessions.
-    async fn account_machines(&self, account: &str) -> Vec<String> {
+    /// The Machines that may run units of `account`: its native generations,
+    /// the runtime Machines of its sessions and their execution targets. A
+    /// failed lookup is an error, never an empty (unfenced) set.
+    async fn account_machines(&self, account: &str) -> Result<Vec<String>, &'static str> {
         let mut machines: BTreeSet<String> = self
             .store
             .account_native_machines(account)
             .await
-            .unwrap_or_default()
+            .map_err(|_| "unavailable")?
             .into_iter()
             .collect();
-        machines.extend(
-            self.env
-                .sessions()
-                .into_iter()
-                .filter(|meta| governed(meta) && meta.provider_account_id.as_str() == account)
-                .map(|meta| meta.machine_id),
-        );
+        for meta in self.env.sessions() {
+            if !governed(&meta) || meta.provider_account_id.as_str() != account {
+                continue;
+            }
+            if let Some(record) = &meta.execution_binding {
+                machines.extend(
+                    record
+                        .decode()
+                        .ok()
+                        .map(|binding| binding.environment.machine_id)
+                        .or_else(|| {
+                            record
+                                .recovery()
+                                .map(|intent| intent.previous.environment.machine_id)
+                        }),
+                );
+            }
+            machines.insert(meta.machine_id);
+        }
         machines.remove("local");
-        machines.into_iter().collect()
+        Ok(machines.into_iter().collect())
     }
 
     /// Move `control`'s account to `next`. Entering a unit-stopping state (or
@@ -600,9 +470,15 @@ impl Controls {
             None
         };
         let machines = match action {
-            Some(_) => self.account_machines(&control.account_id).await,
+            Some(_) => self.account_machines(&control.account_id).await?,
             None => Vec::new(),
         };
+        // Lifting the kill switch first cancels every logout target the
+        // Machines were never asked, so no later block can fire it.
+        if control.state == AccountState::Blocked && next != AccountState::Blocked {
+            self.cancel_undispatched_logouts(&control.account_id)
+                .await?;
+        }
         let written = self
             .store
             .set_account_state(&StateChange {
@@ -619,8 +495,10 @@ impl Controls {
             .await
             .map_err(|_| "outcome_unknown")?
             .ok_or("revision_conflict")?;
-        drop(write);
+        // Refreshed before the lock is released: every reader serialized
+        // behind it sees this write.
         let _ = self.refresh().await;
+        drop(write);
         tracing::info!(
             account = %control.account_id,
             state = next.as_str(),
@@ -631,39 +509,48 @@ impl Controls {
         Ok(written)
     }
 
-    /// Apply a settlement's automatic state change: never lowers a more
-    /// severe state and never replaces the owner's block.
-    async fn settle_state(
+    /// Apply one automatic settlement of `turn` atomically: the state change
+    /// (compared with the stored state in the same transaction, so it never
+    /// lowers a more severe state or replaces the owner's block), its stop
+    /// fences and the release. A failure writes nothing and keeps the slot.
+    async fn settle(
         &self,
-        template: &Control,
-        next: AccountState,
-        reason: &str,
-        stop_units: bool,
-    ) {
-        let current = self.cache.control(&template.account_id);
-        let current_state = current.as_ref().map_or(AccountState::Ok, |c| c.state);
-        let raise =
-            next.severity() >= current_state.severity() && current_state != AccountState::Blocked;
-        if !raise && !stop_units {
-            return;
-        }
-        let kept = current
-            .as_ref()
-            .map_or_else(String::new, |c| c.reason.clone());
-        let (next, reason) = if raise {
-            (next, reason)
+        turn: &Reservation,
+        key: TurnKey<'_>,
+        provider: &str,
+        settlement: &policy::Settlement,
+    ) -> Result<crate::store::account_controls::Settled, &'static str> {
+        let state = settlement.state.as_ref().map(|(next, reason)| {
+            let until = (*next == AccountState::RateLimited)
+                .then(|| now_ms().saturating_add(policy::DEFAULT_RATE_LIMIT_MS));
+            (*next, reason.as_str(), until)
+        });
+        let stops = settlement.stop_units || state.is_some_and(|(next, ..)| next.stops_units());
+        let write = self.cache.writes.lock().await;
+        let machines = if stops {
+            self.account_machines(&turn.account_id).await?
         } else {
-            (current_state, kept.as_str())
+            Vec::new()
         };
-        let until = (next == AccountState::RateLimited)
-            .then(|| now_ms().saturating_add(policy::DEFAULT_RATE_LIMIT_MS));
-        let base = current.unwrap_or_else(|| template.clone());
-        if let Err(error) = self
-            .enter(&base, next, reason, until, None, stop_units)
+        let settled = self
+            .store
+            .settle_account(&crate::store::account_controls::Settle {
+                account_id: &turn.account_id,
+                owner_user_id: &turn.owner_user_id,
+                provider_id: provider,
+                turn: Some(key),
+                release: settlement.release,
+                state,
+                stop_units: settlement.stop_units,
+                machines: &machines,
+                now_ms: now_ms(),
+            })
             .await
-        {
-            tracing::warn!(account = %template.account_id, error, "account settlement state write failed");
-        }
+            .map_err(|_| "outcome_unknown")?;
+        let _ = self.refresh().await;
+        drop(write);
+        self.run_fences();
+        Ok(settled)
     }
 
     /// Every unit of the account is confirmed stopped on every Machine.
@@ -705,6 +592,7 @@ impl Controls {
                     "turn": self.cache.turn(account).map(|turn| json!({
                         "session_id": turn.session_id, "turn_id": turn.turn_id,
                         "state": turn.state.as_str(), "created_at_ms": turn.created_at_ms,
+                        "terminal": turn.terminal.is_some(),
                     })),
                     "fences": self.cache.account_fences(account).iter().map(|fence| json!({
                         "machine_id": fence.machine_id, "action": fence.action,

@@ -77,21 +77,7 @@ pub(in crate::server) async fn dispatch(state: Arc<AppState>, req: crate::core::
     }
     let result = match admitted(&state, context).await {
         Err(reason) => Err(reason.to_owned()),
-        Ok(()) => {
-            let key = super::super::provider_fence_key_for_session(&state.hub, &req.session_id);
-            let fences = state.plugin_lifecycle_fences.read();
-            if key
-                .as_ref()
-                .and_then(|key| fences.get(key))
-                .is_some_and(|s| *s != PluginFenceState::Installing)
-            {
-                Err("superagent_provider_held".into())
-            } else {
-                state
-                    .supervisor
-                    .send_superagent_existing(context, &req.text, cmid.to_owned())
-            }
-        }
+        Ok(()) => deliver(&state, context, &req.text, cmid).await,
     };
     if result.is_err() {
         state.hub.abandon_superagent_prompt(&req.session_id, cmid);
@@ -105,4 +91,32 @@ pub(in crate::server) async fn dispatch(state: Arc<AppState>, req: crate::core::
     {
         tracing::warn!(%error, "superagent delivery receipt remains unknown");
     }
+}
+
+/// Hand a supervised prompt to its target worker through the same account
+/// gate as every other dispatch: admission, account state, uncertain
+/// effects and the account's single active turn, reserved and marked with
+/// this delivery before the handoff and settled from its terminal record.
+async fn deliver(
+    state: &Arc<AppState>,
+    context: &DispatchContext,
+    text: &str,
+    cmid: &str,
+) -> Result<(), String> {
+    let target = context.target();
+    super::super::provider_accounts::controls::handoff(state, target, cmid, || {
+        let key = super::super::provider_fence_key_for_session(&state.hub, target);
+        let fences = state.plugin_lifecycle_fences.read();
+        if key
+            .as_ref()
+            .and_then(|key| fences.get(key))
+            .is_some_and(|s| *s != PluginFenceState::Installing)
+        {
+            return Err("superagent_provider_held".into());
+        }
+        state
+            .supervisor
+            .send_superagent_existing(context, text, cmid.to_owned())
+    })
+    .await
 }

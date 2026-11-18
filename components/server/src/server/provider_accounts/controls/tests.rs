@@ -4,7 +4,8 @@
 //! and uncertain effects.
 use super::reconcile::Observation;
 use super::*;
-use crate::account_controls::TurnOutcome;
+use crate::account_controls::{ReservationState, TurnOutcome};
+use crate::remote_runtime::turn_terminal::TurnTerminal;
 use crate::runtime_wire::WorkerSnapshot;
 
 const ACCOUNT: &str = "11111111-1111-4111-8111-111111111111";
@@ -12,7 +13,8 @@ const ACCOUNT: &str = "11111111-1111-4111-8111-111111111111";
 #[derive(Default)]
 struct Fake {
     sessions: parking_lot::Mutex<HashMap<String, (SessionMeta, bool)>>,
-    ends: parking_lot::Mutex<HashMap<String, String>>,
+    /// The termination ledger's evidence, per session.
+    terminations: parking_lot::Mutex<HashMap<String, TargetTermination>>,
     live: parking_lot::Mutex<HashSet<String>>,
     workers: parking_lot::Mutex<HashMap<String, WorkerSnapshot>>,
     connected: parking_lot::Mutex<HashSet<String>>,
@@ -34,9 +36,6 @@ impl Env for Fake {
             .values()
             .map(|(meta, _)| meta.clone())
             .collect()
-    }
-    fn turn_end(&self, session: &str, _after_seq: u64) -> Option<String> {
-        self.ends.lock().get(session).cloned()
     }
     fn last_event_seq(&self, _session: &str) -> u64 {
         5
@@ -94,6 +93,13 @@ impl Env for Fake {
             })
         })
     }
+    fn termination(
+        &self,
+        turn: &Reservation,
+    ) -> futures::future::BoxFuture<'static, Option<TargetTermination>> {
+        let evidence = self.terminations.lock().get(&turn.session_id).cloned();
+        Box::pin(std::future::ready(evidence))
+    }
 }
 
 impl Fake {
@@ -120,6 +126,25 @@ impl Fake {
         let entry = sessions.get_mut(id).unwrap();
         entry.0.status = status;
         entry.1 = in_flight;
+    }
+
+    fn live(&self, id: &str, epoch: &str) {
+        let worker = serde_json::from_value(json!({
+            "session_id": id, "worker_epoch": epoch, "generation": "g", "state": "running",
+        }))
+        .unwrap();
+        self.workers.lock().insert(id.into(), worker);
+        self.live.lock().insert(id.into());
+    }
+
+    fn terminated(&self, id: &str, closed_log_class: Option<&str>) {
+        self.terminations.lock().insert(
+            id.into(),
+            TargetTermination {
+                terminated: true,
+                closed_log_class: closed_log_class.map(str::to_owned),
+            },
+        );
     }
 
     fn uncertain(&self, id: &str, sequence: u64) {
@@ -174,6 +199,26 @@ fn parked(result: Result<Option<Turn>, String>, needle: &str) {
     );
 }
 
+/// The worker's terminal record of `delivery` in `session`.
+async fn end(controls: &Controls, session: &str, delivery: &str, epoch: &str, stop_reason: &str) {
+    controls
+        .record_terminal(&TurnTerminal {
+            session_id: session.into(),
+            worker_epoch: epoch.into(),
+            cmid: Some(delivery.into()),
+            stop_reason: stop_reason.into(),
+        })
+        .await;
+}
+
+/// The proxy's structured refusal or violation, as the worker records it.
+fn proxy_error(message: &str, cowboy: &Value) -> String {
+    format!(
+        "error: {message}: {}",
+        serde_json::to_string_pretty(&json!({ "cowboy": cowboy })).unwrap()
+    )
+}
+
 async fn control(controls: &Controls) -> Control {
     controls.refresh().await.unwrap();
     controls
@@ -186,17 +231,11 @@ async fn control(controls: &Controls) -> Control {
 async fn admission_and_account_state_gate_dispatch_and_revival() {
     let (fake, controls, _root) = fixture().await;
     fake.admitted.lock().clear();
-    parked(
-        controls.before_dispatch("s1", Some("c1"), true).await,
-        "not admitted",
-    );
+    parked(controls.before_dispatch("s1", true).await, "not admitted");
     assert!(controls.revival_gate(&meta(&fake, "s1")).is_err());
     fake.admitted.lock().insert(ACCOUNT.into());
     assert!(controls.revival_gate(&meta(&fake, "s1")).is_ok());
-    let turn = controls
-        .before_dispatch("s1", Some("c1"), true)
-        .await
-        .unwrap();
+    let turn = controls.before_dispatch("s1", true).await.unwrap();
     drop(turn);
     settle(&controls).await;
     let current = control(&controls).await;
@@ -211,10 +250,7 @@ async fn admission_and_account_state_gate_dispatch_and_revival() {
         )
         .await
         .unwrap();
-    parked(
-        controls.before_dispatch("s1", Some("c2"), true).await,
-        "verify",
-    );
+    parked(controls.before_dispatch("s1", true).await, "verify");
     assert!(controls.revival_gate(&meta(&fake, "s1")).is_err());
     assert!(
         controls
@@ -231,40 +267,50 @@ async fn admission_and_account_state_gate_dispatch_and_revival() {
 #[tokio::test]
 async fn one_active_turn_per_account_is_reserved_marked_and_settled() {
     let (fake, controls, _root) = fixture().await;
-    let mut first = controls
-        .before_dispatch("s1", Some("c1"), true)
-        .await
-        .unwrap()
-        .unwrap();
+    fake.live("s1", "epoch-1");
+    let mut first = controls.before_dispatch("s1", true).await.unwrap().unwrap();
+    // The reservation ID is the Controller's, never a caller's value.
+    assert!(first.id().starts_with("turn-"));
     // Another session of the account waits, with the reason shown.
-    parked(
-        controls.before_dispatch("s2", Some("c2"), true).await,
-        "session s1",
-    );
+    parked(controls.before_dispatch("s2", true).await, "session s1");
     assert!(
         controls
             .parked_reason(&meta(&fake, "s2"))
             .unwrap()
             .contains("s1")
     );
-    first.mark().await.unwrap();
+    drop(first.mark("c1").await.unwrap());
     let stored = controls.store.account_turns().await.unwrap();
     assert_eq!(stored[0].state, ReservationState::MayHaveDispatched);
-    assert_eq!(stored[0].after_seq, 5);
+    assert_eq!(
+        (
+            stored[0].delivery_id.as_str(),
+            stored[0].worker_epoch.as_str(),
+            stored[0].machine_id.as_str()
+        ),
+        ("c1", "epoch-1", "ovh")
+    );
     drop(first);
     settle(&controls).await;
     // Running: the slot stays until the turn's terminal record.
     fake.set("s1", Status::Busy, true);
     controls.tick().await;
     assert_eq!(controls.store.account_turns().await.unwrap().len(), 1);
-    fake.ends.lock().insert("s1".into(), "EndTurn".into());
+    // Unrelated turn ends (another delivery, another worker incarnation,
+    // another session) never settle it.
+    end(&controls, "s1", "other-prompt", "epoch-1", "EndTurn").await;
+    end(&controls, "s1", "c1", "epoch-0", "EndTurn").await;
+    end(&controls, "s2", "c1", "epoch-1", "EndTurn").await;
     fake.set("s1", Status::Running, false);
+    controls.tick().await;
+    assert_eq!(controls.store.account_turns().await.unwrap().len(), 1);
+    end(&controls, "s1", "c1", "epoch-1", "EndTurn").await;
     controls.tick().await;
     assert!(controls.store.account_turns().await.unwrap().is_empty());
     assert_eq!(control(&controls).await.state, AccountState::Ok);
     assert!(
         controls
-            .before_dispatch("s2", Some("c2"), true)
+            .before_dispatch("s2", true)
             .await
             .unwrap()
             .is_some()
@@ -272,24 +318,149 @@ async fn one_active_turn_per_account_is_reserved_marked_and_settled() {
 }
 
 #[tokio::test]
-async fn a_dispatch_that_never_enqueued_releases_its_slot() {
-    let (_fake, controls, _root) = fixture().await;
-    // Dropped before `may_have_dispatched`: not dispatched.
-    drop(
-        controls
-            .before_dispatch("s1", Some("c1"), true)
+async fn the_final_check_serializes_with_control_writes() {
+    let (fake, controls, _root) = fixture().await;
+    // Unadmitted between the reservation and the handoff: nothing is sent.
+    let mut turn = controls.before_dispatch("s1", true).await.unwrap().unwrap();
+    fake.admitted.lock().clear();
+    assert!(turn.mark("c1").await.unwrap_err().contains("not admitted"));
+    drop(turn);
+    settle(&controls).await;
+    assert!(controls.store.account_turns().await.unwrap().is_empty());
+    // Blocked between the reservation and the handoff: nothing is sent.
+    fake.admitted.lock().insert(ACCOUNT.into());
+    let mut turn = controls.before_dispatch("s1", true).await.unwrap().unwrap();
+    let current = control(&controls).await;
+    controls
+        .enter(
+            &current,
+            AccountState::Blocked,
+            "owner_block",
+            None,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    assert!(turn.mark("c1").await.unwrap_err().contains("blocked"));
+    drop(turn);
+    settle(&controls).await;
+    assert!(controls.store.account_turns().await.unwrap().is_empty());
+    // A control write waits for a handoff in progress.
+    let blocked = control(&controls).await;
+    controls
+        .enter(
+            &blocked,
+            AccountState::Ok,
+            "owner_unblock",
+            None,
+            Some(blocked.revision),
+            false,
+        )
+        .await
+        .unwrap();
+    let mut turn = controls.before_dispatch("s1", true).await.unwrap().unwrap();
+    let handoff = turn.mark("c2").await.unwrap();
+    let writer = controls.clone();
+    let current = control(&controls).await;
+    let block = tokio::spawn(async move {
+        writer
+            .enter(
+                &current,
+                AccountState::Blocked,
+                "owner_block",
+                None,
+                None,
+                false,
+            )
             .await
-            .unwrap(),
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert!(!block.is_finished());
+    drop(handoff);
+    block.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn a_supervised_follow_up_takes_the_same_gate_and_reservation() {
+    let (fake, controls, _root) = fixture().await;
+    let sent = std::sync::atomic::AtomicUsize::new(0);
+    let send = || {
+        sent.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    };
+    // Parked account: nothing is handed off.
+    let current = control(&controls).await;
+    controls
+        .enter(
+            &current,
+            AccountState::VerificationRequired,
+            "verification_required",
+            None,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    assert!(controls.handoff("s1", "sa-1", false, send).await.is_err());
+    let parked_state = control(&controls).await;
+    controls
+        .enter(
+            &parked_state,
+            AccountState::Ok,
+            "owner_clear",
+            None,
+            Some(parked_state.revision),
+            false,
+        )
+        .await
+        .unwrap();
+    // Another session's turn holds the account: nothing is handed off.
+    let mut other = controls.before_dispatch("s2", true).await.unwrap().unwrap();
+    drop(other.mark("c2").await.unwrap());
+    assert!(controls.handoff("s1", "sa-1", false, send).await.is_err());
+    assert_eq!(sent.load(std::sync::atomic::Ordering::SeqCst), 0);
+    drop(other);
+    settle(&controls).await;
+    end(&controls, "s2", "c2", "e", "EndTurn").await;
+    controls.tick().await;
+    // Admitted: reserved and marked with the follow-up's delivery ID.
+    controls.handoff("s1", "sa-1", false, send).await.unwrap();
+    assert_eq!(sent.load(std::sync::atomic::Ordering::SeqCst), 1);
+    settle(&controls).await;
+    let stored = controls.store.account_turns().await.unwrap();
+    assert_eq!(
+        (
+            stored[0].session_id.as_str(),
+            stored[0].delivery_id.as_str(),
+            stored[0].state
+        ),
+        ("s1", "sa-1", ReservationState::MayHaveDispatched)
+    );
+    assert!(fake.session("s1").is_some());
+    // A synchronous refusal of the send releases the slot.
+    end(&controls, "s1", "sa-1", "e", "EndTurn").await;
+    controls.tick().await;
+    assert!(
+        controls
+            .handoff("s1", "sa-2", false, || Err::<(), _>("refused".into()))
+            .await
+            .is_err()
     );
     settle(&controls).await;
     assert!(controls.store.account_turns().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_dispatch_that_never_enqueued_releases_its_slot() {
+    let (_fake, controls, _root) = fixture().await;
+    // Dropped before `may_have_dispatched`: not dispatched.
+    drop(controls.before_dispatch("s1", true).await.unwrap());
+    settle(&controls).await;
+    assert!(controls.store.account_turns().await.unwrap().is_empty());
     // Marked, then the enqueue refused it synchronously.
-    let mut turn = controls
-        .before_dispatch("s1", Some("c2"), true)
-        .await
-        .unwrap()
-        .unwrap();
-    turn.mark().await.unwrap();
+    let mut turn = controls.before_dispatch("s1", true).await.unwrap().unwrap();
+    drop(turn.mark("c2").await.unwrap());
     turn.unsent();
     drop(turn);
     settle(&controls).await;
@@ -302,12 +473,36 @@ fn orphan(session: &str, turn: &str, state: ReservationState, updated_at_ms: i64
         owner_user_id: "owner".into(),
         session_id: session.into(),
         turn_id: turn.into(),
-        worker_epoch: "epoch".into(),
+        delivery_id: String::new(),
+        worker_epoch: String::new(),
+        machine_id: String::new(),
         after_seq: 5,
         state,
         created_at_ms: updated_at_ms,
         updated_at_ms,
+        terminal: None,
     }
+}
+
+async fn dispatched(controls: &Controls, turn: &str, at: i64) {
+    let key = crate::store::account_controls::TurnKey {
+        session_id: "s1",
+        turn_id: turn,
+        worker_epoch: "e",
+        only: None,
+    };
+    controls
+        .store
+        .reserve_account_turn(&orphan("s1", turn, ReservationState::Reserved, at))
+        .await
+        .unwrap();
+    assert!(
+        controls
+            .store
+            .mark_account_turn_dispatched(ACCOUNT, &key, ("c", "ovh"), at)
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test]
@@ -321,30 +516,27 @@ async fn controller_start_reconciles_reservations_from_evidence_only() {
         .unwrap();
     controls.tick().await;
     assert!(controls.store.account_turns().await.unwrap().is_empty());
-    // May have dispatched, Machine offline, nothing proven for long: the
-    // slot stays and the account needs the owner.
-    let stale = orphan("s1", "t", ReservationState::MayHaveDispatched, 1);
-    controls.store.reserve_account_turn(&stale).await.unwrap();
-    assert!(
-        controls
-            .store
-            .mark_account_turn_dispatched(ACCOUNT, "t", "e", 1)
-            .await
-            .unwrap()
-    );
+    // May have dispatched, its worker gone, nothing proven for long: the
+    // slot stays and the account needs the owner. A stopped worker on a
+    // connected Machine is not termination evidence.
+    dispatched(&controls, "t", 1).await;
     fake.set("s1", Status::Exited, false);
-    let turns = controls.store.account_turns().await.unwrap();
-    assert_eq!(controls.observe(&turns[0], 1 + 1_000), Observation::Running);
-    controls.tick().await;
-    assert_eq!(controls.store.account_turns().await.unwrap().len(), 1);
-    assert_eq!(control(&controls).await.state, AccountState::NeedsAttention);
-    // Proven unit loss (connected Machine reports the worker gone): the
-    // slot is released; with no backend evidence it settles unknown_refusal,
-    // which never lowers the account's more severe needs_attention.
     fake.connected.lock().insert("ovh".into());
     let turns = controls.store.account_turns().await.unwrap();
     assert_eq!(
-        controls.observe(&turns[0], now_ms()),
+        controls.observe(&turns[0], 1 + 1_000).await,
+        Observation::Running
+    );
+    controls.tick().await;
+    assert_eq!(controls.store.account_turns().await.unwrap().len(), 1);
+    assert_eq!(control(&controls).await.state, AccountState::NeedsAttention);
+    // The ledger proves the execution target terminated, with no closed-log
+    // evidence: released as unknown_refusal, which never lowers the more
+    // severe needs_attention.
+    fake.terminated("s1", None);
+    let turns = controls.store.account_turns().await.unwrap();
+    assert_eq!(
+        controls.observe(&turns[0], now_ms()).await,
         Observation::Settle(TurnOutcome::UnitLost {
             evidence_complete: false
         })
@@ -365,36 +557,76 @@ async fn controller_start_reconciles_reservations_from_evidence_only() {
         )
         .await
         .unwrap();
-    let lost = orphan("s1", "t2", ReservationState::MayHaveDispatched, now_ms());
-    controls.store.reserve_account_turn(&lost).await.unwrap();
-    assert!(
-        controls
-            .store
-            .mark_account_turn_dispatched(ACCOUNT, "t2", "e", now_ms())
-            .await
-            .unwrap()
-    );
+    dispatched(&controls, "t2", now_ms()).await;
     controls.tick().await;
     assert!(controls.store.account_turns().await.unwrap().is_empty());
     assert_eq!(control(&controls).await.state, AccountState::UnknownRefusal);
+    // A closed log that settled ok makes the loss an interruption.
+    let refused = control(&controls).await;
+    controls
+        .enter(
+            &refused,
+            AccountState::Ok,
+            "owner_clear",
+            None,
+            Some(refused.revision),
+            false,
+        )
+        .await
+        .unwrap();
+    fake.terminated("s1", Some("ok"));
+    dispatched(&controls, "t3", now_ms()).await;
+    controls.tick().await;
+    assert!(controls.store.account_turns().await.unwrap().is_empty());
+    assert_eq!(control(&controls).await.state, AccountState::Ok);
 }
 
 #[tokio::test]
 async fn refusals_and_violations_park_the_account_and_stop_its_units() {
     let (fake, controls, _root) = fixture().await;
     fake.connected.lock().insert("ovh".into());
-    let mut turn = controls
-        .before_dispatch("s1", Some("c1"), true)
-        .await
-        .unwrap()
-        .unwrap();
-    turn.mark().await.unwrap();
+    let mut turn = controls.before_dispatch("s1", true).await.unwrap().unwrap();
+    drop(turn.mark("c1").await.unwrap());
     drop(turn);
     settle(&controls).await;
-    fake.ends.lock().insert(
-        "s1".into(),
-        "error: Internal error: antigravity_backend_refusal:suspended".into(),
-    );
+    // Vendor text naming a refusal settles nothing but unknown_refusal.
+    end(
+        &controls,
+        "s1",
+        "c1",
+        "e",
+        "error: upstream: antigravity_backend_refusal:ok",
+    )
+    .await;
+    controls.tick().await;
+    assert_eq!(control(&controls).await.state, AccountState::UnknownRefusal);
+    let unknown = control(&controls).await;
+    controls
+        .enter(
+            &unknown,
+            AccountState::Ok,
+            "owner_clear",
+            None,
+            Some(unknown.revision),
+            false,
+        )
+        .await
+        .unwrap();
+    let mut turn = controls.before_dispatch("s1", true).await.unwrap().unwrap();
+    drop(turn.mark("c2").await.unwrap());
+    drop(turn);
+    settle(&controls).await;
+    end(
+        &controls,
+        "s1",
+        "c2",
+        "e",
+        &proxy_error(
+            "antigravity_backend_refusal:suspended",
+            &json!({"antigravity_backend": {"class": "suspended"}}),
+        ),
+    )
+    .await;
     controls.tick().await;
     settle(&controls).await;
     let suspended = control(&controls).await;
@@ -407,15 +639,7 @@ async fn refusals_and_violations_park_the_account_and_stop_its_units() {
         (sent[0].0.as_str(), sent[0].1.action),
         ("ovh", AccountFenceAction::Stop)
     );
-    parked(
-        controls.before_dispatch("s2", Some("c2"), true).await,
-        "suspended",
-    );
-    // A later rate limit never lowers the suspension.
-    controls
-        .settle_state(&suspended, AccountState::RateLimited, "rate_limited", false)
-        .await;
-    assert_eq!(control(&controls).await.state, AccountState::Suspended);
+    parked(controls.before_dispatch("s2", true).await, "suspended");
     // The owner clears it; the units are admitted again.
     controls
         .enter(
@@ -434,18 +658,21 @@ async fn refusals_and_violations_park_the_account_and_stop_its_units() {
         AccountFenceAction::Admit
     );
     // A built-in tool that executed: needs attention and every unit stops.
-    let mut turn = controls
-        .before_dispatch("s1", Some("c3"), true)
-        .await
-        .unwrap()
-        .unwrap();
-    turn.mark().await.unwrap();
+    let mut turn = controls.before_dispatch("s1", true).await.unwrap().unwrap();
+    drop(turn.mark("c3").await.unwrap());
     drop(turn);
     settle(&controls).await;
-    fake.ends.lock().insert(
-        "s1".into(),
-        "error: antigravity_policy_violation:read_file".into(),
-    );
+    end(
+        &controls,
+        "s1",
+        "c3",
+        "e",
+        &proxy_error(
+            "antigravity_policy_violation:read_file",
+            &json!({"policy_violation": "read_file"}),
+        ),
+    )
+    .await;
     controls.tick().await;
     settle(&controls).await;
     let flagged = control(&controls).await;
@@ -461,14 +688,53 @@ async fn refusals_and_violations_park_the_account_and_stop_its_units() {
 }
 
 #[tokio::test]
-async fn the_kill_switch_fences_durably_before_any_machine_and_gates_force_release() {
+async fn settlement_never_replaces_a_block_written_after_its_observation() {
     let (fake, controls, _root) = fixture().await;
-    let mut turn = controls
-        .before_dispatch("s1", Some("c1"), true)
+    fake.connected.lock().insert("ovh".into());
+    let mut turn = controls.before_dispatch("s1", true).await.unwrap().unwrap();
+    drop(turn.mark("c1").await.unwrap());
+    drop(turn);
+    settle(&controls).await;
+    end(
+        &controls,
+        "s1",
+        "c1",
+        "e",
+        &proxy_error(
+            "antigravity_backend_refusal:rate_limited",
+            &json!({"antigravity_backend": {"class": "rate_limited"}}),
+        ),
+    )
+    .await;
+    // The reconciler's view predates the owner's block.
+    let turns = controls.store.account_turns().await.unwrap();
+    controls
+        .store
+        .set_account_state(&StateChange {
+            account_id: ACCOUNT,
+            owner_user_id: "owner",
+            provider_id: "antigravity",
+            state: AccountState::Blocked,
+            reason: "owner_block",
+            until_ms: None,
+            expected_revision: Some(0),
+            fence: None,
+            now_ms: now_ms(),
+        })
         .await
         .unwrap()
         .unwrap();
-    turn.mark().await.unwrap();
+    assert!(controls.cache.control(ACCOUNT).is_none());
+    controls.settle_turn(&turns[0]).await;
+    assert_eq!(control(&controls).await.state, AccountState::Blocked);
+    assert!(controls.store.account_turns().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn the_kill_switch_fences_durably_before_any_machine_and_gates_force_release() {
+    let (fake, controls, _root) = fixture().await;
+    let mut turn = controls.before_dispatch("s1", true).await.unwrap().unwrap();
+    drop(turn.mark("c1").await.unwrap());
     drop(turn);
     settle(&controls).await;
     // Machine offline: the block is durable and parks everything at once.
@@ -493,12 +759,10 @@ async fn the_kill_switch_fences_durably_before_any_machine_and_gates_force_relea
         (fences[0].state, fences[0].action),
         (FenceState::Pending, AccountFenceAction::Stop)
     );
-    parked(
-        controls.before_dispatch("s2", Some("c2"), true).await,
-        "blocked",
-    );
+    parked(controls.before_dispatch("s2", true).await, "blocked");
     assert!(controls.revival_gate(&meta(&fake, "s2")).is_err());
-    // The unsettled turn may be force-released only after a confirmed stop.
+    // The unsettled turn may be force-released only after a confirmed stop
+    // and the ledger's proof that its execution target terminated.
     let blocked = control(&controls).await;
     assert_eq!(
         controls.force_release(&blocked, true).await,
@@ -512,28 +776,64 @@ async fn the_kill_switch_fences_durably_before_any_machine_and_gates_force_relea
         controls.force_release(&blocked, false).await,
         Err("confirmation_required")
     );
+    assert_eq!(
+        controls.force_release(&blocked, true).await,
+        Err("turn_termination_unconfirmed")
+    );
+    assert_eq!(controls.store.account_turns().await.unwrap().len(), 1);
+    fake.terminated("s1", None);
     controls.force_release(&blocked, true).await.unwrap();
     assert!(controls.store.account_turns().await.unwrap().is_empty());
     // Settlement never replaces the owner's block.
-    controls
-        .settle_state(
-            &blocked,
-            AccountState::UnknownRefusal,
-            "unknown_refusal",
-            false,
-        )
-        .await;
     assert_eq!(control(&controls).await.state, AccountState::Blocked);
+}
+
+#[tokio::test]
+async fn a_failed_machine_lookup_never_writes_an_unfenced_block() {
+    let root = tempfile::tempdir().unwrap();
+    let url = format!(
+        "sqlite://{}?mode=rwc",
+        root.path().join("controls.db").display()
+    );
+    let store = Store::connect(&url, root.path().join("artifacts"))
+        .await
+        .unwrap();
+    store.migrate().await.unwrap();
+    let fake = Arc::new(Fake::default());
+    fake.add("s1", Status::Running);
+    let controls = Controls::new(fake, store, Arc::default());
+    controls.refresh().await.unwrap();
+    // The native-generation lookup fails: the block is refused, not written
+    // without the Machines it must stop.
+    let mut connection = <sqlx::SqliteConnection as sqlx::Connection>::connect(&url)
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE provider_native_generations")
+        .execute(&mut connection)
+        .await
+        .unwrap();
+    let current = control(&controls).await;
+    assert_eq!(
+        controls
+            .enter(
+                &current,
+                AccountState::Blocked,
+                "owner_block",
+                None,
+                None,
+                false
+            )
+            .await,
+        Err("unavailable")
+    );
+    assert_eq!(control(&controls).await.state, AccountState::Ok);
 }
 
 #[tokio::test]
 async fn an_uncertain_effect_parks_the_session_until_acknowledged() {
     let (fake, controls, _root) = fixture().await;
     fake.uncertain("s1", 2);
-    parked(
-        controls.before_dispatch("s1", Some("c1"), true).await,
-        "fs/writeFile",
-    );
+    parked(controls.before_dispatch("s1", true).await, "fs/writeFile");
     // Other sessions of the account are not parked by it.
     assert!(controls.parked_reason(&meta(&fake, "s2")).is_none());
     // Observed durably: still parked when the worker is gone.
@@ -554,7 +854,7 @@ async fn an_uncertain_effect_parks_the_session_until_acknowledged() {
     assert!(controls.parked_reason(&meta(&fake, "s1")).is_none());
     assert!(
         controls
-            .before_dispatch("s1", Some("c1"), true)
+            .before_dispatch("s1", true)
             .await
             .unwrap()
             .is_some()
@@ -579,14 +879,8 @@ async fn a_rate_limit_resumes_only_on_an_owner_send_after_it_ends() {
         )
         .await
         .unwrap();
-    parked(
-        controls.before_dispatch("s1", Some("c1"), false).await,
-        "send again",
-    );
-    let turn = controls
-        .before_dispatch("s1", Some("c1"), true)
-        .await
-        .unwrap();
+    parked(controls.before_dispatch("s1", false).await, "send again");
+    let turn = controls.before_dispatch("s1", true).await.unwrap();
     assert!(turn.is_some());
     assert_eq!(control(&controls).await.state, AccountState::Ok);
 }

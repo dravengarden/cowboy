@@ -12,7 +12,7 @@ use sha2::Digest as _;
 const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
     (
         "0085_provider_account_controls.sql",
-        "e32356e952a9b8ad9343e813b7a491be8420086d482c032029ce57807c9fc688",
+        "a37f6ca6dd660db5480d322ca09f9208d5550df2fcc37a7d2f988e85760e2d13",
     ),
     (
         "0084_subagent_events.sql",
@@ -222,7 +222,7 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "0059_provider_account_controls.sql",
-        "99c9f27d436d561dc639906420782a0a202ee43c17e3ec88e3171eb54803982f",
+        "4531e9cc94701a1073990022848a0ad0798787db130929ca0f5a1ec8024195bf",
     ),
     (
         "0058_subagent_events.sql",

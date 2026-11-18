@@ -183,23 +183,50 @@ impl Controls {
         }
     }
 
+    /// Cancel every target of the account's logout that no Machine was ever
+    /// asked, durably. Called by the unblock under the writer lock, before
+    /// the state leaves `blocked`, so an unsent logout of a lifted block can
+    /// never fire on a later block.
+    pub(super) async fn cancel_undispatched_logouts(
+        &self,
+        account: &str,
+    ) -> Result<(), &'static str> {
+        let Some(mut record) = self.logout_record(account) else {
+            return Ok(());
+        };
+        let mut changed = false;
+        for target in &mut record.targets {
+            if target.state == LogoutTargetState::Pending && !target.dispatched {
+                target.state = LogoutTargetState::Cancelled;
+                target.detail = Some("the account was unblocked first".into());
+                target.updated_at_ms = now_ms();
+                changed = true;
+            }
+        }
+        if changed {
+            self.write_logout(account, &record).await?;
+        }
+        Ok(())
+    }
+
     /// Update one target of the current record under the writer lock.
     async fn update_logout_target(
         &self,
         account: &str,
         operation: &str,
         machine: &str,
-        update: impl FnOnce(&mut Target),
+        update: impl FnOnce(&Self, &Record, &mut Target),
     ) -> Option<(Record, Target)> {
         let _write = self.cache.writes.lock().await;
         let mut record = self
             .logout_record(account)
             .filter(|record| record.operation_id == operation)?;
+        let snapshot = record.clone();
         let target = record
             .targets
             .iter_mut()
             .find(|target| target.machine_id == machine)?;
-        update(target);
+        update(self, &snapshot, target);
         target.updated_at_ms = now_ms();
         let target = target.clone();
         if let Err(error) = self.write_logout(account, &record).await {
@@ -215,21 +242,24 @@ impl Controls {
     }
 
     pub(super) async fn deliver_logout(&self, account: &str, operation: &str, machine: &str) {
-        let blocked = self
-            .cache
-            .control(account)
-            .is_some_and(|control| control.state == AccountState::Blocked);
-        // Lifting the block before the Machine was ever asked cancels it; a
-        // request that may have reached the Machine keeps its operation.
+        // Decided under the writer lock, which every state write holds until
+        // the cache shows it: only the block this logout belongs to (still
+        // in force, at or after the requesting revision) dispatches it; an
+        // unblock cancelled every target not yet asked. A request that may
+        // have reached the Machine keeps its operation.
         let Some((record, target)) = self
-            .update_logout_target(account, operation, machine, |target| {
-                if target.state == LogoutTargetState::Pending {
-                    if !blocked && !target.dispatched {
-                        target.state = LogoutTargetState::Cancelled;
-                        target.detail = Some("the account was unblocked first".into());
-                    } else {
-                        target.dispatched = true;
-                    }
+            .update_logout_target(account, operation, machine, |controls, record, target| {
+                if target.state != LogoutTargetState::Pending || target.dispatched {
+                    return;
+                }
+                let current = controls.cache.control(account).is_some_and(|control| {
+                    control.state == AccountState::Blocked && control.revision >= record.revision
+                });
+                if current {
+                    target.dispatched = true;
+                } else {
+                    target.state = LogoutTargetState::Cancelled;
+                    target.detail = Some("the account was unblocked first".into());
                 }
             })
             .await
@@ -253,7 +283,7 @@ impl Controls {
             Ok(observation) => observation,
             Err(detail) => {
                 tracing::warn!(account, machine, %detail, "account logout unconfirmed; retrying");
-                self.update_logout_target(account, operation, machine, |target| {
+                self.update_logout_target(account, operation, machine, |_, _, target| {
                     target.detail = Some(detail);
                 })
                 .await;
@@ -261,7 +291,7 @@ impl Controls {
             }
         };
         let recorded = self.record_logout(&record, &target, &observation).await;
-        self.update_logout_target(account, operation, machine, |target| {
+        self.update_logout_target(account, operation, machine, |_, _, target| {
             target.credential_cleared = observation.credential_cleared;
             target.history_retained = observation.history_retained;
             target.state = match (observation.succeeded, &recorded) {

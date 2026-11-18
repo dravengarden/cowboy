@@ -1130,12 +1130,7 @@ pub(super) async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
     }
     // Named-only accounts: admission, account state, uncertain effects and
     // the account's single active turn, before anything can revive a worker.
-    let gate = provider_accounts::controls::before_dispatch(
-        &state,
-        &req.session_id,
-        req.cmid.as_deref(),
-        req.explicit,
-    );
+    let gate = provider_accounts::controls::before_dispatch(&state, &req.session_id, req.explicit);
     match gate.await {
         Ok(account_turn) => dispatch_admitted(state, req, account_turn).await,
         Err(reason) => {
@@ -1222,14 +1217,18 @@ async fn dispatch_admitted(
         retain(session_id, text, content, cmid, &error);
         return;
     }
-    // An account turn is durably `may_have_dispatched` before the prompt can
-    // be enqueued (R3-9); a path below that never enqueues it says so.
-    if let Some(turn) = account_turn.as_mut()
-        && let Err(reason) = turn.mark().await
-    {
-        retain_failed_dispatch(hub, session_id, text, content, cmid, &reason);
-        return;
-    }
+    // An account turn passes its final check and is durably
+    // `may_have_dispatched` (with the prompt's delivery ID) before the prompt
+    // can be enqueued (R3-9); the handoff lock is held to the end, and a path
+    // below that never enqueues it says so.
+    let mut cmid = cmid;
+    let _handoff = match mark_account_turn(account_turn.as_mut(), &mut cmid).await {
+        Ok(handoff) => handoff,
+        Err(reason) => {
+            retain_failed_dispatch(hub, session_id, text, content, cmid, &reason);
+            return;
+        }
+    };
     let plugin_key = provider_fence_key_for_session(hub, &session_id);
     let dispatch_fence = plugin_lifecycle_fences.read();
     if plugin_key
@@ -1295,6 +1294,17 @@ async fn dispatch_admitted(
             retain(session_id, text, content, cmid, &e);
         }
     }
+}
+
+/// The account turn's final check and mark, with the prompt's delivery ID
+/// (its `cmid`, assigned from the reservation when the prompt has none).
+async fn mark_account_turn(
+    turn: Option<&mut provider_accounts::controls::Turn>,
+    cmid: &mut Option<String>,
+) -> Result<Option<provider_accounts::controls::Handoff>, String> {
+    let Some(turn) = turn else { return Ok(None) };
+    let delivery = cmid.get_or_insert_with(|| turn.id().to_owned()).clone();
+    turn.mark(&delivery).await.map(Some)
 }
 
 /// Restore a prompt that left the durable queue but never reached its runtime.

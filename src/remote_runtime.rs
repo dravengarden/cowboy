@@ -28,6 +28,7 @@ mod broker_protocol;
 mod native_admission;
 mod reset_admission;
 mod startup_watch;
+pub mod turn_terminal;
 mod worker_authority;
 use crate::runtime_wire::{
     CoreCommand, Frame, FrameReader, PROTOCOL_VERSION, PeerRole, RuntimeEvent, StartSession,
@@ -147,6 +148,7 @@ pub struct Shared {
     auth_recipient_key: Option<String>,
     telemetry: Mutex<Option<(String, crate::observability::Observability)>>,
     native_store: Mutex<Option<(String, crate::store::Store)>>,
+    turn_terminals: Mutex<Option<turn_terminal::Listener>>,
 }
 
 pub struct RemoteRuntime {
@@ -258,6 +260,7 @@ impl RemoteRuntime {
                 auth_recipient_key,
                 telemetry: Mutex::new(None),
                 native_store: Mutex::new(None),
+                turn_terminals: Mutex::new(None),
             }),
             notify_rx: Mutex::new(Some(notify_rx)),
         })
@@ -327,6 +330,7 @@ impl RemoteRuntime {
                 auth_recipient_key: None,
                 telemetry: Mutex::new(None),
                 native_store: Mutex::new(None),
+                turn_terminals: Mutex::new(None),
             }),
             notify_rx: Mutex::new(Some(notify_rx)),
         })
@@ -1982,9 +1986,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                         {
                             let _ = waiter.send(outcome.to_owned());
                         }
-                        if let RuntimeEvent::TurnEnded { turn_id, .. } = &event {
-                            acknowledge_prompt_finish(shared, &session_id, turn_id);
-                        }
+                        turn_terminal::ended(shared, &session_id, &worker_epoch, &event);
                         update_snapshot_from_event(shared, &session_id, runtime_seq, &event);
                         if let RuntimeEvent::Status {
                             state: WorkerState::Crashed | WorkerState::Exited,
@@ -2448,31 +2450,6 @@ fn sync_config_for_worker(shared: &Shared, worker: &WorkerSnapshot) {
 
 // Completion proves admission when the separate CommandAck was lost. Start
 // events and active snapshots precede the fallible ACP send and cannot prove it.
-fn acknowledge_prompt_finish(shared: &Shared, session: &str, turn: &str) {
-    let admitted = {
-        let mut pending = shared.pending.lock();
-        let key = pending.iter().find_map(|(key, command)| match command {
-            CoreCommand::Prompt {
-                session_id,
-                turn_id,
-                ..
-            } if session_id == session && turn_id == turn => Some(key.clone()),
-            _ => None,
-        });
-        key.and_then(|key| pending.remove(&key).map(|command| (key, command)))
-    };
-    if let Some((key, command)) = admitted {
-        shared.sent.lock().remove(&key);
-        if let CoreCommand::Prompt {
-            trace: Some(trace), ..
-        } = command
-            && let Some((_, telemetry)) = shared.telemetry.lock().as_ref()
-        {
-            telemetry.finish_delivery_trace(&trace, true);
-        }
-    }
-}
-
 fn fail_config_startup(shared: &Shared, session_id: &str, reason: &str) {
     let rejected = {
         let mut startups = shared.config_startups.lock();

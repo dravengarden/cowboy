@@ -1,9 +1,12 @@
-//! The account-controls reconciler: settles every reservation from its
-//! turn's terminal record (R1-8, R3-9, R3-10), records uncertain effects the
-//! workers report, and delivers pending Machine fences. It runs at Controller
-//! start, then every few seconds; every step is idempotent.
+//! The account-controls reconciler: settles every reservation from the
+//! terminal record of exactly its delivery and worker epoch, or from proven
+//! termination of its execution target (R1-8, R3-9, R3-10), records
+//! uncertain effects the workers report, and delivers pending Machine
+//! fences. It runs at Controller start, then every few seconds; every step
+//! is idempotent.
 use super::*;
-use crate::account_controls::TurnOutcome;
+use crate::account_controls::{ReservationState, TurnOutcome};
+use crate::remote_runtime::turn_terminal::TurnTerminal;
 
 const TICK: std::time::Duration = std::time::Duration::from_secs(3);
 /// A dispatched turn with no terminal record, no running turn and no proven
@@ -11,6 +14,16 @@ const TICK: std::time::Duration = std::time::Duration::from_secs(3);
 pub(super) const UNSETTLED_AFTER_MS: i64 = 120_000;
 
 pub(in crate::server) fn start(state: &Arc<AppState>) {
+    // Every launch, revive, reset, reload and replacement of a governed
+    // session's worker passes the account gate (`Supervisor::start_session`).
+    let gate = Arc::downgrade(state);
+    state.supervisor.set_launch_gate(Arc::new(move |session| {
+        let state = gate.upgrade().ok_or("Controller is stopping")?;
+        let Some(info) = state.hub.session_info(session) else {
+            return Ok(());
+        };
+        revival_gate(&state, &info.meta)
+    }));
     let weak = Arc::downgrade(state);
     tokio::spawn(async move {
         loop {
@@ -29,6 +42,28 @@ pub(in crate::server) fn start(state: &Arc<AppState>) {
     });
 }
 
+/// The listener a runtime calls with every terminal record: a governed
+/// session's record is stored on the reservation of exactly its delivery
+/// and worker epoch, never on another turn's.
+pub(in crate::server) fn terminal_listener(
+    state: &Arc<AppState>,
+) -> crate::remote_runtime::turn_terminal::Listener {
+    let weak = Arc::downgrade(state);
+    Arc::new(move |terminal: TurnTerminal| {
+        let Some(state) = weak.upgrade() else { return };
+        let governed = state
+            .hub
+            .session_info(&terminal.session_id)
+            .is_some_and(|info| governed(&info.meta));
+        if !governed {
+            return;
+        }
+        let Some(controls) = of(&state) else { return };
+        drop(state);
+        tokio::spawn(async move { controls.record_terminal(&terminal).await });
+    })
+}
+
 /// What the Controller can prove about a turn now.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Observation {
@@ -38,6 +73,32 @@ pub(super) enum Observation {
 }
 
 impl Controls {
+    /// Store one terminal record on its reservation (see [`terminal_listener`]).
+    pub(super) async fn record_terminal(&self, terminal: &TurnTerminal) {
+        let Some(delivery) = terminal.cmid.as_deref() else {
+            return;
+        };
+        match self
+            .store
+            .record_account_turn_terminal(
+                &terminal.session_id,
+                delivery,
+                &terminal.worker_epoch,
+                &terminal.stop_reason,
+                now_ms(),
+            )
+            .await
+        {
+            Ok(true) => {
+                let _ = self.refresh().await;
+            }
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(%error, "recording an account turn's terminal record failed")
+            }
+        }
+    }
+
     /// One reconciliation pass; at Controller start it also settles every
     /// reservation an earlier Controller left `reserved`.
     pub(in crate::server) async fn tick(&self) {
@@ -56,38 +117,46 @@ impl Controls {
         self.run_logouts();
     }
 
-    /// Observe one reservation. Only the turn's terminal record, or proven
-    /// loss of its worker, settles it; anything else waits or asks the owner.
-    pub(super) fn observe(&self, turn: &Reservation, now: i64) -> Observation {
+    /// Observe one reservation. Only the terminal record of exactly its
+    /// delivery and worker epoch, or proven termination of its execution
+    /// target, settles it; anything else waits or asks the owner.
+    pub(super) async fn observe(&self, turn: &Reservation, now: i64) -> Observation {
         if turn.state == ReservationState::Reserved {
             // Not dispatching in this process: an earlier Controller reserved
             // it and stopped before `may_have_dispatched`.
             return Observation::Settle(TurnOutcome::NotDispatched);
         }
-        let Some((meta, in_flight)) = self.env.session(&turn.session_id) else {
-            // The session and its worker are gone without a terminal record.
-            return Observation::Settle(TurnOutcome::UnitLost {
-                evidence_complete: false,
-            });
-        };
-        let after = u64::try_from(turn.after_seq).unwrap_or(0);
-        if let Some(stop_reason) = self.env.turn_end(&turn.session_id, after) {
-            return Observation::Settle(policy::classify_stop_reason(&stop_reason));
-        }
-        if in_flight || matches!(meta.status, Status::Busy | Status::Starting) {
-            return Observation::Running;
-        }
-        // The Machine reports a sandboxed worker stopped only after the
-        // daemon confirmed its unit gone; no backend evidence survives it.
-        if matches!(
-            meta.status,
-            Status::Exited | Status::Crashed | Status::Interrupted
-        ) && !self.env.live_worker(&turn.session_id)
-            && self.env.machine_connected(&meta.machine_id)
+        if let Some(terminal) = &turn.terminal
+            && (turn.worker_epoch.is_empty() || terminal.worker_epoch == turn.worker_epoch)
         {
-            return Observation::Settle(TurnOutcome::UnitLost {
-                evidence_complete: false,
-            });
+            return Observation::Settle(policy::classify_stop_reason(&terminal.stop_reason));
+        }
+        let lost = match self.env.session(&turn.session_id) {
+            // The session is gone without the turn's terminal record.
+            None => true,
+            Some((meta, in_flight)) => {
+                if in_flight || matches!(meta.status, Status::Busy | Status::Starting) {
+                    return Observation::Running;
+                }
+                // A replaced worker incarnation can never end this turn.
+                !self.env.live_worker(&turn.session_id)
+                    || (!turn.worker_epoch.is_empty()
+                        && self
+                            .env
+                            .worker(&turn.session_id)
+                            .is_some_and(|worker| worker.worker_epoch != turn.worker_epoch))
+            }
+        };
+        if lost {
+            // A stopped or replaced worker proves nothing about its
+            // execution target: only the ledger's termination record of the
+            // original binding settles the turn, and only its closed log
+            // decides how.
+            if let Some(outcome) =
+                policy::unit_loss_outcome(self.env.termination(turn).await.as_ref())
+            {
+                return Observation::Settle(outcome);
+            }
         }
         if now.saturating_sub(turn.updated_at_ms) > UNSETTLED_AFTER_MS {
             Observation::Attention
@@ -96,55 +165,62 @@ impl Controls {
         }
     }
 
-    async fn settle_turn(&self, turn: &Reservation) {
-        let template = self.cache.control(&turn.account_id).unwrap_or_else(|| {
-            let provider = self
-                .env
-                .session(&turn.session_id)
-                .map_or_else(|| "antigravity".to_owned(), |(meta, _)| meta.provider);
-            initial(&turn.account_id, &turn.owner_user_id, &provider)
-        });
-        let outcome = match self.observe(turn, now_ms()) {
+    pub(super) async fn settle_turn(&self, turn: &Reservation) {
+        let provider = self.cache.control(&turn.account_id).map_or_else(
+            || {
+                self.env
+                    .session(&turn.session_id)
+                    .map_or_else(|| "antigravity".to_owned(), |(meta, _)| meta.provider)
+            },
+            |control| control.provider_id,
+        );
+        let mut key = TurnKey {
+            session_id: &turn.session_id,
+            turn_id: &turn.turn_id,
+            worker_epoch: &turn.worker_epoch,
+            only: Some(turn.state),
+        };
+        let (outcome, settlement) = match self.observe(turn, now_ms()).await {
             Observation::Running => return,
             Observation::Attention => {
-                if template.state.severity() < AccountState::NeedsAttention.severity() {
-                    self.settle_state(
-                        &template,
-                        AccountState::NeedsAttention,
-                        "turn_unsettled",
-                        false,
-                    )
-                    .await;
+                let current = self
+                    .cache
+                    .control(&turn.account_id)
+                    .map_or(AccountState::Ok, |control| control.state);
+                if current.severity() >= AccountState::NeedsAttention.severity() {
+                    return;
                 }
-                return;
+                let attention = policy::Settlement {
+                    release: false,
+                    settled: "unsettled",
+                    state: Some((AccountState::NeedsAttention, "turn_unsettled".into())),
+                    stop_units: false,
+                };
+                (None, attention)
             }
-            Observation::Settle(outcome) => outcome,
+            Observation::Settle(outcome) => {
+                let settlement = policy::settle(turn.state, &outcome);
+                (Some(outcome), settlement)
+            }
         };
-        let settlement = policy::settle(turn.state, &outcome);
-        // The account parks before its slot frees, so no queued prompt of
-        // the account can slip through between the two writes.
-        if let Some((next, reason)) = &settlement.state {
-            self.settle_state(&template, *next, reason, settlement.stop_units)
-                .await;
+        if outcome == Some(TurnOutcome::NotDispatched) {
+            key.only = Some(ReservationState::Reserved);
         }
-        if settlement.release {
-            let only =
-                (outcome == TurnOutcome::NotDispatched).then_some(ReservationState::Reserved);
-            match self
-                .store
-                .release_account_turn(&turn.account_id, &turn.turn_id, only)
-                .await
-            {
-                Ok(true) => tracing::info!(
+        match self.settle(turn, key, &provider, &settlement).await {
+            Ok(crate::store::account_controls::Settled::Applied { released: true, .. }) => {
+                tracing::info!(
                     account = %turn.account_id,
                     session = %turn.session_id,
                     settled = settlement.settled,
                     "account turn settled"
-                ),
-                Ok(false) => {}
-                Err(error) => tracing::warn!(%error, "releasing an account turn failed"),
+                );
             }
-            let _ = self.refresh().await;
+            Ok(_) => {}
+            Err(error) => tracing::warn!(
+                account = %turn.account_id,
+                error,
+                "account turn settlement failed; the slot stays held"
+            ),
         }
     }
 
