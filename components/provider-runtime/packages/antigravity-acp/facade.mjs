@@ -332,7 +332,7 @@ export class Facade {
   async writeFile(session, turn, { path, content }) {
     if (typeof content !== "string") throw new ToolError("content must be a string");
     const bytes = Buffer.from(content);
-    if (bytes.length > LIMITS.writeBytes) throw new ToolError("content is larger than 4 MiB");
+    if (bytes.length > LIMITS.writeBytes) throw new ToolError("content is larger than 3 MiB");
     const file = await this.resolve(path, { allowMissing: true });
     const current = await this.current(file);
     const observed = session.observed.get(file);
@@ -375,7 +375,7 @@ export class Facade {
     // The result's size is known before anything is allocated for it.
     const replaced = all === true ? count : 1;
     const size = current.length + replaced * (Buffer.byteLength(after) - Buffer.byteLength(before));
-    if (size > LIMITS.writeBytes) throw new ToolError("the result is larger than 4 MiB");
+    if (size > LIMITS.writeBytes) throw new ToolError("the result is larger than 3 MiB");
     const next = Buffer.from(
       all === true ? text.replaceAll(before, () => after) : text.replace(before, () => after),
     );

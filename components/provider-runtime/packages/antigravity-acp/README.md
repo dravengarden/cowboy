@@ -55,7 +55,7 @@ places its tree below `proxy/` in the account-sandbox runtime archive and adds
 - Tools: `ReadFile` (≤ 256 KiB per call, offset paging), `ListDirectory`
   (≤ 2,000 entries), `SearchFiles` (target `rg`, ≤ 500 lines, 512 KiB, 30 s),
   `WriteFile`/`EditFile` (only after `ReadFile` in the session; `EditFile`
-  refuses text that is not valid UTF-8 and a result over 4 MiB before
+  refuses text that is not valid UTF-8 and a result over 3 MiB before
   building it, and keeps a UTF-8 BOM; publication is the execution helper's
   conditional `apply` (`$COWBOY_EXECUTION_FILE_HELPER`, the Claude runtime's
   primitive): it writes only while the file still hashes to what was read,

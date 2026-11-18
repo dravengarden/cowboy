@@ -14,7 +14,10 @@ export const LIMITS = Object.freeze({
   commandOutput: 256 * 1024,
   commandDefaultSeconds: 120,
   commandMaxSeconds: 600,
-  writeBytes: 4 * 1024 * 1024,
+  // A new file's bytes are base64 in the helper request, which is base64
+  // again in its `fs/writeFile` payload (~16/9 of the bytes); the execution
+  // invocation admits at most 7 MiB, so 3 MiB (~5.6 MB encoded) fits.
+  writeBytes: 3 * 1024 * 1024,
   publishTimeoutMs: 30_000,
 });
 

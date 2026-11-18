@@ -183,7 +183,7 @@ test("WriteFile and EditFile are conditional on what was read", async (t) => {
   assert.equal((await call("WriteFile", { path: "escape/x.txt", content: "x" })).error, true);
   assert.equal((await call("WriteFile", { path: "../x.txt", content: "x" })).error, true);
   const big = await call("WriteFile", { path: "big", content: "x".repeat(LIMITS.writeBytes + 1) });
-  assert.match(big.text, /larger than 4 MiB/);
+  assert.match(big.text, /larger than 3 MiB/);
 });
 
 test("RunCommand bounds output and time; StopCommand stops a running command", async (t) => {
@@ -333,7 +333,7 @@ test("EditFile refuses invalid UTF-8 and oversized results before allocating", a
     readFileSync(join(root, "latin1.txt")),
     Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]),
   );
-  writeFileSync(join(root, "many.txt"), "a".repeat(1024 * 1024));
+  writeFileSync(join(root, "many.txt"), "a".repeat(768 * 1024));
   await call("ReadFile", { path: "many.txt" });
   const grown = await call("EditFile", {
     path: "many.txt",
@@ -342,7 +342,7 @@ test("EditFile refuses invalid UTF-8 and oversized results before allocating", a
     replace_all: true,
   });
   assert.equal(grown.error, true);
-  assert.match(grown.text, /larger than 4 MiB/);
+  assert.match(grown.text, /larger than 3 MiB/);
 });
 
 test("publication is the execution helper's conditional apply; the original stays on conflict", async (t) => {
@@ -454,4 +454,20 @@ test("a busy reader never disables a command's deadline", async (t) => {
   await facade.expire(session, running);
   assert.equal(terminated, 1);
   assert.equal(session.commands.has("p1"), false);
+});
+
+test("the largest admitted new file fits one execution invocation after double encoding", () => {
+  // Invocation::validate admits at most MAX_FRAME_BYTES / 2 (7 MiB) of JSON.
+  const invocationLimit = 7 * 1024 * 1024;
+  const bytes = Buffer.alloc(LIMITS.writeBytes, 0xff);
+  const request = JSON.stringify({
+    schema: 1,
+    path: `/${"p".repeat(4096)}`,
+    base: "absent",
+    expect: "0".repeat(64),
+    splices: splice(Buffer.alloc(0), bytes),
+    staleTempSeconds: 3600,
+  });
+  const encoded = Buffer.from(request).toString("base64").length;
+  assert.ok(encoded + 64 * 1024 < invocationLimit, `${encoded} bytes leave no framing room`);
 });
