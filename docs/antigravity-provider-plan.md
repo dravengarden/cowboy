@@ -225,6 +225,33 @@ Remaining Phase 1 items need the dedicated test account.
 Remaining Phase 1: suspension and 429 shapes
 (observe only, never provoke).
 
+#### Phase 1 notes — refusal evidence and hooks (2026-11-18)
+
+- Turn attribution: one `agy acp` process writes
+  `~/.gemini/antigravity-cli/log/acp-server-<time>-<pid>.log`; the ACP
+  `sessionId` is the conversation ID in its lines. Each backend step of a
+  turn logs `http_helpers.go:709] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x… ResponseID: …`;
+  the turn ends with `server.go:1323] Stream goroutine exited for <sessionId>, sending completion signal`.
+- A refused turn (new account, `VALIDATION_REQUIRED`) logs no stream line,
+  then `errorreport.go:307] agent executor error: generating and executing: PERMISSION_DENIED (code 403): Verify your account to continue.`
+  (twice) before the barrier. The reason enum appears only once per process,
+  in the structured JSON of a background request:
+  `http_helpers.go:876] Failed to make code assist backend request (https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary): {`
+  … `"status": "PERMISSION_DENIED"` … `"reason": "VALIDATION_REQUIRED"` … `}`.
+- A transient capacity failure is retried and logged as
+  `run.go:316] Run: attempt 1 failed (UNAVAILABLE (code 503): No capacity available for model gemini-3.8-flash-high on the server), retrying in 4s`;
+  the agent message also shows `⚠ API error (attempt 1)`.
+- Not observed: `UNSUPPORTED_LOCATION` lines on Hawk (seen on OVH only as
+  agent text), 429 and suspension. The classifier in
+  [`cowboy-antigravity-acp`](../components/provider-runtime/packages/antigravity-acp/README.md)
+  matches the lines above and settles anything else `unknown_refusal`.
+- Hooks: the `PreToolUse` input carries `toolCall.name`; MCP facade tools are
+  named `mcp_cowboy_<Tool>`. A missing, timed-out, malformed-output or
+  non-zero hook denies the tool; an unparseable `hooks.json` disables every
+  hook. `settings.json` `permissions.deny` (either the tool-name or the
+  documented `read_file(*)` syntax) did not deny `read_file` in `agy acp`.
+  Details in the design's "Step 4 acceptance".
+
 ### Phase 2 — Native custody as a Provider declaration
 
 Replace the `claude-code` literals of the native-owned fence with a signed

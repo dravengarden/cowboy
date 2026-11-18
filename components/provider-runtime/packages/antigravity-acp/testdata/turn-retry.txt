@@ -1,0 +1,16 @@
+I1118 07:21:52.086926     277 server.go:988] ACP Request received: session/prompt
+I1118 07:21:52.087001     277 server.go:1260] Starting conversation update stream for 54f1aff0-8f8e-4c96-acf4-abc76bd68e92
+I1118 07:21:52.087136     277 server.go:1826] Sending user message to conversation 54f1aff0-8f8e-4c96-acf4-abc76bd68e92 (items=1, media=0)
+I1118 07:21:52.090551     277 latency_breakdown.go:168] SEND_USER_CASCADE_MESSAGE_LATENCY latency breakdown: map[active_user_state_latency_ms:0 blocking:false cascade_id:54f1aff0-8f8e-4c96-acf4-abc76bd68e92 cascade_send_latency_ms:2 hydrate_slash_commands_latency_ms:0 load_trajectory_latency_ms:0 media_count:0 media_summaries_latency_ms:0 message_origin:AGENT_MESSAGE_ORIGIN_UNSPECIFIED resolve_agent_config_latency_ms:0 save_media_latency_ms:0 saved_media_count:0 status:OK total_latency_ms:2 trajectory_id:fb3a1c2c-cfe4-4764-a499-165fdeefc7fe]
+I1118 07:21:52.092579      25 server.go:2427] Advertising 11 slash commands for session 54f1aff0-8f8e-4c96-acf4-abc76bd68e92
+I1118 07:21:52.097613     306 monitor_config_manager_external.go:53] externalMonitorConfigManager: initialized with embedded config (3 monitors)
+I1118 07:21:52.098001     306 monitoring.go:409] [Sonar] Resolved active tags: [jetski_mode_default policy_guardian sonar_skip_tags] (detected surface: "")
+I1118 07:21:52.098089     306 monitoring.go:409] [Sonar] Resolved active tags: [jetski_mode_default policy_guardian sonar_skip_tags] (detected surface: "")
+I1118 07:21:53.028612     323 http_helpers.go:709] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x6541aa7a0e1f7efa ResponseID: EFL9ao6HFf-WjMcP0cWQsQ4
+I1118 07:21:53.302566     205 server.go:2352] Sending session_info_update for session 54f1aff0-8f8e-4c96-acf4-abc76bd68e92: title="Reading Hello.txt File Content"
+I1118 07:21:55.227479     704 http_helpers.go:709] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0xcd5e826f085c8b94 ResponseID: EFL9aov1LJyQ-8YP18e68A4
+I1118 07:21:59.354544     794 http_helpers.go:709] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0xa94d5c7bd68daf68 ResponseID: FVL9atj0D77K-8YP3sT3qA8
+I1118 07:21:59.438889     806 server.go:2738] Tool confirmation for conversation 54f1aff0-8f8e-4c96-acf4-abc76bd68e92 step 4 (type=*gemini_coder_go_proto.Step_Generic approved=true)
+I1118 07:22:00.059343     306 run.go:316] Run: attempt 1 failed (UNAVAILABLE (code 503): No capacity available for model gemini-3.8-flash-high on the server), retrying in 4s
+I1118 07:22:06.714195     852 http_helpers.go:709] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0xc2af40f32def3c3a ResponseID: HFL9aqmOF4Oa_uMPk5OMMQ
+I1118 07:22:06.718232     255 server.go:1323] Stream goroutine exited for 54f1aff0-8f8e-4c96-acf4-abc76bd68e92, sending completion signal

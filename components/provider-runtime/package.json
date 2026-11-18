@@ -10,6 +10,8 @@
   "files": [
     "build.ts",
     "check.ts",
+    "owned-sources.ts",
+    "execution-connection.mjs",
     "lock.json",
     "packages"
   ],

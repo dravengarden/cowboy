@@ -73,7 +73,53 @@
       "turn_end": "portable_v1",
       "configuration": "portable_v1",
       "default_preferences": {},
-      "error_rules": []
+      "error_rules": [
+        {
+          "when": {
+            "op": "contains",
+            "value": "antigravity_backend_refusal:verification_required"
+          },
+          "user_detail": "Google asks to verify this Antigravity account. Verify it in the account's browser before continuing.",
+          "classification": "antigravity-verification-required",
+          "keep_worker_alive": true
+        },
+        {
+          "when": {
+            "op": "contains",
+            "value": "antigravity_backend_refusal:location_unsupported"
+          },
+          "user_detail": "Google refused this Antigravity account: the service is not available in the runtime Machine's location.",
+          "classification": "antigravity-location-unsupported",
+          "keep_worker_alive": true
+        },
+        {
+          "when": {
+            "op": "contains",
+            "value": "antigravity_backend_refusal:rate_limited"
+          },
+          "user_detail": "Google rate-limited this Antigravity account. Wait for the limit to reset before sending again.",
+          "classification": "antigravity-rate-limited",
+          "keep_worker_alive": true
+        },
+        {
+          "when": {
+            "op": "contains",
+            "value": "antigravity_backend_refusal:suspended"
+          },
+          "user_detail": "Google reported this Antigravity account as suspended.",
+          "classification": "antigravity-suspended",
+          "keep_worker_alive": true
+        },
+        {
+          "when": {
+            "op": "contains",
+            "value": "antigravity_backend_refusal:unknown_refusal"
+          },
+          "user_detail": "Cowboy could not prove Google's outcome for this turn from the account's log. Review the account before continuing.",
+          "classification": "antigravity-unknown-refusal",
+          "keep_worker_alive": true
+        }
+      ]
     },
     "arguments": [
       "acp",
@@ -97,7 +143,14 @@
         "id": "cowboy-antigravity-launch",
         "version": "1.1.0",
         "source": "cowboy:components/provider-runtime/packages/antigravity-launch",
-        "integrity": "sha256:9fdbd1bba97f4af5cf20c9c789d06b99abaac9664b4c93798080fce60fa304c4",
+        "integrity": "sha256:9d885248a15f644f6d83dd0cf16dbeb62395f2d3d09dbaa065ae4cb7968d2119",
+        "private": true
+      },
+      {
+        "id": "cowboy-antigravity-acp",
+        "version": "1.0.0",
+        "source": "cowboy:components/provider-runtime/packages/antigravity-acp",
+        "integrity": "sha256:3e6a57badab9eadc44fd30254e429bb642835a4bad4f696e901caeedbfaa20d6",
         "private": true
       },
       {
@@ -126,6 +179,12 @@
             "slot": "antigravity",
             "dependency": "cowboy-antigravity-launch",
             "command": "agy-launch"
+          },
+          {
+            "kind": "provider_adapter",
+            "slot": "antigravity-proxy",
+            "dependency": "cowboy-antigravity-acp",
+            "command": "agy-proxy"
           }
         ]
       }

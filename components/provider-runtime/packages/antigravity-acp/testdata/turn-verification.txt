@@ -1,0 +1,74 @@
+I1117 04:57:08.407101     220 http_helpers.go:876] Failed to make code assist backend request (https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary): {
+  "error": {
+    "code": 403,
+    "message": "Verify your account to continue.",
+    "status": "PERMISSION_DENIED",
+    "details": [
+      {
+        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+        "reason": "VALIDATION_REQUIRED",
+        "domain": "cloudcode-pa.googleapis.com",
+        "metadata": {
+          "validation_learn_more_url": "https://support.google.com/accounts?p=al_alert",
+          "validation_error_message": "Verify your account to continue.",
+          "validation_url_link_text": "Verify your account",
+          "validation_url": "https://accounts.google.com/v3/signin/continue?plt=REDACTED&continue=https://developers.google.com/gemini-code-assist/auth/auth_success_gemini&sarp=1&scc=1&flowName=GlifWebSignIn&authuser",
+          "validation_learn_more_link_text": "Learn more"
+        }
+      },
+      {
+        "@type": "type.googleapis.com/google.rpc.Help",
+        "links": [
+          {
+            "description": "Verify your account",
+            "url": "https://accounts.google.com/v3/signin/continue?plt=REDACTED&continue=https://developers.google.com/gemini-code-assist/auth/auth_success_gemini&sarp=1&scc=1&flowName=GlifWebSignIn&authuser"
+          },
+          {
+            "description": "Learn more",
+            "url": "https://support.google.com/accounts?p=al_alert"
+          }
+        ]
+      }
+    ]
+  }
+}
+W1117 04:57:08.407328     220 cache.go:157] Cache(retrieveUserQuotaSummary): Singleflight refresh failed: PERMISSION_DENIED (code 403): Verify your account to continue.
+E1117 04:57:08.407379     220 errorreport.go:307] PERMISSION_DENIED (code 403): Verify your account to continue.
+W1117 04:57:08.407400     220 cache.go:189] Failed to refresh cache in background: PERMISSION_DENIED (code 403): Verify your account to continue.
+W1117 04:57:08.407423     226 cache.go:189] Failed to refresh cache in background: PERMISSION_DENIED (code 403): Verify your account to continue.
+I1117 04:57:08.628492      70 http_helpers.go:108] UseAICodeMendel routing switch changed: false -> true
+I1117 04:57:08.628785      70 server.go:5348] [RemoteControl] Mendel flags changed (remote-control-setting-enabled=false, remote-control-proxy-server-url="jetski-webchannel.googleapis.com:443"), re-evaluating the connection
+I1117 04:57:08.628854      70 server.go:742] Failed to load CLI settings, using defaults: open /tmp/agy-spike/home/.gemini/antigravity-cli/settings.json: no such file or directory
+I1117 04:57:08.628882      70 server.go:1199] Creating new cascade trajectory (agentScript=false)
+I1117 04:57:08.628890      70 server.go:1225] Conversation using project ID: default-cli-project
+I1117 04:57:08.629308     262 server.go:5828] [RemoteControl] Session toggle is off, staying disconnected
+I1117 04:57:08.629323     262 server.go:5511] [RemoteControl] Resolved proxyServerURL: ""
+I1117 04:57:08.639015      70 server.go:1242] Created conversation 2d67a645-da8f-46e6-b9fb-6e2f9fd20870 (backend=BACKEND_TYPE_UNSPECIFIED)
+I1117 04:57:08.639381      70 server.go:2901] Setting default model override: Gemini 3.8 Flash (High)
+I1117 04:57:08.639504      70 server.go:1288] Advertising available models to client: current=gemini-3.8-flash-high, count=6
+I1117 04:57:08.646029     278 server.go:988] ACP Request received: session/prompt
+I1117 04:57:08.646164     278 server.go:1260] Starting conversation update stream for 2d67a645-da8f-46e6-b9fb-6e2f9fd20870
+I1117 04:57:08.646211     278 server.go:1826] Sending user message to conversation 2d67a645-da8f-46e6-b9fb-6e2f9fd20870 (items=1, media=0)
+E1117 04:57:08.655351     283 projects.go:204] projects store: project_store_get_file_missing: missing project file: open /tmp/agy-spike/home/.gemini/config/projects/default-cli-project.json: no such file or directory
+E1117 04:57:08.655587     283 errorreport.go:307] missing project file: open /tmp/agy-spike/home/.gemini/config/projects/default-cli-project.json: no such file or directory
+I1117 04:57:08.658906     278 latency_breakdown.go:168] SEND_USER_CASCADE_MESSAGE_LATENCY latency breakdown: map[active_user_state_latency_ms:0 blocking:false cascade_id:2d67a645-da8f-46e6-b9fb-6e2f9fd20870 cascade_send_latency_ms:10 hydrate_slash_commands_latency_ms:0 load_trajectory_latency_ms:0 media_count:0 media_summaries_latency_ms:0 message_origin:AGENT_MESSAGE_ORIGIN_UNSPECIFIED resolve_agent_config_latency_ms:0 save_media_latency_ms:0 saved_media_count:0 status:OK total_latency_ms:10 trajectory_id:e9557cfd-7191-42a1-9234-984c8854a2be]
+E1117 04:57:08.673077      70 projects.go:204] projects store: project_store_get_file_missing: missing project file: open /tmp/agy-spike/home/.gemini/config/projects/default-cli-project.json: no such file or directory
+E1117 04:57:08.673138      70 errorreport.go:307] missing project file: open /tmp/agy-spike/home/.gemini/config/projects/default-cli-project.json: no such file or directory
+I1117 04:57:08.677241      70 server.go:2427] Advertising 11 slash commands for session 2d67a645-da8f-46e6-b9fb-6e2f9fd20870
+I1117 04:57:08.693733     283 monitor_config_manager_external.go:53] externalMonitorConfigManager: initialized with embedded config (3 monitors)
+I1117 04:57:08.694445     283 monitoring.go:409] [Sonar] Resolved active tags: [jetski_mode_default policy_guardian sonar_skip_tags] (detected surface: "")
+I1117 04:57:08.694594     283 monitoring.go:409] [Sonar] Resolved active tags: [jetski_mode_default policy_guardian sonar_skip_tags] (detected surface: "")
+E1117 04:57:09.255482     283 errorreport.go:307] agent executor error: generating and executing: PERMISSION_DENIED (code 403): Verify your account to continue.
+E1117 04:57:09.255933     283 errorreport.go:307] generating and executing: PERMISSION_DENIED (code 403): Verify your account to continue.
+I1117 04:57:09.255934     280 server.go:1323] Stream goroutine exited for 2d67a645-da8f-46e6-b9fb-6e2f9fd20870, sending completion signal
+I1117 04:57:09.257425     611 server.go:988] ACP Request received: session/prompt
+I1117 04:57:09.257486     611 server.go:1260] Starting conversation update stream for 2d67a645-da8f-46e6-b9fb-6e2f9fd20870
+I1117 04:57:09.257538     611 server.go:1826] Sending user message to conversation 2d67a645-da8f-46e6-b9fb-6e2f9fd20870 (items=1, media=0)
+I1117 04:57:09.261890     611 latency_breakdown.go:168] SEND_USER_CASCADE_MESSAGE_LATENCY latency breakdown: map[active_user_state_latency_ms:0 blocking:false cascade_id:2d67a645-da8f-46e6-b9fb-6e2f9fd20870 cascade_send_latency_ms:0 hydrate_slash_commands_latency_ms:0 load_trajectory_latency_ms:0 media_count:0 media_summaries_latency_ms:0 message_origin:AGENT_MESSAGE_ORIGIN_UNSPECIFIED resolve_agent_config_latency_ms:2 save_media_latency_ms:0 saved_media_count:0 status:OK total_latency_ms:3 trajectory_id:e9557cfd-7191-42a1-9234-984c8854a2be]
+E1117 04:57:09.266989     310 projects.go:204] projects store: project_store_get_file_missing: missing project file: open /tmp/agy-spike/home/.gemini/config/projects/default-cli-project.json: no such file or directory
+E1117 04:57:09.267044     310 errorreport.go:307] missing project file: open /tmp/agy-spike/home/.gemini/config/projects/default-cli-project.json: no such file or directory
+I1117 04:57:09.282816     310 monitoring.go:409] [Sonar] Resolved active tags: [jetski_mode_default policy_guardian sonar_skip_tags] (detected surface: "")
+I1117 04:57:09.282859     310 monitoring.go:409] [Sonar] Resolved active tags: [jetski_mode_default policy_guardian sonar_skip_tags] (detected surface: "")
+E1117 04:57:09.757013     310 errorreport.go:307] agent executor error: generating and executing: PERMISSION_DENIED (code 403): Verify your account to continue.
+E1117 04:57:09.758395     310 errorreport.go:307] generating and executing: PERMISSION_DENIED (code 403): Verify your account to continue.
+I1117 04:57:09.758609     309 server.go:1323] Stream goroutine exited for 2d67a645-da8f-46e6-b9fb-6e2f9fd20870, sending completion signal

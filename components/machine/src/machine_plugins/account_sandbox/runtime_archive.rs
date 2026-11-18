@@ -20,27 +20,35 @@ use sha2::{Digest as _, Sha256};
 enum Source {
     /// The vendor executable of the `provider_cli` component.
     VendorCli,
-    /// A file of the `provider_adapter` (launcher) component, relative to
-    /// its content root.
-    Adapter(&'static str),
+    /// A file of the proxy component (`agy-proxy`), relative to its content
+    /// root.
+    Proxy(&'static str),
+    /// A fixed executable script.
+    Script(&'static str),
     /// The daemon's `cowboy-runtime.json` manifest.
     Manifest,
 }
 
-/// Every daemon path besides the adapter's own tree, which is copied as-is.
+/// Every daemon path besides the component trees, which are copied as-is:
+/// the launcher's at the root and the proxy's below [`PROXY_ROOT`].
 const LAYOUT: &[(&str, Source)] = &[
     ("bin/agy", Source::VendorCli),
-    // The launcher stands in for the Node proxy until it exists (step 4).
-    ("bin/agy-proxy", Source::Adapter("bin/agy-launch")),
-    ("policy/hooks.json", Source::Adapter("share/hooks.json")),
-    (
-        "policy/settings.json",
-        Source::Adapter("share/settings.json"),
-    ),
+    ("bin/agy-proxy", Source::Script(PROXY_ENTRY)),
+    ("bin/agy-hook", Source::Script(HOOK_ENTRY)),
+    ("policy/hooks.json", Source::Proxy("app/hooks.json")),
+    ("policy/settings.json", Source::Proxy("app/settings.json")),
     ("cowboy-runtime.json", Source::Manifest),
 ];
 /// The daemon starts `login`, `logout` and `probe` units with this command.
 const LAUNCHER: &str = "bin/agy-launch";
+/// The proxy component's own entry point, inside its tree.
+const PROXY: &str = "bin/agy-proxy";
+const PROXY_ROOT: &str = "proxy";
+/// `runtime` units start `bin/agy-proxy`: the proxy component's launcher.
+const PROXY_ENTRY: &str = "#!/bin/sh\nset -eu\ncase \"$0\" in */*) cowboy_dir=${0%/*} ;; *) cowboy_dir=. ;; esac\nexec \"$cowboy_dir/../proxy/bin/agy-proxy\" \"$@\"\n";
+/// `policy/hooks.json` runs `agy-hook` from `PATH`, which the proxy sets to
+/// this runtime's `bin`; it runs the proxy's `hook.mjs` on the bundled Node.
+const HOOK_ENTRY: &str = "#!/bin/sh\nset -eu\ncase \"$0\" in */*) cowboy_dir=${0%/*} ;; *) cowboy_dir=. ;; esac\nexec \"$cowboy_dir/../proxy/runtime/node\" \"$cowboy_dir/../proxy/app/hook.mjs\"\n";
 const MANIFEST: &str =
     r#"{"agy":"bin/agy","hooks":"policy/hooks.json","settings":"policy/settings.json"}"#;
 /// The daemon's default `max_runtime_archive_bytes`.
@@ -99,34 +107,39 @@ pub(in crate::machine_plugins) fn record_registered(
     )
 }
 
-/// The resolved inputs of one archive: component executables by kind.
+/// The resolved inputs of one archive: component executables.
 pub(in crate::machine_plugins) struct Components {
     pub vendor_cli: PathBuf,
-    pub adapter: PathBuf,
+    /// The `agy-launch` launcher (login, logout and probe units).
+    pub launcher: PathBuf,
+    /// The `agy-proxy` Node proxy (runtime units).
+    pub proxy: PathBuf,
 }
 
 impl Components {
-    /// Select the `provider_cli` and `provider_adapter` executables.
+    /// Select the `provider_cli` executable and the two `provider_adapter`
+    /// executables by command.
     pub(in crate::machine_plugins) fn select(
         payload: &cowboy_provider_sdk::PlatformPayload,
         resolve: impl Fn(&str) -> Result<PathBuf>,
     ) -> Result<Self> {
-        let command = |kind: PrivateComponentKind| {
-            let mut matching = payload
-                .private_components
-                .iter()
-                .filter(|component| component.kind == kind);
+        let command = |kind: PrivateComponentKind, name: Option<&str>| {
+            let mut matching = payload.private_components.iter().filter(|component| {
+                component.kind == kind && name.is_none_or(|name| component.command == name)
+            });
             match (matching.next(), matching.next()) {
                 (Some(component), None) => resolve(&component.command),
                 _ => bail!(
-                    "the account sandbox needs exactly one {} component",
-                    kind.as_str()
+                    "the account sandbox needs exactly one {} component{}",
+                    kind.as_str(),
+                    name.map(|name| format!(" {name}")).unwrap_or_default()
                 ),
             }
         };
         Ok(Self {
-            vendor_cli: command(PrivateComponentKind::ProviderCli)?,
-            adapter: command(PrivateComponentKind::ProviderAdapter)?,
+            vendor_cli: command(PrivateComponentKind::ProviderCli, None)?,
+            launcher: command(PrivateComponentKind::ProviderAdapter, Some("agy-launch"))?,
+            proxy: command(PrivateComponentKind::ProviderAdapter, Some("agy-proxy"))?,
         })
     }
 }
@@ -163,37 +176,46 @@ enum Content {
     Bytes(&'static [u8]),
 }
 
-/// The adapter's tree as-is, then [`LAYOUT`], sorted by path.
-fn entries(components: &Components) -> Result<Vec<Entry>> {
-    let bin = components
-        .adapter
+/// The content root of the component whose executable is `command`, which
+/// must be `expected` inside it.
+fn content_root<'a>(command: &'a Path, expected: &str) -> Result<&'a Path> {
+    let root = command
         .parent()
-        .context("launcher has no directory")?;
-    let root = bin.parent().context("launcher has no content root")?;
+        .and_then(Path::parent)
+        .context("component has no content root")?;
     ensure!(
-        components.adapter.strip_prefix(root).ok() == Some(Path::new(LAUNCHER)),
-        "the launcher component must provide {LAUNCHER}"
+        command.strip_prefix(root).ok() == Some(Path::new(expected)),
+        "the component must provide {expected}"
     );
+    Ok(root)
+}
+
+/// The launcher's tree at the root, the proxy's below [`PROXY_ROOT`], then
+/// [`LAYOUT`], sorted by path.
+fn entries(components: &Components) -> Result<Vec<Entry>> {
+    let launcher = content_root(&components.launcher, LAUNCHER)?;
+    let proxy = content_root(&components.proxy, PROXY)?;
     let mut entries = Vec::new();
-    adapter_tree(root, root, &mut entries)?;
+    adapter_tree(launcher, launcher, "", &mut entries)?;
+    adapter_tree(proxy, proxy, PROXY_ROOT, &mut entries)?;
     for (path, source) in LAYOUT {
         ensure!(
             !entries.iter().any(|entry| entry.path == *path),
-            "the launcher component already provides {path}"
+            "a component already provides {path}"
         );
         let (content, executable) = match source {
             Source::VendorCli => (Content::File(components.vendor_cli.clone()), true),
-            Source::Adapter(relative) => {
-                let file = root.join(relative);
+            Source::Proxy(relative) => {
+                let file = proxy.join(relative);
                 ensure!(
                     fs::symlink_metadata(&file)
-                        .with_context(|| format!("the launcher component lacks {relative}"))?
+                        .with_context(|| format!("the proxy component lacks {relative}"))?
                         .is_file(),
-                    "launcher file {relative} is not a regular file"
+                    "proxy file {relative} is not a regular file"
                 );
-                let executable = fs::metadata(&file)?.permissions().mode() & 0o111 != 0;
-                (Content::File(file), executable)
+                (Content::File(file), false)
             }
+            Source::Script(script) => (Content::Bytes(script.as_bytes()), true),
             Source::Manifest => (Content::Bytes(MANIFEST.as_bytes()), false),
         };
         entries.push(Entry {
@@ -207,26 +229,35 @@ fn entries(components: &Components) -> Result<Vec<Entry>> {
 }
 
 /// Every regular file under `directory`; links and special files refuse.
-fn adapter_tree(root: &Path, directory: &Path, entries: &mut Vec<Entry>) -> Result<()> {
+fn adapter_tree(
+    root: &Path,
+    directory: &Path,
+    prefix: &str,
+    entries: &mut Vec<Entry>,
+) -> Result<()> {
     for entry in fs::read_dir(directory)? {
         let entry = entry?;
         let path = entry.path();
         let kind = entry.file_type()?;
         if kind.is_dir() {
-            adapter_tree(root, &path, entries)?;
+            adapter_tree(root, &path, prefix, entries)?;
         } else if kind.is_file() {
             let relative = path.strip_prefix(root)?;
-            let name = relative
+            let relative = relative
                 .to_str()
-                .context("launcher file name is not UTF-8")?
-                .to_owned();
+                .context("component file name is not UTF-8")?;
+            let name = if prefix.is_empty() {
+                relative.to_owned()
+            } else {
+                format!("{prefix}/{relative}")
+            };
             entries.push(Entry {
                 path: name,
                 executable: entry.metadata()?.permissions().mode() & 0o111 != 0,
                 content: Content::File(path),
             });
         } else {
-            bail!("launcher component contains a link or special file");
+            bail!("a component contains a link or special file");
         }
     }
     Ok(())
@@ -314,24 +345,40 @@ impl<W: std::io::Write> std::io::Write for Hashing<W> {
 mod tests {
     use super::*;
 
+    fn executable(path: &Path, content: &[u8]) {
+        fs::write(path, content).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
     fn fixture(root: &Path) -> Components {
         let cli = root.join("runtime/provider_cli-antigravity/content");
-        let adapter = root.join("runtime/provider_adapter-antigravity/content");
-        for directory in [cli.clone(), adapter.join("bin"), adapter.join("share")] {
+        let launcher = root.join("runtime/provider_adapter-antigravity/content");
+        let proxy = root.join("runtime/provider_adapter-antigravity-proxy/content");
+        for directory in [
+            cli.clone(),
+            launcher.join("bin"),
+            launcher.join("share"),
+            proxy.join("bin"),
+            proxy.join("runtime"),
+            proxy.join("app/node_modules/ws"),
+        ] {
             fs::create_dir_all(directory).unwrap();
         }
         fs::write(cli.join("antigravity"), b"vendor").unwrap();
-        fs::write(adapter.join("bin/agy-launch"), b"#!/bin/sh\n").unwrap();
-        fs::set_permissions(
-            adapter.join("bin/agy-launch"),
-            fs::Permissions::from_mode(0o755),
-        )
-        .unwrap();
-        fs::write(adapter.join("share/hooks.json"), b"{}").unwrap();
-        fs::write(adapter.join("share/settings.json"), b"{\"permissions\":{}}").unwrap();
+        executable(&launcher.join("bin/agy-launch"), b"#!/bin/sh\n");
+        fs::write(launcher.join("share/hooks.json"), b"{}").unwrap();
+        executable(&proxy.join("bin/agy-proxy"), b"#!/bin/sh\n# node wrapper\n");
+        executable(&proxy.join("runtime/node"), b"node");
+        fs::write(proxy.join("app/cowboy-launch.mjs"), b"// proxy").unwrap();
+        fs::write(proxy.join("app/hook.mjs"), b"// hook").unwrap();
+        fs::write(proxy.join("app/hooks.json"), b"{\"gate\":{}}").unwrap();
+        fs::write(proxy.join("app/settings.json"), b"{\"permissions\":{}}").unwrap();
+        fs::write(proxy.join("app/node_modules/ws/index.js"), b"ws").unwrap();
+        fs::write(proxy.join("cowboy-runtime.json"), b"{\"schema_version\":1}").unwrap();
         Components {
             vendor_cli: cli.join("antigravity"),
-            adapter: adapter.join("bin/agy-launch"),
+            launcher: launcher.join("bin/agy-launch"),
+            proxy: proxy.join("bin/agy-proxy"),
         }
     }
 
@@ -375,19 +422,31 @@ mod tests {
             names,
             [
                 "bin/agy",
+                "bin/agy-hook",
                 "bin/agy-launch",
                 "bin/agy-proxy",
                 "cowboy-runtime.json",
                 "policy/hooks.json",
                 "policy/settings.json",
+                "proxy/app/cowboy-launch.mjs",
+                "proxy/app/hook.mjs",
+                "proxy/app/hooks.json",
+                "proxy/app/node_modules/ws/index.js",
+                "proxy/app/settings.json",
+                "proxy/bin/agy-proxy",
+                "proxy/cowboy-runtime.json",
+                "proxy/runtime/node",
                 "share/hooks.json",
-                "share/settings.json",
             ]
         );
         let entry = |name: &str| entries.iter().find(|(path, _, _)| path == name).unwrap();
         assert_eq!(entry("bin/agy").2, b"vendor");
         assert_eq!(entry("bin/agy").1, 0o555);
-        assert_eq!(entry("bin/agy-proxy").2, b"#!/bin/sh\n");
+        assert_eq!(entry("bin/agy-proxy").1, 0o555);
+        assert_eq!(entry("bin/agy-proxy").2, PROXY_ENTRY.as_bytes());
+        assert_eq!(entry("bin/agy-hook").1, 0o555);
+        assert_eq!(entry("proxy/runtime/node").1, 0o555);
+        assert_eq!(entry("policy/hooks.json").2, b"{\"gate\":{}}");
         assert_eq!(entry("policy/settings.json").1, 0o444);
         let manifest: serde_json::Value =
             serde_json::from_slice(&entry("cowboy-runtime.json").2).unwrap();
@@ -401,6 +460,46 @@ mod tests {
         );
         let digest = format!("{:x}", Sha256::digest(fs::read(&archive.path).unwrap()));
         assert_eq!(digest, archive.sha256);
+    }
+
+    /// The trampolines resolve the proxy tree from their own location.
+    #[test]
+    fn entry_scripts_run_the_proxy_tree() {
+        let root = tempfile::tempdir().unwrap();
+        let unpacked = root.path().join("rt");
+        fs::create_dir_all(unpacked.join("bin")).unwrap();
+        fs::create_dir_all(unpacked.join("proxy/bin")).unwrap();
+        fs::create_dir_all(unpacked.join("proxy/runtime")).unwrap();
+        executable(&unpacked.join("bin/agy-proxy"), PROXY_ENTRY.as_bytes());
+        executable(&unpacked.join("bin/agy-hook"), HOOK_ENTRY.as_bytes());
+        executable(
+            &unpacked.join("proxy/bin/agy-proxy"),
+            b"#!/bin/sh\necho proxy \"$@\"\n",
+        );
+        executable(
+            &unpacked.join("proxy/runtime/node"),
+            b"#!/bin/sh\necho node \"$1\"\n",
+        );
+        let run = |command: &str| {
+            let output = std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(command)
+                .env(
+                    "PATH",
+                    format!("{}:/usr/bin:/bin", unpacked.join("bin").display()),
+                )
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            String::from_utf8(output.stdout).unwrap()
+        };
+        assert_eq!(run("agy-proxy a b"), "proxy a b\n");
+        let hook = run("agy-hook");
+        assert!(hook.starts_with("node "), "{hook}");
+        assert!(
+            hook.trim_end().ends_with("/bin/../proxy/app/hook.mjs"),
+            "{hook}"
+        );
     }
 
     #[test]
@@ -418,20 +517,44 @@ mod tests {
     }
 
     #[test]
-    fn launcher_without_policy_or_with_links_is_refused() {
+    fn proxy_without_policy_or_with_links_is_refused() {
         let root = tempfile::tempdir().unwrap();
         let components = fixture(root.path());
-        let share = components
-            .adapter
+        let app = components
+            .proxy
             .parent()
             .unwrap()
             .parent()
             .unwrap()
-            .join("share");
-        fs::remove_file(share.join("settings.json")).unwrap();
+            .join("app");
+        fs::remove_file(app.join("settings.json")).unwrap();
         assert!(build(&components, tempfile::tempdir().unwrap().path()).is_err());
-        fs::write(share.join("settings.json"), b"{}").unwrap();
-        std::os::unix::fs::symlink("/etc/passwd", share.join("link")).unwrap();
+        fs::write(app.join("settings.json"), b"{}").unwrap();
+        std::os::unix::fs::symlink("/etc/passwd", app.join("link")).unwrap();
         assert!(build(&components, tempfile::tempdir().unwrap().path()).is_err());
+    }
+
+    #[test]
+    fn components_are_selected_by_command() {
+        let payload: cowboy_provider_sdk::PlatformPayload = serde_json::from_value(serde_json::json!({
+            "os": "linux",
+            "architecture": "x86_64",
+            "payload_digest": "",
+            "launch_command": "agy-launch",
+            "private_components": [
+                {"kind": "provider_cli", "slot": "antigravity", "dependency": "cli", "command": "antigravity"},
+                {"kind": "provider_adapter", "slot": "antigravity", "dependency": "launch", "command": "agy-launch"},
+                {"kind": "provider_adapter", "slot": "antigravity-proxy", "dependency": "acp", "command": "agy-proxy"},
+            ],
+        }))
+        .unwrap();
+        let selected =
+            Components::select(&payload, |command| Ok(PathBuf::from("/c").join(command))).unwrap();
+        assert_eq!(selected.vendor_cli, Path::new("/c/antigravity"));
+        assert_eq!(selected.launcher, Path::new("/c/agy-launch"));
+        assert_eq!(selected.proxy, Path::new("/c/agy-proxy"));
+        let mut without = payload.clone();
+        without.private_components.pop();
+        assert!(Components::select(&without, |command| Ok(PathBuf::from(command))).is_err());
     }
 }

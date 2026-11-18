@@ -1,0 +1,25 @@
+I1117 05:11:37.407186     140 server.go:988] ACP Request received: session/prompt
+E1117 05:11:37.412055     140 projects.go:204] projects store: project_store_get_file_missing: missing project file: open /tmp/agy-spike/home2/.gemini/config/projects/default-cli-project.json: no such file or directory
+E1117 05:11:37.412082      45 projects.go:204] projects store: project_store_get_file_missing: missing project file: open /tmp/agy-spike/home2/.gemini/config/projects/default-cli-project.json: no such file or directory
+E1117 05:11:37.412106      45 errorreport.go:307] missing project file: open /tmp/agy-spike/home2/.gemini/config/projects/default-cli-project.json: no such file or directory
+E1117 05:11:37.412106     140 errorreport.go:307] missing project file: open /tmp/agy-spike/home2/.gemini/config/projects/default-cli-project.json: no such file or directory
+I1117 05:11:37.414007      45 server.go:2427] Advertising 11 slash commands for session 41fea08c-692b-4737-acd5-099de1e2f2cd
+I1117 05:11:37.414023     140 server.go:1260] Starting conversation update stream for 41fea08c-692b-4737-acd5-099de1e2f2cd
+I1117 05:11:37.414064     140 server.go:1826] Sending user message to conversation 41fea08c-692b-4737-acd5-099de1e2f2cd (items=1, media=0)
+I1117 05:11:37.416109     140 latency_breakdown.go:168] SEND_USER_CASCADE_MESSAGE_LATENCY latency breakdown: map[active_user_state_latency_ms:0 blocking:false cascade_id:41fea08c-692b-4737-acd5-099de1e2f2cd cascade_send_latency_ms:0 hydrate_slash_commands_latency_ms:0 load_trajectory_latency_ms:0 media_count:0 media_summaries_latency_ms:0 message_origin:AGENT_MESSAGE_ORIGIN_UNSPECIFIED resolve_agent_config_latency_ms:0 save_media_latency_ms:0 saved_media_count:0 status:OK total_latency_ms:1 trajectory_id:40ac294c-d354-4e31-8647-2774cf3e53fa]
+E1117 05:11:37.418753     371 projects.go:204] projects store: project_store_get_file_missing: missing project file: open /tmp/agy-spike/home2/.gemini/config/projects/default-cli-project.json: no such file or directory
+E1117 05:11:37.418787     371 errorreport.go:307] missing project file: open /tmp/agy-spike/home2/.gemini/config/projects/default-cli-project.json: no such file or directory
+I1117 05:11:37.425964     371 monitor_config_manager_external.go:53] externalMonitorConfigManager: initialized with embedded config (3 monitors)
+I1117 05:11:37.426022     371 monitoring.go:409] [Sonar] Resolved active tags: [jetski_mode_default policy_guardian sonar_skip_tags] (detected surface: "")
+I1117 05:11:37.426043     371 monitoring.go:409] [Sonar] Resolved active tags: [jetski_mode_default policy_guardian sonar_skip_tags] (detected surface: "")
+I1117 05:11:38.187128     363 http_helpers.go:709] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0xfe1971127d8277f7 ResponseID: CeL7aqTfI9v2jrEPgcWi0AE
+I1117 05:11:39.113528     203 server.go:2352] Sending session_info_update for session 41fea08c-692b-4737-acd5-099de1e2f2cd: title="Delegating Task To Subagent"
+I1117 05:11:41.137308     652 http_helpers.go:709] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x91f0bb48b0650121 ResponseID: CeL7arO3N4up1MkPtJTi2AI
+E1117 05:11:46.949315     713 projects.go:204] projects store: project_store_get_file_missing: missing project file: open /tmp/agy-spike/home2/.gemini/config/projects/default-cli-project.json: no such file or directory
+E1117 05:11:46.949344     713 errorreport.go:307] missing project file: open /tmp/agy-spike/home2/.gemini/config/projects/default-cli-project.json: no such file or directory
+I1117 05:11:46.953373     713 monitoring.go:409] [Sonar] Resolved active tags: [jetski_mode_default policy_guardian sonar_skip_tags] (detected surface: "")
+I1117 05:11:46.953399     713 monitoring.go:409] [Sonar] Resolved active tags: [jetski_mode_default policy_guardian sonar_skip_tags] (detected surface: "")
+I1117 05:11:49.597741     744 http_helpers.go:709] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x64c416f5c3156491 ResponseID: E-L7aoHhD7_cjMcP_O_r0Qs
+I1117 05:11:50.505823     998 http_helpers.go:709] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x26d26a252fcc740e ResponseID: E-L7aoaEErnW_uMPvY2ewA0
+I1117 05:11:57.306427    1047 http_helpers.go:709] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x3e8ea94991c90ec9 ResponseID: GeL7auaAH4mV_uMPh7SkiQ0
+I1117 05:11:57.865525     352 server.go:1323] Stream goroutine exited for 41fea08c-692b-4737-acd5-099de1e2f2cd, sending completion signal

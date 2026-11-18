@@ -5,8 +5,13 @@ daemon (`packaging/account-sandbox/`), Machine step 3a (manifest isolation,
 runtime archive, worker launch, native login/logout through the daemon) and
 step 3b (Unix execution bridge, trusted process ledger in the worker endpoint,
 sealed install probes, daemon-confirmed watchdog recycle; see
-[Providers](architecture/04-providers.md)); the proxy, queue parking on
-`uncertain_effect` and controls remain. It extends
+[Providers](architecture/04-providers.md)) and step 4 (the `agy-proxy` ACP
+proxy and the Cowboy MCP facade,
+[`cowboy-antigravity-acp`](../components/provider-runtime/packages/antigravity-acp/README.md));
+queue parking on `uncertain_effect` and controls remain. Split execution stays
+unavailable: native acceptance on 2026-11-18 found that `settings.json`
+`permissions.deny` does not deny built-in tools in `agy acp` 1.5.9, so the
+second denial layer of [R2-14] does not hold (see "Step 4 acceptance"). It extends
 [`antigravity-provider-plan.md`](antigravity-provider-plan.md) Phases 3 and 4
 under the
 [Antigravity consumer-subscription boundary](requirements.md#antigravity-consumer-subscription-boundary).
@@ -492,6 +497,45 @@ why.
 - **[R3-16] Several idle sessions.** Each session has its own runtime unit
   (at most 4 per account plus 1 authentication unit); the one-turn limit is
   enforced by the Controller's reservation, not by the unit count.
+
+## Step 4 acceptance (Hawk, 2026-11-18)
+
+Run with the dedicated test account's home, the official `agy` 1.5.9, no
+daemon, and `bwrap` standing in for the unit: the target path hidden by an
+empty tmpfs, `hooks.json` and `settings.json` bound read-only, the closed
+environment, and the pinned Codex exec-server 0.159.3 serving a temporary
+target directory as a `unix:` execution endpoint.
+
+- Proxy and facade (1 prompt): `read_file` was attempted and denied by the
+  hook (`failed`), `mcp_cowboy_ReadFile` returned the target-only sentinel,
+  `session/prompt` carried `antigravity_backend.class = ok` (4 success
+  records, barrier seen; one retried `UNAVAILABLE (code 503)` attempt counted
+  as transient), `authenticate` was refused, and the endpoint saw one
+  connection. The hook saw the facade tool as `mcp_cowboy_ReadFile`.
+- Hook failures (direct `agy`, prompt: read a probe file with `read_file`):
+
+| Hook | `settings.json` deny | Result |
+|---|---|---|
+| (a) command does not exist | absent | denied: `exit status 127` |
+| (b) times out (`timeout: 3`) | absent | denied: `signal: killed` |
+| (c) prints malformed JSON | absent | denied: `failed to unmarshal result from hook` |
+| (d) exits non-zero | absent | denied: `exit status 3` |
+| (a) command does not exist | present | denied: `exit status 127` |
+| (d) exits non-zero | present | denied: `exit status 3` |
+| `hooks.json` itself unparseable | present (`"read_file"` names) | **read executed** |
+| hook allows | present (`read_file(*)`, `command(*)` rules) | **read executed**; `run_command` asked permission |
+
+  Every hook failure mode fails closed, but `agy` logs `Failed to parse hooks
+  file` and runs without hooks when `hooks.json` does not parse, and neither
+  deny-list syntax stopped `read_file`. The proxy therefore also validates the
+  gate's shape at readiness and rejects every `session/request_permission`
+  for a non-facade tool itself (an independent layer only for tools that ask:
+  `run_command`, `write_file`). Read-only built-ins remain gated by the hook
+  alone; split execution stays undeclared until a second layer is proven or
+  the owner accepts the hook as the only one for reads.
+- The (b) and (c) cases with `settings.json` present were not run (prompt
+  budget); with the deny layer shown ineffective they reduce to the absent
+  rows.
 
 ## Residual risks
 

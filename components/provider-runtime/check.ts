@@ -43,7 +43,7 @@ interface NpmArchiveRecipe {
   targets: Partial<Record<TargetKey, DownloadTarget>>;
 }
 
-interface NodeNpmRecipe {
+interface NodeNpmRecipe extends OwnedNodeRecipe {
   kind: "node_npm";
   version: string;
   package_dir: string;
@@ -294,7 +294,12 @@ async function validateDependencySource(
       `${providerId}: owned archive source mismatch for ${dependency.id}`,
     );
     assert(
-      dependency.integrity === await ownedIntegrity(recipe),
+      dependency.integrity ===
+        await ownedArchiveIntegrity(
+          join(runtimeRoot, recipe.package_dir),
+          recipe.launcher,
+          recipe.files,
+        ),
       `${providerId}: owned archive integrity mismatch for ${dependency.id}`,
     );
     return;
@@ -318,6 +323,14 @@ async function validateDependencySource(
     return;
   }
 
+  if (recipe.kind === "node_npm" && dependency.source.startsWith("cowboy:")) {
+    assert(
+      dependency.source === ownedNodeSource(recipe) &&
+        dependency.integrity === await ownedNodeIntegrity(runtimeRoot, recipe),
+      `${providerId}: owned node package integrity mismatch for ${dependency.id}`,
+    );
+    return;
+  }
   assert(
     dependency.source.startsWith("https://registry.npmjs.org/") &&
       dependency.source.endsWith(`-${dependency.version}.tgz`),
@@ -391,12 +404,15 @@ async function validateNpmRecipe(
   );
   const directDependencies = Object.entries(packageJson.dependencies);
   assert(lock.lockfileVersion === 3, `${providerId}: npm lockfile must be v3`);
-  const primary = directDependencies.filter(([name, version]) =>
+  // A Cowboy-owned program has no primary registry package; its owned
+  // inputs are bound by the dependency integrity instead.
+  const owned = dependency.source === ownedNodeSource(recipe);
+  const primary = owned ? [] : directDependencies.filter(([name, version]) =>
     version === dependency.version &&
     lock.packages[`node_modules/${name}`]?.resolved === dependency.source
   );
   assert(
-    primary.length === 1,
+    owned || primary.length === 1,
     `${providerId}: ${dependency.id} runtime package must have one exact primary dependency`,
   );
   // Private transport libraries belong to this adapter's complete npm lock,
@@ -418,6 +434,10 @@ async function validateNpmRecipe(
       `${providerId}: private npm input ${name} is not exactly integrity-pinned`,
     );
   }
+  if (owned) {
+    ownedNodeInputs(recipe);
+    return;
+  }
   const [packageName, packageVersion] = required(
     primary[0],
     "missing npm dependency",
@@ -437,25 +457,6 @@ async function validateNpmRecipe(
       lockedPackage.integrity === dependency.integrity,
     `${providerId}: npm lock payload mismatch for ${dependency.id}`,
   );
-}
-
-/** SHA-256 over each owned source file's name and SHA-256, in order. */
-async function ownedIntegrity(recipe: OwnedArchiveRecipe): Promise<string> {
-  const names = [recipe.launcher, ...recipe.files];
-  assert(
-    names.every((name) => /^[a-z0-9][a-z0-9._-]*$/.test(name)) &&
-      new Set(names).size === names.length,
-    "owned archive files must be distinct plain names",
-  );
-  let lines = "";
-  for (const name of names) {
-    const path = join(runtimeRoot, recipe.package_dir, name);
-    assert((await lstat(path)).isFile(), `owned file ${name} is not regular`);
-    const digest = createHash("sha256").update(await readFile(path))
-      .digest("hex");
-    lines += `${name} ${digest}\n`;
-  }
-  return `sha256:${createHash("sha256").update(lines).digest("hex")}`;
 }
 
 /** SHA-256 over the sorted pinned targets of a vendor archive recipe. */
@@ -502,3 +503,10 @@ function assert(condition: unknown, message: string): asserts condition {
 }
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  ownedArchiveIntegrity,
+  ownedNodeInputs,
+  ownedNodeIntegrity,
+  ownedNodeSource,
+  type OwnedNodeRecipe,
+} from "./owned-sources.ts";

@@ -1,0 +1,270 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { Connection } from "../../execution-connection.mjs";
+import { Facade, LIMITS, Retained } from "./facade.mjs";
+import { buildProjection, guidanceDirectories, parseGit } from "./projection.mjs";
+import { fakeEndpoint } from "./test-endpoint.mjs";
+
+const hasRg = (() => {
+  try {
+    execFileSync("rg", ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+async function fixture(t, options = {}) {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "agy-facade-")));
+  const root = join(base, "workspace");
+  mkdirSync(join(root, "src"), { recursive: true });
+  mkdirSync(join(base, "outside"));
+  writeFileSync(join(base, "outside", "secret.txt"), "OUTSIDE_SECRET\n");
+  writeFileSync(join(root, "hello.txt"), "hello target\n");
+  symlinkSync(join(base, "outside"), join(root, "escape"));
+  const socket = join(base, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, root, options);
+  const connection = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: root } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  const uncertain = [];
+  const facade = await Facade.create(connection, {
+    onUncertain: (session, method) => uncertain.push([session, method]),
+  });
+  t.after(() => {
+    connection.close();
+    endpoint.close();
+    rmSync(base, { recursive: true, force: true });
+  });
+  facade.beginTurn("s1");
+  const call = async (name, args) => {
+    const result = await facade.call("s1", name, args);
+    return { text: result.content[0].text, error: result.isError === true };
+  };
+  return { base, root, facade, call, endpoint, uncertain };
+}
+
+test("tools are unavailable outside a turn and after the turn ends", async (t) => {
+  const { facade } = await fixture(t);
+  const outside = await facade.call("other", "ReadFile", { path: "hello.txt" });
+  assert.equal(outside.isError, true);
+  assert.match(outside.content[0].text, /No Cowboy turn/);
+  await facade.endTurn("s1");
+  assert.equal((await facade.call("s1", "ReadFile", { path: "hello.txt" })).isError, true);
+  assert.deepEqual(
+    facade.tools().map((tool) => tool.name),
+    [
+      "ReadFile",
+      "ListDirectory",
+      "SearchFiles",
+      "WriteFile",
+      "EditFile",
+      "RunCommand",
+      "StopCommand",
+    ],
+  );
+});
+
+test("ReadFile pages at 256 KiB and paths stay inside the workspace", async (t) => {
+  const { root, base, call } = await fixture(t);
+  assert.deepEqual(await call("ReadFile", { path: "hello.txt" }), {
+    text: "hello target\n",
+    error: false,
+  });
+  writeFileSync(join(root, "big.txt"), "x".repeat(300 * 1024));
+  const first = await call("ReadFile", { path: "big.txt" });
+  assert.equal(first.text.indexOf("\n[cowboy:"), LIMITS.readBytes);
+  assert.match(first.text, /continue with offset=262144\]$/);
+  const second = await call("ReadFile", { path: "big.txt", offset: 262144 });
+  assert.equal(second.text.split("\n")[0].length, 300 * 1024 - 262144);
+  assert.equal(
+    (await call("ReadFile", { path: "big.txt", length: LIMITS.readBytes + 1 })).error,
+    true,
+  );
+  for (const path of [
+    "../outside/secret.txt",
+    "escape/secret.txt",
+    join(base, "outside", "secret.txt"),
+    "/etc/passwd",
+  ]) {
+    const result = await call("ReadFile", { path });
+    assert.equal(result.error, true, path);
+    assert.doesNotMatch(result.text, /OUTSIDE_SECRET/);
+  }
+  assert.match((await call("ReadFile", { path: "missing.txt" })).text, /No such file/);
+  assert.equal((await call("ReadFile", { path: "a\0b" })).error, true);
+});
+
+test("ListDirectory is bounded to 2000 entries", async (t) => {
+  const { root, call } = await fixture(t);
+  mkdirSync(join(root, "many"));
+  for (let index = 0; index < 2005; index++) writeFileSync(join(root, "many", `f${index}`), "");
+  const listing = await call("ListDirectory", { path: "many" });
+  assert.equal(listing.text.split("\n").length, 1 + 2000 + 1);
+  assert.match(listing.text, /truncated; 5 more entries/);
+  assert.match((await call("ListDirectory", {})).text, /\nsrc\//);
+  assert.equal((await call("ListDirectory", { path: "escape" })).error, true);
+});
+
+test("SearchFiles runs the target's rg with match and byte bounds", { skip: !hasRg }, async (t) => {
+  const { root, call } = await fixture(t);
+  writeFileSync(join(root, "src", "a.txt"), "needle one\nhay\n");
+  assert.match((await call("SearchFiles", { pattern: "needle" })).text, /src\/a\.txt:1:needle one/);
+  assert.equal((await call("SearchFiles", { pattern: "absent-token" })).text, "No matches.");
+  writeFileSync(join(root, "src", "many.txt"), "needle\n".repeat(800));
+  const many = await call("SearchFiles", { pattern: "needle", path: "src" });
+  assert.ok(many.text.split("\n").length <= LIMITS.searchMatches + 1);
+  assert.match(many.text, /results truncated/);
+  assert.equal((await call("SearchFiles", { pattern: "x", path: "../outside" })).error, true);
+});
+
+test("WriteFile and EditFile are conditional on what was read", async (t) => {
+  const { root, call } = await fixture(t);
+  assert.match(
+    (await call("WriteFile", { path: "new/dir/a.txt", content: "one\n" })).text,
+    /Created/,
+  );
+  assert.equal(readFileSync(join(root, "new/dir/a.txt"), "utf8"), "one\n");
+  const unread = await call("WriteFile", { path: "hello.txt", content: "x" });
+  assert.match(unread.text, /read it with ReadFile/);
+  await call("ReadFile", { path: "hello.txt" });
+  writeFileSync(join(root, "hello.txt"), "changed elsewhere\n");
+  assert.match(
+    (await call("WriteFile", { path: "hello.txt", content: "x" })).text,
+    /changed since/,
+  );
+  await call("ReadFile", { path: "hello.txt" });
+  execFileSync("chmod", ["0751", join(root, "hello.txt")]);
+  assert.match(
+    (await call("WriteFile", { path: "hello.txt", content: "mine\n" })).text,
+    /Replaced/,
+  );
+  assert.equal(readFileSync(join(root, "hello.txt"), "utf8"), "mine\n");
+  assert.equal(
+    execFileSync("stat", ["-c", "%a", join(root, "hello.txt")])
+      .toString()
+      .trim(),
+    "751",
+  );
+  writeFileSync(join(root, "e.txt"), "a b a\n");
+  assert.match(
+    (await call("EditFile", { path: "e.txt", old_string: "a", new_string: "c" })).text,
+    /Read/,
+  );
+  await call("ReadFile", { path: "e.txt" });
+  assert.match(
+    (await call("EditFile", { path: "e.txt", old_string: "a", new_string: "c" })).text,
+    /occurs 2 times/,
+  );
+  await call("EditFile", { path: "e.txt", old_string: "b", new_string: "B" });
+  assert.equal(readFileSync(join(root, "e.txt"), "utf8"), "a B a\n");
+  await call("EditFile", { path: "e.txt", old_string: "a", new_string: "z", replace_all: true });
+  assert.equal(readFileSync(join(root, "e.txt"), "utf8"), "z B z\n");
+  assert.equal((await call("WriteFile", { path: "escape/x.txt", content: "x" })).error, true);
+  assert.equal((await call("WriteFile", { path: "../x.txt", content: "x" })).error, true);
+  const big = await call("WriteFile", { path: "big", content: "x".repeat(LIMITS.writeBytes + 1) });
+  assert.match(big.text, /larger than 4 MiB/);
+});
+
+test("RunCommand bounds output and time; StopCommand stops a running command", async (t) => {
+  const { call } = await fixture(t);
+  const ok = await call("RunCommand", { command: "printf 'out\\n'; printf 'err\\n' >&2; exit 3" });
+  assert.match(ok.text, /^Exit code: 3\n/);
+  assert.match(ok.text, /out/);
+  assert.match(ok.text, /err/);
+  const loud = await call("RunCommand", { command: "head -c 600000 /dev/zero | tr '\\0' x" });
+  assert.match(loud.text, /bytes of output omitted/);
+  assert.ok(loud.text.length < LIMITS.commandOutput + 200);
+  const slow = await call("RunCommand", { command: "sleep 30", timeout_seconds: 1 });
+  assert.match(slow.text, /Timed out/);
+  const background = await call("RunCommand", {
+    command: "echo started; sleep 30",
+    wait_seconds: 1,
+  });
+  const id = /command_id: ([^)]+)\)/.exec(background.text)?.[1];
+  assert.ok(id, background.text);
+  assert.match(background.text, /started/);
+  assert.match((await call("StopCommand", { command_id: id })).text, /Stopped/);
+  assert.equal((await call("StopCommand", { command_id: id })).error, true);
+  assert.equal((await call("RunCommand", { command: "x", timeout_seconds: 601 })).error, true);
+});
+
+test("a lost mutation reply reports an unknown outcome and ends the turn", async (t) => {
+  let lose = false;
+  const { root, call, uncertain } = await fixture(t, {
+    lose: (method) => lose && method === "fs/writeFile",
+  });
+  lose = true;
+  const result = await call("WriteFile", { path: "lost.txt", content: "maybe\n" });
+  assert.equal(result.error, true);
+  assert.match(result.text, /^outcome unknown/);
+  assert.deepEqual(uncertain, [["s1", "fs/writeFile"]]);
+  lose = false;
+  const after = await call("ReadFile", { path: "hello.txt" });
+  assert.match(after.text, /unknown outcome/);
+  // The staged file may exist on the target; nothing was published or retried.
+  assert.throws(() => readFileSync(join(root, "lost.txt")));
+});
+
+test("a lost process start is an unknown outcome too", async (t) => {
+  const { call, uncertain } = await fixture(t, { lose: (method) => method === "process/start" });
+  assert.match((await call("RunCommand", { command: "true" })).text, /^outcome unknown/);
+  assert.deepEqual(uncertain, [["s1", "process/start"]]);
+});
+
+test("retained output keeps head and tail", () => {
+  const retained = new Retained(10);
+  retained.push(Buffer.from("abcdefghijklmnop"));
+  assert.equal(retained.take(), "abcde\n[cowboy: 6 bytes of output omitted]\nlmnop");
+  assert.equal(retained.take(), "");
+});
+
+test("projection fences repository guidance and bounds Git status", async (t) => {
+  const { root, facade, base } = await fixture(t);
+  const git = (...args) => execFileSync("git", ["-C", root, ...args], { stdio: "pipe" });
+  git("init", "-q", "-b", "main");
+  writeFileSync(join(root, "AGENTS.md"), "ROOT_GUIDANCE\n");
+  writeFileSync(join(root, "src", "GEMINI.md"), `SUB_GUIDANCE ${"y".repeat(20000)}\n`);
+  for (let index = 0; index < 250; index++) writeFileSync(join(root, `u${index}`), "");
+  const projection = await buildProjection(facade, join(root, "src"));
+  assert.ok(/^<cowboy_routing>/.test(projection));
+  assert.ok(/Git branch: main/.test(projection));
+  assert.ok(/Git status --short \(200 lines\):/.test(projection));
+  assert.ok(/\n\[truncated\]\n/.test(projection));
+  const fence = /(COWBOY_UNTRUSTED_[a-f0-9]{32})/.exec(projection)[1];
+  const fenced = projection.split(fence);
+  assert.equal(fenced.length, 4);
+  assert.match(fenced[2], /ROOT_GUIDANCE/);
+  assert.match(fenced[2], /SUB_GUIDANCE/);
+  assert.ok(fenced[2].length < 64 * 1024);
+  assert.ok(fenced[0].indexOf("ROOT_GUIDANCE") < 0);
+  await assert.rejects(
+    buildProjection(facade, join(base, "outside")),
+    /outside the bound workspace/,
+  );
+  assert.deepEqual(guidanceDirectories("/r", "/r/a/b"), ["/r", "/r/a", "/r/a/b"]);
+  assert.deepEqual(guidanceDirectories(undefined, "/w"), ["/w"]);
+  assert.deepEqual(parseGit("top\t/r\nbranch\tdev\nstatus\t M a\n"), {
+    top: "/r",
+    branch: "dev",
+    status: [" M a"],
+  });
+});

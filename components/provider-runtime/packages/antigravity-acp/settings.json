@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "deny": [
+      "read_file(*)",
+      "write_file(*)",
+      "command(*)",
+      "unsandboxed(*)",
+      "read_url(*)",
+      "execute_url(*)"
+    ]
+  },
+  "allowNonWorkspaceAccess": false
+}

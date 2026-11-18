@@ -57,7 +57,7 @@ interface NpmArchiveRecipe {
   targets: Partial<Record<TargetKey, DownloadTarget>>;
 }
 
-interface NodeNpmRecipe {
+interface NodeNpmRecipe extends OwnedNodeRecipe {
   kind: "node_npm";
   version: string;
   package_dir: string;
@@ -284,7 +284,8 @@ async function buildComponent(
       if (
         !/^packages\/[a-z0-9-]+$/.test(recipe.package_dir) ||
         dependency.source !== `cowboy:components/provider-runtime/${recipe.package_dir}` ||
-        dependency.integrity !== await ownedIntegrity(sourceDir, recipe)
+        dependency.integrity !==
+          await ownedArchiveIntegrity(sourceDir, recipe.launcher, recipe.files)
       ) {
         throw new Error(`owned archive source mismatch for ${dependency.id}`);
       }
@@ -407,10 +408,7 @@ async function buildComponent(
         if (!/^packages\/[a-z0-9-]+\/launch\.mjs$/.test(recipe.launcher)) {
           throw new Error("unsafe private launcher source");
         }
-        await copyFile(
-          join(runtimeRoot, recipe.launcher),
-          `${stage}/app/cowboy-launch.mjs`,
-        );
+        await copyOwnedNode(runtimeRoot, recipe, dependency, `${stage}/app`);
         await writeFile(
           `${stage}/bin/cowboy-configured-cli`,
           '#!/bin/sh\nset -eu\ncowboy_dir=${0%/*}\ncowboy_root=$(CDPATH= cd -- "$cowboy_dir/.." && pwd)\nexec "$cowboy_root/runtime/node" "$cowboy_root/app/cowboy-launch.mjs" --cowboy-private-cli "$@"\n',
@@ -494,30 +492,6 @@ async function buildComponent(
       return { path: archive, format: "tar_gz", entrypoint: `bin/${command}` };
     }
   }
-}
-
-/** SHA-256 over each owned source file's name and SHA-256, in order. */
-async function ownedIntegrity(
-  sourceDir: string,
-  recipe: OwnedArchiveRecipe,
-): Promise<string> {
-  const names = [recipe.launcher, ...recipe.files];
-  if (
-    names.some((name) => !/^[a-z0-9][a-z0-9._-]*$/.test(name)) ||
-    new Set(names).size !== names.length
-  ) {
-    throw new Error("owned archive files must be distinct plain names");
-  }
-  let lines = "";
-  for (const name of names) {
-    const path = join(sourceDir, name);
-    if (!(await lstat(path)).isFile()) {
-      throw new Error(`owned archive file ${name} is not a regular file`);
-    }
-    lines += `${name} ${await sha256(path)}\n`;
-  }
-  const digest = new Bun.CryptoHasher("sha256").update(lines).digest("hex");
-  return `sha256:${digest}`;
 }
 
 async function materializeGitSource(
@@ -790,3 +764,8 @@ function requiredTarget<T>(
 }
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  copyOwnedNode,
+  ownedArchiveIntegrity,
+  type OwnedNodeRecipe,
+} from "./owned-sources.ts";

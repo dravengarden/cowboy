@@ -24,16 +24,13 @@ if [ "${1-}" = "--cowboy-probe" ]; then
   exit 1
 fi
 # In an account-sandbox runtime archive (`cowboy-runtime.json` at its root)
-# the vendor binary is `bin/agy`, and the daemon binds the hooks and settings
-# read-only over the account home, so nothing is copied there.
+# the vendor binary is `bin/agy`; this launcher serves only login, logout and
+# probe units there (runtime units start the `agy-proxy` Node proxy), and the
+# daemon binds the policy files read-only over the account home.
 sandboxed=false
 if [ -f "$cowboy_root/cowboy-runtime.json" ]; then
   sandboxed=true
   agy="$cowboy_root/bin/agy"
-  # `agy-proxy` is this launcher until the Node proxy replaces it.
-  if [ "${0##*/}" = "agy-proxy" ] && [ "$#" -eq 0 ]; then
-    set -- acp --disable-telemetry
-  fi
 else
   agy="$cowboy_root/../../provider_cli-antigravity/content/antigravity"
 fi

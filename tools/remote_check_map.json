@@ -158,6 +158,7 @@
     "tools/remote_check_map.json",
     "components/provider-runtime/packages/deepseek-harness/",
     "components/provider-runtime/packages/antigravity-launch/",
+    "components/provider-runtime/packages/antigravity-acp/",
     "components/provider-runtime/check.ts",
     "plugins/codex/runtime/resume_conformance.py",
     "third_party/claude-agent-acp/"
@@ -289,6 +290,7 @@
         "flake.lock",
         "components/provider-runtime/packages/claude-agent-acp/",
         "components/provider-runtime/build.ts",
+        "components/provider-runtime/owned-sources.ts",
         "components/provider-runtime/package.json",
         "src/bin/cowboy-acp-worker.rs",
         "src/worker.rs",
@@ -482,6 +484,7 @@
         "tools/lib/third-party.ts",
         "components/provider-runtime/packages/codex-acp/",
         "components/provider-runtime/build.ts",
+        "components/provider-runtime/owned-sources.ts",
         "components/provider-runtime/package.json",
         "src/bin/cowboy-acp-worker.rs",
         "src/worker.rs",

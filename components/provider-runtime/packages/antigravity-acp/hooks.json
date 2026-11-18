@@ -1,0 +1,16 @@
+{
+  "cowboy-facade-gate": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agy-hook",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

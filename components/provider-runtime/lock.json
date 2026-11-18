@@ -172,8 +172,30 @@
       "package_dir": "packages/antigravity-launch",
       "launcher": "launch.sh",
       "files": [
+        "hooks.json"
+      ],
+      "probe": [
+        "--cowboy-probe"
+      ]
+    },
+    "cowboy-antigravity-acp": {
+      "kind": "node_npm",
+      "version": "1.0.0",
+      "package_dir": "packages/antigravity-acp",
+      "script": "cowboy-launch.mjs",
+      "launcher": "packages/antigravity-acp/launch.mjs",
+      "files": [
+        "evidence.mjs",
+        "facade.mjs",
+        "facade-relay.mjs",
+        "hook.mjs",
+        "projection.mjs",
+        "proxy.mjs",
         "hooks.json",
         "settings.json"
+      ],
+      "shared_files": [
+        "execution-connection.mjs"
       ],
       "probe": [
         "--cowboy-probe"
