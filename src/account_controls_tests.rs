@@ -211,3 +211,35 @@ fn fence_operations_are_stable_per_request_revision() {
     assert_ne!(id, fence_operation_id("a", "hawk", Stop, 3));
     assert!(id.starts_with("account-fence-") && id.len() == 46);
 }
+
+#[test]
+fn logout_needs_the_kill_switch_and_is_idempotent_per_revision() {
+    use AccountState::{Blocked, Ok as Ready, Suspended};
+    assert_eq!(owner_transition(OwnerAction::Logout, Blocked), Ok(None));
+    assert_eq!(
+        owner_transition(OwnerAction::Logout, Ready),
+        Err("account_not_blocked")
+    );
+    assert!(owner_transition(OwnerAction::Logout, Suspended).is_err());
+    let id = logout_operation_id("a", 3);
+    assert_eq!(id, logout_operation_id("a", 3));
+    assert_ne!(id, logout_operation_id("a", 4));
+    assert_ne!(id, logout_operation_id("b", 3));
+    assert!(id.starts_with("account-logout-") && id.len() <= 160);
+    assert!(id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
+}
+
+#[test]
+fn logout_state_summarizes_its_machine_targets() {
+    use LogoutTargetState::{Cancelled, Failed, Pending, SignedOut, Unconfirmed};
+    assert_eq!(logout_state(&[]), "not_signed_in");
+    assert_eq!(logout_state(&[SignedOut, Pending]), "pending");
+    assert_eq!(logout_state(&[SignedOut, Failed]), "failed");
+    assert_eq!(logout_state(&[Unconfirmed, SignedOut]), "unconfirmed");
+    assert_eq!(logout_state(&[SignedOut, SignedOut]), "signed_out");
+    assert_eq!(
+        logout_state(&[SignedOut, Cancelled]),
+        "partially_signed_out"
+    );
+    assert_eq!(logout_state(&[Cancelled]), "cancelled");
+}

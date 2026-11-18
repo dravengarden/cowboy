@@ -29,6 +29,7 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(in crate::server) mod http;
+mod logout;
 mod reconcile;
 pub(in crate::server) use reconcile::start;
 
@@ -52,6 +53,16 @@ pub(in crate::server) trait Env: Send + Sync + 'static {
         machine: String,
         request: AccountFenceRequest,
     ) -> futures::future::BoxFuture<'static, Result<AccountFenceObservation, String>>;
+    /// Run one native logout on `machine` (the Machine's existing native
+    /// logout command; sandboxed accounts use the daemon's logout unit).
+    fn native_logout(
+        &self,
+        machine: String,
+        request: crate::provider_account::NativeLogoutRequest,
+    ) -> futures::future::BoxFuture<
+        'static,
+        Result<crate::provider_account::NativeLogoutObservation, String>,
+    >;
 }
 
 /// The production [`Env`].
@@ -114,6 +125,28 @@ impl Env for AppEnv {
                 .machine_control
                 .account_sandbox_fence(&machine, &request)
                 .await
+        })
+    }
+
+    fn native_logout(
+        &self,
+        machine: String,
+        request: crate::provider_account::NativeLogoutRequest,
+    ) -> futures::future::BoxFuture<
+        'static,
+        Result<crate::provider_account::NativeLogoutObservation, String>,
+    > {
+        let state = Arc::clone(&self.0);
+        Box::pin(async move {
+            let (connection, _) = state
+                .machine_control
+                .connection_protocol(&machine)
+                .ok_or_else(|| "machine_offline".to_owned())?;
+            let pending =
+                state
+                    .machine_control
+                    .begin_native_logout(&connection, &machine, &request)?;
+            pending.await
         })
     }
 }
@@ -680,6 +713,7 @@ impl Controls {
                     })).collect::<Vec<_>>(),
                     "stop_confirmed": self.stop_confirmed(account),
                     "uncertain_effects": uncertain,
+                    "logout": self.logout_value(account),
                 })
             })
             .collect::<Vec<_>>();

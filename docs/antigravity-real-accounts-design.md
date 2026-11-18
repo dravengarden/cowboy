@@ -552,9 +552,19 @@ R3-4, R3-9, R3-10, R3-13 and R3-16, with these concrete choices:
 - **Kill switch.** `block` (with confirmation) writes `blocked` and the stop
   fences first, then the fences stop and confirm the units; `unblock` writes
   `ok` with admit fences. `force_release` of an unsettled turn requires every
-  fence of the account to be a confirmed stop. History-preserving logout is
-  not part of the kill switch yet: the native logout path exists only inside
-  account revocation.
+  fence of the account to be a confirmed stop.
+- **Logout (step 5b).** `logout` (with confirmation) needs `blocked` and a
+  confirmed stop. The request is recorded durably (internal setting
+  `provider_account_logout:<account>`, one operation ID per control revision)
+  with one target per Machine holding a signed-in generation; the reconciler
+  delivers each target through the Machine's native logout command (the
+  daemon's `logout` unit and `logout_cleanup`: `credential_cleared`,
+  `history_retained`) when the Machine is connected, so an offline Machine
+  stays `pending`. The outcome is recorded on that generation's login receipt,
+  which then admits no session and reads `signed_out`; the account and its
+  home remain. Unblocking before a target was ever sent cancels it. A later
+  revocation accepts the recorded logout instead of asking the Machine for a
+  second logout of the same generation.
 - **Detection.** `suspended` and a policy violation (`needs_attention`,
   reason `policy_violation:<tool>`) stop the account's units like a block.
 - **Uncertain effects.** The worker ledger counts lost replies

@@ -5,6 +5,7 @@ use super::{ProviderAccountId, Registry, StorageBackend, Store};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+mod control_logout;
 mod discovery;
 mod dispatch;
 mod native_admission;

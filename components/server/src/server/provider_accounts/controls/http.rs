@@ -17,6 +17,8 @@ pub(in crate::server) enum Action {
     Unblock,
     StopUnits,
     ForceRelease,
+    /// History-preserving native logout after a confirmed kill switch.
+    Logout,
 }
 
 #[derive(Debug, Deserialize)]
@@ -27,8 +29,8 @@ pub(in crate::server) struct ControlRequest {
     /// state (clear, unblock), so a newer refusal is never cleared blindly.
     #[serde(default)]
     expected_revision: Option<i64>,
-    /// Required by the actions that interrupt running work (block,
-    /// force_release).
+    /// Required by the actions that interrupt running work or sign the
+    /// account out (block, force_release, logout).
     #[serde(default)]
     confirm: bool,
 }
@@ -90,6 +92,11 @@ pub(in crate::server) async fn apply(
         }
         Action::StopUnits => controls.run_fences(),
         Action::ForceRelease => controls.force_release(&control, request.confirm).await?,
+        Action::Logout => {
+            controls
+                .request_logout(&control, user, request.confirm)
+                .await?;
+        }
         Action::Clear | Action::Unblock | Action::Block => {
             let owner_action = match request.action {
                 Action::Clear => OwnerAction::Clear,

@@ -53,6 +53,7 @@ impl Controls {
             self.settle_turn(&turn).await;
         }
         self.run_fences();
+        self.run_logouts();
     }
 
     /// Observe one reservation. Only the turn's terminal record, or proven

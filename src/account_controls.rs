@@ -453,6 +453,8 @@ pub enum OwnerAction {
     /// Release a turn slot whose settlement cannot be proven; requires a
     /// confirmed account stop.
     ForceRelease,
+    /// History-preserving native logout of a blocked, stopped account.
+    Logout,
 }
 
 /// The state an owner action moves the account to, or why it is refused.
@@ -468,7 +470,64 @@ pub fn owner_transition(
         (OwnerAction::Clear, AccountState::Blocked) => Err("account_blocked_use_unblock"),
         (OwnerAction::Clear, AccountState::Ok) => Ok(None),
         (OwnerAction::Clear, _) => Ok(Some(AccountState::Ok)),
-        (OwnerAction::StopUnits | OwnerAction::ForceRelease, _) => Ok(None),
+        (OwnerAction::StopUnits | OwnerAction::ForceRelease, _)
+        | (OwnerAction::Logout, AccountState::Blocked) => Ok(None),
+        (OwnerAction::Logout, _) => Err("account_not_blocked"),
+    }
+}
+
+/// The idempotent operation ID of the kill switch's native logout: one per
+/// control revision, so a retry (or a Machine that reconnects later) repeats
+/// the same request and the Machine replays its recorded outcome.
+#[must_use]
+pub fn logout_operation_id(account_id: &str, revision: i64) -> String {
+    use sha2::Digest as _;
+    let scope = serde_json::to_vec(&("account-logout", account_id, revision))
+        .expect("logout scope serializes");
+    let digest = sha2::Sha256::digest(scope);
+    let mut id = String::from("account-logout-");
+    for byte in &digest[..16] {
+        use std::fmt::Write as _;
+        let _ = write!(id, "{byte:02x}");
+    }
+    id
+}
+
+/// One Machine's part of an account logout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogoutTargetState {
+    /// Not yet answered by the Machine (offline, or the reply was lost).
+    Pending,
+    /// The native logout ran and the daemon cleared the credential; the
+    /// account's history stays in its home.
+    SignedOut,
+    /// The native logout reported failure.
+    Failed,
+    /// The Machine could not establish the outcome.
+    Unconfirmed,
+    /// The owner lifted the kill switch before the Machine was asked.
+    Cancelled,
+}
+
+/// The account-wide outcome of a logout from its Machine targets.
+#[must_use]
+pub fn logout_state(targets: &[LogoutTargetState]) -> &'static str {
+    use LogoutTargetState as T;
+    if targets.is_empty() {
+        "not_signed_in"
+    } else if targets.contains(&T::Pending) {
+        "pending"
+    } else if targets.contains(&T::Failed) {
+        "failed"
+    } else if targets.contains(&T::Unconfirmed) {
+        "unconfirmed"
+    } else if targets.iter().all(|target| *target == T::SignedOut) {
+        "signed_out"
+    } else if targets.contains(&T::SignedOut) {
+        "partially_signed_out"
+    } else {
+        "cancelled"
     }
 }
 

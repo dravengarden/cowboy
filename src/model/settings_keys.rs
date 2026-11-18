@@ -41,6 +41,8 @@ pub const SESSION_DELIVERY_POLICY_PREFIX: &str = "session_delivery_policy:";
 pub const SESSION_DELIVERY_HOLD_PREFIX: &str = "session_delivery_hold:";
 /// The uncertain-effect sequence the owner acknowledged; the session id follows.
 pub const SESSION_UNCERTAIN_EFFECT_ACK_PREFIX: &str = "session_uncertain_effect_ack:";
+/// The kill switch's native logout of one named-only account; the account id follows.
+pub const PROVIDER_ACCOUNT_LOGOUT_PREFIX: &str = "provider_account_logout:";
 pub const SESSION_CONTEXT_PREFIX: &str = "session_context:";
 /// The prompt that carries a session's linked context; the session id follows.
 pub const SESSION_CONTEXT_CARRIER_PREFIX: &str = "session_context_carrier:";
@@ -93,6 +95,7 @@ pub fn is_persisted_setting_key(key: &str) -> bool {
         || key == TRANSCRIPT_ANCHORS_CALLS_SINCE
         || [
             PROVIDER_UPDATE_FAILURE_PREFIX,
+            PROVIDER_ACCOUNT_LOGOUT_PREFIX,
             MACHINE_MAINTENANCE_PREFIX,
             SESSION_RESOURCE_WAIT_PREFIX,
             SESSION_QUEUE_PAUSED_PREFIX,
@@ -131,6 +134,7 @@ pub fn examples() -> Vec<String> {
         SESSION_DORMANT_SINCE.to_owned(),
         TRANSCRIPT_ANCHORS_CALLS_SINCE.to_owned(),
         format!("{MACHINE_MAINTENANCE_PREFIX}ovh"),
+        format!("{PROVIDER_ACCOUNT_LOGOUT_PREFIX}11111111-1111-4111-8111-111111111111"),
         format!("{SESSION_RESOURCE_WAIT_PREFIX}sess-1"),
         format!("{SESSION_QUEUE_PAUSED_PREFIX}sess-1"),
         format!("{SESSION_DELIVERY_POLICY_PREFIX}sess-1"),

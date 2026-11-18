@@ -109,6 +109,11 @@ async fn deliver(
         },
     };
     if let Some(recorded) = login.native_logout {
+        // The kill switch's history-preserving logout already ended this
+        // generation; the Machine refuses a second logout operation of it.
+        if recorded.revocation_operation != operation {
+            return Ok(outcome(&recorded.observation));
+        }
         let mut expected = proposal.clone();
         expected.observation.succeeded = recorded.observation.succeeded;
         expected.observation.profile_cleaned = recorded.observation.profile_cleaned;

@@ -37,6 +37,13 @@ fn project(receipt: &Receipt, current: bool) -> Option<&'static str> {
         return None;
     }
     receipt.native_completion.as_ref()?;
+    if receipt
+        .native_logout
+        .as_ref()
+        .is_some_and(|logout| logout.observation.succeeded == Some(true))
+    {
+        return Some("signed_out");
+    }
     Some(if receipt.native_binding_revision.is_none() {
         "binding_pending"
     } else if current {
@@ -65,6 +72,17 @@ mod tests {
         receipt.native_binding_revision = Some(2);
         assert_eq!(project(&receipt, false), Some("binding_unavailable"));
         assert_eq!(project(&receipt, true), Some("completed"));
+        // The kill switch's logout ended this generation.
+        let mut logout = json!({
+            "revocation_operation":"account-logout-1", "machine_id":"machine", "recipient_fingerprint":"fingerprint",
+            "observation":{"request":{"account_id":receipt.input.account_id,"provider_id":"claude-code","generation":1,
+                "login_request_id":"login","operation_id":"account-logout-1"},"succeeded":false}
+        });
+        receipt.native_logout = Some(serde_json::from_value(logout.clone()).unwrap());
+        assert_eq!(project(&receipt, true), Some("completed"));
+        logout["observation"]["succeeded"] = json!(true);
+        receipt.native_logout = Some(serde_json::from_value(logout).unwrap());
+        assert_eq!(project(&receipt, true), Some("signed_out"));
         receipt.cancel_requested = true;
         assert_eq!(project(&receipt, true), Some("cancellation_requested"));
     }

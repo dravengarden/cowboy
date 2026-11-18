@@ -20,6 +20,8 @@ struct Fake {
     settings: parking_lot::Mutex<HashMap<String, Value>>,
     /// Every fence command a Machine received, in order.
     fences: parking_lot::Mutex<Vec<(String, AccountFenceRequest)>>,
+    /// Every native logout a Machine received, in order.
+    logouts: parking_lot::Mutex<Vec<(String, crate::provider_account::NativeLogoutRequest)>>,
 }
 
 impl Env for Fake {
@@ -69,6 +71,26 @@ impl Env for Fake {
                 fence_epoch: Some(1),
                 stopped: vec!["cga-k-runtime-1.service".into()],
                 request,
+            })
+        })
+    }
+    fn native_logout(
+        &self,
+        machine: String,
+        request: crate::provider_account::NativeLogoutRequest,
+    ) -> futures::future::BoxFuture<
+        'static,
+        Result<crate::provider_account::NativeLogoutObservation, String>,
+    > {
+        self.logouts.lock().push((machine, request.clone()));
+        Box::pin(async move {
+            Ok(crate::provider_account::NativeLogoutObservation {
+                request,
+                succeeded: Some(true),
+                profile_cleaned: true,
+                process_trees_exited: true,
+                credential_cleared: Some(true),
+                history_retained: Some(true),
             })
         })
     }
@@ -568,3 +590,5 @@ async fn a_rate_limit_resumes_only_on_an_owner_send_after_it_ends() {
     assert!(turn.is_some());
     assert_eq!(control(&controls).await.state, AccountState::Ok);
 }
+
+mod logout_tests;
