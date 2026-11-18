@@ -61,7 +61,11 @@ find the same serious defects in this fleet's real reviews?
    presets using the original focus text, `--root`, `--base` and a new `--task`.
 2. Use the union of serious findings (high/critical, or medium with concrete
    data-loss/security/contract impact) across all arms as the reference set.
-   Verify each against the code; discard ones that are not real defects.
+   Adjudicate blind: give an adjudicator from a different model family the
+   arms anonymised (A, B, …), have it cluster findings by root cause and
+   verify each cluster read-only against the reviewed code, and keep the
+   arm key out of its prompt. Commit the cluster summary under
+   `models/pilots/`.
 3. Per arm record recall of the verified serious set, unsupported findings
    (false positives), tokens and minutes. Record recall as a capability
    observation (`ceiling = 1`), tokens/minutes as cost observations, one

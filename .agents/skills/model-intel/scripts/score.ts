@@ -154,7 +154,14 @@ export function normalize(
       const oriented = group.map((o) => (lower ? 1 - o.value / ceiling : o.value / ceiling));
       const hi = Math.max(...oriented);
       const lo = Math.min(...oriented);
-      if (hi > m.evidence.saturation_fraction || (targets > 1 && hi - lo < m.evidence.min_spread)) {
+      // Saturated means most targets sit near the ceiling, not that one does:
+      // a discriminating benchmark may well have a perfect leader.
+      const sorted = [...oriented].sort((a, b) => a - b);
+      const median = sorted[Math.floor((sorted.length - 1) / 2)];
+      if (
+        median > m.evidence.saturation_fraction ||
+        (targets > 1 && hi - lo < m.evidence.min_spread)
+      ) {
         dropped.push(`${k}: saturated or flat`);
         continue;
       }

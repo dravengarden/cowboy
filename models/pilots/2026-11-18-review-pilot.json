@@ -1,0 +1,674 @@
+{
+ "schema": 1,
+ "date": "2026-11-18",
+ "method": "Blind adjudication by Claude Opus 5.5 subagents: arms anonymised as A-D, findings clustered by root cause and verified read-only against the reviewed worktree.",
+ "arm_key": {
+  "keeper-idle-retire/C": {
+   "arm": "62max",
+   "call": "call-4f492b808c5e11d31056a723",
+   "tokens": 5998192,
+   "minutes": 37.1
+  },
+  "keeper-idle-retire/A": {
+   "arm": "62am",
+   "call": "call-95bd4c9106cabc116a9281ab",
+   "tokens": 498726,
+   "minutes": 3.8
+  },
+  "keeper-idle-retire/D": {
+   "arm": "62sm",
+   "call": "call-de0c292dd56162aa642c4b53",
+   "tokens": 956023,
+   "minutes": 3.4
+  },
+  "keeper-idle-retire/B": {
+   "arm": "60max",
+   "call": "call-2f254e2094f8e857acb12361",
+   "tokens": 1897017,
+   "minutes": 8.9
+  },
+  "pr8818/B": {
+   "arm": "62max",
+   "call": "call-021daceaf490e860b83c85d4",
+   "tokens": 10414464,
+   "minutes": 39.5
+  },
+  "pr8818/C": {
+   "arm": "62am",
+   "call": "call-b9df53d4bf41f25726ba6647",
+   "tokens": 667361,
+   "minutes": 3.6
+  },
+  "pr8818/D": {
+   "arm": "62sm",
+   "call": "call-1dd2d5c70160dc775f12ab15",
+   "tokens": 1878521,
+   "minutes": 5.2
+  },
+  "pr8818/A": {
+   "arm": "60max",
+   "call": "call-b0c0ad7276d7eebf6d958b08",
+   "tokens": 2826298,
+   "minutes": 15.7
+  },
+  "pr8895/A": {
+   "arm": "62max",
+   "call": "call-673d8f212394bbb7fbb9dea4",
+   "tokens": 6135132,
+   "minutes": 30.2
+  },
+  "pr8895/C": {
+   "arm": "62am",
+   "call": "call-7275870fe529781cb3b669f3",
+   "tokens": 777557,
+   "minutes": 9.9
+  },
+  "pr8895/B": {
+   "arm": "62sm",
+   "call": "call-bcea189f3fe90c3809a18e92",
+   "tokens": 799259,
+   "minutes": 4.0
+  },
+  "pr8895/D": {
+   "arm": "60max",
+   "call": "call-ba7a092de09ad87c51a97d29",
+   "tokens": 2704302,
+   "minutes": 8.1
+  },
+  "pr8874/B": {
+   "arm": "62max",
+   "call": "call-08aa305239574a4bfdbb0fd1",
+   "tokens": 913545,
+   "minutes": 8.7
+  },
+  "pr8874/A": {
+   "arm": "62am",
+   "call": "call-8a345f9663682e696e272c5b",
+   "tokens": 183369,
+   "minutes": 2.3
+  },
+  "pr8874/C": {
+   "arm": "62sm",
+   "call": "call-9d8fea8dcf93e3f4253700a4",
+   "tokens": 330509,
+   "minutes": 1.6
+  },
+  "pr8874/D": {
+   "arm": "60max",
+   "call": "call-94f071ece9eebc28d2d33a43",
+   "tokens": 451872,
+   "minutes": 3.0
+  }
+ },
+ "verdicts": {
+  "keeper-idle-retire": [
+   {
+    "id": "K1",
+    "summary": "Retirement treats 2h of Events silence as proof the worker exited; a live worker whose provider socket dropped (Claude reconnects only on next call) or a long partition loses its keeper/executor state",
+    "verdict": "confirmed",
+    "serious": true,
+    "arms": [
+     "A",
+     "B",
+     "C",
+     "D"
+    ]
+   },
+   {
+    "id": "K2",
+    "summary": "Cached target readiness survives self-retirement, so dispatch skips Describe and the next prompt goes to the dead binding and is cancelled",
+    "verdict": "confirmed",
+    "serious": true,
+    "arms": [
+     "A",
+     "C",
+     "D"
+    ]
+   },
+   {
+    "id": "K3",
+    "summary": "Expiry check and shutdown notification are not atomic with request admission; an Invoke/Describe can be admitted between the decision and ledger.lose()",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "A",
+     "B",
+     "C",
+     "D"
+    ]
+   },
+   {
+    "id": "K4",
+    "summary": "Describe does not refresh attendance, so a wake near expiry can get Ready and lose the keeper during worker cold start",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "B"
+    ]
+   },
+   {
+    "id": "K5",
+    "summary": "Finished managed calls are explicitly retired, but conversation=continue (and Reload) relaunch the worker on the saved binding without wake recovery",
+    "verdict": "confirmed",
+    "serious": true,
+    "arms": [
+     "B",
+     "C"
+    ]
+   },
+   {
+    "id": "K6",
+    "summary": "Retirement drops the keeper's (dev,inode) workspace guard; recovery relaunches by pathname so a replaced worktree at the same path is accepted",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "C"
+    ]
+   },
+   {
+    "id": "K7",
+    "summary": "A keeper launched by Prepare/Recover whose binding the Controller never committed can retire, after which retries return EnvironmentLost forever",
+    "verdict": "confirmed",
+    "serious": true,
+    "arms": [
+     "C",
+     "D"
+    ]
+   },
+   {
+    "id": "K8",
+    "summary": "Retirement is not gated on recovery being possible; e.g. a changed configured executor digest makes the saved binding unrecoverable",
+    "verdict": "confirmed",
+    "serious": true,
+    "arms": [
+     "C"
+    ]
+   },
+   {
+    "id": "K9",
+    "summary": "cgroup-suffix eligibility is decoupled from the Machine's launch mode / loss-proof logic",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "C",
+     "D"
+    ]
+   }
+  ],
+  "pr8818": [
+   {
+    "id": "P1",
+    "summary": "Whole-info entitlement writers (UpdateEntitlementInfo, NewEntitlementTerm, UpdateEntitlementAwsLicenseArn) copy awsBuyerContact from a replica/stale read and can erase a just-saved answer",
+    "verdict": "confirmed",
+    "serious": true,
+    "arms": [
+     "A",
+     "B",
+     "C",
+     "D"
+    ]
+   },
+   {
+    "id": "P2",
+    "summary": "Contact-answer UPDATE is unconditional (org+ID only): concurrent unchecked workers both save/derive, and stale agreement/buyer snapshots can be written onto a repaired/reassigned row",
+    "verdict": "confirmed",
+    "serious": true,
+    "arms": [
+     "A",
+     "B",
+     "C",
+     "D"
+    ]
+   },
+   {
+    "id": "P3",
+    "summary": "Company enrichment calls full-row UpdateBuyer from a pre-AWS-call (possibly batch-prefetched) buyer snapshot, overwriting concurrent seller edits",
+    "verdict": "confirmed",
+    "serious": true,
+    "arms": [
+     "A",
+     "B",
+     "C",
+     "D"
+    ]
+   },
+   {
+    "id": "P4",
+    "summary": "Serial 30s-per-agreement optional AWS call inside the agreement sync loop can exhaust the activity deadline and starve required reconciliation",
+    "verdict": "confirmed",
+    "serious": true,
+    "arms": [
+     "B",
+     "C",
+     "D"
+    ]
+   },
+   {
+    "id": "P5",
+    "summary": "Answer is committed before Contact/link/company derivation; any partial failure is never retried",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "B",
+     "C",
+     "D"
+    ]
+   },
+   {
+    "id": "P6",
+    "summary": "Local replace of marketplaceagreement SDK breaks downstream importers / masks upgrades",
+    "verdict": "uncertain",
+    "serious": false,
+    "arms": [
+     "B",
+     "C"
+    ]
+   },
+   {
+    "id": "P7",
+    "summary": "run-ai-tests discovers the live aws-buyer-profiles.plan.md by default though its fixtures are unavailable",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "B",
+     "C"
+    ]
+   },
+   {
+    "id": "P8",
+    "summary": "affected.js can pass only the opt-in-ignored local spec to Playwright, yielding 'no tests found'",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "B",
+     "D"
+    ]
+   },
+   {
+    "id": "P9",
+    "summary": "Entitlement guard rejects empty PartnerID, so single-account (legacy empty partner_id) sellers never get buyer contacts",
+    "verdict": "confirmed",
+    "serious": true,
+    "arms": [
+     "B"
+    ]
+   },
+   {
+    "id": "P10",
+    "summary": "CPPO data-feed fallback buyer may differ from the acceptor, attaching acceptor contact to wrong buyer",
+    "verdict": "refuted",
+    "serious": false,
+    "arms": [
+     "B"
+    ]
+   },
+   {
+    "id": "P11",
+    "summary": "SQS SUBSCRIBE_SUCCESS path leaves meta.IntegrationPartnerID empty, so named-integration entitlements skip enrichment",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "B"
+    ]
+   },
+   {
+    "id": "P12",
+    "summary": "Terminal MDFS-created agreements without AwsAgreementV2 bypass the cancelled check",
+    "verdict": "uncertain",
+    "serious": false,
+    "arms": [
+     "B"
+    ]
+   },
+   {
+    "id": "P13",
+    "summary": "DB error during contact lookup logs the buyer's email",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "B"
+    ]
+   },
+   {
+    "id": "P14",
+    "summary": "Offer sidebar may show a contact from a non-newest entitlement (>1000 entitlements) / no buyerID recheck",
+    "verdict": "refuted",
+    "serious": false,
+    "arms": [
+     "B"
+    ]
+   },
+   {
+    "id": "P15",
+    "summary": "Fixture cleanup deletes fixture organization, cascading unchecked tables",
+    "verdict": "uncertain",
+    "serious": false,
+    "arms": [
+     "B"
+    ]
+   },
+   {
+    "id": "P16",
+    "summary": "Live external test prints real contact on assertion mismatch",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "B"
+    ]
+   },
+   {
+    "id": "P17",
+    "summary": "Contact-id queryFn returns undefined on miss (TanStack error) and ilike 1000-row search may miss exact match",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "B"
+    ]
+   },
+   {
+    "id": "P18",
+    "summary": "Entitlement UPDATE notifications now include awsBuyerContact PII in webhook/SNS payloads",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "D"
+    ]
+   }
+  ],
+  "pr8895": [
+   {
+    "id": "Q1",
+    "summary": "Open auto-apply CRM-push workflow swallows the approval's push (same workflow ID, non-override start returns open run without new allowFields); suggestion then recorded PUSHED",
+    "verdict": "confirmed",
+    "serious": true,
+    "arms": [
+     "A",
+     "B",
+     "C",
+     "D"
+    ]
+   },
+   {
+    "id": "Q2",
+    "summary": "Later approval push only sends approveFields and overwrites single crmPush, hiding an earlier FAILED auto-applied push",
+    "verdict": "confirmed",
+    "serious": true,
+    "arms": [
+     "A",
+     "C",
+     "D"
+    ]
+   },
+   {
+    "id": "Q3",
+    "summary": "Approval writes a full dealDetails/nextSteps snapshot without a conditional DB write; concurrent or token-less approvals can lose unrelated Seller edits",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "A",
+     "C"
+    ]
+   },
+   {
+    "id": "Q4",
+    "summary": "Decision committed before Seller write; a crash between them leaves APPROVED suggestion with unapplied values",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "A"
+    ]
+   },
+   {
+    "id": "Q5",
+    "summary": "Raw Seller CRM error text (Opportunity ID, Salesforce response body) stored on the partner copy's suggestion and returned to the partner org",
+    "verdict": "confirmed",
+    "serious": true,
+    "arms": [
+     "A"
+    ]
+   },
+   {
+    "id": "Q6",
+    "summary": "Approving amount+currency pushes only Amount (default mappings lack currency), writing amount in wrong denomination",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "A"
+    ]
+   },
+   {
+    "id": "Q7",
+    "summary": "A replacement suggestion during push backoff drops the original's failure outcome and makes Retry impossible",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "A"
+    ]
+   },
+   {
+    "id": "Q8",
+    "summary": "Engagement-sync start failure after Seller write is swallowed as a successful apply",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "A"
+    ]
+   },
+   {
+    "id": "Q9",
+    "summary": "New default close-date filler sends raw RFC3339 timestamp to Salesforce Date field (dateFormat expression removed)",
+    "verdict": "confirmed",
+    "serious": true,
+    "arms": [
+     "A",
+     "B",
+     "C",
+     "D"
+    ]
+   },
+   {
+    "id": "Q10",
+    "summary": "Skipped CRM write (inactive/Expired Seller copy, nil HubSpot client) returns nil and is recorded PUSHED",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "A",
+     "B",
+     "C",
+     "D"
+    ]
+   },
+   {
+    "id": "Q11",
+    "summary": "Orgs with saved legacy expression-only close-date mapping get NOT_MAPPED for close-date approvals",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "A",
+     "B",
+     "C"
+    ]
+   },
+   {
+    "id": "Q12",
+    "summary": "Account-only Salesforce links classified NOT_LINKED by startCrmStep",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "A",
+     "D"
+    ]
+   },
+   {
+    "id": "Q13",
+    "summary": "HubSpot fetcher passes {configs,lastUpdateTime} envelope to crmsMissing, suppressing all missing-mapping markers",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "A",
+     "B",
+     "C",
+     "D"
+    ]
+   },
+   {
+    "id": "Q14",
+    "summary": "Console PENDING branch hides CrmPushNotice/Retry for failed auto-applied fields",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "A",
+     "B",
+     "C",
+     "D"
+    ]
+   },
+   {
+    "id": "Q15",
+    "summary": "Review selection state survives a 409 refresh / new suggestion, keeping stale fields checked",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "A"
+    ]
+   },
+   {
+    "id": "Q16",
+    "summary": "Worker/DB interruption leaves push with no recorded outcome (maximumAttempts 1, record outside try)",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "A"
+    ]
+   },
+   {
+    "id": "Q17",
+    "summary": "Impossible RFC3339 close date (2026-02-31T..) accepted at submission but fails on apply",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "A"
+    ]
+   },
+   {
+    "id": "Q18",
+    "summary": "Initial partner next steps never populate Seller partnerNextSteps (rebuild only on change/removal)",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "A"
+    ]
+   },
+   {
+    "id": "Q19",
+    "summary": "Salesforce review dialog Promise.all: one missing CRM config blanks all mapping targets",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "A",
+     "B",
+     "C",
+     "D"
+    ]
+   },
+   {
+    "id": "Q20",
+    "summary": "Closed (terminal) Seller copy: UI still offers approve/decline that API rejects; pending suggestion stranded",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "A",
+     "B",
+     "C",
+     "D"
+    ]
+   },
+   {
+    "id": "Q21",
+    "summary": "Currency accepted as arbitrary non-empty string",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "A",
+     "B",
+     "C",
+     "D"
+    ]
+   },
+   {
+    "id": "Q22",
+    "summary": "Salesforce LWC formats money with 0 fraction digits, hiding sub-unit changes",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "A"
+    ]
+   },
+   {
+    "id": "Q23",
+    "summary": "Console says only approved fields are written though Sync-on fields are also pushed",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "A"
+    ]
+   },
+   {
+    "id": "Q24",
+    "summary": "Console marks every field 'Not in CRM' while mapping is loading or failed",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "A"
+    ]
+   },
+   {
+    "id": "Q25",
+    "summary": "Review email says 'Nothing changes until you approve' after auto-apply already ran",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "A"
+    ]
+   },
+   {
+    "id": "Q26",
+    "summary": "PR description lists stage/next steps as suggestible; asks to correct the description",
+    "verdict": "refuted",
+    "serious": false,
+    "arms": [
+     "A"
+    ]
+   },
+   {
+    "id": "Q27",
+    "summary": "Withdrawn/replaced/declined suggestion can still auto-apply because autoApply never rechecks the suggestion",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "B"
+    ]
+   },
+   {
+    "id": "Q28",
+    "summary": "autoAppliedFields published before Seller write; if Seller decides meanwhile and autoApply fails, correction write matches 0 rows and decided suggestion claims an unapplied field",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "C"
+    ]
+   }
+  ],
+  "pr8874": [
+   {
+    "id": "G1",
+    "summary": "MCP tools ListRevenueCashDisbursements/ListRevenueCreditMemos drop legacy source/channel args before reaching the new renamed-filter guard, so an MCP caller still gets an unfiltered 200",
+    "verdict": "confirmed",
+    "serious": false,
+    "arms": [
+     "B"
+    ]
+   }
+  ]
+ }
+}

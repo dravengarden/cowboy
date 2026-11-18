@@ -3,17 +3,17 @@
   "as_of": "2026-11-18",
   "inputs": {
     "repository": {
-      "count": 46,
-      "digest": "sha256:6afc123d9e37b7613b22b294d71fd359578ad9a0b2a79a1e33696661d095c04f"
+      "count": 90,
+      "digest": "sha256:d1a9d82b37759a305e9451185d0a3140c21abfa90dbcf60c5b86f555471b26ef"
     },
     "local": {
       "count": 164,
       "digest": "sha256:3cfb64c1784b18f632a1988863726e056084300155f09260d5988bb14ff901fc"
     },
-    "canonical_rows": 177,
-    "normalized_capability_rows": 83,
+    "canonical_rows": 221,
+    "normalized_capability_rows": 118,
     "excluded_after_snapshot": 0,
-    "methodology": "sha256:e0479617d64d43d54ffbde9ba9dd6d71d8db233c4273bb3d68ca51099525b7ba",
+    "methodology": "sha256:1a7de7d9cd0a1c404047d76b6a593960df7c2a8ec2cb733b81766a0613f3d9a3",
     "targets": "sha256:4b0171a49f08943e98b08fc17b701ead2c76fadfe2f6b32dbb817b77b97975bb"
   },
   "bindings": [
@@ -163,11 +163,8 @@
     }
   ],
   "dropped_groups": [
-    "arc-agi-2|v2_Semi_Private|arc-standard|score|fraction|1|higher: saturated or flat",
     "gpqa-diamond|diamond|artificial-analysis|accuracy|fraction|1|higher: saturated or flat",
-    "gpqa-diamond|diamond|epoch-inspect|accuracy|fraction|1|higher: saturated or flat",
-    "mcp-atlas|public-500|scale-seal|pass_rate|fraction|1|higher: saturated or flat",
-    "swe-bench-pro|public|anthropic-internal|resolved_rate|fraction|1|higher: saturated or flat"
+    "gpqa-diamond|diamond|epoch-inspect|accuracy|fraction|1|higher: saturated or flat"
   ],
   "unmapped_targets": [],
   "targets": [
@@ -195,12 +192,20 @@
           "confidence": "medium"
         },
         "code_review": {
-          "status": "insufficient",
-          "lineages": 0
+          "status": "scored",
+          "mean": 1,
+          "uncertainty": 0.05,
+          "lineages": 3,
+          "max_age_days": 0,
+          "confidence": "high"
         },
         "reasoning": {
-          "status": "insufficient",
-          "lineages": 1
+          "status": "scored",
+          "mean": 0.95,
+          "uncertainty": 0.05,
+          "lineages": 2,
+          "max_age_days": 0,
+          "confidence": "medium"
         },
         "long_context": {
           "status": "insufficient",
@@ -216,7 +221,8 @@
         }
       },
       "cost_groups": {
-        "tokens_per_task": 1,
+        "minutes_per_task": 4,
+        "tokens_per_task": 5,
         "usd_per_task": 3
       }
     },
@@ -240,12 +246,20 @@
           "lineages": 1
         },
         "code_review": {
-          "status": "insufficient",
-          "lineages": 0
+          "status": "scored",
+          "mean": 0.65,
+          "uncertainty": 0.103,
+          "lineages": 3,
+          "max_age_days": 0,
+          "confidence": "high"
         },
         "reasoning": {
-          "status": "insufficient",
-          "lineages": 1
+          "status": "scored",
+          "mean": 0.875,
+          "uncertainty": 0.05,
+          "lineages": 2,
+          "max_age_days": 0,
+          "confidence": "medium"
         },
         "long_context": {
           "status": "insufficient",
@@ -261,6 +275,8 @@
         }
       },
       "cost_groups": {
+        "minutes_per_task": 4,
+        "tokens_per_task": 4,
         "usd_per_task": 2
       }
     },
@@ -292,8 +308,12 @@
           "lineages": 0
         },
         "reasoning": {
-          "status": "insufficient",
-          "lineages": 1
+          "status": "scored",
+          "mean": 0.841,
+          "uncertainty": 0.05,
+          "lineages": 2,
+          "max_age_days": 0,
+          "confidence": "medium"
         },
         "long_context": {
           "status": "insufficient",
@@ -333,12 +353,20 @@
           "lineages": 1
         },
         "code_review": {
-          "status": "insufficient",
-          "lineages": 0
+          "status": "scored",
+          "mean": 0.633,
+          "uncertainty": 0.072,
+          "lineages": 3,
+          "max_age_days": 0,
+          "confidence": "high"
         },
         "reasoning": {
-          "status": "insufficient",
-          "lineages": 1
+          "status": "scored",
+          "mean": 0.771,
+          "uncertainty": 0.05,
+          "lineages": 2,
+          "max_age_days": 0,
+          "confidence": "medium"
         },
         "long_context": {
           "status": "insufficient",
@@ -354,6 +382,8 @@
         }
       },
       "cost_groups": {
+        "minutes_per_task": 4,
+        "tokens_per_task": 4,
         "usd_per_task": 1
       }
     },
@@ -385,11 +415,11 @@
         },
         "reasoning": {
           "status": "scored",
-          "mean": 0.25,
-          "uncertainty": 0.095,
-          "lineages": 2,
+          "mean": 0.321,
+          "uncertainty": 0.106,
+          "lineages": 3,
           "max_age_days": 0,
-          "confidence": "medium"
+          "confidence": "high"
         },
         "long_context": {
           "status": "insufficient",
@@ -426,11 +456,11 @@
       "tasks": {
         "agentic_coding": {
           "status": "scored",
-          "mean": 0.607,
-          "uncertainty": 0.05,
-          "lineages": 2,
+          "mean": 0.657,
+          "uncertainty": 0.069,
+          "lineages": 3,
           "max_age_days": 0,
-          "confidence": "medium"
+          "confidence": "high"
         },
         "code_review": {
           "status": "insufficient",
@@ -438,11 +468,11 @@
         },
         "reasoning": {
           "status": "scored",
-          "mean": 0.871,
-          "uncertainty": 0.091,
-          "lineages": 2,
+          "mean": 0.888,
+          "uncertainty": 0.063,
+          "lineages": 3,
           "max_age_days": 0,
-          "confidence": "medium"
+          "confidence": "high"
         },
         "long_context": {
           "status": "insufficient",
@@ -487,11 +517,11 @@
         },
         "reasoning": {
           "status": "scored",
-          "mean": 0.798,
-          "uncertainty": 0.096,
-          "lineages": 2,
+          "mean": 0.831,
+          "uncertainty": 0.071,
+          "lineages": 3,
           "max_age_days": 0,
-          "confidence": "medium"
+          "confidence": "high"
         },
         "long_context": {
           "status": "insufficient",
@@ -535,11 +565,11 @@
         },
         "reasoning": {
           "status": "scored",
-          "mean": 0.624,
-          "uncertainty": 0.05,
-          "lineages": 2,
+          "mean": 0.688,
+          "uncertainty": 0.08,
+          "lineages": 3,
           "max_age_days": 0,
-          "confidence": "medium"
+          "confidence": "high"
         },
         "long_context": {
           "status": "insufficient",
@@ -625,9 +655,9 @@
         },
         "reasoning": {
           "status": "scored",
-          "mean": 0.546,
-          "uncertainty": 0.05,
-          "lineages": 3,
+          "mean": 0.597,
+          "uncertainty": 0.066,
+          "lineages": 4,
           "max_age_days": 0,
           "confidence": "high"
         },
@@ -673,11 +703,11 @@
         },
         "reasoning": {
           "status": "scored",
-          "mean": 0.292,
-          "uncertainty": 0.075,
-          "lineages": 2,
+          "mean": 0.3,
+          "uncertainty": 0.055,
+          "lineages": 3,
           "max_age_days": 0,
-          "confidence": "medium"
+          "confidence": "high"
         },
         "long_context": {
           "status": "insufficient",
@@ -912,11 +942,11 @@
       "tasks": {
         "agentic_coding": {
           "status": "scored",
-          "mean": 0.603,
-          "uncertainty": 0.05,
-          "lineages": 2,
+          "mean": 0.633,
+          "uncertainty": 0.053,
+          "lineages": 3,
           "max_age_days": 0,
-          "confidence": "medium"
+          "confidence": "high"
         },
         "code_review": {
           "status": "insufficient",
@@ -924,11 +954,11 @@
         },
         "reasoning": {
           "status": "scored",
-          "mean": 0.741,
-          "uncertainty": 0.09,
-          "lineages": 2,
+          "mean": 0.777,
+          "uncertainty": 0.077,
+          "lineages": 3,
           "max_age_days": 0,
-          "confidence": "medium"
+          "confidence": "high"
         },
         "long_context": {
           "status": "insufficient",
@@ -967,11 +997,11 @@
         },
         "reasoning": {
           "status": "scored",
-          "mean": 0.702,
-          "uncertainty": 0.09,
-          "lineages": 2,
+          "mean": 0.748,
+          "uncertainty": 0.083,
+          "lineages": 3,
           "max_age_days": 0,
-          "confidence": "medium"
+          "confidence": "high"
         },
         "long_context": {
           "status": "insufficient",
@@ -1017,7 +1047,7 @@
         },
         "tool_use": {
           "status": "insufficient",
-          "lineages": 0
+          "lineages": 1
         },
         "writing": {
           "status": "insufficient",
@@ -1093,8 +1123,12 @@
           "lineages": 0
         },
         "reasoning": {
-          "status": "insufficient",
-          "lineages": 1
+          "status": "scored",
+          "mean": 0.905,
+          "uncertainty": 0.05,
+          "lineages": 2,
+          "max_age_days": 0,
+          "confidence": "medium"
         },
         "long_context": {
           "status": "insufficient",
@@ -1136,11 +1170,11 @@
         },
         "reasoning": {
           "status": "scored",
-          "mean": 0.615,
-          "uncertainty": 0.05,
-          "lineages": 2,
+          "mean": 0.689,
+          "uncertainty": 0.077,
+          "lineages": 3,
           "max_age_days": 0,
-          "confidence": "medium"
+          "confidence": "high"
         },
         "long_context": {
           "status": "insufficient",
@@ -1186,7 +1220,7 @@
         },
         "tool_use": {
           "status": "insufficient",
-          "lineages": 0
+          "lineages": 1
         },
         "writing": {
           "status": "insufficient",
@@ -1296,11 +1330,11 @@
         },
         "reasoning": {
           "status": "scored",
-          "mean": 0.365,
-          "uncertainty": 0.05,
-          "lineages": 2,
+          "mean": 0.416,
+          "uncertainty": 0.067,
+          "lineages": 3,
           "max_age_days": 0,
-          "confidence": "medium"
+          "confidence": "high"
         },
         "long_context": {
           "status": "insufficient",
@@ -1342,11 +1376,11 @@
         },
         "reasoning": {
           "status": "scored",
-          "mean": 0.331,
-          "uncertainty": 0.072,
-          "lineages": 2,
+          "mean": 0.447,
+          "uncertainty": 0.124,
+          "lineages": 3,
           "max_age_days": 0,
-          "confidence": "medium"
+          "confidence": "high"
         },
         "long_context": {
           "status": "insufficient",
@@ -1388,11 +1422,11 @@
         },
         "reasoning": {
           "status": "scored",
-          "mean": 0.205,
-          "uncertainty": 0.145,
-          "lineages": 2,
+          "mean": 0.262,
+          "uncertainty": 0.137,
+          "lineages": 3,
           "max_age_days": 0,
-          "confidence": "medium"
+          "confidence": "high"
         },
         "long_context": {
           "status": "insufficient",
@@ -1468,15 +1502,19 @@
         },
         "reasoning": {
           "status": "insufficient",
-          "lineages": 0
+          "lineages": 1
         },
         "long_context": {
           "status": "insufficient",
           "lineages": 0
         },
         "tool_use": {
-          "status": "insufficient",
-          "lineages": 1
+          "status": "scored",
+          "mean": 0.592,
+          "uncertainty": 0.16,
+          "lineages": 2,
+          "max_age_days": 117,
+          "confidence": "medium"
         },
         "writing": {
           "status": "insufficient",
@@ -1501,8 +1539,12 @@
           "lineages": 0
         },
         "code_review": {
-          "status": "insufficient",
-          "lineages": 0
+          "status": "scored",
+          "mean": 0.583,
+          "uncertainty": 0.083,
+          "lineages": 3,
+          "max_age_days": 0,
+          "confidence": "high"
         },
         "reasoning": {
           "status": "insufficient",
@@ -1521,7 +1563,10 @@
           "lineages": 0
         }
       },
-      "cost_groups": {}
+      "cost_groups": {
+        "minutes_per_task": 4,
+        "tokens_per_task": 4
+      }
     }
   ],
   "tiers": {

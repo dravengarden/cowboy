@@ -99,8 +99,11 @@ test("a mirrored lineage counts once and cannot set the scale", () => {
 });
 
 test("saturated groups are dropped and lower-is-better bounds are oriented", () => {
-  const sat = normalize([obs({ target: "a", value: 0.95 }), obs({ target: "b", value: 0.6 })], m);
+  const sat = normalize([obs({ target: "a", value: 0.95 }), obs({ target: "b", value: 0.92 })], m);
   assertEquals(sat.values.size, 0);
+  // A perfect leader on a discriminating benchmark is not saturation.
+  const leader = normalize([obs({ target: "a", value: 1 }), obs({ target: "b", value: 0.6 })], m);
+  assertEquals(leader.values.size, 2);
   const err = obs({ target: "a", value: 0.2, higher_is_better: false, metric: "error" });
   assertEquals(normalize([err], m).values.get(err.id), 0.8);
 });

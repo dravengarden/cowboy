@@ -3,10 +3,10 @@
 First run of the `model-intel` skill. Scores and tiers are in
 `models/catalog.json`; the agent-facing digest is `models/summary.md`.
 
-Inputs: 46 repository observations (`sha256:6afc123d…c04f`) and 164
-reference-only observations kept in local state (`sha256:3cfb64c1…01fc`).
-After canonical selection 177 valid rows remained, and 83 capability rows
-survived normalization (the rest were cost rows or in dropped groups). Numbers from sources whose terms
+Inputs: 90 repository observations (`sha256:d1a9d82b…6ef`, including the
+verified review pilot) and 164 reference-only observations kept in local state
+(`sha256:3cfb64c1…01fc`). After canonical selection 221 valid rows remained,
+118 of them normalized capability rows. Numbers from sources whose terms
 forbid redistribution are not reproduced here; statements derived from them
 are marked *(local inputs)* and can be checked only against that digest.
 
@@ -21,21 +21,29 @@ yet, and the signed Recommended order and defaults stay unchanged:
 - The remaining Claude presets and Luna do not share enough independently
   scored tasks to be ranked against each other (agentic coding below max
   effort has one public lineage each).
-- The review pilot below is unverified, so it is reported but not scored.
+- The verified review pilot scores `code_review` for GPT-6.2 Astra Max,
+  Astra Medium and Sol Medium, but those presets are provisional; the review
+  workload also needs agentic-coding coverage shared by all candidates.
 
 Luna is the only rankable non-provisional Codex target; a single candidate
 is never tiered, so no Codex workload has a tier until GPT-6.2 matures.
 
-## What the pilot suggests (directional, not scored)
+## What the verified pilot shows
 
-On the three historical inputs with findings, GPT-6.2 Astra Medium and Sol
-6.2 Medium each agreed with more of the unverified union of serious findings
-(77% and 69%) than the original GPT-6 Astra Max review (54%). Across all four
-inputs they used 27% and 50% of its tokens and 55% and 40% of its wall time.
-The comparison confounds model generation (GPT-6 vs 6.2) with effort and uses
-an unverified reference set, so it says nothing yet about Max versus Medium
-on one model. It justifies a verified same-model pilot and an opt-in
-review-effort choice, not a change to the default selector.
+On four real reviews (14 verified serious defects), **GPT-6.2 Astra Max found
+all 14**; Astra Medium and Sol Medium each found 9 (64%), and the historical
+GPT-6 Astra Max found 8 (57%). Max cost about 11× Astra Medium's tokens and
+6× Sol Medium's, and about 6–8× their wall time. An earlier unverified
+reading suggested Medium was as good as Max; that came from comparing 6.2
+Medium with the older GPT-6 Max and from an unverified reference set, and is
+withdrawn.
+
+Implication for routing, pending more inputs: keep Max as the default for
+reviews requested for real risk (the built-in `max` routine effort does), and
+treat `standard` effort as a deliberate trade — roughly a third of serious
+defects missed for an order of magnitude fewer tokens — suitable only for
+low-stakes reviews. Four inputs, all chosen because a review was warranted,
+are still a small sample.
 
 ## Baseline: what managed calls used
 
@@ -50,55 +58,56 @@ and effort max first, and takes the first candidate when no preset is passed
 
 ## Review pilot
 
-Four historical Astra Max reviews whose worktrees were still clean and
-unchanged were re-run with the original focus text and base on Sol 6.2
-Medium and Astra Medium. Reference set: the union of serious findings (high,
-or medium with concrete correctness/security/contract impact) across the
-three arms, matched by root cause. Findings were **not** verified against the
-code, so the figures below measure agreement with an unverified union, and
-false positives are unmeasured. Rows:
-`models/observations/2026-11-cowboy-pilot.jsonl` (`validity = "unverified"`).
+Four historical reviews whose worktrees were still clean and unchanged were
+re-run with the original focus text and base on GPT-6.2 Astra Max, Astra
+Medium and Sol Medium; the original GPT-6 Astra Max result is the fourth
+arm. Claude Opus 5.5 adjudicators received the arms anonymised as A–D,
+clustered all findings by root cause, and verified each cluster read-only
+against the reviewed code (confirmed / refuted / uncertain, and whether it
+is serious). Summary: `models/pilots/2026-11-18-review-pilot.json`; rows:
+`models/observations/2026-11-cowboy-pilot.jsonl` (the earlier unverified rows
+are kept as `superseded`).
 
-| Input | Union | GPT-6 Astra Max | 6.2 Astra Medium | 6.2 Sol Medium |
-| --- | --- | --- | --- | --- |
-| keeper-idle-retire (Cowboy) | 6 | 4 | 3 | 4 |
-| pr8818 buyer profiles (Suger) | 9 | 3 | 8 | 7 |
-| pr8895 deal suggestions (Suger) | 11 | 7 | 9 | 7 |
-| pr8874 guard (Suger) | 0 | approve | approve | approve |
-| **Agreement with union** | 26 | **54%** | **77%** | **69%** |
-| Tokens (4 inputs) | | 7.88M | 2.13M (27%) | 3.96M (50%) |
-| Minutes (4 inputs) | | 35.7 | 19.6 (55%) | 14.2 (40%) |
+| Input | Serious | 6.2 Astra Max | 6.2 Astra Medium | 6.2 Sol Medium | GPT-6 Astra Max |
+| --- | --- | --- | --- | --- | --- |
+| keeper-idle-retire (Cowboy) | 5 | 5 | 2 | 3 | 2 |
+| pr8818 buyer profiles (Suger) | 5 | 5 | 4 | 4 | 3 |
+| pr8895 deal suggestions (Suger) | 4 | 4 | 3 | 2 | 3 |
+| pr8874 guard (Suger) | 0 | 0 (1 minor, real) | 0 | 0 | 0 |
+| **Recall** | 14 | **100%** | **64%** | **64%** | **57%** |
+| Findings / refuted | | 52 / 3 | 23 / 0 | 22 / 0 | 17 / 0 |
+| Tokens (4 inputs) | | 23.5M | 2.1M | 4.0M | 7.9M |
+| Minutes (4 inputs) | | 115 | 20 | 14 | 36 |
 
-- Each arm found serious issues the others missed. Astra Medium found fewer
-  than the baseline on keeper-idle-retire (3 vs 4); the baseline uniquely
-  found the managed conversation-continuation recovery gap and the
-  Account-only Salesforce link case.
-- Sol Medium used more tokens than Astra Medium on all four inputs but
-  finished faster; whether it is cheaper in subscription quota depends on the
-  per-model quota rate, which no source here measures.
-- The pr8895 focus listed prior findings to verify, so part of its agreement
-  was prompted.
-- Limitations: three scored inputs; unverified union; baseline is GPT-6
-  Astra, not 6.2; no GPT-6.2 Astra Max arm.
+- Max's extra recall is concentrated in failure-mode and recovery defects
+  (recovery after retirement, executor identity, empty-partner configuration)
+  and one cross-organization error-text exposure
+  that the cheaper arms did not reach; every arm found the most obvious
+  defect of each change.
+- Max is noisier in absolute terms (3 refuted of 52) but its precision stays
+  high (94%); the Medium arms had no refuted findings.
+- Limitations: four inputs selected because a review was warranted;
+  one adjudicator family (Claude) per input; serious/not-serious is a
+  judgment the adjudicators made; the reference set is the union of what the
+  four arms found, so defects every arm missed are not counted.
 
 ## Public evidence coverage
 
-Scored lineages per executable target and task (after canonical selection
-and after dropping saturated groups: ARC-AGI-2, GPQA Diamond, Scale
-MCP-Atlas and the vendor-only SWE-bench Pro):
+Scored lineages per executable target and task (after canonical selection;
+saturated groups — GPQA Diamond — are dropped):
 
 | Target | agentic coding | reasoning | long context | code review | tool use |
 | --- | --- | --- | --- | --- | --- |
-| gpt-6.2-astra:max | 2 | 1 | 0 | 0 | 0 |
-| gpt-6.2-astra:medium | 1 | 1 | 0 | 0 (3 unverified) | 0 |
-| gpt-6.2-sol:max | 2 | 1 | 0 | 0 | 0 |
-| gpt-6.2-sol:medium | 1 | 1 | 0 | 0 (3 unverified) | 0 |
-| gpt-6-luna:max | 2 | 2 | 1 | 0 | 0 |
-| claude-fable-5-2:max | 2 | 2 | 1 | 0 | 0 |
-| claude-fable-5-2:high | 1 | 2 | 1 | 0 | 0 |
-| claude-opus-5-5:high | 1 | 2 | 1 | 0 | 0 |
-| claude-sonnet-5-5:xhigh | 1 | 3 | 1 | 0 | 0 |
-| claude-sonnet-5-5:medium | 1 | 2 | 1 | 0 | 0 |
+| gpt-6.2-astra:max | 2 | 2 | 0 | 3 (pilot) | 0 |
+| gpt-6.2-astra:medium | 1 | 2 | 0 | 3 (pilot) | 0 |
+| gpt-6.2-sol:max | 2 | 2 | 0 | 0 | 0 |
+| gpt-6.2-sol:medium | 1 | 2 | 0 | 3 (pilot) | 0 |
+| gpt-6-luna:max | 2 | 3 | 1 | 0 | 0 |
+| claude-fable-5-2:max | 3 | 3 | 1 | 0 | 0 |
+| claude-fable-5-2:high | 1 | 3 | 1 | 0 | 0 |
+| claude-opus-5-5:high | 1 | 3 | 1 | 0 | 0 |
+| claude-sonnet-5-5:xhigh | 1 | 4 | 1 | 0 | 0 |
+| claude-sonnet-5-5:medium | 1 | 3 | 1 | 0 | 0 |
 
 Opus 5.5 default, Gemini 3.8 Flash (Antigravity), the three DeepSeek V4.1
 Flash bindings and the Grok preset have no observations yet.
@@ -118,15 +127,13 @@ refresh rather than as conclusions:
 ## Gaps and next actions
 
 - **Code review:** no public (model, effort) benchmark matches an executable
-  target; ReviewBench ranks agents, SWE-PRBench covers older models. Verify
-  the pilot's reference findings, then pair the next ten routine reviews
-  (cheaper preset plus the normally selected one).
+  target; ReviewBench ranks agents, SWE-PRBench covers older models. Grow the
+  verified pilot (more inputs, including low-risk changes, and a Claude
+  reviewer arm) before trusting `standard` effort for any class of review.
 - **Agentic coding below max:** every below-max preset (Astra/Sol Medium,
   Fable High, Opus High, Sonnet XHigh/Medium) has one lineage; the tbench.ai
   4.1 and ARC rows used here are max or xhigh only. A second independent
   source or internal pilots are needed.
-- **Reasoning for GPT-6.2:** one lineage per preset; Claude presets and Luna
-  already have two or more.
 - **Long context:** insufficient rather than absent — at most one lineage
   (AA-LCR) per target, none for GPT-6.2. MRCR is vendor-only.
 - **Tool use, writing:** no usable public rows for current targets.
