@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { installSteeringPriority } from "./steering.mjs";
+import { compactionInProgress, installSteeringPriority } from "./steering.mjs";
 
 function fixture(run) {
   const messages = [];
@@ -66,6 +66,49 @@ test("failed and overlapping native steering cannot leave an input override behi
   assert.equal(agent.sessions.one.input.push, push);
   assert.deepEqual(messages, []);
   await assert.rejects(agent.steer(request("invalid")), /Unsupported/);
+});
+
+test("immediate steering waits while the turn is compacting", async () => {
+  const { agent, messages } = fixture(async (input) => {
+    input.push({ type: "user", priority: "now", message: { content: "hello" } });
+    return { outcome: "injected" };
+  });
+  const session = agent.sessions.one;
+  session.contextCompaction = { activeCompaction: { compactionId: "c1" } };
+  await agent.steer(request("now"));
+  // Upstream omits the priority when it is not set by the request.
+  await agent.steer({ sessionId: "one" });
+  session.contextCompaction.activeCompaction.terminalStatus = "completed";
+  await agent.steer(request("now"));
+  session.contextCompaction.activeCompaction = undefined;
+  await agent.steer(request("now"));
+  assert.deepEqual(
+    messages.map((message) => message.priority),
+    ["next", "next", "now", "now"],
+  );
+});
+
+test("the pinned adapter's compaction lifecycle exposes its in-progress state", async () => {
+  const upstream = new URL(
+    "../../../dist/claude-source-tests/node_modules/@agentclientprotocol/claude-agent-acp/dist/context-compaction.js",
+    import.meta.url,
+  );
+  const { ContextCompactionLifecycle } = await import(upstream);
+  for (const presentation of ["compaction_update", "tool_call"]) {
+    const contextCompaction = new ContextCompactionLifecycle(async () => {}, {
+      sessionId: "one",
+      presentation,
+    });
+    const session = { contextCompaction };
+    assert.equal(compactionInProgress(session), false);
+    await contextCompaction.start("c1");
+    assert.equal(compactionInProgress(session), true);
+    await contextCompaction.finish("c1", "failed");
+    assert.equal(compactionInProgress(session), false);
+    await contextCompaction.start("c2");
+    await contextCompaction.reset();
+    assert.equal(compactionInProgress(session), false);
+  }
 });
 
 test("unsupported adapters never advertise priority support", () => {

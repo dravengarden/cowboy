@@ -89,7 +89,7 @@ recipe kinds: `vendor_archive`, a vendor-hosted native archive the Machine
 downloads from the vendor's pinned URL and that publication never copies into
 the Catalog, and `owned_archive`, a deterministic archive of a Cowboy-owned
 launcher and data files. Every Provider that pins provider-runtime advances one
-patch version without behavior changes: claude-code 3.20.44, claude-deepseek
+patch version without behavior changes: claude-code 3.20.45, claude-deepseek
 3.1.63, codex 3.6.2, codex-deepseek 3.1.63, deepseek-harness 1.0.21 and grok
 3.2.2.
 
