@@ -36,6 +36,9 @@ pub struct AccountMeta {
     /// Unresolved cleanups, retried on every activation.
     pub cleanups: Vec<Cleanup>,
     pub last_logout: Option<LogoutRecord>,
+    /// The last revisioned fence operation applied (see [`crate::fence`]).
+    #[serde(default)]
+    pub disposition: Option<crate::fence::Disposition>,
 }
 
 /// The account's credential generation (R3-8).
@@ -130,6 +133,7 @@ impl AccountMeta {
             units: Vec::new(),
             cleanups: Vec::new(),
             last_logout: None,
+            disposition: None,
         }
     }
 

@@ -4,11 +4,13 @@
 //! the `exec-confined` wrapper those units start through. The wire format and
 //! configuration are documented in `packaging/account-sandbox/README.md`.
 
+mod account_fence;
 mod config;
 mod confine;
 mod daemon;
 #[cfg(test)]
 mod fake;
+mod fence;
 mod host;
 mod ids;
 mod meta;
@@ -106,6 +108,17 @@ fn serve(arguments: &[String]) -> Result<()> {
     });
     let daemon = daemon::Daemon::new(config, host, host::var_run_is_directory())?;
     daemon.reconcile()?;
+    {
+        // Retry stops that failed (a closed connection's units, units of a
+        // previous instance) and settle units systemd confirmed gone.
+        let daemon = Arc::clone(&daemon);
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(daemon::SWEEP_INTERVAL);
+                daemon.sweep_units();
+            }
+        });
+    }
     server::serve(&daemon, &listener);
     Ok(())
 }

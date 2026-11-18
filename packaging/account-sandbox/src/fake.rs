@@ -32,6 +32,8 @@ pub struct Inner {
 pub struct FakeHost {
     pub inner: Arc<Inner>,
     pub free: AtomicU64,
+    /// The next this many `stop_unit` calls fail.
+    pub stop_failures: AtomicU64,
 }
 
 impl FakeHost {
@@ -39,6 +41,7 @@ impl FakeHost {
         Arc::new(Self {
             inner: Arc::default(),
             free: AtomicU64::new(u64::MAX),
+            stop_failures: AtomicU64::new(0),
         })
     }
 
@@ -53,6 +56,18 @@ impl FakeHost {
         state.exits.insert(unit.to_owned(), code);
         drop(state);
         self.inner.signal.notify_all();
+    }
+
+    /// The unit's `systemd-run` client exits with `code` while systemd still
+    /// runs the unit.
+    pub fn exit_client_only(&self, unit: &str, code: Option<i32>) {
+        self.state().exits.insert(unit.to_owned(), code);
+        self.inner.signal.notify_all();
+    }
+
+    /// systemd finishes a unit whose client already exited.
+    pub fn end_unit(&self, unit: &str) {
+        self.state().units.remove(unit);
     }
 
     pub fn unit_status_of(&self, unit: &str) -> Option<String> {
@@ -141,6 +156,13 @@ impl Host for FakeHost {
     }
 
     fn stop_unit(&self, unit: &str) -> Result<()> {
+        if self
+            .stop_failures
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            bail!("systemctl stop {unit} failed");
+        }
         if self.state().units.contains_key(unit) {
             self.finish(unit, None);
         }

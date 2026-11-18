@@ -125,6 +125,12 @@ pub fn properties(config: &Config, spec: &UnitSpec<'_>) -> Vec<String> {
             "TemporaryFileSystem=/tmp:size={},mode=1777",
             config.unit_tmp_size
         ),
+        // `PrivateTmp=` alone backs `/var/tmp` with host storage the account
+        // could fill without bound; it shares the bounded `/tmp` budget.
+        format!(
+            "TemporaryFileSystem=/var/tmp:size={},mode=1777",
+            config.unit_tmp_size
+        ),
         format!("BindPaths={home}"),
         format!("BindReadOnlyPaths={runtime}"),
         format!(
@@ -288,6 +294,7 @@ mod tests {
             "TemporaryFileSystem=/var/lib/cowboy-account-sandbox".into(),
             "TemporaryFileSystem=/run".into(),
             "TemporaryFileSystem=/tmp:size=256M,mode=1777".into(),
+            "TemporaryFileSystem=/var/tmp:size=256M,mode=1777".into(),
             format!("BindPaths={home}"),
             format!("BindReadOnlyPaths={rt}"),
             format!("BindReadOnlyPaths=/var/lib/cowboy-account-sandbox/accounts/0123456789abcdef/gemini:{home}/.gemini"),

@@ -74,9 +74,18 @@ pub enum Request {
     },
     StopAccount {
         key: String,
+        /// The Controller's account-control revision, with `operation_id`.
+        #[serde(default)]
+        revision: Option<u64>,
+        #[serde(default)]
+        operation_id: Option<String>,
     },
     AdmitAccount {
         key: String,
+        #[serde(default)]
+        revision: Option<u64>,
+        #[serde(default)]
+        operation_id: Option<String>,
     },
     ListUnits {
         key: String,
@@ -86,6 +95,10 @@ pub enum Request {
     },
     LogoutCleanup {
         key: String,
+        /// The credential generation whose logout this cleans up.
+        credential_generation: u64,
+        #[serde(default)]
+        operation_id: Option<String>,
     },
     RemoveAccount {
         key: String,
@@ -199,11 +212,36 @@ fn validate(request: &Request) -> Result<()> {
         Request::StopUnit { unit } | Request::UnitState { unit } => {
             validate_unit_name(unit).map(|_| ())
         }
-        Request::StopAccount { key }
-        | Request::AdmitAccount { key }
-        | Request::ListUnits { key }
-        | Request::LogoutCleanup { key }
-        | Request::RemoveAccount { key } => ids::validate_key(key),
+        Request::StopAccount {
+            key,
+            revision,
+            operation_id,
+        }
+        | Request::AdmitAccount {
+            key,
+            revision,
+            operation_id,
+        } => {
+            ids::validate_key(key)?;
+            anyhow::ensure!(
+                revision.is_some() == operation_id.is_some(),
+                "revision and operation_id go together"
+            );
+            if let Some(operation_id) = operation_id {
+                ids::validate_id("operation_id", operation_id)?;
+            }
+            Ok(())
+        }
+        Request::LogoutCleanup {
+            key, operation_id, ..
+        } => {
+            ids::validate_key(key)?;
+            if let Some(operation_id) = operation_id {
+                ids::validate_id("operation_id", operation_id)?;
+            }
+            Ok(())
+        }
+        Request::ListUnits { key } | Request::RemoveAccount { key } => ids::validate_key(key),
     }
 }
 

@@ -134,6 +134,14 @@ impl Daemon {
                 Self::save(dir, meta)?;
             }
 
+            // The pipes are allocated before the unit's files and its durable
+            // `Starting` record, so their failure strands neither.
+            let (stdin_read, stdin_write) =
+                rustix::pipe::pipe_with(PipeFlags::CLOEXEC).context("pipe")?;
+            let (stdout_read, stdout_write) =
+                rustix::pipe::pipe_with(PipeFlags::CLOEXEC).context("pipe")?;
+            let (stderr_read, stderr_write) =
+                rustix::pipe::pipe_with(PipeFlags::CLOEXEC).context("pipe")?;
             let nonce = safefs::nonce(8)?;
             let unit = units::unit_name(key, request.mode, &nonce);
             let unit_dir = self.unit_dir(&nonce, meta.gid)?;
@@ -211,12 +219,6 @@ impl Daemon {
             Self::save(dir, meta)?;
             drop(store_guard);
 
-            let (stdin_read, stdin_write) =
-                rustix::pipe::pipe_with(PipeFlags::CLOEXEC).context("pipe")?;
-            let (stdout_read, stdout_write) =
-                rustix::pipe::pipe_with(PipeFlags::CLOEXEC).context("pipe")?;
-            let (stderr_read, stderr_write) =
-                rustix::pipe::pipe_with(PipeFlags::CLOEXEC).context("pipe")?;
             self.expect_exit(&unit);
             let stdio = UnitStdio {
                 stdin: stdin_read,

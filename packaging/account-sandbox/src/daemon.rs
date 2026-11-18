@@ -13,6 +13,7 @@ use anyhow::Context as _;
 use serde_json::{Value, json};
 
 use crate::config::Config;
+use crate::fence::{FenceAction, FenceOp};
 use crate::host::Host;
 use crate::ids;
 use crate::meta::{self, AccountMeta, Cleanup, CredentialState, LogoutRecord, UnitRecord};
@@ -20,13 +21,15 @@ use crate::protocol::{Code, Mode, Outcome, Request, fail};
 use crate::safefs::{self, STRICT};
 use crate::store;
 use crate::units::{
-    self, AccountPaths, GEMINI_CONFIG_DIR, GEMINI_DIR, GEMINI_STATE_DIR, HOOKS_FILE, SETTINGS_FILE,
+    AccountPaths, GEMINI_CONFIG_DIR, GEMINI_DIR, GEMINI_STATE_DIR, HOOKS_FILE, SETTINGS_FILE,
     TOKEN_FILE,
 };
 
 pub const ACCOUNTS_DIR: &str = "accounts";
 pub const UNITS_DIR: &str = "units";
 const POLL: Duration = Duration::from_millis(5);
+/// Interval of [`Daemon::sweep_units`].
+pub const SWEEP_INTERVAL: Duration = Duration::from_secs(2);
 
 /// A spawned unit's exit as seen by its waiter thread.
 #[derive(Debug, Clone, Copy)]
@@ -49,7 +52,7 @@ pub struct Reply {
 }
 
 impl Reply {
-    fn value(value: Value) -> Self {
+    pub(crate) fn value(value: Value) -> Self {
         Self {
             value,
             fds: Vec::new(),
@@ -57,7 +60,7 @@ impl Reply {
     }
 }
 
-fn guard<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn guard<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -65,6 +68,29 @@ fn guard<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// user in unprivileged tests.
 pub fn root_owner() -> Option<(u32, u32)> {
     rustix::process::geteuid().is_root().then_some((0, 0))
+}
+
+/// Runtime registrations staging at once.
+pub const MAX_CONCURRENT_REGISTRATIONS: usize = 2;
+
+#[derive(Default)]
+struct StagingTotals {
+    count: usize,
+    bytes: u64,
+}
+
+/// One registration's staging reservation; released on drop.
+pub(crate) struct Staging<'a> {
+    daemon: &'a Daemon,
+    bytes: u64,
+}
+
+impl Drop for Staging<'_> {
+    fn drop(&mut self) {
+        let mut staging = guard(&self.daemon.staging);
+        staging.count -= 1;
+        staging.bytes -= self.bytes;
+    }
 }
 
 pub struct Daemon {
@@ -80,6 +106,7 @@ pub struct Daemon {
     live_connections: Mutex<HashSet<String>>,
     pub(crate) owned: Mutex<HashMap<String, Vec<(String, String)>>>,
     exits: Mutex<HashMap<String, ExitSlot>>,
+    staging: Mutex<StagingTotals>,
     exit_signal: Condvar,
     next_connection: AtomicU64,
 }
@@ -110,6 +137,7 @@ impl Daemon {
             live_connections: Mutex::new(HashSet::new()),
             owned: Mutex::new(HashMap::new()),
             exits: Mutex::new(HashMap::new()),
+            staging: Mutex::new(StagingTotals::default()),
             exit_signal: Condvar::new(),
             next_connection: AtomicU64::new(1),
         });
@@ -217,11 +245,37 @@ impl Daemon {
                 },
             ),
             Request::StopUnit { unit } => self.stop_unit(&unit),
-            Request::StopAccount { key } => self.stop_account(&key),
-            Request::AdmitAccount { key } => self.admit_account(&key),
+            Request::StopAccount {
+                key,
+                revision,
+                operation_id,
+            } => self.fence_account(
+                &key,
+                FenceOp {
+                    action: FenceAction::Stop,
+                    revision,
+                    operation_id: operation_id.as_deref(),
+                },
+            ),
+            Request::AdmitAccount {
+                key,
+                revision,
+                operation_id,
+            } => self.fence_account(
+                &key,
+                FenceOp {
+                    action: FenceAction::Admit,
+                    revision,
+                    operation_id: operation_id.as_deref(),
+                },
+            ),
             Request::ListUnits { key } => self.list_units(&key),
             Request::UnitState { unit } => self.unit_state(&unit),
-            Request::LogoutCleanup { key } => self.logout_cleanup(&key),
+            Request::LogoutCleanup {
+                key,
+                credential_generation,
+                operation_id,
+            } => self.logout_cleanup(&key, credential_generation, operation_id.as_deref()),
             Request::RemoveAccount { key } => self.remove_account(&key),
         }
     }
@@ -262,6 +316,9 @@ impl Daemon {
             meta.gid = owner.1;
             Self::save(&dir, &meta)?;
         }
+        // A fence issued before this account existed (or after it was
+        // removed) holds from its first unit on.
+        self.adopt_tombstone(&key, &dir, &mut meta)?;
         if !meta.image_ready {
             self.check_space()?;
             self.create_image(&dir, &key, &meta)?;
@@ -356,6 +413,8 @@ impl Daemon {
         if size > self.config.max_runtime_archive_bytes {
             return Err(fail(Code::Limit, "runtime archive exceeds the size limit"));
         }
+        // Reserved before a byte of the body is read; released on return.
+        let _staging = self.reserve_staging(size)?;
         let store = store::open_store(self.root.as_fd())?;
         let live = || self.live_digests();
         let present = store::register(
@@ -370,6 +429,39 @@ impl Daemon {
         Ok(Reply::value(
             json!({ "sha256": sha256, "already_present": present }),
         ))
+    }
+
+    /// Reserve staging space for one registration: its received archive and
+    /// its unpacked tree (at most the archive's size each) on top of every
+    /// registration in flight must stay above the free-space reserve, and at
+    /// most [`MAX_CONCURRENT_REGISTRATIONS`] registrations stage at once.
+    pub(crate) fn reserve_staging(&self, size: u64) -> Outcome<Staging<'_>> {
+        let bytes = size.saturating_mul(2);
+        let mut staging = guard(&self.staging);
+        if staging.count >= MAX_CONCURRENT_REGISTRATIONS {
+            return Err(fail(
+                Code::Limit,
+                "too many runtime registrations in flight",
+            ));
+        }
+        let free = self.host.free_bytes(&self.config.state_root)?;
+        let needed = self
+            .config
+            .free_space_reserve_bytes
+            .saturating_add(staging.bytes)
+            .saturating_add(bytes);
+        if free < needed {
+            return Err(fail(
+                Code::InsufficientSpace,
+                format!("{free} bytes free cannot stage {bytes} bytes above the reserve"),
+            ));
+        }
+        staging.count += 1;
+        staging.bytes += bytes;
+        Ok(Staging {
+            daemon: self,
+            bytes,
+        })
     }
 
     /// Runtime digests referenced by any persisted unit.
@@ -449,7 +541,7 @@ impl Daemon {
         Ok(())
     }
 
-    fn confirm_gone(&self, unit: &str, timeout: Duration) -> Outcome<()> {
+    pub(crate) fn confirm_gone(&self, unit: &str, timeout: Duration) -> Outcome<()> {
         let deadline = Instant::now() + timeout;
         loop {
             if !self
@@ -543,6 +635,12 @@ impl Daemon {
                     // The starter still holds the lock; it settles failures.
                     return Ok(());
                 }
+                // `systemd-run` ending is not the unit ending: keep the
+                // record until systemd confirms the invocation is gone; the
+                // sweeper settles it then.
+                if self.invocation_live(&meta.units[index])? {
+                    return Ok(());
+                }
                 let record = meta.units.remove(index);
                 self.finish_unit(dir, meta, &record, exit);
                 Self::save(dir, meta)?;
@@ -551,6 +649,67 @@ impl Daemon {
         });
         if let Err(error) = result {
             eprintln!("cowboy-account-sandbox: settling {unit}: {error}");
+        }
+    }
+
+    /// Whether systemd still runs the recorded invocation of `record` (an
+    /// unknown invocation of a live unit counts as running).
+    fn invocation_live(&self, record: &UnitRecord) -> Outcome<bool> {
+        Ok(self.host.unit_status(&record.unit)?.is_some_and(|status| {
+            status.is_live()
+                && (record.invocation_id.is_none()
+                    || status.invocation_id.is_none()
+                    || status.invocation_id == record.invocation_id)
+        }))
+    }
+
+    /// Settle every recorded unit whose process is known to have exited and
+    /// systemd confirms gone, and stop every recorded unit no live connection
+    /// of this instance owns. A failed stop keeps its record, so the next
+    /// sweep (and the next activation) retries it until it is confirmed.
+    pub fn sweep_units(&self) {
+        let Ok(accounts) = self.accounts() else {
+            return;
+        };
+        let Ok(keys) = safefs::list(accounts.as_fd()) else {
+            return;
+        };
+        for key in keys {
+            if ids::validate_key(&key).is_err() {
+                continue;
+            }
+            let result = self.with_account(&key, |dir, meta| {
+                let live = guard(&self.live_connections).clone();
+                let mut failed = None;
+                for record in meta.units.clone() {
+                    let owned = live.contains(&record.connection);
+                    if owned && !self.exited(&record.unit) {
+                        continue;
+                    }
+                    if owned && !self.invocation_live(&record)? {
+                        let exit = self.wait_exit(&record.unit, Duration::ZERO);
+                        if let Some(index) = meta
+                            .units
+                            .iter()
+                            .position(|other| other.unit == record.unit)
+                        {
+                            let record = meta.units.remove(index);
+                            self.finish_unit(dir, meta, &record, exit);
+                        }
+                    } else if !owned
+                        && let Err(error) = self.stop_and_confirm(dir, meta, &record.unit)
+                    {
+                        failed = Some(error);
+                    }
+                }
+                Self::save(dir, meta)?;
+                failed.map_or(Ok(()), Err)
+            });
+            if let Err(error) = result
+                && error.code != Code::NotFound
+            {
+                eprintln!("cowboy-account-sandbox: sweeping account {key}: {error}");
+            }
         }
     }
 
@@ -600,57 +759,6 @@ impl Daemon {
             self.stop_and_confirm(dir, meta, unit)?;
         }
         Ok(names)
-    }
-
-    fn stop_account(&self, key: &str) -> Outcome<Reply> {
-        self.with_account(key, |dir, meta| {
-            meta.fence_epoch += 1;
-            meta.fenced = Some(meta.fence_epoch);
-            Self::save(dir, meta)?;
-            let stopped = self.stop_all(dir, meta, |_| true);
-            Self::save(dir, meta)?;
-            let stopped = stopped?;
-            let slice = units::slice_name(key);
-            if self
-                .host
-                .unit_status(&slice)?
-                .is_some_and(|status| status.is_live())
-            {
-                self.host.stop_unit(&slice)?;
-            }
-            let remaining = self
-                .host
-                .list_units(&format!("{}-*", ids::user_name(key)))?;
-            let live: Vec<String> = remaining
-                .into_iter()
-                .filter(|unit| {
-                    self.host
-                        .unit_status(unit)
-                        .ok()
-                        .flatten()
-                        .is_some_and(|status| status.is_live())
-                })
-                .collect();
-            if !live.is_empty() {
-                return Err(fail(
-                    Code::Internal,
-                    format!("units still running: {}", live.join(" ")),
-                ));
-            }
-            Ok(Reply::value(
-                json!({ "key": key, "fence_epoch": meta.fence_epoch, "stopped": stopped }),
-            ))
-        })
-    }
-
-    fn admit_account(&self, key: &str) -> Outcome<Reply> {
-        self.with_account(key, |dir, meta| {
-            meta.fenced = None;
-            Self::save(dir, meta)?;
-            Ok(Reply::value(
-                json!({ "key": key, "fence_epoch": meta.fence_epoch, "fenced": false }),
-            ))
-        })
     }
 
     fn list_units(&self, key: &str) -> Outcome<Reply> {
@@ -713,29 +821,73 @@ impl Daemon {
                 value["current_boot_id"] = json!(self.boot_id);
                 return Ok(Reply::value(value));
             }
+            // An unrecorded unit that systemd still runs is alive and needs
+            // reconciliation (`stop_unit`); it is never reported gone.
             let status = self.host.unit_status(unit)?;
+            let live = status
+                .as_ref()
+                .is_some_and(crate::host::UnitStatus::is_live);
             Ok(Reply::value(json!({
                 "unit": unit,
                 "recorded": false,
                 "state": status.map_or_else(|| "gone".to_owned(), |status| status.active_state),
-                "alive": false,
+                "alive": live,
+                "requires_reconciliation": live,
                 "owned": false,
                 "current_boot_id": self.boot_id,
             })))
         })
     }
 
-    fn logout_cleanup(&self, key: &str) -> Outcome<Reply> {
+    /// Remove the vendor token of credential `generation` after its logout.
+    /// The generation is verified under the same account lock as the
+    /// deletion, so a delayed cleanup never removes a newer credential.
+    fn logout_cleanup(
+        &self,
+        key: &str,
+        generation: u64,
+        operation_id: Option<&str>,
+    ) -> Outcome<Reply> {
         self.with_account(key, |dir, meta| {
+            let receipt = |removed: bool, superseded: bool| {
+                Reply::value(json!({
+                    "key": key,
+                    "credential_generation": generation,
+                    "token_removed": removed,
+                    "credential_cleared": true,
+                    "history_retained": true,
+                    "superseded": superseded,
+                    "operation_id": operation_id,
+                }))
+            };
+            let current = meta.credential.generation;
+            if generation < current {
+                // A later login started only with no token present, so the
+                // token of `generation` is already gone; the newer one stays.
+                return Ok(receipt(false, true));
+            }
+            if generation > current {
+                return Err(fail(
+                    Code::Precondition,
+                    format!("credential generation {generation} is not known (current {current})"),
+                ));
+            }
             if !meta.units.is_empty() {
                 return Err(fail(
                     Code::Conflict,
                     "units of the account are still running",
                 ));
             }
+            if meta.credential.state == CredentialState::LoggedOut
+                && meta
+                    .last_logout
+                    .as_ref()
+                    .is_some_and(|record| record.generation == generation)
+            {
+                return Ok(receipt(false, false));
+            }
             let home = self.mount_home(dir, key, meta)?;
             let removed = Self::remove_token(&home)?;
-            let generation = meta.credential.generation;
             meta.credential.state = CredentialState::LoggedOut;
             meta.cleanups
                 .retain(|cleanup| !matches!(cleanup, Cleanup::LogoutToken { .. }));
@@ -745,13 +897,7 @@ impl Daemon {
                 history_retained: true,
             });
             Self::save(dir, meta)?;
-            Ok(Reply::value(json!({
-                "key": key,
-                "credential_generation": generation,
-                "token_removed": removed,
-                "credential_cleared": true,
-                "history_retained": true,
-            })))
+            Ok(receipt(removed, false))
         })
     }
 
@@ -776,6 +922,7 @@ impl Daemon {
             }
             self.stop_all(dir, meta, |_| true)?;
             Self::save(dir, meta)?;
+            self.keep_tombstone(key, meta)?;
             let paths = self.paths(key);
             if self.host.is_mounted(&paths.home)? {
                 let home = self.open_home(dir, key)?;

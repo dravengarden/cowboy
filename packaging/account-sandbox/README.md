@@ -62,7 +62,7 @@ Every field is optional; unknown fields are rejected.
 | `max_runtime_units` | `4` | `runtime`/`probe` units per account (plus at most one `login`/`logout` unit, fixed) |
 | `unit_memory_max` | `"3G"` | `MemoryMax=` per unit |
 | `unit_tasks_max` | `512` | `TasksMax=` per unit |
-| `unit_tmp_size` | `"256M"` | Size of each unit's `/tmp` |
+| `unit_tmp_size` | `"256M"` | Size of each unit's `/tmp` and of its separate `/var/tmp` (both tmpfs) |
 | `max_runtime_archive_bytes` | `1073741824` | Largest runtime archive and unpacked content |
 | `max_runtime_entries` | `50000` | Most entries per runtime archive |
 | `max_runtimes` | `6` | Runtimes kept in the store (runtimes of live units are never evicted) |
@@ -91,11 +91,11 @@ each: `{"ok":true,"result":{...}}` or
 | `register_runtime` | `sha256`, `size`, then exactly `size` raw bytes | `sha256`, `already_present` |
 | `start` | `key`, `mode` (`runtime`/`login`/`logout`/`probe`), `credential_generation`, `runtime_sha256`, optional `session_id`, `descriptor_b64` (≤ 32 KiB decoded) | `unit`, `mode`, `invocation_id`, `boot_id`, `fds` |
 | `stop_unit` | `unit` | `unit`, `stopped` |
-| `stop_account` | `key` | `key`, `fence_epoch`, `stopped` |
-| `admit_account` | `key` | `key`, `fence_epoch`, `fenced` |
+| `stop_account` | `key`, optional `revision` + `operation_id` (together) | `key`, `fence_epoch`, `fenced`, `stopped`, `revision`, `replayed`, `account_present` |
+| `admit_account` | `key`, optional `revision` + `operation_id` (together) | `key`, `fence_epoch`, `fenced`, `stopped`, `revision`, `replayed`, `account_present` |
 | `list_units` | `key` | `units` (each with `alive`, `owned`), `unrecorded`, `credential`, `fenced`, `boot_id` |
-| `unit_state` | `unit` | `recorded`, `state`, `alive`, `owned`, `invocation_id`, `boot_id`, `current_boot_id` |
-| `logout_cleanup` | `key` | `token_removed`, `credential_cleared`, `history_retained` |
+| `unit_state` | `unit` | `recorded`, `state`, `alive`, `owned`, `invocation_id`, `boot_id`, `current_boot_id`; unrecorded units add `requires_reconciliation` |
+| `logout_cleanup` | `key`, `credential_generation`, optional `operation_id` | `credential_generation`, `token_removed`, `credential_cleared`, `history_retained`, `superseded`, `operation_id` |
 | `remove_account` | `key` | `removed` |
 
 `key = hex(sha256("cowboy-account-v1" || 0x00 || service_id || 0x00 || account_id))[..16]`.
@@ -107,9 +107,18 @@ pipes, plus for `runtime` the daemon-created listening execution socket
 mode 0660, bound into the unit at `/run/cowboy-exec.sock`). The `fds` array
 names them in order. `invocation_id` is `null` only when the unit finished
 before its `InvocationID` could be observed (its output stays readable).
-Closing the connection stops and confirms every unit it started. A failed
-`register_runtime` closes the connection, because unread payload bytes may
-remain.
+Closing the connection stops and confirms every unit it started. A stop that
+fails keeps the unit's record; a sweep every 2 s (and every activation) retries
+it until systemd confirms the unit gone. A failed `register_runtime` closes the
+connection, because unread payload bytes may remain. Before any body byte is
+read, a registration reserves twice its `size` (archive plus unpacked tree) on
+top of every registration in flight above `free_space_reserve_bytes`
+(`insufficient_space`); at most two registrations stage at once (`limit`).
+
+A unit record is kept until systemd confirms the recorded invocation is no
+longer active: the `systemd-run` client ending is not enough. `unit_state` of a
+unit systemd runs without a record reports `alive: true` and
+`requires_reconciliation: true`; `stop_unit` stops and confirms it.
 
 ### Runtime archives
 
@@ -131,6 +140,7 @@ The per-mode commands are fixed in `src/units.rs` (`COMMANDS`):
 
 ```text
 <state_root>/                       root 0711
+  fences/<key>.json                 root 0600 (fence tombstones)
   runtime/<sha256>/                 root, dirs 0755, files 0444/0555
   accounts/<key>/                   root 0711
     meta.json                       root 0600 (atomic writes)
@@ -163,6 +173,24 @@ image is mounted; everything beneath it uses the full set again.
 - `stop_account` persists `fenced(epoch)` before stopping every unit and the
   account slice; only `logout`, `logout_cleanup` and `remove_account` run while
   fenced; `admit_account` clears it.
+- Fence operations carrying the Controller's account-control `revision` and
+  `operation_id` are ordered: the account persists the last applied
+  disposition (`meta.json` `disposition`) and, under the account lock, refuses
+  an older revision, or another operation at the applied revision, with
+  `conflict`. Repeating the applied operation is `replayed` and changes
+  nothing but re-confirms the stop. An unrevisioned `admit_account` is refused
+  once a revisioned disposition exists; an unrevisioned stop is always applied.
+- A fence of an account without metadata (never ensured, or removed) is
+  persisted as the root-held tombstone `<state_root>/fences/<key>.json`
+  (`account_present: false`); `ensure_account` adopts it before the account
+  can start a unit, and `remove_account` leaves one with the account's fence
+  state. `stop_account` therefore never answers `not_found`: its success is
+  always durable fence evidence.
+- `logout_cleanup` checks `credential_generation` under the same account lock
+  as the token removal. An older generation is `superseded` (a later login
+  required its token absent) and removes nothing; a newer one is
+  `precondition`; repeating a completed cleanup of the current generation
+  returns `token_removed: false`.
 - `remove_account` requires the fence, a logged-out (or never signed-in)
   account and no token; it stops units, unmounts and deletes the tree, then
   removes the user.

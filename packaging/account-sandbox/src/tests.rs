@@ -17,6 +17,9 @@ use crate::protocol::{Code, Mode, Outcome, Request};
 use crate::safefs;
 use crate::store::tests::{AGY, runtime_archive, test_config};
 
+#[path = "tests_recovery.rs"]
+mod recovery;
+
 struct Fixture {
     _temp: tempfile::TempDir,
     root: PathBuf,
@@ -307,7 +310,11 @@ fn authentication_transitions_stop_runtime_units_first() {
     assert_eq!(meta.units.len(), 1);
     assert_eq!(meta.credential.state, CredentialState::LogoutRunning);
     assert_eq!(
-        code(f.call(Request::LogoutCleanup { key: f.key.clone() })),
+        code(f.call(Request::LogoutCleanup {
+            key: f.key.clone(),
+            credential_generation: 1,
+            operation_id: None
+        })),
         Code::Conflict
     );
     f.host.finish(&logout, Some(0));
@@ -320,7 +327,11 @@ fn authentication_transitions_stop_runtime_units_first() {
     )
     .unwrap();
     let cleanup = f
-        .call(Request::LogoutCleanup { key: f.key.clone() })
+        .call(Request::LogoutCleanup {
+            key: f.key.clone(),
+            credential_generation: 1,
+            operation_id: None,
+        })
         .unwrap();
     assert_eq!(cleanup["token_removed"], true);
     assert_eq!(cleanup["credential_cleared"], true);
@@ -353,7 +364,13 @@ fn the_fence_blocks_starts_until_admitted() {
         .as_str()
         .unwrap()
         .to_owned();
-    let stopped = f.call(Request::StopAccount { key: f.key.clone() }).unwrap();
+    let stopped = f
+        .call(Request::StopAccount {
+            key: f.key.clone(),
+            revision: None,
+            operation_id: None,
+        })
+        .unwrap();
     assert_eq!(stopped["fence_epoch"], 1);
     assert_eq!(stopped["stopped"], serde_json::json!([unit]));
     assert!(f.meta().units.is_empty());
@@ -375,8 +392,12 @@ fn the_fence_blocks_starts_until_admitted() {
         Some(1),
         "the auth transition keeps the owner fence"
     );
-    f.call(Request::AdmitAccount { key: f.key.clone() })
-        .unwrap();
+    f.call(Request::AdmitAccount {
+        key: f.key.clone(),
+        revision: None,
+        operation_id: None,
+    })
+    .unwrap();
     assert_eq!(f.meta().fenced, None);
     assert_eq!(code(f.start(Mode::Runtime, 1)), Code::Precondition);
     f.start(Mode::Probe, 1).unwrap();
@@ -457,12 +478,6 @@ fn unknown_runtimes_and_accounts_are_refused() {
         ),
         Code::NotFound
     );
-    assert_eq!(
-        code(f.call(Request::StopAccount {
-            key: "0".repeat(16)
-        })),
-        Code::NotFound
-    );
     // A runtime whose agy was removed from the allow-list no longer starts.
     std::fs::write(&f.config.agy_allow_list, "").unwrap();
     assert_eq!(code(f.start(Mode::Probe, 0)), Code::RuntimeRejected);
@@ -476,13 +491,22 @@ fn remove_account_requires_fence_and_logout() {
         code(f.call(Request::RemoveAccount { key: f.key.clone() })),
         Code::Precondition
     );
-    f.call(Request::StopAccount { key: f.key.clone() }).unwrap();
+    f.call(Request::StopAccount {
+        key: f.key.clone(),
+        revision: None,
+        operation_id: None,
+    })
+    .unwrap();
     assert_eq!(
         code(f.call(Request::RemoveAccount { key: f.key.clone() })),
         Code::Precondition
     );
-    f.call(Request::LogoutCleanup { key: f.key.clone() })
-        .unwrap();
+    f.call(Request::LogoutCleanup {
+        key: f.key.clone(),
+        credential_generation: 1,
+        operation_id: None,
+    })
+    .unwrap();
     f.call(Request::RemoveAccount { key: f.key.clone() })
         .unwrap();
     assert!(!f.account_dir().exists());
@@ -500,7 +524,11 @@ fn token_cleanup_does_not_follow_symlinks() {
     std::fs::remove_dir_all(&state).unwrap();
     symlink(&outside, &state).unwrap();
     assert_eq!(
-        code(f.call(Request::LogoutCleanup { key: f.key.clone() })),
+        code(f.call(Request::LogoutCleanup {
+            key: f.key.clone(),
+            credential_generation: 0,
+            operation_id: None
+        })),
         Code::Internal
     );
     assert_eq!(
