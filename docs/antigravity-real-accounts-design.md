@@ -1,6 +1,7 @@
 # Antigravity real accounts on OVH — design
 
-Status: design, revision 5, 2026-11-18 (implementation in progress). Implemented so far: the sandbox
+Status: design, revision 5, 2026-11-18 (implementation in progress; the
+"Revision 5 simplification" section takes precedence over earlier sections). Implemented so far: the sandbox
 daemon (`packaging/account-sandbox/`), Machine step 3a (manifest isolation,
 runtime archive, worker launch, native login/logout through the daemon) and
 step 3b (Unix execution bridge, trusted process ledger in the worker endpoint,
@@ -723,6 +724,77 @@ R3-16 where they differ.
   Conditional writes reuse the existing execution helper primitive.
 - **Logout and removal bind to the Machine enrollment** that holds the
   credential, so a re-enrolled Machine cannot certify them.
+
+This section also supersedes the turn reservation, settlement, termination
+query and force release of "Controller account controls (step 5a)" and the
+"In use by 1 turn" line and Force release action of "Account UX (step 5b)".
+
+### Revision 5 implementation decisions
+
+- **Records.** The unreleased migrations `0085` (PostgreSQL) and `0059`
+  (SQLite) were amended: `provider_account_turns` is gone;
+  `provider_account_controls` and `provider_account_fences` remain.
+- **In use.** The launch gate (`Supervisor::start_session`: create, wake,
+  revive, reset, reload) refuses a governed session while another session of
+  the same account has a live worker: "Antigravity · <name> is in use by
+  another session (<id>); hibernate it first". Session creation refuses with
+  `antigravity_account_in_use`. The account read model exposes `in_use_by`
+  (derived from live workers, never stored); the card shows "In use by
+  <session>" and the picker lists the account disabled with the same reason.
+  The daemon's `limit` is the backstop: the worker reports "Antigravity ·
+  account <id prefix> is in use by another session; hibernate it first" (the
+  Machine does not know the account's name).
+- **Signals.** The Controller observes every `TurnEnded` of a governed
+  session (`remote_runtime::turn_end`, no delivery correlation) and
+  classifies its stop reason: the proxy's structured refusal moves the
+  account to that state, a policy violation to `needs_attention`
+  (`policy_violation:<tool>`), any other error ending or unknown stop reason
+  to `unknown_refusal`; normal endings change nothing. The proxy classifies
+  vendor error endings itself, so an error without a refusal record already
+  arrives as `unknown_refusal`. The raise is one transaction compared with
+  the stored state: it never lowers a more severe state and never replaces
+  `blocked`. `suspended`, `blocked` and `needs_attention` write stop fences.
+  A rate limit holds one hour and only an explicit owner send resumes it.
+- **Cache and fences.** Control reloads apply in the order they started and
+  never move a record to a lower revision, so a slow reload cannot reopen a
+  blocked account. Fences go only to Machines that can hold the account's
+  sandbox (its sign-in Machines and its sessions' runtime Machines), never to
+  execution targets, and a fence whose originating revision cannot be
+  established is not sent unordered; it stays pending.
+- **Ledger.** The readiness window is open while the worker's session is
+  `Starting` (until `Ready`/`Running` or the first turn): one probe at a
+  time, whatever its id. `fs/writeFile`, `fs/remove`, `fs/copy`,
+  `fs/createDirectory` and `process/start` need the active turn; a turn's
+  completion is reported after its admitted requests drained and its
+  processes were asked to terminate (bounded, 5 s per process). The ledger
+  file keeps only the uncertain effect and its sequence. A lost reply of a
+  mutation, of `process/terminate`, or of a `process/read` of a turn's
+  process (a publish's outcome) is an uncertain effect; acknowledgement
+  records exactly the newest sequence and never overwrites a newer
+  observation.
+- **Logout.** Targets are every Machine's newest dispatched sign-in without a
+  recorded logout, whatever the Controller recorded about its outcome (the
+  daemon's credential state decides what is cleared). Delivery requires the
+  Machine's current enrollment to be the one the sign-in was dispatched to.
+  A receipt-store failure keeps the target pending; an unblock cancels
+  undispatched targets only once the unblock is written. A completed kill
+  switch logout satisfies a later revocation's login cleanup.
+- **Removal.** Required only on the account's sign-in Machines (the daemon
+  creates a sandbox only where the credential lives), recorded only from the
+  enrollment that dispatched a planned sign-in there. A Machine without an
+  account sandbox, or whose daemon never created the account, confirms that
+  nothing exists. A refused logout start (a failed first login) is settled by
+  the daemon's token cleanup, so revocation can finish.
+- **Conversations.** A re-login keeps the native conversation only on the
+  same Machine and the same signed Provider generation; a home of another
+  generation (one that predates the sandbox) never resumes it.
+- **Configuration.** `accounts.antigravity_admission` (the boolean the
+  admitted list replaced) is accepted and ignored, so a deployed
+  configuration still starts.
+- **Facade.** WriteFile and EditFile publish through the execution helper's
+  conditional `apply` (`$COWBOY_EXECUTION_FILE_HELPER`, the Claude runtime's
+  primitive). Guidance files are read only as regular files whose canonical
+  path is themselves inside the repository.
 
 ## Residual risks
 

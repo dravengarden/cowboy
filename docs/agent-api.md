@@ -698,13 +698,13 @@ Machine.
 
 Antigravity accounts carry account controls in `accounts.list().account_controls`
 (`{loaded, accounts:[{account_id, provider_id, admitted, state, reason,
-until_ms, revision, turn, fences, stop_confirmed, uncertain_effects, logout}]}`; see
-the [design](antigravity-real-accounts-design.md#controller-account-controls-step-5a)).
+until_ms, revision, in_use_by, fences, stop_confirmed, uncertain_effects, logout}]}`;
+`in_use_by` names the session whose live worker holds the account's single
+runtime; see the [design](antigravity-real-accounts-design.md#revision-5-simplification-owner-decision-2026-11-18)).
 Owner actions use `control.apply` `accounts.control {account, body:{action,
 expected_revision?, confirm?}}` (`POST /api/provider-accounts/{id}/controls`):
 `block` (kill switch, `confirm: true`), `unblock` and `clear` (both need the
 control `expected_revision`), `stop_units` (retry unconfirmed fences),
-`force_release` (`confirm: true`, only after a confirmed account stop),
 `logout` (`confirm: true`, only while blocked with a confirmed stop: the
 history-preserving native sign-out; one operation per block, pending while a
 Machine is offline, outcome in `logout.state` and its per-Machine `targets`), and

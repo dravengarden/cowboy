@@ -197,15 +197,16 @@ binds into the unit at `/run/cowboy-exec.sock` (same bearer token, one
 connection, 14 MiB frames), and the descriptor the daemon passes the unit as
 its `descriptor` credential names `unix:/run/cowboy-exec.sock`. The endpoint
 is the trusted process ledger: every `process/start` is recorded under the
-current Cowboy turn in the Machine-owned file
-`<state-dir>/execution-ledgers/<session>.json` before it is forwarded; a
-cancellation, turn end, unit loss or teardown fences the turn (later starts
-are refused) and terminates its processes until `process/read` reports them
-exited, or the target reports an id unknown with no start in flight. The
-turn's `TurnEnded` is emitted only after that evidence. A dead worker's
-entries are terminated by the next worker of the same binding. A lost reply
-to a mutation or start marks the session `uncertain_effect` in the worker
-snapshot. The prompt watchdog's hard recycle stops the unit through the
+current Cowboy turn before it is forwarded, and process starts and
+filesystem mutations outside an active turn are refused (the readiness Git
+probe only while the worker starts its session); a cancellation, turn end or
+teardown fences the turn (later effects are refused) and terminates its
+processes best-effort. The turn's `TurnEnded` is emitted after its admitted
+requests drained. Nothing a dead worker left is inherited; the target
+keeper's unattended reap is the backstop. A lost reply to a mutation, start,
+termination or turn-process read marks the session `uncertain_effect` in the
+worker snapshot, kept across workers in the Machine-owned file
+`<state-dir>/execution-ledgers/<session>.json`. The prompt watchdog's hard recycle stops the unit through the
 daemon and waits for its confirmation. Install probes run each vendor
 component sealed (disposable empty HOME, closed environment, nothing may be
 written) and skip the HOME-touching launcher probe

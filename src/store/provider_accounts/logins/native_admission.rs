@@ -459,11 +459,8 @@ impl Store {
                         evidence.require_transition_stop(operation)?;
                         anyhow::ensure!(evidence.account_id == r.account_id && evidence.session_id == r.session_id
                             && evidence.machine_id == r.machine_id && evidence.recipient_fingerprint == completion.recipient_fingerprint, "transition_stop_scope_mismatch");
-                        // A verified same-account move on the same Machine keeps the
-                        // native conversation only where the account's home persists
-                        // across sign-ins, and only within one signed generation (the
-                        // old row's digest): a historical home of another generation
-                        // (one that predates the sandbox) never held that conversation.
+                        // Same account and Machine keep the conversation only in a persistent
+                        // home of the same signed generation (old row digest; R3-13, rev 5).
                         sqlx::query("UPDATE sessions SET provider_version=$1,provider_generation_digest=$2,provider_auth_generation=$3,provider_behavior=$4,agent_session_id=CASE WHEN $6 AND provider_generation_digest=$2 THEN agent_session_id ELSE NULL END,status='exited' WHERE id=$5")
                             .bind(&profile.provider_version).bind(&profile.generation_digest).bind(i64::try_from(profile.generation)?)
                             .bind(serde_json::to_value(&commit.behavior)?).bind(&r.session_id).bind(profile.account_id == r.account_id && crate::account_controls::keeps_conversation_across_sign_ins(&r.provider)).execute(&mut *tx).await?;
