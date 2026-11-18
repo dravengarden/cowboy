@@ -834,8 +834,8 @@ Recorded 2026-11-17; recheck when the
 [Antigravity terms](https://antigravity.google/terms),
 [FAQ](https://antigravity.google/docs/faq) or the `agy` major version changes.
 The proposed Provider and its phases are in
-[`antigravity-provider-plan.md`](antigravity-provider-plan.md); no Antigravity
-Provider is admitted yet.
+[`antigravity-provider-plan.md`](antigravity-provider-plan.md); the Provider
+package exists but no real account is admitted yet.
 
 Google's Additional Terms section 6 calls "using third party software, tools,
 or services to access the Service (e.g. using OpenClaw with Antigravity OAuth)"
@@ -858,9 +858,14 @@ These boundaries are mandatory and fail closed:
   authorization URL and pasted code, and never reads, parses, exports, copies,
   injects, refreshes or forwards Google OAuth credentials, nor calls Google
   backends directly. Usage is shown only from a documented `agy`/ACP surface.
-- Every Antigravity account, including `default`, uses Machine-local
-  native-owned custody; its credentials never enter the Controller candidate,
-  vault or replica pipeline (same fence as named Claude subscriptions).
+- Every Antigravity account uses Machine-local native-owned custody; its
+  credentials never enter the Controller candidate, vault or replica pipeline
+  (same fence as named Claude subscriptions). Antigravity therefore has no
+  `default` account: Controller and Machine refuse it, and every account is an
+  owner-named native login.
+- `agy` rewrites its own executable when its auto-updater runs, so every
+  Cowboy launch, login and logout sets `AGY_CLI_DISABLE_AUTO_UPDATE=true` (the
+  value `1` is ignored).
 - One person's own account per Cowboy account: no sharing, proxying, automatic
   rotation or quota-driven fallback to another account.
 - Human-paced use only. Antigravity is not offered to managed calls, scheduled

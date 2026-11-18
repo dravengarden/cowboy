@@ -1,6 +1,8 @@
 # Antigravity Provider plan
 
-Status: proposed, 2026-11-17. Nothing is implemented or admitted. The normative
+Status: in progress. Phase 3's package and custody fence are implemented
+(component release 3.113.0, 2026-11-18) but not yet deployed; no real account
+is admitted. The normative
 account-risk boundary is
 [`requirements.md` — Antigravity consumer-subscription boundary](requirements.md#antigravity-consumer-subscription-boundary).
 The plan was design-reviewed by Codex Astra Max (call
@@ -250,6 +252,41 @@ pin advance and OVH maintenance.
 
 Acceptance on Hawk with the test account: sessions, resume after worker
 restart, logout, kill switch, and two-account isolation if Phase 1.3 passed.
+
+#### Phase 3 progress — package (2026-11-18)
+
+- Phase 2 shipped only the `owner_declared_v1` identity recipe and the
+  `ipv4_only_v1` network policy (SDK 3.4.0); the native-owned fence was still
+  the `claude-code` literal, so a named Antigravity login would have been
+  exported to the account vault and the default account used the vault too.
+  `antigravity` is now in `NATIVE_ONLY_PROVIDERS` and the new
+  `NAMED_ONLY_PROVIDERS`: `portable_credentials_allowed` refuses its default
+  account as well, the Machine refuses portable login candidates and replica
+  launches for it, and the Controller refuses its default sign-in. Replacing
+  the literals with a signed declaration stays future work.
+- Install: `vendor_archive` (Google URL, SHA-512, SHA-256, never copied into
+  the Catalog) for `agy` 1.5.9 Linux x86_64. The live `linux_x64` manifest
+  returned 404 on 2026-11-18 while 1.5.10 was published for arm64 and macOS
+  only, so the pin stays on the tested 1.5.9; macOS waits for one version with
+  every target published.
+- Launcher: `owned_archive` `agy-launch` (see
+  [Provider architecture](architecture/04-providers.md)). Verified on Hawk with
+  the test account: the hooks denied `schedule` and `swarm` while
+  `run_command` ran; ACP `logout` piped to `agy acp` removed the token file.
+- Auto-update: `agy --print` with `AGY_CLI_DISABLE_AUTO_UPDATE=1` spawned the
+  updater, which replaced the 1.5.9 executable in place with 1.5.10. Only
+  `=true` disables it ("Auto-update disabled via environment variable").
+  `agy acp` logs never showed the updater; the launcher sets `=true` anyway.
+- `agy` has no non-interactive logout command (`/logout` is refused in print
+  mode); the launcher sends ACP `initialize` and `logout` and succeeds only if
+  the token file is gone afterwards.
+- Configuration: ACP `configOptions` ids `model` and `thought_level`; default
+  preset Gemini 3.8 Flash · High. Not offered to managed calls (no
+  `managed_profiles`, not a `CALL_TARGETS` member).
+- Remaining for Phase 3: deploy with the 3.113.0 OVH maintenance, publish the
+  release, Hawk acceptance with the test account (named login through Cowboy,
+  keyring untouched, sessions, resume, logout), per-account concurrency caps,
+  suspension rule and the dedicated kill switch.
 
 ### Phase 4 — OVH split execution
 

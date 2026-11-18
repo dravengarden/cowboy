@@ -233,9 +233,23 @@ pub struct ProviderAccountId(String);
 /// the host runtime policy admits Claude on (`--provider-runtime-machine`),
 /// which native login, session creation, registration and usage enforce.
 /// Every other Provider's named accounts keep their credential in the
-/// account's Service vault and sign in once for every Machine.
+/// account's Service vault and sign in once for every Machine. Antigravity is
+/// native-only by its account-risk boundary (`docs/requirements.md`).
 #[cfg(any(feature = "full", feature = "machine-host", test))]
-pub const NATIVE_ONLY_PROVIDERS: &[&str] = &["claude-code"];
+pub const NATIVE_ONLY_PROVIDERS: &[&str] = &["claude-code", "antigravity"];
+
+/// Native-only Providers that have no default account: its credential would
+/// be a Service-vault candidate replicated to every Machine, which their
+/// boundary forbids. Every account is a named, owner-declared native login.
+#[cfg(any(feature = "full", feature = "machine-host", test))]
+pub const NAMED_ONLY_PROVIDERS: &[&str] = &["antigravity"];
+
+/// Whether `provider` refuses the default account entirely.
+#[cfg(any(feature = "full", feature = "machine-host", test))]
+#[must_use]
+pub fn named_only(provider: &str) -> bool {
+    NAMED_ONLY_PROVIDERS.contains(&provider)
+}
 
 /// Whether `provider`'s named accounts stay native per Machine.
 #[cfg(any(feature = "full", feature = "machine-host", test))]
@@ -245,13 +259,16 @@ pub fn native_only(provider: &str) -> bool {
 }
 
 /// A named account of a native-only Provider never holds portable
-/// credentials. The default account retains its existing boundary.
+/// credentials. The default account retains its existing boundary, except for
+/// a named-only Provider, which never holds portable credentials at all.
 #[cfg(any(feature = "full", feature = "machine-host", test))]
 pub fn portable_credentials_allowed(
     account: &ProviderAccountId,
     provider: &str,
 ) -> Result<(), &'static str> {
-    if !account.is_default() && native_only(provider) {
+    if account.is_default() && named_only(provider) {
+        Err("named_account_required")
+    } else if !account.is_default() && native_only(provider) {
         Err("native_owned_credentials_required")
     } else {
         Ok(())
@@ -364,6 +381,16 @@ mod tests {
         for provider in ["claude-deepseek", "codex", "grok"] {
             assert!(portable_credentials_allowed(&named, provider).is_ok());
         }
+        // Antigravity holds no portable credential for any account.
+        assert_eq!(
+            portable_credentials_allowed(&named, "antigravity"),
+            Err("native_owned_credentials_required")
+        );
+        assert_eq!(
+            portable_credentials_allowed(&ProviderAccountId::default(), "antigravity"),
+            Err("named_account_required")
+        );
+        assert!(!named_only("claude-code"));
     }
 
     #[test]

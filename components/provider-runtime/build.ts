@@ -46,6 +46,7 @@ interface DownloadTarget {
   url: string;
   integrity?: string;
   sha256?: string;
+  sha512?: string;
   entrypoint: string;
 }
 
@@ -80,7 +81,39 @@ interface GitGoRecipe {
   probe: string[];
 }
 
-type ComponentRecipe = NpmArchiveRecipe | NodeNpmRecipe | GitGoRecipe;
+/**
+ * A vendor-hosted native archive Cowboy must not redistribute. Each Machine
+ * downloads it from the vendor's immutable versioned URL; the build only
+ * verifies the vendor-published SHA-512 and the pinned SHA-256 and probes it.
+ */
+interface VendorArchiveRecipe {
+  kind: "vendor_archive";
+  version: string;
+  /** Vendor's versioned release directory; every target URL lies below it. */
+  release: string;
+  probe: string[];
+  targets: Partial<Record<TargetKey, DownloadTarget>>;
+}
+
+/**
+ * A small Cowboy-owned launcher shipped as a deterministic archive: one
+ * POSIX shell entrypoint plus read-only data files from `package_dir`.
+ */
+interface OwnedArchiveRecipe {
+  kind: "owned_archive";
+  version: string;
+  package_dir: string;
+  launcher: string;
+  files: string[];
+  probe: string[];
+}
+
+type ComponentRecipe =
+  | NpmArchiveRecipe
+  | NodeNpmRecipe
+  | GitGoRecipe
+  | VendorArchiveRecipe
+  | OwnedArchiveRecipe;
 
 interface RuntimeLock {
   schema_version: number;
@@ -167,13 +200,20 @@ try {
       );
       const digest = await sha256(built.path);
       const name = built.path.slice(built.path.lastIndexOf("/") + 1);
+      if (built.vendorUrl !== undefined) {
+        // Never copied into the Catalog: the signed release binds the
+        // vendor URL and digest, and each Machine verifies both itself.
+        if (built.vendorSha256 !== digest) {
+          throw new Error(`vendor archive SHA-256 mismatch for ${dependency.id}`);
+        }
+      }
       const released: ReleasedComponent = {
         kind: pluginComponentKind(requirement.kind),
         slot: requirement.slot,
         dependency: dependency.id,
         version: dependency.version,
         command: requirement.command,
-        artifact_url: `${baseUrl}/${digest}/${name}`,
+        artifact_url: built.vendorUrl ?? `${baseUrl}/${digest}/${name}`,
         artifact_digest: `sha256:${digest}`,
         artifact_format: built.format,
         probe: { args: recipe.probe, timeout_ms: 30_000 },
@@ -230,9 +270,59 @@ async function buildComponent(
   command: string,
   target: TargetKey,
   destination: string,
-): Promise<{ path: string; format: "raw" | "tar_gz"; entrypoint?: string }> {
+): Promise<{
+  path: string;
+  format: "raw" | "tar_gz";
+  entrypoint?: string;
+  vendorUrl?: string;
+  vendorSha256?: string;
+}> {
   await mkdir(destination, { recursive: true });
   switch (recipe.kind) {
+    case "owned_archive": {
+      const sourceDir = join(runtimeRoot, recipe.package_dir);
+      if (
+        !/^packages\/[a-z0-9-]+$/.test(recipe.package_dir) ||
+        dependency.source !== `cowboy:components/provider-runtime/${recipe.package_dir}` ||
+        dependency.integrity !== await ownedIntegrity(sourceDir, recipe)
+      ) {
+        throw new Error(`owned archive source mismatch for ${dependency.id}`);
+      }
+      const stage = await mkdtemp(join(temporary, `${command}-`));
+      await mkdir(`${stage}/bin`, { recursive: true });
+      await mkdir(`${stage}/share`, { recursive: true });
+      await copyFile(join(sourceDir, recipe.launcher), `${stage}/bin/${command}`);
+      await chmod(`${stage}/bin/${command}`, 0o755);
+      for (const file of recipe.files) {
+        await copyFile(join(sourceDir, file), `${stage}/share/${file}`);
+        await chmod(`${stage}/share/${file}`, 0o444);
+      }
+      await rejectLinks(stage);
+      const output = `${destination}/${command}.tar.gz`;
+      await deterministicTarGz(stage, output);
+      return { path: output, format: "tar_gz", entrypoint: `bin/${command}` };
+    }
+    case "vendor_archive": {
+      const locked = requiredTarget(recipe.targets, target, dependency.id);
+      if (
+        !locked.url.startsWith(recipe.release) ||
+        dependency.source !== recipe.release
+      ) {
+        throw new Error(`vendor archive source mismatch for ${dependency.id}`);
+      }
+      const sha512 = required(locked.sha512, "vendor SHA-512");
+      if (!/^[a-f0-9]{128}$/.test(sha512)) {
+        throw new Error(`invalid vendor SHA-512 for ${locked.url}`);
+      }
+      const archive = await downloadVerified(locked.url, "sha512", sha512);
+      return {
+        path: archive,
+        format: "tar_gz",
+        entrypoint: locked.entrypoint,
+        vendorUrl: locked.url,
+        vendorSha256: required(locked.sha256, "vendor SHA-256"),
+      };
+    }
     case "npm_archive": {
       const locked = requiredTarget(recipe.targets, target, dependency.id);
       const archive = await downloadSRI(
@@ -404,6 +494,30 @@ async function buildComponent(
       return { path: archive, format: "tar_gz", entrypoint: `bin/${command}` };
     }
   }
+}
+
+/** SHA-256 over each owned source file's name and SHA-256, in order. */
+async function ownedIntegrity(
+  sourceDir: string,
+  recipe: OwnedArchiveRecipe,
+): Promise<string> {
+  const names = [recipe.launcher, ...recipe.files];
+  if (
+    names.some((name) => !/^[a-z0-9][a-z0-9._-]*$/.test(name)) ||
+    new Set(names).size !== names.length
+  ) {
+    throw new Error("owned archive files must be distinct plain names");
+  }
+  let lines = "";
+  for (const name of names) {
+    const path = join(sourceDir, name);
+    if (!(await lstat(path)).isFile()) {
+      throw new Error(`owned archive file ${name} is not a regular file`);
+    }
+    lines += `${name} ${await sha256(path)}\n`;
+  }
+  const digest = new Bun.CryptoHasher("sha256").update(lines).digest("hex");
+  return `sha256:${digest}`;
 }
 
 async function materializeGitSource(

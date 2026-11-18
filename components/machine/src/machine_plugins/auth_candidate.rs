@@ -130,6 +130,12 @@ impl MachinePluginStore {
         let _guard = self.auth_candidates.lock();
         super::validate_plugin_id(provider)?;
         super::validate_auth_candidate_id(request)?;
+        // Candidates export portable credentials; a native-only Provider's
+        // named login never uses one and a named-only Provider has no default.
+        ensure!(
+            !crate::provider_account::named_only(provider),
+            "named_account_required: this Provider signs in only to named accounts"
+        );
         let root = self.auth_candidate_root(provider);
         ensure!(
             self.auth_candidate_stop(provider, request)?.is_none(),
@@ -372,6 +378,18 @@ impl Drop for AuthCandidateCleanup {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn named_only_provider_never_creates_a_portable_candidate() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = MachinePluginStore::new(dir.path(), Platform::Linux, "x86_64".into()).unwrap();
+        let error = root
+            .create_auth_candidate_home("antigravity", "request")
+            .unwrap_err();
+        assert!(error.to_string().contains("named_account_required"));
+        assert!(!root.auth_candidate_root("antigravity").exists());
+        assert!(root.create_auth_candidate_home("grok", "request").is_ok());
+    }
 
     #[test]
     fn tree_exit_marker_recovers_failed_cleanup_without_success_marker() {

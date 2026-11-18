@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { lstat, readdir, readFile } from "node:fs/promises";
 interface ExactDependency {
   id: string;
@@ -32,6 +33,7 @@ interface DownloadTarget {
   url: string;
   integrity?: string;
   sha256?: string;
+  sha512?: string;
   entrypoint: string;
 }
 
@@ -60,7 +62,27 @@ interface GitGoRecipe {
   files?: string[];
 }
 
-type ComponentRecipe = NpmArchiveRecipe | NodeNpmRecipe | GitGoRecipe;
+interface VendorArchiveRecipe {
+  kind: "vendor_archive";
+  version: string;
+  release: string;
+  targets: Partial<Record<TargetKey, DownloadTarget>>;
+}
+
+interface OwnedArchiveRecipe {
+  kind: "owned_archive";
+  version: string;
+  package_dir: string;
+  launcher: string;
+  files: string[];
+}
+
+type ComponentRecipe =
+  | NpmArchiveRecipe
+  | NodeNpmRecipe
+  | GitGoRecipe
+  | VendorArchiveRecipe
+  | OwnedArchiveRecipe;
 
 interface RuntimeLock {
   schema_version: number;
@@ -162,7 +184,7 @@ for (const pluginRoot of pluginRoots) {
       recipe.version === dependency.version,
       `${providerId}: runtime lock version mismatch for ${dependencyId}`,
     );
-    validateDependencySource(providerId, dependency, recipe);
+    await validateDependencySource(providerId, dependency, recipe);
 
     for (const target of usedTargets) {
       switch (recipe.kind) {
@@ -188,6 +210,25 @@ for (const pluginRoot of pluginRoots) {
             validatedNpmRecipes.add(dependencyId);
           }
           break;
+        case "owned_archive":
+          break;
+        case "vendor_archive": {
+          const locked = required(
+            recipe.targets[target],
+            `${providerId}: ${dependencyId} has no vendor archive for ${target}`,
+          );
+          validateDownloadTarget(
+            `${providerId}: ${dependencyId} ${target}`,
+            locked,
+            "sha256",
+          );
+          assert(
+            locked.url.startsWith(recipe.release) &&
+              /^[a-f0-9]{128}$/.test(locked.sha512 ?? ""),
+            `${providerId}: ${dependencyId} ${target} vendor archive is not pinned below its release`,
+          );
+          break;
+        }
         case "git_go_static":
           assert(
             target.startsWith("linux-") || target === "macos-aarch64",
@@ -214,11 +255,11 @@ console.log(
   }),
 );
 
-function validateDependencySource(
+async function validateDependencySource(
   providerId: string,
   dependency: ExactDependency,
   recipe: ComponentRecipe,
-): void {
+): Promise<void> {
   if (recipe.kind === "git_go_static") {
     const repository = recipe.repository.replace(
       /^git@([^:]+):/,
@@ -241,6 +282,38 @@ function validateDependencySource(
     assert(
       /^[a-f0-9]{64}$/.test(recipe.source_archive_sha256),
       `${providerId}: Git archive digest is invalid`,
+    );
+    return;
+  }
+
+  if (recipe.kind === "owned_archive") {
+    assert(
+      /^packages\/[a-z0-9-]+$/.test(recipe.package_dir) &&
+        dependency.source ===
+          `cowboy:components/provider-runtime/${recipe.package_dir}`,
+      `${providerId}: owned archive source mismatch for ${dependency.id}`,
+    );
+    assert(
+      dependency.integrity === await ownedIntegrity(recipe),
+      `${providerId}: owned archive integrity mismatch for ${dependency.id}`,
+    );
+    return;
+  }
+  if (recipe.kind === "vendor_archive") {
+    // The vendor's versioned release directory is the source; the integrity
+    // binds every pinned target, so a lock edit cannot drift from the
+    // signed Provider manifest.
+    assert(
+      recipe.release.startsWith("https://") &&
+        recipe.release.endsWith("/") &&
+        recipe.release.includes(`/${dependency.version}`) &&
+        !recipe.release.includes("latest") &&
+        dependency.source === recipe.release,
+      `${providerId}: vendor release mismatch for ${dependency.id}`,
+    );
+    assert(
+      dependency.integrity === vendorIntegrity(recipe),
+      `${providerId}: vendor integrity mismatch for ${dependency.id}`,
     );
     return;
   }
@@ -364,6 +437,36 @@ async function validateNpmRecipe(
       lockedPackage.integrity === dependency.integrity,
     `${providerId}: npm lock payload mismatch for ${dependency.id}`,
   );
+}
+
+/** SHA-256 over each owned source file's name and SHA-256, in order. */
+async function ownedIntegrity(recipe: OwnedArchiveRecipe): Promise<string> {
+  const names = [recipe.launcher, ...recipe.files];
+  assert(
+    names.every((name) => /^[a-z0-9][a-z0-9._-]*$/.test(name)) &&
+      new Set(names).size === names.length,
+    "owned archive files must be distinct plain names",
+  );
+  let lines = "";
+  for (const name of names) {
+    const path = join(runtimeRoot, recipe.package_dir, name);
+    assert((await lstat(path)).isFile(), `owned file ${name} is not regular`);
+    const digest = createHash("sha256").update(await readFile(path))
+      .digest("hex");
+    lines += `${name} ${digest}\n`;
+  }
+  return `sha256:${createHash("sha256").update(lines).digest("hex")}`;
+}
+
+/** SHA-256 over the sorted pinned targets of a vendor archive recipe. */
+function vendorIntegrity(recipe: VendorArchiveRecipe): string {
+  const lines = Object.entries(recipe.targets)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([target, locked]) =>
+      `${target} ${locked?.url} ${locked?.sha512} ${locked?.sha256} ${locked?.entrypoint}\n`
+    )
+    .join("");
+  return `sha256:${createHash("sha256").update(lines).digest("hex")}`;
 }
 
 function safeEntrypoint(value: string): boolean {

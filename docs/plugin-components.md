@@ -83,6 +83,16 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.113.0 records provider-runtime 1.3.0 and adds the
+`antigravity` Provider 0.1.0 (Linux x86_64 only). The runtime lock gains two
+recipe kinds: `vendor_archive`, a vendor-hosted native archive the Machine
+downloads from the vendor's pinned URL and that publication never copies into
+the Catalog, and `owned_archive`, a deterministic archive of a Cowboy-owned
+launcher and data files. Every Provider that pins provider-runtime advances one
+patch version without behavior changes: claude-code 3.20.44, claude-deepseek
+3.1.63, codex 3.6.2, codex-deepseek 3.1.63, deepseek-harness 1.0.21 and grok
+3.2.2.
+
 Component release 3.112.0 records Zed 1.39.7, whose adapter dependency policy
 records the chrono "unmaintained" notice RUSTSEC-2026-0543 (no vulnerability;
 the pinned Zed crates require chrono). No component changes.

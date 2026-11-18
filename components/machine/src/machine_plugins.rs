@@ -1755,6 +1755,8 @@ impl MachinePluginStore {
             self.ensure_native_release(package, generation, generation_digest)?;
             return self.native_profile_home(package, generation);
         }
+        crate::provider_account::portable_credentials_allowed(&self.account_id, provider_id)
+            .map_err(anyhow::Error::msg)?;
         let auth = &package.manifest.authentication;
         let envelope = self
             .latest_auth_envelope(provider_id)?
@@ -4211,6 +4213,8 @@ async fn stage_runtime_component(
     );
     guard.check()?;
     let unpack_started = Instant::now();
+    // Stable installed layout: `plugins/antigravity`'s `agy-launch` finds its
+    // sibling `provider_cli-antigravity/content/` component through it.
     let component_root = runtime_root.join(format!("{}-{}", artifact.kind.as_str(), artifact.slot));
     fs::create_dir_all(&component_root)?;
     let (executable, stored_artifact) = match artifact.artifact_format {

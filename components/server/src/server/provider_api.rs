@@ -233,6 +233,13 @@ pub(super) async fn api_provider_auth_start(
         )
             .into_response();
     };
+    if crate::provider_account::named_only(&provider_id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "named_account_required: this Provider signs in only to named accounts",
+        )
+            .into_response();
+    }
     if !crate::provider_account::portable_contract::contract(&package)
         .methods
         .iter()

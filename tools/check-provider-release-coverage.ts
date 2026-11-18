@@ -1,5 +1,6 @@
 import { Command } from "./lib/command.ts";
 import { lstat, readdir, readFile } from "node:fs/promises";
+import { vendorHosted } from "./vendor-runtime-artifacts.ts";
 interface PluginManifest {
   id: string;
   version: string;
@@ -8,6 +9,9 @@ interface PluginManifest {
 }
 
 interface RuntimeComponent {
+  dependency: string;
+  version: string;
+  command: string;
   artifact_url: string;
   artifact_digest: string;
 }
@@ -23,7 +27,11 @@ interface PluginRelease {
   publisher: string;
   host_bundle_digest?: string;
   signature: string;
-  runtime_artifacts: Array<{ components: RuntimeComponent[] }>;
+  runtime_artifacts: Array<{
+    os: string;
+    architecture: string;
+    components: RuntimeComponent[];
+  }>;
 }
 
 interface PublicationReceipt {
@@ -157,6 +165,7 @@ async function validatePublishedRelease(
   );
   for (const target of release.runtime_artifacts) {
     for (const component of target.components) {
+      if (vendorHosted(target, component)) continue;
       await validateArtifact(
         catalogRoot,
         component.artifact_url,

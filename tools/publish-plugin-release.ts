@@ -1,5 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import { resolveImmutableReceipt } from "./plugin-publication-receipt.ts";
+import { vendorHosted } from "./vendor-runtime-artifacts.ts";
 import {
   copyImmutable,
   copyImmutableText,
@@ -23,6 +24,8 @@ interface PluginRelease {
     architecture: string;
     components: Array<{
       command: string;
+      dependency: string;
+      version: string;
       artifact_url: string;
       artifact_digest: string;
       artifact_format: "raw" | "tar_gz";
@@ -136,6 +139,7 @@ published.push(release.artifact_url);
 
 for (const target of release.runtime_artifacts) {
   for (const component of target.components) {
+    if (vendorHosted(target, component)) continue;
     const extension = component.artifact_format === "tar_gz" ? ".tar.gz" : "";
     const localPath =
       `${sourceRoot}/runtime/${target.os}-${target.architecture}/${component.command}${extension}`;

@@ -1665,8 +1665,11 @@ mod tests {
         assert!(!detect.iter().any(|row| row.plugin_id == "codex-deepseek"));
         assert_eq!(
             occupancy_slots(),
-            ["claude", "codex", "deepseek-harness", "grok"]
+            ["antigravity", "claude", "codex", "deepseek-harness", "grok"]
         );
+        // The legacy occupancy probe may run a host `antigravity --version`;
+        // that exits without writing state or starting `agy`'s updater.
+        assert_eq!(cli_command_for_slot("antigravity"), Some("antigravity"));
         assert_eq!(cli_command_for_slot("claude"), Some("claude"));
         assert_eq!(cli_command_for_slot("codex"), Some("codex"));
         assert_eq!(

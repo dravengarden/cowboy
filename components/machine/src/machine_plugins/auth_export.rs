@@ -16,6 +16,8 @@ fn sign_in_method(
     method_id: &str,
 ) -> Result<(cowboy_provider_sdk::AuthMethod, String)> {
     if account.is_default() {
+        crate::provider_account::portable_credentials_allowed(account, &package.manifest.id)
+            .map_err(anyhow::Error::msg)?;
         let method = portable_contract::contract(package)
             .methods
             .iter()

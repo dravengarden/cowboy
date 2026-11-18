@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "adapter_slot": "antigravity",
+  "visual": {
+    "light": {
+      "primary": "#1A73E8",
+      "secondary": "#188038"
+    },
+    "dark": {
+      "primary": "#8AB4F8",
+      "secondary": "#81C995"
+    }
+  },
+  "slots": [
+    "provider.setup",
+    "provider.empty",
+    "provider.settings"
+  ],
+  "ui": {
+    "schema_version": 1,
+    "renderers": {
+      "provider.setup": "provider-surface-v1",
+      "provider.empty": "provider-surface-v1",
+      "provider.settings": "provider-surface-v1"
+    }
+  }
+}
