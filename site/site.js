@@ -187,6 +187,8 @@ const zhMessages = {
   "plugins.summary.codex": "采用标准 OpenAI 账户与配置的 Codex",
   "plugins.summary.claude-code": "采用标准 Anthropic 账户与配置的 Claude Code",
   "plugins.summary.grok": "使用标准 xAI 认证的官方 Grok Build Agent",
+  "plugins.summary.antigravity":
+    "使用个人 Google 账号的官方 Antigravity CLI（Google 不支持在 Cowboy 中使用）",
   "plugins.summary.codex-deepseek": "运行于隔离 DeepSeek runtime、支持 V4 Flash 与 V4 Pro 的 Codex",
   "plugins.summary.claude-deepseek":
     "运行于隔离 DeepSeek runtime、提供百万 token 通道的 Claude Code",
