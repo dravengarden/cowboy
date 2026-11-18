@@ -1,0 +1,76 @@
+{
+  "schema": 1,
+  "source_revision": "1d90b1b1bdf491baf5d76cb52d523a52409acf23",
+  "machine_release": "/nix/store/y0ky9bqjksgkq1gr6rhpnnfr9c39aqw8-cowboy-machine-release",
+  "controller_release": "/nix/store/6kf5ibd98f4qbj317zcrgnnx96h9h0ik-cowboy-controller-release",
+  "worker_generation": "worker-523905c470f5abfe0220",
+  "production_activation": false,
+  "tests": [
+    {
+      "name": "worker-codex",
+      "receipt_sha256": "69352bb9601d084b260a8683bb773da770f7da5e0817e8e810d01176937c963e",
+      "schema": "cowboy.execution-worker-conformance/v1",
+      "accepted": true,
+      "checks": 34
+    },
+    {
+      "name": "worker-claude",
+      "receipt_sha256": "b99838612d7cdfdad9c8ccefd9e80a2369cbd8d6d5649b05d2573c333254b448",
+      "schema": "cowboy.claude-execution-worker-conformance/v1",
+      "accepted": true,
+      "checks": 96
+    },
+    {
+      "name": "managed-claude",
+      "receipt_sha256": "1d1016e87897901a71d8aa26f1fda59be9327662635c5a369d2a6a68a6e89c65",
+      "schema": "cowboy.claude-managed-execution-conformance/v1",
+      "accepted": true,
+      "checks": 7
+    },
+    {
+      "name": "session",
+      "receipt_sha256": "de9ac06686101e4e7eceb739f1be8e8eab2f2c35cc55a4dbc35ddf91a52049e7",
+      "schema": "cowboy.execution-session-conformance/v1",
+      "accepted": true,
+      "checks": 39
+    },
+    {
+      "name": "logs",
+      "receipt_sha256": "a2378ffafb2216f6cb18ee7f1ee6c053dbeb43082f2a578f07dcbda74f3b921e",
+      "schema": "cowboy.logs-conformance/v1",
+      "accepted": true,
+      "checks": 11
+    },
+    {
+      "name": "code",
+      "receipt_sha256": "1cce916bdc1a2e96d521a6222fb0bcc2917b27360248403e314edf6719bbc45b",
+      "schema": "dravengarden.cowboy.code-buffer-connected-conformance/v17",
+      "accepted": true,
+      "checks": 38
+    },
+    {
+      "name": "agent-codex",
+      "receipt_sha256": "af86408978ca1560a1ac7656e4c353bcbb9f34739caf91daa64ea06e5bf1e6da",
+      "schema": null,
+      "accepted": null,
+      "plugin": "codex 3.6.1",
+      "previous": "3.5.30",
+      "probes": [
+        "codex 0.166.0 passed",
+        "codex-acp 2.7.0 passed"
+      ]
+    },
+    {
+      "name": "agent-claude-code",
+      "receipt_sha256": "03ab1431a93318715cb16d6e82b501d882b948f3cc355d8eeafe592b5ce0968c",
+      "schema": null,
+      "accepted": null,
+      "plugin": "claude-code 3.20.44",
+      "previous": "3.20.41",
+      "probes": [
+        "claude 2.1.326 passed",
+        "claude-agent-acp 0.107.3 passed"
+      ]
+    }
+  ]
+}
