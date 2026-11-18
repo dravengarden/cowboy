@@ -19,6 +19,8 @@ use crate::account_sandbox;
 const UNIT_POLL: Duration = Duration::from_secs(2);
 /// Bound of the daemon's stop confirmation at teardown.
 const UNIT_STOP_TIMEOUT: Duration = Duration::from_secs(45);
+/// Delay before the watchdog retries an unconfirmed account-unit stop.
+const UNIT_STOP_RETRY: Duration = Duration::from_secs(5);
 
 pub(super) struct AgentProcess {
     /// The cgroup containing a local process tree, when contained.
@@ -278,9 +280,11 @@ pub(super) enum Recycler {
 }
 
 impl Recycler {
-    /// End the wedged process tree; `false` when nothing could be done and
-    /// the caller must wait for the prompt to fail on its own.
-    pub(super) async fn hard_recycle(&self, session_id: &str) -> bool {
+    /// End the wedged process tree. `None` when it is done (or nothing can be
+    /// done and the caller must wait for the prompt to fail on its own);
+    /// `Some(retry_at)` when the daemon did not confirm an account unit's
+    /// stop, which the caller retries then rather than treating it as ended.
+    pub(super) async fn hard_recycle(&self, session_id: &str) -> Option<std::time::Instant> {
         match self {
             Self::Cgroup(dir) => {
                 tracing::warn!(
@@ -288,7 +292,7 @@ impl Recycler {
                     "prompt watchdog: agent will not yield to cancel — recycling"
                 );
                 cgroup::kill_and_remove(dir);
-                true
+                None
             }
             Self::Unit { client, unit } => {
                 tracing::warn!(
@@ -301,16 +305,16 @@ impl Recycler {
                 match tokio::time::timeout(UNIT_STOP_TIMEOUT, stop).await {
                     Ok(Ok(Ok(true))) => {
                         tracing::info!(session = session_id, %unit, "account unit stop confirmed");
-                        true
+                        None
                     }
                     outcome => {
                         tracing::warn!(
                             session = session_id,
                             %unit,
                             ?outcome,
-                            "account unit stop unconfirmed; the owner connection still ends it"
+                            "account unit stop unconfirmed; retrying"
                         );
-                        true
+                        Some(std::time::Instant::now() + UNIT_STOP_RETRY)
                     }
                 }
             }
@@ -319,8 +323,43 @@ impl Recycler {
                     session = session_id,
                     "prompt watchdog: agent wedged and uncontained — waiting for prompt to fail"
                 );
-                false
+                None
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{BufRead as _, Write as _};
+
+    #[tokio::test]
+    async fn an_unconfirmed_unit_stop_is_retried() {
+        let root = tempfile::tempdir().unwrap();
+        let socket = root.path().join("control.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            for reply in [
+                r#"{"ok":false,"error":{"code":"internal","message":"did not stop"}}"#,
+                r#"{"ok":true,"result":{"unit":"u","stopped":true}}"#,
+            ] {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                writeln!(stream, "{reply}").unwrap();
+            }
+        });
+        let recycler = Recycler::Unit {
+            client: Arc::new(Mutex::new(
+                account_sandbox::Client::connect(&socket).unwrap(),
+            )),
+            unit: "cga-0123456789abcdef-runtime-0011223344556677.service".into(),
+        };
+        let retry = recycler.hard_recycle("session").await;
+        assert!(retry.is_some_and(|at| at > std::time::Instant::now()));
+        assert!(recycler.hard_recycle("session").await.is_none());
+        server.join().unwrap();
     }
 }

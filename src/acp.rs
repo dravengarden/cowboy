@@ -3473,9 +3473,9 @@ async fn await_prompt_with_idle_watchdog<R>(
             }
             () = tokio::time::sleep(wait) => {
                 if cancel_deadline.is_some() {
-                    state.recycler.hard_recycle(&state.session_id).await;
-                    recycled = true;
-                    cancel_deadline = None;
+                    // An unconfirmed account-unit stop is retried, never dropped.
+                    cancel_deadline = state.recycler.hard_recycle(&state.session_id).await;
+                    recycled = cancel_deadline.is_none();
                 } else if !cancelled {
                     // Silence the provider already explained is not a wedge.
                     // Wait out a short scheduled retry; end a wait no turn can
