@@ -1,0 +1,1808 @@
+{
+  "schema": 1,
+  "as_of": "2026-11-18",
+  "observations": 210,
+  "dropped_groups": [
+    "arc-agi-2|v2_Semi_Private|arc-standard|score: saturated or flat",
+    "gpqa-diamond|diamond|artificial-analysis|accuracy: saturated or flat",
+    "gpqa-diamond|diamond|epoch-inspect|accuracy: saturated or flat",
+    "mcp-atlas|public-500|scale-seal|pass_rate: saturated or flat",
+    "swe-bench-pro|public|anthropic-internal|resolved_rate: saturated or flat"
+  ],
+  "unmapped_targets": [],
+  "targets": [
+    {
+      "id": "gpt-6.2-astra:max",
+      "vendor": "openai",
+      "model": "gpt-6.2-astra",
+      "effort": "max",
+      "released": "2026-11-17",
+      "provider": "codex",
+      "preset": "astra-max",
+      "values": {
+        "model": "gpt-6.2-astra",
+        "reasoning_effort": "max"
+      },
+      "executable": true,
+      "provisional": true,
+      "tasks": {
+        "agentic_coding": {
+          "status": "scored",
+          "mean": 0.637,
+          "uncertainty": 0.05,
+          "lineages": 2,
+          "independent_lineages": 1,
+          "max_age_days": 0,
+          "confidence": "medium"
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.6
+        },
+        "review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.3
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "analysis": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.3
+        }
+      },
+      "cost_index": 7.577
+    },
+    {
+      "id": "gpt-6.2-astra:medium",
+      "vendor": "openai",
+      "model": "gpt-6.2-astra",
+      "effort": "medium",
+      "released": "2026-11-17",
+      "provider": "codex",
+      "preset": "astra-medium",
+      "values": {
+        "model": "gpt-6.2-astra",
+        "reasoning_effort": "medium"
+      },
+      "executable": true,
+      "provisional": true,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "code_review": {
+          "status": "scored",
+          "mean": 0.736,
+          "uncertainty": 0.098,
+          "lineages": 3,
+          "independent_lineages": 3,
+          "max_age_days": 0,
+          "confidence": "high"
+        },
+        "reasoning": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "review": {
+          "status": "scored",
+          "mean": 0.736,
+          "uncertainty": 0.098,
+          "lineages": 0,
+          "coverage": 0.7
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.3
+        },
+        "analysis": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        }
+      },
+      "cost_index": 1.558
+    },
+    {
+      "id": "gpt-6.2-sol:max",
+      "vendor": "openai",
+      "model": "gpt-6.2-sol",
+      "effort": "max",
+      "released": "2026-11-17",
+      "provider": "codex",
+      "preset": "sol-6-2-max",
+      "values": {
+        "model": "gpt-6.2-sol",
+        "reasoning_effort": "max"
+      },
+      "executable": true,
+      "provisional": true,
+      "tasks": {
+        "agentic_coding": {
+          "status": "scored",
+          "mean": 0.604,
+          "uncertainty": 0.05,
+          "lineages": 2,
+          "independent_lineages": 1,
+          "max_age_days": 0,
+          "confidence": "medium"
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.6
+        },
+        "review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.3
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "analysis": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.3
+        }
+      },
+      "cost_index": 3.185
+    },
+    {
+      "id": "gpt-6.2-sol:medium",
+      "vendor": "openai",
+      "model": "gpt-6.2-sol",
+      "effort": "medium",
+      "released": "2026-11-17",
+      "provider": "codex",
+      "preset": "sol-6-2-medium",
+      "values": {
+        "model": "gpt-6.2-sol",
+        "reasoning_effort": "medium"
+      },
+      "executable": true,
+      "provisional": true,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "code_review": {
+          "status": "scored",
+          "mean": 0.694,
+          "uncertainty": 0.05,
+          "lineages": 3,
+          "independent_lineages": 3,
+          "max_age_days": 0,
+          "confidence": "high"
+        },
+        "reasoning": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "review": {
+          "status": "scored",
+          "mean": 0.694,
+          "uncertainty": 0.05,
+          "lineages": 0,
+          "coverage": 0.7
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.3
+        },
+        "analysis": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        }
+      },
+      "cost_index": 1.501
+    },
+    {
+      "id": "gpt-6-luna:max",
+      "vendor": "openai",
+      "model": "gpt-6-luna",
+      "effort": "max",
+      "provider": "codex",
+      "preset": "luna-6-max",
+      "values": {
+        "model": "gpt-6-luna",
+        "reasoning_effort": "max"
+      },
+      "executable": true,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "scored",
+          "mean": 0.129,
+          "uncertainty": 0.05,
+          "lineages": 2,
+          "independent_lineages": 1,
+          "max_age_days": 0,
+          "confidence": "medium"
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "scored",
+          "mean": 0.25,
+          "uncertainty": 0.095,
+          "lineages": 2,
+          "independent_lineages": 2,
+          "max_age_days": 0,
+          "confidence": "medium"
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.6
+        },
+        "review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.3
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.5
+        },
+        "analysis": {
+          "status": "scored",
+          "mean": 0.198,
+          "uncertainty": 0.058,
+          "lineages": 0,
+          "coverage": 0.7
+        }
+      },
+      "cost_index": 1.533
+    },
+    {
+      "id": "claude-fable-5-2:max",
+      "vendor": "anthropic",
+      "model": "claude-fable-5-2",
+      "effort": "max",
+      "released": "2026-11-09",
+      "provider": "claude-code",
+      "preset": "fable-max",
+      "values": {
+        "model": "fable",
+        "effort": "max"
+      },
+      "executable": true,
+      "provisional": true,
+      "tasks": {
+        "agentic_coding": {
+          "status": "scored",
+          "mean": 0.607,
+          "uncertainty": 0.05,
+          "lineages": 2,
+          "independent_lineages": 1,
+          "max_age_days": 0,
+          "confidence": "medium"
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "scored",
+          "mean": 0.871,
+          "uncertainty": 0.091,
+          "lineages": 2,
+          "independent_lineages": 2,
+          "max_age_days": 0,
+          "confidence": "medium"
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.6
+        },
+        "review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.3
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.5
+        },
+        "analysis": {
+          "status": "scored",
+          "mean": 0.758,
+          "uncertainty": 0.056,
+          "lineages": 0,
+          "coverage": 0.7
+        }
+      },
+      "cost_index": 42.627
+    },
+    {
+      "id": "claude-fable-5-2:high",
+      "vendor": "anthropic",
+      "model": "claude-fable-5-2",
+      "effort": "high",
+      "released": "2026-11-09",
+      "provider": "claude-code",
+      "preset": "fable-high",
+      "values": {
+        "model": "fable",
+        "effort": "high"
+      },
+      "executable": true,
+      "provisional": true,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "scored",
+          "mean": 0.798,
+          "uncertainty": 0.096,
+          "lineages": 2,
+          "independent_lineages": 2,
+          "max_age_days": 0,
+          "confidence": "medium"
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.5
+        },
+        "analysis": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.4
+        }
+      },
+      "cost_index": 18.681
+    },
+    {
+      "id": "claude-opus-5-5:high",
+      "vendor": "anthropic",
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "released": "2026-09-22",
+      "provider": "claude-code",
+      "preset": "opus-high",
+      "values": {
+        "model": "opus",
+        "effort": "high"
+      },
+      "executable": true,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "scored",
+          "mean": 0.624,
+          "uncertainty": 0.05,
+          "lineages": 2,
+          "independent_lineages": 2,
+          "max_age_days": 0,
+          "confidence": "medium"
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.5
+        },
+        "analysis": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.4
+        }
+      },
+      "cost_index": 7.737
+    },
+    {
+      "id": "claude-opus-5-5:default",
+      "vendor": "anthropic",
+      "model": "claude-opus-5-5",
+      "effort": "default",
+      "released": "2026-09-22",
+      "provider": "claude-code",
+      "preset": "opus-default",
+      "values": {
+        "model": "opus",
+        "effort": "default"
+      },
+      "executable": true,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "analysis": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        }
+      },
+      "cost_index": null
+    },
+    {
+      "id": "claude-sonnet-5-5:xhigh",
+      "vendor": "anthropic",
+      "model": "claude-sonnet-5-5",
+      "effort": "xhigh",
+      "released": "2026-09-28",
+      "provider": "claude-code",
+      "preset": "sonnet-xhigh",
+      "values": {
+        "model": "sonnet",
+        "effort": "xhigh"
+      },
+      "executable": true,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "scored",
+          "mean": 0.546,
+          "uncertainty": 0.05,
+          "lineages": 3,
+          "independent_lineages": 3,
+          "max_age_days": 0,
+          "confidence": "high"
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.5
+        },
+        "analysis": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.4
+        }
+      },
+      "cost_index": 9.73
+    },
+    {
+      "id": "claude-sonnet-5-5:medium",
+      "vendor": "anthropic",
+      "model": "claude-sonnet-5-5",
+      "effort": "medium",
+      "released": "2026-09-28",
+      "provider": "claude-code",
+      "preset": "sonnet-medium",
+      "values": {
+        "model": "sonnet",
+        "effort": "medium"
+      },
+      "executable": true,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "scored",
+          "mean": 0.292,
+          "uncertainty": 0.075,
+          "lineages": 2,
+          "independent_lineages": 2,
+          "max_age_days": 0,
+          "confidence": "medium"
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.5
+        },
+        "analysis": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.4
+        }
+      },
+      "cost_index": 2.267
+    },
+    {
+      "id": "claude-opus-5-5:max",
+      "vendor": "anthropic",
+      "model": "claude-opus-5-5",
+      "effort": "max",
+      "released": "2026-09-22",
+      "executable": false,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "scored",
+          "mean": 0.603,
+          "uncertainty": 0.05,
+          "lineages": 2,
+          "independent_lineages": 1,
+          "max_age_days": 0,
+          "confidence": "medium"
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "scored",
+          "mean": 0.741,
+          "uncertainty": 0.09,
+          "lineages": 2,
+          "independent_lineages": 2,
+          "max_age_days": 0,
+          "confidence": "medium"
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.6
+        },
+        "review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.3
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.5
+        },
+        "analysis": {
+          "status": "scored",
+          "mean": 0.682,
+          "uncertainty": 0.056,
+          "lineages": 0,
+          "coverage": 0.7
+        }
+      },
+      "cost_index": 16.238
+    },
+    {
+      "id": "claude-opus-5-5:xhigh",
+      "vendor": "anthropic",
+      "model": "claude-opus-5-5",
+      "effort": "xhigh",
+      "released": "2026-09-22",
+      "executable": false,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "scored",
+          "mean": 0.702,
+          "uncertainty": 0.09,
+          "lineages": 2,
+          "independent_lineages": 2,
+          "max_age_days": 0,
+          "confidence": "medium"
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.5
+        },
+        "analysis": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.4
+        }
+      },
+      "cost_index": 13.109
+    },
+    {
+      "id": "claude-opus-5-5:api-default",
+      "vendor": "anthropic",
+      "model": "claude-opus-5-5",
+      "effort": "default",
+      "released": "2026-09-22",
+      "executable": false,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "analysis": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        }
+      },
+      "cost_index": null
+    },
+    {
+      "id": "claude-sonnet-5-5:max",
+      "vendor": "anthropic",
+      "model": "claude-sonnet-5-5",
+      "effort": "max",
+      "executable": false,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "scored",
+          "mean": 0.637,
+          "uncertainty": 0.05,
+          "lineages": 2,
+          "independent_lineages": 1,
+          "max_age_days": 0,
+          "confidence": "medium"
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "scored",
+          "mean": 0.654,
+          "uncertainty": 0.074,
+          "lineages": 2,
+          "independent_lineages": 2,
+          "max_age_days": 0,
+          "confidence": "medium"
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.6
+        },
+        "review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.3
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.5
+        },
+        "analysis": {
+          "status": "scored",
+          "mean": 0.647,
+          "uncertainty": 0.047,
+          "lineages": 0,
+          "coverage": 0.7
+        }
+      },
+      "cost_index": 25.226
+    },
+    {
+      "id": "gemini-4-carbon:high",
+      "vendor": "google",
+      "model": "gemini-4-carbon",
+      "effort": "high",
+      "executable": false,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "scored",
+          "mean": 0.651,
+          "uncertainty": 0.05,
+          "lineages": 2,
+          "independent_lineages": 1,
+          "max_age_days": 0,
+          "confidence": "medium"
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.6
+        },
+        "review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.3
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "analysis": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.3
+        }
+      },
+      "cost_index": 4.397
+    },
+    {
+      "id": "gemini-4-argon:high",
+      "vendor": "google",
+      "model": "gemini-4-argon",
+      "effort": "high",
+      "executable": false,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "scored",
+          "mean": 0.569,
+          "uncertainty": 0.05,
+          "lineages": 2,
+          "independent_lineages": 1,
+          "max_age_days": 0,
+          "confidence": "medium"
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "scored",
+          "mean": 0.615,
+          "uncertainty": 0.05,
+          "lineages": 2,
+          "independent_lineages": 2,
+          "max_age_days": 0,
+          "confidence": "medium"
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.6
+        },
+        "review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.3
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.5
+        },
+        "analysis": {
+          "status": "scored",
+          "mean": 0.595,
+          "uncertainty": 0.036,
+          "lineages": 0,
+          "coverage": 0.7
+        }
+      },
+      "cost_index": 3.59
+    },
+    {
+      "id": "gemini-4-argon:api-default",
+      "vendor": "google",
+      "model": "gemini-4-argon",
+      "effort": "default",
+      "executable": false,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "analysis": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        }
+      },
+      "cost_index": null
+    },
+    {
+      "id": "gemini-4-hydrogen:high",
+      "vendor": "google",
+      "model": "gemini-4-hydrogen",
+      "effort": "high",
+      "executable": false,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "scored",
+          "mean": 0.545,
+          "uncertainty": 0.05,
+          "lineages": 2,
+          "independent_lineages": 1,
+          "max_age_days": 0,
+          "confidence": "medium"
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.6
+        },
+        "review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.3
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "analysis": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.3
+        }
+      },
+      "cost_index": 2.515
+    },
+    {
+      "id": "gemini-4-hydrogen:xhigh",
+      "vendor": "google",
+      "model": "gemini-4-hydrogen",
+      "effort": "xhigh",
+      "executable": false,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "analysis": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        }
+      },
+      "cost_index": 20.797
+    },
+    {
+      "id": "grok-4.7:xhigh",
+      "vendor": "xai",
+      "model": "grok-4.7",
+      "effort": "xhigh",
+      "executable": false,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "scored",
+          "mean": 0.272,
+          "uncertainty": 0.05,
+          "lineages": 2,
+          "independent_lineages": 1,
+          "max_age_days": 0,
+          "confidence": "medium"
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "scored",
+          "mean": 0.365,
+          "uncertainty": 0.05,
+          "lineages": 2,
+          "independent_lineages": 2,
+          "max_age_days": 0,
+          "confidence": "medium"
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.6
+        },
+        "review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.3
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.5
+        },
+        "analysis": {
+          "status": "scored",
+          "mean": 0.325,
+          "uncertainty": 0.036,
+          "lineages": 0,
+          "coverage": 0.7
+        }
+      },
+      "cost_index": 3.712
+    },
+    {
+      "id": "deepseek-v4.1-flash-1017:max",
+      "vendor": "deepseek",
+      "model": "deepseek-v4.1-flash-1017",
+      "effort": "max",
+      "executable": false,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "scored",
+          "mean": 0.354,
+          "uncertainty": 0.05,
+          "lineages": 2,
+          "independent_lineages": 2,
+          "max_age_days": 0,
+          "confidence": "medium"
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "scored",
+          "mean": 0.331,
+          "uncertainty": 0.072,
+          "lineages": 2,
+          "independent_lineages": 2,
+          "max_age_days": 0,
+          "confidence": "medium"
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.6
+        },
+        "review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.3
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.5
+        },
+        "analysis": {
+          "status": "scored",
+          "mean": 0.341,
+          "uncertainty": 0.046,
+          "lineages": 0,
+          "coverage": 0.7
+        }
+      },
+      "cost_index": 1.811
+    },
+    {
+      "id": "deepseek-v4-pro-0813:max",
+      "vendor": "deepseek",
+      "model": "deepseek-v4-pro-0813",
+      "effort": "max",
+      "executable": false,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "scored",
+          "mean": 0.128,
+          "uncertainty": 0.05,
+          "lineages": 2,
+          "independent_lineages": 2,
+          "max_age_days": 0,
+          "confidence": "medium"
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "scored",
+          "mean": 0.205,
+          "uncertainty": 0.145,
+          "lineages": 2,
+          "independent_lineages": 2,
+          "max_age_days": 0,
+          "confidence": "medium"
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.6
+        },
+        "review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.3
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.5
+        },
+        "analysis": {
+          "status": "scored",
+          "mean": 0.172,
+          "uncertainty": 0.086,
+          "lineages": 0,
+          "coverage": 0.7
+        }
+      },
+      "cost_index": 3.821
+    },
+    {
+      "id": "kimi-k3.1-pro:max",
+      "vendor": "moonshot",
+      "model": "kimi-k3.1-pro",
+      "effort": "max",
+      "executable": false,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "analysis": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        }
+      },
+      "cost_index": 2.424
+    },
+    {
+      "id": "kimi-k3:max",
+      "vendor": "moonshot",
+      "model": "kimi-k3",
+      "effort": "max",
+      "executable": false,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 1
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "analysis": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        }
+      },
+      "cost_index": 5.492
+    },
+    {
+      "id": "gpt-6-astra:max",
+      "vendor": "openai",
+      "model": "gpt-6-astra",
+      "effort": "max",
+      "executable": false,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "code_review": {
+          "status": "scored",
+          "mean": 0.545,
+          "uncertainty": 0.087,
+          "lineages": 3,
+          "independent_lineages": 3,
+          "max_age_days": 0,
+          "confidence": "high"
+        },
+        "reasoning": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "workloads": {
+        "session_default": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        },
+        "review": {
+          "status": "scored",
+          "mean": 0.545,
+          "uncertainty": 0.087,
+          "lineages": 0,
+          "coverage": 0.7
+        },
+        "design_review": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0.3
+        },
+        "analysis": {
+          "status": "insufficient",
+          "lineages": 0,
+          "coverage": 0
+        }
+      },
+      "cost_index": 2.966
+    }
+  ],
+  "tiers": {
+    "claude-code": {
+      "session_default": {
+        "notes": [
+          "no scored executable targets",
+          "not evaluated: fable-max, fable-high, opus-high, opus-default, sonnet-xhigh, sonnet-medium"
+        ]
+      },
+      "review": {
+        "notes": [
+          "no scored executable targets",
+          "not evaluated: fable-max, fable-high, opus-high, opus-default, sonnet-xhigh, sonnet-medium"
+        ]
+      },
+      "design_review": {
+        "notes": [
+          "no scored executable targets",
+          "not evaluated: fable-max, fable-high, opus-high, opus-default, sonnet-xhigh, sonnet-medium"
+        ]
+      },
+      "analysis": {
+        "notes": [
+          "no scored executable targets",
+          "not evaluated: fable-max, fable-high, opus-high, opus-default, sonnet-xhigh, sonnet-medium"
+        ]
+      }
+    },
+    "codex": {
+      "session_default": {
+        "notes": [
+          "no scored executable targets",
+          "not evaluated: astra-max, astra-medium, sol-6-2-max, sol-6-2-medium, luna-6-max"
+        ]
+      },
+      "review": {
+        "flagship": "sol-6-2-medium",
+        "strong": "astra-medium",
+        "strong_tie": true,
+        "workhorse": "sol-6-2-medium",
+        "value": "sol-6-2-medium",
+        "notes": [
+          "flagship and astra-medium are statistically tied",
+          "not evaluated: astra-max, sol-6-2-max, luna-6-max"
+        ]
+      },
+      "design_review": {
+        "notes": [
+          "no scored executable targets",
+          "not evaluated: astra-max, astra-medium, sol-6-2-max, sol-6-2-medium, luna-6-max"
+        ]
+      },
+      "analysis": {
+        "flagship": "luna-6-max",
+        "strong_tie": false,
+        "workhorse": "luna-6-max",
+        "notes": [
+          "no target with cost evidence clears the value floor",
+          "not evaluated: astra-max, astra-medium, sol-6-2-max, sol-6-2-medium"
+        ]
+      }
+    }
+  },
+  "recommendations": {
+    "claude-code": {
+      "order": []
+    },
+    "codex": {
+      "order": []
+    }
+  }
+}

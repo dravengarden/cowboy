@@ -1,0 +1,222 @@
+# Evaluation targets (schema 1).
+#
+# A target is one (model, effort) configuration. Targets with `provider` and
+# `preset` are executable Cowboy presets: their `values` must equal the signed
+# `configuration_presets` entry in plugins/<provider>/provider.json, which the
+# scorer checks. Targets without them are market research only and never
+# become a recommendation or a routing candidate.
+#
+# Cost is never declared here: it comes from `axis = "cost"` observations.
+# `released` (vendor release date of the model) drives the provisional window.
+
+schema = 1
+
+[[targets]]
+id = "gpt-6.2-astra:max"
+vendor = "openai"
+model = "gpt-6.2-astra"
+effort = "max"
+released = "2026-11-17"
+provider = "codex"
+preset = "astra-max"
+values = { model = "gpt-6.2-astra", reasoning_effort = "max" }
+
+[[targets]]
+id = "gpt-6.2-astra:medium"
+vendor = "openai"
+model = "gpt-6.2-astra"
+effort = "medium"
+released = "2026-11-17"
+provider = "codex"
+preset = "astra-medium"
+values = { model = "gpt-6.2-astra", reasoning_effort = "medium" }
+
+[[targets]]
+id = "gpt-6.2-sol:max"
+vendor = "openai"
+model = "gpt-6.2-sol"
+effort = "max"
+released = "2026-11-17"
+provider = "codex"
+preset = "sol-6-2-max"
+values = { model = "gpt-6.2-sol", reasoning_effort = "max" }
+
+[[targets]]
+id = "gpt-6.2-sol:medium"
+vendor = "openai"
+model = "gpt-6.2-sol"
+effort = "medium"
+released = "2026-11-17"
+provider = "codex"
+preset = "sol-6-2-medium"
+values = { model = "gpt-6.2-sol", reasoning_effort = "medium" }
+
+[[targets]]
+id = "gpt-6-luna:max"
+vendor = "openai"
+model = "gpt-6-luna"
+effort = "max"
+provider = "codex"
+preset = "luna-6-max"
+values = { model = "gpt-6-luna", reasoning_effort = "max" }
+
+[[targets]]
+id = "claude-fable-5-2:max"
+vendor = "anthropic"
+model = "claude-fable-5-2"
+effort = "max"
+released = "2026-11-09"
+provider = "claude-code"
+preset = "fable-max"
+values = { model = "fable", effort = "max" }
+
+[[targets]]
+id = "claude-fable-5-2:high"
+vendor = "anthropic"
+model = "claude-fable-5-2"
+effort = "high"
+released = "2026-11-09"
+provider = "claude-code"
+preset = "fable-high"
+values = { model = "fable", effort = "high" }
+
+[[targets]]
+id = "claude-opus-5-5:high"
+vendor = "anthropic"
+model = "claude-opus-5-5"
+effort = "high"
+released = "2026-09-22"
+provider = "claude-code"
+preset = "opus-high"
+values = { model = "opus", effort = "high" }
+
+[[targets]]
+id = "claude-opus-5-5:default"
+vendor = "anthropic"
+model = "claude-opus-5-5"
+effort = "default"
+released = "2026-09-22"
+provider = "claude-code"
+preset = "opus-default"
+values = { model = "opus", effort = "default" }
+
+[[targets]]
+id = "claude-sonnet-5-5:xhigh"
+vendor = "anthropic"
+model = "claude-sonnet-5-5"
+effort = "xhigh"
+released = "2026-09-28"
+provider = "claude-code"
+preset = "sonnet-xhigh"
+values = { model = "sonnet", effort = "xhigh" }
+
+[[targets]]
+id = "claude-sonnet-5-5:medium"
+vendor = "anthropic"
+model = "claude-sonnet-5-5"
+effort = "medium"
+released = "2026-09-28"
+provider = "claude-code"
+preset = "sonnet-medium"
+values = { model = "sonnet", effort = "medium" }
+
+# ---- Market-research-only targets (never recommended) ----
+
+
+[[targets]]
+id = "claude-opus-5-5:max"
+vendor = "anthropic"
+model = "claude-opus-5-5"
+effort = "max"
+released = "2026-09-22"
+
+[[targets]]
+id = "claude-opus-5-5:xhigh"
+vendor = "anthropic"
+model = "claude-opus-5-5"
+effort = "xhigh"
+released = "2026-09-22"
+
+# Scale MCP-Atlas row "Opus 5.5": "evaluated each model in its default
+# configuration" via API. Not provably equal to Claude Code's `effort=default`
+# preset (opus-default), so kept separate.
+[[targets]]
+id = "claude-opus-5-5:api-default"
+vendor = "anthropic"
+model = "claude-opus-5-5"
+effort = "default"
+released = "2026-09-22"
+
+[[targets]]
+id = "claude-sonnet-5-5:max"
+vendor = "anthropic"
+model = "claude-sonnet-5-5"
+effort = "max"
+
+[[targets]]
+id = "gemini-4-carbon:high"
+vendor = "google"
+model = "gemini-4-carbon"
+effort = "high"
+
+[[targets]]
+id = "gemini-4-argon:high"
+vendor = "google"
+model = "gemini-4-argon"
+effort = "high"
+
+# Scale MCP-Atlas row "Gemini-4-Argon", API default configuration.
+[[targets]]
+id = "gemini-4-argon:api-default"
+vendor = "google"
+model = "gemini-4-argon"
+effort = "default"
+
+[[targets]]
+id = "gemini-4-hydrogen:high"
+vendor = "google"
+model = "gemini-4-hydrogen"
+effort = "high"
+
+[[targets]]
+id = "gemini-4-hydrogen:xhigh"
+vendor = "google"
+model = "gemini-4-hydrogen"
+effort = "xhigh"
+
+[[targets]]
+id = "grok-4.7:xhigh"
+vendor = "xai"
+model = "grok-4.7"
+effort = "xhigh"
+
+[[targets]]
+id = "deepseek-v4.1-flash-1017:max"
+vendor = "deepseek"
+model = "deepseek-v4.1-flash-1017"
+effort = "max"
+
+[[targets]]
+id = "deepseek-v4-pro-0813:max"
+vendor = "deepseek"
+model = "deepseek-v4-pro-0813"
+effort = "max"
+
+[[targets]]
+id = "kimi-k3.1-pro:max"
+vendor = "moonshot"
+model = "kimi-k3.1-pro"
+effort = "max"
+
+[[targets]]
+id = "kimi-k3:max"
+vendor = "moonshot"
+model = "kimi-k3"
+effort = "max"
+
+# Baseline of the 2026-11-18 review pilot: historical reviews ran GPT-6 Astra at max.
+[[targets]]
+id = "gpt-6-astra:max"
+vendor = "openai"
+model = "gpt-6-astra"
+effort = "max"

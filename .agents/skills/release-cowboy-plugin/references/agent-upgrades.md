@@ -108,9 +108,12 @@ configuration surface or its authoritative artifact fixtures. Model labels,
 aliases and effort support must be checked together; do not infer them from
 display text or another Provider's contract.
 
-`is_default` is presentation, not a runtime setting. When the request also changes
-the new-session default, update `runtime.behavior.default_preferences` for the
-same model/effort keys, preserving unrelated defaults. Inspect any provider-owned
+`is_default` marks the Recommended badge and is also the preset the Web New
+Session form submits when neither an explicit choice nor an inherited folder
+default applies (`web/src/newSessionPreset.ts`). It is not the runtime default:
+when the request changes the new-session default, also update
+`runtime.behavior.default_preferences` for the same model/effort keys,
+preserving unrelated defaults, so sessions created outside the Web form agree. Inspect any provider-owned
 runtime arguments/environment that also select the model. Do not reset existing
 sessions or personal selections to match a new recommendation.
 
@@ -131,6 +134,26 @@ This is versioned Plugin configuration, not an unsigned host override or a
 Settings editor. Do not introduce another Columbus list, database table or
 frontend constant for the same recommendations. A host-local editable policy
 or GUI editor would be a separate product capability.
+
+### Evidence for the order and default
+
+Before changing an Agent Provider's order or default, or after an upgrade that
+adds, retires or retargets a model, run the advisory audit of the
+[model-intel](../../model-intel/SKILL.md) skill:
+
+```bash
+nix develop -c bun .agents/skills/model-intel/scripts/score.ts --audit
+```
+
+It reports signed presets without an evaluation target, target values that
+differ from the signed preset, catalog age, and differences between the
+evidence-derived order/default and the signed ones. Treat it as input, not a
+gate: catalog age or a missing model never blocks an unrelated runtime fix.
+When the evidence names a better model that the installed runtime does not
+offer, confirm account rollout and the live options before proposing a
+runtime upgrade. Keep existing preset IDs (the Controller and folder defaults
+reference them) and change only order, `is_default` and the matching default
+keys unless the evidence requires a new preset.
 
 ## Verify and deliver
 
