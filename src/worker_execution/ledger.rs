@@ -98,6 +98,34 @@ struct Record {
     #[serde(default)]
     uncertain_sequence: u64,
     processes: BTreeMap<String, Recorded>,
+    /// The execution binding every recorded process was started through: a
+    /// drain without a worker reaches the same target with it, and another
+    /// binding never terminates these ids on a different target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    binding: Option<crate::execution_environment::BindingV1>,
+}
+
+/// What a session's durable ledger still holds, read without a worker (for
+/// a Machine-side drain): the binding to reach its target with, the
+/// processes to terminate and the uncertain effect to report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingLedger {
+    pub session_id: String,
+    pub binding: Option<crate::execution_environment::BindingV1>,
+    pub processes: Vec<String>,
+    pub uncertain_effect: Option<String>,
+    pub uncertain_sequence: u64,
+}
+
+/// The ledger at `path`, if it holds anything; never modifies it.
+pub fn read_pending(path: &Path) -> Result<Option<PendingLedger>> {
+    Ok(read(path)?.map(|record| PendingLedger {
+        session_id: record.session_id,
+        binding: record.binding,
+        processes: record.processes.into_keys().collect(),
+        uncertain_effect: record.uncertain_effect,
+        uncertain_sequence: record.uncertain_sequence,
+    }))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,6 +202,23 @@ impl Ledger {
             runtime: tokio::runtime::Handle::current(),
             observer: OnceLock::new(),
         }))
+    }
+
+    /// Bind the ledger to the worker's execution binding. Processes recorded
+    /// through another binding are never terminated through this one: the
+    /// worker refuses to start until they are drained.
+    pub fn bind(&self, binding: &crate::execution_environment::BindingV1) -> Result<()> {
+        let mut state = self.state.lock();
+        if let Some(recorded) = &state.record.binding
+            && recorded != binding
+        {
+            ensure!(
+                state.record.processes.is_empty(),
+                "the execution ledger holds processes of another execution binding"
+            );
+        }
+        state.record.binding = Some(binding.clone());
+        self.persist(&state)
     }
 
     /// Called once, with the request's method, when the session first holds

@@ -55,7 +55,7 @@ pub(super) async fn prepare(
     let client = Client::new(
         args.session_id.clone(),
         epoch.to_owned(),
-        binding,
+        binding.clone(),
         notify_tx.clone(),
     );
     let mut managed_round = None;
@@ -85,7 +85,9 @@ pub(super) async fn prepare(
             path.is_some(),
             "a sandboxed execution binding requires the Machine's process ledger"
         );
-        client.set_ledger(Ledger::open(&args.session_id, path)?);
+        let ledger = Ledger::open(&args.session_id, path)?;
+        ledger.bind(&binding)?;
+        client.set_ledger(ledger);
         let (endpoint, bridge) = Endpoint::start_unix(Arc::clone(&client))?;
         client.settle_recovered();
         spec.execution_bridge = Some(bridge);

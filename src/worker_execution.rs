@@ -5,7 +5,7 @@
 
 mod ledger;
 mod relay;
-pub use ledger::{LEDGER_ENV, Ledger, MAX_PROCESSES};
+pub use ledger::{LEDGER_ENV, Ledger, MAX_PROCESSES, PendingLedger, read_pending};
 
 use std::collections::{BTreeMap, HashSet};
 use std::os::fd::OwnedFd;

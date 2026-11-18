@@ -710,3 +710,25 @@ async fn a_lost_start_is_resolved_by_its_keeper_operation_before_reads_count() {
         .unwrap();
     assert!(ledger.live().is_empty());
 }
+
+#[tokio::test]
+async fn the_ledger_keeps_its_binding_for_a_drain_without_a_worker() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("session.json");
+    let target = Target::new(processes());
+    let ledger = ledger(&target.client, Some(path.clone()));
+    ledger.bind(&binding()).unwrap();
+    ledger.begin_turn("turn-1");
+    ledger.admit_start("p1").unwrap();
+    drop(target);
+    let pending = read_pending(&path).unwrap().unwrap();
+    assert_eq!(pending.session_id, "session");
+    assert_eq!(pending.binding, Some(binding()));
+    assert_eq!(pending.processes, ["p1".to_owned()]);
+    // Another binding never inherits (and terminates) these processes.
+    let reopened = Ledger::open("session", Some(path.clone())).unwrap();
+    let mut other = binding();
+    other.environment.id = "other-environment".into();
+    assert!(reopened.bind(&other).is_err());
+    reopened.bind(&binding()).unwrap();
+}
