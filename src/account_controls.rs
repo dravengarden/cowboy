@@ -256,6 +256,27 @@ pub fn fence_operation_id(
     id
 }
 
+/// Revisions [`fence_revision`] searches below the current control revision.
+const FENCE_REVISION_SEARCH: i64 = 4096;
+
+/// The control revision that requested `fence`: the revision whose derived
+/// operation ID is the fence's own, at or below `current` (the account's
+/// control revision now). The daemon orders fence operations by it, so a
+/// fence must carry exactly its originating revision, never a later one: a
+/// later revision may have written another fence of the opposite action,
+/// and two operations at one revision conflict.
+#[must_use]
+pub fn fence_revision(fence: &Fence, current: i64) -> Option<u64> {
+    let lowest = current.saturating_sub(FENCE_REVISION_SEARCH).max(1);
+    (lowest..=current)
+        .rev()
+        .find(|&revision| {
+            fence_operation_id(&fence.account_id, &fence.machine_id, fence.action, revision)
+                == fence.operation_id
+        })
+        .and_then(|revision| u64::try_from(revision).ok())
+}
+
 /// What a dispatch of an account's prompt may do now.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Gate {
@@ -426,19 +447,10 @@ fn proxy_result(error: &str) -> Option<TurnOutcome> {
 }
 
 /// The worker/Machine ledger's evidence about the execution target of one
-/// reserved turn on its original binding (the Machine side is provided by
-/// the account-sandbox daemon; see `docs/antigravity-real-accounts-design.md`,
+/// reserved turn on its original binding (`MachineCommand::
+/// QueryAccountTurnTermination`; see `docs/antigravity-real-accounts-design.md`,
 /// R3-10). Without it no loss of a dispatched turn is proven.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TargetTermination {
-    /// Every process of the turn's execution target exited (the ledger's
-    /// termination record of the reservation's worker epoch).
-    pub terminated: bool,
-    /// The backend class the daemon reconciled from the unit's closed log,
-    /// when the log was closed and its evidence settled.
-    #[serde(default)]
-    pub closed_log_class: Option<String>,
-}
+pub use crate::provider_account::TargetTermination;
 
 /// The outcome of a dispatched turn whose worker is gone without a terminal
 /// record: only proven termination of its execution target settles it, and

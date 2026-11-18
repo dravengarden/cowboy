@@ -184,7 +184,8 @@ impl MachinePluginStore {
     /// a tombstone for an account the daemon has not created yet, which the
     /// account adopts when it is created) and every unit of the account is
     /// confirmed gone; a daemon refusal, including `not_found`, is never a
-    /// confirmation.
+    /// confirmation. A revisioned request is ordered by the daemon (a stale
+    /// one is refused with `conflict`).
     pub fn account_sandbox_fence(
         &self,
         request: &crate::provider_account::AccountFenceRequest,
@@ -198,17 +199,71 @@ impl MachinePluginStore {
         let (socket, service) = self.sandbox_host()?;
         let key = daemon::account_key(service, request.account_id.as_str());
         let mut client = daemon::Client::connect(socket)?;
-        // The wire request carries no control revision yet, so these
-        // operations are unordered; see `daemon::FenceOrder`.
+        // The daemon orders revisioned operations under the account lock: an
+        // older revision, or another operation at the applied one, is its
+        // `conflict`, which is an error here and never a confirmation.
+        let order = request.revision.map(|revision| daemon::FenceOrder {
+            revision,
+            operation_id: &request.operation_id,
+        });
         let fence = match request.action {
-            AccountFenceAction::Stop => client.stop_account(&key, None)?,
-            AccountFenceAction::Admit => client.admit_account(&key, None)?,
+            AccountFenceAction::Stop => client.stop_account(&key, order)?,
+            AccountFenceAction::Admit => client.admit_account(&key, order)?,
         };
         Ok(AccountFenceObservation {
             request: request.clone(),
             fence_epoch: Some(fence.fence_epoch),
             fenced: fence.fenced,
             stopped: fence.stopped,
+        })
+    }
+
+    /// The daemon's record of `account` (a named account of an
+    /// account-sandbox Provider); `None` when the daemon never created it, so
+    /// it runs no unit of it. A missing account is never created here.
+    pub fn account_sandbox_units_of(
+        &self,
+        provider: &str,
+        account: &crate::provider_account::ProviderAccountId,
+    ) -> Result<Option<daemon::AccountUnits>> {
+        ensure!(
+            !account.is_default() && crate::provider_account::named_only(provider),
+            "account sandbox records exist only for named accounts of account-sandbox Providers"
+        );
+        let (socket, service) = self.sandbox_host()?;
+        match daemon::Client::connect(socket)?
+            .list_units(&daemon::account_key(service, account.as_str()))
+        {
+            Ok(units) => Ok(Some(units)),
+            Err(error) if daemon::DaemonError::code_of(&error) == Some("not_found") => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Remove a revoked account's persistent home and system user. The
+    /// revocation has stopped its sessions and logged out its credential;
+    /// the account fence `remove_account` requires is set here first (an
+    /// unrevisioned stop only tightens and stops every unit of the account),
+    /// then the daemon removes both under the revocation's operation ID, so
+    /// a retry is the same removal's replay. A daemon refusal is an error.
+    pub fn account_sandbox_remove(
+        &self,
+        request: &crate::provider_account::AccountRemoveRequest,
+    ) -> Result<crate::provider_account::AccountRemoveObservation> {
+        ensure!(
+            !request.account_id.is_default()
+                && crate::provider_account::named_only(&request.provider_id),
+            "account removal applies only to named accounts of account-sandbox Providers"
+        );
+        let (socket, service) = self.sandbox_host()?;
+        let key = daemon::account_key(service, request.account_id.as_str());
+        let mut client = daemon::Client::connect(socket)?;
+        client.stop_account(&key, None)?;
+        let removed = client.remove_account(&key, &request.operation_id)?;
+        Ok(crate::provider_account::AccountRemoveObservation {
+            request: request.clone(),
+            home_removed: removed.removed && removed.home_removed,
+            user_removed: removed.removed && removed.user_removed,
         })
     }
 
@@ -343,6 +398,7 @@ mod tests {
             provider_id: "antigravity".into(),
             account_id: account.clone(),
             action,
+            revision: None,
         };
         let stopped = store
             .account_sandbox_fence(&request(AccountFenceAction::Stop))
@@ -372,6 +428,141 @@ mod tests {
         let mut codex = request(AccountFenceAction::Stop);
         codex.provider_id = "codex".into();
         assert!(store.account_sandbox_fence(&codex).is_err());
+    }
+
+    /// A fake daemon that orders fence operations like the real one
+    /// (`packaging/account-sandbox/src/fence.rs`): it keeps the applied
+    /// disposition and refuses an older revision, or another operation at the
+    /// applied one, with `conflict`.
+    fn ordering_daemon(
+        socket: &Path,
+        requests: usize,
+    ) -> std::thread::JoinHandle<Vec<serde_json::Value>> {
+        let listener = std::os::unix::net::UnixListener::bind(socket).unwrap();
+        std::thread::spawn(move || {
+            let mut applied: Option<(u64, String, String)> = None;
+            let mut seen = Vec::new();
+            for _ in 0..requests {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut line = String::new();
+                std::io::BufReader::new(&stream)
+                    .read_line(&mut line)
+                    .unwrap();
+                let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+                let op = request["op"].as_str().unwrap().to_owned();
+                let revision = request["revision"].as_u64().unwrap();
+                let id = request["operation_id"].as_str().unwrap().to_owned();
+                let conflict = applied.as_ref().is_some_and(|(r, i, o)| {
+                    revision < *r || (revision == *r && (i != &id || o != &op))
+                });
+                let reply = if conflict {
+                    serde_json::json!({"ok": false, "error": {
+                        "code": "conflict", "message": "stale fence operation"}})
+                } else {
+                    let replayed = applied
+                        .as_ref()
+                        .is_some_and(|(r, i, _)| *r == revision && *i == id);
+                    let fenced = op == "stop_account";
+                    applied = Some((revision, id, op));
+                    serde_json::json!({"ok": true, "result": {
+                        "key": request["key"], "fence_epoch": revision, "fenced": fenced,
+                        "stopped": [], "replayed": replayed, "account_present": true}})
+                };
+                writeln!(stream, "{reply}").unwrap();
+                seen.push(request);
+            }
+            seen
+        })
+    }
+
+    #[test]
+    fn a_delayed_admit_never_undoes_a_newer_confirmed_stop() {
+        use crate::provider_account::{AccountFenceAction, AccountFenceRequest};
+        let root = tempfile::tempdir().unwrap();
+        let socket = root.path().join("control.sock");
+        let server = ordering_daemon(&socket, 4);
+        let store = store(root.path());
+        store.set_account_sandbox(socket, Some("service".into()));
+        let account: crate::provider_account::ProviderAccountId =
+            uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let request = |action, revision: u64| AccountFenceRequest {
+            operation_id: format!("op-{revision}"),
+            provider_id: "antigravity".into(),
+            account_id: account.clone(),
+            action,
+            revision: Some(revision),
+        };
+        let stop = request(AccountFenceAction::Stop, 5);
+        let observed = store.account_sandbox_fence(&stop).unwrap();
+        assert!(observed.fenced && observed.request == stop);
+        // The admit of revision 4 arrives late: refused, never confirmed.
+        let error = store
+            .account_sandbox_fence(&request(AccountFenceAction::Admit, 4))
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("conflict"), "{error:#}");
+        // A retry of the applied stop repeats it; a newer admit applies.
+        assert!(store.account_sandbox_fence(&stop).unwrap().fenced);
+        let admitted = store
+            .account_sandbox_fence(&request(AccountFenceAction::Admit, 6))
+            .unwrap();
+        assert!(!admitted.fenced);
+        let requests = server.join().unwrap();
+        assert_eq!(requests[0]["revision"], 5);
+        assert_eq!(requests[0]["operation_id"], "op-5");
+        assert_eq!(requests[1]["op"], "admit_account");
+    }
+
+    #[test]
+    fn a_revocation_fences_then_removes_the_account_under_its_operation() {
+        let root = tempfile::tempdir().unwrap();
+        let socket = root.path().join("control.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let account: crate::provider_account::ProviderAccountId =
+            uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let key = daemon::account_key("service", account.as_str());
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut writer = stream;
+            let mut requests = Vec::new();
+            for _ in 0..2 {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+                let reply = if request["op"] == "stop_account" {
+                    serde_json::json!({"ok": true, "result": {"key": request["key"],
+                        "fence_epoch": 1, "fenced": true, "stopped": []}})
+                } else {
+                    serde_json::json!({"ok": true, "result": {"key": request["key"],
+                        "removed": true, "home_removed": true, "user_removed": true,
+                        "operation_id": request["operation_id"], "replayed": false}})
+                };
+                writeln!(writer, "{reply}").unwrap();
+                requests.push(request);
+            }
+            requests
+        });
+        let store = store(root.path());
+        store.set_account_sandbox(socket, Some("service".into()));
+        let request = crate::provider_account::AccountRemoveRequest {
+            operation_id: "revoke-op".into(),
+            provider_id: "antigravity".into(),
+            account_id: account,
+        };
+        let removed = store.account_sandbox_remove(&request).unwrap();
+        assert!(removed.home_removed && removed.user_removed && removed.request == request);
+        let requests = server.join().unwrap();
+        assert_eq!(
+            requests,
+            [
+                serde_json::json!({"op": "stop_account", "key": key}),
+                serde_json::json!({"op": "remove_account", "key": key,
+                    "operation_id": "revoke-op"}),
+            ]
+        );
+        let mut codex = request;
+        codex.provider_id = "codex".into();
+        assert!(store.account_sandbox_remove(&codex).is_err());
     }
 
     #[test]

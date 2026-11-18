@@ -67,11 +67,13 @@ pub(in crate::server) trait Env: Send + Sync + 'static {
         Result<crate::provider_account::NativeLogoutObservation, String>,
     >;
     /// The worker/Machine ledger's evidence about the execution target of a
-    /// dispatched turn on its original binding (`turn.machine_id`, worker
-    /// epoch and delivery ID). `None`: no evidence, so no loss is proven.
+    /// dispatched turn of `provider` on its original binding
+    /// (`turn.machine_id`, worker epoch and delivery ID). `None`: no
+    /// evidence, so no loss is proven.
     fn termination(
         &self,
         turn: &Reservation,
+        provider: &str,
     ) -> futures::future::BoxFuture<'static, Option<TargetTermination>>;
 }
 
@@ -159,13 +161,46 @@ impl Env for AppEnv {
     fn termination(
         &self,
         turn: &Reservation,
+        provider: &str,
     ) -> futures::future::BoxFuture<'static, Option<TargetTermination>> {
-        // The termination ledger is the account-sandbox daemon's (queried on
-        // `turn.machine_id` by account, session, worker epoch and delivery
-        // ID). Until a Machine answers that query, no loss is proven and the
+        // Asked of the turn's original runtime Machine only: its worker
+        // registry, the session's durable process ledger and the account
+        // daemon's units decide. An unanswered query proves nothing, so the
         // reservation keeps the account's slot.
-        let _ = turn;
-        Box::pin(std::future::ready(None))
+        let state = Arc::clone(&self.0);
+        let machine = turn.machine_id.clone();
+        let query = turn
+            .account_id
+            .parse::<ProviderAccountId>()
+            .ok()
+            .map(
+                |account_id| crate::provider_account::AccountTurnTerminationQuery {
+                    account_id,
+                    provider_id: provider.to_owned(),
+                    session_id: turn.session_id.clone(),
+                    worker_epoch: turn.worker_epoch.clone(),
+                    delivery_id: turn.delivery_id.clone(),
+                },
+            );
+        Box::pin(async move {
+            let query = query.filter(|_| !machine.is_empty())?;
+            match state
+                .machine_control
+                .account_turn_termination(&machine, &query)
+                .await
+            {
+                Ok(observation) => Some(observation),
+                Err(detail) => {
+                    tracing::debug!(
+                        session = %query.session_id,
+                        %machine,
+                        detail,
+                        "account turn termination unproven"
+                    );
+                    None
+                }
+            }
+        })
     }
 }
 

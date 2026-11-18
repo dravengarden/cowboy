@@ -42,12 +42,10 @@ pub(super) trait Remover: Send + Sync {
     ) -> futures::future::BoxFuture<'static, Result<RemoveObservation, String>>;
 }
 
-/// The production [`Remover`]. The Machine command is the account-sandbox
-/// daemon's `remove_account` (`MachineCommand::AccountSandboxRemove {
-/// request_id, remove: RemoveRequest }`, answered only by
-/// `MachineEvent::AccountSandboxRemoveObserved { request_id, observation:
-/// Option<RemoveObservation>, detail }`). Until a Machine implements it,
-/// every removal stays pending and the revocation does not complete.
+/// The production [`Remover`]: the Machine's account-sandbox daemon
+/// `remove_account` (`MachineCommand::AccountSandboxRemove`, answered only by
+/// `MachineEvent::AccountSandboxRemoveObserved` for the same request). A
+/// Machine below protocol 48, offline or refusing keeps the removal pending.
 pub(super) struct MachineRemover(pub(super) Arc<super::super::super::AppState>);
 
 impl Remover for MachineRemover {
@@ -61,12 +59,16 @@ impl Remover for MachineRemover {
 
     fn remove(
         &self,
-        _machine: &str,
-        _request: &RemoveRequest,
+        machine: &str,
+        request: &RemoveRequest,
     ) -> futures::future::BoxFuture<'static, Result<RemoveObservation, String>> {
-        Box::pin(std::future::ready(Err(
-            "account_remove_unsupported".to_owned()
-        )))
+        let (state, machine, request) = (Arc::clone(&self.0), machine.to_owned(), request.clone());
+        Box::pin(async move {
+            state
+                .machine_control
+                .account_sandbox_remove(&machine, &request)
+                .await
+        })
     }
 }
 

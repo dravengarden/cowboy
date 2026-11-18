@@ -180,6 +180,13 @@ impl MachinePluginStore {
     /// tree is proved first; the abandoned generation never produced an
     /// identity, so it is recorded as failed and the next preparation retires
     /// it. A live owner, a completed identity or any logout is left untouched.
+    ///
+    /// A sandboxed login ran in the daemon's login unit, which the daemon
+    /// stops when the owner's connection closes, and only the daemon records
+    /// its outcome: once no login unit of that exact generation is alive, a
+    /// generation the daemon records `signed_in` is completed (its identity
+    /// recorded for the Controller's native recovery) and any other is
+    /// failed. An unanswered daemon or a live unit leaves it reserved.
     pub async fn recover_abandoned_native_logins(
         &self,
         provider: &str,
@@ -220,15 +227,60 @@ impl MachinePluginStore {
             if !process.recover().await? {
                 continue;
             }
-            let _guard = self.auth_candidates.lock();
-            let (directory, mut profile) =
-                self.read_native_profile_for_cleanup(provider, generation)?;
-            ensure!(profile == snapshot, "native login reservation changed");
-            profile.leader_exited = true;
-            profile.process_tree_exited = true;
-            profile.login_succeeded = false;
-            logout::persist(&directory, &profile)?;
+            let signed_in = if snapshot.account_sandbox {
+                match self.account_sandbox_login_outcome(generation).await {
+                    Some(signed_in) => signed_in,
+                    None => continue,
+                }
+            } else {
+                false
+            };
+            {
+                let _guard = self.auth_candidates.lock();
+                let (directory, mut profile) =
+                    self.read_native_profile_for_cleanup(provider, generation)?;
+                ensure!(profile == snapshot, "native login reservation changed");
+                profile.leader_exited = true;
+                profile.process_tree_exited = true;
+                profile.login_succeeded = signed_in;
+                logout::persist(&directory, &profile)?;
+            }
+            if signed_in
+                && let Err(error) =
+                    self.complete_native_profile(provider, generation, &snapshot.request)
+            {
+                tracing::warn!(
+                    provider,
+                    generation,
+                    error = %format!("{error:#}"),
+                    "recovered sandboxed login awaits identity reconciliation"
+                );
+            }
         }
         Ok(())
+    }
+
+    /// The daemon's outcome of an abandoned sandboxed login of `generation`:
+    /// `None` while a login unit of it is alive or the daemon cannot answer.
+    /// An account the daemon never created ran no login.
+    async fn account_sandbox_login_outcome(&self, generation: u64) -> Option<bool> {
+        let store = self.clone();
+        let units = tokio::task::spawn_blocking(move || store.account_sandbox_units())
+            .await
+            .ok()?;
+        match units {
+            Ok(units) => (!units.units.iter().any(|unit| {
+                unit.mode == crate::account_sandbox::Mode::Login
+                    && unit.credential_generation == generation
+                    && unit.alive
+            }))
+            .then(|| units.credential.signed_in(generation)),
+            Err(error)
+                if crate::account_sandbox::DaemonError::code_of(&error) == Some("not_found") =>
+            {
+                Some(false)
+            }
+            Err(_) => None,
+        }
     }
 }

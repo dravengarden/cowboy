@@ -547,8 +547,21 @@ R3-4, R3-9, R3-10, R3-13 and R3-16, with these concrete choices:
   data's `cowboy` member; anything else is `unknown_refusal`). A stopped,
   replaced or deleted worker proves nothing: loss settles only on the
   worker/Machine ledger's termination evidence for the turn's original
-  binding (`Env::termination`), and its closed-log class decides between
-  `interrupted`, a refusal and `unknown_refusal`. A `reserved` row no process
+  binding (`Env::termination`, `MachineCommand::QueryAccountTurnTermination`
+  to the turn's runtime Machine), and its closed-log class decides between
+  `interrupted`, a refusal and `unknown_refusal`. The Machine reports the
+  target terminated only when no worker of the turn's epoch runs (a
+  connected worker of another epoch, or no connected worker and a launch
+  journal that is absent or records the tree exit), the session's execution
+  ledger records no process and no account unit of the session survives
+  its worker. Two parts are conservative: the Machine never reports a
+  closed-log class (the turn's log window, the unit's `agy` process, byte
+  cursor and conversation, is known only to the proxy inside the unit), so
+  a proven loss settles `UnitLost` without complete evidence; and a ledger
+  that still records processes is drained only by the next worker of the
+  same binding, because the Controller forwards execution requests only
+  from the session's current worker epoch, so the Machine answers
+  `terminated: false` and the reservation keeps the slot. A `reserved` row no process
   is dispatching settles `not_dispatched`; anything else keeps the slot and,
   after 2 minutes, marks the account `needs_attention`. Settlement is one
   transaction (state, stop fences, release) that compares with the stored
@@ -561,7 +574,11 @@ R3-4, R3-9, R3-10, R3-13 and R3-16, with these concrete choices:
   `stop_account` answers only after it confirmed every unit gone. The
   operation ID is derived from the account, Machine, action and control
   revision, so retries after a lost reply repeat the same request; pending
-  fences are retried while the Machine is connected. The Machines are the
+  fences are retried while the Machine is connected. The request carries
+  that originating revision (recovered from the operation ID, never the
+  current one), and the daemon orders fences by it under the account lock:
+  an older revision, or another operation at the applied one, is its
+  `conflict`, which never confirms the fence. The Machines are the
   account's native generations plus its sessions' runtime Machines.
 - **Kill switch.** `block` (with confirmation) writes `blocked` and the stop
   fences first, then the fences stop and confirm the units; `unblock` writes
@@ -589,8 +606,19 @@ R3-4, R3-9, R3-10, R3-13 and R3-16, with these concrete choices:
   `remove_account` under an operation ID derived from the revocation,
   account and Machine (so every retry repeats the same request), and records
   the receipt only when it answers exactly that request with both removals
-  confirmed. Completion requires a receipt from every such Machine; until a
-  Machine implements the command the removal stays `pending`.
+  confirmed (`MachineCommand::AccountSandboxRemove`). The Machine first sets
+  the daemon's fence with an unrevisioned stop (it stops every unit and only
+  tightens), then calls `remove_account`, which requires the fence and a
+  logged-out credential, records the removal in the fence tombstone and
+  deletes the home, then the user, then the metadata, so a retry after a
+  crash finishes it and a retry after a lost reply is its replay.
+  Completion requires a receipt from every such Machine; an offline Machine
+  or one below protocol 48 keeps the removal `pending`.
+- **Login recovery.** A sandboxed login abandoned by a Machine restart is
+  reconciled against the daemon's record of exactly its generation once no
+  login unit of it is alive: `signed_in` completes it (the Controller's
+  native recovery then admits it), anything else fails it; an unanswered
+  daemon leaves it reserved.
 - **Detection.** `suspended` and a policy violation (`needs_attention`,
   reason `policy_violation:<tool>`) stop the account's units like a block.
 - **Uncertain effects.** The worker ledger counts lost replies

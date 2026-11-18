@@ -123,6 +123,46 @@ pub fn execution_ledger_file(state_dir: &Path, session_id: &str) -> Option<PathB
     })
 }
 
+/// Largest execution ledger file (the worker's `Ledger` writes at most this).
+const MAX_EXECUTION_LEDGER_BYTES: u64 = 256 * 1024;
+
+/// What a session's durable execution ledger still records, read by the
+/// Machine without a worker: the target processes a worker of the session's
+/// binding has not proven gone (including starts whose reply was lost). The
+/// file is written only by the worker's `worker_execution::Ledger`
+/// (schema 1); this read ignores its other fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionLedgerSummary {
+    pub session_id: String,
+    pub processes: Vec<String>,
+}
+
+/// The ledger at `path`; `None` when there is none. Never modifies it.
+pub fn read_execution_ledger(path: &Path) -> Result<Option<ExecutionLedgerSummary>> {
+    #[derive(Deserialize)]
+    struct File {
+        schema: u16,
+        session_id: String,
+        #[serde(default)]
+        processes: std::collections::BTreeMap<String, serde::de::IgnoredAny>,
+    }
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("opening the execution ledger"),
+    };
+    ensure!(
+        file.metadata()?.len() <= MAX_EXECUTION_LEDGER_BYTES,
+        "execution ledger exceeds its size limit"
+    );
+    let ledger: File = serde_json::from_reader(file).context("invalid execution ledger")?;
+    ensure!(ledger.schema == 1, "unsupported execution ledger schema");
+    Ok(Some(ExecutionLedgerSummary {
+        session_id: ledger.session_id,
+        processes: ledger.processes.into_keys().collect(),
+    }))
+}
+
 /// The unit's path of its execution socket (the daemon binds it there).
 pub const UNIT_EXEC_SOCKET: &str = "/run/cowboy-exec.sock";
 
@@ -269,6 +309,21 @@ pub struct LogoutCleanup {
     /// A newer credential generation exists; nothing was removed.
     #[serde(default)]
     pub superseded: bool,
+}
+
+/// The daemon's receipt of `remove_account`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Removed {
+    pub key: String,
+    pub removed: bool,
+    #[serde(default)]
+    pub home_removed: bool,
+    #[serde(default)]
+    pub user_removed: bool,
+    #[serde(default)]
+    pub operation_id: Option<String>,
+    #[serde(default)]
+    pub replayed: bool,
 }
 
 /// The daemon's probe of a registered runtime in its probe identity's unit.
@@ -430,6 +485,20 @@ impl Client {
             "the account sandbox cleaned another credential generation"
         );
         Ok(cleanup)
+    }
+
+    /// Remove the account's persistent home and its system user under the
+    /// caller's idempotent `operation_id`. The daemon requires the account's
+    /// fence and a logged-out credential; an account it has no metadata for
+    /// is confirmed removed.
+    pub fn remove_account(&mut self, key: &str, operation_id: &str) -> Result<Removed> {
+        let removed: Removed =
+            self.call(&json!({"op": "remove_account", "key": key, "operation_id": operation_id}))?;
+        ensure!(
+            removed.key == key && removed.operation_id.as_deref() == Some(operation_id),
+            "the account sandbox removed another account or operation"
+        );
+        Ok(removed)
     }
 
     fn call<T: serde::de::DeserializeOwned>(&mut self, request: &Value) -> Result<T> {

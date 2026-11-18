@@ -34,8 +34,12 @@ mod challenge_proof;
 pub use challenge_proof::{challenge_proof_v1, challenge_proof_v2, challenge_proof_v3};
 
 pub const MACHINE_PROTOCOL_VERSION: u16 = 48;
-/// Controller-owned account-sandbox fences (`AccountSandboxFence`): the kill
-/// switch and suspension stop an account's units through the Machine's daemon.
+/// Controller-owned account-sandbox controls: fences (`AccountSandboxFence`,
+/// the kill switch and suspension stop an account's units through the
+/// Machine's daemon), turn termination evidence
+/// (`QueryAccountTurnTermination`) and the revocation's removal of an
+/// account's home and user (`AccountSandboxRemove`). All three arrived in the
+/// same unreleased protocol 48, so no Machine speaks 48 without them.
 pub const ACCOUNT_FENCE_PROTOCOL_VERSION: u16 = 48;
 /// Named subscription accounts (other than native-only Providers) keep their
 /// credentials in the account's Service vault: Machines sign in at account
@@ -859,6 +863,19 @@ pub enum MachineCommand {
         request_id: String,
         fence: crate::provider_account::AccountFenceRequest,
     },
+    /// Ask a session's runtime Machine whether the execution target of one
+    /// dispatched account turn is proven gone; answered only by
+    /// `AccountTurnTerminationObserved`.
+    QueryAccountTurnTermination {
+        request_id: String,
+        query: crate::provider_account::AccountTurnTerminationQuery,
+    },
+    /// Remove a revoked account's home and system user in this Machine's
+    /// account-sandbox daemon; answered only by `AccountSandboxRemoveObserved`.
+    AccountSandboxRemove {
+        request_id: String,
+        remove: crate::provider_account::AccountRemoveRequest,
+    },
     PrepareNativeBinding {
         request_id: String,
         binding: Box<crate::provider_account::PreparedBinding>,
@@ -1287,6 +1304,22 @@ pub enum MachineEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
     },
+    /// The Machine's evidence for a `QueryAccountTurnTermination`; `None`
+    /// when it could not establish any (the Controller keeps the slot).
+    AccountTurnTerminationObserved {
+        request_id: String,
+        observation: Option<crate::provider_account::TargetTermination>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
+    /// The daemon's receipt of an `AccountSandboxRemove`, or the refusal that
+    /// left it unconfirmed.
+    AccountSandboxRemoveObserved {
+        request_id: String,
+        observation: Option<crate::provider_account::AccountRemoveObservation>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
     NativeBindingPrepared {
         request_id: String,
         binding: Option<Box<crate::provider_account::PreparedBinding>>,
@@ -1574,6 +1607,54 @@ mod tests {
         assert!(matches!(
             observed,
             MachineEvent::AccountSandboxFenceObserved {
+                detail: Some(_),
+                ..
+            }
+        ));
+        let ordered = serde_json::json!({"command":"account_sandbox_fence","request_id":"r",
+            "fence":{"operation_id":"op","provider_id":"antigravity",
+                "account_id":"11111111-1111-4111-8111-111111111111","action":"admit",
+                "revision":7}});
+        let command: MachineCommand = serde_json::from_value(ordered.clone()).unwrap();
+        assert_eq!(serde_json::to_value(command).unwrap(), ordered);
+    }
+
+    #[test]
+    fn account_turn_terminations_and_removals_need_protocol_48() {
+        let account = "11111111-1111-4111-8111-111111111111";
+        for value in [
+            serde_json::json!({"command":"query_account_turn_termination","request_id":"r",
+                "query":{"account_id":account,"provider_id":"antigravity","session_id":"s",
+                    "worker_epoch":"e","delivery_id":"c"}}),
+            serde_json::json!({"command":"account_sandbox_remove","request_id":"r",
+                "remove":{"operation_id":"op","provider_id":"antigravity",
+                    "account_id":account}}),
+        ] {
+            let command: MachineCommand = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(command.minimum_protocol(), ACCOUNT_FENCE_PROTOCOL_VERSION);
+            assert_eq!(serde_json::to_value(command).unwrap(), value);
+        }
+        let observed: MachineEvent = serde_json::from_value(serde_json::json!({
+            "event":"account_turn_termination_observed","request_id":"r",
+            "observation":{"terminated":false}}))
+        .unwrap();
+        assert!(matches!(
+            observed,
+            MachineEvent::AccountTurnTerminationObserved {
+                observation: Some(crate::provider_account::TargetTermination {
+                    terminated: false,
+                    closed_log_class: None,
+                }),
+                ..
+            }
+        ));
+        let removed: MachineEvent = serde_json::from_value(serde_json::json!({
+            "event":"account_sandbox_remove_observed","request_id":"r","observation":null,
+            "detail":"precondition"}))
+        .unwrap();
+        assert!(matches!(
+            removed,
+            MachineEvent::AccountSandboxRemoveObserved {
                 detail: Some(_),
                 ..
             }

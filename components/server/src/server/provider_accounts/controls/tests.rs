@@ -96,6 +96,7 @@ impl Env for Fake {
     fn termination(
         &self,
         turn: &Reservation,
+        _provider: &str,
     ) -> futures::future::BoxFuture<'static, Option<TargetTermination>> {
         let evidence = self.terminations.lock().get(&turn.session_id).cloned();
         Box::pin(std::future::ready(evidence))
@@ -639,6 +640,8 @@ async fn refusals_and_violations_park_the_account_and_stop_its_units() {
         (sent[0].0.as_str(), sent[0].1.action),
         ("ovh", AccountFenceAction::Stop)
     );
+    // The daemon orders fences by the revision that wrote them.
+    assert_eq!(sent[0].1.revision, u64::try_from(suspended.revision).ok());
     parked(controls.before_dispatch("s2", true).await, "suspended");
     // The owner clears it; the units are admitted again.
     controls
@@ -653,10 +656,9 @@ async fn refusals_and_violations_park_the_account_and_stop_its_units() {
         .await
         .unwrap();
     settle(&controls).await;
-    assert_eq!(
-        fake.fences.lock().last().unwrap().1.action,
-        AccountFenceAction::Admit
-    );
+    let admit = fake.fences.lock().last().unwrap().1.clone();
+    assert_eq!(admit.action, AccountFenceAction::Admit);
+    assert_eq!(admit.revision, u64::try_from(suspended.revision + 1).ok());
     // A built-in tool that executed: needs attention and every unit stops.
     let mut turn = controls.before_dispatch("s1", true).await.unwrap().unwrap();
     drop(turn.mark("c3").await.unwrap());

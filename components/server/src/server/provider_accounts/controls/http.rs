@@ -167,8 +167,13 @@ impl Controls {
             .cache
             .turn(&control.account_id)
             .ok_or("no_account_turn")?;
-        let outcome = policy::unit_loss_outcome(self.env.termination(&turn).await.as_ref())
-            .ok_or("turn_termination_unconfirmed")?;
+        let outcome = policy::unit_loss_outcome(
+            self.env
+                .termination(&turn, &control.provider_id)
+                .await
+                .as_ref(),
+        )
+        .ok_or("turn_termination_unconfirmed")?;
         let key = TurnKey {
             session_id: &turn.session_id,
             turn_id: &turn.turn_id,

@@ -15,6 +15,8 @@ pub enum ReplyKind {
     LoginStop,
     WorkerExit,
     AccountFence,
+    AccountTurnTermination,
+    AccountRemove,
     NativeProfile,
     Execution,
     Adapter,
@@ -41,6 +43,10 @@ pub enum Reply {
     WorkerExit(Option<crate::provider_account::WorkerExitObservation>),
     /// The daemon's confirmation, or the Machine's refusal detail.
     AccountFence(Result<crate::provider_account::AccountFenceObservation, String>),
+    /// The Machine's termination evidence, or its detail of why none.
+    AccountTurnTermination(Result<crate::provider_account::TargetTermination, String>),
+    /// The daemon's removal receipt, or the Machine's refusal detail.
+    AccountRemove(Result<crate::provider_account::AccountRemoveObservation, String>),
     NativeProfile(Option<Box<crate::provider_account::NativeProfileReceipt>>),
     Execution(Box<crate::machine_protocol::execution::Response>),
     InstallationTarget(Box<crate::machine_protocol::plugin_install::InstallTargetObservation>),
@@ -77,6 +83,8 @@ impl Reply {
             Self::LoginStop(_) => ReplyKind::LoginStop,
             Self::WorkerExit(_) => ReplyKind::WorkerExit,
             Self::AccountFence(_) => ReplyKind::AccountFence,
+            Self::AccountTurnTermination(_) => ReplyKind::AccountTurnTermination,
+            Self::AccountRemove(_) => ReplyKind::AccountRemove,
             Self::NativeBinding(_) => ReplyKind::NativeBinding,
             Self::Execution(_) => ReplyKind::Execution,
             Self::InstallationTarget(_) => ReplyKind::InstallationTarget,
@@ -118,6 +126,22 @@ impl Reply {
             } => (
                 request_id,
                 Self::AccountFence(observation.ok_or_else(|| detail.unwrap_or_default())),
+            ),
+            MachineEvent::AccountTurnTerminationObserved {
+                request_id,
+                observation,
+                detail,
+            } => (
+                request_id,
+                Self::AccountTurnTermination(observation.ok_or_else(|| detail.unwrap_or_default())),
+            ),
+            MachineEvent::AccountSandboxRemoveObserved {
+                request_id,
+                observation,
+                detail,
+            } => (
+                request_id,
+                Self::AccountRemove(observation.ok_or_else(|| detail.unwrap_or_default())),
             ),
             MachineEvent::LoginStopObserved {
                 request_id,

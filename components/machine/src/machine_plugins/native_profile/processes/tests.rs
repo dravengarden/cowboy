@@ -343,3 +343,98 @@ async fn a_login_abandoned_by_an_exited_owner_is_retired_before_the_next_login()
     assert!(!directory.join("home").exists());
     validate_reservation(&store.native_profile_root("claude-code"), "login-2").unwrap();
 }
+
+/// A fake account-sandbox daemon answering one `list_units` per connection.
+fn daemon_units(
+    socket: &Path,
+    replies: Vec<serde_json::Value>,
+) -> std::thread::JoinHandle<Vec<serde_json::Value>> {
+    use std::io::{BufRead as _, Write as _};
+    let listener = std::os::unix::net::UnixListener::bind(socket).unwrap();
+    std::thread::spawn(move || {
+        let mut requests = Vec::new();
+        for reply in replies {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            std::io::BufReader::new(&stream)
+                .read_line(&mut line)
+                .unwrap();
+            requests.push(serde_json::from_str(&line).unwrap());
+            writeln!(stream, "{reply}").unwrap();
+        }
+        requests
+    })
+}
+
+fn units(state: &str, login_alive: bool) -> serde_json::Value {
+    let login = serde_json::json!({"unit": "cga-k-login-1.service", "mode": "login",
+        "invocation_id": "i", "boot_id": "b", "credential_generation": 1,
+        "session_id": null, "state": "active", "alive": true, "owned": false});
+    serde_json::json!({"ok": true, "result": {
+        "key": "k", "boot_id": "b", "fenced": null,
+        "credential": {"generation": 1, "state": state},
+        "units": if login_alive { vec![login] } else { vec![] },
+        "unrecorded": [],
+    }})
+}
+
+#[tokio::test]
+async fn an_abandoned_sandboxed_login_takes_the_daemon_record_of_its_generation() {
+    let temp = tempfile::tempdir().unwrap();
+    let socket = temp.path().join("control.sock");
+    let account = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+    let store = MachinePluginStore::new(
+        temp.path(),
+        crate::machine_protocol::Platform::Linux,
+        "x86_64".into(),
+    )
+    .unwrap()
+    .for_account(&account)
+    .unwrap();
+    store.set_account_sandbox(socket.clone(), Some("service".into()));
+    let (directory, mut profile) = pending(&store);
+    profile.account_sandbox = true;
+    past_owner(profile.process.as_mut().unwrap());
+    logout::persist(&directory, &profile).unwrap();
+    let server = daemon_units(
+        &socket,
+        vec![units("logging_in", true), units("signed_in", false)],
+    );
+    let recover = || store.recover_abandoned_native_logins("claude-code", "login-2");
+    // Its login unit is still being stopped: the reservation stays.
+    recover().await.unwrap();
+    assert!(
+        !store
+            .read_native_profile_metadata("claude-code", 1)
+            .unwrap()
+            .1
+            .leader_exited
+    );
+    // The daemon recorded the generation signed in: never a failed login.
+    recover().await.unwrap();
+    let (_, recovered) = store
+        .read_native_profile_metadata("claude-code", 1)
+        .unwrap();
+    assert!(recovered.leader_exited && recovered.process_tree_exited);
+    assert!(recovered.login_succeeded);
+    for request in server.join().unwrap() {
+        assert_eq!(request["op"], "list_units");
+    }
+    // An unreachable daemon decides nothing.
+    let (directory, mut profile) = store
+        .read_native_profile_metadata("claude-code", 1)
+        .unwrap();
+    profile.leader_exited = false;
+    profile.process_tree_exited = false;
+    profile.login_succeeded = false;
+    profile.identity = None;
+    logout::persist(&directory, &profile).unwrap();
+    recover().await.unwrap();
+    assert!(
+        !store
+            .read_native_profile_metadata("claude-code", 1)
+            .unwrap()
+            .1
+            .leader_exited
+    );
+}

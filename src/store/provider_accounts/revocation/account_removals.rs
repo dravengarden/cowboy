@@ -15,28 +15,11 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-/// What the Controller asks a Machine's account-sandbox daemon
-/// (`remove_account`): stop every unit of the account, then remove its
-/// persistent home and system user. Idempotent per operation ID.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct RemoveRequest {
-    pub operation_id: String,
-    pub provider_id: String,
-    pub account_id: ProviderAccountId,
-}
-
-/// The daemon's answer to a [`RemoveRequest`]. Only both removals confirmed
-/// count; `false` means the daemon could not establish it.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct RemoveObservation {
-    pub request: RemoveRequest,
-    /// The account's persistent home no longer exists.
-    pub home_removed: bool,
-    /// The account's system user no longer exists.
-    pub user_removed: bool,
-}
+/// The wire request and observation of the Machine's `remove_account`
+/// (`MachineCommand::AccountSandboxRemove`).
+pub use crate::provider_account::{
+    AccountRemoveObservation as RemoveObservation, AccountRemoveRequest as RemoveRequest,
+};
 
 /// One Machine's removal receipt.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

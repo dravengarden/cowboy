@@ -725,6 +725,14 @@ async fn the_ledger_keeps_its_binding_for_a_drain_without_a_worker() {
     assert_eq!(pending.session_id, "session");
     assert_eq!(pending.binding, Some(binding()));
     assert_eq!(pending.processes, ["p1".to_owned()]);
+    // The Machine reads the same file without a worker.
+    let summary = crate::account_sandbox::read_execution_ledger(&path)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (summary.session_id.as_str(), summary.processes),
+        ("session", vec!["p1".to_owned()])
+    );
     // Another binding never inherits (and terminates) these processes.
     let reopened = Ledger::open("session", Some(path.clone())).unwrap();
     let mut other = binding();

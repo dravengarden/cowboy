@@ -297,6 +297,24 @@ fn fence_operations_are_stable_per_request_revision() {
 }
 
 #[test]
+fn a_fence_carries_exactly_the_revision_that_wrote_it() {
+    use crate::provider_account::AccountFenceAction::Stop;
+    let fence = Fence {
+        account_id: "a".into(),
+        machine_id: "ovh".into(),
+        action: Stop,
+        operation_id: fence_operation_id("a", "ovh", Stop, 3),
+        state: FenceState::Pending,
+        detail: String::new(),
+        updated_at_ms: 0,
+    };
+    // Later revisions without a new fence never relabel it.
+    assert_eq!(fence_revision(&fence, 3), Some(3));
+    assert_eq!(fence_revision(&fence, 9), Some(3));
+    assert_eq!(fence_revision(&fence, 2), None);
+}
+
+#[test]
 fn logout_needs_the_kill_switch_and_is_idempotent_per_revision() {
     use AccountState::{Blocked, Ok as Ready, Suspended};
     assert_eq!(owner_transition(OwnerAction::Logout, Blocked), Ok(None));

@@ -121,6 +121,10 @@ impl Controls {
     /// delivery and worker epoch, or proven termination of its execution
     /// target, settles it; anything else waits or asks the owner.
     pub(super) async fn observe(&self, turn: &Reservation, now: i64) -> Observation {
+        let provider = self
+            .cache
+            .control(&turn.account_id)
+            .map_or_else(|| "antigravity".to_owned(), |control| control.provider_id);
         if turn.state == ReservationState::Reserved {
             // Not dispatching in this process: an earlier Controller reserved
             // it and stopped before `may_have_dispatched`.
@@ -153,7 +157,7 @@ impl Controls {
             // original binding settles the turn, and only its closed log
             // decides how.
             if let Some(outcome) =
-                policy::unit_loss_outcome(self.env.termination(turn).await.as_ref())
+                policy::unit_loss_outcome(self.env.termination(turn, &provider).await.as_ref())
             {
                 return Observation::Settle(outcome);
             }
@@ -282,17 +286,25 @@ impl Controls {
         let Ok(account_id) = fence.account_id.parse::<ProviderAccountId>() else {
             return;
         };
-        let provider_id = self
-            .cache
-            .control(&fence.account_id)
-            .map_or_else(|| "antigravity".to_owned(), |control| control.provider_id);
+        let control = self.cache.control(&fence.account_id);
+        // The daemon orders fences by the control revision that wrote them
+        // and refuses an older one (`conflict`): a delayed admit can never
+        // undo a newer confirmed stop.
+        let revision = control
+            .as_ref()
+            .and_then(|control| policy::fence_revision(fence, control.revision));
+        let provider_id =
+            control.map_or_else(|| "antigravity".to_owned(), |control| control.provider_id);
         let request = AccountFenceRequest {
             operation_id: fence.operation_id.clone(),
             provider_id,
             account_id,
             action: fence.action,
+            revision,
         };
         let result = self.env.fence(fence.machine_id.clone(), request).await;
+        // A refusal, including the daemon's `conflict` for a superseded
+        // operation, never confirms the fence; the newer fence replaces it.
         let (confirmed, detail) = match &result {
             Ok(observation) => (
                 true,
