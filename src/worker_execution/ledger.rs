@@ -27,6 +27,41 @@ use serde_json::{Value, json};
 use tokio::sync::watch;
 
 use super::Client;
+use crate::execution_protocol::{self as wire, Command, Outcome, Response};
+
+impl Client {
+    /// Resolve a start whose reply was lost with the keeper's typed outcome
+    /// of its operation, before any read is taken as absence evidence: a
+    /// `missing` operation or the start's own error means no process; any
+    /// other final outcome means the start is settled and reads decide.
+    async fn resolve_start(&self, ledger: &Ledger, process: &str, operation: String) {
+        let mut delay = RETRY_INITIAL;
+        loop {
+            let observed = self
+                .call_queued(Command::Observe {
+                    operation_id: operation.clone(),
+                    wait_ms: wire::MAX_WAIT_MS,
+                })
+                .await;
+            let outcome = match observed {
+                Ok(Ok(Response::Operation { outcome })) => outcome,
+                _ => {
+                    tokio::time::sleep(delay).await;
+                    delay = (delay * 2).min(RETRY_MAX);
+                    continue;
+                }
+            };
+            match outcome {
+                Outcome::Pending => {}
+                Outcome::Missing => return ledger.exited(process),
+                Outcome::Completed { reply } if reply.get("error").is_some() => {
+                    return ledger.exited(process);
+                }
+                _ => return ledger.start_resolved(process),
+            }
+        }
+    }
+}
 
 pub use crate::account_sandbox::EXECUTION_LEDGER_ENV as LEDGER_ENV;
 const SCHEMA: u16 = 1;
@@ -72,6 +107,11 @@ struct Recorded {
     /// Written by a previous worker: every turn of this one waits for it.
     #[serde(default)]
     recovered: bool,
+    /// The keeper operation of a start whose reply was lost. Until the
+    /// keeper resolves it, the start may still be applied, so a read that
+    /// does not know the process is no evidence of its absence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    unresolved_start: Option<String>,
 }
 
 #[derive(Default)]
@@ -206,6 +246,7 @@ impl Ledger {
             Recorded {
                 turn,
                 recovered: false,
+                unresolved_start: None,
             },
         );
         if self.persist(&state).is_err() {
@@ -214,6 +255,36 @@ impl Ledger {
         }
         state.in_flight.insert(process.to_owned());
         Ok(())
+    }
+
+    /// The start of `process` (keeper operation `operation`) lost its reply.
+    fn start_unresolved(&self, process: &str, operation: &str) {
+        let mut state = self.state.lock();
+        if let Some(entry) = state.record.processes.get_mut(process) {
+            entry.unresolved_start = Some(operation.to_owned());
+            if self.persist(&state).is_err() {
+                tracing::error!(%process, "the unresolved process start could not be persisted");
+            }
+        }
+    }
+
+    /// The keeper resolved the start of `process`: from now on the target's
+    /// reads are authoritative for it.
+    fn start_resolved(&self, process: &str) {
+        let mut state = self.state.lock();
+        if let Some(entry) = state.record.processes.get_mut(process) {
+            entry.unresolved_start = None;
+            let _ = self.persist(&state);
+        }
+    }
+
+    fn unresolved_start(&self, process: &str) -> Option<String> {
+        self.state
+            .lock()
+            .record
+            .processes
+            .get(process)
+            .and_then(|entry| entry.unresolved_start.clone())
     }
 
     fn start_settled(&self, process: &str) {
@@ -433,8 +504,13 @@ impl Client {
             .then(|| process_id(&params))
             .flatten();
         let mutation = MUTATIONS.contains(&method.as_str()).then(|| method.clone());
-        let result = self.invoke_classified(method, params).await;
+        let operation = super::new_operation_id();
+        let result = self.invoke_as(operation.clone(), method, params).await;
         if let Some(Some(process)) = &start {
+            if result == Err(true) {
+                // Recorded before the start stops counting as in flight.
+                ledger.start_unresolved(process, &operation);
+            }
             ledger.start_settled(process);
         }
         match result {
@@ -561,6 +637,9 @@ impl Client {
             // Another settlement owns it; wait for its evidence.
             ledger.wait_until(|ledger| !ledger.tracked(&process)).await;
             return;
+        }
+        if let Some(operation) = ledger.unresolved_start(&process) {
+            self.resolve_start(&ledger, &process, operation).await;
         }
         let mut delay = RETRY_INITIAL;
         while ledger.tracked(&process) {

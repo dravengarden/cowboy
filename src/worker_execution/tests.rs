@@ -47,6 +47,8 @@ struct Target {
     client: Arc<Client>,
     log: Arc<Mutex<Vec<String>>>,
     held: Arc<Mutex<Vec<RuntimeRequest>>>,
+    /// The keeper's answer to `Observe`; `Pending` while unset.
+    observed: Arc<Mutex<Option<Response>>>,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -78,8 +80,13 @@ impl Target {
         let client = Client::new("session".into(), "worker".into(), binding(), notify);
         let log = Arc::<Mutex<Vec<String>>>::default();
         let held = Arc::<Mutex<Vec<RuntimeRequest>>>::default();
-        let (relay, relay_log, relay_held) =
-            (Arc::clone(&client), Arc::clone(&log), Arc::clone(&held));
+        let observed = Arc::<Mutex<Option<Response>>>::default();
+        let (relay, relay_log, relay_held, relay_observed) = (
+            Arc::clone(&client),
+            Arc::clone(&log),
+            Arc::clone(&held),
+            Arc::clone(&observed),
+        );
         let task = tokio::spawn(async move {
             while notified.recv().await.is_some() {
                 for frame in relay.frames(false) {
@@ -104,7 +111,18 @@ impl Target {
                                 Reply::Hold => relay_held.lock().push(request),
                             }
                         }
-                        // Event polls and observations stay open.
+                        Command::Observe { operation_id, .. } => {
+                            relay_log.lock().push(format!("observe {operation_id}"));
+                            // Unset: the keeper long-polls and still reports pending.
+                            let response = relay_observed.lock().clone().unwrap_or_else(|| {
+                                std::thread::sleep(Duration::from_millis(20));
+                                Response::Operation {
+                                    outcome: Outcome::Pending,
+                                }
+                            });
+                            answer(&relay, request, response);
+                        }
+                        // Event polls stay open.
                         _ => {}
                     }
                 }
@@ -114,6 +132,7 @@ impl Target {
             client,
             log,
             held,
+            observed,
             task,
         }
     }
@@ -641,4 +660,53 @@ async fn a_closed_socket_neither_aborts_an_admitted_relay_nor_drops_its_outcome(
     fixture.target.release(json!({"result": {}}));
     eventually(|| ledger.uncertain_effect().is_some()).await;
     assert_eq!(ledger.uncertain_effect().as_deref(), Some("fs/writeFile"));
+}
+
+#[tokio::test]
+async fn a_lost_start_is_resolved_by_its_keeper_operation_before_reads_count() {
+    let terminated = Arc::new(Mutex::new(false));
+    let seen = Arc::clone(&terminated);
+    let target = Target::new(Arc::new(move |invocation| {
+        match invocation.method.as_str() {
+            // The start's reply is lost after admission.
+            "process/start" => Reply::Answer(Response::Operation {
+                outcome: Outcome::Unknown,
+            }),
+            "process/terminate" => {
+                *seen.lock() = true;
+                completed(json!({"result": {}}))
+            }
+            // The target does not (yet) know the process.
+            _ => completed(json!({"error": {"code": -32600, "message": "unknown process id"}})),
+        }
+    }));
+    let ledger = ledger(&target.client, None);
+    ledger.begin_turn("turn-1");
+    let reply = target
+        .client
+        .relay(
+            "process/start".into(),
+            json!({"processId": "p1", "argv": ["true"], "cwd": "file:///target"}),
+        )
+        .await;
+    assert_eq!(
+        reply.pointer("/error/data/outcome"),
+        Some(&json!("unknown"))
+    );
+    let settled = target.client.finish_turn("turn-1").unwrap();
+    let settled = tokio::spawn(settled);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Unresolved: a read that does not know the process proves nothing.
+    assert_eq!(ledger.live(), ["p1".to_owned()]);
+    assert!(target.log().iter().any(|line| line.starts_with("observe ")));
+    assert!(!*terminated.lock());
+    // The keeper resolves the operation as never admitted: no process.
+    *target.observed.lock() = Some(Response::Operation {
+        outcome: Outcome::Missing,
+    });
+    tokio::time::timeout(Duration::from_secs(10), settled)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(ledger.live().is_empty());
 }

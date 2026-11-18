@@ -289,14 +289,20 @@ impl Client {
     /// the effect (`true`: lost reply or unknown outcome) or certainly did
     /// not (`false`: refused before admission, or never sent).
     async fn invoke_classified(&self, method: String, params: Value) -> Result<Value, bool> {
+        self.invoke_as(new_operation_id(), method, params).await
+    }
+
+    /// [`Self::invoke_classified`] under the caller's keeper operation id,
+    /// which [`Command::Observe`] resolves later when the reply is lost.
+    async fn invoke_as(
+        &self,
+        operation_id: String,
+        method: String,
+        params: Value,
+    ) -> Result<Value, bool> {
         let started = std::time::Instant::now();
         let invocation = Invocation {
-            // The suffix asks the keeper for the backend's own duration.
-            operation_id: format!(
-                "{:032x}{}",
-                rand::random::<u128>(),
-                crate::execution_protocol::TIMED_SUFFIX
-            ),
+            operation_id,
             method,
             params,
         };
@@ -719,6 +725,16 @@ where
         }
     }
     Ok(())
+}
+
+/// A fresh keeper operation id; the suffix asks the keeper for the backend's
+/// own duration.
+fn new_operation_id() -> String {
+    format!(
+        "{:032x}{}",
+        rand::random::<u128>(),
+        crate::execution_protocol::TIMED_SUFFIX
+    )
 }
 
 fn valid_id(value: &Value) -> bool {
