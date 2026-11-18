@@ -454,6 +454,7 @@ primary phone/desktop product path.
 - [`releases/service-buffer-sync-2026-09-17.md`](releases/service-buffer-sync-2026-09-17.md) — Service-owned synchronization — 2026-09-17
 - [`releases/service-navigation-candidate-2026-09-17.md`](releases/service-navigation-candidate-2026-09-17.md) — Service navigation continuation candidate — 2026-09-17
 - [`releases/session-auto-update-2026-10-01.md`](releases/session-auto-update-2026-10-01.md) — Session automatic updates and cached transcript recovery — 2026-10-01
+- [`releases/sdk-1-17-rollout-2026-11-18.md`](releases/sdk-1-17-rollout-2026-11-18.md) — Plugin SDK 1.17 fleet rollout — 2026-11-18
 - [`releases/sync-budget-outcomes-2026-09-19.md`](releases/sync-budget-outcomes-2026-09-19.md) — Original-operation Budget outcomes — 2026-09-19
 - [`releases/telemetry-2026-09-08.md`](releases/telemetry-2026-09-08.md) — Local-first telemetry and OTel rollout — 2026-09-08
 - [`releases/telemetry-background-policy-2026-09-13.md`](releases/telemetry-background-policy-2026-09-13.md) — Managed background policy implementation: 2026-09-13
