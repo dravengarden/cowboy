@@ -59,9 +59,17 @@ impl Controls {
             Gate::Proceed {
                 clears_rate_limit: true,
             } => {
+                // Only the expired rate limit that authorized this send is
+                // cleared: a newer state (a block) read here is refused, and
+                // one written after this read fails the revision compare in
+                // the store transaction.
                 let control = self
                     .cache
                     .control(meta.provider_account_id.as_str())
+                    .filter(|control| {
+                        control.state == AccountState::RateLimited
+                            && control.until_ms.is_some_and(|until| until <= now_ms())
+                    })
                     .ok_or_else(|| wait("the account's state changed; send again"))?;
                 self.enter(
                     &control,

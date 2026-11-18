@@ -213,6 +213,11 @@ async fn fixture(store: &Store) {
 /// An owner's account of `provider` signed in on `machine` and revoking
 /// under operation `revoke`.
 pub(in crate::server) async fn fixture_for(store: &Store, provider: &str) {
+    fixture_dispatched(store, provider, true).await;
+}
+
+/// The fixture whose sign-in was dispatched, or refused before enqueue.
+pub(in crate::server) async fn fixture_dispatched(store: &Store, provider: &str, dispatched: bool) {
     store.migrate().await.unwrap();
     let MutationResult::Applied(created) = store
         .mutate_provider_accounts(
@@ -256,19 +261,31 @@ pub(in crate::server) async fn fixture_for(store: &Store, provider: &str) {
         )
         .await
         .unwrap();
-    store
-        .with_provider_login_dispatch(
-            "owner",
-            "login",
-            &claim,
-            &DispatchScope {
-                registry_revision: created.registry.revision,
-                recipient_fingerprint: crate::admin::hex_sha256(key.as_bytes()),
-            },
-            || Ok(()),
-        )
-        .await
-        .unwrap();
+    if dispatched {
+        store
+            .with_provider_login_dispatch(
+                "owner",
+                "login",
+                &claim,
+                &DispatchScope {
+                    registry_revision: created.registry.revision,
+                    recipient_fingerprint: crate::admin::hex_sha256(key.as_bytes()),
+                },
+                || Ok(()),
+            )
+            .await
+            .unwrap();
+    } else {
+        store
+            .reject_provider_login(
+                "owner",
+                "login",
+                &claim,
+                crate::store::provider_accounts::logins::DispatchRejection::CleanupRequired,
+            )
+            .await
+            .unwrap();
+    }
     store
         .mutate_provider_accounts(
             "owner",

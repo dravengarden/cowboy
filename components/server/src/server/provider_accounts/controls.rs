@@ -49,6 +49,8 @@ pub(in crate::server) trait Env: Send + Sync + 'static {
     fn machine_connected(&self, machine: &str) -> bool;
     fn admitted(&self, account: &ProviderAccountId) -> bool;
     fn setting(&self, key: &str) -> Option<Value>;
+    /// Publish a setting the caller already wrote durably (in memory only:
+    /// every writer persists first, under the controls' writer lock).
     fn set_setting(&self, key: String, value: Value);
     fn fence(
         &self,
@@ -108,7 +110,7 @@ impl Env for AppEnv {
     }
 
     fn set_setting(&self, key: String, value: Value) {
-        self.0.hub.set_setting(key, value);
+        self.0.hub.load_settings(vec![(key, value)]);
     }
 
     fn fence(
@@ -136,23 +138,31 @@ impl Env for AppEnv {
     > {
         let state = Arc::clone(&self.0);
         Box::pin(async move {
-            let store = state.store.as_ref().ok_or("unavailable")?;
-            let key = store
-                .machine_encryption_public_key(&machine)
-                .await
-                .map_err(|_| "unavailable".to_owned())?
-                .ok_or_else(|| "machine_unavailable".to_owned())?;
-            if crate::admin::hex_sha256(key.as_bytes()) != recipient_fingerprint {
-                return Err("machine_enrollment_changed".to_owned());
-            }
+            // Every refusal before the command is enqueued says so
+            // (`logout::UNSENT`): an unblock may still cancel the target.
+            let unsent = |detail: &str| format!("{}{detail}", logout::UNSENT);
+            let store = state.store.as_ref().ok_or_else(|| unsent("unavailable"))?;
+            // The connection is captured before the enrollment is checked: a
+            // re-enrollment after this point replaces the captured
+            // connection (refused below), and one before it changes the key.
             let (connection, _) = state
                 .machine_control
                 .connection_protocol(&machine)
-                .ok_or_else(|| "machine_offline".to_owned())?;
-            let pending =
-                state
-                    .machine_control
-                    .begin_native_logout(&connection, &machine, &request)?;
+                .ok_or_else(|| unsent("machine_offline"))?;
+            let key = store
+                .machine_encryption_public_key(&machine)
+                .await
+                .map_err(|_| unsent("unavailable"))?
+                .ok_or_else(|| unsent("machine_unavailable"))?;
+            if crate::admin::hex_sha256(key.as_bytes()) != recipient_fingerprint
+                || !state.machine_control.is_current(&connection)
+            {
+                return Err(unsent("machine_enrollment_changed"));
+            }
+            let pending = state
+                .machine_control
+                .begin_native_logout(&connection, &machine, &request)
+                .map_err(|detail| unsent(&detail))?;
             let observation = pending.await?;
             // Evidence from a connection replaced meanwhile (a re-enrolled
             // Machine) is never recorded.
@@ -174,6 +184,9 @@ pub(in crate::server) struct Cache {
     labels: parking_lot::RwLock<HashMap<String, String>>,
     /// Fence operations with a Machine command in flight.
     fencing: parking_lot::Mutex<HashSet<String>>,
+    /// Backend signals of each account observed but not yet committed: the
+    /// account's dispatches and revivals wait for them (fail closed).
+    pending_signals: parking_lot::Mutex<HashMap<String, usize>>,
     /// Serializes this process's control writers (state, admission, logout)
     /// with every dispatch's eligibility check and handoff.
     writes: Arc<tokio::sync::Mutex<()>>,
@@ -203,6 +216,8 @@ impl Cache {
             .collect()
     }
 }
+
+const SIGNAL_PENDING: &str = "a backend signal of this account is being recorded";
 
 fn wait(reason: &str) -> String {
     format!("{}{reason}", super::super::session_maintenance::WAIT_PREFIX)
@@ -288,6 +303,14 @@ pub(in crate::server) fn parked_reason(
     }
 }
 
+/// The final, synchronous recheck of a governed session's dispatch at the
+/// prompt handoff (after any asynchronous recovery since
+/// [`before_dispatch`]): the session's visible wait when it must park now.
+pub(in crate::server) fn handoff_refusal(state: &Arc<AppState>, session: &str) -> Option<String> {
+    let meta = state.hub.session_info(session)?.meta;
+    parked_reason(state, &meta).map(|reason| wait(&reason))
+}
+
 /// Every worker revival of a governed session: admitted and `ok` (a rate
 /// limit after its end counts as resumable).
 pub(in crate::server) fn revival_gate(
@@ -338,6 +361,10 @@ impl Controls {
             // A load that started later already applied a newer snapshot.
             return loaded.map(drop);
         }
+        // A failed load also advances the watermark: no load that started
+        // before it may restore availability, only a later successful one
+        // (it may have missed a write the failed one was meant to see).
+        *applied = started;
         let (controls, fences) = match loaded {
             Ok(loaded) => loaded,
             Err(error) => {
@@ -345,7 +372,6 @@ impl Controls {
                 return Err(error);
             }
         };
-        *applied = started;
         let mut cached = self.cache.controls.write();
         let mut next: HashMap<String, Control> = controls
             .into_iter()
@@ -442,7 +468,19 @@ impl Controls {
             .filter(|(_, sequence)| *sequence > acknowledged)
     }
 
+    /// Whether a backend signal of `account` is still being recorded.
+    fn signal_pending(&self, account: &ProviderAccountId) -> bool {
+        self.cache
+            .pending_signals
+            .lock()
+            .get(account.as_str())
+            .is_some_and(|pending| *pending > 0)
+    }
+
     fn gate(&self, meta: &SessionMeta, explicit: bool) -> Gate {
+        if self.signal_pending(&meta.provider_account_id) {
+            return Gate::Park(SIGNAL_PENDING.into());
+        }
         let control = self.cache.control(meta.provider_account_id.as_str());
         let uncertain = self.uncertain(&meta.id);
         policy::gate(&GateInput {
@@ -477,6 +515,9 @@ impl Controls {
         }
         if !self.cache.loaded.load(Ordering::Acquire) {
             return Err(wait("account controls are loading"));
+        }
+        if self.signal_pending(&meta.provider_account_id) {
+            return Err(wait(SIGNAL_PENDING));
         }
         let control = self.cache.control(meta.provider_account_id.as_str());
         policy::revival_allowed(

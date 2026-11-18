@@ -20,6 +20,8 @@ struct Fake {
     fences: parking_lot::Mutex<Vec<(String, AccountFenceRequest)>>,
     /// Every native logout a Machine received, in order.
     logouts: parking_lot::Mutex<Vec<(String, crate::provider_account::NativeLogoutRequest)>>,
+    /// The next native logout reaches the Machine but its reply is lost.
+    lose_logout_reply: parking_lot::Mutex<bool>,
 }
 
 impl Env for Fake {
@@ -81,11 +83,15 @@ impl Env for Fake {
             .as_ref()
             .is_some_and(|current| *current != recipient_fingerprint)
         {
-            return Box::pin(std::future::ready(Err(
-                "machine_enrollment_changed".to_owned()
-            )));
+            return Box::pin(std::future::ready(Err(format!(
+                "{}machine_enrollment_changed",
+                logout::UNSENT
+            ))));
         }
         self.logouts.lock().push((machine, request.clone()));
+        if std::mem::take(&mut *self.lose_logout_reply.lock()) {
+            return Box::pin(std::future::ready(Err("timeout".to_owned())));
+        }
         Box::pin(async move {
             Ok(crate::provider_account::NativeLogoutObservation {
                 request,
@@ -456,6 +462,29 @@ async fn an_older_refresh_never_reopens_a_blocked_account() {
 }
 
 #[tokio::test]
+async fn an_older_load_cannot_restore_availability_after_a_newer_load_failed() {
+    let (_fake, controls, _root) = fixture().await;
+    let stale = (
+        controls.store.account_controls().await.unwrap(),
+        controls.store.account_fences().await.unwrap(),
+    );
+    let stale_started = controls.cache.loads_started.fetch_add(1, Ordering::AcqRel) + 1;
+    let failed_started = controls.cache.loads_started.fetch_add(1, Ordering::AcqRel) + 1;
+    assert!(
+        controls
+            .apply(failed_started, Err("unavailable".into()))
+            .is_err()
+    );
+    controls.apply(stale_started, Ok(stale)).unwrap();
+    assert!(
+        !controls.cache.loaded.load(Ordering::Acquire),
+        "only a later successful load restores availability"
+    );
+    controls.refresh().await.unwrap();
+    assert!(controls.cache.loaded.load(Ordering::Acquire));
+}
+
+#[tokio::test]
 async fn the_kill_switch_fences_durably_before_any_machine() {
     let (fake, controls, _root) = fixture().await;
     // Machine offline: the block is durable and parks everything at once.
@@ -487,6 +516,42 @@ async fn the_kill_switch_fences_durably_before_any_machine() {
     settle(&controls).await;
     assert!(controls.stop_confirmed(ACCOUNT));
     assert_eq!(control(&controls).await.state, AccountState::Blocked);
+}
+
+#[tokio::test]
+async fn a_machine_that_gains_a_blocked_account_is_fenced_by_the_reconciler() {
+    let (fake, controls, _root) = fixture().await;
+    let current = control(&controls).await;
+    controls
+        .enter(
+            &current,
+            AccountState::Blocked,
+            "owner_block",
+            None,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    // A first sign-in on another Machine raced the block's fence list.
+    let mut late = meta(&fake, "s2");
+    late.id = "s9".into();
+    late.machine_id = "falcon".into();
+    fake.sessions.lock().insert("s9".into(), (late, false));
+    controls.close_stop_fences().await;
+    let fences = controls.store.account_fences().await.unwrap();
+    assert!(fences.iter().any(|fence| fence.machine_id == "falcon"
+        && fence.action == AccountFenceAction::Stop
+        && fence.state == FenceState::Pending));
+    let revision = control(&controls).await.revision;
+    let late = fences
+        .iter()
+        .find(|fence| fence.machine_id == "falcon")
+        .unwrap();
+    assert_eq!(
+        policy::fence_revision(late, revision),
+        u64::try_from(revision).ok()
+    );
 }
 
 #[tokio::test]
@@ -558,6 +623,26 @@ async fn a_failed_machine_lookup_never_writes_an_unfenced_block() {
 }
 
 #[tokio::test]
+async fn an_observed_backend_signal_parks_the_account_until_it_commits() {
+    let (fake, controls, _root) = fixture().await;
+    controls.begin_signal(&meta(&fake, "s1"));
+    parked(controls.before_dispatch("s2", true).await, "backend signal");
+    assert!(controls.revival_gate(&meta(&fake, "s2")).is_err());
+    end(
+        &controls,
+        &fake,
+        "s1",
+        &proxy_error(
+            "antigravity_backend_refusal:suspended",
+            &json!({"antigravity_backend": {"class": "suspended"}}),
+        ),
+    )
+    .await;
+    assert!(controls.cache.pending_signals.lock().is_empty());
+    assert_eq!(control(&controls).await.state, AccountState::Suspended);
+}
+
+#[tokio::test]
 async fn an_uncertain_effect_parks_the_session_until_acknowledged() {
     let (fake, controls, _root) = fixture().await;
     fake.uncertain("s1", 2);
@@ -577,8 +662,8 @@ async fn an_uncertain_effect_parks_the_session_until_acknowledged() {
         controls.acknowledge("s1", 1).await.unwrap_err(),
         "uncertain_effect_changed"
     );
-    let (key, record) = controls.acknowledge("s1", 2).await.unwrap();
-    fake.set_setting(key, record);
+    // Published by the acknowledgement itself, under the writer lock.
+    controls.acknowledge("s1", 2).await.unwrap();
     assert!(controls.parked_reason(&meta(&fake, "s1")).is_none());
     controls.before_dispatch("s1", true).await.unwrap();
     // A newer lost reply parks it again, and acknowledging the older one
@@ -594,6 +679,13 @@ async fn an_uncertain_effect_parks_the_session_until_acknowledged() {
         fake.setting(&uncertain_key("s1")).unwrap()["observed"],
         json!(3)
     );
+    // The observation is durable, not only published.
+    let stored = controls.store.load_settings().await.unwrap();
+    let (_, record) = stored
+        .iter()
+        .find(|(key, _)| *key == uncertain_key("s1"))
+        .unwrap();
+    assert_eq!(record["observed"], json!(3));
 }
 
 #[tokio::test]

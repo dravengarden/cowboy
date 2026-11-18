@@ -173,3 +173,25 @@ async fn other_providers_need_no_sandbox_removal() {
     );
     assert!(fake.asked.lock().is_empty());
 }
+
+#[tokio::test]
+async fn a_sign_in_refused_before_enqueue_needs_no_machine_removal() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::connect("sqlite::memory:", dir.path().join("artifacts"))
+        .await
+        .unwrap();
+    super::super::native::tests::fixture_dispatched(&store, "antigravity", false).await;
+    let fake = Fake::default();
+    let targets = run(&store, &fake, "owner", "revoke").await.unwrap();
+    assert_eq!(targets[0].state, State::Removed);
+    assert!(
+        fake.asked.lock().is_empty(),
+        "nothing is sent to the Machine"
+    );
+    let receipt = store
+        .provider_account_receipt("owner", "revoke")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(missing(&receipt).is_empty());
+}

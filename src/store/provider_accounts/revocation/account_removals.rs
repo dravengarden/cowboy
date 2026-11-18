@@ -123,29 +123,42 @@ impl Store {
             ensure!(evidence.observation.home_removed && evidence.observation.user_removed, "account_removal_unconfirmed");
             // Bound to the enrollment that dispatched a planned sign-in there.
             let mut enrolled = BTreeSet::new();
+            let mut never_dispatched = true;
             for target in receipt.revocation.iter().flat_map(|plan| &plan.logins)
                 .filter(|target| target.machine_id == evidence.machine_id)
             {
                 let login: Option<String> = sqlx::query_scalar("SELECT value FROM provider_login_operations WHERE owner_user_id=$1 AND operation_id=$2")
                     .bind(owner).bind(&target.operation_id).fetch_optional(&mut *tx).await?;
-                if let Some(login) = login.and_then(|value| serde_json::from_str::<super::super::logins::Receipt>(&value).ok()) {
-                    enrolled.extend(login.dispatch_recipient_fingerprint);
+                match login.and_then(|value| serde_json::from_str::<super::super::logins::Receipt>(&value).ok()) {
+                    Some(login) => {
+                        never_dispatched &= login.never_dispatched();
+                        enrolled.extend(login.dispatch_recipient_fingerprint);
+                    }
+                    None => never_dispatched = false,
                 }
             }
-            let key: Option<String> = sqlx::query_scalar(concat!("SELECT encryption_public_key FROM machines WHERE id=$1 AND ", $revoked, " IS NULL"))
-                .bind(&evidence.machine_id).fetch_optional(&mut *tx).await?.flatten();
-            let current = key.map(|key| crate::digest::hex_sha256(key.as_bytes()));
-            ensure!(current.as_ref().is_some_and(|current| enrolled.contains(current))
-                && evidence.recipient_fingerprint == current, "machine_enrollment_changed");
+            // Every planned sign-in there was refused before enqueue: the
+            // daemon never saw the account, so nothing exists to remove and
+            // no enrollment can (or needs to) answer.
+            let proven_absent = never_dispatched && evidence.recipient_fingerprint.is_none();
+            if !proven_absent {
+                let key: Option<String> = sqlx::query_scalar(concat!("SELECT encryption_public_key FROM machines WHERE id=$1 AND ", $revoked, " IS NULL"))
+                    .bind(&evidence.machine_id).fetch_optional(&mut *tx).await?.flatten();
+                let current = key.map(|key| crate::digest::hex_sha256(key.as_bytes()));
+                ensure!(current.as_ref().is_some_and(|current| enrolled.contains(current))
+                    && evidence.recipient_fingerprint == current, "machine_enrollment_changed");
+            }
             let value: String = sqlx::query_scalar("SELECT value FROM provider_account_registries WHERE owner_user_id=$1")
                 .bind(owner).fetch_one(&mut *tx).await?;
             let registry: Registry = serde_json::from_str(&value)?;
             ensure!(registry.accounts.iter().any(|account| account.id == receipt.account_id
                 && account.revoking && !account.enabled), "account_not_revoking");
-            let machine = sqlx::query(concat!("UPDATE machines SET encryption_public_key=encryption_public_key WHERE id=$1 AND ", $revoked, " IS NULL"))
-                .bind(&evidence.machine_id).execute(&mut *tx).await?;
-            ensure!(machine.rows_affected() == 1, "machine_unavailable");
-            ensure!(connection_is_current(), "machine_connection_changed");
+            if !proven_absent {
+                let machine = sqlx::query(concat!("UPDATE machines SET encryption_public_key=encryption_public_key WHERE id=$1 AND ", $revoked, " IS NULL"))
+                    .bind(&evidence.machine_id).execute(&mut *tx).await?;
+                ensure!(machine.rows_affected() == 1, "machine_unavailable");
+                ensure!(connection_is_current(), "machine_connection_changed");
+            }
             receipt.account_removals.insert(evidence.machine_id.clone(), evidence.clone());
             sqlx::query("UPDATE provider_account_operations SET result=$3 WHERE owner_user_id=$1 AND operation_id=$2")
                 .bind(owner).bind(revocation).bind(serde_json::to_string(&receipt)?).execute(&mut *tx).await?;

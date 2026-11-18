@@ -60,32 +60,50 @@ pub(in crate::server) fn turn_end_listener(
         };
         let Some(controls) = of(&state) else { return };
         drop(state);
+        // Registered before this listener returns (before the turn ending
+        // is acknowledged): the account's next dispatch or revival waits
+        // until the signal is committed.
+        controls.begin_signal(&meta);
         tokio::spawn(async move { controls.signal(&meta, &transition).await });
     })
 }
 
 impl Controls {
-    /// Apply one backend signal of `meta`'s account.
+    pub(super) fn begin_signal(&self, meta: &SessionMeta) {
+        *self
+            .cache
+            .pending_signals
+            .lock()
+            .entry(meta.provider_account_id.as_str().to_owned())
+            .or_default() += 1;
+    }
+
+    /// Apply one backend signal of `meta`'s account, registered by
+    /// [`Self::begin_signal`]. A store failure is retried until the signal
+    /// commits; the account stays parked meanwhile.
     pub(super) async fn signal(&self, meta: &SessionMeta, transition: &policy::Transition) {
-        if meta.provider_account_id.is_default() {
-            return;
+        let account = meta.provider_account_id.as_str().to_owned();
+        if !meta.provider_account_id.is_default() {
+            let owner = meta.owner_user_id.clone().unwrap_or_default();
+            while let Err(error) = self
+                .raise(&account, &owner, &meta.provider, transition)
+                .await
+            {
+                tracing::warn!(
+                    account,
+                    session = %meta.id,
+                    error,
+                    "recording an account's backend signal failed; retrying"
+                );
+                tokio::time::sleep(TICK).await;
+            }
         }
-        let owner = meta.owner_user_id.clone().unwrap_or_default();
-        if let Err(error) = self
-            .raise(
-                meta.provider_account_id.as_str(),
-                &owner,
-                &meta.provider,
-                transition,
-            )
-            .await
-        {
-            tracing::warn!(
-                account = %meta.provider_account_id.as_str(),
-                session = %meta.id,
-                error,
-                "recording an account's backend signal failed"
-            );
+        let mut pending = self.cache.pending_signals.lock();
+        if let Some(count) = pending.get_mut(&account) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                pending.remove(&account);
+            }
         }
     }
 
@@ -96,8 +114,59 @@ impl Controls {
             return;
         }
         self.observe_uncertain_effects().await;
+        self.close_stop_fences().await;
         self.run_fences();
         self.run_logouts();
+    }
+
+    /// A stopped account's fence list is computed when its state is
+    /// written; a Machine that gained the account concurrently (a first
+    /// sign-in racing the block) is missing from it. Every pass adds a stop
+    /// fence of the current revision for such a Machine.
+    pub(super) async fn close_stop_fences(&self) {
+        let stopped: Vec<Control> = self
+            .cache
+            .controls
+            .read()
+            .values()
+            .filter(|control| control.state.stops_units())
+            .cloned()
+            .collect();
+        for control in stopped {
+            let Ok(machines) = self.account_machines(&control.account_id).await else {
+                continue;
+            };
+            let fenced: HashSet<String> = self
+                .cache
+                .account_fences(&control.account_id)
+                .into_iter()
+                .map(|fence| fence.machine_id)
+                .collect();
+            let missing: Vec<String> = machines
+                .into_iter()
+                .filter(|machine| !fenced.contains(machine))
+                .collect();
+            if missing.is_empty() {
+                continue;
+            }
+            let _write = self.cache.writes.lock().await;
+            match self
+                .store
+                .add_missing_stop_fences(&control.account_id, &missing, control.revision, now_ms())
+                .await
+            {
+                Ok(0) => {}
+                Ok(_) => {
+                    tracing::warn!(
+                        account = %control.account_id,
+                        machines = ?missing,
+                        "stop fence added for a Machine that gained a stopped account"
+                    );
+                    let _ = self.refresh().await;
+                }
+                Err(error) => tracing::warn!(%error, "adding a missing stop fence failed"),
+            }
+        }
     }
 
     /// Record each governed session's newest uncertain effect durably, so a
@@ -125,6 +194,12 @@ impl Controls {
             record["observed"] = json!(sequence);
             record["method"] = json!(effect.method);
             record["observed_at_ms"] = json!(now_ms());
+            // Durable, then published, both under the writer lock the
+            // acknowledgement holds: the record only ever moves forward.
+            if let Err(error) = self.store.put_setting(&key, &record).await {
+                tracing::warn!(session = %meta.id, %error, "recording an uncertain effect failed");
+                continue;
+            }
             self.env.set_setting(key, record);
         }
     }

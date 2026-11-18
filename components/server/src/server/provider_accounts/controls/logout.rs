@@ -40,6 +40,11 @@ pub(in crate::server) struct Target {
     /// The request may have reached the Machine: never cancel it then.
     #[serde(default)]
     pub dispatched: bool,
+    /// The operation of an earlier block's logout of this generation that
+    /// may have reached the Machine (its reply lost): retried as is, since
+    /// the Machine refuses another operation for the generation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
     #[serde(default)]
     pub credential_cleared: Option<bool>,
     #[serde(default)]
@@ -62,6 +67,9 @@ impl Recording {
         }
     }
 }
+
+/// The prefix of a native logout failure that proves nothing was enqueued.
+pub(in crate::server) const UNSENT: &str = "unsent: ";
 
 pub(in crate::server) fn logout_key(account: &str) -> String {
     format!(
@@ -114,20 +122,45 @@ impl Controls {
             .await
             .map_err(|_| "unavailable")?;
         let now = now_ms();
+        let previous = self.logout_record(account);
         let targets = found
             .into_iter()
-            .map(|target| Target {
-                machine_id: target.machine_id,
-                login_operation: target.login_operation,
-                login_request_id: target.login_request_id,
-                generation: target.generation,
-                recipient_fingerprint: target.recipient_fingerprint,
-                state: LogoutTargetState::Pending,
-                dispatched: false,
-                credential_cleared: None,
-                history_retained: None,
-                detail: None,
-                updated_at_ms: now,
+            .map(|target| {
+                // A logout of the same generation an earlier block may have
+                // delivered keeps its operation until its receipt arrives.
+                let carried = previous.as_ref().and_then(|previous| {
+                    previous
+                        .targets
+                        .iter()
+                        .find(|old| {
+                            old.machine_id == target.machine_id
+                                && old.generation == target.generation
+                                && old.dispatched
+                                && matches!(
+                                    old.state,
+                                    LogoutTargetState::Pending | LogoutTargetState::Unconfirmed
+                                )
+                        })
+                        .map(|old| {
+                            old.operation_id
+                                .clone()
+                                .unwrap_or_else(|| previous.operation_id.clone())
+                        })
+                });
+                Target {
+                    machine_id: target.machine_id,
+                    login_operation: target.login_operation,
+                    login_request_id: target.login_request_id,
+                    generation: target.generation,
+                    recipient_fingerprint: target.recipient_fingerprint,
+                    state: LogoutTargetState::Pending,
+                    dispatched: carried.is_some(),
+                    operation_id: carried,
+                    credential_cleared: None,
+                    history_retained: None,
+                    detail: None,
+                    updated_at_ms: now,
+                }
             })
             .collect();
         let record = Record {
@@ -263,8 +296,12 @@ impl Controls {
                 if target.state != LogoutTargetState::Pending || target.dispatched {
                     return;
                 }
+                // Exactly the block that requested it: a blocked account's
+                // revision does not move, so a later revision means it was
+                // unblocked meanwhile (even if that unblock's cancellation
+                // was interrupted).
                 let current = controls.cache.control(account).is_some_and(|control| {
-                    control.state == AccountState::Blocked && control.revision >= record.revision
+                    control.state == AccountState::Blocked && control.revision == record.revision
                 });
                 if current {
                     target.dispatched = true;
@@ -288,7 +325,10 @@ impl Controls {
             provider_id: record.provider_id.clone(),
             generation: target.generation,
             login_request_id: target.login_request_id.clone(),
-            operation_id: operation.to_owned(),
+            operation_id: target
+                .operation_id
+                .clone()
+                .unwrap_or_else(|| operation.to_owned()),
         };
         let observation = match self
             .env
@@ -302,7 +342,13 @@ impl Controls {
             Ok(observation) => observation,
             Err(detail) => {
                 tracing::warn!(account, machine, %detail, "account logout unconfirmed; retrying");
+                // Refused before anything was enqueued: the Machine was never
+                // asked, so an unblock may still cancel it.
+                let unsent = detail.starts_with(UNSENT);
                 self.update_logout_target(account, operation, machine, |_, _, target| {
+                    if unsent && target.operation_id.is_none() {
+                        target.dispatched = false;
+                    }
                     target.detail = Some(detail);
                 })
                 .await;
@@ -349,7 +395,10 @@ impl Controls {
             ));
         }
         let completion = Completion {
-            revocation_operation: record.operation_id.clone(),
+            revocation_operation: target
+                .operation_id
+                .clone()
+                .unwrap_or_else(|| record.operation_id.clone()),
             machine_id: target.machine_id.clone(),
             recipient_fingerprint: target.recipient_fingerprint.clone(),
             observation: observation.clone(),

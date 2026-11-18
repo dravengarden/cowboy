@@ -109,8 +109,21 @@ pub(super) async fn run(
         }
         let request = account_removals::request(&receipt, operation, &machine)
             .context("account_removal_scope_mismatch")?;
-        let (state, detail) =
-            remove_one(store, remover, owner, operation, &machine, &request).await;
+        let (dispatched, never_dispatched) =
+            dispatch_enrollments(store, owner, &receipt, &machine).await?;
+        let (state, detail) = if never_dispatched {
+            // No planned sign-in reached the Machine: nothing exists there.
+            record_absent(store, owner, operation, &machine, &request).await
+        } else {
+            remove_one(
+                store,
+                remover,
+                (owner, operation, &machine),
+                &request,
+                &dispatched,
+            )
+            .await
+        };
         targets.push(Target {
             machine,
             state,
@@ -120,13 +133,71 @@ pub(super) async fn run(
     Ok(targets)
 }
 
-async fn remove_one(
+/// The enrollments that dispatched a planned sign-in of the account on
+/// `machine`, and whether every planned sign-in there was refused before
+/// enqueue (a proven `never_dispatched`; an unknown outcome is not).
+async fn dispatch_enrollments(
     store: &Store,
-    remover: &dyn Remover,
+    owner: &str,
+    receipt: &crate::store::provider_accounts::Receipt,
+    machine: &str,
+) -> Result<(std::collections::BTreeSet<String>, bool)> {
+    let mut dispatched = std::collections::BTreeSet::new();
+    let mut never = true;
+    for target in receipt
+        .revocation
+        .iter()
+        .flat_map(|plan| &plan.logins)
+        .filter(|target| target.machine_id == machine)
+    {
+        match store
+            .provider_login_receipt(owner, &target.operation_id)
+            .await?
+        {
+            Some(login) => {
+                never &= login.never_dispatched();
+                dispatched.extend(login.dispatch_recipient_fingerprint);
+            }
+            None => never = false,
+        }
+    }
+    Ok((dispatched, never))
+}
+
+/// Record that nothing of the account exists on `machine` (no planned
+/// sign-in was ever dispatched there); the store re-verifies it.
+async fn record_absent(
+    store: &Store,
     owner: &str,
     operation: &str,
     machine: &str,
     request: &RemoveRequest,
+) -> (State, Option<String>) {
+    let evidence = Evidence {
+        machine_id: machine.to_owned(),
+        observation: RemoveObservation {
+            request: request.clone(),
+            home_removed: true,
+            user_removed: true,
+        },
+        observed_at_ms: crate::usage::now_ms(),
+        recipient_fingerprint: None,
+    };
+    match store
+        .record_provider_account_removal(owner, operation, &evidence, || true)
+        .await
+    {
+        Ok(_) => (State::Removed, None),
+        Err(error) => (State::Pending, Some(error.to_string())),
+    }
+}
+
+async fn remove_one(
+    store: &Store,
+    remover: &dyn Remover,
+    (owner, operation, machine): (&str, &str, &str),
+    request: &RemoveRequest,
+    dispatched: &std::collections::BTreeSet<String>,
 ) -> (State, Option<String>) {
     let Some(current) = remover.connection(machine) else {
         return (State::Pending, Some("machine_offline".into()));
@@ -134,6 +205,11 @@ async fn remove_one(
     let Some(enrollment) = remover.enrollment(machine).await else {
         return (State::Pending, Some("machine_unavailable".into()));
     };
+    // The destructive request goes only to an enrollment that dispatched a
+    // planned sign-in there; the receipt writer verifies it again.
+    if !dispatched.contains(&enrollment) || !current() {
+        return (State::Pending, Some("machine_enrollment_changed".into()));
+    }
     let observation = match tokio::time::timeout(
         std::time::Duration::from_secs(20),
         remover.remove(machine, request),

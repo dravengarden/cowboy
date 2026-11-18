@@ -153,6 +153,22 @@ impl Store {
     pub async fn account_native_machines(&self, account_id: &str) -> Result<Vec<String>> {
         dispatch!(self, account_native_machines(account_id))
     }
+
+    /// Queue a pending stop fence of control `revision` on each of
+    /// `machines` that has no fence of the account yet (a Machine that
+    /// gained the account after its stop was written); the number added.
+    pub async fn add_missing_stop_fences(
+        &self,
+        account_id: &str,
+        machines: &[String],
+        revision: i64,
+        now_ms: i64,
+    ) -> Result<u64> {
+        dispatch!(
+            self,
+            add_missing_stop_fences(account_id, machines, revision, now_ms)
+        )
+    }
 }
 
 macro_rules! implementation {
@@ -364,6 +380,35 @@ macro_rules! implementation {
                 .await
                 .context("UPDATE account fence")?;
                 Ok(result.rows_affected() == 1)
+            }
+
+            pub(super) async fn add_missing_stop_fences(
+                &self,
+                account_id: &str,
+                machines: &[String],
+                revision: i64,
+                now_ms: i64,
+            ) -> Result<u64> {
+                let mut added = 0;
+                for machine in machines {
+                    let action = AccountFenceAction::Stop;
+                    let result = sqlx::query(
+                        "INSERT INTO provider_account_fences(account_id, machine_id, action, \
+                         operation_id, state, detail, updated_at_ms) \
+                         VALUES ($1, $2, $3, $4, 'pending', '', $5) \
+                         ON CONFLICT(account_id, machine_id) DO NOTHING",
+                    )
+                    .bind(account_id)
+                    .bind(machine)
+                    .bind(action_name(action))
+                    .bind(fence_operation_id(account_id, machine, action, revision))
+                    .bind(now_ms)
+                    .execute(&self.pool)
+                    .await
+                    .context("INSERT missing account fence")?;
+                    added += result.rows_affected();
+                }
+                Ok(added)
             }
 
             pub(super) async fn account_native_machines(&self, account_id: &str) -> Result<Vec<String>> {

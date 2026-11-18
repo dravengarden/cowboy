@@ -291,7 +291,101 @@ async fn a_re_enrolled_machine_never_certifies_a_logout() {
     assert!(fake.logouts.lock().is_empty());
     let value = controls.logout_value(account.as_str());
     assert_eq!(value["state"], "pending");
-    assert_eq!(value["targets"][0]["detail"], "machine_enrollment_changed");
+    assert_eq!(
+        value["targets"][0]["detail"],
+        format!("{}machine_enrollment_changed", logout::UNSENT)
+    );
+    // Refused before enqueue: never dispatched, so an unblock cancels it.
+    let record = controls.logout_record(account.as_str()).unwrap();
+    assert!(!record.targets[0].dispatched);
+    let blocked = controls.cache.control(account.as_str()).unwrap();
+    controls
+        .enter(
+            &blocked,
+            AccountState::Ok,
+            "owner_unblock",
+            None,
+            Some(blocked.revision),
+            false,
+        )
+        .await
+        .unwrap();
+    let record = controls.logout_record(account.as_str()).unwrap();
+    assert_eq!(record.targets[0].state, LogoutTargetState::Cancelled);
+}
+
+#[tokio::test]
+async fn a_later_block_retries_a_logout_whose_reply_was_lost_under_its_operation() {
+    let (fake, controls, _root) = fixture().await;
+    let (account, _) = signed_in(&controls.store).await;
+    let ok = initial(account.as_str(), OWNER, "claude-code");
+    let blocked = controls
+        .enter(&ok, AccountState::Blocked, "owner_block", None, None, false)
+        .await
+        .unwrap();
+    fake.connected.lock().insert(MACHINE.into());
+    controls.run_fences();
+    settle(&controls).await;
+    *fake.lose_logout_reply.lock() = true;
+    controls
+        .request_logout(&blocked, OWNER, true)
+        .await
+        .unwrap();
+    settle_logouts(&controls).await;
+    let first = controls.logout_record(account.as_str()).unwrap();
+    assert!(first.targets[0].dispatched);
+    // Unblock (the dispatched target is kept) and block again.
+    let blocked = controls.cache.control(account.as_str()).unwrap();
+    controls
+        .enter(
+            &blocked,
+            AccountState::Ok,
+            "owner_unblock",
+            None,
+            Some(blocked.revision),
+            false,
+        )
+        .await
+        .unwrap();
+    let unblocked = controls.cache.control(account.as_str()).unwrap();
+    let reblocked = controls
+        .enter(
+            &unblocked,
+            AccountState::Blocked,
+            "owner_block",
+            None,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    controls.run_fences();
+    settle(&controls).await;
+    fake.connected.lock().clear();
+    controls
+        .request_logout(&reblocked, OWNER, true)
+        .await
+        .unwrap();
+    let second = controls.logout_record(account.as_str()).unwrap();
+    assert_ne!(second.operation_id, first.operation_id);
+    assert_eq!(
+        second.targets[0].operation_id.as_deref(),
+        Some(first.operation_id.as_str())
+    );
+    fake.connected.lock().insert(MACHINE.into());
+    controls.tick().await;
+    settle_logouts(&controls).await;
+    let logouts = fake.logouts.lock().clone();
+    assert_eq!(logouts.len(), 2);
+    assert!(
+        logouts
+            .iter()
+            .all(|(_, request)| request.operation_id == first.operation_id)
+    );
+    assert_eq!(
+        controls.logout_value(account.as_str())["state"],
+        "signed_out"
+    );
 }
 
 #[tokio::test]

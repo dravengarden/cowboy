@@ -226,6 +226,20 @@ pub(in crate::server) async fn start_operation(
                 .map_err(|_| "outcome_unknown")?;
             return observation(state, owner, &receipt).await;
         }
+        // The kill switch is checked again once this sign-in's generation is
+        // durable: a block written before this point is seen here, and one
+        // written later fences this Machine (its native generation now
+        // exists; the reconciler adds a fence a concurrent block missed).
+        if super::super::named_only_admitted(state, &executor.provider_id, &input.account_id)
+            .await
+            .is_err()
+        {
+            let receipt = store
+                .reject_provider_login(owner, operation, &claim, DispatchRejection::CleanupRequired)
+                .await
+                .map_err(|_| "outcome_unknown")?;
+            return observation(state, owner, &receipt).await;
+        }
         let (revision, recipient) = if let Some(login) = &executor.native_login {
             (login.registry_revision, &login.recipient_key)
         } else if let Some(login) = &executor.named_login {

@@ -1245,6 +1245,13 @@ async fn dispatch_admitted(state: Arc<AppState>, req: DispatchReq) {
         hub.clear_in_flight(&session_id);
         return;
     };
+    // The account gate ran before the asynchronous recovery above; an
+    // uncertain effect, signal or block that arrived meanwhile parks the
+    // prompt here, with nothing awaited between this check and the send.
+    if let Some(wait) = provider_accounts::controls::handoff_refusal(&state, &session_id) {
+        retain_failed_dispatch(hub, session_id, text, content, cmid, &wait);
+        return;
+    }
     let title = first_prompt_title(&text, &content);
     let trace = observability.dispatch_trace(&session_id, cmid.as_deref());
     let sent = supervisor.send_traced_after_execution_recovery(

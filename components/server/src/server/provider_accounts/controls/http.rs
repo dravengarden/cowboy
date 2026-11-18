@@ -177,6 +177,8 @@ impl Controls {
             .put_setting(&key, &record)
             .await
             .map_err(|_| "outcome_unknown")?;
+        // Published under the same lock as every observation of the record.
+        self.env.set_setting(key.clone(), record.clone());
         Ok((key, record))
     }
 }
@@ -260,12 +262,11 @@ pub(in crate::server) async fn acknowledge(
     session: &str,
     sequence: u64,
 ) -> Result<Value, &'static str> {
-    let (key, record) = of(state)
+    of(state)
         .ok_or("unavailable")?
         .acknowledge(session, sequence)
         .await?;
-    // Durable above; publish it, then let the parked queue drain.
-    state.hub.load_settings(vec![(key, record)]);
+    // Durable and published above; let the parked queue drain.
     state.hub.retry_resource_wait(session);
     Ok(json!({"status":"committed","session_id":session,"acknowledged":sequence}))
 }
