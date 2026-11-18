@@ -161,7 +161,7 @@ async fn an_unobservable_survivor_keeps_its_record_capacity_fence_and_admission(
     let (account, instance_id, purpose, viewport) = open_tab(&fixture, "inst-2");
     let refused = fixture
         .manager
-        .open("o1", account, instance_id, purpose, viewport)
+        .open("o1", account, instance_id, purpose, viewport, None)
         .await;
     assert_eq!(refused.reason, Some(Reason::Busy));
     assert_eq!(fixture.manager.starts.counts(), (0, 0));
@@ -190,7 +190,7 @@ async fn an_open_is_refused_while_a_unit_of_the_same_name_is_unconfirmed() {
     let (account, instance_id, purpose, viewport) = open_tab(&fixture, "inst-9");
     let refused = fixture
         .manager
-        .open("o1", account, instance_id, purpose, viewport)
+        .open("o1", account, instance_id, purpose, viewport, None)
         .await;
     assert_eq!(refused.reason, Some(Reason::Busy));
 }

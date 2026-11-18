@@ -179,6 +179,7 @@ mod tests {
             limits: tight,
             launcher: Path::new("/launcher"),
             arguments: Vec::new(),
+            ipv4_only: false,
         };
         let arguments: Vec<String> = unit::systemd_run_arguments(&launch)
             .into_iter()

@@ -165,7 +165,7 @@ async fn the_inventory_fence_holds_every_account_until_the_whole_inventory_is_ac
     );
     let refused = fixture
         .manager
-        .open("o1", account, instance_id, purpose, viewport)
+        .open("o1", account, instance_id, purpose, viewport, None)
         .await;
     assert_eq!(refused.reason, Some(Reason::Busy));
     let query = fixture.manager.query("q1", &other);

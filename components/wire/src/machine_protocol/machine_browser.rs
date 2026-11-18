@@ -76,6 +76,17 @@ pub enum Purpose {
     Tab,
 }
 
+/// The network policy of the account's Provider the browser unit enforces
+/// (R3-15). Absent for every other account; a Machine that does not know a
+/// policy refuses the open (`deny_unknown_fields`), so it never runs the
+/// browser of an IPv4-only Provider unrestricted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserNetwork {
+    /// Only IPv4, Unix and netlink sockets; no `io_uring`.
+    Ipv4OnlyV1,
+}
+
 /// Exact instance identity. Every mutation names the incarnation it expects
 /// so a delayed command for a replaced instance is a recorded no-op.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +105,8 @@ pub enum Command {
         instance_id: String,
         purpose: Purpose,
         viewport: Viewport,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        network: Option<BrowserNetwork>,
     },
     Attach {
         instance: InstanceRef,
@@ -159,6 +172,7 @@ impl Command {
                 instance_id,
                 purpose,
                 viewport,
+                ..
             } => {
                 ensure!(!account_id.is_default(), "browser requires a named account");
                 validate_id(instance_id, "browser instance id")?;
@@ -438,6 +452,32 @@ mod tests {
     }
 
     #[test]
+    fn an_open_names_a_network_policy_only_when_set() {
+        let open = |network| Command::Open {
+            account_id: account(),
+            instance_id: "inst-1".to_owned(),
+            purpose: Purpose::Tab,
+            viewport: Viewport {
+                width: 1280,
+                height: 800,
+                scale: 1,
+            },
+            network,
+        };
+        assert!(
+            serde_json::to_value(open(None))
+                .unwrap()
+                .get("network")
+                .is_none()
+        );
+        let ipv4 = open(Some(BrowserNetwork::Ipv4OnlyV1));
+        ipv4.validate().unwrap();
+        let value = serde_json::to_value(&ipv4).unwrap();
+        assert_eq!(value["network"], "ipv4_only_v1");
+        assert_eq!(serde_json::from_value::<Command>(value).unwrap(), ipv4);
+    }
+
+    #[test]
     fn commands_bound_geometry_identity_and_urls() {
         let open = Command::Open {
             account_id: account(),
@@ -450,6 +490,7 @@ mod tests {
                 height: 1688,
                 scale: 2,
             },
+            network: None,
         };
         open.validate().unwrap();
         let huge = Command::Resize {
@@ -468,6 +509,7 @@ mod tests {
                 height: 800,
                 scale: 3,
             },
+            network: None,
         };
         assert!(scale.validate().is_err());
         let default_account = Command::Reset {

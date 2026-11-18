@@ -385,6 +385,7 @@ async fn a_retired_sign_in_open_is_refused_and_touches_no_instance() {
             "inst-1".into(),
             sign_in(),
             viewport,
+            None,
         )
         .await;
     assert_eq!(refused.state, State::Hibernated);
@@ -404,7 +405,14 @@ async fn a_retired_sign_in_open_is_refused_and_touches_no_instance() {
     let other: ProviderAccountId = uuid::Uuid::new_v4().to_string().try_into().unwrap();
     let refused = fixture
         .manager
-        .open("o2", other.clone(), "inst-2".into(), sign_in(), viewport)
+        .open(
+            "o2",
+            other.clone(),
+            "inst-2".into(),
+            sign_in(),
+            viewport,
+            None,
+        )
         .await;
     assert_eq!(refused.reason, Some(Reason::NotAvailable));
     assert!(fixture.manager.slot(&other).instance.lock().is_none());

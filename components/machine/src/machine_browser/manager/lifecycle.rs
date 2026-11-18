@@ -11,6 +11,7 @@ impl BrowserManager {
         instance_id: String,
         purpose: Purpose,
         viewport: Viewport,
+        network: Option<BrowserNetwork>,
     ) -> StateEvent {
         let hibernated =
             |reason: Reason| hibernated_event(request_id, &account_id, &instance_id, reason, None);
@@ -96,7 +97,7 @@ impl BrowserManager {
                 &account_id,
                 &instance_id,
                 incarnation,
-                viewport,
+                (viewport, network),
                 deadline_ms,
                 capacity.with_memory(budget),
             )
@@ -230,7 +231,7 @@ impl BrowserManager {
         account_id: &ProviderAccountId,
         instance_id: &str,
         incarnation: u64,
-        viewport: Viewport,
+        (viewport, network): (Viewport, Option<BrowserNetwork>),
         deadline_ms: i64,
         // The instance slot, holding the admitted memory budget.
         capacity: CapacityGuard,
@@ -263,6 +264,7 @@ impl BrowserManager {
             ),
             launcher: &plan.launcher,
             arguments,
+            ipv4_only: network == Some(BrowserNetwork::Ipv4OnlyV1),
         };
         let mut cgroup_dir = None;
         let mut invocation_id = None;

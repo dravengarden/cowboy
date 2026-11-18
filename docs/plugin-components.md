@@ -111,7 +111,7 @@ further error rule classifies. Every
 other Plugin pins the SDKs and advances one patch version without behavior
 changes: claude-code 3.20.47, claude-deepseek 3.1.65, codex 3.6.5,
 codex-deepseek 3.1.65, deepseek-harness 1.0.23, github 0.2.14, grok 3.2.4,
-machine-browser 1.0.10, matrix 1.0.12, review 1.0.15 and zed 1.39.9.
+machine-browser 1.0.11, matrix 1.0.12, review 1.0.15 and zed 1.39.9.
 
 Component release 3.114.0 records provider-runtime 1.3.1, whose lock moves
 native Codex (`openai-codex`) to 0.169.1 for both `codex` and

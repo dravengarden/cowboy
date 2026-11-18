@@ -27,8 +27,8 @@ use crate::launch_ledger::{Admission, FLOOR_BYTES, LEDGER, Ledger};
 use crate::machine_plugins::{MachineBrowserRuntimePlan, MachinePluginStore};
 use crate::machine_protocol::MachineEvent;
 use crate::machine_protocol::machine_browser::{
-    Capability, Command, Event, Geometry, InstanceRef, LEASE_EXPIRY_MS, Purpose, Reason, State,
-    StateEvent, Viewport,
+    BrowserNetwork, Capability, Command, Event, Geometry, InstanceRef, LEASE_EXPIRY_MS, Purpose,
+    Reason, State, StateEvent, Viewport,
 };
 use crate::provider_account::ProviderAccountId;
 
@@ -650,9 +650,17 @@ impl BrowserManager {
                 instance_id,
                 purpose,
                 viewport,
+                network,
             } => Some(
-                self.open(&request_id, account_id, instance_id, purpose, viewport)
-                    .await,
+                self.open(
+                    &request_id,
+                    account_id,
+                    instance_id,
+                    purpose,
+                    viewport,
+                    network,
+                )
+                .await,
             ),
             Command::Attach {
                 instance,

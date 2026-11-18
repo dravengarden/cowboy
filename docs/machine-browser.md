@@ -368,7 +368,7 @@ nothing is configurable from outside beyond the argument vector.
    `AudioCaptureAllowed=false`, `VideoCaptureAllowed=false`,
    `RestoreOnStartup=5`. The browser starts on Chromium's own new-tab page,
    whose `NTPShortcuts` tiles are the sign-in pages: Claude, ChatGPT · Codex,
-   Grok, DeepSeek and Google sign-in. Shortcuts are browser UI only; no page
+   Grok, DeepSeek, Antigravity and Google sign-in. Shortcuts are browser UI only; no page
    can read them, and opening one is an ordinary typed-address navigation.
    With the built-in resolver off, Chromium resolves
    names through the artifact's glibc, which the scaffolded `resolv.conf`
@@ -1147,8 +1147,8 @@ whose browser it displays and the Machine it runs on.
 
 - **Sign-in pages live in the browser.** The panel offers no quick links:
   the browser starts on Chromium's own new-tab page, whose policy
-  `NTPShortcuts` tiles are Claude, ChatGPT · Codex, Grok, DeepSeek and Google
-  sign-in (see "Managed policy"). The navigate command still accepts an
+  `NTPShortcuts` tiles are Claude, ChatGPT · Codex, Grok, DeepSeek,
+  Antigravity and Google sign-in (see "Managed policy"). The navigate command still accepts an
   `attachment_id`: the Machine checks it under the control lock a takeover
   holds while installing its attachment, so a navigation fenced to one
   viewer never reaches a replacement viewer's page.
@@ -1622,6 +1622,19 @@ explicit `deny` rules refuse far more than written, see the Columbus
 `/home/**`, the Machine state root and any write to the cgroup tree with
 audit logging, and denies `ptrace` and `signal` toward anything outside its
 own instance.
+
+**IPv4-only Providers (R3-15).** The Controller's `Open` carries
+`network: "ipv4_only_v1"` for an account whose Provider, as installed on that
+Machine, declares the `ipv4_only_v1` runtime network policy (a named-only
+Provider whose manifest cannot be resolved is restricted too). The Machine
+then adds `RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK`,
+`SystemCallArchitectures=native` and
+`SystemCallFilter=~io_uring_setup io_uring_enter io_uring_register` to the
+instance's unit; other accounts' units are unchanged. A Machine that predates
+the field refuses such an `Open` (`deny_unknown_fields`) rather than run the
+browser unrestricted. The matching AppArmor rule (an `ipv4_only` variant of
+the sealed profile with `deny network inet6`) is host policy in Columbus
+`machines/ovh/apparmor` and is a separate host change.
 
 The Machine checks that the host's AppArmor exposes the features these
 profiles rely on (`/sys/kernel/security/apparmor/features`: network

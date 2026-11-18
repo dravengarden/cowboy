@@ -20,6 +20,7 @@ use serde_json::{Value, json};
 pub(in crate::server) mod coordinator;
 pub(in crate::server) mod legacy;
 pub(in crate::server) mod machine_stream;
+mod network;
 pub(in crate::server) mod revocation;
 pub(in crate::server) mod shares;
 pub(in crate::server) mod viewer;
@@ -744,6 +745,7 @@ async fn dispatch_open(
                 instance_id: instance,
                 purpose,
                 viewport,
+                network: network::policy(state, resolved, machine_id).await,
             },
             OPEN_TIMEOUT,
         )

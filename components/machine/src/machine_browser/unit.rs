@@ -108,7 +108,19 @@ pub struct Launch<'a> {
     pub limits: Limits,
     pub launcher: &'a Path,
     pub arguments: Vec<OsString>,
+    /// The account's Provider declares `ipv4_only_v1` (R3-15): the browser
+    /// may open only IPv4, Unix and netlink sockets, and never `io_uring`
+    /// (whose operations bypass the socket-family filter).
+    pub ipv4_only: bool,
 }
+
+/// The unit properties of an `ipv4_only_v1` account's browser. The
+/// host's AppArmor sealed profile additionally denies `inet6`.
+pub const IPV4_ONLY_PROPERTIES: [&str; 3] = [
+    "--property=RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK",
+    "--property=SystemCallArchitectures=native",
+    "--property=SystemCallFilter=~io_uring_setup io_uring_enter io_uring_register",
+];
 
 /// The `systemd-run` argument vector for `launch`, without the program name.
 #[must_use]
@@ -142,11 +154,14 @@ pub fn systemd_run_arguments(launch: &Launch<'_>) -> Vec<OsString> {
         // A unit starts from the user manager's environment; the launcher
         // clears it for every child, and needs nothing from it itself.
         "--property=UnsetEnvironment=HOME USER LOGNAME SHELL PATH".to_owned(),
-        "--".to_owned(),
     ]
     .into_iter()
     .map(OsString::from)
     .collect();
+    if launch.ipv4_only {
+        arguments.extend(IPV4_ONLY_PROPERTIES.map(OsString::from));
+    }
+    arguments.push(OsString::from("--"));
     arguments.push(launch.launcher.as_os_str().to_owned());
     arguments.extend(launch.arguments.iter().cloned());
     arguments
@@ -712,6 +727,7 @@ mod tests {
             },
             launcher: Path::new("/state/plugins/x/usr/libexec/cowboy-browser-launcher"),
             arguments: vec!["run".into(), "--display".into(), ":7".into()],
+            ipv4_only: false,
         };
         let arguments: Vec<String> = systemd_run_arguments(&launch)
             .into_iter()
@@ -752,5 +768,50 @@ mod tests {
             "cowboy-browser/inst-1"
         );
         assert!(runtime_directory("inst-1").ends_with("cowboy-browser/inst-1"));
+        // Every other account's unit carries no network restriction.
+        for property in IPV4_ONLY_PROPERTIES {
+            assert!(!arguments.iter().any(|argument| argument == property));
+        }
+    }
+
+    #[test]
+    fn an_ipv4_only_account_browser_cannot_open_ipv6_or_io_uring() {
+        let launch = Launch {
+            unit: "cowboy-browser-inst-1",
+            instance_id: "inst-1",
+            limits: Limits {
+                memory_max: 2 << 30,
+                memory_high: 1536 << 20,
+                cpu_quota_percent: 200,
+                tasks_max: 512,
+                max_runtime: Duration::from_secs(1800),
+            },
+            launcher: Path::new("/launcher"),
+            arguments: vec!["run".into()],
+            ipv4_only: true,
+        };
+        let arguments: Vec<String> = systemd_run_arguments(&launch)
+            .into_iter()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+        let separator = arguments
+            .iter()
+            .position(|argument| argument == "--")
+            .unwrap();
+        for expected in [
+            "--property=RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK",
+            "--property=SystemCallArchitectures=native",
+            "--property=SystemCallFilter=~io_uring_setup io_uring_enter io_uring_register",
+        ] {
+            let at = arguments.iter().position(|argument| argument == expected);
+            // A unit property, never a launcher argument.
+            assert!(at.is_some_and(|at| at < separator), "{expected}");
+        }
+        assert!(
+            !arguments
+                .iter()
+                .any(|argument| argument.contains("AF_INET6"))
+        );
+        assert_eq!(&arguments[separator + 1..], ["/launcher", "run"]);
     }
 }
