@@ -235,9 +235,19 @@ impl MachinePluginStore {
                 && crate::provider_account::named_only(&request.provider_id),
             "account removal applies only to named accounts of account-sandbox Providers"
         );
-        if self.account_sandbox.get().is_none() {
-            // No account sandbox was ever configured here, so none of the
-            // account exists (a historical sign-in ran unsandboxed).
+        if self
+            .account_sandbox
+            .get()
+            .is_none_or(|host| !host.socket.exists())
+            && !self
+                .for_account(&request.account_id)?
+                .has_sandboxed_native_profile(&request.provider_id)?
+        {
+            // No daemon is installed here (its socket is absent) and no
+            // native profile of the account was ever sandboxed, so none of
+            // the account exists (a historical sign-in ran unsandboxed). An
+            // installed daemon that does not answer keeps the removal
+            // pending.
             return Ok(crate::provider_account::AccountRemoveObservation {
                 request: request.clone(),
                 home_removed: true,
@@ -568,6 +578,32 @@ mod tests {
         let mut codex = request;
         codex.provider_id = "codex".into();
         assert!(store.account_sandbox_remove(&codex).is_err());
+    }
+
+    #[test]
+    fn a_machine_without_the_daemon_confirms_removal_only_without_sandboxed_profiles() {
+        let root = tempfile::tempdir().unwrap();
+        let store = store(root.path());
+        // Production always configures the socket path, installed or not.
+        store.set_account_sandbox(root.path().join("absent.sock"), Some("service".into()));
+        let account: crate::provider_account::ProviderAccountId =
+            uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let request = crate::provider_account::AccountRemoveRequest {
+            operation_id: "revoke-op".into(),
+            provider_id: "antigravity".into(),
+            account_id: account.clone(),
+        };
+        let removed = store.account_sandbox_remove(&request).unwrap();
+        assert!(removed.home_removed && removed.user_removed);
+        // An unreadable profile may be sandboxed: the removal stays pending.
+        let scoped = store.for_account(&account).unwrap();
+        std::fs::create_dir_all(
+            scoped
+                .native_profile_root("antigravity")
+                .join("generations/1"),
+        )
+        .unwrap();
+        assert!(store.account_sandbox_remove(&request).is_err());
     }
 
     #[test]

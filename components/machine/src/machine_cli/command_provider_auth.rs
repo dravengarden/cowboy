@@ -129,25 +129,18 @@ pub(super) fn handle(
             account_id,
             generation,
             login_request_id,
-        } => {
-            let profile = (protocol >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION)
-                .then(|| {
-                    providers
-                        .observe_native_profile(
-                            &account_id,
-                            &provider,
-                            generation,
-                            &login_request_id,
-                        )
-                        .ok()
-                })
-                .flatten()
-                .map(Box::new);
-            let _ = events.send(MachineEvent::NativeProfileObserved {
+        } => observe_native_profile(
+            protocol,
+            events,
+            providers,
+            (
                 request_id,
-                profile,
-            });
-        }
+                provider,
+                account_id,
+                generation,
+                login_request_id,
+            ),
+        ),
         MachineCommand::CollectNativeUsage {
             request_id,
             profile,
@@ -213,6 +206,47 @@ fn named_auth_refusal(
         )
         .is_err())
     .then_some("Named Provider account runtime admission is not available")
+}
+
+/// Answer `QueryNativeProfile`: a login interrupted by a Machine crash (for a
+/// sandboxed one, finished by the daemon) is recovered before it is
+/// observed, not only when another login starts. A live owner is never
+/// touched.
+fn observe_native_profile(
+    protocol: u16,
+    events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+    providers: Arc<MachinePluginStore>,
+    (request_id, provider, account_id, generation, login_request_id): (
+        String,
+        String,
+        crate::provider_account::ProviderAccountId,
+        u64,
+        String,
+    ),
+) {
+    tokio::spawn(async move {
+        if protocol < crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION {
+            let _ = events.send(MachineEvent::NativeProfileObserved {
+                request_id,
+                profile: None,
+            });
+            return;
+        }
+        if let Err(error) = providers
+            .recover_abandoned_native_logins(&provider, &login_request_id)
+            .await
+        {
+            tracing::warn!(%provider, generation, error = %format!("{error:#}"), "native login recovery before observation failed");
+        }
+        let profile = providers
+            .observe_native_profile(&account_id, &provider, generation, &login_request_id)
+            .ok()
+            .map(Box::new);
+        let _ = events.send(MachineEvent::NativeProfileObserved {
+            request_id,
+            profile,
+        });
+    });
 }
 
 #[cfg(test)]

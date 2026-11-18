@@ -201,6 +201,7 @@ impl MachinePluginStore {
             result => result?,
         };
         let mut abandoned = Vec::new();
+        let mut uncompleted = Vec::new();
         {
             let _guard = self.auth_candidates.lock();
             for entry in generations {
@@ -220,7 +221,28 @@ impl MachinePluginStore {
                     && profile.process.is_some()
                 {
                     abandoned.push((generation, profile));
+                } else if profile.account_sandbox
+                    && !profile.revoked
+                    && profile.leader_exited
+                    && profile.process_tree_exited
+                    && profile.login_succeeded
+                    && profile.identity.is_none()
+                    && profile.logout.is_none()
+                {
+                    // A crash after the daemon's signed-in outcome was saved
+                    // but before the identity was: finish it.
+                    uncompleted.push((generation, profile.request));
                 }
+            }
+        }
+        for (generation, login) in uncompleted {
+            if let Err(error) = self.complete_native_profile(provider, generation, &login) {
+                tracing::warn!(
+                    provider,
+                    generation,
+                    error = %format!("{error:#}"),
+                    "recovered sandboxed login awaits identity reconciliation"
+                );
             }
         }
         for (generation, snapshot) in abandoned {

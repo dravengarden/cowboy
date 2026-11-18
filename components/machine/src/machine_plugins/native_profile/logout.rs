@@ -123,8 +123,10 @@ impl MachinePluginStore {
         })))
     }
 
-    /// The Provider generation digest of an account-sandboxed profile whose
-    /// logout outcome is still unknown; `None` otherwise.
+    /// The Provider generation digest of an account-sandboxed profile with a
+    /// recorded logout (pending or finished): a pending one is reconciled
+    /// with the daemon, a successful one replays the daemon's idempotent
+    /// cleanup receipt. `None` otherwise.
     pub fn native_logout_sandbox_digest(
         &self,
         provider: &str,
@@ -132,12 +134,7 @@ impl MachinePluginStore {
     ) -> Result<Option<String>> {
         let _guard = self.auth_candidates.lock();
         let (_, profile) = self.read_native_profile_for_cleanup(provider, generation)?;
-        Ok((profile.account_sandbox
-            && profile
-                .logout
-                .as_ref()
-                .is_some_and(|record| record.succeeded.is_none()))
-        .then(|| profile.digest.clone()))
+        Ok((profile.account_sandbox && profile.logout.is_some()).then(|| profile.digest.clone()))
     }
 
     pub fn record_native_logout_exit(

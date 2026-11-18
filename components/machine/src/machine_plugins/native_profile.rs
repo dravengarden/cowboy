@@ -222,8 +222,31 @@ impl MachinePluginStore {
         Ok(directories)
     }
 
-    fn native_profile_root(&self, provider: &str) -> PathBuf {
+    pub(super) fn native_profile_root(&self, provider: &str) -> PathBuf {
         self.auth_provider_root(provider).join("native")
+    }
+
+    /// Whether any native profile of this account and `provider` was
+    /// reserved for the account sandbox: durable evidence that the daemon
+    /// may hold the account. An unreadable profile counts as sandboxed.
+    pub(crate) fn has_sandboxed_native_profile(&self, provider: &str) -> Result<bool> {
+        validate_plugin_id(provider)?;
+        let generations = match fs::read_dir(self.native_profile_root(provider).join("generations"))
+        {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            result => result?,
+        };
+        for entry in generations {
+            let name = entry?.file_name().to_string_lossy().into_owned();
+            let Ok(generation) = name.parse::<u64>() else {
+                continue;
+            };
+            match self.read_native_profile_for_cleanup(provider, generation) {
+                Ok((_, profile)) if !profile.account_sandbox => {}
+                _ => return Ok(true),
+            }
+        }
+        Ok(false)
     }
 
     /// Reserve a fresh native home exactly once. An existing operation, even
