@@ -83,6 +83,14 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.114.0 records provider-runtime 1.3.1, whose lock moves
+native Codex (`openai-codex`) to 0.169.1 for both `codex` and
+`codex-deepseek`. Every Provider that pins provider-runtime advances one patch
+version: antigravity 0.1.1, claude-code 3.20.46, claude-deepseek 3.1.64,
+codex 3.6.4, codex-deepseek 3.1.64, deepseek-harness 1.0.22 and grok 3.2.3.
+Only the two Codex Providers change behavior; see
+[the release record](releases/codex-0169-2026-11-18.md).
+
 Component release 3.113.0 records provider-sdk 3.5.0, plugin-sdk 1.18.0,
 provider-ui 3.6.0, provider-authoring 1.0.17 and provider-runtime 1.3.0, and
 adds the `antigravity` Provider 0.1.0 (Linux x86_64 only). Runtime contracts

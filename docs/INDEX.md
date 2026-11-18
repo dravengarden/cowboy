@@ -99,6 +99,7 @@ primary phone/desktop product path.
 - [`releases/agent-runtimes-2026-11-10.md`](releases/agent-runtimes-2026-11-10.md) — Claude Code 2.1.321 (Fable 5.2) with ACP 0.102.0, idle compaction kept off; component release 3.107.0
 - [`releases/agent-runtimes-2026-11-17.md`](releases/agent-runtimes-2026-11-17.md) — Claude Code 2.1.326 with ACP 0.107.3 (v1 path, owner-only cycle naming), Grok 1.0.77, dsh 0.2.2-rc.1; component release 3.109.0, installed on all four Machines
 - [`releases/machine-browser-1.0.7-2026-11-17.md`](releases/machine-browser-1.0.7-2026-11-17.md) — machine-browser 1.0.7 drops Chrome 157 Optimization Guide models (profile 53 → 6.5 MB) and the OVH Machine host update to SDK 1.16.0
+- [`releases/codex-0169-2026-11-18.md`](releases/codex-0169-2026-11-18.md) — Native Codex 0.169.1 (GPT-6.2) ahead of ACP 2.7.0 through the `native-codex-version` delta; component release 3.114.0 and 6.2 Recommended presets
 - [`releases/codex-runtime-2026-11-17.md`](releases/codex-runtime-2026-11-17.md) — Codex 0.166.0 with ACP 2.7.0, rebased adapter patch, 0.169.0 retained until ACP declares it, and Codex remote acceptance
 - [`releases/credential-probe-backoff-2026-10-31.md`](releases/credential-probe-backoff-2026-10-31.md) — failed credential probe backoff, usage after re-login, Ultra badge; Claude Code 3.20.22 and component release 3.73.0
 - [`releases/gemini-retirement-2026-10-30.md`](releases/gemini-retirement-2026-10-30.md) — Gemini retired from source, component release 3.72.0 and its fleet rollout

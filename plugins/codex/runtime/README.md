@@ -44,6 +44,9 @@ The shared runtime component remains unchanged. This Provider owns the changes
 - (`managed-read-only-profile`, `native-image-profile`) The managed read-only
   and image profiles; see [native capabilities](../../../docs/managed-native-capabilities.md).
 - (`configured-mcp-startup-wait`) The MCP startup wait below.
+- (`native-codex-version`) The adapter declares the native Codex release this
+  Provider packages (`@openai/codex ^0.169.1`) ahead of upstream's
+  `^0.166.0`, so upstream's suites run against it; see the 2026-11-18 audit.
 
 ## Authentication default
 
@@ -121,6 +124,35 @@ ACP cannot express them without changing their meaning:
 The launcher and the bridge each list the native servers once, from the same
 arguments; a configuration change between those two reads can only make the
 wait miss a server or end at its timeout.
+
+## Dependency audit (2026-11-18)
+
+Native Codex moves to `0.169.1` ahead of ACP. `0.169.1` is the first release
+whose bundled model catalog carries `gpt-6.2-sol` and `gpt-6.2-astra`; it
+lists `gpt-6.1-sol` and `gpt-6-astra` as the previous generation. ACP `2.7.0`
+is still the latest stable release, and its newest preview
+(`v2.7.1-preview.2`) still declares `@openai/codex ^0.166.0`, so the
+`native-codex-version` delta declares `^0.169.1` until an upstream release
+does. The ACP pin is unchanged.
+
+- The app-server TypeScript schema of `0.169.1` (`generate-ts
+  --experimental`) removes no type, field or string literal of `0.169.0`'s,
+  which in turn only added to the `0.166.0` schema ACP 2.7 was generated from.
+  The only new required fields in a client-to-server or server-request type
+  belong to a new MCP elicitation mode, `openai/userVerification`. ACP routes
+  no such mode to ACP elicitation or its permission fallback, so it is not
+  presented; Cowboy configures no MCP server that sends it.
+- The offline MCP startup probe reports the same `thread/start` sequence on
+  `0.166.0`, `0.169.0` and `0.169.1`.
+- Type checks and all 2,548 enabled upstream tests pass with the series (39
+  remain skipped upstream). The new delta's test pins the declaration, the
+  lockfile and the installed package.
+
+Recommended presets follow the new generation: Sol 6.2 Medium (the new
+default and new-session default), Astra Medium and Astra Max on
+`gpt-6.2-astra` (their IDs, used by managed calls, are unchanged), Sol 6.2 Max
+and the unchanged Luna 6 Max. See
+[the release record](../../../docs/releases/codex-0169-2026-11-18.md).
 
 ## Dependency audit (2026-11-17)
 
