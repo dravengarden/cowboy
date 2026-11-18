@@ -75,10 +75,12 @@ pub(super) fn prepare(state: &AppState, session_id: &str) {
 ///
 /// Sources, without starting anything: the snapshots of sessions with a live
 /// worker on the same exact generation, Machine, owner, account and login
-/// (the native model list depends on the login); only when there is none,
-/// and the snapshot lacks the generation's signed default model and so
-/// predates it, the generation's signed preset models. An upgrade that keeps
-/// its default model therefore shows new models once one session runs it.
+/// (the native model list depends on the login). Only when there is none, the
+/// generation's signed preset models, if the snapshot is known to come from
+/// another generation, or, when its producer is unknown (after a Controller
+/// restart), if it lacks the generation's signed default model and so
+/// predates it. A snapshot this Controller saw the pinned generation report
+/// needs nothing.
 fn carry_model_choices(state: &AppState, session_id: &str, snapshot: &Value) {
     let Some(info) = state.hub.session_info(session_id) else {
         return;
@@ -91,47 +93,28 @@ fn carry_model_choices(state: &AppState, session_id: &str, snapshot: &Value) {
     if model_ids.is_empty() {
         return;
     }
+    let reported_by_current = state.hub.config_reported_by_current(&meta);
     let mut choices = BTreeMap::<String, Vec<Value>>::new();
-    let mut live_peer = false;
-    for peer in state.hub.session_list() {
-        // A live worker's snapshot is its own; a dormant or starting peer may
-        // still hold an earlier generation's.
-        if peer.id == meta.id
-            || !matches!(
-                peer.status,
-                crate::core::Status::Running | crate::core::Status::Busy
-            )
-            || is_managed(&peer)
-            || peer.provider != meta.provider
-            || peer.provider_account_id != meta.provider_account_id
-            || peer.provider_auth_generation != meta.provider_auth_generation
-            || peer.provider_version != meta.provider_version
-            || peer.provider_generation_digest != meta.provider_generation_digest
-            || peer.machine_id != meta.machine_id
-            || peer.owner_user_id != meta.owner_user_id
-        {
-            continue;
+    if reported_by_current == Some(true) {
+        // Nothing to add; still replace an earlier lookup below.
+    } else if let Some(peers) = state.hub.live_config_peers(&meta) {
+        for options in &peers {
+            collect_model_choices(options, &model_ids, &mut choices);
         }
-        if let Some(options) = state.hub.persisted_config_options(&peer.id) {
-            live_peer = true;
-            collect_model_choices(&options, &model_ids, &mut choices);
-        }
-    }
-    if !live_peer
-        && let Some(package) = state.provider_catalog.package(
-            &meta.provider,
-            &meta.provider_version,
-            &meta.provider_generation_digest,
-        )
-        && let Some(behavior) = meta.provider_behavior.as_ref()
+    } else if let Some(package) = state.provider_catalog.package(
+        &meta.provider,
+        &meta.provider_version,
+        &meta.provider_generation_digest,
+    ) && let Some(behavior) = meta.provider_behavior.as_ref()
     {
-        let predates = model_ids.iter().any(|id| {
-            behavior
-                .default_preferences
-                .get(id)
-                .and_then(|value| serde_json::to_value(value).ok())
-                .is_some_and(|default| !offers(snapshot, id, &default))
-        });
+        let predates = reported_by_current == Some(false)
+            || model_ids.iter().any(|id| {
+                behavior
+                    .default_preferences
+                    .get(id)
+                    .and_then(|value| serde_json::to_value(value).ok())
+                    .is_some_and(|default| !offers(snapshot, id, &default))
+            });
         if predates {
             for preset in &package.manifest.configuration.presets {
                 for id in &model_ids {
@@ -151,9 +134,9 @@ fn carry_model_choices(state: &AppState, session_id: &str, snapshot: &Value) {
             }
         }
     }
-    if !choices.is_empty() {
-        state.hub.set_dormant_config_choices(&meta, choices);
-    }
+    state
+        .hub
+        .set_dormant_config_choices(&meta, snapshot, choices);
 }
 
 fn is_managed(meta: &SessionMeta) -> bool {
@@ -162,12 +145,18 @@ fn is_managed(meta: &SessionMeta) -> bool {
         .is_some_and(|binding| binding.managed().is_some())
 }
 
+/// The Web picker's rule: the `model` category, or the legacy `model` id
+/// when the agent reports no category.
+fn is_model_option(option: &Value) -> bool {
+    option["category"] == "model" || (option["category"].is_null() && option["id"] == "model")
+}
+
 fn model_option_ids(options: &Value) -> Vec<String> {
     options
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|option| option["category"] == "model")
+        .filter(|option| is_model_option(option))
         .filter_map(|option| option["id"].as_str().map(str::to_owned))
         .collect()
 }
@@ -188,6 +177,9 @@ fn collect_model_choices(
     additions: &mut BTreeMap<String, Vec<Value>>,
 ) {
     for option in options.as_array().into_iter().flatten() {
+        if !is_model_option(option) {
+            continue;
+        }
         let Some(id) = option["id"]
             .as_str()
             .filter(|id| ids.iter().any(|known| known == id))

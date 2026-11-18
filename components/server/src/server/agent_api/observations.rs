@@ -112,6 +112,8 @@ pub(super) async fn read(
                     .ok_or("not_found")?;
                 let value = match scope {
                     "session" => {
+                        // The same preparation as opening the session in a client.
+                        super::super::session_configuration::prepare(state, id);
                         json!({"session_id":id,"provider":info.meta.provider,"version":info.meta.provider_version,
                         "options":state.hub.config_options(id),"preferences":state.hub.config_preferences(id)})
                     }

@@ -416,7 +416,16 @@ fn dormant_choices_are_display_only_and_end_with_the_next_agent_snapshot() {
          "options": [{"group": "Profiles", "options": [{"value": "ask", "name": "Ask"}]}]},
     ]);
     hub.set_config_options("dormant", reported.clone());
-    let meta = hub.session_info("dormant").unwrap().meta;
+    let repin = |hub: &Hub, digest: &str| {
+        hub.inner
+            .sessions
+            .lock()
+            .get_mut("dormant")
+            .unwrap()
+            .meta
+            .provider_generation_digest = digest.to_owned();
+        hub.session_info("dormant").unwrap().meta
+    };
     let choices = || -> std::collections::BTreeMap<String, Vec<serde_json::Value>> {
         [
             (
@@ -445,14 +454,24 @@ fn dormant_choices_are_display_only_and_end_with_the_next_agent_snapshot() {
     // A session with a worker reports its own options.
     hub.set_status("dormant", Status::Running, None);
     let live = hub.session_info("dormant").unwrap().meta;
-    assert!(!hub.set_dormant_config_choices(&live, choices()));
+    assert!(!hub.set_dormant_config_choices(&live, &reported, choices()));
 
     hub.set_status("dormant", Status::Exited, None);
+    // The pinned generation reported this snapshot: nothing to add.
+    let current = hub.session_info("dormant").unwrap().meta;
+    assert_eq!(hub.config_reported_by_current(&current), Some(true));
+    assert!(!hub.set_dormant_config_choices(&current, &reported, choices()));
+
+    // Moved to another generation while exited.
+    let meta = repin(&hub, "sha256:next");
+    assert_eq!(hub.config_reported_by_current(&meta), Some(false));
     let mut moved = meta.clone();
     moved.provider_generation_digest = "sha256:other".to_owned();
-    assert!(!hub.set_dormant_config_choices(&moved, choices()));
+    assert!(!hub.set_dormant_config_choices(&moved, &reported, choices()));
+    // Choices derived from a snapshot a worker has since replaced.
+    assert!(!hub.set_dormant_config_choices(&meta, &serde_json::json!([]), choices()));
 
-    assert!(hub.set_dormant_config_choices(&meta, choices()));
+    assert!(hub.set_dormant_config_choices(&meta, &reported, choices()));
     assert_eq!(shown(&hub), ["gpt-6.1-sol", "gpt-6.2-sol"]);
     // Never persisted, so never replayed as an agent capability.
     assert_eq!(hub.persisted_config_options("dormant").unwrap(), reported);
@@ -464,7 +483,11 @@ fn dormant_choices_are_display_only_and_end_with_the_next_agent_snapshot() {
             .len(),
         1
     );
-    assert!(!hub.set_dormant_config_choices(&meta, choices()));
+    assert!(!hub.set_dormant_config_choices(&meta, &reported, choices()));
+    // An empty lookup replaces the previous one.
+    assert!(hub.set_dormant_config_choices(&meta, &reported, Default::default()));
+    assert_eq!(shown(&hub), ["gpt-6.1-sol"]);
+    assert!(hub.set_dormant_config_choices(&meta, &reported, choices()));
 
     // Selecting one is an ordinary preference; the stored snapshot keeps only
     // what the agent reported, with the selection as its current value.

@@ -771,7 +771,7 @@ fn option_choices(state: &AppState, agent: &str) -> serde_json::Value {
                     .as_ref()
                     .is_none_or(|b| b.managed_child().is_none())
         })
-        .find_map(|meta| state.hub.config_options(&meta.id))
+        .find_map(|meta| state.hub.reported_config_options(&meta.id))
         .and_then(|value| value.as_array().cloned())
         .unwrap_or_default();
     let mut preset_values: std::collections::BTreeMap<String, Vec<String>> = Default::default();
