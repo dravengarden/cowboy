@@ -180,6 +180,60 @@ fn client_entry_points_cannot_prompt_a_managed_child() {
 }
 
 #[test]
+fn a_managed_prompt_queued_before_a_restart_waits_for_the_runner_release() {
+    let hub = Hub::new();
+    hub.create_session(child("child"));
+    hub.set_status("child", Status::Running, None);
+    hub.submit_managed_prompt("child", "call-1", "review".into());
+    let released = hub.managed_turn("child", 0).unwrap();
+    assert!(released.prompted && !released.held);
+    assert_eq!(
+        hub.drain_decision_for("child", false, false),
+        Some(super::hub_queue::DrainDecision::Dispatch)
+    );
+    // A new Controller process has no release for a persisted queue entry.
+    hub.forget_managed_release("call-1");
+    let held = hub.managed_turn("child", 0).unwrap();
+    assert!(held.prompted && held.held);
+    assert_ne!(
+        hub.drain_decision_for("child", false, false),
+        Some(super::hub_queue::DrainDecision::Dispatch)
+    );
+    hub.release_managed_prompt("child", "call-1");
+    assert!(!hub.managed_turn("child", 0).unwrap().held);
+    assert_eq!(
+        hub.drain_decision_for("child", false, false),
+        Some(super::hub_queue::DrainDecision::Dispatch)
+    );
+    hub.forget_managed_release("call-1");
+    hub.discard_managed_prompt("child", "call-1");
+    let discarded = hub.managed_turn("child", 0).unwrap();
+    assert!(!discarded.prompted && !discarded.held);
+}
+
+#[test]
+fn a_dormant_managed_child_is_never_re_pinned() {
+    let hub = Hub::new();
+    hub.create_session(child("child"));
+    hub.set_agent_session_id("child", "native-thread".to_owned());
+    hub.set_status("child", Status::Exited, None);
+    let before = hub.session_info("child").unwrap().meta;
+    let behavior = crate::provider::legacy_behavior("codex");
+    for missing in [false, true] {
+        let refused = if missing {
+            hub.note_provider_generation_missing("child");
+            hub.repin_missing_provider(&before, "9.9.9", "newer", &behavior)
+        } else {
+            hub.repin_dormant_provider(&before, "9.9.9", "newer", &behavior, None)
+        };
+        assert!(refused.unwrap_err().contains("managed child"));
+        let after = hub.session_info("child").unwrap().meta;
+        assert_eq!(after.provider_version, "3.4.0");
+        assert_eq!(after.provider_generation_digest, "generation");
+    }
+}
+
+#[test]
 fn managed_turn_returns_the_final_message_after_its_last_tool_update() {
     let hub = Hub::new();
     hub.create_session(child("child"));

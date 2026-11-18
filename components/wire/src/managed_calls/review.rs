@@ -106,8 +106,10 @@ pub fn identity(
     {
         return None;
     }
+    // Schema 2: results admitted before reviews were bound to a signed
+    // reviewer preset on the executed generation never match a new request.
     Some(super::canonical_digest(&json!({
-        "schema":1,
+        "schema":2,
         "task":request.labels.get(TASK),
         "base":request.labels.get(BASE),
         "placement":record.placement,

@@ -309,6 +309,19 @@ impl Hub {
             if session.in_flight || !workerless {
                 return Err("session is no longer dormant".to_owned());
             }
+            // A managed child runs every round on the generation its call
+            // claimed; the call resolves presets against exactly that one.
+            if session
+                .meta
+                .execution_binding
+                .as_ref()
+                .is_some_and(|binding| binding.managed().is_some())
+            {
+                return Err(
+                    "managed child sessions keep their Provider release until they are retired"
+                        .to_owned(),
+                );
+            }
             if session.meta.provider != expected.provider
                 || session.meta.provider_account_id != expected.provider_account_id
                 || session.meta.provider_version != expected.provider_version

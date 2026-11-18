@@ -336,10 +336,14 @@ that is already running. Every round of a managed child stays on one side of
 review versus analysis: analysis shares the read-only runtime profile but never
 passed the reviewer allowlist.
 
-Known gap: automatic review selection still ranks the latest Catalog's
-presets rather than the generation that will run, and a queued prompt, a reused
-result or a re-pinned child is not re-bound to that generation. The execution
-check above prevents a non-reviewer model, not every preference deviation. Generic Tools target pins
+Review selection, claim, worker start, prompt delivery, recovery and reuse
+are bound to one Provider generation: admission and capabilities rank the
+generation readiness would launch; claim refuses a preset that is no reviewer
+on the generation it pins; managed children are never re-pinned or configured
+by anyone but their call; a prompt queued before a Controller restart is held
+until its configuration is confirmed again; and only schema-2 review results
+from a signed reviewer run are reused. See
+[`review-generation-binding.md`](review-generation-binding.md). Generic Tools target pins
 remain inputs to ordinary calls; they do not override Review preferences.
 Quota assessment remains the calling agent's responsibility, with no fixed
 percentage router or automatic retry. Explicit preset choices must

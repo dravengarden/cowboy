@@ -14,6 +14,23 @@ pub(in crate::server::managed_calls) struct ProviderReadiness {
     pub account: crate::provider_account::ProviderAccountId,
 }
 
+impl ProviderReadiness {
+    /// The signed presets of the generation this runtime would launch (the
+    /// latest package when none is ready): what review admission ranks.
+    pub(in crate::server::managed_calls) fn presets(
+        &self,
+        state: &AppState,
+        provider: &str,
+    ) -> serde_json::Value {
+        let generation = self.generation.as_ref();
+        super::super::super::agent_tools::presets_on(
+            state,
+            provider,
+            generation.map(|g| (g.version.as_str(), g.digest.as_str())),
+        )
+    }
+}
+
 /// Where a managed child's Agent runtime runs, and whether it can. The
 /// execution Machine is preferred. When host policy places the Provider on
 /// other Machines, one of them (the parent's runtime first) runs the child

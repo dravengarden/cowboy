@@ -86,6 +86,10 @@ pub(super) async fn repin(state: &Arc<AppState>) {
         let Some(since) = next.get(&meta.id) else {
             continue;
         };
+        // Managed children keep their claimed generation; see the Hub refusal.
+        if state.hub.is_managed_child(&meta.id) {
+            continue;
+        }
         if !due(*since, now, after) {
             continue;
         }

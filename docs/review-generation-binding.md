@@ -1,6 +1,6 @@
 # Review generation binding
 
-Status: proposed, not implemented. Closes the "Known gap" recorded in
+Status: implemented. Closes the "Known gap" recorded in
 [`managed-agent-calls.md`](managed-agent-calls.md) after the reviewer
 allowlist release (`dd3bc506b`).
 
@@ -63,18 +63,18 @@ reuse of unchecked verdicts.
   readiness generation it already resolves per Provider, so what an agent
   sees is what admission will choose. Falls back to the latest package only
   when the Provider is unavailable (the call would be refused anyway).
-- `claim` re-resolves readiness (unchanged). If the claimed generation
-  differs from the one used at admission (for example an update landed while
-  the call waited for approval):
-  - `selection = auto`: re-rank on the claimed generation with the same
-    preferences and risk label and record the new preset in the same claim
-    CAS. No new admission, no request conflict.
-  - `selection = explicit`: keep the ID only if the claimed generation still
-    signs it and it resolves to a reviewer family; otherwise fail
-    `preset_unavailable` / `review_model_not_allowed` with no worker start.
-- Admission records the ranked generation in the existing
-  `provider_version` / `provider_generation_digest` fields as a hint; claim
-  overwrites them as today. No ledger schema change.
+- An explicit review `--preset` is checked against the runnable
+  generation's reviewer candidates, not the latest Catalog.
+- `claim` re-resolves readiness (unchanged) and, for a review, resolves the
+  admitted preset on the generation it pins. If an update landed while the
+  call waited (for example for approval) and the ID is missing or no longer a
+  reviewer family, the call fails `preset_unavailable` /
+  `review_model_not_allowed` before any snapshot or worker; the caller
+  submits again and admission ranks the new generation.
+- Claim does not silently re-rank an automatic choice. The ledger `Record`
+  denies unknown fields, so recording whether the preset was automatic would
+  make a rolled-back Controller unable to read new records; the rare
+  update-during-wait case fails visibly instead.
 
 ### B. Freeze a managed child's generation
 
@@ -92,14 +92,15 @@ reuse of unchecked verdicts.
 - `config_revert::apply` refuses managed children for every client and Agent
   API entry point (`managed child configuration is owned by its call`). The
   runner keeps writing preferences through `apply_preset`.
-- `ManagedTurn` gains `delivered` (in-flight or a `user_message_chunk` after
-  the cursor) distinct from `queued`. When recovery finds a Running call
-  whose managed prompt is queued but not delivered, it removes that queued
-  entry, runs `configuration::ready` (which also rejects preset-less legacy
-  reviews), and resubmits under the same message id. Implementation must
-  confirm the Hub never auto-dispatches a queued managed prompt before the
-  runner's recovery pass; if it can, the queue holds managed prompts until
-  the runner releases them.
+- The Hub persists queues, so a managed prompt queued before a Controller
+  restart would otherwise drain as soon as the child is ready. The queue now
+  dispatches a managed prompt only after the runner released it in this
+  process (`submit_managed_prompt` releases after `configuration::ready`;
+  the release set is in memory only). `ManagedTurn::held` reports a queued,
+  unreleased prompt; the runner then runs `configuration::ready` again
+  (which also rejects preset-less legacy reviews) and calls
+  `release_managed_prompt`, or discards the prompt and fails the call. A
+  finished call discards its prompt and forgets its release.
 
 ### D. Reuse only checked reviews
 
@@ -109,9 +110,10 @@ reuse of unchecked verdicts.
 - Before `reserve_review_input`, run the pure part of `apply_preset`
   (resolve values on the claimed generation, signed preset, reviewer family)
   so a request that could not run cannot reserve an identity either.
-- `reuse_source` additionally requires the source's recorded
-  `configuration.model` to be a reviewer family of the Provider; otherwise
-  `review_source_not_reusable`.
+- Reservation recovery (`launch_source`) runs the same request check in
+  `reuse_source`, which additionally requires the source's recorded
+  `configuration.model` to be a reviewer family of the Provider and its preset
+  to be signed (not `custom:`); otherwise `review_source_not_reusable`.
 
 `apply_preset` is split into `resolve_preset` (pure, returns the value map)
 and the preference write, so A, B and D share one validation.
@@ -120,7 +122,9 @@ and the preference write, so A, B and D share one validation.
 
 - Controller-only release (`.#cowboy-controller-release`); no Machine,
   worker, wire protocol or ledger migration. Review identity schema 2 is a
-  digest input change only.
+  digest input change only. Rolling back the Controller is safe: no record
+  gains a field, and the old Controller treats a held prompt as ordinary
+  queued work.
 - In-flight calls at upgrade: queued/starting calls follow the new claim
   path; running calls keep their pinned generation; a running call whose
   prompt is still queued gets the recovery check in C.
@@ -132,8 +136,8 @@ and the preference write, so A, B and D share one validation.
 
 - Selection: latest package ≠ runnable generation → auto pick comes from the
   runnable one; explicit ID absent on runnable → refused at admission.
-- Claim: generation changed after admission → auto re-ranked in the claim
-  CAS; explicit missing → failed, no worker started.
+- Claim: preset no longer a reviewer on the pinned generation → failed, no
+  snapshot or worker.
 - Re-pin: dormant and missing-generation re-pin refuse a managed child;
   `ready` fails `generation_changed` on a hand-modified child meta.
 - Configure: `SetConfigOption` / `sessions.configure` on a managed child is

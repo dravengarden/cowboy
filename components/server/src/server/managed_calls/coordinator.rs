@@ -676,6 +676,8 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
         {
             image_providers.push(provider);
         }
+        // What admission ranks: the generation this runtime would launch.
+        let runnable_presets = readiness.presets(state, provider);
         providers.push(json!({
             "id": provider,
             "alias": if provider == "codex" { "codex" } else { "claude" },
@@ -688,8 +690,8 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             "options": target.and_then(|target| target.options.as_ref()),
             "quota_account": readiness.generation.as_ref().and_then(|generation| state.provider_catalog.account_usage_provider(provider, &generation.version, &generation.digest)),
             // `--preset` choices; the session's Tools choose otherwise.
-            "presets": agent_tools::presets(state, provider),
-            "review_candidates": super::selection::candidates(&agent_tools::presets(state, provider), provider, &policy.review, false).iter().filter_map(|p| p["id"].as_str()).collect::<Vec<_>>(),
+            "presets": runnable_presets,
+            "review_candidates": super::selection::candidates(&runnable_presets, provider, &policy.review, false).iter().filter_map(|p| p["id"].as_str()).collect::<Vec<_>>(),
             "access": ["read-only"],
             "output": if readiness.structured_output { json!(["text","json_schema"]) } else { json!(["text"]) },
             "conversation": ["fresh","continue"],
@@ -773,7 +775,7 @@ async fn first_ready(
     ledger: &Ledger,
     targets: Vec<agent_tools::CallTarget>,
     profile: cowboy_provider_sdk::ManagedRuntimeProfile,
-) -> Result<agent_tools::CallTarget, &'static str> {
+) -> Result<(agent_tools::CallTarget, Option<(String, String)>), &'static str> {
     let mut refusal = None;
     for target in targets {
         let (_, readiness) = child_runtime(
@@ -786,7 +788,10 @@ async fn first_ready(
         )
         .await;
         if readiness.available {
-            return Ok(target);
+            let generation = readiness
+                .generation
+                .map(|generation| (generation.version, generation.digest));
+            return Ok((target, generation));
         }
         refusal.get_or_insert(readiness.reason.unwrap_or("provider_unavailable"));
     }
@@ -867,7 +872,9 @@ async fn start(
         if continued.is_some() {
             return error("invalid_contract", "not_submitted");
         }
-        if !agent_tools::preset_exists(state, requested, preset) {
+        // A review checks its explicit preset against the runnable
+        // generation's reviewer candidates after readiness, below.
+        if !request.purpose.is_review() && !agent_tools::preset_exists(state, requested, preset) {
             return error("preset_unavailable", "not_submitted");
         }
         for target in &mut targets {
@@ -893,9 +900,9 @@ async fn start(
         },
         None => return error("capacity", "not_submitted"),
     }
-    let mut target =
+    let (mut target, generation) =
         match first_ready(state, meta, ledger, targets, request.purpose.profile()).await {
-            Ok(target) => target,
+            Ok(ready) => ready,
             Err(reason) => return error(reason, "not_submitted"),
         };
     if continued.is_none()
@@ -908,8 +915,16 @@ async fn start(
             .labels
             .get(crate::managed_calls::review::RISK)
             .is_some_and(|risk| risk == "high");
+        // Rank the generation the claim will pin, not the latest Catalog: a
+        // preset id may be absent or name another model on the runnable one.
         let choices = super::selection::candidates(
-            &agent_tools::presets(state, &target.agent),
+            &agent_tools::presets_on(
+                state,
+                &target.agent,
+                generation
+                    .as_ref()
+                    .map(|(version, digest)| (version.as_str(), digest.as_str())),
+            ),
             &target.agent,
             &policy.review,
             high_risk,

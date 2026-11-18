@@ -271,6 +271,11 @@ async fn repin_missing(state: &Arc<AppState>) {
             continue;
         };
         let meta = info.meta;
+        // A managed child never changes generation; its call fails instead.
+        if state.hub.is_managed_child(&meta.id) {
+            state.hub.clear_provider_generation_missing(&meta.id);
+            continue;
+        }
         // Keep the note while something transient blocks the move.
         if meta.closing
             || !matches!(meta.status, Status::Exited | Status::Crashed)

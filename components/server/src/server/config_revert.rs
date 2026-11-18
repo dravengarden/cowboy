@@ -96,6 +96,8 @@ pub(super) fn clear(hub: &crate::core::Hub, id: &str) {
     write(hub, id, &revert);
 }
 
+pub(super) const MANAGED_CHILD_REFUSAL: &str = "managed child configuration is owned by its call";
+
 /// Apply one live option change: the Web, Desktop and Agent API path.
 pub(super) fn apply(
     state: &AppState,
@@ -104,6 +106,11 @@ pub(super) fn apply(
     value: serde_json::Value,
     remember: bool,
 ) -> Result<(), String> {
+    // The call runner alone configures a managed child: its receipt records
+    // the preset that passed admission, so another writer would falsify it.
+    if state.hub.is_managed_child(session_id) {
+        return Err(MANAGED_CHILD_REFUSAL.to_owned());
+    }
     session_configuration::prepare(state, session_id);
     // Read what the change replaces before applying it; record it only once
     // the change is accepted, so a refused value leaves nothing to go back to.

@@ -291,6 +291,15 @@ async fn claim(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
             }
         }
     };
+    // Admission ranked the generation readiness reported then; an update may
+    // have landed while the call waited. Refuse before any snapshot or worker
+    // if the admitted preset is no reviewer on the generation pinned now.
+    if record.purpose.is_review()
+        && let Err(code) = review_preset_on(state, record, &version, &digest)
+    {
+        advance(state, store, record, fail(code, None)).await;
+        return Step::Again;
+    }
     match ledger
         .claim(&record.call_id, &runtime, &version, &digest)
         .await
@@ -469,6 +478,12 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
         advance(state, store, record, fail("identity_mismatch", None)).await;
         return Step::Again;
     }
+    // A request that could not run may not reserve, or take, a review result.
+    if let Err(code) = review_admissible(state, record) {
+        state.supervisor.delete_session(child);
+        advance(state, store, record, fail(code, None)).await;
+        return Step::Again;
+    }
     if let Some(step) = reuse_review(state, store, record, &request, &prepared.input_revision).await
     {
         return step;
@@ -548,9 +563,64 @@ fn source_failure(original: &Record) -> CallError {
     })
 }
 
+/// The reviewer checks a fresh run of `record` would apply before its worker
+/// starts. Ordinary calls pass.
+fn review_admissible(state: &AppState, record: &Record) -> Result<(), &'static str> {
+    if !record.purpose.is_review() {
+        return Ok(());
+    }
+    let (Some(version), Some(digest)) =
+        (&record.provider_version, &record.provider_generation_digest)
+    else {
+        return Err("preset_unavailable");
+    };
+    review_preset_on(state, record, version, digest)
+}
+
+fn review_preset_on(
+    state: &AppState,
+    record: &Record,
+    version: &str,
+    digest: &str,
+) -> Result<(), &'static str> {
+    resolve_preset(state, record, version, digest)?
+        .map(|_| ())
+        .ok_or("review_model_not_allowed")
+}
+
+/// A source verdict is reusable only if it ran a signed reviewer preset.
+fn reviewed_by_reviewer(original: &Record) -> bool {
+    original
+        .preset
+        .as_deref()
+        .is_some_and(|preset| super::super::agent_tools::custom_values(preset).is_none())
+        && reviewer_family_allowed(
+            &original.provider,
+            original
+                .configuration
+                .as_ref()
+                .and_then(|configuration| configuration.get("model"))
+                .map(String::as_str),
+        )
+}
+
 async fn reuse_source(state: &AppState, store: &Store, record: &Record, original: &Record) -> Step {
     if !original.state.terminal() {
         return Step::Wait(Duration::from_secs(2));
+    }
+    if let Err(code) = review_admissible(state, record) {
+        advance(state, store, record, fail(code, None)).await;
+        return Step::Again;
+    }
+    if original.state == State::Completed && !reviewed_by_reviewer(original) {
+        advance(
+            state,
+            store,
+            record,
+            fail("review_source_not_reusable", Some(original.call_id.clone())),
+        )
+        .await;
+        return Step::Again;
     }
     let complete = crate::managed_calls::review::complete(original);
     let mut result = original.result.clone().unwrap_or_else(|| json!({}));
@@ -607,6 +677,27 @@ fn apply_preset(
     version: &str,
     digest: &str,
 ) -> Result<Option<Value>, &'static str> {
+    let Some(values) = resolve_preset(state, record, version, digest)? else {
+        return Ok(None);
+    };
+    let applied = json!(values);
+    for (config_id, value) in values {
+        state
+            .hub
+            .set_config_preference(&record.child_session_id, config_id, json!(value))
+            .map_err(|_| "preset_unavailable")?;
+    }
+    Ok(Some(applied))
+}
+
+/// The call's preset values on exactly one generation, with the reviewer
+/// checks applied. Pure: reuse checks a request with it before reserving.
+fn resolve_preset(
+    state: &AppState,
+    record: &Record,
+    version: &str,
+    digest: &str,
+) -> Result<Option<std::collections::BTreeMap<String, Value>>, &'static str> {
     let Some(preset) = &record.preset else {
         return Ok(None);
     };
@@ -660,14 +751,7 @@ fn apply_preset(
             return Err("review_model_not_allowed");
         }
     }
-    let applied = json!(values);
-    for (config_id, value) in values {
-        state
-            .hub
-            .set_config_preference(&record.child_session_id, config_id, json!(value))
-            .map_err(|_| "preset_unavailable")?;
-    }
-    Ok(Some(applied))
+    Ok(Some(values))
 }
 
 /// Admission ranked presets from the latest Catalog and the session's
@@ -1133,6 +1217,15 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
         .await;
         return Step::Again;
     }
+    // Queued before a Controller restart: no worker has seen it, and only the
+    // previous process confirmed the child's configuration.
+    if record.state == State::Running && turn.held {
+        if let Err(step) = reconfirm(state, store, record).await {
+            return step;
+        }
+        state.hub.release_managed_prompt(child, &record.call_id);
+        return Step::Wait(POLL);
+    }
     let elapsed = now_ms() - record.updated_at_ms;
     match turn.status {
         Status::Crashed | Status::Interrupted if turn.prompted || elapsed > PROMPT_RECOVERY_MS => {
@@ -1172,19 +1265,30 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
         // previous Controller stopped between the two. Same message id.
         // A replacement worker must confirm the original preset again before
         // this recovery path may send anything to the native model.
-        if let Err(error) = configuration::ready(state, store, record).await {
-            if error.code == RETRY {
-                return Step::Wait(POLL);
-            }
-            state.supervisor.delete_session(child);
-            advance(state, store, record, fail(error.code, error.detail)).await;
-            return Step::Again;
+        if let Err(step) = reconfirm(state, store, record).await {
+            return step;
         }
         state
             .hub
             .submit_managed_prompt(child, &record.call_id, request.prompt());
     }
     Step::Wait(POLL)
+}
+
+/// Confirm a running call's preset on its child again before a recovered
+/// prompt may reach the model. On refusal, its prompt and worker are dropped.
+async fn reconfirm(state: &AppState, store: &Store, record: &Record) -> Result<(), Step> {
+    let Err(error) = configuration::ready(state, store, record).await else {
+        return Ok(());
+    };
+    if error.code == RETRY {
+        return Err(Step::Wait(POLL));
+    }
+    let child = record.child_session_id.as_str();
+    state.hub.discard_managed_prompt(child, &record.call_id);
+    state.supervisor.delete_session(child);
+    advance(state, store, record, fail(error.code, error.detail)).await;
+    Err(Step::Again)
 }
 
 /// Release a finished child's worker; its transcript and workspace stay.
@@ -1240,6 +1344,12 @@ fn call_notice(record: &Record) -> String {
 }
 
 fn settle(state: &AppState, record: &Record) {
+    // A finished call's prompt must never run later (for example one still
+    // held after a restart when the call was cancelled).
+    state
+        .hub
+        .discard_managed_prompt(&record.child_session_id, &record.call_id);
+    state.hub.forget_managed_release(&record.call_id);
     if state.supervisor.has_live_worker(&record.child_session_id) {
         let _ = state.supervisor.hibernate_session(&record.child_session_id);
     }
@@ -1260,6 +1370,41 @@ mod tests {
         assert!(!reviewer_family_allowed("claude-code", Some("sonnet")));
         // A Claude model is never a GPT reviewer.
         assert!(!reviewer_family_allowed("codex", Some("opus")));
+    }
+
+    #[test]
+    fn only_a_signed_reviewer_run_is_a_reusable_review_source() {
+        let source = |preset: Option<&str>, model: Option<&str>| -> Record {
+            let mut record: Record = serde_json::from_value(json!({
+                "schema":1,"call_id":"source","request_id":"op","request_digest":"digest",
+                "provider":"codex","purpose":"review","access":"read-only","labels":{},
+                "placement":{"service_id":"s","parent_session_id":"p","parent_revision":"r",
+                    "machine_id":"m","workspace_id":"w","cwd":"/workspace"},
+                "child_session_id":"child","state":"completed","revision":3,
+                "created_at_ms":1,"updated_at_ms":1
+            }))
+            .unwrap();
+            record.preset = preset.map(str::to_owned);
+            record.configuration =
+                model.map(|model| [("model".to_owned(), model.to_owned())].into());
+            record
+        };
+        assert!(reviewed_by_reviewer(&source(
+            Some("astra-max"),
+            Some("gpt-6.2-astra")
+        )));
+        // Admitted before the guard: no preset, a weak model, a custom value
+        // map or no observed model at all.
+        assert!(!reviewed_by_reviewer(&source(None, Some("gpt-6.2-astra"))));
+        assert!(!reviewed_by_reviewer(&source(
+            Some("luna-max"),
+            Some("gpt-6-luna")
+        )));
+        assert!(!reviewed_by_reviewer(&source(
+            Some("custom:model=gpt-6.2-astra"),
+            Some("gpt-6.2-astra")
+        )));
+        assert!(!reviewed_by_reviewer(&source(Some("astra-max"), None)));
     }
 
     #[tokio::test]

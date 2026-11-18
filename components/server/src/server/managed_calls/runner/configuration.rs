@@ -22,6 +22,15 @@ pub(super) async fn ready(state: &AppState, store: &Store, record: &Record) -> R
     if record.purpose.is_review() && record.preset.is_none() {
         return Err("review_model_not_allowed".into());
     }
+    // Presets resolve against the claimed generation; the worker launches the
+    // child's pinned one. They must be the same release.
+    let child_meta = state.hub.session_info(child).ok_or("child_removed")?.meta;
+    if record.provider_version.as_deref() != Some(child_meta.provider_version.as_str())
+        || record.provider_generation_digest.as_deref()
+            != Some(child_meta.provider_generation_digest.as_str())
+    {
+        return Err("generation_changed".into());
+    }
     // Reapply the immutable call intent on recovery too: option reconciliation
     // may have retired an unsupported value since the original registration.
     let applied = if record.preset.is_some() {

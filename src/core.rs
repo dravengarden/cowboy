@@ -38,6 +38,7 @@ pub use session_fork::{FORK_ORIGIN_UPDATE, ForkPoint, ForkRecord, ForkState};
 mod hub_config;
 use hub_config::{ConfigPreviews, add_config_choices};
 mod hub_events;
+mod hub_managed_calls;
 mod hub_provider_pins;
 mod hub_queue;
 mod hub_superagent;
@@ -206,6 +207,10 @@ pub const MANAGED_CALL_CMID_PREFIX: &str = "managed-call:";
 pub struct ManagedTurn {
     /// The prompt is queued, in flight or already echoed into the transcript.
     pub prompted: bool,
+    /// The prompt is queued but its call never released it on this Controller
+    /// (it was queued before a restart): the runner must confirm the child's
+    /// configuration again before it may reach a worker.
+    pub held: bool,
     pub stop_reason: Option<String>,
     pub final_text: String,
     pub generated_images: Vec<serde_json::Value>,
@@ -1486,6 +1491,10 @@ struct HubInner {
     mcp_launch: Mutex<Option<std::sync::Arc<mcp_launch::Resolver>>>,
     sessions: Mutex<HashMap<String, Session>>,
     context_edits: Mutex<HashSet<String>>,
+    /// Managed call prompts the call runner released after confirming the
+    /// child's configuration. In memory only: a prompt queued before a
+    /// Controller restart stays held until the runner confirms it again.
+    managed_releases: Mutex<HashSet<String>>,
     /// Internal auth/admin state restored from the durable settings table.
     settings: Mutex<HashMap<String, serde_json::Value>>,
     product_permissions: Mutex<product_permissions::Observations>,
@@ -1760,6 +1769,7 @@ impl Hub {
                 sessions: Mutex::new(HashMap::new()),
                 settings: Mutex::new(HashMap::new()),
                 context_edits: Mutex::new(HashSet::new()),
+                managed_releases: Mutex::new(HashSet::new()),
                 product_permissions: Mutex::new(product_permissions::Observations::default()),
                 runtime_reconciliation: Mutex::new(HashSet::new()),
                 restart_interrupted: Mutex::new(HashSet::new()),
@@ -2502,6 +2512,7 @@ impl Hub {
     pub fn managed_turn(&self, session_id: &str, after_seq: u64) -> Option<ManagedTurn> {
         let sessions = self.inner.sessions.lock();
         let s = sessions.get(session_id)?;
+        let releases = self.inner.managed_releases.lock();
         let mut turn = ManagedTurn {
             prompted: s.in_flight
                 || s.queue.iter().any(|m| {
@@ -2509,6 +2520,11 @@ impl Hub {
                         .as_deref()
                         .is_some_and(|c| c.starts_with(MANAGED_CALL_CMID_PREFIX))
                 }),
+            held: s.queue.iter().any(|m| {
+                m.cmid.as_deref().is_some_and(|c| {
+                    c.starts_with(MANAGED_CALL_CMID_PREFIX) && !releases.contains(c)
+                })
+            }),
             stop_reason: None,
             final_text: String::new(),
             generated_images: Vec::new(),
@@ -2574,19 +2590,6 @@ impl Hub {
         Some(turn)
     }
 
-    /// Submit a managed call's prompt to its child. Client entry points refuse
-    /// managed children; only the Controller-owned call runner reaches here.
-    pub fn submit_managed_prompt(&self, session_id: &str, call_id: &str, text: String) {
-        self.submit_inner(
-            session_id,
-            text,
-            Vec::new(),
-            Some(format!("{MANAGED_CALL_CMID_PREFIX}{call_id}")),
-            true,
-            false,
-        );
-    }
-
     /// Queue the parent's notice that one of its opted-in managed calls ended.
     /// An idle parent starts a turn; a busy one sees it at its next turn. The
     /// call-scoped id makes a repeated notice a no-op.
@@ -2612,15 +2615,6 @@ impl Hub {
             .lock()
             .get(session_id)
             .is_some_and(|s| crate::provider_account::named_only(&s.meta.provider))
-    }
-
-    pub fn is_managed_child(&self, session_id: &str) -> bool {
-        self.inner.sessions.lock().get(session_id).is_some_and(|s| {
-            s.meta
-                .execution_binding
-                .as_ref()
-                .is_some_and(|binding| binding.managed().is_some())
-        })
     }
 
     /// Subscribe to the live event stream.
@@ -3343,6 +3337,10 @@ impl Hub {
 
     fn context_allows_dispatch(&self, id: &str, cmid: Option<&str>) -> bool {
         !self.inner.context_edits.lock().contains(id)
+            && cmid.is_none_or(|cmid| {
+                !cmid.starts_with(MANAGED_CALL_CMID_PREFIX)
+                    || self.inner.managed_releases.lock().contains(cmid)
+            })
             && crate::session_context::allows_dispatch(self, id, cmid)
     }
 

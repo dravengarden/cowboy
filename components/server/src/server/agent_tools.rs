@@ -868,10 +868,26 @@ pub(super) fn preset_exists(state: &AppState, agent: &str, preset: &str) -> bool
 }
 
 pub(super) fn presets(state: &AppState, agent: &str) -> serde_json::Value {
-    state
-        .provider_catalog
-        .latest_package(agent)
-        .map(|(_, _, package)| {
+    presets_on(state, agent, None)
+}
+
+/// The signed presets of one exact generation (`(version, digest)`), or of the
+/// latest package without one. Review selection must rank the generation a
+/// child will actually run.
+pub(super) fn presets_on(
+    state: &AppState,
+    agent: &str,
+    generation: Option<(&str, &str)>,
+) -> serde_json::Value {
+    let package = match generation {
+        Some((version, digest)) => state.provider_catalog.package(agent, version, digest),
+        None => state
+            .provider_catalog
+            .latest_package(agent)
+            .map(|(_, _, package)| package),
+    };
+    package
+        .map(|package| {
             json!(
                 package
                     .manifest
