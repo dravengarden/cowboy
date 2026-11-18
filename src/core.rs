@@ -2590,6 +2590,16 @@ impl Hub {
         );
     }
 
+    /// Antigravity sessions run human-paced only: their drafts never get a
+    /// schedule and a schedule restored from storage parks instead of firing.
+    fn human_paced(&self, session_id: &str) -> bool {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .is_some_and(|s| crate::provider_account::named_only(&s.meta.provider))
+    }
+
     pub fn is_managed_child(&self, session_id: &str) -> bool {
         self.inner.sessions.lock().get(session_id).is_some_and(|s| {
             s.meta

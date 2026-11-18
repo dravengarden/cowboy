@@ -1079,7 +1079,8 @@ impl Hub {
         fire_at_ms: i64,
         delivery: Delivery,
     ) {
-        let (draft_id, draft_scheduled) = {
+        let human_paced = self.human_paced(session_id);
+        let draft_id = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
@@ -1091,13 +1092,10 @@ impl Hub {
                     cmid.as_deref()
                         .and_then(|c| s.drafts.iter().position(|m| m.cmid.as_deref() == Some(c)))
                 });
-            // Antigravity is human-paced only: its drafts stay parked, never
-            // scheduled, so no prompt reaches its subscription unattended.
-            let schedule =
-                (!crate::provider_account::named_only(&s.meta.provider)).then_some(DraftSchedule {
-                    fire_at_ms,
-                    delivery,
-                });
+            let schedule = (!human_paced).then_some(DraftSchedule {
+                fire_at_ms,
+                delivery,
+            });
             match pos {
                 Some(p) => {
                     let m = &mut s.drafts[p];
@@ -1105,13 +1103,11 @@ impl Hub {
                         m.text = text;
                         m.content = content;
                     }
-                    let scheduled = schedule.is_some();
                     m.schedule = schedule;
-                    (m.id.clone(), scheduled)
+                    m.id.clone()
                 }
                 None => {
                     let did = self.next_qid();
-                    let scheduled = schedule.is_some();
                     s.drafts.push(QueuedMessage {
                         id: did.clone(),
                         text,
@@ -1119,13 +1115,13 @@ impl Hub {
                         cmid,
                         schedule,
                     });
-                    (did, scheduled)
+                    did
                 }
             }
         };
         self.emit_pending(session_id);
         self.broadcast_sessions();
-        if draft_scheduled {
+        if !human_paced {
             self.arm_draft_timer(session_id, &draft_id, fire_at_ms);
         }
     }
@@ -1162,6 +1158,9 @@ impl Hub {
         if self.is_managed_child(session_id) {
             return;
         }
+        if self.human_paced(session_id) {
+            return self.unschedule_draft(session_id, draft_id);
+        }
         let fired = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -1171,17 +1170,6 @@ impl Hub {
             // visible (overdue) if the session is restored. Checked under the
             // lock that removes the Draft, so a concurrent Trash cannot slip in.
             if s.meta.trashed_at_ms.is_some() {
-                return;
-            }
-            // A schedule persisted before the human-paced fence (or restored
-            // from storage) parks instead of firing for Antigravity.
-            if crate::provider_account::named_only(&s.meta.provider) {
-                if let Some(m) = s.drafts.iter_mut().find(|m| m.id == draft_id) {
-                    m.schedule = None;
-                }
-                drop(sessions);
-                self.emit_pending(session_id);
-                self.broadcast_sessions();
                 return;
             }
             s.drafts

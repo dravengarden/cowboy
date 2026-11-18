@@ -6,7 +6,8 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AuthExecutor, AuthMethod, AuthenticationContract, validate_id, validate_relative_path,
+    AuthExecutor, AuthMethod, AuthenticationContract, ProviderManifest, RuntimeCapability,
+    validate_id, validate_relative_path,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,4 +165,68 @@ pub(crate) fn validate_method(method: &AuthMethod) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// `provider.native-custody.v1`: every account is a named, Machine-local
+/// native command login, so readers that predate the fence refuse the package.
+pub(crate) fn validate_native_custody(manifest: &ProviderManifest) -> Result<()> {
+    if !manifest
+        .runtime
+        .required_capabilities
+        .contains(&RuntimeCapability::ProviderNativeCustodyV1)
+    {
+        return Ok(());
+    }
+    ensure!(
+        semver::Version::parse(&manifest.sdk_version)? >= semver::Version::new(3, 5, 0),
+        "native custody requires Provider SDK 3.5.0 or newer"
+    );
+    let authentication = &manifest.authentication;
+    ensure!(
+        authentication.required && authentication.native_accounts(),
+        "native custody requires authenticated native account methods"
+    );
+    ensure!(
+        authentication.environment_projection.is_empty()
+            && authentication
+                .methods
+                .iter()
+                .all(|method| matches!(method.executor, AuthExecutor::CommandV1 { .. })),
+        "native custody admits only native command logins"
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{RuntimeCapability, StandardProviderSource, build_package};
+
+    #[test]
+    fn native_custody_requires_sdk_3_5_and_native_command_logins() {
+        let source: StandardProviderSource =
+            serde_json::from_str(include_str!("../../../plugins/antigravity/provider.json"))
+                .unwrap();
+        let mut manifest = source.compile().unwrap();
+        assert!(
+            manifest
+                .runtime
+                .required_capabilities
+                .contains(&RuntimeCapability::ProviderNativeCustodyV1)
+        );
+        build_package(manifest.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(RuntimeCapability::ProviderNativeCustodyV1).unwrap(),
+            serde_json::json!("provider.native-custody.v1")
+        );
+        let mut old = manifest.clone();
+        old.sdk_version = "3.4.0".into();
+        let error = old.validate().unwrap_err().to_string();
+        assert!(error.contains("Provider SDK 3.5.0"), "{error}");
+        for method in &mut manifest.authentication.methods {
+            method.native_identity = None;
+            method.native_logout = None;
+        }
+        let error = manifest.validate().unwrap_err().to_string();
+        assert!(error.contains("native account methods"), "{error}");
+    }
 }

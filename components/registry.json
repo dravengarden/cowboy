@@ -16449,7 +16449,7 @@
           "sources": [
             "components/provider-sdk"
           ],
-          "digest": "sha256:799dad88275a361465fb735b6281b2293e7fa3803d0a4eaf8e47bd5368a2384b",
+          "digest": "sha256:4d54938ac8532879e170a20aafc00f0637624883aefcba85194ccf3553fc973f",
           "package": {
             "kind": "cargo",
             "name": "cowboy-provider-sdk",
@@ -16463,7 +16463,7 @@
           "sources": [
             "components/provider-ui"
           ],
-          "digest": "sha256:859653bf421dc0df557a6ccd96ff7f02e4bd611945b61fe52db0f99107cb7c21",
+          "digest": "sha256:84cf815da52cac68c9cb94bc95662b41a0b87317a4f815cb0b861a84c9f7aba1",
           "package": {
             "kind": "npm",
             "name": "@cowboy/provider-ui",

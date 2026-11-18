@@ -12,7 +12,7 @@ import {
   ownerDeclaredIdentity,
   runtimeNetworkPolicy,
 } from "./nativeIdentity.ts";
-import { type ProviderCapability, providerCapabilities } from "./providerCapabilities.ts";
+import { knownCapabilities, type ProviderCapability } from "./providerCapabilities.ts";
 
 /**
  * Cowboy Provider UI SDK v2.
@@ -1289,18 +1289,12 @@ export function validateProviderManifest(input: unknown): asserts input is Provi
   );
   const declaresGateway = runtime.sidecars.length > 0;
   if (
-    !runtime.required_capabilities.every((value) => providerCapabilities.has(value)) ||
+    !knownCapabilities(runtime.required_capabilities, String(full.sdk_version), compareProviderVersions) ||
     !capabilities.has("provider.runtime.v1") ||
     usesGateway !== declaresGateway ||
     capabilities.has("provider.gateway.v1") !== declaresGateway
   ) {
     throw new Error("Unknown or missing Provider runtime capability");
-  }
-  if (
-    capabilities.has("provider.native-custody.v1") &&
-    compareProviderVersions(String(full.sdk_version), "3.5.0") < 0
-  ) {
-    throw new Error("Provider native custody requires SDK 3.5.0");
   }
   const execution = runtime.behavior.execution;
   const declaresExecution = execution !== undefined && execution !== null;
