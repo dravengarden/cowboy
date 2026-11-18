@@ -515,32 +515,46 @@ R3-4, R3-9, R3-10, R3-13 and R3-16, with these concrete choices:
   session that is not admitted or not `ok`.
 - **Records** (migration `0085` / SQLite `0059`):
   `provider_account_controls` (state, bounded reason, `until_ms`, revision),
-  `provider_account_turns` (one row per account: session, turn = the prompt's
-  `cmid`, worker epoch, the session's event cursor `after_seq`, state
-  `reserved | may_have_dispatched`) and `provider_account_fences` (one current
-  fence per account and Machine, `stop | admit`, `pending | confirmed`). A
-  state change writes its fences in the same transaction.
+  `provider_account_turns` (one row per account: session, a
+  Controller-generated turn ID, the prompt's delivery ID (`cmid`), the worker
+  epoch and runtime Machine at marking, the session's event cursor
+  `after_seq`, state `reserved | may_have_dispatched`, and the turn's terminal
+  record once delivered) and `provider_account_fences` (one current fence per
+  account and Machine, `stop | admit`, `pending | confirmed`). A state change
+  writes its fences in the same transaction.
 - **Parking.** A refused dispatch requeues the prompt unchanged and shows the
   reason as the session's resource wait; the maintenance loop rechecks the
   cached controls before draining again. Any state but `ok`, a missing
   admission, another session's turn or an unacknowledged uncertain effect
   parks. A rate limit (default one hour; the proxy reports no reset time)
   parks until `until_ms`; after it only an explicit owner send (send, send
-  now) resumes the account, an automatic drain does not.
-- **One active turn.** The dispatcher reserves the account before any
-  preparation, persists `may_have_dispatched` before the Provider lifecycle
-  fence and the enqueue, and releases the slot when a path never enqueued the
-  prompt (a requeue before the send, or the enqueue's synchronous refusal:
-  positive in-process proof, not inferred absence). The reconciler (every 3 s
-  and at start) settles a `may_have_dispatched` turn only from the first turn
-  end after `after_seq` (classified by the proxy's closed codes) or from proven
-  loss: the Machine reports a sandboxed worker stopped only after the daemon
-  confirmed its unit gone, and a connected Machine shows no live worker for a
-  stopped session. No backend evidence survives a lost unit, so loss settles
-  `unknown_refusal`. A `reserved` row no process is dispatching settles
-  `not_dispatched`; anything else keeps the slot and, after 2 minutes, marks
-  the account `needs_attention`. Settlement never lowers a more severe state
-  and never replaces `blocked`.
+  now) resumes the account, an automatic drain does not. Admission and the
+  kill switch at login and session creation are read from the store, never
+  from the cache; a failed reload marks the cache unloaded, which parks.
+- **One active turn.** Every dispatch of a governed session, user prompts
+  and supervised follow-ups alike, reserves the account before any
+  preparation. The final eligibility check (admission from the live
+  configuration, state, uncertain effect, the reservation itself) and the
+  `may_have_dispatched` mark run under the control writers' lock, which is
+  held until the prompt was handed to its runtime; admission edits apply to
+  the live configuration under the same lock. Every transition matches
+  account, session and the Controller-generated turn ID. The slot is
+  released when a path never enqueued the prompt (positive in-process
+  proof). The runtime reports every `TurnEnded` with the delivery ID of the
+  prompt it ends and the worker epoch; only the record of exactly the
+  reservation's delivery and epoch settles it, classified only from the
+  proxy's structured result (the closed code and the same code in the error
+  data's `cowboy` member; anything else is `unknown_refusal`). A stopped,
+  replaced or deleted worker proves nothing: loss settles only on the
+  worker/Machine ledger's termination evidence for the turn's original
+  binding (`Env::termination`), and its closed-log class decides between
+  `interrupted`, a refusal and `unknown_refusal`. A `reserved` row no process
+  is dispatching settles `not_dispatched`; anything else keeps the slot and,
+  after 2 minutes, marks the account `needs_attention`. Settlement is one
+  transaction (state, stop fences, release) that compares with the stored
+  state, so it never lowers a more severe state and never replaces `blocked`;
+  a failed write keeps the slot. Every worker launch, revive, reset, reload
+  and replacement passes the account gate (`Supervisor::start_session`).
 - **Fences.** `MachineCommand::AccountSandboxFence` (Machine protocol 48) asks
   the Machine's daemon for `stop_account` or `admit_account`; only the typed
   `AccountSandboxFenceObserved` for the same request confirms it, and
@@ -551,8 +565,11 @@ R3-4, R3-9, R3-10, R3-13 and R3-16, with these concrete choices:
   account's native generations plus its sessions' runtime Machines.
 - **Kill switch.** `block` (with confirmation) writes `blocked` and the stop
   fences first, then the fences stop and confirm the units; `unblock` writes
-  `ok` with admit fences. `force_release` of an unsettled turn requires every
-  fence of the account to be a confirmed stop.
+  `ok` with admit fences and first cancels every logout target no Machine
+  was asked. `force_release` of an unsettled turn requires every fence of
+  the account to be a confirmed stop and the ledger's termination evidence
+  for the turn. The account's Machines include its sessions' execution
+  targets; a failed lookup refuses the write instead of fencing fewer.
 - **Logout (step 5b).** `logout` (with confirmation) needs `blocked` and a
   confirmed stop. The request is recorded durably (internal setting
   `provider_account_logout:<account>`, one operation ID per control revision)
@@ -565,6 +582,15 @@ R3-4, R3-9, R3-10, R3-13 and R3-16, with these concrete choices:
   home remain. Unblocking before a target was ever sent cancels it. A later
   revocation accepts the recorded logout instead of asking the Machine for a
   second logout of the same generation.
+- **Revocation removes the sandbox.** Unlike logout, revoking a named-only
+  account must destroy its persistent home and system user on every Machine
+  it signed in or ran a session on. Once every session is stopped and every
+  native profile cleaned up, the revocation asks each Machine's daemon for
+  `remove_account` under an operation ID derived from the revocation,
+  account and Machine (so every retry repeats the same request), and records
+  the receipt only when it answers exactly that request with both removals
+  confirmed. Completion requires a receipt from every such Machine; until a
+  Machine implements the command the removal stays `pending`.
 - **Detection.** `suspended` and a policy violation (`needs_attention`,
   reason `policy_violation:<tool>`) stop the account's units like a block.
 - **Uncertain effects.** The worker ledger counts lost replies

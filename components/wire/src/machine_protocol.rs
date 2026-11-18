@@ -52,6 +52,10 @@ pub const MCP_NATIVE_CONFIRMATION_PROTOCOL_VERSION: u16 = 44;
 /// Machine browser instances (`machine_browser::Command`/`Event`) and the
 /// dedicated display stream they attach to.
 pub const MACHINE_BROWSER_PROTOCOL_VERSION: u16 = 45;
+/// A browser `Open` carrying the account Provider's network policy
+/// (`BrowserNetwork`, R3-15). Older Machines deny the unknown field and
+/// would drop the connection, so the Controller never sends it below this.
+pub const MACHINE_BROWSER_NETWORK_PROTOCOL_VERSION: u16 = 48;
 /// Sessions relay memory through the Machine that owns the backend.
 pub const MEMORY_RELAY_PROTOCOL_VERSION: u16 = 41;
 /// Machines route `CoreCommand::CancelSubagent` to a worker that reports
@@ -1519,6 +1523,34 @@ mod tests {
             assert_eq!(
                 serde_json::to_value(command).unwrap()["account_id"],
                 named["account_id"]
+            );
+        }
+    }
+
+    #[test]
+    fn a_browser_open_with_a_network_policy_needs_a_policy_aware_machine() {
+        let open = |network: serde_json::Value| {
+            let mut value = serde_json::json!({"command":"browser","request_id":"r",
+                "browser":{"kind":"open","account_id":"11111111-1111-4111-8111-111111111111",
+                    "instance_id":"inst-1","purpose":{"kind":"tab"},
+                    "viewport":{"width":1280,"height":800,"scale":1}}});
+            if !network.is_null() {
+                value["browser"]["network"] = network;
+            }
+            serde_json::from_value::<MachineCommand>(value).unwrap()
+        };
+        assert_eq!(
+            open(serde_json::Value::Null).minimum_protocol(),
+            MACHINE_BROWSER_PROTOCOL_VERSION
+        );
+        assert_eq!(
+            open(serde_json::json!("ipv4_only_v1")).minimum_protocol(),
+            MACHINE_BROWSER_NETWORK_PROTOCOL_VERSION
+        );
+        const {
+            assert!(MACHINE_BROWSER_NETWORK_PROTOCOL_VERSION <= MACHINE_PROTOCOL_VERSION);
+            assert!(
+                MACHINE_BROWSER_NETWORK_PROTOCOL_VERSION > PORTABLE_SUBSCRIPTION_PROTOCOL_VERSION
             );
         }
     }

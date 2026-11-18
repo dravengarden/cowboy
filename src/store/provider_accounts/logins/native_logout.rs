@@ -27,7 +27,9 @@ impl Store {
         ensure!(
             proposal.observation.succeeded.is_none()
                 && !proposal.observation.profile_cleaned
-                && !proposal.observation.process_trees_exited,
+                && !proposal.observation.process_trees_exited
+                && proposal.observation.credential_cleared.is_none()
+                && proposal.observation.history_retained.is_none(),
             "logout_outcome_not_expected"
         );
         self.native_logout_admission(owner, login_operation, proposal, false, || {
@@ -88,6 +90,8 @@ impl Store {
                     expected.observation.succeeded = old.observation.succeeded;
                     expected.observation.profile_cleaned = old.observation.profile_cleaned;
                     expected.observation.process_trees_exited = old.observation.process_trees_exited;
+                    expected.observation.credential_cleared = old.observation.credential_cleared;
+                    expected.observation.history_retained = old.observation.history_retained;
                 }
                 let cleanup_pending = old.observation.succeeded == Some(true) && !old.observation.profile_cleaned;
                 let cleanup_progress = record && cleanup_pending && expected.observation.profile_cleaned;

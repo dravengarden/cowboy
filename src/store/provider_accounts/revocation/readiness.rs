@@ -108,6 +108,14 @@ impl Store {
             }
         }
         missing.extend(
+            super::account_removals::missing(&receipt)
+                .into_iter()
+                .map(|target| Missing {
+                    kind: "account_removal",
+                    target,
+                }),
+        );
+        missing.extend(
             super::super::portable::missing(&receipt)
                 .into_iter()
                 .map(|(kind, target)| Missing { kind, target }),

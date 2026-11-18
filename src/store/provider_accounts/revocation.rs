@@ -5,6 +5,7 @@ use super::{ProviderAccountId, grants, logins};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+pub mod account_removals;
 pub mod browser_revocations;
 mod completion;
 pub mod discovery;

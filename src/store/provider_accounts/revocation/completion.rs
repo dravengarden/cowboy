@@ -51,6 +51,8 @@ impl Store {
             for target in &plan.browsers {
                 if !receipt.browser_revocations.contains_key(&target.machine_id) { return Ok(false); }
             }
+            // A named-only account's sandbox (home and system user) is removed on every Machine.
+            if !super::account_removals::missing(&receipt).is_empty() { return Ok(false); }
             if !super::super::portable::missing(&receipt).is_empty() { return Ok(false); }
             receipt.revocation_completed = true;
             sqlx::query("UPDATE provider_account_operations SET result=$3 WHERE owner_user_id=$1 AND operation_id=$2")

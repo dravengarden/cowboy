@@ -31,6 +31,17 @@ fn native_logout_missing_generation_is_not_permission_to_clean_up() {
 
 #[tokio::test]
 async fn native_logout_old_success_is_reconciled_until_cleanup_is_recorded() {
+    old_success_is_reconciled(None).await;
+}
+
+/// The account sandbox's evidence (credential cleared, history kept) is
+/// recorded and replayed with the rest of the observation.
+#[tokio::test]
+async fn native_logout_replay_keeps_the_sandbox_evidence() {
+    old_success_is_reconciled(Some(true)).await;
+}
+
+async fn old_success_is_reconciled(sandbox: Option<bool>) {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::connect("sqlite::memory:", dir.path().join("artifacts"))
         .await
@@ -66,8 +77,8 @@ async fn native_logout_old_success_is_reconciled_until_cleanup_is_recorded() {
                         succeeded: Some(true),
                         profile_cleaned,
                         process_trees_exited: false,
-                        credential_cleared: None,
-                        history_retained: None,
+                        credential_cleared: sandbox,
+                        history_retained: sandbox,
                     }),
                 },
             );
@@ -90,6 +101,13 @@ async fn native_logout_old_success_is_reconciled_until_cleanup_is_recorded() {
             .native_logout
             .unwrap();
         assert_eq!(saved.observation.profile_cleaned, profile_cleaned);
+        assert_eq!(
+            (
+                saved.observation.credential_cleared,
+                saved.observation.history_retained
+            ),
+            (sandbox, sandbox)
+        );
         if profile_cleaned {
             let mut downgrade = saved;
             downgrade.observation.profile_cleaned = false;
@@ -189,6 +207,12 @@ async fn native_logout_lost_response_retries_original_scope_and_records_observat
 }
 
 async fn fixture(store: &Store) {
+    fixture_for(store, "claude-code").await;
+}
+
+/// An owner's account of `provider` signed in on `machine` and revoking
+/// under operation `revoke`.
+pub(in crate::server) async fn fixture_for(store: &Store, provider: &str) {
     store.migrate().await.unwrap();
     let MutationResult::Applied(created) = store
         .mutate_provider_accounts(
@@ -197,7 +221,7 @@ async fn fixture(store: &Store) {
             &Mutation {
                 expected_revision: 0,
                 change: Change::Create {
-                    provider_id: "claude-code".into(),
+                    provider_id: provider.into(),
                     label: "Personal".into(),
                 },
             },

@@ -14,6 +14,8 @@
 )]
 
 mod delivery;
+pub mod launch_gate;
+use launch_gate::refuse_trashed;
 
 use parking_lot::Mutex;
 use std::path::PathBuf;
@@ -71,6 +73,7 @@ pub struct Supervisor {
     wake_listener: parking_lot::Mutex<Option<WakeListener>>,
     wake_admission: parking_lot::Mutex<Option<WakeAdmission>>,
     recovery_admission: parking_lot::Mutex<Option<WakeAdmission>>,
+    launch_gate: parking_lot::Mutex<Option<launch_gate::LaunchGate>>,
 }
 
 /// Receives the id of a dormant session that a prompt is waking.
@@ -138,6 +141,7 @@ impl Supervisor {
             wake_listener: parking_lot::Mutex::new(None),
             wake_admission: parking_lot::Mutex::new(None),
             recovery_admission: parking_lot::Mutex::new(None),
+            launch_gate: parking_lot::Mutex::new(None),
         }
     }
 
@@ -880,6 +884,7 @@ impl Supervisor {
         // Every launch, revive, reset, reload and Provider upgrade builds its
         // declaration here, so this is the one boundary Trash must hold.
         refuse_trashed(&self.hub, session_id)?;
+        self.check_launch_gate(session_id)?;
         if self.hub.execution_lifetime_lost(session_id) {
             return Err(
                 "The execution environment was lost; send a message or Reload to recover it"
@@ -898,7 +903,10 @@ impl Supervisor {
     ) -> Result<StartSession, String> {
         let mut declaration = self.session_declaration(session_id, Some(target))?;
         declaration.adopt_only = true;
-        declaration.agent_session_id = None;
+        // Only a persistent account home keeps the native conversation.
+        if !crate::account_controls::keeps_conversation_across_sign_ins(&target.provider_id) {
+            declaration.agent_session_id = None;
+        }
         Ok(declaration)
     }
 
@@ -1483,15 +1491,6 @@ impl Supervisor {
             .runtime(&machine_id)
             .ok_or_else(|| format!("machine {machine_id:?} is not connected"))
     }
-}
-
-/// A trashed session never launches, resumes or replaces a worker: every
-/// wake path (open, send, queue drain, schedule, wakeup, reload) passes here.
-fn refuse_trashed(hub: &crate::core::Hub, session_id: &str) -> Result<(), String> {
-    if hub.session_is_trashed(session_id) {
-        return Err(crate::core::TRASHED_SESSION_REFUSAL.to_owned());
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -2243,6 +2242,33 @@ mod tests {
         )));
         assert_eq!(hub.status("s"), Some(Status::Starting));
         assert_eq!(woken.lock().as_slice(), ["s".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn the_launch_gate_refuses_every_replacement_of_a_parked_session() {
+        let root = TestDir::new();
+        let hub = dormant_codex_session(&root);
+        let router = RuntimeRouter::new();
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        router.install("hawk".to_owned(), Arc::clone(&runtime));
+        let supervisor = Supervisor::new(hub.clone(), root.0.clone(), 0, router);
+        let parked = "Waiting for resources: this account is blocked";
+        supervisor.set_launch_gate(Arc::new(move |_| Err(parked.to_owned())));
+        // Clear conversation of a crashed session recycles its worker.
+        hub.set_status("s", Status::Crashed, None);
+        assert_eq!(supervisor.reset_session("s").unwrap_err(), parked);
+        assert_eq!(supervisor.reload_session("s", true).unwrap_err(), parked);
+        hub.set_status("s", Status::Exited, None);
+        assert_eq!(
+            supervisor
+                .send(
+                    "s",
+                    AgentCommand::Prompt(Vec::new(), Some("c1".into()), None)
+                )
+                .unwrap_err(),
+            parked
+        );
+        assert!(runtime.pending_for_test().is_empty());
     }
 
     #[tokio::test]

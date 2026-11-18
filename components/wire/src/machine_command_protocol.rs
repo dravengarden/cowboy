@@ -17,6 +17,13 @@ impl MachineCommand {
                 ..
             } => MCP_NATIVE_CONFIRMATION_PROTOCOL_VERSION,
             Self::McpTransport { .. } => MCP_TRANSPORT_PROTOCOL_VERSION,
+            Self::Browser {
+                browser:
+                    machine_browser::Command::Open {
+                        network: Some(_), ..
+                    },
+                ..
+            } => MACHINE_BROWSER_NETWORK_PROTOCOL_VERSION,
             Self::Browser { .. } => MACHINE_BROWSER_PROTOCOL_VERSION,
             Self::CollectNativeUsage { .. } => NATIVE_USAGE_PROTOCOL_VERSION,
             Self::AccountSandboxFence { .. } => ACCOUNT_FENCE_PROTOCOL_VERSION,

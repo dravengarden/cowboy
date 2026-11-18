@@ -403,6 +403,7 @@ impl BrowserManager {
             // The slot and budget reserved for the survivor are moved in
             // by `adopt` once verification passed.
             capacity: None,
+            network: record.network,
         });
         let bootstrap = host::enforce_label(BOOTSTRAP_PROFILE);
         let sealed = host::enforce_label(SEALED_PROFILE);

@@ -88,6 +88,10 @@ pub(in crate::server) async fn apply(
             if !service_owner {
                 return Err("permission_denied");
             }
+            // Serialized with every dispatch's final eligibility check: once
+            // this returns, no prompt of the account is handed off under the
+            // previous admission.
+            let _write = controls.cache.writes.lock().await;
             set_admitted(state, &id, request.action == Action::Admit).await?;
         }
         Action::StopUnits => controls.run_fences(),
@@ -144,8 +148,10 @@ pub(in crate::server) async fn apply(
 }
 
 impl Controls {
-    /// Release a turn slot nothing can settle. Only after every unit of the
-    /// account is confirmed stopped: no turn of it can still be running.
+    /// Release a turn slot the reconciler cannot settle. Only after every
+    /// unit of the account is confirmed stopped and the ledger proved the
+    /// turn's execution target terminated on its original binding; the
+    /// closed log's evidence still decides the account's state.
     pub(in crate::server) async fn force_release(
         &self,
         control: &Control,
@@ -161,16 +167,31 @@ impl Controls {
             .cache
             .turn(&control.account_id)
             .ok_or("no_account_turn")?;
-        self.store
-            .release_account_turn(&control.account_id, &turn.turn_id, None)
-            .await
-            .map_err(|_| "outcome_unknown")?;
+        let outcome = policy::unit_loss_outcome(self.env.termination(&turn).await.as_ref())
+            .ok_or("turn_termination_unconfirmed")?;
+        let key = TurnKey {
+            session_id: &turn.session_id,
+            turn_id: &turn.turn_id,
+            worker_epoch: &turn.worker_epoch,
+            only: Some(turn.state),
+        };
+        let settled = self
+            .settle(
+                &turn,
+                key,
+                &control.provider_id,
+                &policy::settle(turn.state, &outcome),
+            )
+            .await?;
+        if settled == crate::store::account_controls::Settled::Stale {
+            return Err("revision_conflict");
+        }
         tracing::warn!(
             account = %control.account_id,
             session = %turn.session_id,
-            "owner force-released an unsettled account turn after a confirmed stop"
+            "owner force-released an account turn after a confirmed stop and proven termination"
         );
-        self.refresh().await.map_err(|_| "unavailable")
+        Ok(())
     }
 
     /// Acknowledge exactly the session's current uncertain effect, durably,
@@ -210,7 +231,7 @@ async fn set_admitted(
 ) -> Result<(), &'static str> {
     let path = state.service_config_path.clone();
     let id = account.as_str().to_owned();
-    tokio::task::spawn_blocking(move || {
+    let report = tokio::task::spawn_blocking(move || {
         let current = crate::config::editable(crate::config::Scope::Service, &path)
             .map_err(|_| "configuration_unavailable")?;
         let revision = current["revision"]
@@ -226,7 +247,7 @@ async fn set_admitted(
             })
             .unwrap_or_default();
         if admitted.contains(&id) == admit {
-            return Ok(());
+            return Ok(None);
         }
         if admit {
             admitted.push(id);
@@ -240,14 +261,20 @@ async fn set_admitted(
             &json!({"accounts.antigravity_admitted": admitted}),
             || Ok(()),
         )
-        .map(drop)
+        .map(Some)
         .map_err(|error| match error.to_string().as_str() {
             "revision_conflict" => "revision_conflict",
             _ => "invalid_configuration",
         })
     })
     .await
-    .map_err(|_| "unavailable")?
+    .map_err(|_| "unavailable")??;
+    // Applied live now, under the caller's writer lock, rather than when the
+    // file watcher notices the edit: the next dispatch check sees it.
+    if let Some(report) = report {
+        state.service_config.reload(&report);
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]

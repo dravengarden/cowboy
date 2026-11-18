@@ -95,7 +95,8 @@ pub(super) async fn observe(
         return Err("authentication_connection_changed");
     }
     // Admission and the kill switch also hold at login completion.
-    super::super::named_only_admitted(state, &receipt.provider_id, &receipt.input.account_id)?;
+    super::super::named_only_admitted(state, &receipt.provider_id, &receipt.input.account_id)
+        .await?;
     // The DB writer rechecks owner, request, generation, cancellation, account
     // admission and original enrollment. This is historical evidence only.
     let recorded = store

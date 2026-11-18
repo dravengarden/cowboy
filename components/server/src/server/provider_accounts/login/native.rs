@@ -167,7 +167,7 @@ pub(in crate::server) async fn accept_native_completion(
         validate_executor(current, &state.machine_control, connection, profile)?;
     }
     // Admission and the kill switch also hold at login completion.
-    super::super::named_only_admitted(state, &profile.provider_id, &profile.account_id)?;
+    super::super::named_only_admitted(state, &profile.provider_id, &profile.account_id).await?;
     store
         .record_native_login_completion(&executor.owner_user_id, &operation, &completion)
         .await

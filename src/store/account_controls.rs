@@ -6,7 +6,8 @@
 
 use super::{PostgresStorage, SqliteStorage, StorageBackend, Store};
 use crate::account_controls::{
-    AccountState, Control, Fence, FenceState, Reservation, ReservationState, fence_operation_id,
+    AccountState, Control, Fence, FenceState, Reservation, ReservationState, Terminal,
+    fence_operation_id,
 };
 use crate::provider_account::AccountFenceAction;
 use anyhow::{Context as _, Result};
@@ -37,6 +38,52 @@ pub struct StateChange<'a> {
     pub now_ms: i64,
 }
 
+/// One reservation, identified on every transition by account, session,
+/// Controller-generated turn ID and (once marked) worker epoch.
+#[derive(Clone, Copy, Debug)]
+pub struct TurnKey<'a> {
+    pub session_id: &'a str,
+    pub turn_id: &'a str,
+    pub worker_epoch: &'a str,
+    /// Match only a reservation still in this state.
+    pub only: Option<ReservationState>,
+}
+
+/// An automatic settlement of an account (a reserved turn's outcome or an
+/// unsettled turn), applied in one transaction: the state change (never
+/// lowering a more severe state, never replacing `blocked`), its stop fences
+/// and the reservation's release.
+#[derive(Clone, Debug)]
+pub struct Settle<'a> {
+    pub account_id: &'a str,
+    pub owner_user_id: &'a str,
+    pub provider_id: &'a str,
+    /// The reservation this settles; nothing is written once it no longer
+    /// holds the account's slot.
+    pub turn: Option<TurnKey<'a>>,
+    /// Delete the reservation.
+    pub release: bool,
+    /// The state to raise the account to, with its reason and end.
+    pub state: Option<(AccountState, &'a str, Option<i64>)>,
+    /// Stop every unit of the account even when the state is not raised.
+    pub stop_units: bool,
+    /// The account's Machines, for the stop fences.
+    pub machines: &'a [String],
+    pub now_ms: i64,
+}
+
+/// What a [`Settle`] wrote.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Settled {
+    /// The reservation no longer matched: nothing was written.
+    Stale,
+    Applied {
+        /// The account state was raised (or rewritten to queue stop fences).
+        state_written: bool,
+        released: bool,
+    },
+}
+
 type ControlRow = (
     String,
     String,
@@ -53,11 +100,19 @@ type TurnRow = (
     String,
     String,
     String,
+    String,
+    String,
     i64,
     String,
     i64,
     i64,
+    Option<String>,
+    Option<String>,
 );
+
+const TURN_COLUMNS: &str = "account_id, owner_user_id, session_id, turn_id, delivery_id, \
+     worker_epoch, machine_id, after_seq, state, created_at_ms, updated_at_ms, terminal_epoch, \
+     terminal_stop_reason";
 type FenceRow = (String, String, String, String, String, String, i64);
 
 fn control(row: ControlRow) -> Result<Control> {
@@ -79,11 +134,20 @@ fn turn(row: TurnRow) -> Result<Reservation> {
         owner_user_id: row.1,
         session_id: row.2,
         turn_id: row.3,
-        worker_epoch: row.4,
-        after_seq: row.5,
-        state: ReservationState::parse(&row.6).context("unknown stored reservation state")?,
-        created_at_ms: row.7,
-        updated_at_ms: row.8,
+        delivery_id: row.4,
+        worker_epoch: row.5,
+        machine_id: row.6,
+        after_seq: row.7,
+        state: ReservationState::parse(&row.8).context("unknown stored reservation state")?,
+        created_at_ms: row.9,
+        updated_at_ms: row.10,
+        terminal: row
+            .11
+            .zip(row.12)
+            .map(|(worker_epoch, stop_reason)| Terminal {
+                worker_epoch,
+                stop_reason,
+            }),
     })
 }
 
@@ -131,6 +195,12 @@ impl Store {
         dispatch!(self, set_account_state(change))
     }
 
+    /// The account's current record, read from the store (admission paths
+    /// never trust a cached view).
+    pub async fn account_control(&self, account_id: &str) -> Result<Option<Control>> {
+        dispatch!(self, account_control(account_id))
+    }
+
     pub async fn account_turns(&self) -> Result<Vec<Reservation>> {
         dispatch!(self, account_turns())
     }
@@ -141,30 +211,54 @@ impl Store {
         dispatch!(self, reserve_account_turn(turn))
     }
 
-    /// `reserved` -> `may_have_dispatched` for exactly this turn, before its
-    /// prompt is enqueued. `false` when the reservation is not this turn's.
+    /// `reserved` -> `may_have_dispatched` for exactly this account,
+    /// session and turn, before its prompt is enqueued, recording the
+    /// prompt's delivery ID, worker epoch and runtime Machine. `false` when
+    /// the reservation is not this turn's.
     pub async fn mark_account_turn_dispatched(
         &self,
         account_id: &str,
-        turn_id: &str,
-        worker_epoch: &str,
+        key: &TurnKey<'_>,
+        (delivery_id, machine_id): (&str, &str),
         now_ms: i64,
     ) -> Result<bool> {
         dispatch!(
             self,
-            mark_account_turn_dispatched(account_id, turn_id, worker_epoch, now_ms)
+            mark_account_turn_dispatched(account_id, key, (delivery_id, machine_id), now_ms)
         )
     }
 
-    /// Release exactly this turn's slot; `only` restricts the release to a
-    /// reservation still in that state.
-    pub async fn release_account_turn(
+    /// Record the terminal record a worker delivered for `delivery_id` of
+    /// `session_id`, only on a dispatched reservation of that delivery whose
+    /// worker epoch is this one (or was not known when it was marked).
+    pub async fn record_account_turn_terminal(
         &self,
-        account_id: &str,
-        turn_id: &str,
-        only: Option<ReservationState>,
+        session_id: &str,
+        delivery_id: &str,
+        worker_epoch: &str,
+        stop_reason: &str,
+        now_ms: i64,
     ) -> Result<bool> {
-        dispatch!(self, release_account_turn(account_id, turn_id, only))
+        dispatch!(
+            self,
+            record_account_turn_terminal(
+                session_id,
+                delivery_id,
+                worker_epoch,
+                stop_reason,
+                now_ms
+            )
+        )
+    }
+
+    /// Release exactly this turn's slot.
+    pub async fn release_account_turn(&self, account_id: &str, key: &TurnKey<'_>) -> Result<bool> {
+        dispatch!(self, release_account_turn(account_id, key))
+    }
+
+    /// Apply one automatic settlement atomically (see [`Settle`]).
+    pub async fn settle_account(&self, settle: &Settle<'_>) -> Result<Settled> {
+        dispatch!(self, settle_account(settle))
     }
 
     pub async fn account_fences(&self) -> Result<Vec<Fence>> {
@@ -190,9 +284,60 @@ impl Store {
 }
 
 macro_rules! implementation {
-    ($backend:ty, $begin:literal) => {
+    ($backend:ty, $begin:literal, $db:ty) => {
+        async fn write_control(tx: &mut sqlx::Transaction<'_, $db>, control: &Control) -> Result<()> {
+            sqlx::query(
+                "INSERT INTO provider_account_controls(account_id, owner_user_id, provider_id, \
+                 state, reason, until_ms, updated_at_ms, revision) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+                 ON CONFLICT(account_id) DO UPDATE SET state = EXCLUDED.state, \
+                 reason = EXCLUDED.reason, until_ms = EXCLUDED.until_ms, \
+                 updated_at_ms = EXCLUDED.updated_at_ms, revision = EXCLUDED.revision",
+            )
+            .bind(&control.account_id)
+            .bind(&control.owner_user_id)
+            .bind(&control.provider_id)
+            .bind(control.state.as_str())
+            .bind(&control.reason)
+            .bind(control.until_ms)
+            .bind(control.updated_at_ms)
+            .bind(control.revision)
+            .execute(&mut **tx)
+            .await
+            .context("UPSERT account control")?;
+            Ok(())
+        }
+
+        /// Replace the account's fence on `machine` with a pending `action`.
+        async fn write_fence(
+            tx: &mut sqlx::Transaction<'_, $db>,
+            account_id: &str,
+            machine: &str,
+            action: AccountFenceAction,
+            revision: i64,
+            now_ms: i64,
+        ) -> Result<()> {
+            sqlx::query(
+                "INSERT INTO provider_account_fences(account_id, machine_id, action, \
+                 operation_id, state, detail, updated_at_ms) \
+                 VALUES ($1, $2, $3, $4, 'pending', '', $5) \
+                 ON CONFLICT(account_id, machine_id) DO UPDATE SET \
+                 action = EXCLUDED.action, operation_id = EXCLUDED.operation_id, \
+                 state = 'pending', detail = '', updated_at_ms = EXCLUDED.updated_at_ms",
+            )
+            .bind(account_id)
+            .bind(machine)
+            .bind(action_name(action))
+            .bind(fence_operation_id(account_id, machine, action, revision))
+            .bind(now_ms)
+            .execute(&mut **tx)
+            .await
+            .context("UPSERT account fence")?;
+            Ok(())
+        }
+
         impl $backend {
-            async fn account_controls(&self) -> Result<Vec<Control>> {
+            pub(super) async fn account_controls(&self) -> Result<Vec<Control>> {
                 let rows: Vec<ControlRow> = sqlx::query_as(
                     "SELECT account_id, owner_user_id, provider_id, state, reason, until_ms, \
                      updated_at_ms, revision FROM provider_account_controls ORDER BY account_id",
@@ -203,7 +348,7 @@ macro_rules! implementation {
                 rows.into_iter().map(control).collect()
             }
 
-            async fn set_account_state(&self, change: &StateChange<'_>) -> Result<Option<Control>> {
+            pub(super) async fn set_account_state(&self, change: &StateChange<'_>) -> Result<Option<Control>> {
                 let mut tx = self.pool.begin_with($begin).await.context("begin account state")?;
                 let current: Option<i64> = sqlx::query_scalar(
                     "SELECT revision FROM provider_account_controls WHERE account_id = $1",
@@ -220,47 +365,7 @@ macro_rules! implementation {
                 }
                 let revision = current.unwrap_or(0).saturating_add(1);
                 let reason = bounded(change.reason, 256);
-                sqlx::query(
-                    "INSERT INTO provider_account_controls(account_id, owner_user_id, provider_id, \
-                     state, reason, until_ms, updated_at_ms, revision) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-                     ON CONFLICT(account_id) DO UPDATE SET state = EXCLUDED.state, \
-                     reason = EXCLUDED.reason, until_ms = EXCLUDED.until_ms, \
-                     updated_at_ms = EXCLUDED.updated_at_ms, revision = EXCLUDED.revision",
-                )
-                .bind(change.account_id)
-                .bind(change.owner_user_id)
-                .bind(change.provider_id)
-                .bind(change.state.as_str())
-                .bind(&reason)
-                .bind(change.until_ms)
-                .bind(change.now_ms)
-                .bind(revision)
-                .execute(&mut *tx)
-                .await
-                .context("UPSERT account control")?;
-                if let Some((action, machines)) = change.fence {
-                    for machine in machines {
-                        sqlx::query(
-                            "INSERT INTO provider_account_fences(account_id, machine_id, action, \
-                             operation_id, state, detail, updated_at_ms) \
-                             VALUES ($1, $2, $3, $4, 'pending', '', $5) \
-                             ON CONFLICT(account_id, machine_id) DO UPDATE SET \
-                             action = EXCLUDED.action, operation_id = EXCLUDED.operation_id, \
-                             state = 'pending', detail = '', updated_at_ms = EXCLUDED.updated_at_ms",
-                        )
-                        .bind(change.account_id)
-                        .bind(machine)
-                        .bind(action_name(action))
-                        .bind(fence_operation_id(change.account_id, machine, action, revision))
-                        .bind(change.now_ms)
-                        .execute(&mut *tx)
-                        .await
-                        .context("UPSERT account fence")?;
-                    }
-                }
-                tx.commit().await.context("commit account state")?;
-                Ok(Some(Control {
+                let written = Control {
                     account_id: change.account_id.to_owned(),
                     owner_user_id: change.owner_user_id.to_owned(),
                     provider_id: change.provider_id.to_owned(),
@@ -269,27 +374,46 @@ macro_rules! implementation {
                     until_ms: change.until_ms,
                     updated_at_ms: change.now_ms,
                     revision,
-                }))
+                };
+                write_control(&mut tx, &written).await?;
+                if let Some((action, machines)) = change.fence {
+                    for machine in machines {
+                        write_fence(&mut tx, change.account_id, machine, action, revision, change.now_ms)
+                            .await?;
+                    }
+                }
+                tx.commit().await.context("commit account state")?;
+                Ok(Some(written))
             }
 
-            async fn account_turns(&self) -> Result<Vec<Reservation>> {
-                let rows: Vec<TurnRow> = sqlx::query_as(
-                    "SELECT account_id, owner_user_id, session_id, turn_id, worker_epoch, after_seq, \
-                     state, created_at_ms, updated_at_ms FROM provider_account_turns \
-                     ORDER BY account_id",
+            pub(super) async fn account_control(&self, account_id: &str) -> Result<Option<Control>> {
+                let row: Option<ControlRow> = sqlx::query_as(
+                    "SELECT account_id, owner_user_id, provider_id, state, reason, until_ms, \
+                     updated_at_ms, revision FROM provider_account_controls WHERE account_id = $1",
                 )
+                .bind(account_id)
+                .fetch_optional(&self.pool)
+                .await
+                .context("SELECT account control")?;
+                row.map(control).transpose()
+            }
+
+            pub(super) async fn account_turns(&self) -> Result<Vec<Reservation>> {
+                let rows: Vec<TurnRow> = sqlx::query_as(&format!(
+                    "SELECT {TURN_COLUMNS} FROM provider_account_turns ORDER BY account_id"
+                ))
                 .fetch_all(&self.pool)
                 .await
                 .context("SELECT account turns")?;
                 rows.into_iter().map(turn).collect()
             }
 
-            async fn reserve_account_turn(&self, wanted: &Reservation) -> Result<Reservation> {
+            pub(super) async fn reserve_account_turn(&self, wanted: &Reservation) -> Result<Reservation> {
                 let mut tx = self.pool.begin_with($begin).await.context("begin account turn")?;
                 sqlx::query(
                     "INSERT INTO provider_account_turns(account_id, owner_user_id, session_id, \
-                     turn_id, worker_epoch, after_seq, state, created_at_ms, updated_at_ms) \
-                     VALUES ($1, $2, $3, $4, $5, $6, 'reserved', $7, $7) \
+                     turn_id, delivery_id, worker_epoch, after_seq, state, created_at_ms, \
+                     updated_at_ms) VALUES ($1, $2, $3, $4, '', $5, $6, 'reserved', $7, $7) \
                      ON CONFLICT(account_id) DO NOTHING",
                 )
                 .bind(&wanted.account_id)
@@ -302,11 +426,9 @@ macro_rules! implementation {
                 .execute(&mut *tx)
                 .await
                 .context("INSERT account turn")?;
-                let row: TurnRow = sqlx::query_as(
-                    "SELECT account_id, owner_user_id, session_id, turn_id, worker_epoch, after_seq, \
-                     state, created_at_ms, updated_at_ms FROM provider_account_turns \
-                     WHERE account_id = $1",
-                )
+                let row: TurnRow = sqlx::query_as(&format!(
+                    "SELECT {TURN_COLUMNS} FROM provider_account_turns WHERE account_id = $1"
+                ))
                 .bind(&wanted.account_id)
                 .fetch_one(&mut *tx)
                 .await
@@ -315,48 +437,180 @@ macro_rules! implementation {
                 turn(row)
             }
 
-            async fn mark_account_turn_dispatched(
+            pub(super) async fn mark_account_turn_dispatched(
                 &self,
                 account_id: &str,
-                turn_id: &str,
-                worker_epoch: &str,
+                key: &TurnKey<'_>,
+                (delivery_id, machine_id): (&str, &str),
                 now_ms: i64,
             ) -> Result<bool> {
                 let result = sqlx::query(
                     "UPDATE provider_account_turns SET state = 'may_have_dispatched', \
-                     worker_epoch = $3, updated_at_ms = $4 \
-                     WHERE account_id = $1 AND turn_id = $2 AND state = 'reserved'",
+                     delivery_id = $4, worker_epoch = $5, updated_at_ms = $6, machine_id = $7 \
+                     WHERE account_id = $1 AND session_id = $2 AND turn_id = $3 \
+                     AND state = 'reserved'",
                 )
                 .bind(account_id)
-                .bind(turn_id)
-                .bind(worker_epoch)
+                .bind(key.session_id)
+                .bind(key.turn_id)
+                .bind(bounded(delivery_id, 256))
+                .bind(key.worker_epoch)
                 .bind(now_ms)
+                .bind(machine_id)
                 .execute(&self.pool)
                 .await
                 .context("UPDATE account turn dispatched")?;
                 Ok(result.rows_affected() == 1)
             }
 
-            async fn release_account_turn(
+            pub(super) async fn record_account_turn_terminal(
+                &self,
+                session_id: &str,
+                delivery_id: &str,
+                worker_epoch: &str,
+                stop_reason: &str,
+                now_ms: i64,
+            ) -> Result<bool> {
+                if delivery_id.is_empty() || worker_epoch.is_empty() {
+                    return Ok(false);
+                }
+                let result = sqlx::query(
+                    "UPDATE provider_account_turns SET terminal_epoch = $3, \
+                     terminal_stop_reason = $4, updated_at_ms = $5 \
+                     WHERE session_id = $1 AND delivery_id = $2 \
+                     AND state = 'may_have_dispatched' AND terminal_stop_reason IS NULL \
+                     AND (worker_epoch = $3 OR worker_epoch = '')",
+                )
+                .bind(session_id)
+                .bind(delivery_id)
+                .bind(worker_epoch)
+                .bind(stop_reason.chars().take(8192).collect::<String>())
+                .bind(now_ms)
+                .execute(&self.pool)
+                .await
+                .context("UPDATE account turn terminal")?;
+                Ok(result.rows_affected() == 1)
+            }
+
+            pub(super) async fn release_account_turn(
                 &self,
                 account_id: &str,
-                turn_id: &str,
-                only: Option<ReservationState>,
+                key: &TurnKey<'_>,
             ) -> Result<bool> {
                 let result = sqlx::query(
-                    "DELETE FROM provider_account_turns WHERE account_id = $1 AND turn_id = $2 \
-                     AND ($3 IS NULL OR state = $3)",
+                    "DELETE FROM provider_account_turns WHERE account_id = $1 AND session_id = $2 \
+                     AND turn_id = $3 AND ($4 IS NULL OR state = $4)",
                 )
                 .bind(account_id)
-                .bind(turn_id)
-                .bind(only.map(ReservationState::as_str))
+                .bind(key.session_id)
+                .bind(key.turn_id)
+                .bind(key.only.map(ReservationState::as_str))
                 .execute(&self.pool)
                 .await
                 .context("DELETE account turn")?;
                 Ok(result.rows_affected() == 1)
             }
 
-            async fn account_fences(&self) -> Result<Vec<Fence>> {
+            pub(super) async fn settle_account(&self, settle: &Settle<'_>) -> Result<Settled> {
+                let mut tx = self.pool.begin_with($begin).await.context("begin account settlement")?;
+                if let Some(key) = settle.turn {
+                    let held: Option<String> = sqlx::query_scalar(
+                        "SELECT state FROM provider_account_turns WHERE account_id = $1 \
+                         AND session_id = $2 AND turn_id = $3 AND worker_epoch = $4",
+                    )
+                    .bind(settle.account_id)
+                    .bind(key.session_id)
+                    .bind(key.turn_id)
+                    .bind(key.worker_epoch)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .context("SELECT settled account turn")?;
+                    let holds = held.as_deref().and_then(ReservationState::parse).is_some_and(
+                        |state| key.only.is_none_or(|only| only == state),
+                    );
+                    if !holds {
+                        return Ok(Settled::Stale);
+                    }
+                }
+                let current: Option<(String, String, Option<i64>, i64)> = sqlx::query_as(
+                    "SELECT state, reason, until_ms, revision FROM provider_account_controls \
+                     WHERE account_id = $1",
+                )
+                .bind(settle.account_id)
+                .fetch_optional(&mut *tx)
+                .await
+                .context("SELECT account control for settlement")?;
+                let (current_state, current_reason, current_until, revision) = match current {
+                    Some((state, reason, until, revision)) => (
+                        AccountState::parse(&state).context("unknown stored account state")?,
+                        reason,
+                        until,
+                        revision,
+                    ),
+                    None => (AccountState::Ok, String::new(), None, 0),
+                };
+                // Compared inside the transaction: an owner's block (or any
+                // more severe state) written meanwhile is never replaced.
+                let raised = settle.state.filter(|(next, ..)| {
+                    current_state != AccountState::Blocked
+                        && next.severity() >= current_state.severity()
+                });
+                let mut state_written = false;
+                if raised.is_some() || settle.stop_units {
+                    let (state, reason, until) = raised.map_or(
+                        (current_state, current_reason, current_until),
+                        |(next, reason, until)| (next, bounded(reason, 256), until),
+                    );
+                    let revision = revision.saturating_add(1);
+                    let written = Control {
+                        account_id: settle.account_id.to_owned(),
+                        owner_user_id: settle.owner_user_id.to_owned(),
+                        provider_id: settle.provider_id.to_owned(),
+                        state,
+                        reason,
+                        until_ms: until,
+                        updated_at_ms: settle.now_ms,
+                        revision,
+                    };
+                    write_control(&mut tx, &written).await?;
+                    if settle.stop_units || state.stops_units() {
+                        for machine in settle.machines {
+                            write_fence(
+                                &mut tx,
+                                settle.account_id,
+                                machine,
+                                AccountFenceAction::Stop,
+                                revision,
+                                settle.now_ms,
+                            )
+                            .await?;
+                        }
+                    }
+                    state_written = true;
+                }
+                let mut released = false;
+                if let (Some(key), true) = (settle.turn, settle.release) {
+                    let result = sqlx::query(
+                        "DELETE FROM provider_account_turns WHERE account_id = $1 \
+                         AND session_id = $2 AND turn_id = $3 AND worker_epoch = $4",
+                    )
+                    .bind(settle.account_id)
+                    .bind(key.session_id)
+                    .bind(key.turn_id)
+                    .bind(key.worker_epoch)
+                    .execute(&mut *tx)
+                    .await
+                    .context("DELETE settled account turn")?;
+                    released = result.rows_affected() == 1;
+                }
+                tx.commit().await.context("commit account settlement")?;
+                Ok(Settled::Applied {
+                    state_written,
+                    released,
+                })
+            }
+
+            pub(super) async fn account_fences(&self) -> Result<Vec<Fence>> {
                 let rows: Vec<FenceRow> = sqlx::query_as(
                     "SELECT account_id, machine_id, action, operation_id, state, detail, \
                      updated_at_ms FROM provider_account_fences ORDER BY account_id, machine_id",
@@ -367,7 +621,7 @@ macro_rules! implementation {
                 rows.into_iter().map(fence).collect()
             }
 
-            async fn record_account_fence(
+            pub(super) async fn record_account_fence(
                 &self,
                 fence: &Fence,
                 confirmed: bool,
@@ -391,7 +645,7 @@ macro_rules! implementation {
                 Ok(result.rows_affected() == 1)
             }
 
-            async fn account_native_machines(&self, account_id: &str) -> Result<Vec<String>> {
+            pub(super) async fn account_native_machines(&self, account_id: &str) -> Result<Vec<String>> {
                 sqlx::query_scalar(
                     "SELECT DISTINCT machine_id FROM provider_native_generations \
                      WHERE account_id = $1 ORDER BY machine_id",
@@ -405,5 +659,11 @@ macro_rules! implementation {
     };
 }
 
-implementation!(PostgresStorage, "BEGIN");
-implementation!(SqliteStorage, "BEGIN IMMEDIATE");
+mod postgres {
+    use super::*;
+    implementation!(PostgresStorage, "BEGIN", sqlx::Postgres);
+}
+mod sqlite {
+    use super::*;
+    implementation!(SqliteStorage, "BEGIN IMMEDIATE", sqlx::Sqlite);
+}

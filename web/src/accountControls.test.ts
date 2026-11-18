@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { assert, assertEquals, assertStringIncludes } from "../../tools/test-assert.ts";
 import {
-  type AccountControl, accountStateBadge, acknowledgeUncertainEffect, controlActions, controlRequest, logoutStatus,
+  type AccountControl, accountStateBadge, acknowledgementTarget, acknowledgeUncertainEffect, controlActions, controlRequest, logoutStatus,
   pickerUnavailableReason, postAccountControl, sessionParkedReason, signInObservation, validAccountControls,
 } from "./accountControls";
 import { AccountControlsPanel } from "./AccountControlsPanel";
@@ -38,8 +38,31 @@ test("the account card names every state, its reason and the rate-limit end", ()
   assertEquals(accountStateBadge(control({ state: "needs_attention", reason: "policy_violation:read_file" }), undefined).detail,
     "A built-in tool ran (read_file)");
   assertEquals(signInObservation({ reason: "native_login_required" }), "not_signed_in");
-  assertEquals(signInObservation({}), "signed_in");
+  assertEquals(signInObservation({ available: true }), "signed_in");
   assertEquals(signInObservation(undefined), undefined);
+});
+
+test("only an affirmative sign-in observation shows the account signed in", () => {
+  // Loading, or a read without a resolved native login, is unknown.
+  assertEquals(signInObservation({}), undefined);
+  assertEquals(signInObservation({ reason: "account_disabled" }), undefined);
+  assertEquals(signInObservation({ reason: "something_new", available: false }), undefined);
+  const unknown = accountStateBadge(control(), signInObservation(undefined));
+  assertEquals([unknown.label, unknown.tone], ["Sign-in unknown", "default"]);
+  assertEquals(accountStateBadge(control(), signInObservation({ available: true })).label, "Signed in");
+});
+
+test("an acknowledgement sheet acknowledges only the effect it showed", () => {
+  const shown = { session: "s1", method: "fs/write_text_file", sequence: 2 };
+  const effect = (sequence: number, method = "fs/write_text_file") => ({ session_id: "s1", method, sequence });
+  assertEquals(acknowledgementTarget(shown, "s1", effect(2)), shown);
+  // Nothing shown yet, the effect resolved, a newer sequence, another
+  // method, or the sheet now rendered for another session: stale.
+  assertEquals(acknowledgementTarget(undefined, "s1", effect(2)), undefined);
+  assertEquals(acknowledgementTarget(shown, "s1", undefined), undefined);
+  assertEquals(acknowledgementTarget(shown, "s1", effect(3)), undefined);
+  assertEquals(acknowledgementTarget(shown, "s1", effect(2, "terminal/create")), undefined);
+  assertEquals(acknowledgementTarget(shown, "s2", effect(2)), undefined);
 });
 
 test("kill switch actions follow the block, the confirmed stop and the logout", () => {

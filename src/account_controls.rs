@@ -17,6 +17,25 @@ pub const VIOLATION_PREFIX: &str = "antigravity_policy_violation:";
 /// How long a rate limit holds when the backend gave no reset time.
 pub const DEFAULT_RATE_LIMIT_MS: i64 = 60 * 60 * 1000;
 
+/// Whether a session's native conversation survives a re-login of the same
+/// account: a named-only Provider's account sandbox keeps one persistent
+/// home across credential generations (R3-13), so a verified same-account
+/// transition keeps the conversation ID. Every other native Provider signs
+/// each generation into its own home, where the old ID does not exist.
+#[must_use]
+pub fn keeps_conversation_across_sign_ins(provider: &str) -> bool {
+    crate::provider_account::named_only(provider)
+}
+
+impl crate::model::SessionMeta {
+    /// A dormant session awaiting native readmission still holds a native
+    /// conversation its new credential generation cannot resume.
+    #[must_use]
+    pub fn discards_conversation_on_readmission(&self) -> bool {
+        self.agent_session_id.is_some() && !keeps_conversation_across_sign_ins(&self.provider)
+    }
+}
+
 /// The durable state of one account. Anything but `Ok` parks every queue of
 /// the account; `Suspended`, `Blocked` and a detected policy violation also
 /// stop its units on every Machine.
@@ -168,16 +187,33 @@ pub struct Reservation {
     pub account_id: String,
     pub owner_user_id: String,
     pub session_id: String,
+    /// The Controller-generated reservation ID; never a caller's value.
     pub turn_id: String,
+    /// The prompt's delivery ID (its `cmid`), set when the turn is marked:
+    /// the worker reports it with the turn's terminal record.
+    pub delivery_id: String,
     /// The worker incarnation known when the turn was marked; empty while
     /// the dispatch revives the session.
     pub worker_epoch: String,
+    /// The session's runtime Machine when the turn was marked: the original
+    /// binding its termination evidence must come from.
+    pub machine_id: String,
     /// The session's newest event sequence before this turn: its terminal
     /// record is the first turn end after it.
     pub after_seq: i64,
     pub state: ReservationState,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+    /// The turn's terminal record, as delivered by the worker incarnation
+    /// that ran it (matched on session, delivery ID and worker epoch).
+    pub terminal: Option<Terminal>,
+}
+
+/// The terminal record of a reserved turn.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Terminal {
+    pub worker_epoch: String,
+    pub stop_reason: String,
 }
 
 /// A Machine fence the Controller owes the account's daemon.
@@ -330,33 +366,99 @@ pub enum TurnOutcome {
     NotDispatched,
 }
 
-/// Classify a terminal record's stop reason. Only the proxy's closed codes
-/// are read, never the message around them.
+/// The ACP stop reasons of a turn that ended normally (`Debug` of
+/// `StopReason`, as the worker records them). Anything else that is not an
+/// error is not proof of success.
+const COMPLETED_STOP_REASONS: [&str; 5] = [
+    "EndTurn",
+    "MaxTokens",
+    "MaxTurnRequests",
+    "Refusal",
+    "Cancelled",
+];
+
+/// Classify a terminal record's stop reason. A refusal or violation counts
+/// only as the proxy's validated structured result: the error message is
+/// exactly the proxy's closed code and its data carries the same code in
+/// `cowboy` (`proxy.mjs`). Vendor text that merely contains a code, and
+/// every unclassified error, is unproven.
 #[must_use]
 pub fn classify_stop_reason(stop_reason: &str) -> TurnOutcome {
-    let code = |prefix: &str| {
-        stop_reason.find(prefix).map(|at| {
-            stop_reason[at + prefix.len()..]
-                .chars()
-                .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
-                .take(128)
-                .collect::<String>()
-        })
-    };
-    if let Some(tool) = code(VIOLATION_PREFIX) {
-        return TurnOutcome::PolicyViolation(tool);
-    }
-    if let Some(class) = code(REFUSAL_PREFIX) {
-        return match AccountState::from_backend_class(&class) {
-            AccountState::Ok => TurnOutcome::Completed,
-            state => TurnOutcome::Refused(state),
+    let Some(error) = stop_reason.strip_prefix("error: ") else {
+        return if COMPLETED_STOP_REASONS.contains(&stop_reason) {
+            TurnOutcome::Completed
+        } else {
+            TurnOutcome::Unproven
         };
+    };
+    proxy_result(error).unwrap_or(TurnOutcome::Unproven)
+}
+
+fn closed_code(code: &str) -> Option<&str> {
+    (!code.is_empty()
+        && code.len() <= 128
+        && code
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')))
+    .then_some(code)
+}
+
+/// The proxy's structured result: `<prefix><code>: <data>`, where `data` is
+/// the JSON-RPC error data the ACP error display appends.
+fn proxy_result(error: &str) -> Option<TurnOutcome> {
+    let (message, data) = error.split_once(": ")?;
+    let data: serde_json::Value = serde_json::from_str(data).ok()?;
+    let cowboy = data.get("cowboy")?.as_object()?;
+    let violation = cowboy.get("policy_violation");
+    if let Some(tool) = message.strip_prefix(VIOLATION_PREFIX) {
+        let tool = closed_code(tool)?;
+        return (violation?.as_str()? == tool).then(|| TurnOutcome::PolicyViolation(tool.into()));
     }
-    if stop_reason.starts_with("error:") {
-        TurnOutcome::Unproven
-    } else {
-        TurnOutcome::Completed
+    let class = closed_code(message.strip_prefix(REFUSAL_PREFIX)?)?;
+    if violation.is_some() || cowboy.get("antigravity_backend")?.get("class")?.as_str()? != class {
+        return None;
     }
+    match AccountState::from_backend_class(class) {
+        // The proxy never reports `ok` as an error.
+        AccountState::Ok => None,
+        state => Some(TurnOutcome::Refused(state)),
+    }
+}
+
+/// The worker/Machine ledger's evidence about the execution target of one
+/// reserved turn on its original binding (the Machine side is provided by
+/// the account-sandbox daemon; see `docs/antigravity-real-accounts-design.md`,
+/// R3-10). Without it no loss of a dispatched turn is proven.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TargetTermination {
+    /// Every process of the turn's execution target exited (the ledger's
+    /// termination record of the reservation's worker epoch).
+    pub terminated: bool,
+    /// The backend class the daemon reconciled from the unit's closed log,
+    /// when the log was closed and its evidence settled.
+    #[serde(default)]
+    pub closed_log_class: Option<String>,
+}
+
+/// The outcome of a dispatched turn whose worker is gone without a terminal
+/// record: only proven termination of its execution target settles it, and
+/// only the closed log's evidence decides how (R3-10).
+#[must_use]
+pub fn unit_loss_outcome(evidence: Option<&TargetTermination>) -> Option<TurnOutcome> {
+    let evidence = evidence.filter(|evidence| evidence.terminated)?;
+    Some(
+        match evidence.closed_log_class.as_deref().and_then(closed_code) {
+            Some(class) => match AccountState::from_backend_class(class) {
+                AccountState::Ok => TurnOutcome::UnitLost {
+                    evidence_complete: true,
+                },
+                state => TurnOutcome::Refused(state),
+            },
+            None => TurnOutcome::UnitLost {
+                evidence_complete: false,
+            },
+        },
+    )
 }
 
 /// The effect of settling a reservation.

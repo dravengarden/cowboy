@@ -12,7 +12,7 @@ use anyhow::{Context as _, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 use super::launcher::ReadyReport;
-use crate::machine_protocol::machine_browser::{Geometry, Purpose};
+use crate::machine_protocol::machine_browser::{BrowserNetwork, Geometry, Purpose};
 
 /// Control record beside, not inside, the deleted `browser/` tree.
 pub const CONTROL_FILE: &str = "browser-state.json";
@@ -203,6 +203,11 @@ pub struct InstanceRecord {
     pub geometry: Geometry,
     pub scale: u8,
     pub ready: ReadyReport,
+    /// The network policy the unit was started with; absent for an
+    /// unrestricted unit (and in records of earlier Machines, which an open
+    /// that requires a policy therefore replaces).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<BrowserNetwork>,
 }
 
 #[must_use]

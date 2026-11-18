@@ -176,6 +176,9 @@ pub struct Receipt {
     /// Machine browser revocation evidence by Machine id.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub browser_revocations: BTreeMap<String, revocation::browser_revocations::Evidence>,
+    /// Account-sandbox removal evidence (home and system user) by Machine id.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub account_removals: BTreeMap<String, revocation::account_removals::Evidence>,
     /// The share a browser share change is about.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser_share_id: Option<String>,

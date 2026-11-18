@@ -77,7 +77,7 @@ pub(super) async fn resolve_for_create(
     // scope; other accounts serve exactly their own Provider.
     let scope = state.provider_catalog.portable_account_scope(provider);
     let id = registry.resolve_in_scope(provider, &scope, explicit)?;
-    named_only_admitted(state, provider, &id)?;
+    named_only_admitted(state, provider, &id).await?;
     if !id.is_default() {
         allow_named_creation(
             named_session_provider(state, provider),
@@ -92,7 +92,7 @@ pub(super) async fn resolve_for_create(
 /// A named-only Provider (Antigravity) has no default account, and admits
 /// sign-ins and sessions only for accounts the Service admits
 /// (`accounts.antigravity_admitted`) and the owner has not blocked.
-pub(super) fn named_only_admitted(
+pub(super) async fn named_only_admitted(
     state: &AppState,
     provider: &str,
     account: &crate::provider_account::ProviderAccountId,
@@ -106,7 +106,7 @@ pub(super) fn named_only_admitted(
     if !controls::admitted(state, account) {
         return Err("antigravity_account_not_admitted");
     }
-    if controls::blocked(state, account) {
+    if controls::blocked(state, account).await? {
         return Err("antigravity_account_blocked");
     }
     Ok(())

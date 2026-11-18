@@ -398,7 +398,7 @@ impl SessionMeta {
             || self.closing
             || self.status != Status::Exited
             || self.owner_user_id.is_none()
-            || self.agent_session_id.is_some()
+            || self.discards_conversation_on_readmission()
             || self.provider_account_id != target.account_id
             || self.provider != target.provider_id
             || self.provider_version != target.provider_version

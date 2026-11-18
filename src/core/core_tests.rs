@@ -3225,6 +3225,51 @@ fn provider_reload_fixture() -> (Hub, SessionMeta) {
 }
 
 #[test]
+fn a_persistent_account_home_keeps_its_conversation_across_sign_ins() {
+    for (provider, keeps) in [("antigravity", true), ("claude-code", false)] {
+        let (hub, before) = provider_reload_fixture();
+        let account = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        {
+            let mut sessions = hub.inner.sessions.lock();
+            let session = sessions.get_mut(&before.id).unwrap();
+            session.meta.provider = provider.into();
+            session.meta.provider_account_id = account;
+            session.meta.provider_auth_generation = Some(1);
+            session.meta.status = Status::Exited;
+        }
+        let expected = hub.session_info(&before.id).unwrap().meta;
+        let target = crate::provider_account::NativeProfileReceipt {
+            account_id: expected.provider_account_id.clone(),
+            provider_id: provider.into(),
+            request_id: "login".into(),
+            generation: 2,
+            method: "native".into(),
+            provider_version: "new".into(),
+            generation_digest: "new-digest".into(),
+            auth_contract_fingerprint: "fixture".into(),
+            identity: crate::provider_account::NativeIdentity {
+                authority: "fixture".into(),
+                subject: "private".into(),
+                tenant: None,
+            },
+        };
+        let behavior = crate::provider::legacy_behavior(provider);
+        hub.project_native_binding(&expected, &target, &behavior)
+            .unwrap();
+        // Idempotent either way.
+        hub.project_native_binding(&expected, &target, &behavior)
+            .unwrap();
+        let after = hub.session_info(&before.id).unwrap().meta;
+        assert_eq!(after.provider_auth_generation, Some(2));
+        assert_eq!(
+            after.agent_session_id.as_deref(),
+            keeps.then_some("native-thread"),
+            "{provider}"
+        );
+    }
+}
+
+#[test]
 fn native_binding_projection_is_scoped_idempotent_and_preserves_user_state() {
     let (hub, before) = provider_reload_fixture();
     let account = uuid::Uuid::new_v4().to_string().try_into().unwrap();

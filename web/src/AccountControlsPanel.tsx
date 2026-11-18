@@ -32,7 +32,7 @@ const CONFIRM: Partial<Record<ControlAction, { title: string; body: string; butt
 export function AccountControlsPanel({ control, observation, disabled, onChange }: {
   control: AccountControl;
   /** The account's cached usage/sign-in observation, if any. */
-  observation: { reason?: string | undefined } | undefined;
+  observation: { reason?: string | undefined; available?: boolean | undefined } | undefined;
   disabled: boolean;
   onChange: () => void;
 }): React.JSX.Element {

@@ -22,7 +22,10 @@ impl MachinePluginStore {
                 && session.provider_version == target.provider_version
                 && session.provider_generation_digest == target.generation_digest
                 && session.provider_auth_generation == Some(target.generation)
-                && session.agent_session_id.is_none()
+                // An account sandbox's persistent home keeps the native
+                // conversation across sign-ins (R3-13); other homes do not.
+                && (session.agent_session_id.is_none()
+                    || crate::provider_account::named_only(&target.provider_id))
                 && session.adopt_only,
             "readmission declaration mismatch"
         );

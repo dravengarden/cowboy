@@ -234,6 +234,22 @@ async fn unblocking_before_the_machine_is_reached_cancels_the_logout() {
         )
         .await
         .unwrap();
+    // Cancelled by the unblock itself, before any Machine reconnects.
+    let record = controls.logout_record(account.as_str()).unwrap();
+    assert_eq!(record.targets[0].state, LogoutTargetState::Cancelled);
+    // A later block never fires the lifted block's unsent logout.
+    let unblocked = controls.cache.control(account.as_str()).unwrap();
+    controls
+        .enter(
+            &unblocked,
+            AccountState::Blocked,
+            "owner_block",
+            None,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
     fake.connected.lock().insert(MACHINE.into());
     controls.tick().await;
     settle_logouts(&controls).await;

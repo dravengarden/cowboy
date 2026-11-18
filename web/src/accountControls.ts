@@ -110,13 +110,15 @@ export type BadgeTone = "success" | "warning" | "error" | "default";
 export interface StateBadge { label: string; tone: BadgeTone; detail?: string | undefined }
 
 /** The card's state badge. `signIn` is the account's sign-in observation:
- * `signed_in`, `not_signed_in`, `pending` or unknown (undefined). */
+ * `signed_in`, `not_signed_in`, `pending` or unknown (undefined). Only an
+ * affirmative observation shows "Signed in"; unknown or loading is neutral. */
 export function accountStateBadge(control: AccountControl, signIn: "signed_in" | "not_signed_in" | "pending" | undefined, now = Date.now()): StateBadge {
   const detail = controlReasonText(control.reason);
   if (control.state === "ok") {
+    if (signIn === "signed_in") return { label: "Signed in", tone: "success" };
     if (signIn === "not_signed_in") return { label: "Not signed in", tone: "warning" };
     if (signIn === "pending") return { label: "Sign-in not finished", tone: "warning" };
-    return { label: "Signed in", tone: "success" };
+    return { label: "Sign-in unknown", tone: "default" };
   }
   if (control.state === "rate_limited") {
     const until = control.until_ms ?? undefined;
@@ -252,9 +254,25 @@ export function acknowledgeUncertainEffect(session: string, sequence: number): P
 
 /** The sign-in state of an account from its cached usage observation
  * (`/api/provider-accounts/usage`), never a Provider request. */
-export function signInObservation(observation: { reason?: string | undefined } | undefined): "signed_in" | "not_signed_in" | "pending" | undefined {
+export function signInObservation(observation: { reason?: string | undefined; available?: boolean | undefined } | undefined): "signed_in" | "not_signed_in" | "pending" | undefined {
   if (!observation) return undefined;
   if (observation.reason === "native_login_required" || observation.reason === "native_login_outdated") return "not_signed_in";
   if (observation.reason === "native_login_pending") return "pending";
-  return "signed_in";
+  // Only the server's resolved native login is evidence of a sign-in; any
+  // other refusal (disabled, unavailable, an unknown code) proves nothing.
+  return observation.available === true ? "signed_in" : undefined;
+}
+
+/** The uncertain effect an acknowledgement sheet was opened for. */
+export interface AcknowledgementTarget { session: string; method: string; sequence: number }
+
+/** What the open sheet may acknowledge: exactly the effect the owner was
+ * shown when it opened, and only while it is still the session's current
+ * effect. `undefined` once the session or the effect changed. */
+export function acknowledgementTarget(
+  captured: AcknowledgementTarget | undefined, session: string, current: UncertainEffect | undefined,
+): AcknowledgementTarget | undefined {
+  if (!captured || !current) return undefined;
+  return captured.session === session && captured.method === current.method && captured.sequence === current.sequence
+    ? captured : undefined;
 }
