@@ -338,7 +338,12 @@ and `reason` directly.
 AI configuration uses the existing on-demand `control.describe` contracts for
 `tools.defaults_set` and `tools.session_set`. The field is
 `calls.review: {claude:["opus","fable"],gpt:["astra","sol"],claude_effort:"max",gpt_effort:"max"}`
-(the effort keys are optional and default to `max`). Read the current
+(the effort keys are optional and default to `max`). The Controller persists
+effort under its own settings keys (`agent_review_effort:<agent>`,
+`session_review_effort:<session>`), never inside the schema-one Tools document:
+an older Controller would reject the unknown field and fall back to built-in
+Tools. A rollback therefore only forgets effort (Max first), and Web shows the
+effort controls only when the Controller returns the fields. Read the current
 Tools document, preserve unrelated fields, and omit the session override to
 inherit. Existing authorization, DB persistence and operation receipts apply.
 

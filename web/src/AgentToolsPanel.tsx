@@ -123,8 +123,9 @@ function ReviewPreferenceRows(
           </Row>
         );
       })}
-      {(["claude", "gpt"] as const).map((family) => {
-        const review = current ?? DEFAULT_REVIEW_PREFERENCES;
+      {/* Older Controllers omit effort and reject it on write. */}
+      {current?.claude_effort !== undefined && (["claude", "gpt"] as const).map((family) => {
+        const review = current;
         const key = family === "claude" ? "claude_effort" : "gpt_effort";
         const name = family === "claude" ? "Claude" : "GPT";
         return (

@@ -16,7 +16,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::{AppState, AuthenticatedProductRequest, session_is_visible};
-use crate::core::settings_keys::{AGENT_TOOLS_PREFIX, SESSION_TOOLS_PREFIX};
+mod effort_store;
+pub(super) use effort_store::store_session;
 
 pub(super) const SCHEMA: u16 = 1;
 /// Agents a managed call can start. Each must declare the read-only profile.
@@ -463,7 +464,7 @@ pub(super) fn agent_defaults(state: &AppState, agent: &str) -> (AgentTools, bool
 }
 
 fn hub_agent_defaults(hub: &crate::core::Hub, agent: &str) -> (AgentTools, bool) {
-    hub.setting(&format!("{AGENT_TOOLS_PREFIX}{agent}"))
+    effort_store::agent_document(hub, agent)
         .and_then(|value| serde_json::from_value::<AgentTools>(value).ok())
         .filter(AgentTools::validate)
         .map_or_else(
@@ -477,7 +478,7 @@ pub(super) fn session_override(state: &AppState, session: &str) -> SessionTools 
 }
 
 fn hub_session_override(hub: &crate::core::Hub, session: &str) -> SessionTools {
-    hub.setting(&format!("{SESSION_TOOLS_PREFIX}{session}"))
+    effort_store::session_document(hub, session)
         .and_then(|value| serde_json::from_value::<SessionTools>(value).ok())
         .filter(SessionTools::validate)
         .unwrap_or(SessionTools {
@@ -679,9 +680,7 @@ pub(super) fn allow_session(
     if targets != current.targets {
         session.calls.targets = Some(targets);
     }
-    state
-        .hub
-        .set_setting(format!("{SESSION_TOOLS_PREFIX}{}", meta.id), json!(session));
+    effort_store::store_session(&state.hub, &meta.id, Some(json!(session)));
 }
 
 /// A requested agent resolved against the session's policy, before readiness.
@@ -942,12 +941,10 @@ pub(super) async fn configure_agent(
     {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    state.hub.set_setting(
-        format!("{AGENT_TOOLS_PREFIX}{agent}"),
-        update
-            .settings
-            .as_ref()
-            .map_or(serde_json::Value::Null, |settings| json!(settings)),
+    effort_store::store_agent(
+        &state.hub,
+        &agent,
+        update.settings.as_ref().map(|settings| json!(settings)),
     );
     let (settings, customized) = agent_defaults(&state, &agent);
     Json(json!({"schema": SCHEMA, "agent": agent, "settings": settings, "customized": customized}))
@@ -1004,13 +1001,10 @@ pub(super) async fn configure_session(
     if !update.validate() {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    state.hub.set_setting(
-        format!("{SESSION_TOOLS_PREFIX}{session}"),
-        if update.is_empty() {
-            serde_json::Value::Null
-        } else {
-            json!(update)
-        },
+    effort_store::store_session(
+        &state.hub,
+        &session,
+        (!update.is_empty()).then(|| json!(update)),
     );
     Json(session_view(&state, &info.meta)).into_response()
 }

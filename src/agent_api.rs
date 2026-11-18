@@ -497,7 +497,7 @@ export type CallCapabilities = {
   enabled:boolean;default:string;review_input_reuse:boolean;
   capabilities:{id:string;enabled:boolean;providers:string[]}[];
   providers:{id:string;available:boolean;reason:string|null;presets:unknown[];review_candidates:string[];preset:string|null;options:Record<string,string>|null;quota_account:string|null}[];
-  review_selection:string;review_preferences:Record<string,string[]|string>;
+  review_selection:string;review_preferences:{claude:string[];gpt:string[]};
   quota:{observed_now_ms?:number;accounts?:{account:string;status:string;observed_at_ms:number|null;stale:boolean;limits:unknown;needs_read:boolean}[];unavailable_accounts?:string[];status?:string};
   purposes:string[];limits:Record<string,number>;
 };

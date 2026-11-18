@@ -142,9 +142,10 @@ pub(super) fn apply(
         state.hub.set_config_preference(&target.id, key, value)?;
     }
     let tools = super::super::agent_tools::inherited_settings(state, source, &target.provider);
-    state.hub.set_setting(
-        format!("{}{}", settings_keys::SESSION_TOOLS_PREFIX, target.id),
-        serde_json::json!(tools),
+    super::super::agent_tools::store_session(
+        &state.hub,
+        &target.id,
+        Some(serde_json::json!(tools)),
     );
     state.hub.set_setting(
         format!(
