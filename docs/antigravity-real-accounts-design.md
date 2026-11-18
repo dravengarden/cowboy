@@ -1,6 +1,6 @@
 # Antigravity real accounts on OVH — design
 
-Status: design, revision 4, 2026-11-18. Implemented so far: the sandbox
+Status: design, revision 5, 2026-11-18 (implementation in progress). Implemented so far: the sandbox
 daemon (`packaging/account-sandbox/`), Machine step 3a (manifest isolation,
 runtime archive, worker launch, native login/logout through the daemon) and
 step 3b (Unix execution bridge, trusted process ledger in the worker endpoint,
@@ -685,6 +685,44 @@ target directory as a `unix:` execution endpoint.
 - The (b) and (c) cases with `settings.json` present were not run (prompt
   budget); with the deny layer shown ineffective they reduce to the absent
   rows.
+
+## Revision 5 simplification (owner decision, 2026-11-18)
+
+Two code reviews of the implementation (calls `call-c61a3380faee24839460a248`
+and `call-68f0580fdd70787294431c14`) kept finding crash-safety and race
+defects concentrated in three cross-component state machines. The owner chose
+to simplify them; account isolation (L1–L4) is unchanged. This section takes
+precedence over "Account controls", R1-8, R2-11, R3-5/R3-6, R3-9, R3-10 and
+R3-16 where they differ.
+
+- **One runtime per account, enforced by the daemon.** `max_runtime_units` is
+  1 for every account; a second runtime start is refused (`limit`). There is
+  no Controller turn reservation, no reservation settlement, no cross-Machine
+  termination query and no per-turn evidence settlement. The Controller only
+  explains the state: creating or waking another session of an account whose
+  runtime is live is refused with "in use by session X; hibernate it first".
+  One runtime serves one session, so at most one turn per account runs.
+- **Backend signals set account state only.** The proxy's structured
+  classification (`antigravity_backend_refusal:<class>`,
+  `antigravity_policy_violation`) moves the account to the matching state;
+  `suspended`, `blocked`, `needs_attention` and policy violations also fence
+  the account and stop its unit. Nothing waits for, or is settled by, turn
+  terminal events. Unit loss has no settlement.
+- **Process ledger for cancel and teardown only.** The worker records every
+  `process/start` before forwarding, refuses starts and filesystem mutations
+  outside an active turn (the readiness Git probe is authorized by worker
+  state, never by a caller-chosen ID), fences the turn on cancel, turn end
+  and teardown, and terminates recorded processes best-effort. Processes left
+  behind by a dead worker are not inherited; the target keeper's unattended
+  reap (30 minutes) is the backstop. A maybe-admitted mutation still sets
+  `uncertain_effect`, which parks the session until the owner acknowledges
+  that exact sequence.
+- **Facade paths are a guardrail.** `RunCommand` already gives the model a
+  shell on the development Machine, so workspace path confinement in the
+  file tools prevents mistakes, not attacks; it is not an isolation boundary.
+  Conditional writes reuse the existing execution helper primitive.
+- **Logout and removal bind to the Machine enrollment** that holds the
+  credential, so a re-enrolled Machine cannot certify them.
 
 ## Residual risks
 
