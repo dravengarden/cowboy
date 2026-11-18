@@ -21,7 +21,7 @@ primary phone/desktop product path.
 - [`architecture/00-overview.md`](architecture/00-overview.md) — Control plane, Machines, workers, storage, and client topology
 - [`configuration.md`](configuration.md) — Unified Service/Device configuration files, `cowboy config` CLI, reload classes, rolling-update pre-flight, and how to decide config file vs database vs wiring
 - [`antigravity-provider-plan.md`](antigravity-provider-plan.md) — Proposed Antigravity CLI Provider: consumer-subscription account-risk boundary, feasibility spike and phases; not implemented
-- [`antigravity-real-accounts-design.md`](antigravity-real-accounts-design.md) — Antigravity real accounts on OVH — design
+- [`antigravity-real-accounts-design.md`](antigravity-real-accounts-design.md) — Antigravity real accounts on OVH — design (account sandbox identities, split execution, controls)
 - [`execution-environments.md`](execution-environments.md) — Native remote execution, ownership, staged acceptance and OVH egress/context audit
 - [`execution-connection-recovery.md`](execution-connection-recovery.md) — Machine heartbeat, native handshake and execution lifetime recovery, including Retry preflight
 - [`remote-session-disaster-recovery.md`](remote-session-disaster-recovery.md) — Proposed recovery contract, October 24 incident audit, durable ACK gaps, per-session reconciliation and fault acceptance matrix; not implemented or activated
