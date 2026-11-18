@@ -14,7 +14,16 @@ const GIB: u64 = 1024 * 1024 * 1024;
 const MAX_CONFIG_BYTES: u64 = 64 * 1024;
 
 /// Address ranges always denied to account units, besides the configured ones.
-pub const BUILTIN_IP_DENY: &[&str] = &["localhost", "link-local", "multicast"];
+/// Explicit prefixes: `systemd-run -p` rejects the symbolic names
+/// (`localhost`, `link-local`, `multicast`) that unit files accept.
+pub const BUILTIN_IP_DENY: &[&str] = &[
+    "127.0.0.0/8",
+    "::1/128",
+    "169.254.0.0/16",
+    "fe80::/10",
+    "224.0.0.0/4",
+    "ff00::/8",
+];
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]

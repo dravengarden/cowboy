@@ -320,7 +320,7 @@ mod tests {
             "UMask=0077".into(),
             "KeyringMode=private".into(),
             "RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK".into(),
-            "IPAddressDeny=localhost link-local multicast 40.160.141.233/32 10.0.0.0/8".into(),
+            "IPAddressDeny=127.0.0.0/8 ::1/128 169.254.0.0/16 fe80::/10 224.0.0.0/4 ff00::/8 40.160.141.233/32 10.0.0.0/8".into(),
             "IPAddressAllow=127.0.0.53/32".into(),
             "MemoryMax=3G".into(),
             "MemorySwapMax=0".into(),
