@@ -12,6 +12,7 @@
 
 mod agent_tools;
 mod config_revert;
+mod model_catalog;
 pub(crate) use agent_tools::launch_extensions;
 pub(crate) use mcp_bindings::launch_mcp;
 mod dormant_pins;

@@ -146,6 +146,13 @@ topics include their own type dependencies and share one declaration source with
 the full SDK. Each of the seven read topics is tested to cost less than half of
 full read discovery.
 
+`help:"models"` returns the model-intel evidence summary (`models/summary.md`,
+about 1 KB) with its own content revision: determined tiers per Provider and
+workload, and per-preset evidence such as verified review recall. It is never
+part of a resident description or the read SDK, explains trade-offs without
+authorizing a model, and is embedded in the Controller so a catalog refresh
+needs only a Controller release. The help index lists it.
+
 Resource `cowboy://sdk/v1` also obtains the current Controller's strict
 declaration ([`src/agent_api.rs`](../src/agent_api.rs) `SDK`). `cowboy_read`
 runs CODE as `async ({cowboy}) => { CODE }`, or a module exporting a default
