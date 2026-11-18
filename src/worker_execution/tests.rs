@@ -47,8 +47,6 @@ struct Target {
     client: Arc<Client>,
     log: Arc<Mutex<Vec<String>>>,
     held: Arc<Mutex<Vec<RuntimeRequest>>>,
-    /// The keeper's answer to `Observe`; `Pending` while unset.
-    observed: Arc<Mutex<Option<Response>>>,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -80,13 +78,8 @@ impl Target {
         let client = Client::new("session".into(), "worker".into(), binding(), notify);
         let log = Arc::<Mutex<Vec<String>>>::default();
         let held = Arc::<Mutex<Vec<RuntimeRequest>>>::default();
-        let observed = Arc::<Mutex<Option<Response>>>::default();
-        let (relay, relay_log, relay_held, relay_observed) = (
-            Arc::clone(&client),
-            Arc::clone(&log),
-            Arc::clone(&held),
-            Arc::clone(&observed),
-        );
+        let (relay, relay_log, relay_held) =
+            (Arc::clone(&client), Arc::clone(&log), Arc::clone(&held));
         let task = tokio::spawn(async move {
             while notified.recv().await.is_some() {
                 for frame in relay.frames(false) {
@@ -113,13 +106,11 @@ impl Target {
                         }
                         Command::Observe { operation_id, .. } => {
                             relay_log.lock().push(format!("observe {operation_id}"));
-                            // Unset: the keeper long-polls and still reports pending.
-                            let response = relay_observed.lock().clone().unwrap_or_else(|| {
-                                std::thread::sleep(Duration::from_millis(20));
-                                Response::Operation {
-                                    outcome: Outcome::Pending,
-                                }
-                            });
+                            // The keeper long-polls and still reports pending.
+                            std::thread::sleep(Duration::from_millis(20));
+                            let response = Response::Operation {
+                                outcome: Outcome::Pending,
+                            };
                             answer(&relay, request, response);
                         }
                         // Event polls stay open.
@@ -132,7 +123,6 @@ impl Target {
             client,
             log,
             held,
-            observed,
             task,
         }
     }
@@ -200,27 +190,27 @@ fn start(id: &str) -> Value {
 }
 
 #[tokio::test]
-async fn a_start_is_durable_before_it_is_forwarded() {
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("session.json");
-    let observed = Arc::new(Mutex::new(None));
-    let (file, seen) = (path.clone(), Arc::clone(&observed));
+async fn a_start_is_recorded_before_it_is_forwarded() {
+    let recorded = Arc::new(Mutex::new(None));
+    let seen = Arc::clone(&recorded);
     let inner = processes();
+    let holder: Arc<OnceLock<Arc<Ledger>>> = Arc::default();
+    let reader = Arc::clone(&holder);
     let target = Target::new(Arc::new(move |invocation| {
         if invocation.method == "process/start" {
-            *seen.lock() = Some(std::fs::read_to_string(&file).unwrap_or_default());
+            *seen.lock() = reader.get().map(|ledger| ledger.live());
         }
         inner(invocation)
     }));
-    let ledger = ledger(&target.client, Some(path.clone()));
+    let ledger = ledger(&target.client, None);
+    let _ = holder.set(Arc::clone(&ledger));
     ledger.begin_turn("turn-1");
     let reply = target
         .client
         .relay("process/start".into(), start("p1"))
         .await;
     assert_eq!(reply["result"]["processId"], "p1");
-    let recorded = observed.lock().clone().unwrap();
-    assert!(recorded.contains("\"p1\"") && recorded.contains("turn-1"));
+    assert_eq!(recorded.lock().clone().unwrap(), ["p1".to_owned()]);
     assert_eq!(ledger.live(), ["p1"]);
 }
 
@@ -228,6 +218,7 @@ async fn a_start_is_durable_before_it_is_forwarded() {
 async fn starts_outside_a_turn_or_without_an_id_are_refused_unsent() {
     let target = Target::new(processes());
     let ledger = ledger(&target.client, None);
+    ledger.set_readiness(false);
     let reply = target
         .client
         .relay("process/start".into(), start("p1"))
@@ -238,6 +229,22 @@ async fn starts_outside_a_turn_or_without_an_id_are_refused_unsent() {
             .unwrap()
             .contains("no Cowboy turn")
     );
+    // Filesystem mutations need a turn too, even in the readiness window.
+    ledger.set_readiness(true);
+    let write = target
+        .client
+        .relay(
+            "fs/writeFile".into(),
+            json!({"path": "file:///target/a", "dataBase64": ""}),
+        )
+        .await;
+    assert!(
+        write["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("filesystem change was refused")
+    );
+    ledger.set_readiness(false);
     ledger.begin_turn("turn-1");
     let reply = target
         .client
@@ -351,7 +358,7 @@ async fn an_unknown_id_counts_as_gone_only_once_its_start_settled() {
 }
 
 #[tokio::test]
-async fn a_dead_workers_ledger_is_terminated_by_the_next_worker() {
+async fn a_dead_workers_processes_are_not_inherited() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("session.json");
     {
@@ -362,28 +369,14 @@ async fn a_dead_workers_ledger_is_terminated_by_the_next_worker() {
             .client
             .relay("process/start".into(), start("p1"))
             .await;
-        target
-            .client
-            .relay(
-                "fs/writeFile".into(),
-                json!({"path": "file:///target/a", "dataBase64": ""}),
-            )
-            .await;
         // The worker dies here: nothing settles.
     }
-    let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    assert_eq!(saved["processes"]["p1"]["turn"], "turn-1");
     let target = Target::new(processes());
-    let ledger = ledger(&target.client, Some(path.clone()));
-    assert_eq!(ledger.live(), ["p1"]);
-    // The next turn's completion waits for the recovered process too.
-    ledger.begin_turn("turn-2");
-    let settled = target.client.finish_turn("turn-2").unwrap();
-    target.client.settle_recovered();
-    settled.await;
+    let ledger = ledger(&target.client, Some(path));
     assert!(ledger.live().is_empty());
-    assert!(!path.exists(), "an empty ledger leaves no file");
-    assert_eq!(target.log(), ["process/terminate p1", "process/read p1"]);
+    ledger.begin_turn("turn-2");
+    assert!(target.client.finish_turn("turn-2").is_none());
+    assert!(target.log().is_empty());
 }
 
 #[tokio::test]
@@ -394,12 +387,13 @@ async fn lost_mutation_replies_mark_the_effect_uncertain_durably() {
         "fs/remove" => Reply::Answer(Response::Refused {
             reason: wire::Refusal::Capacity,
         }),
-        "fs/writeFile" => Reply::Answer(Response::Operation {
+        "fs/writeFile" | "process/terminate" => Reply::Answer(Response::Operation {
             outcome: Outcome::Unknown,
         }),
         _ => completed(json!({"result": {}})),
     }));
     let ledger = ledger(&target.client, Some(path.clone()));
+    ledger.begin_turn("turn-1");
     let observed = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&observed);
     ledger.set_observer(Box::new(move |method, sequence| {
@@ -430,11 +424,23 @@ async fn lost_mutation_replies_mark_the_effect_uncertain_durably() {
     assert!(refused.pointer("/error/data").is_none());
     assert_eq!(ledger.uncertain_effect().as_deref(), Some("fs/writeFile"));
     assert_eq!(*observed.lock(), [("fs/writeFile".to_owned(), 1)]);
+    // A lost termination result is uncertain too.
+    target
+        .client
+        .relay("process/terminate".into(), json!({"processId": "p9"}))
+        .await;
+    assert_eq!(
+        ledger.uncertain_effect().as_deref(),
+        Some("process/terminate")
+    );
     drop(target);
     let reopened = Ledger::open("session", Some(path)).unwrap();
-    assert_eq!(reopened.uncertain_effect().as_deref(), Some("fs/writeFile"));
+    assert_eq!(
+        reopened.uncertain_effect().as_deref(),
+        Some("process/terminate")
+    );
     // Each lost reply advances the sequence the owner acknowledges.
-    assert_eq!(reopened.uncertain_sequence(), 1);
+    assert_eq!(reopened.uncertain_sequence(), 2);
     assert!(Ledger::open("other", Some(root.path().join("session.json"))).is_err());
 }
 
@@ -614,19 +620,39 @@ async fn the_unix_endpoint_bounds_frames() {
 }
 
 #[tokio::test]
-async fn readiness_probes_run_outside_turns_one_at_a_time() {
-    let target = Target::new(Arc::new(|_| completed(json!({"result": {}}))));
+async fn the_readiness_probe_runs_only_while_the_worker_starts() {
+    let target = Target::new(processes());
     let ledger = ledger(&target.client, None);
-    // No turn runs while a session is created; only a readiness probe starts.
-    assert!(ledger.admit_start("cowboy-agy-plain").is_err());
-    let first = format!("{}1", super::ledger::READINESS_PREFIX);
-    let second = format!("{}2", super::ledger::READINESS_PREFIX);
-    ledger.admit_start(&first).unwrap();
-    assert!(ledger.admit_start(&second).is_err());
-    // It is recorded like every process and ends with the target's evidence.
-    assert_eq!(ledger.live(), std::slice::from_ref(&first));
-    ledger.exited(&first);
-    ledger.admit_start(&second).unwrap();
+    // While the session starts, one probe may run outside a turn, whatever
+    // its id; a second waits for the first.
+    let first = target
+        .client
+        .relay("process/start".into(), start("any-id"))
+        .await;
+    assert_eq!(first["result"]["processId"], "any-id");
+    let second = target
+        .client
+        .relay("process/start".into(), start("second"))
+        .await;
+    assert!(
+        second["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("readiness")
+    );
+    ledger.exited("any-id");
+    // Once the worker reports its session running, no probe id helps.
+    ledger.set_readiness(false);
+    let late = target
+        .client
+        .relay("process/start".into(), start("cowboy-agy-readiness-1"))
+        .await;
+    assert!(
+        late["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("no Cowboy turn")
+    );
 }
 
 #[tokio::test]
@@ -640,6 +666,7 @@ async fn a_closed_socket_neither_aborts_an_admitted_relay_nor_drops_its_outcome(
         }
     }));
     let ledger = ledger(&fixture.target.client, None);
+    ledger.begin_turn("turn-1");
     let mut socket = fixture.initialized().await;
     socket
         .send(Message::Text(
@@ -663,80 +690,40 @@ async fn a_closed_socket_neither_aborts_an_admitted_relay_nor_drops_its_outcome(
 }
 
 #[tokio::test]
-async fn a_lost_start_is_resolved_by_its_keeper_operation_before_reads_count() {
-    let terminated = Arc::new(Mutex::new(false));
-    let seen = Arc::clone(&terminated);
-    let target = Target::new(Arc::new(move |invocation| {
-        match invocation.method.as_str() {
-            // The start's reply is lost after admission.
-            "process/start" => Reply::Answer(Response::Operation {
-                outcome: Outcome::Unknown,
-            }),
-            "process/terminate" => {
-                *seen.lock() = true;
-                completed(json!({"result": {}}))
-            }
-            // The target does not (yet) know the process.
-            _ => completed(json!({"error": {"code": -32600, "message": "unknown process id"}})),
+async fn a_turns_completion_waits_for_its_admitted_writes() {
+    let target = Target::new(Arc::new(|invocation| {
+        if invocation.method == "fs/writeFile" {
+            Reply::Hold
+        } else {
+            completed(json!({"result": {}}))
         }
     }));
     let ledger = ledger(&target.client, None);
     ledger.begin_turn("turn-1");
-    let reply = target
-        .client
-        .relay(
-            "process/start".into(),
-            json!({"processId": "p1", "argv": ["true"], "cwd": "file:///target"}),
-        )
-        .await;
-    assert_eq!(
-        reply.pointer("/error/data/outcome"),
-        Some(&json!("unknown"))
-    );
-    let settled = target.client.finish_turn("turn-1").unwrap();
-    let settled = tokio::spawn(settled);
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    // Unresolved: a read that does not know the process proves nothing.
-    assert_eq!(ledger.live(), ["p1".to_owned()]);
-    assert!(target.log().iter().any(|line| line.starts_with("observe ")));
-    assert!(!*terminated.lock());
-    // The keeper resolves the operation as never admitted: no process.
-    *target.observed.lock() = Some(Response::Operation {
-        outcome: Outcome::Missing,
+    let client = Arc::clone(&target.client);
+    let writing = tokio::spawn(async move {
+        client
+            .relay(
+                "fs/writeFile".into(),
+                json!({"path": "file:///target/a", "dataBase64": ""}),
+            )
+            .await
     });
+    eventually(|| !target.held.lock().is_empty()).await;
+    let settled = tokio::spawn(target.client.finish_turn("turn-1").unwrap());
+    // Fenced: a later write of the ended turn is refused unsent.
+    let refused = target
+        .client
+        .relay("fs/remove".into(), json!({"path": "file:///target/a"}))
+        .await;
+    assert!(refused.get("error").is_some());
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!settled.is_finished());
+    target.release(json!({"result": {}}));
+    writing.await.unwrap();
     tokio::time::timeout(Duration::from_secs(10), settled)
         .await
         .unwrap()
         .unwrap();
-    assert!(ledger.live().is_empty());
-}
-
-#[tokio::test]
-async fn the_ledger_keeps_its_binding_for_a_drain_without_a_worker() {
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("session.json");
-    let target = Target::new(processes());
-    let ledger = ledger(&target.client, Some(path.clone()));
-    ledger.bind(&binding()).unwrap();
-    ledger.begin_turn("turn-1");
-    ledger.admit_start("p1").unwrap();
-    drop(target);
-    let pending = read_pending(&path).unwrap().unwrap();
-    assert_eq!(pending.session_id, "session");
-    assert_eq!(pending.binding, Some(binding()));
-    assert_eq!(pending.processes, ["p1".to_owned()]);
-    // The Machine reads the same file without a worker.
-    let summary = crate::account_sandbox::read_execution_ledger(&path)
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        (summary.session_id.as_str(), summary.processes),
-        ("session", vec!["p1".to_owned()])
-    );
-    // Another binding never inherits (and terminates) these processes.
-    let reopened = Ledger::open("session", Some(path.clone())).unwrap();
-    let mut other = binding();
-    other.environment.id = "other-environment".into();
-    assert!(reopened.bind(&other).is_err());
-    reopened.bind(&binding()).unwrap();
+    assert_eq!(target.log(), ["fs/writeFile "]);
 }

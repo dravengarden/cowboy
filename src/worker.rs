@@ -186,6 +186,16 @@ impl Shared {
         seq
     }
 
+    /// Open or close the execution ledger's readiness window: the
+    /// projection's readiness probe runs only while this worker is starting
+    /// its session, an authorization from worker state, never from the
+    /// caller's process id.
+    fn readiness_window(&self, starting: bool) {
+        if let Some(ledger) = self.execution.as_ref().and_then(|client| client.ledger()) {
+            ledger.set_readiness(starting);
+        }
+    }
+
     fn apply_snapshot_event(&self, seq: u64, event: &RuntimeEvent) {
         let mut snapshot = self.snapshot.lock();
         snapshot.last_runtime_seq = seq;
@@ -193,6 +203,7 @@ impl Shared {
         match event {
             RuntimeEvent::Ready { .. } => {
                 snapshot.state = WorkerState::Running;
+                self.readiness_window(false);
             }
             RuntimeEvent::Status { state, .. } => {
                 snapshot.state = if *state == WorkerState::Running && snapshot.drain_requested {
@@ -200,6 +211,8 @@ impl Shared {
                 } else {
                     *state
                 };
+                // Only a starting session may run the readiness probe.
+                self.readiness_window(*state == WorkerState::Starting);
                 // A late startup/idle Running edge can arrive after a prompt
                 // was accepted. Only TurnEnded owns clean turn completion;
                 // process death may clear it without that edge.

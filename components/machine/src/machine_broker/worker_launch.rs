@@ -191,10 +191,10 @@ impl Broker {
         Ok(session_environment)
     }
 
-    /// The durable process ledger of a sandboxed session's execution binding
-    /// (design R3-5, R3-6). It lives under the Machine state root, keyed by
-    /// Session, so a worker that died or a reboot leaves it for the next
-    /// worker of the binding, which terminates every recorded process first.
+    /// The durable ledger of a sandboxed session's execution binding. It
+    /// lives under the Machine state root, keyed by Session, so the session's
+    /// uncertain effect survives a dead worker or a reboot; processes are
+    /// never inherited (design "Revision 5 simplification").
     fn execution_ledger(&self, session_id: &str) -> Result<PathBuf> {
         let root = self
             .args

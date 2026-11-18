@@ -1,19 +1,22 @@
 //! Trusted process ledger of a sandboxed session's execution endpoint
-//! (docs/antigravity-real-accounts-design.md, amendments R3-5 and R3-6).
+//! (docs/antigravity-real-accounts-design.md, "Revision 5 simplification").
 //!
 //! The endpoint relays every request between the account unit and the target
-//! keeper, so it, not the confined proxy, is where process starts are
-//! accounted. Each `process/start` is recorded under the current Cowboy turn,
-//! durably, before it is forwarded. A turn is fenced when the worker sees its
-//! cancellation, when it ends, when the unit is lost and at teardown: later
-//! starts for it are refused and every recorded process is terminated, with
-//! completion observed through `process/read` (an exit notification may
-//! already have been consumed by the agent). A process counts as gone only on
-//! the target's exit evidence, or when the target reports its id unknown while
-//! no start of it is in flight. Entries a dead worker left behind are
-//! terminated by the next worker of the same binding.
+//! keeper, so it, not the confined proxy, is where target effects are
+//! admitted. Each `process/start` is recorded under the current Cowboy turn
+//! before it is forwarded; process starts and filesystem mutations outside an
+//! active turn are refused. The one exception is the projection's readiness
+//! probe while the worker is starting its session: the worker's own state
+//! opens that window, never a caller-chosen id. A turn is fenced when the
+//! worker sees its cancellation, when it ends and at teardown: later effects
+//! for it are refused, its admitted requests drain before its completion is
+//! reported, and its recorded processes are terminated best-effort. Nothing a
+//! dead worker left is inherited; the target keeper's unattended reap is the
+//! backstop. A request whose reply was lost after it may have been admitted
+//! makes the session's effect uncertain, durably, until the owner
+//! acknowledges that exact sequence.
 
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::Write as _;
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
@@ -27,41 +30,6 @@ use serde_json::{Value, json};
 use tokio::sync::watch;
 
 use super::Client;
-use crate::execution_protocol::{self as wire, Command, Outcome, Response};
-
-impl Client {
-    /// Resolve a start whose reply was lost with the keeper's typed outcome
-    /// of its operation, before any read is taken as absence evidence: a
-    /// `missing` operation or the start's own error means no process; any
-    /// other final outcome means the start is settled and reads decide.
-    async fn resolve_start(&self, ledger: &Ledger, process: &str, operation: String) {
-        let mut delay = RETRY_INITIAL;
-        loop {
-            let observed = self
-                .call_queued(Command::Observe {
-                    operation_id: operation.clone(),
-                    wait_ms: wire::MAX_WAIT_MS,
-                })
-                .await;
-            let outcome = match observed {
-                Ok(Ok(Response::Operation { outcome })) => outcome,
-                _ => {
-                    tokio::time::sleep(delay).await;
-                    delay = (delay * 2).min(RETRY_MAX);
-                    continue;
-                }
-            };
-            match outcome {
-                Outcome::Pending => {}
-                Outcome::Missing => return ledger.exited(process),
-                Outcome::Completed { reply } if reply.get("error").is_some() => {
-                    return ledger.exited(process);
-                }
-                _ => return ledger.start_resolved(process),
-            }
-        }
-    }
-}
 
 pub use crate::account_sandbox::EXECUTION_LEDGER_ENV as LEDGER_ENV;
 const SCHEMA: u16 = 1;
@@ -69,15 +37,13 @@ const SCHEMA: u16 = 1;
 pub const MAX_PROCESSES: usize = 256;
 const MAX_LEDGER_BYTES: u64 = 256 * 1024;
 const MAX_FENCED_TURNS: usize = 64;
-/// Process ids of the facade's bounded readiness probes (the projection's Git
-/// state). They run outside any turn, one at a time, and are recorded and
-/// ended like every other process.
-pub const READINESS_PREFIX: &str = "cowboy-agy-readiness-";
-/// The ledger turn readiness probes are recorded under.
+/// The ledger turn the readiness probe is recorded under.
 const READINESS_TURN: &str = "cowboy-readiness";
-const RETRY_INITIAL: Duration = Duration::from_millis(250);
-const RETRY_MAX: Duration = Duration::from_secs(15);
-/// Requests whose lost reply leaves an unknown effect on the target.
+/// Bound of one process's best-effort termination.
+const TERMINATE_BOUND: Duration = Duration::from_secs(5);
+/// Requests that change the target: admitted only inside an active turn,
+/// drained before the turn's completion, and uncertain when their reply is
+/// lost.
 const MUTATIONS: &[&str] = &[
     "fs/writeFile",
     "fs/remove",
@@ -86,69 +52,33 @@ const MUTATIONS: &[&str] = &[
     "process/start",
 ];
 
+/// The durable part of the ledger: the session's uncertain effect, so a
+/// replacement worker keeps reporting it until the owner acknowledges it.
 #[derive(Debug, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Record {
     schema: u16,
     session_id: String,
-    /// The latest mutation whose reply was lost after possible admission.
+    /// The latest request whose reply was lost after possible admission.
     uncertain_effect: Option<String>,
-    /// How many mutations lost their reply; the Controller parks the
+    /// How many requests lost their reply; the Controller parks the
     /// session's queue until the owner acknowledged this sequence.
     #[serde(default)]
     uncertain_sequence: u64,
-    processes: BTreeMap<String, Recorded>,
-    /// The execution binding every recorded process was started through: a
-    /// drain without a worker reaches the same target with it, and another
-    /// binding never terminates these ids on a different target.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    binding: Option<crate::execution_environment::BindingV1>,
-}
-
-/// What a session's durable ledger still holds, read without a worker (for
-/// a Machine-side drain): the binding to reach its target with, the
-/// processes to terminate and the uncertain effect to report.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PendingLedger {
-    pub session_id: String,
-    pub binding: Option<crate::execution_environment::BindingV1>,
-    pub processes: Vec<String>,
-    pub uncertain_effect: Option<String>,
-    pub uncertain_sequence: u64,
-}
-
-/// The ledger at `path`, if it holds anything; never modifies it.
-pub fn read_pending(path: &Path) -> Result<Option<PendingLedger>> {
-    Ok(read(path)?.map(|record| PendingLedger {
-        session_id: record.session_id,
-        binding: record.binding,
-        processes: record.processes.into_keys().collect(),
-        uncertain_effect: record.uncertain_effect,
-        uncertain_sequence: record.uncertain_sequence,
-    }))
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Recorded {
-    turn: String,
-    /// Written by a previous worker: every turn of this one waits for it.
-    #[serde(default)]
-    recovered: bool,
-    /// The keeper operation of a start whose reply was lost. Until the
-    /// keeper resolves it, the start may still be applied, so a read that
-    /// does not know the process is no evidence of its absence.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    unresolved_start: Option<String>,
 }
 
 #[derive(Default)]
 struct State {
     record: Record,
-    in_flight: HashSet<String>,
-    terminating: HashSet<String>,
+    /// Recorded target processes and the turn that started each.
+    processes: BTreeMap<String, String>,
+    /// Starts not yet answered by the target.
+    starting: HashSet<String>,
+    /// Admitted requests still running, per turn.
+    admitted: HashMap<String, usize>,
     current_turn: Option<String>,
     fenced: VecDeque<String>,
+    /// The worker is starting its session: the readiness probe may run.
+    readiness: bool,
     closed: bool,
 }
 
@@ -156,9 +86,14 @@ impl State {
     fn fenced(&self, turn: &str) -> bool {
         self.closed || self.fenced.iter().any(|fenced| fenced == turn)
     }
+
+    /// The turn a new target effect belongs to, if one is active.
+    fn active_turn(&self) -> Option<String> {
+        self.current_turn.clone().filter(|turn| !self.fenced(turn))
+    }
 }
 
-/// Told the method of the first mutation whose effect became unknown.
+/// Told the method and sequence of each request whose effect became unknown.
 pub type Observer = Box<dyn Fn(&str, u64) + Send + Sync>;
 
 pub struct Ledger {
@@ -175,9 +110,15 @@ impl std::fmt::Debug for Ledger {
     }
 }
 
+/// One admitted request: settled when its relay finished.
+pub(super) struct Admitted {
+    turn: String,
+}
+
 impl Ledger {
-    /// Open the session's ledger on the current runtime. Entries a previous
-    /// worker left are marked recovered; the caller terminates them.
+    /// Open the session's ledger on the current runtime. Only the uncertain
+    /// effect survives a worker; processes are never inherited. The ledger
+    /// starts in the readiness window of a starting worker.
     pub fn open(session_id: &str, path: Option<PathBuf>) -> Result<Arc<Self>> {
         let mut record = match &path {
             Some(path) => read(path)?.unwrap_or_default(),
@@ -189,13 +130,11 @@ impl Ledger {
         );
         record.schema = SCHEMA;
         session_id.clone_into(&mut record.session_id);
-        for entry in record.processes.values_mut() {
-            entry.recovered = true;
-        }
         Ok(Arc::new(Self {
             path,
             state: Mutex::new(State {
                 record,
+                readiness: true,
                 ..State::default()
             }),
             changed: watch::Sender::new(0),
@@ -204,31 +143,22 @@ impl Ledger {
         }))
     }
 
-    /// Bind the ledger to the worker's execution binding. Processes recorded
-    /// through another binding are never terminated through this one: the
-    /// worker refuses to start until they are drained.
-    pub fn bind(&self, binding: &crate::execution_environment::BindingV1) -> Result<()> {
-        let mut state = self.state.lock();
-        if let Some(recorded) = &state.record.binding
-            && recorded != binding
-        {
-            ensure!(
-                state.record.processes.is_empty(),
-                "the execution ledger holds processes of another execution binding"
-            );
-        }
-        state.record.binding = Some(binding.clone());
-        self.persist(&state)
-    }
-
-    /// Called once, with the request's method, when the session first holds
-    /// an uncertain effect.
+    /// Called with the request's method and sequence whenever the session
+    /// holds a newer uncertain effect.
     pub fn set_observer(&self, observer: Observer) {
         let _ = self.observer.set(observer);
     }
 
+    /// The worker's session state: the readiness probe may run only while
+    /// the worker is starting its session.
+    pub fn set_readiness(&self, starting: bool) {
+        self.state.lock().readiness = starting;
+    }
+
     pub fn begin_turn(&self, turn: &str) {
-        self.state.lock().current_turn = Some(turn.to_owned());
+        let mut state = self.state.lock();
+        state.current_turn = Some(turn.to_owned());
+        state.readiness = false;
     }
 
     #[must_use]
@@ -236,13 +166,13 @@ impl Ledger {
         self.state.lock().current_turn.clone()
     }
 
-    /// The method of the latest mutation whose effect is unknown.
+    /// The method of the latest request whose effect is unknown.
     #[must_use]
     pub fn uncertain_effect(&self) -> Option<String> {
         self.state.lock().record.uncertain_effect.clone()
     }
 
-    /// How many mutations of this session lost their reply.
+    /// How many requests of this session lost their reply.
     #[must_use]
     pub fn uncertain_sequence(&self) -> u64 {
         self.state.lock().record.uncertain_sequence
@@ -250,111 +180,97 @@ impl Ledger {
 
     #[must_use]
     pub fn live(&self) -> Vec<String> {
-        self.state.lock().record.processes.keys().cloned().collect()
+        self.state.lock().processes.keys().cloned().collect()
     }
 
-    /// Record a start before it is forwarded, or say why it is refused.
-    pub fn admit_start(&self, process: &str) -> Result<(), &'static str> {
+    /// Admit one request before it is forwarded, recording a start, or say
+    /// why it is refused. Requests that change nothing pass unrecorded.
+    pub(super) fn admit(
+        &self,
+        method: &str,
+        params: &Value,
+    ) -> Result<Option<Admitted>, &'static str> {
+        if !MUTATIONS.contains(&method) {
+            return Ok(None);
+        }
         let mut state = self.state.lock();
-        let readiness = process.starts_with(READINESS_PREFIX);
-        let turn = if readiness {
-            // Independently tracked: never part of a turn, one at a time.
-            if state
-                .record
-                .processes
-                .values()
-                .any(|entry| entry.turn == READINESS_TURN)
-            {
-                return Err("a readiness probe is already running; process start refused");
+        if method != "process/start" {
+            let turn = state
+                .active_turn()
+                .ok_or("no Cowboy turn is running; the filesystem change was refused")?;
+            *state.admitted.entry(turn.clone()).or_default() += 1;
+            return Ok(Some(Admitted { turn }));
+        }
+        let process = process_id(params)
+            .filter(|process| !process.is_empty() && process.len() <= 256)
+            .ok_or("process start needs a valid processId")?;
+        let turn = match state.active_turn() {
+            Some(turn) => turn,
+            None if state.readiness && !state.closed => {
+                // The readiness probe: one at a time, never during a turn.
+                let busy = state.processes.values().any(|turn| turn == READINESS_TURN)
+                    || state.admitted.contains_key(READINESS_TURN);
+                if busy {
+                    return Err("a readiness probe is already running; process start refused");
+                }
+                READINESS_TURN.to_owned()
             }
-            READINESS_TURN.to_owned()
-        } else {
-            let Some(turn) = state.current_turn.clone() else {
-                return Err("no Cowboy turn is running; process start refused");
-            };
-            turn
+            None if state.current_turn.is_some() || state.closed => {
+                return Err("the turn was cancelled or ended; process start refused");
+            }
+            None => return Err("no Cowboy turn is running; process start refused"),
         };
-        if state.fenced(&turn) {
-            return Err("the turn was cancelled or ended; process start refused");
-        }
-        if process.is_empty() || process.len() > 256 {
-            return Err("process start needs a valid processId");
-        }
-        if state.record.processes.contains_key(process) || state.in_flight.contains(process) {
+        if state.processes.contains_key(&process) || state.starting.contains(&process) {
             return Err("process id is already recorded; process start refused");
         }
-        if state.record.processes.len() >= MAX_PROCESSES {
+        if state.processes.len() >= MAX_PROCESSES {
             return Err("session process limit reached; process start refused");
         }
-        state.record.processes.insert(
-            process.to_owned(),
-            Recorded {
-                turn,
-                recovered: false,
-                unresolved_start: None,
-            },
-        );
-        if self.persist(&state).is_err() {
-            state.record.processes.remove(process);
-            return Err("the process ledger is unavailable; process start refused");
-        }
-        state.in_flight.insert(process.to_owned());
-        Ok(())
+        state.processes.insert(process.clone(), turn.clone());
+        state.starting.insert(process);
+        *state.admitted.entry(turn.clone()).or_default() += 1;
+        Ok(Some(Admitted { turn }))
     }
 
-    /// The start of `process` (keeper operation `operation`) lost its reply.
-    fn start_unresolved(&self, process: &str, operation: &str) {
+    /// An admitted request finished (answered, refused or lost).
+    pub(super) fn settled(&self, admitted: &Admitted, start: Option<&str>) {
         let mut state = self.state.lock();
-        if let Some(entry) = state.record.processes.get_mut(process) {
-            entry.unresolved_start = Some(operation.to_owned());
-            if self.persist(&state).is_err() {
-                tracing::error!(%process, "the unresolved process start could not be persisted");
+        if let Some(process) = start {
+            state.starting.remove(process);
+        }
+        if let Some(count) = state.admitted.get_mut(&admitted.turn) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                state.admitted.remove(&admitted.turn);
             }
         }
-    }
-
-    /// The keeper resolved the start of `process`: from now on the target's
-    /// reads are authoritative for it.
-    fn start_resolved(&self, process: &str) {
-        let mut state = self.state.lock();
-        if let Some(entry) = state.record.processes.get_mut(process) {
-            entry.unresolved_start = None;
-            let _ = self.persist(&state);
-        }
-    }
-
-    fn unresolved_start(&self, process: &str) -> Option<String> {
-        self.state
-            .lock()
-            .record
-            .processes
-            .get(process)
-            .and_then(|entry| entry.unresolved_start.clone())
-    }
-
-    fn start_settled(&self, process: &str) {
-        self.state.lock().in_flight.remove(process);
+        drop(state);
         self.changed.send_modify(|value| *value += 1);
     }
 
     /// The target's evidence that `process` is gone.
     pub fn exited(&self, process: &str) {
-        let mut state = self.state.lock();
-        if state.record.processes.remove(process).is_some() {
-            if let Err(error) = self.persist(&state) {
-                tracing::warn!(%error, "execution ledger update failed");
-            }
-            drop(state);
+        if self.state.lock().processes.remove(process).is_some() {
             self.changed.send_modify(|value| *value += 1);
         }
     }
 
-    fn mark_uncertain(&self, method: &str) {
+    /// Whether `process` was started by a Cowboy turn (not the readiness
+    /// probe): its output may carry a result the agent acts on.
+    fn turn_process(&self, process: &str) -> bool {
+        self.state
+            .lock()
+            .processes
+            .get(process)
+            .is_some_and(|turn| turn != READINESS_TURN)
+    }
+
+    pub(super) fn mark_uncertain(&self, method: &str) {
         let mut state = self.state.lock();
         state.record.uncertain_effect = Some(method.to_owned());
         state.record.uncertain_sequence = state.record.uncertain_sequence.saturating_add(1);
         let sequence = state.record.uncertain_sequence;
-        if let Err(error) = self.persist(&state) {
+        if let Err(error) = self.persist(&state.record) {
             tracing::warn!(%error, "execution ledger update failed");
         }
         drop(state);
@@ -363,7 +279,8 @@ impl Ledger {
         }
     }
 
-    /// Refuse every later start of `turn`; returns the processes to end.
+    /// Refuse every later effect of `turn` (every turn when `None`);
+    /// returns the processes to end.
     fn fence(&self, turn: Option<&str>) -> Vec<String> {
         let mut state = self.state.lock();
         match turn {
@@ -375,44 +292,29 @@ impl Ledger {
                     state.fenced.push_back(turn.to_owned());
                 }
             }
-            None => state.closed = true,
+            None => {
+                state.closed = true;
+                state.readiness = false;
+            }
         }
         state
-            .record
             .processes
             .iter()
-            .filter(|(_, entry)| turn.is_none_or(|turn| entry.turn == turn || entry.recovered))
+            .filter(|(_, owner)| turn.is_none_or(|turn| *owner == turn))
             .map(|(process, _)| process.clone())
             .collect()
     }
 
-    fn recovered(&self) -> Vec<String> {
+    fn drained(&self, turn: Option<&str>) -> bool {
         let state = self.state.lock();
-        state
-            .record
-            .processes
-            .iter()
-            .filter(|(_, entry)| entry.recovered)
-            .map(|(process, _)| process.clone())
-            .collect()
+        match turn {
+            Some(turn) => !state.admitted.contains_key(turn),
+            None => state.admitted.is_empty(),
+        }
     }
 
-    fn tracked(&self, process: &str) -> bool {
-        self.state.lock().record.processes.contains_key(process)
-    }
-
-    fn in_flight(&self, process: &str) -> bool {
-        self.state.lock().in_flight.contains(process)
-    }
-
-    /// Whether this caller owns the termination of `process`.
-    fn claim(&self, process: &str) -> bool {
-        self.state.lock().terminating.insert(process.to_owned())
-    }
-
-    fn release(&self, process: &str) {
-        self.state.lock().terminating.remove(process);
-        self.changed.send_modify(|value| *value += 1);
+    fn starting(&self, process: &str) -> bool {
+        self.state.lock().starting.contains(process)
     }
 
     /// Wait until `ready` holds or the ledger changes.
@@ -425,17 +327,11 @@ impl Ledger {
         }
     }
 
-    fn persist(&self, state: &State) -> Result<()> {
+    fn persist(&self, record: &Record) -> Result<()> {
         let Some(path) = &self.path else {
             return Ok(());
         };
-        if state.record.processes.is_empty() && state.record.uncertain_effect.is_none() {
-            return match std::fs::remove_file(path) {
-                Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
-                _ => Ok(()),
-            };
-        }
-        let bytes = serde_json::to_vec(&state.record)?;
+        let bytes = serde_json::to_vec(record)?;
         let parent = path.parent().context("execution ledger has no directory")?;
         let temporary = parent.join(format!(
             ".{}.{:016x}.partial",
@@ -472,10 +368,6 @@ fn read(path: &Path) -> Result<Option<Record>> {
     ensure!(
         record.schema == SCHEMA,
         "unsupported execution ledger schema"
-    );
-    ensure!(
-        record.processes.len() <= MAX_PROCESSES,
-        "execution ledger exceeds its process limit"
     );
     Ok(Some(record))
 }
@@ -526,8 +418,8 @@ impl Client {
     }
 
     /// Relay one native request from the agent side. Without a ledger this
-    /// is the plain invocation; with one, starts are admitted and recorded
-    /// first and lost mutation replies mark the session's effect uncertain.
+    /// is the plain invocation; with one, effects are admitted (and starts
+    /// recorded) first and lost replies mark the session's effect uncertain.
     pub async fn relay(self: &Arc<Self>, method: String, params: Value) -> Value {
         let Some(ledger) = self.ledger().cloned() else {
             return self
@@ -535,42 +427,46 @@ impl Client {
                 .await
                 .unwrap_or_else(|_| unavailable());
         };
-        let start = (method == "process/start").then(|| process_id(&params));
-        if let Some(process) = &start {
-            let admitted = process
-                .as_deref()
-                .ok_or("process start needs a processId")
-                .and_then(|process| ledger.admit_start(process));
-            if let Err(reason) = admitted {
-                return refused(reason);
-            }
-        }
-        let read = (method == "process/read")
-            .then(|| process_id(&params))
+        let admitted = match ledger.admit(&method, &params) {
+            Ok(admitted) => admitted,
+            Err(reason) => return refused(reason),
+        };
+        let process = process_id(&params);
+        let start = (method == "process/start")
+            .then(|| process.clone())
             .flatten();
-        let mutation = MUTATIONS.contains(&method.as_str()).then(|| method.clone());
-        let operation = super::new_operation_id();
-        let result = self.invoke_as(operation.clone(), method, params).await;
-        if let Some(Some(process)) = &start {
-            if result == Err(true) {
-                // Recorded before the start stops counting as in flight.
-                ledger.start_unresolved(process, &operation);
-            }
-            ledger.start_settled(process);
+        // Decided before the reply: an exit removes the process. A lost
+        // termination, or a lost read of a turn's process (a publish's
+        // outcome), hides a result the agent acts on.
+        let result_carrying = method == "process/terminate"
+            || (method == "process/read"
+                && process
+                    .as_deref()
+                    .is_some_and(|process| ledger.turn_process(process)));
+        let result = self.invoke_classified(method.clone(), params).await;
+        if let Some(admitted) = &admitted {
+            ledger.settled(admitted, start.as_deref());
         }
         match result {
             Ok(reply) => {
-                if let Some(process) = read.filter(|_| exited(&reply)) {
-                    ledger.exited(&process);
+                if let Some(process) = &process
+                    && ((method == "process/read" && exited(&reply))
+                        || (start.is_some() && reply.get("error").is_some()))
+                {
+                    // An exit, or a refused start that started nothing.
+                    ledger.exited(process);
                 }
                 reply
             }
             Err(admitted) => {
                 if !admitted {
                     // Refused before it was sent: nothing can have happened.
+                    if let Some(process) = &start {
+                        ledger.exited(process);
+                    }
                     return refused("Execution unavailable; the request was not sent");
                 }
-                if let Some(method) = mutation {
+                if MUTATIONS.contains(&method.as_str()) || result_carrying {
                     ledger.mark_uncertain(&method);
                 }
                 unavailable()
@@ -578,16 +474,17 @@ impl Client {
         }
     }
 
-    /// The reply of `method` never reached the agent side. A mutation the
-    /// target answered (or whose outcome is already unknown) then has an
-    /// effect the agent never learned: the session's effect is uncertain.
+    /// The reply of `method` never reached the agent side. A mutation or
+    /// termination the target answered (or whose outcome is already
+    /// unknown) then has an effect the agent never learned: the session's
+    /// effect is uncertain.
     pub(super) fn undelivered(&self, method: &str, reply: &Value) {
         let Some(ledger) = self.ledger() else {
             return;
         };
         let answered = reply.get("result").is_some()
             || reply.pointer("/error/data/outcome") == Some(&json!("unknown"));
-        if MUTATIONS.contains(&method) && answered {
+        if (MUTATIONS.contains(&method) || method == "process/terminate") && answered {
             ledger.mark_uncertain(method);
         }
     }
@@ -603,7 +500,7 @@ impl Client {
     }
 
     /// Fence the current turn after its cancellation and end its processes
-    /// in the background.
+    /// in the background, best-effort.
     pub fn cancel_turn(self: &Arc<Self>) {
         let Some(ledger) = self.ledger() else {
             return;
@@ -619,46 +516,40 @@ impl Client {
         });
     }
 
-    /// Fence an ended turn. When it still holds processes, the returned
-    /// future resolves once the target proved every one of them gone; the
-    /// turn's completion must wait for it.
+    /// Fence an ended turn. When it still has admitted requests or recorded
+    /// processes, the returned future resolves once its admitted requests
+    /// drained and its processes were terminated best-effort; the turn's
+    /// completion is reported after it.
     pub fn finish_turn(
         self: &Arc<Self>,
         turn: &str,
     ) -> Option<impl std::future::Future<Output = ()> + Send + 'static> {
-        let ledger = self.ledger()?;
+        let ledger = Arc::clone(self.ledger()?);
         let processes = ledger.fence(Some(turn));
-        if processes.is_empty() {
+        if processes.is_empty() && ledger.drained(Some(turn)) {
             return None;
         }
         tracing::info!(event_name = "cowboy.execution.turn_fenced", session = %self.session, %turn, processes = processes.len(), reason = "turn_end", "execution turn fenced");
-        let client = Arc::clone(self);
-        Some(async move { client.terminate_all(processes).await })
+        let (client, turn) = (Arc::clone(self), turn.to_owned());
+        Some(async move {
+            ledger
+                .wait_until(|ledger| ledger.drained(Some(&turn)))
+                .await;
+            // Starts admitted before the fence was raised are recorded too.
+            let processes = ledger.fence(Some(&turn));
+            client.terminate_all(processes).await;
+        })
     }
 
-    /// Fence every turn and end every recorded process: unit loss and
-    /// teardown. Entries left unresolved stay durable for the next worker.
+    /// Fence every turn, drain and end every recorded process best-effort:
+    /// teardown.
     pub async fn settle_all(self: &Arc<Self>) {
-        if let Some(ledger) = self.ledger() {
+        if let Some(ledger) = self.ledger().cloned() {
+            ledger.fence(None);
+            ledger.wait_until(|ledger| ledger.drained(None)).await;
             let processes = ledger.fence(None);
             self.terminate_all(processes).await;
         }
-    }
-
-    /// End what a previous worker of this session left recorded.
-    pub fn settle_recovered(self: &Arc<Self>) {
-        let Some(ledger) = self.ledger() else {
-            return;
-        };
-        let processes = ledger.recovered();
-        if processes.is_empty() {
-            return;
-        }
-        tracing::warn!(event_name = "cowboy.execution.ledger_recovered", session = %self.session, processes = processes.len(), "terminating processes a previous worker recorded");
-        let client = Arc::clone(self);
-        ledger.runtime.spawn(async move {
-            client.terminate_all(processes).await;
-        });
     }
 
     /// Resolve the spawned settlement of `future` on the ledger's runtime.
@@ -673,49 +564,43 @@ impl Client {
             .await;
     }
 
-    /// Terminate `process` until the target proves it gone.
+    /// Ask the target to terminate `process` and observe its end, within a
+    /// bound. A process that does not end in time stays recorded; the
+    /// target keeper's unattended reap is the backstop.
     async fn terminate(self: &Arc<Self>, process: String) {
         let Some(ledger) = self.ledger().cloned() else {
             return;
         };
-        if !ledger.claim(&process) {
-            // Another settlement owns it; wait for its evidence.
-            ledger.wait_until(|ledger| !ledger.tracked(&process)).await;
-            return;
-        }
-        if let Some(operation) = ledger.unresolved_start(&process) {
-            self.resolve_start(&ledger, &process, operation).await;
-        }
-        let mut delay = RETRY_INITIAL;
-        while ledger.tracked(&process) {
-            ledger
-                .wait_until(|ledger| !ledger.in_flight(&process))
-                .await;
+        let attempt = async {
+            ledger.wait_until(|ledger| !ledger.starting(&process)).await;
             let _ = self
                 .invoke(
                     "process/terminate".to_owned(),
                     json!({"processId": process}),
                 )
                 .await;
-            let read = self
-                .invoke(
-                    "process/read".to_owned(),
-                    json!({"processId": process, "afterSeq": null, "maxBytes": 1, "waitMs": 1000}),
-                )
-                .await;
-            match read {
-                Ok(reply)
-                    if exited(&reply)
-                        || (unknown_process(&reply) && !ledger.in_flight(&process)) =>
-                {
-                    ledger.exited(&process);
-                }
-                _ => {
-                    tokio::time::sleep(delay).await;
-                    delay = (delay * 2).min(RETRY_MAX);
+            loop {
+                let read = self
+                    .invoke(
+                        "process/read".to_owned(),
+                        json!({"processId": process, "afterSeq": null, "maxBytes": 1, "waitMs": 1000}),
+                    )
+                    .await;
+                match read {
+                    Ok(reply) if exited(&reply) || unknown_process(&reply) => {
+                        ledger.exited(&process);
+                        return;
+                    }
+                    Ok(_) => {}
+                    Err(_) => tokio::time::sleep(Duration::from_millis(250)).await,
                 }
             }
+        };
+        if tokio::time::timeout(TERMINATE_BOUND, attempt)
+            .await
+            .is_err()
+        {
+            tracing::warn!(event_name = "cowboy.execution.terminate_unconfirmed", session = %self.session, %process, "target process end unconfirmed; the keeper's reap is the backstop");
         }
-        ledger.release(&process);
     }
 }

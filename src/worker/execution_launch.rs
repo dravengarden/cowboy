@@ -4,8 +4,9 @@
 //! `COWBOY_EXECUTION_DESCRIPTOR`. An account-sandboxed Provider's unit can
 //! reach no host loopback service: its endpoint serves the Unix socket the
 //! daemon binds into the unit, the daemon hands the unit the descriptor, and
-//! the trusted process ledger accounts every process the unit starts on the
-//! target (docs/antigravity-real-accounts-design.md, R3-5, R3-6, R3-11).
+//! the trusted process ledger admits every effect the unit has on the target
+//! (docs/antigravity-real-accounts-design.md, R3-11 and "Revision 5
+//! simplification").
 
 use std::sync::Arc;
 
@@ -85,11 +86,8 @@ pub(super) async fn prepare(
             path.is_some(),
             "a sandboxed execution binding requires the Machine's process ledger"
         );
-        let ledger = Ledger::open(&args.session_id, path)?;
-        ledger.bind(&binding)?;
-        client.set_ledger(ledger);
+        client.set_ledger(Ledger::open(&args.session_id, path)?);
         let (endpoint, bridge) = Endpoint::start_unix(Arc::clone(&client))?;
-        client.settle_recovered();
         spec.execution_bridge = Some(bridge);
         return Ok((Some(endpoint), managed_round));
     }
@@ -103,8 +101,8 @@ pub(super) async fn prepare(
     Ok((Some(endpoint), managed_round))
 }
 
-/// Bound of the teardown settlement; what remains stays in the durable
-/// ledger for the next worker of the binding.
+/// Bound of the teardown settlement; what remains is left to the target
+/// keeper's unattended reap.
 const TEARDOWN_SETTLE: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Fence every turn and terminate every recorded process at teardown.
@@ -119,7 +117,7 @@ pub(super) async fn settle(execution: Arc<Client>) {
         tracing::warn!(
             event_name = "cowboy.execution.ledger_pending",
             pending = execution.ledger().map_or(0, |ledger| ledger.live().len()),
-            "target processes remain recorded for the next worker"
+            "target processes remain; the keeper's reap is the backstop"
         );
     }
 }

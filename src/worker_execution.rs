@@ -5,7 +5,7 @@
 
 mod ledger;
 mod relay;
-pub use ledger::{LEDGER_ENV, Ledger, MAX_PROCESSES, PendingLedger, read_pending};
+pub use ledger::{LEDGER_ENV, Ledger, MAX_PROCESSES};
 
 use std::collections::{BTreeMap, HashSet};
 use std::os::fd::OwnedFd;
@@ -289,20 +289,10 @@ impl Client {
     /// the effect (`true`: lost reply or unknown outcome) or certainly did
     /// not (`false`: refused before admission, or never sent).
     async fn invoke_classified(&self, method: String, params: Value) -> Result<Value, bool> {
-        self.invoke_as(new_operation_id(), method, params).await
-    }
-
-    /// [`Self::invoke_classified`] under the caller's keeper operation id,
-    /// which [`Command::Observe`] resolves later when the reply is lost.
-    async fn invoke_as(
-        &self,
-        operation_id: String,
-        method: String,
-        params: Value,
-    ) -> Result<Value, bool> {
         let started = std::time::Instant::now();
         let invocation = Invocation {
-            operation_id,
+            // The suffix asks the keeper for the backend's own duration.
+            operation_id: new_operation_id(),
             method,
             params,
         };

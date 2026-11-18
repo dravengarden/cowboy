@@ -102,8 +102,9 @@ impl Launch {
     }
 }
 
-/// Worker wiring: the Machine-owned durable process-ledger file of a
-/// sandboxed session with an execution binding (design R3-5, R3-6).
+/// Worker wiring: the Machine-owned durable ledger file of a sandboxed
+/// session with an execution binding. It keeps only the session's uncertain
+/// effect across workers (design "Revision 5 simplification").
 pub const EXECUTION_LEDGER_ENV: &str = "COWBOY_EXECUTION_LEDGER";
 /// Directory of the ledger files under the Machine state root.
 pub const EXECUTION_LEDGER_DIR: &str = "execution-ledgers";
@@ -121,46 +122,6 @@ pub fn execution_ledger_file(state_dir: &Path, session_id: &str) -> Option<PathB
             .join(EXECUTION_LEDGER_DIR)
             .join(format!("{session_id}.json"))
     })
-}
-
-/// Largest execution ledger file (the worker's `Ledger` writes at most this).
-const MAX_EXECUTION_LEDGER_BYTES: u64 = 256 * 1024;
-
-/// What a session's durable execution ledger still records, read by the
-/// Machine without a worker: the target processes a worker of the session's
-/// binding has not proven gone (including starts whose reply was lost). The
-/// file is written only by the worker's `worker_execution::Ledger`
-/// (schema 1); this read ignores its other fields.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExecutionLedgerSummary {
-    pub session_id: String,
-    pub processes: Vec<String>,
-}
-
-/// The ledger at `path`; `None` when there is none. Never modifies it.
-pub fn read_execution_ledger(path: &Path) -> Result<Option<ExecutionLedgerSummary>> {
-    #[derive(Deserialize)]
-    struct File {
-        schema: u16,
-        session_id: String,
-        #[serde(default)]
-        processes: std::collections::BTreeMap<String, serde::de::IgnoredAny>,
-    }
-    let file = match std::fs::File::open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).context("opening the execution ledger"),
-    };
-    ensure!(
-        file.metadata()?.len() <= MAX_EXECUTION_LEDGER_BYTES,
-        "execution ledger exceeds its size limit"
-    );
-    let ledger: File = serde_json::from_reader(file).context("invalid execution ledger")?;
-    ensure!(ledger.schema == 1, "unsupported execution ledger schema");
-    Ok(Some(ExecutionLedgerSummary {
-        session_id: ledger.session_id,
-        processes: ledger.processes.into_keys().collect(),
-    }))
 }
 
 /// The unit's path of its execution socket (the daemon binds it there).
