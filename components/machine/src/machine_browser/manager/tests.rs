@@ -606,3 +606,60 @@ async fn an_ipv4_only_device_trusts_a_survivors_policy_only_for_its_recorded_inv
     assert!(plain.manager.survivor_serves(None, false));
     assert!(plain.manager.survivor_serves(ipv4, true));
 }
+
+#[tokio::test]
+async fn a_capability_change_during_the_hello_reaches_the_controller() {
+    let fixture = fixture().await;
+    let attach = |events| {
+        fixture.manager.attach(
+            events,
+            reqwest::Url::parse("https://controller.invalid/").unwrap(),
+        )
+    };
+    // The hello carried exactly the current capability: nothing to repeat.
+    let current = fixture.manager.hello_capability();
+    let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let uplink = attach(events);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !std::iter::from_fn(|| received.try_recv().ok()).any(|event| matches!(
+            event,
+            MachineEvent::Browser {
+                browser: Event::Capability(_) | Event::CapabilityLost
+            }
+        ))
+    );
+    drop(uplink);
+    // The host changed between the hello and the watcher's first sample.
+    let stale = match &current {
+        Some(_) => None,
+        None => Some(Capability {
+            plugin_id: "machine-browser".into(),
+            plugin_version: "0.0.0".into(),
+            generation_digest: "sha256:00".into(),
+            available: true,
+            reason: None,
+            max_instances: 1,
+            network: None,
+        }),
+    };
+    *fixture.manager.hello_capability.lock() = Some(stale);
+    let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let _uplink = attach(events);
+    let event = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(MachineEvent::Browser {
+                browser: browser @ (Event::Capability(_) | Event::CapabilityLost),
+            }) = received.recv().await
+            {
+                return browser;
+            }
+        }
+    })
+    .await
+    .expect("the changed capability was not published");
+    match current {
+        Some(capability) => assert_eq!(event, Event::Capability(capability)),
+        None => assert_eq!(event, Event::CapabilityLost),
+    }
+}

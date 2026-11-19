@@ -386,6 +386,9 @@ pub struct BrowserManager {
     /// (`browser.ipv4_only`, read once at start: a restart setting).
     enforced_network: Option<BrowserNetwork>,
     receipts: parking_lot::Mutex<VecDeque<(String, StateEvent)>>,
+    /// The capability the latest Machine hello carried; the next uplink's
+    /// watcher compares its first sample against it.
+    hello_capability: parking_lot::Mutex<Option<Option<Capability>>>,
     headroom: fn() -> Option<u64>,
     /// The Device launch ledger every instance's admitted memory budget is
     /// held in until its unit's exit is confirmed.
@@ -472,6 +475,7 @@ impl BrowserManager {
             masks: sensitive_paths(state_dir, uid),
             enforced_network,
             receipts: parking_lot::Mutex::new(VecDeque::new()),
+            hello_capability: parking_lot::Mutex::new(None),
             headroom,
             ledger,
             this: this.clone(),
@@ -543,9 +547,12 @@ impl BrowserManager {
         uplink: u64,
         events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
     ) {
+        // Seeded with what the hello carried, so a host change between the
+        // hello and the first sample is published, not adopted silently.
+        let hello = self.hello_capability.lock().take();
         let manager = Arc::downgrade(self);
         tokio::spawn(async move {
-            let mut announced: Option<Option<Capability>> = None;
+            let mut announced: Option<Option<Capability>> = hello;
             let mut tick = tokio::time::interval(CAPABILITY_WATCH_INTERVAL);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
@@ -562,12 +569,14 @@ impl BrowserManager {
                     return;
                 }
                 let current = manager.capability();
-                // The first sample is always published: the hello carried an
-                // earlier observation, and the host may have changed since
-                // (repeating an unchanged capability is harmless).
+                // Without a recorded hello the first sample is the baseline.
                 let changed = announced
                     .as_ref()
-                    .is_none_or(|previous| *previous != current);
+                    .is_some_and(|previous| *previous != current);
+                if announced.is_none() {
+                    announced = Some(current);
+                    continue;
+                }
                 if changed {
                     let event = match &current {
                         Some(capability) => Event::Capability(capability.clone()),
@@ -583,6 +592,15 @@ impl BrowserManager {
                 }
             }
         });
+    }
+
+    /// The capability for a Machine hello, recorded so the next uplink's
+    /// capability watcher publishes any change since.
+    #[must_use]
+    pub fn hello_capability(&self) -> Option<Capability> {
+        let capability = self.capability();
+        *self.hello_capability.lock() = Some(capability.clone());
+        capability
     }
 
     /// Whether this Machine can run browsers, and with which Plugin

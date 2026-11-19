@@ -1332,7 +1332,7 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
         workspace_revision: workspace_snapshot.revision,
         workspace_owner: Some(workspace_snapshot.owner),
         capacity: config.capacity.clone(),
-        browser: config.browsers.capability(),
+        browser: config.browsers.hello_capability(),
     };
     let proof = if proof_version >= 3 {
         crate::machine_protocol::challenge_proof_v3(&challenge_id, &nonce, expires_at_ms, &hello)
