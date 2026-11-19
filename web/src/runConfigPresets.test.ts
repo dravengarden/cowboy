@@ -12,6 +12,7 @@ import {
   activeRunConfigPreset,
   runConfigCurrentTitle,
   runConfigDraftChanges,
+  runConfigPresetBlocked,
   runConfigPresetChanges,
   runConfigPresetChangesModel,
   runConfigPresets,
@@ -174,6 +175,8 @@ test("another model's reasoning limits do not hide signed recommendations", () =
     { configId: "effort", value: "max" },
   ]);
   assertEquals(runConfigPresetChangesModel(onlyAstra!, modelOnly), true);
+  assertEquals(runConfigPresetBlocked(onlyAstra!, modelOnly, () => false), false);
+  assertEquals(runConfigPresetBlocked(onlyAstra!, modelOnly, () => true), true);
   // Without a model change, a value the session does not show is refused.
   assertEquals(
     supportedRunConfigPresets([{

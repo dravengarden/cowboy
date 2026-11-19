@@ -24,8 +24,8 @@ import {
 } from "./providerConfigOptions";
 import {
   activeRunConfigPreset,
+  runConfigPresetBlocked,
   runConfigPresetChanges,
-  runConfigPresetChangesModel,
   runConfigPresets,
 } from "./runConfigPresets";
 import { setSessionConfigOptions, useStoreSelector } from "./store";
@@ -105,16 +105,8 @@ export function SessionStartSettings(
   const optionDisabled = (option: ConfigOption): boolean =>
     unavailable ||
     providerConfigOptionDisabled(session!.status, presentations.get(option.id));
-  const presetDisabled = (preset: (typeof presets)[number]): boolean => {
-    // A value for an option the current model does not show is applied
-    // after the preset's model change, which then validates it.
-    const changingModel = runConfigPresetChangesModel(preset, options);
-    return unavailable ||
-      runConfigPresetChanges(preset, options).some((change) => {
-        const option = options.find((item) => item.id === change.configId);
-        return option ? optionDisabled(option) : !changingModel;
-      });
-  };
+  const presetDisabled = (preset: (typeof presets)[number]): boolean =>
+    unavailable || runConfigPresetBlocked(preset, options, optionDisabled);
   const renderOption = (
     option: ConfigOption,
     compact: boolean,

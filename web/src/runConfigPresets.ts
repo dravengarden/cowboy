@@ -127,6 +127,21 @@ export function runConfigPresetChanges(
   );
 }
 
+/** Whether applying `preset` needs an option `disabled` blocks. A value for
+ *  an option the current model does not show is applied after the preset's
+ *  model change, which then validates it. */
+export function runConfigPresetBlocked(
+  preset: RunConfigPreset,
+  options: readonly ConfigOption[],
+  disabled: (option: ConfigOption) => boolean,
+): boolean {
+  const changingModel = runConfigPresetChangesModel(preset, options);
+  return runConfigPresetChanges(preset, options).some((change) => {
+    const option = options.find((item) => item.id === change.configId);
+    return option ? disabled(option) : !changingModel;
+  });
+}
+
 /** Unsaved Run configuration edits, by option id. */
 export type RunConfigDraft = Readonly<Record<string, string | boolean>>;
 
