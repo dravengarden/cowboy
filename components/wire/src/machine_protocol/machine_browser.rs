@@ -83,8 +83,7 @@ pub enum Purpose {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BrowserNetwork {
-    /// No IPv6 socket: the browser runs under the host's IPv4-only sealed
-    /// `AppArmor` profile.
+    /// Only IPv4, Unix and netlink sockets; no `io_uring`.
     Ipv4OnlyV1,
 }
 

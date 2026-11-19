@@ -770,5 +770,4 @@ mod tests {
             assert!(!arguments.iter().any(|argument| argument.contains(property)));
         }
     }
-
 }

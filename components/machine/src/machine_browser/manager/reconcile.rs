@@ -388,7 +388,8 @@ impl BrowserManager {
             plan.generation_digest == record.generation_digest,
             "installed generation changed"
         );
-        host::check(&plan.contract.host_requirements, ipv4_only(record.network)).map_err(|unmet| anyhow!(unmet.0))?;
+        host::check(&plan.contract.host_requirements, ipv4_only(record.network))
+            .map_err(|unmet| anyhow!(unmet.0))?;
         let account_id = ProviderAccountId::try_from(record.account_id.clone())
             .map_err(|error| anyhow!("{error}"))?;
         let account_dir = self.account_dir(&account_id)?;

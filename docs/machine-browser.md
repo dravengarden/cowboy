@@ -1574,8 +1574,12 @@ configuration, kept and receipted in Columbus `machines/ovh`. It is two
 profiles, and it confines rather than exempts. The sysctl and the ordinary
 denial for every other process stay exactly as they are.
 
-The profiles are named `cowboy-browser-bootstrap` and `cowboy-browser-sealed`;
-the Machine checks for exactly these names in enforce mode.
+The profiles are named `cowboy-browser-bootstrap` and `cowboy-browser-sealed`,
+plus `cowboy-browser-sealed-ipv4` for IPv4-only browsers. The Machine checks
+for exactly these names in enforce mode: bootstrap with `cowboy-browser-sealed`
+for an ordinary browser, bootstrap with `cowboy-browser-sealed-ipv4` for an
+`ipv4_only_v1` one (every browser of a `browser.ipv4_only` Machine), whose
+capability is then reported unavailable, with no `network`, until both are.
 
 **`bootstrap`** attaches to the Plugin's launcher executable through a glob
 over the Machine state root and runtime digest directory (derived from
@@ -1648,7 +1652,7 @@ transition to cowboy-browser-sealed`).
 **Machine-enforced IPv4-only browsers.** A Machine whose Device setting
 `browser.ipv4_only` is `true` (restart-applied; see
 [`configuration.md`](configuration.md#machine-browser-network-policy)) runs
-*every* browser unit with those properties, own or
+*every* browser unit under `cowboy-browser-sealed-ipv4`, own or
 [shared](#shared-browser-profiles), named account or legacy card, whatever
 the `Open` names, and reports it in its browser capability
 (`Capability.network: "ipv4_only_v1"`, sent in the hello and on every
@@ -1667,8 +1671,8 @@ the field refuses such an `Open` (`deny_unknown_fields`) rather than run the
 browser unrestricted. The `cowboy-browser-sealed-ipv4` profile, and the
 bootstrap rules that let the launcher change to it, are host policy in
 Columbus `machines/ovh/apparmor`; a Machine with the setting reports its
-browser capability unavailable (`host_requirements`) until that profile is
-enforced.
+browser capability unavailable (`host_requirements`, and no `network`, so the
+Controller places no IPv4-only share there) until that profile is enforced.
 
 The Machine checks that the host's AppArmor exposes the features these
 profiles rely on (`/sys/kernel/security/apparmor/features`: network

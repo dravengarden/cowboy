@@ -59,6 +59,7 @@ pub(super) fn admitted_limits(settings: &Settings, budget: u64) -> Limits {
 }
 
 /// Argument vector of `cowboy-browser-launcher run` for one start.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn launch_arguments(
     plan: &MachineBrowserRuntimePlan,
     settings: &Settings,

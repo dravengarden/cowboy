@@ -562,14 +562,12 @@ impl BrowserManager {
                     return;
                 }
                 let current = manager.capability();
-                // The hello already carried the first observation.
+                // The first sample is always published: the hello carried an
+                // earlier observation, and the host may have changed since
+                // (repeating an unchanged capability is harmless).
                 let changed = announced
                     .as_ref()
-                    .is_some_and(|previous| *previous != current);
-                if announced.is_none() {
-                    announced = Some(current);
-                    continue;
-                }
+                    .is_none_or(|previous| *previous != current);
                 if changed {
                     let event = match &current {
                         Some(capability) => Event::Capability(capability.clone()),
@@ -619,7 +617,10 @@ impl BrowserManager {
             available,
             reason,
             max_instances: settings.max_instances,
-            network: self.enforced_network,
+            // Only an available browser runtime may vouch for the policy: a
+            // Controller admits IPv4-only shares on the reported network
+            // alone, so a host that cannot open one reports none.
+            network: self.enforced_network.filter(|_| available),
         })
     }
 
