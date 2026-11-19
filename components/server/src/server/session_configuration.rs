@@ -273,17 +273,27 @@ fn preview(
             }
         }
     }
+    let observed = observed.and_then(Value::as_array);
+    // A stored preference of a model-specific option (one some preset
+    // defines) applies only while the selected model's presets, or the
+    // agent's advertised options, still offer it: a Gemini reasoning level
+    // chosen earlier must not return on a model-only preset.
+    let offered = |id: &str| {
+        id == "model"
+            || !presets.iter().any(|preset| preset.values.contains_key(id))
+            || scoped.iter().any(|preset| preset.values.contains_key(id))
+            || observed.is_some_and(|options| options.iter().any(|option| option["id"] == id))
+    };
     // These are the target session's signed defaults or explicit selections.
     // Do not guess defaults from a peer, especially its permissions or model.
     if let Some(preferences) = preferences.as_object() {
-        for (id, value) in preferences {
+        for (id, value) in preferences.iter().filter(|(id, _)| offered(id)) {
             let choices = values.entry(id.clone()).or_default();
             if !choices.contains(value) {
                 choices.push(value.clone());
             }
         }
     }
-    let observed = observed.and_then(Value::as_array);
     json!(values.into_iter().filter_map(|(id, values)| {
         let current = preferences.get(&id).cloned().or_else(|| {
             let pool: Vec<&ConfigurationPreset> =
@@ -387,7 +397,12 @@ mod tests {
             preset("gemini-flash-low", "gemini-3.8-flash", Some("low"), false),
             preset("claude-sonnet-thinking", "claude-sonnet-4-6", None, false),
         ];
-        let options = preview(&presets, &json!({"model": "claude-sonnet-4-6"}), None);
+        // A Gemini level stored earlier stays with Gemini.
+        let options = preview(
+            &presets,
+            &json!({"model": "claude-sonnet-4-6", "thought_level": "low"}),
+            None,
+        );
         let option = |id: &str| {
             options
                 .as_array()

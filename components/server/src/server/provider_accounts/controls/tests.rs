@@ -752,6 +752,10 @@ async fn the_account_card_shows_the_newest_plan_its_sessions_reported() {
         ("pro", "Pro\u{202e}artlU"),
         ("pro", "Pro\u{061c}"),
         ("pro", "Pro\u{00ad}"),
+        // Private use and unassigned (`Co`, `Cn`), like the proxy and Web.
+        ("pro", "Pro\u{e000}"),
+        ("pro", "Pro\u{10ffff}"),
+        ("pro", "Pro\u{2029}"),
     ] {
         report("s2", 300, reading(id, name));
         assert_eq!(plan(&controls)["id"], "free-tier", "{id:?} {name:?}");

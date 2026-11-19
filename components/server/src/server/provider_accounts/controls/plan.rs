@@ -21,17 +21,21 @@ fn valid_id(id: &str) -> bool {
         })
 }
 
-/// Printable text only: no control, line-separator or format (`Cf`:
-/// bidirectional, zero-width, invisible) characters. The proxy and the Web
-/// apply the same rule.
+/// Printable text only: no character of the Unicode general category
+/// `Other` (`Cc` control, `Cf` format, `Cs` surrogate, `Co` private use, `Cn`
+/// unassigned) and no line or paragraph separator, at most [`MAX_NAME`] code
+/// points. The proxy and the Web apply the same rule (`[\p{C}\p{Zl}\p{Zp}]`).
 fn valid_name(name: &str) -> bool {
+    use unicode_properties::{GeneralCategory, GeneralCategoryGroup, UnicodeGeneralCategory as _};
     !name.is_empty()
         && name.trim() == name
         && name.chars().count() <= MAX_NAME
         && !name.chars().any(|character| {
-            character.is_control()
-                || matches!(character, '\u{2028}' | '\u{2029}')
-                || crate::widgets::format_char(character)
+            character.general_category_group() == GeneralCategoryGroup::Other
+                || matches!(
+                    character.general_category(),
+                    GeneralCategory::LineSeparator | GeneralCategory::ParagraphSeparator
+                )
         })
 }
 
