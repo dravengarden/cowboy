@@ -756,10 +756,22 @@ async fn the_account_card_shows_the_newest_plan_its_sessions_reported() {
         ("pro", "Pro\u{e000}"),
         ("pro", "Pro\u{10ffff}"),
         ("pro", "Pro\u{2029}"),
+        // Untrimmed or forbidden at either end: the proxy only forwards a
+        // trimmed name, so neither is one it sent.
+        ("pro", "Pro\t"),
+        ("pro", "\u{2028}Pro"),
+        ("pro", "Pro\u{3000}"),
+        ("pro", &"P".repeat(81)),
+        ("pro", &"\u{1F680}".repeat(81)),
     ] {
         report("s2", 300, reading(id, name));
         assert_eq!(plan(&controls)["id"], "free-tier", "{id:?} {name:?}");
     }
+    // The bound counts code points, like the proxy and the Web.
+    let wide = "\u{1F680}".repeat(80);
+    report("s2", 300, reading("wide", &wide));
+    assert_eq!(plan(&controls)["name"], wide.as_str());
+    report("s2", 300, reading("free-tier", "Antigravity Starter Quota"));
     report(
         "s2",
         300,

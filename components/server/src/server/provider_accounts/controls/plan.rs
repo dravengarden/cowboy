@@ -25,6 +25,8 @@ fn valid_id(id: &str) -> bool {
 /// `Other` (`Cc` control, `Cf` format, `Cs` surrogate, `Co` private use, `Cn`
 /// unassigned) and no line or paragraph separator, at most [`MAX_NAME`] code
 /// points. The proxy and the Web apply the same rule (`[\p{C}\p{Zl}\p{Zp}]`).
+/// The proxy rejects a forbidden character anywhere and then trims, so a
+/// name it reports is already trimmed; an untrimmed one is not its output.
 fn valid_name(name: &str) -> bool {
     use unicode_properties::{GeneralCategory, GeneralCategoryGroup, UnicodeGeneralCategory as _};
     !name.is_empty()
