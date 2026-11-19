@@ -83,6 +83,19 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.116.0 (unpublished) records provider-runtime 1.3.3, whose
+lock moves the Cowboy-owned `cowboy-antigravity-acp` to 1.0.1: `agy-proxy`
+reads the plan `agy` reports in `_meta.antigravity.tier` of a session result
+and carries it as `_meta.cowboy.account_plan` (`{id, name}`, never the tier's
+`upgradeUri`) on every `usage_update`, which the Controller shows on the
+account card. Antigravity 0.2.1 also adds Recommended cards for Gemini 3.8
+Flash Medium and Low, Claude Sonnet 4.6 (Thinking), Claude Opus 4.6 (Thinking)
+and GPT-OSS 120B; Gemini 3.8 Flash High stays the default. Every other Provider
+that pins provider-runtime advances one patch version without behavior
+changes: claude-code 3.20.48, claude-deepseek 3.1.66, codex 3.6.6,
+codex-deepseek 3.1.66, deepseek-harness 1.0.24 and grok 3.2.5. Native pins are
+unchanged.
+
 Component release 3.115.0 records provider-sdk 3.6.0, plugin-sdk 1.19.0,
 provider-ui 3.7.0, provider-authoring 1.0.18 and provider-runtime 1.3.2.
 Runtime contracts gain an optional `isolation` policy (SDK 3.6.0+):
