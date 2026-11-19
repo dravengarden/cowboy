@@ -41,11 +41,33 @@ impl Hub {
         !self.is_managed_child(session_id) && self.edit_queued(session_id, id, text, content)
     }
 
-    /// Offer a managed child's queued prompt to its worker again. The automatic
-    /// drain runs only into an alive, idle worker, so this never revives one;
-    /// it recovers a prompt requeued after a full dispatch channel.
-    pub fn retry_managed_dispatch(&self, session_id: &str) {
-        self.try_drain(session_id);
+    /// Queued managed prompts as `(child, parent, call)`. Withdrawal is
+    /// persisted best-effort, so a restart can restore a row whose call
+    /// already ended; recovery removes those before they can be dispatched.
+    pub fn queued_managed_calls(&self) -> Vec<(String, String, String)> {
+        let sessions = self.inner.sessions.lock();
+        let mut queued = Vec::new();
+        for (id, s) in sessions.iter() {
+            let Some(parent) = s
+                .meta
+                .execution_binding
+                .as_ref()
+                .and_then(|binding| binding.managed())
+                .map(|managed| managed.parent_session_id)
+            else {
+                continue;
+            };
+            for row in &s.queue {
+                if let Some(call) = row
+                    .cmid
+                    .as_deref()
+                    .and_then(|c| c.strip_prefix(MANAGED_CALL_CMID_PREFIX))
+                {
+                    queued.push((id.clone(), parent.clone(), call.to_owned()));
+                }
+            }
+        }
+        queued
     }
 
     pub fn is_managed_child(&self, session_id: &str) -> bool {

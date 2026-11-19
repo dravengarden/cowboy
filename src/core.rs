@@ -207,9 +207,6 @@ pub const MANAGED_CALL_CMID_PREFIX: &str = "managed-call:";
 pub struct ManagedTurn {
     /// The prompt is queued, in flight or already echoed into the transcript.
     pub prompted: bool,
-    /// A managed prompt is still queued and nothing is in flight: no worker
-    /// has seen it yet.
-    pub queued: bool,
     pub stop_reason: Option<String>,
     pub final_text: String,
     pub generated_images: Vec<serde_json::Value>,
@@ -2513,7 +2510,6 @@ impl Hub {
         });
         let mut turn = ManagedTurn {
             prompted: s.in_flight || queued,
-            queued: queued && !s.in_flight,
             stop_reason: None,
             final_text: String::new(),
             generated_images: Vec::new(),

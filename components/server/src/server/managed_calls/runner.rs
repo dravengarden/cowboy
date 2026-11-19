@@ -57,16 +57,36 @@ pub(super) fn ensure_runner(state: &Arc<AppState>, record: &Record) {
     });
 }
 
+/// Remove restored queue rows whose call already ended or is unknown.
+/// Withdrawal before a terminal write is persisted best-effort, so a crash
+/// can restore such a row; no runner owns it, and it must never run.
+async fn withdraw_ended(state: &AppState, store: &Store) {
+    for (child, parent, call) in state.hub.queued_managed_calls() {
+        match store.managed_call(&parent, &call).await {
+            Ok(Some(record)) if !record.state.terminal() => {}
+            Ok(_) => {
+                let _ = state.hub.discard_managed_prompt(&child, &call);
+            }
+            // Unknown: keep it; the next start checks again.
+            Err(_) => {}
+        }
+    }
+}
+
 /// Resume every accepted, non-terminal call after a Controller start.
 pub(super) fn recover(state: &Arc<AppState>) {
     let state = Arc::clone(state);
     tokio::spawn(async move {
-        // Machines reconnect and the Hub restores sessions shortly after
-        // start; observations before that would misread a live child.
-        tokio::time::sleep(Duration::from_secs(10)).await;
         let Some(store) = state.store.clone() else {
             return;
         };
+        // Before Machines reconnect, when no restored row can drain yet; and
+        // again once the Hub has surely restored every session.
+        withdraw_ended(&state, &store).await;
+        // Machines reconnect and the Hub restores sessions shortly after
+        // start; observations before that would misread a live child.
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        withdraw_ended(&state, &store).await;
         match store.active_managed_calls().await {
             Ok(records) => {
                 for record in records {
@@ -1293,9 +1313,6 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
         }
         _ => {}
     }
-    if let Some(step) = redeliver(state, store, record, &turn, elapsed).await {
-        return step;
-    }
     if record.state == State::Stopping && elapsed > STOP_GRACE_MS {
         // Stop only this exact child worker; its turn never confirmed.
         state.supervisor.delete_session(child);
@@ -1331,17 +1348,12 @@ async fn withdraw_unstarted(state: &AppState, store: &Store, record: &Record) ->
     if record.state != State::Running || !(cancelled || review_admissible(state, record).is_err()) {
         return None;
     }
-    let child = record.child_session_id.as_str();
-    let withdrawn = state.hub.discard_managed_prompt(child, &record.call_id);
-    // Cancellation may already have withdrawn the row: nothing queued, in
-    // flight or echoed after the cursor means no native turn ever started.
-    let never_started = withdrawn
-        || (cancelled
-            && record
-                .child_cursor
-                .and_then(|cursor| state.hub.managed_turn(child, cursor))
-                .is_some_and(|turn| !turn.prompted));
-    if !never_started {
+    // Only positive evidence counts: absent echoes are no proof, since the
+    // bounded hot log may have evicted a finished turn's echo.
+    if !state
+        .hub
+        .discard_managed_prompt(&record.child_session_id, &record.call_id)
+    {
         return None;
     }
     if !cancelled {
@@ -1362,40 +1374,6 @@ async fn withdraw_unstarted(state: &AppState, store: &Store, record: &Record) ->
         .await;
     }
     Some(Step::Again)
-}
-
-/// A running call's prompt still queued with nothing in flight is retried:
-/// an idle worker is offered it again (a full dispatch channel requeues it
-/// without a retry), and a worker that exited before delivery (for example
-/// across a reboot) is started with the call's confirmed preset, after which
-/// the queue drains into it. The automatic drain never revives a worker.
-async fn redeliver(
-    state: &AppState,
-    store: &Store,
-    record: &Record,
-    turn: &crate::core::ManagedTurn,
-    elapsed: i64,
-) -> Option<Step> {
-    if record.state != State::Running || !turn.queued {
-        return None;
-    }
-    let child = record.child_session_id.as_str();
-    match turn.status {
-        Status::Running => state.hub.retry_managed_dispatch(child),
-        Status::Exited if elapsed > PROMPT_RECOVERY_MS => {
-            let request = store
-                .managed_call_input(&record.placement.parent_session_id, &record.call_id)
-                .await
-                .ok()
-                .flatten()?;
-            if let Err(step) = reconfirm(state, store, record, &request).await {
-                return Some(step);
-            }
-            state.hub.retry_managed_dispatch(child);
-        }
-        _ => {}
-    }
-    None
 }
 
 /// Stop a child whose call was refused before its prompt ran. A fresh child

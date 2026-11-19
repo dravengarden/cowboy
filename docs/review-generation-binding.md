@@ -166,21 +166,24 @@ and the preference write, so A, B and D share one validation.
 - `configuration::ready` keeps its existing preference/observation
   handshake; it is not rewritten here.
 - Queue and delivery layer. Closed since: cancellation withdraws a
-  still-queued prompt as soon as its ledger write commits, and the runner
-  finishes a call that never started (nothing queued, in flight or echoed
-  after its cursor) as cancelled at once; every terminal runner transition
-  withdraws a leftover prompt before its ledger write, so a crash cannot leave
-  a row for a finished call; a running call whose prompt is still queued is
-  offered to an idle worker again on every poll (a full dispatch channel
-  requeues without a retry), and a worker that exited before delivery is
-  started with the confirmed preset so the queue drains into it. Still open:
-  queue-row removal is persisted asynchronously, so a Controller crash after
-  Machine acceptance can restore a row for work already accepted (closing it
-  needs Machine-side delivery evidence keyed by the call's message id); and a
-  queued row drained by a replacement worker relies on its replay of the
-  runner-written preferences, which skips options the worker does not offer
-  (with the generation frozen and only signed preset values written, the
-  same generation offers them).
+  still-queued prompt as soon as its ledger write commits and, since that
+  withdrawal proves no worker saw it, finishes the call Running → Stopping →
+  Cancelled at once (only positive withdrawal evidence counts: a missing
+  echo is no proof, because the bounded hot log can evict a finished turn's
+  echo); every terminal runner transition withdraws a leftover prompt before
+  its ledger write; and because that withdrawal is persisted best-effort,
+  Controller start removes restored managed rows whose call has ended (before
+  Machines reconnect and again after the restore delay). Still open: a
+  Controller crash after Machine acceptance can restore a row for work
+  already accepted (needs Machine-side delivery evidence keyed by the call's
+  message id); a queued row drained by a replacement worker relies on its
+  replay of the runner-written preferences; a cancellation that commits
+  between launch recording Running and submitting the prompt falls back to
+  the ordinary native stop; and a running call whose prompt was requeued (a
+  full dispatch channel) or whose worker exited before delivery is not
+  retried automatically. An automatic redelivery path was tried and dropped:
+  it could fail calls whose Machine reconnects late, wake paused or trashed
+  children in a loop, and retry permanent refusals every poll.
 - A refused continuation whose worker is still starting cannot be
   hibernated yet; idle hibernation reclaims it later.
 - Capabilities publish presets from the read-only profile's generation. An

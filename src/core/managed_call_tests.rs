@@ -185,11 +185,11 @@ fn a_withdrawn_managed_prompt_never_reaches_a_worker() {
     hub.create_session(child("child"));
     hub.set_status("child", Status::Running, None);
     hub.submit_managed_prompt("child", "call-1", "review".into());
-    let turn = hub.managed_turn("child", 0).unwrap();
-    assert!(turn.prompted && turn.queued);
-    // Offering it again without a dispatcher never pops (or loses) the row.
-    hub.retry_managed_dispatch("child");
-    assert!(hub.managed_turn("child", 0).unwrap().queued);
+    assert!(hub.managed_turn("child", 0).unwrap().prompted);
+    assert_eq!(
+        hub.queued_managed_calls(),
+        [("child".to_owned(), "parent".to_owned(), "call-1".to_owned())]
+    );
     // A client cannot edit it, and another call's id leaves it alone.
     let queued = hub.inner.sessions.lock()["child"].queue[0].id.clone();
     assert!(!hub.client_edit("child", &queued, "other".into(), Vec::new()));
@@ -197,8 +197,8 @@ fn a_withdrawn_managed_prompt_never_reaches_a_worker() {
     assert!(!hub.discard_managed_prompt("child", "call-2"));
     assert!(hub.managed_turn("child", 0).unwrap().prompted);
     assert!(hub.discard_managed_prompt("child", "call-1"));
-    let turn = hub.managed_turn("child", 0).unwrap();
-    assert!(!turn.prompted && !turn.queued);
+    assert!(!hub.managed_turn("child", 0).unwrap().prompted);
+    assert!(hub.queued_managed_calls().is_empty());
     assert_eq!(
         hub.drain_decision_for("child", false, false),
         Some(super::hub_queue::DrainDecision::Empty)

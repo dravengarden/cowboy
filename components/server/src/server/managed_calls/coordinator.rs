@@ -1100,17 +1100,48 @@ pub(super) async fn cancel_call(state: &Arc<AppState>, parent: &str, call: &str)
         }
         if store.advance_managed_call(&record, &next).await.ok()? {
             // Withdraw a still-queued prompt at once, so no drain can start it
-            // before the runner's next poll; the runner then sees a call that
-            // never started and finishes it as cancelled.
-            let _ = state
-                .hub
-                .discard_managed_prompt(&record.child_session_id, call);
+            // before the runner's next poll. Withdrawing it proves no native
+            // turn started, so the stop completes now (Running may only end
+            // through Stopping); a lost write leaves the runner's ordinary stop.
+            if next.state == State::Running
+                && state
+                    .hub
+                    .discard_managed_prompt(&record.child_session_id, call)
+            {
+                next = finish_unstarted(store, next).await;
+            }
             super::runner::ensure_runner(state, &next);
             state.managed_calls.notify();
             return Some(next);
         }
     }
     None
+}
+
+/// Running → Stopping → Cancelled for a call whose prompt was withdrawn
+/// before any worker saw it. Returns the latest record written.
+async fn finish_unstarted(store: &crate::store::Store, running: Record) -> Record {
+    let mut current = running;
+    for phase in [State::Stopping, State::Cancelled] {
+        let mut next = current.clone();
+        next.state = phase;
+        next.revision += 1;
+        next.updated_at_ms = chrono::Utc::now()
+            .timestamp_millis()
+            .max(current.updated_at_ms);
+        if phase.terminal() {
+            next.finished_at_ms = Some(next.updated_at_ms);
+        }
+        if !store
+            .advance_managed_call(&current, &next)
+            .await
+            .unwrap_or(false)
+        {
+            break;
+        }
+        current = next;
+    }
+    current
 }
 
 /// Where a managed child lives: its parent and the Machine holding its
