@@ -14,6 +14,9 @@ export interface AccountLogoutTarget {
   machine_id: string; state: string;
   credential_cleared?: boolean | null; history_retained?: boolean | null; detail?: string | null;
 }
+/** The plan the Provider last reported during one of the account's sessions
+ * (informational; Cowboy never queries the vendor for it). */
+export interface AccountPlan { id: string; name: string; observed_at_ms?: number }
 export interface AccountLogout {
   operation_id: string; revision: number; requested_at_ms: number;
   state: "pending" | "signed_out" | "partially_signed_out" | "failed" | "unconfirmed" | "cancelled" | "not_signed_in" | string;
@@ -33,6 +36,7 @@ export interface AccountControl {
   stop_confirmed: boolean;
   uncertain_effects: UncertainEffect[];
   logout?: AccountLogout | null;
+  plan?: AccountPlan | null;
 }
 export interface AccountControls { loaded: boolean; accounts: AccountControl[] }
 
@@ -56,6 +60,17 @@ function validControl(value: unknown): value is AccountControl {
       record(effect) && text(effect.session_id) && text(effect.method) && number(effect.sequence)) &&
     optional(value.logout, (logout) => record(logout) && text(logout.operation_id) && text(logout.state) &&
       Array.isArray(logout.targets) && logout.targets.every((target) => record(target) && text(target.machine_id) && text(target.state)));
+}
+
+/** The account's reported plan as card text, or nothing when the Controller
+ * reported none or a value this client cannot show safely. A bad plan never
+ * invalidates the account's controls. */
+export function accountPlanLabel(control: Pick<AccountControl, "plan">): string | undefined {
+  const plan: unknown = control.plan;
+  if (!record(plan) || !text(plan.id) || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(plan.id) || !text(plan.name)) return undefined;
+  const name = plan.name;
+  if (name.trim() !== name || [...name].length > 80 || /[\p{C}\p{Zl}\p{Zp}]/u.test(name)) return undefined;
+  return name;
 }
 
 export function validAccountControls(value: unknown): value is AccountControls {

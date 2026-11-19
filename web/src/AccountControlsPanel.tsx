@@ -1,7 +1,7 @@
 import { Alert, Button, FormControlLabel, Link, Stack, Switch, Typography } from "@mui/material";
 import { useState } from "react";
 import {
-  type AccountControl, accountStateBadge, type ControlAction, controlActions, controlReasonText, logoutStatus,
+  type AccountControl, accountPlanLabel, accountStateBadge, type ControlAction, controlActions, controlReasonText, logoutStatus,
   postAccountControl, signInObservation,
 } from "./accountControls";
 import { ProviderAccountStatus } from "./ProviderAccountIdentity";
@@ -40,6 +40,7 @@ export function AccountControlsPanel({ control, observation, disabled, onChange 
   const holder = control.in_use_by ? sessions.find((session) => session.id === control.in_use_by) : undefined;
   const pendingFences = control.fences.filter((fence) => fence.state !== "confirmed");
   const logout = logoutStatus(control.logout);
+  const plan = accountPlanLabel(control);
   async function run(action: ControlAction) {
     setBusy(true); setError("");
     try {
@@ -60,6 +61,8 @@ export function AccountControlsPanel({ control, observation, disabled, onChange 
         {holder?.title || control.in_use_by}
       </Link>
     </Typography>}
+    {plan && <Typography variant="caption" color="text.secondary" data-account-plan={control.plan?.id}
+      title="Reported by the Provider during a session of this account">Plan · {plan}</Typography>}
     <Typography variant="caption" color="text.secondary">Usage · Not available</Typography>
     {pendingFences.length > 0 && <Typography variant="caption" color="warning.main">
       Stop pending on {pendingFences.map((fence) => fence.machine_id).join(", ")}

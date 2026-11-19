@@ -34,6 +34,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 mod dispatch;
 pub(in crate::server) mod http;
 mod logout;
+mod plan;
 mod reconcile;
 pub(in crate::server) use dispatch::{before_dispatch, handoff};
 pub(in crate::server) use reconcile::{start, turn_end_listener};
@@ -720,6 +721,7 @@ impl Controls {
                     "stop_confirmed": self.stop_confirmed(account),
                     "uncertain_effects": uncertain,
                     "logout": self.logout_value(account),
+                    "plan": plan::account_plan(&sessions, id),
                 })
             })
             .collect::<Vec<_>>();

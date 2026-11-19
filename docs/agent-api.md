@@ -698,9 +698,11 @@ Machine.
 
 Antigravity accounts carry account controls in `accounts.list().account_controls`
 (`{loaded, accounts:[{account_id, provider_id, admitted, state, reason,
-until_ms, revision, in_use_by, fences, stop_confirmed, uncertain_effects, logout}]}`;
-`in_use_by` names the session whose live worker holds the account's single
-runtime; see the [design](antigravity-real-accounts-design.md#revision-5-simplification-owner-decision-2026-11-18)).
+until_ms, revision, in_use_by, fences, stop_confirmed, uncertain_effects, logout,
+plan}]}`; `in_use_by` names the session whose live worker holds the account's
+single runtime; `plan` is `{id, name, observed_at_ms}` or `null`, the newest
+plan the Provider reported during one of the account's sessions
+(informational, never queried); see the [design](antigravity-real-accounts-design.md#revision-5-simplification-owner-decision-2026-11-18)).
 Owner actions use `control.apply` `accounts.control {account, body:{action,
 expected_revision?, confirm?}}` (`POST /api/provider-accounts/{id}/controls`):
 `block` (kill switch, `confirm: true`), `unblock` and `clear` (both need the

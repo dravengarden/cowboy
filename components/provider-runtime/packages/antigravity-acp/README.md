@@ -36,6 +36,16 @@ places its tree below `proxy/` in the account-sandbox runtime archive and adds
 - Agent requests: only `session/request_permission`, and only for the facade
   tools and `ask_question`; any other tool's request is rejected by the proxy
   without reaching the worker. Agent notifications: only `session/update`.
+- Account plan: the `_meta.antigravity.tier` of a `session/new|load|resume`
+  result (`agy` 1.5.9: `{name: "Antigravity Starter Quota", id: "free-tier",
+  upgradeUri}`) becomes the proxy's plan `{id, name}` when `id` is a slug of
+  at most 64 characters and `name` at most 80 printable characters; a tier it
+  cannot read clears the plan, a result without one keeps it. Every
+  `usage_update` then carries `_meta.cowboy.account_plan` (whatever `agy` put
+  under `_meta.cowboy` is dropped first), so the session usage the worker
+  already relays shows the Controller the account's plan. `upgradeUri` is
+  never copied. Nothing is requested for it: the plan is only what `agy`
+  reports while the owner runs a session.
 - `session/new|load|resume`: `mcpServers` becomes exactly
   `cowboy` = bundled Node + `facade-relay.mjs <socket> <channel>`;
   `_meta` becomes `{antigravity: {systemPrompt: {append: <projection>}}}`;

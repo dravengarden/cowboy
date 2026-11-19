@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AcpProxy, REFUSAL_PREFIX, VIOLATION_PREFIX } from "./proxy.mjs";
+import { AcpProxy, accountPlan, REFUSAL_PREFIX, VIOLATION_PREFIX } from "./proxy.mjs";
 
 function harness({
   ready = true,
@@ -371,4 +371,115 @@ test("every vendor error ending is classified; an unclassified one is unknown_re
   const error = client.at(-1).error;
   assert.equal(error.message, "antigravity_backend_refusal:unknown_refusal");
   assert.equal(error.data.cowboy.antigravity_backend.class, "unknown_refusal");
+});
+
+const TIER = {
+  name: "Antigravity Starter Quota",
+  id: "free-tier",
+  upgradeUri: "https://antigravity.google/docs/faq#why-am-i-ineligible-for-a-google-one-ai-plan",
+};
+const update = (sessionUpdate, fields = {}) => ({
+  jsonrpc: "2.0",
+  method: "session/update",
+  params: { sessionId: "s-new", update: { sessionUpdate, ...fields } },
+});
+
+test("only a short tier id and printable name become the account plan", () => {
+  assert.deepEqual(accountPlan({ antigravity: { tier: TIER } }), {
+    id: "free-tier",
+    name: "Antigravity Starter Quota",
+  });
+  assert.deepEqual(accountPlan({ antigravity: { tier: { id: "g1-pro-tier", name: " Pro " } } }), {
+    id: "g1-pro-tier",
+    name: "Pro",
+  });
+  for (const tier of [
+    undefined,
+    null,
+    true,
+    [],
+    { name: "Pro" },
+    { id: "Pro Tier", name: "Pro" },
+    { id: "-x", name: "Pro" },
+    { id: "x".repeat(65), name: "Pro" },
+    { id: "pro", name: "" },
+    { id: "pro", name: "   " },
+    { id: "pro", name: "Pro\nUltra" },
+    { id: "pro", name: "Pro\u202eartlU" },
+    { id: "pro", name: "P".repeat(81) },
+    { id: "pro", name: 7 },
+  ]) {
+    assert.equal(accountPlan({ antigravity: { tier } }), undefined, JSON.stringify(tier));
+  }
+  assert.equal(accountPlan(undefined), undefined);
+});
+
+test("usage readings carry the plan agy reported, never its upgrade link", async () => {
+  const { proxy, client } = harness();
+  // Before any session reports a tier, a reading passes unchanged, minus
+  // anything agy put under Cowboy's namespace.
+  await proxy.fromAgent(update("usage_update", { used: 0, size: 1048576 }));
+  assert.deepEqual(client.at(-1), update("usage_update", { used: 0, size: 1048576 }));
+  await proxy.fromAgent(
+    update("usage_update", { used: 1, size: 2, _meta: { cowboy: { account_plan: { id: "x" } } } }),
+  );
+  assert.deepEqual(client.at(-1), update("usage_update", { used: 1, size: 2 }));
+
+  await proxy.fromClient(request(2, "session/new", { cwd: "/work/repo", mcpServers: [] }));
+  const result = { sessionId: "s-new", _meta: { antigravity: { tier: TIER } } };
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 2, result });
+  // The session result itself is forwarded unchanged.
+  assert.deepEqual(client.at(-1), { jsonrpc: "2.0", id: 2, result });
+
+  const reading = update("usage_update", {
+    used: 10457,
+    size: 1048576,
+    _meta: { other: 1, cowboy: { account_plan: { id: "ultra", name: "Forged" } } },
+  });
+  await proxy.fromAgent(reading);
+  assert.deepEqual(
+    client.at(-1),
+    update("usage_update", {
+      used: 10457,
+      size: 1048576,
+      _meta: { other: 1, cowboy: { account_plan: { id: "free-tier", name: TIER.name } } },
+    }),
+  );
+  assert.equal(JSON.stringify(client.at(-1)).includes("antigravity.google"), false);
+  // The original notification object is not mutated.
+  assert.equal(reading.params.update._meta.cowboy.account_plan.name, "Forged");
+
+  // Titles, commands and thoughts pass through untouched.
+  for (const notification of [
+    update("session_info_update", { title: "Delegating Task To Subagent" }),
+    update("available_commands_update", { availableCommands: [{ name: "compact" }] }),
+    update("agent_thought_chunk", { content: { type: "text", text: "…" } }),
+  ]) {
+    await proxy.fromAgent(notification);
+    assert.deepEqual(client.at(-1), notification);
+  }
+
+  // A later result without a tier keeps the plan; an unreadable tier clears it.
+  await proxy.fromClient(request(3, "session/load", { sessionId: "s-new", cwd: "/work/repo" }));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 3, result: {} });
+  await proxy.fromAgent(update("usage_update", { used: 3, size: 4 }));
+  assert.equal(client.at(-1).params.update._meta.cowboy.account_plan.id, "free-tier");
+  await proxy.fromClient(request(4, "session/resume", { sessionId: "s-new", cwd: "/work/repo" }));
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 4,
+    result: { _meta: { antigravity: { tier: { id: "free-tier", name: "\u0007" } } } },
+  });
+  await proxy.fromAgent(update("usage_update", { used: 5, size: 6 }));
+  assert.deepEqual(client.at(-1), update("usage_update", { used: 5, size: 6 }));
+});
+
+test("image prompts reach agy unchanged", async () => {
+  const { proxy, agent } = harness();
+  const prompt = [
+    { type: "text", text: "What is in this screenshot?" },
+    { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
+  ];
+  await proxy.fromClient(request(9, "session/prompt", { sessionId: "s", prompt }));
+  assert.deepEqual(agent.at(-1), request(9, "session/prompt", { sessionId: "s", prompt }));
 });

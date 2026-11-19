@@ -709,3 +709,69 @@ async fn a_rate_limit_resumes_only_on_an_owner_send_after_it_ends() {
 }
 
 mod logout_tests;
+
+#[tokio::test]
+async fn the_account_card_shows_the_newest_plan_its_sessions_reported() {
+    let (fake, controls, _root) = fixture().await;
+    let account: ProviderAccountId = ACCOUNT.parse().unwrap();
+    let plan = |controls: &Controls| {
+        controls.read_value(&[(ACCOUNT.parse().unwrap(), "antigravity".into())])["accounts"][0]
+            ["plan"]
+            .clone()
+    };
+    // No session reported one yet.
+    assert!(plan(&controls).is_null());
+    let report = |id: &str, observed: i64, raw: Value| {
+        let mut sessions = fake.sessions.lock();
+        let (meta, _) = sessions.get_mut(id).unwrap();
+        meta.usage = Some(crate::agent_model::SessionUsage {
+            used: 10_457,
+            size: 1_048_576,
+            raw,
+            observed_at_ms: observed,
+        });
+    };
+    let reading = |id: &str, name: &str| {
+        json!({"sessionUpdate": "usage_update", "used": 10_457, "size": 1_048_576,
+            "_meta": {"cowboy": {"account_plan": {"id": id, "name": name}}}})
+    };
+    report("s1", 100, reading("free-tier", "Antigravity Starter Quota"));
+    assert_eq!(
+        plan(&controls),
+        json!({"id": "free-tier", "name": "Antigravity Starter Quota", "observed_at_ms": 100})
+    );
+    // The newest reading wins, whichever session reported it.
+    report("s2", 200, reading("g1-pro-tier", "Google AI Pro"));
+    assert_eq!(plan(&controls)["id"], "g1-pro-tier");
+    // An unreadable plan is ignored, never shown; the last readable one stays.
+    for (id, name) in [
+        ("Pro Tier", "Pro"),
+        ("pro", ""),
+        ("pro", " Pro"),
+        ("pro", "Pro\nUltra"),
+        ("pro", "Pro\u{202e}artlU"),
+    ] {
+        report("s2", 300, reading(id, name));
+        assert_eq!(plan(&controls)["id"], "free-tier", "{id:?} {name:?}");
+    }
+    report(
+        "s2",
+        300,
+        json!({"sessionUpdate": "usage_update", "used": 1, "size": 2}),
+    );
+    assert_eq!(plan(&controls)["id"], "free-tier");
+    // Another Provider's or another account's sessions never contribute.
+    {
+        let mut sessions = fake.sessions.lock();
+        let (meta, _) = sessions.get_mut("s1").unwrap();
+        meta.provider = "codex".into();
+    }
+    assert!(plan(&controls).is_null());
+    let other: ProviderAccountId = "22222222-2222-4222-8222-222222222222".parse().unwrap();
+    report("s2", 400, reading("ultra", "Google AI Ultra"));
+    assert!(controls.read_value(&[(other, "antigravity".into())])["accounts"][0]["plan"].is_null());
+    assert_eq!(
+        controls.read_value(&[(account, "antigravity".into())])["accounts"][0]["plan"]["name"],
+        "Google AI Ultra"
+    );
+}

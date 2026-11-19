@@ -633,9 +633,10 @@ R3-4, R3-9, R3-10, R3-13 and R3-16, with these concrete choices:
   named-only Provider never offers a default account.
 - **Account card** (`AccountControlsPanel`): title `Antigravity · <name>`,
   the state badge (sign-in observation for `ok`; reason and `until` for the
-  others), "In use by 1 turn" with the holder session, usage "Not available",
-  the Google notice, the Admitted switch, Clear state (with its reason),
-  Block / Unblock, Sign out (blocked, stop confirmed), Stop units (pending
+  others), "In use by 1 turn" with the holder session, the plan `agy`
+  reported ("Plan · Antigravity Starter Quota", see "Antigravity features"),
+  usage "Not available", the Google notice, the Admitted switch, Clear state
+  (with its reason), Block / Unblock, Sign out (blocked, stop confirmed), Stop units (pending
   fences), Force release (turn held, stop confirmed); Block, Sign out and
   Force release confirm first. Sign-in, Machine browser and Remove account
   stay the existing controls; "Use by default" is hidden.
@@ -832,6 +833,53 @@ query and force release of "Controller account controls (step 5a)" and the
   conditional `apply` (`$COWBOY_EXECUTION_FILE_HELPER`, the Claude runtime's
   primitive). Guidance files are read only as regular files whose canonical
   path is themselves inside the repository.
+
+## Antigravity features (0.2.1)
+
+Built on what `agy` 1.5.9 returns over ACP during owner-driven sessions; no
+request is added for any of it.
+
+- **Recommended cards.** `configuration_presets` follow the `configOptions`
+  of `session/new`: Gemini 3.8 Flash High (default), Medium and Low set
+  `model` and `thought_level`; Claude Sonnet 4.6 (Thinking), Claude Opus 4.6
+  (Thinking) and GPT-OSS 120B set only `model`. The legacy
+  `models.availableModels` enumerates thinking variants only for Gemini
+  (`gemini-3.8-flash-high|medium|low`) and one entry for each other model,
+  so a level is not signed where `agy` gives no evidence that it applies; a
+  card that set an option `agy` then withdrew would never read as current.
+  Values reach `agy` through the generic serial `session/set_config_option`
+  queue (the model first), which the proxy forwards.
+- **No Plan card.** Recommended cards are (model, reasoning) configurations:
+  the picker labels them so, each binds one `models/targets.toml` evaluation
+  target, and a card is current when all its values match. A card setting
+  `mode` would be shadowed by the model-only card of the same model, or force
+  every card to pin `mode=default` and silently reset the owner's live mode on
+  each card switch. `agy`'s own `mode` option (`default`, `accept-edits`,
+  `auto`, `plan`) is already shown per session as "Agent mode" and persists
+  as a session preference, so Plan stays one choice away. How `plan` behaves
+  with every built-in tool denied is not observed yet; it is an acceptance
+  item for the next human-paced session, not something a card should
+  preselect.
+- **Account plan.** `session/new|load|resume` results carry
+  `_meta.antigravity.tier` (`{name: "Antigravity Starter Quota", id:
+  "free-tier", upgradeUri}`). The proxy keeps `{id, name}` only and adds it
+  to every `usage_update` as `_meta.cowboy.account_plan`; the worker already
+  relays that reading as the session's usage, and the Controller persists it.
+  `accounts.list()` reports, per named-only account, the newest valid plan of
+  its sessions (`plan: {id, name, observed_at_ms}` or `null`); the account
+  card shows "Plan · <name>" beside "Usage · Not available". Values that are
+  not a short slug and short printable name are dropped at the proxy, the
+  Controller and the Web. The plan never gates anything, and the
+  `upgradeUri` is never copied, so no link to Google appears outside the
+  account browser.
+- **Generic paths, unchanged.** `usage_update` (`size` 1,048,576) drives the
+  context meter; `promptCapabilities.image` needs no declaration (image
+  blocks are forwarded verbatim); `available_commands_update` feeds the
+  command list; `agent_thought_chunk` renders as thought. `session_info_update`
+  titles are not adopted: Cowboy titles a session from its first prompt and
+  only while the title is the creation default, so a later agent title could
+  not tell an owner's rename from Cowboy's own title without a new title
+  source, which would also change every other Provider that emits one.
 
 ## Residual risks
 

@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { assert, assertEquals, assertStringIncludes } from "../../tools/test-assert.ts";
 import {
-  type AccountControl, accountStateBadge, acknowledgementTarget, acknowledgeUncertainEffect, controlActions, controlRequest, logoutStatus,
+  type AccountControl, accountPlanLabel, accountStateBadge, acknowledgementTarget, acknowledgeUncertainEffect, controlActions, controlRequest, logoutStatus,
   pickerUnavailableReason, postAccountControl, sessionParkedReason, signInObservation, validAccountControls,
 } from "./accountControls";
 import { AccountControlsPanel } from "./AccountControlsPanel";
@@ -199,4 +199,28 @@ test("a named-only account's sign-in is independent of usage collection", () => 
   assertEquals(namedOnlyLoginReason(observed({ reason: "account_usage_unsupported" }), "antigravity", ACCOUNT), "Sign-in not confirmed");
   assertEquals(namedOnlyLoginReason([], "antigravity", ACCOUNT), "Sign-in not confirmed");
   assertEquals(namedOnlyLoginReason(observed({ reason: "native_login_required" }), "antigravity", ACCOUNT), "Not signed in on a Machine");
+});
+
+test("the account card shows the plan the Provider reported, and nothing it cannot read", () => {
+  const starter = { id: "free-tier", name: "Antigravity Starter Quota", observed_at_ms: 1 };
+  assertEquals(accountPlanLabel(control({ plan: starter })), "Antigravity Starter Quota");
+  assertEquals(accountPlanLabel(control()), undefined);
+  assertEquals(accountPlanLabel(control({ plan: null })), undefined);
+  for (const plan of [
+    { id: "Free Tier", name: "Starter" }, { id: "free-tier", name: "" }, { id: "free-tier", name: " Starter" },
+    { id: "free-tier", name: "Starter\nUltra" }, { id: "free-tier", name: "Pro\u202eartlU" },
+    { id: "free-tier", name: "P".repeat(81) }, { id: 7, name: "Starter" },
+  ]) assertEquals(accountPlanLabel(control({ plan: plan as never })), undefined, JSON.stringify(plan));
+  // A bad plan never invalidates the account's controls.
+  assert(validAccountControls({ loaded: true, accounts: [control({ plan: "Ultra" as never })] }));
+  const markup = render(createElement(AccountControlsPanel, {
+    control: control({ plan: starter }), observation: { available: true }, disabled: false, onChange: () => undefined,
+  }));
+  for (const text of ["Plan · Antigravity Starter Quota", "data-account-plan=\"free-tier\"", "Usage · Not available"]) {
+    assertStringIncludes(markup, text);
+  }
+  assert(!markup.includes("href"));
+  assert(!render(createElement(AccountControlsPanel, {
+    control: control(), observation: { available: true }, disabled: false, onChange: () => undefined,
+  })).includes("Plan ·"));
 });

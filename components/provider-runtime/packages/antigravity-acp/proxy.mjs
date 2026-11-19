@@ -37,6 +37,26 @@ function toolCode(name) {
 const SESSION_REQUESTS = new Set(["session/new", "session/load", "session/resume"]);
 
 /**
+ * The account's plan from `_meta.antigravity.tier` of a session result, as
+ * Cowboy's provider-neutral `{ id, name }`, or `undefined`. Only a short slug
+ * and a short printable name pass; the tier's `upgradeUri` never leaves the
+ * proxy.
+ */
+export function accountPlan(meta) {
+  const tier = meta?.antigravity?.tier;
+  if (tier === null || typeof tier !== "object" || Array.isArray(tier)) return undefined;
+  const { id, name } = tier;
+  if (typeof id !== "string" || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(id)) return undefined;
+  if (typeof name !== "string") return undefined;
+  const label = name.trim();
+  // Printable text only: no control, format or line-separator characters.
+  if (label.length === 0 || label.length > 80 || /[\p{C}\p{Zl}\p{Zp}]/u.test(label)) {
+    return undefined;
+  }
+  return { id, name: label };
+}
+
+/**
  * @param send.agent write one message to `agy`
  * @param send.client write one message to the worker
  * @param runtime a promise of the ready runtime: `{ facade, mcpServer(channel),
@@ -52,6 +72,8 @@ export class AcpProxy {
     this.pending = new Map();
     this.agentRequests = new Set();
     this.turns = new Map();
+    /** The account plan `agy` last reported (one proxy serves one account). */
+    this.plan = undefined;
     this.queue = Promise.resolve();
   }
 
@@ -170,6 +192,26 @@ export class AcpProxy {
     this.agent({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });
   }
 
+  /**
+   * Carry the account plan on every `usage_update`, the reading the worker
+   * already relays as the session's usage, under Cowboy's own `_meta`
+   * namespace. Anything `agy` itself put there is dropped first.
+   */
+  annotateUsage(message) {
+    const update = message.params?.update;
+    if (update?.sessionUpdate !== "usage_update") return message;
+    const meta = update._meta;
+    const hasOwn = meta !== null && typeof meta === "object" && !Array.isArray(meta);
+    if (this.plan === undefined && !(hasOwn && Object.hasOwn(meta, "cowboy"))) return message;
+    const annotated = structuredClone(message);
+    const next = hasOwn ? { ...annotated.params.update._meta } : {};
+    delete next.cowboy;
+    if (this.plan !== undefined) next.cowboy = { account_plan: { ...this.plan } };
+    if (Object.keys(next).length === 0) delete annotated.params.update._meta;
+    else annotated.params.update._meta = next;
+    return annotated;
+  }
+
   /** A facade call's effect became unknown: end that session's turn. */
   uncertain(sessionId, method) {
     const turn = this.turns.get(sessionId);
@@ -183,7 +225,10 @@ export class AcpProxy {
     const { id, method } = message;
     if (typeof method === "string") {
       if (id === undefined) {
-        if (method === "session/update") this.observe(message.params);
+        if (method === "session/update") {
+          this.observe(message.params);
+          return this.client(this.annotateUsage(message));
+        }
         if (AGENT_NOTIFICATIONS.includes(method)) this.client(message);
         return;
       }
@@ -222,6 +267,14 @@ export class AcpProxy {
     const runtime = await this.runtime;
     if (record.channel && typeof message.result?.sessionId === "string") {
       runtime.bindChannel(record.channel, message.result.sessionId);
+    }
+    if (
+      SESSION_REQUESTS.has(record.method) &&
+      message.result?._meta?.antigravity?.tier !== undefined
+    ) {
+      // Informational, fail closed: a tier this proxy cannot read clears
+      // the plan; a result that reports none keeps the last one.
+      this.plan = accountPlan(message.result._meta);
     }
     if (record.method !== "session/prompt") return this.client(message);
     const turn = this.turns.get(record.sessionId);
