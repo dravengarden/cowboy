@@ -165,25 +165,43 @@ and the preference write, so A, B and D share one validation.
   keeps owning its identity; pass `fresh:true` to run a new review.
 - `configuration::ready` keeps its existing preference/observation
   handshake; it is not rewritten here.
-- Queue and delivery layer. Closed since: cancellation withdraws a
-  still-queued prompt as soon as its ledger write commits and, since that
-  withdrawal proves no worker saw it, finishes the call Running → Stopping →
-  Cancelled at once (only positive withdrawal evidence counts: a missing
-  echo is no proof, because the bounded hot log can evict a finished turn's
-  echo); every terminal runner transition withdraws a leftover prompt before
-  its ledger write; and because that withdrawal is persisted best-effort,
-  Controller start removes restored managed rows whose call has ended (before
-  Machines reconnect and again after the restore delay). Still open: a
-  Controller crash after Machine acceptance can restore a row for work
-  already accepted (needs Machine-side delivery evidence keyed by the call's
-  message id); a queued row drained by a replacement worker relies on its
-  replay of the runner-written preferences; a cancellation that commits
-  between launch recording Running and submitting the prompt falls back to
-  the ordinary native stop; and a running call whose prompt was requeued (a
-  full dispatch channel) or whose worker exited before delivery is not
-  retried automatically. An automatic redelivery path was tried and dropped:
-  it could fail calls whose Machine reconnects late, wake paused or trashed
-  children in a loop, and retry permanent refusals every poll.
+- Queue and delivery layer. Closed: cancellation withdraws a still-queued
+  prompt as soon as its ledger write commits and finishes the call Running →
+  Stopping → Cancelled at once (a missing echo is never treated as evidence,
+  because the bounded hot log can evict a finished turn's echo); every
+  terminal runner transition withdraws a leftover prompt before its ledger
+  write; and because that withdrawal is persisted best-effort, Controller
+  start removes restored managed rows whose call has ended (before Machines
+  reconnect and again after the restore delay).
+  Still open, each needing a durable per-delivery identity recorded in the
+  call ledger before dispatch and honoured by the Machine (a Machine release):
+  - A Controller crash after Machine acceptance but before the queue removal
+    commits restores a row for accepted work, which a later drain delivers
+    again. Withdrawing such a row on cancellation is therefore no proof that
+    no turn started: the call finishes Cancelled while the accepted turn may
+    still run.
+  - A cancellation that commits between launch recording Running and the
+    first submission falls back to the ordinary native stop.
+  - A prompt requeued by a full dispatch channel, or queued on a child whose
+    worker exited before delivery, waits for the next drain trigger.
+  - A queued row drained by a replacement worker relies on its replay of the
+    runner-written preferences.
+  Controller-only attempts at these were reviewed and dropped (2026-11-19,
+  five Astra Max rounds), because each traded one window for another:
+  - stable runtime command ids: a duplicate acknowledgement cannot return a
+    result lost before it was persisted, and client message ids could collide;
+  - echo-driven removal of restored rows: raced the reviewer admissibility
+    check;
+  - resource-wait retries, and before them a runner-owned redelivery path:
+    re-enrolled permanent refusals, paused and trashed children;
+  - a Hub cancellation tombstone with in-memory "unsent" evidence: lost
+    across a restart (the stop grace could then stop a retained child), could
+    discard a result whose echo replayed during reconfirmation, and is not
+    serialized with the cancellation commit;
+  - a native Cancel for a withdrawn restored row: session-scoped, so a
+    buffered Cancel can reach a later worker on the same child;
+  - hibernating instead of stopping after the stop grace: raced a worker that
+    finished hibernating, and a refused hibernation left the call Stopping.
 - A refused continuation whose worker is still starting cannot be
   hibernated yet; idle hibernation reclaims it later.
 - Capabilities publish presets from the read-only profile's generation. An
