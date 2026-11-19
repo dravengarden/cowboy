@@ -18040,7 +18040,7 @@
           "sources": [
             "components/provider-runtime"
           ],
-          "digest": "sha256:b2cd122c1d7b05d2c0a48b9379da0f95a511cf877b5a6a1a6797fa2324ae6252",
+          "digest": "sha256:9bd981ca1677728393e835ebd0aea1ca0a293843759e1ea81534120fd6c23fe7",
           "package": {
             "kind": "npm",
             "name": "@cowboy/provider-runtime",
