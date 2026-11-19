@@ -848,7 +848,13 @@ request is added for any of it.
   so a level is not signed where `agy` gives no evidence that it applies; a
   card that set an option `agy` then withdrew would never read as current.
   Values reach `agy` through the generic serial `session/set_config_option`
-  queue (the model first), which the proxy forwards.
+  queue (the model first), which the proxy forwards. A card is validated
+  against its own target model: while a model-only card is current, the
+  session (and the preview of an unstarted one) shows no reasoning option,
+  yet the Gemini cards stay offered, because their level is applied after
+  their model and judged by it. A stored reasoning preference stays with the
+  model whose presets or advertised options offer it; it is not shown, or
+  replayed, on a model-only card.
 - **No Plan card.** Recommended cards are (model, reasoning) configurations:
   the picker labels them so, each binds one `models/targets.toml` evaluation
   target, and a card is current when all its values match. A card setting
@@ -867,11 +873,25 @@ request is added for any of it.
   relays that reading as the session's usage, and the Controller persists it.
   `accounts.list()` reports, per named-only account, the newest valid plan of
   its sessions (`plan: {id, name, observed_at_ms}` or `null`); the account
-  card shows "Plan · <name>" beside "Usage · Not available". Values that are
-  not a short slug and short printable name are dropped at the proxy, the
-  Controller and the Web. The plan never gates anything, and the
-  `upgradeUri` is never copied, so no link to Google appears outside the
-  account browser.
+  card shows "Plan · <name>" beside "Usage · Not available". One rule holds
+  at the proxy, the Controller and the Web: `id` is a slug of at most 64
+  characters; `name` has no character of Unicode category C or a line or
+  paragraph separator anywhere, and is 1 to 80 code points once trimmed. The
+  proxy checks the reported name before trimming (so a tab or U+2028 at
+  either end clears the plan) and forwards it trimmed; the Controller and
+  the Web accept only an already trimmed name. Anything else is dropped. The
+  proxy applies a session result's plan before it awaits anything, so a
+  `usage_update` that `agy` writes right behind the result carries the new
+  plan. A counter-only worker snapshot keeps the last reported reading, so a
+  reconnect does not erase the plan. The plan never gates anything.
+- **No raw tier.** The proxy removes `_meta.antigravity.tier` from every
+  `_meta`, at any depth, of every message it forwards to the worker
+  (results, error data, notifications, session updates, permission requests,
+  tool inputs and outputs), together with the `antigravity` and `_meta`
+  objects that removal leaves empty. Nothing else is altered or dropped: the
+  walk is iterative with no depth limit and copies only the objects on the
+  path to a tier. The `upgradeUri` is therefore never copied, so no link to
+  Google appears outside the account browser.
 - **Generic paths, unchanged.** `usage_update` (`size` 1,048,576) drives the
   context meter; `promptCapabilities.image` needs no declaration (image
   blocks are forwarded verbatim); `available_commands_update` feeds the
