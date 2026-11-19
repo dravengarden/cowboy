@@ -18040,7 +18040,7 @@
           "sources": [
             "components/provider-runtime"
           ],
-          "digest": "sha256:3525c063864f329194b1250469b8104d29cb43524c5c0e6115b5db5107c2e786",
+          "digest": "sha256:81298fa5d05b73e416f86bb06f62383861898772198922a2a636700f5514a4b4",
           "package": {
             "kind": "npm",
             "name": "@cowboy/provider-runtime",
@@ -18158,7 +18158,7 @@
                 "version": "1.3.3"
               }
             ],
-            "source_digest": "sha256:1e7dcfd097476bd00e2514887a533347b1624617ac44be324d0abf80bbd797b3"
+            "source_digest": "sha256:9fc152fedffd2a7ec09ea3a998fe9d23b83805942b6a20f43dedeca23980efe0"
           },
           "claude-code": {
             "component_release": "3.116.0",
