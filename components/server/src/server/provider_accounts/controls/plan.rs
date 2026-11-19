@@ -14,6 +14,16 @@ const MAX_NAME: usize = 80;
 /// The `_meta.cowboy.sanitizer` generation of the Antigravity proxy whose
 /// usage readings carry a plan it validated itself.
 const SANITIZER: u64 = 1;
+/// The first Antigravity Provider release whose proxy rebuilds
+/// `_meta.cowboy`. An earlier proxy forwarded `agy`'s own `_meta` verbatim,
+/// marker included, so only the session's pinned release proves provenance.
+const SANITIZING_RELEASE: semver::Version = semver::Version::new(0, 2, 1);
+
+/// Whether the session's pinned Provider release sanitizes `_meta.cowboy`.
+fn sanitizing_release(meta: &SessionMeta) -> bool {
+    semver::Version::parse(&meta.provider_version)
+        .is_ok_and(|version| version >= SANITIZING_RELEASE)
+}
 
 fn valid_id(id: &str) -> bool {
     id.len() <= MAX_ID
@@ -57,6 +67,9 @@ fn unprintable(character: char) -> bool {
 
 /// One session's reported plan and when it was observed.
 fn reported(meta: &SessionMeta) -> Option<(i64, &str, &str)> {
+    if !sanitizing_release(meta) {
+        return None;
+    }
     let usage = meta.usage.as_ref()?;
     let cowboy = usage.raw.pointer("/_meta/cowboy")?;
     // Only a proxy that rebuilds `_meta.cowboy` itself stamps this marker. An
@@ -72,6 +85,9 @@ fn reported(meta: &SessionMeta) -> Option<(i64, &str, &str)> {
 }
 
 /// The newest plan any governed session of `account` reported, or `null`.
+/// Only each session's current usage reading counts: the fallback to an
+/// older reading exists across sessions only, so a session whose newest
+/// reading carries no plan contributes none.
 pub(super) fn account_plan(sessions: &[SessionMeta], account: &ProviderAccountId) -> Value {
     sessions
         .iter()

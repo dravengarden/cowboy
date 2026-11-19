@@ -701,8 +701,9 @@ Antigravity accounts carry account controls in `accounts.list().account_controls
 until_ms, revision, in_use_by, fences, stop_confirmed, uncertain_effects, logout,
 plan}]}`; `in_use_by` names the session whose live worker holds the account's
 single runtime; `plan` is `{id, name, observed_at_ms}` or `null`, the newest
-plan the Provider reported during one of the account's sessions
-(informational, never queried, never gating anything). `id` is a lowercase
+plan among the current usage readings of the account's sessions pinned to
+Antigravity 0.2.1 or later (informational, never queried, never gating
+anything; it may be absent after a worker reconnect until the next reading). `id` is a lowercase
 slug of at most 64 characters (`[a-z0-9][a-z0-9_-]*`); `name` is 1 to 80
 code points, already trimmed, with no character of Unicode category C
 (control, format, surrogate, private use, unassigned; Unicode 17.0 at the

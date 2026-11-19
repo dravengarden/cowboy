@@ -867,10 +867,12 @@ request is added for any of it.
   `_meta.cowboy.sanitizer: 1`, which marks a `_meta.cowboy` the proxy rebuilt
   itself; the worker already relays that reading as the session's usage, and
   the Controller persists it. The Controller ignores a plan without that
-  marker: the 0.2.0 proxy forwarded `agy`'s `_meta` verbatim, so a stored
-  reading or a still-pinned worker could carry a plan nobody validated.
-  `accounts.list()` reports, per named-only account, the newest valid plan of
-  its sessions (`plan: {id, name, observed_at_ms}` or `null`); the account
+  marker, and one from a session pinned to an Antigravity release before
+  0.2.1: the 0.2.0 proxy forwarded `agy`'s `_meta` verbatim, marker
+  included, so a stored reading or a still-pinned worker could carry a plan
+  nobody validated. `accounts.list()` reports, per named-only account, the
+  newest valid plan among its sessions' current usage readings (`plan: {id,
+  name, observed_at_ms}` or `null`); the account
   card shows "Plan · <name>" beside "Usage · Not available". One rule holds
   at the proxy, the Controller and the Web: `id` is a slug of at most 64
   characters; `name` has no character of Unicode category C or a line or
@@ -881,15 +883,17 @@ request is added for any of it.
   (`tools/generate-plan-name-table.ts`, Unicode 17.0), unassigned code
   points included. The proxy checks the reported name before trimming (so a tab or U+2028 at
   either end clears the plan) and forwards it trimmed; the Controller and
-  the Web accept only an already trimmed name. Anything else is dropped, and
-  an older valid reading keeps showing. The proxy forwards a session result
+  the Web accept only an already trimmed name. Anything else is dropped; a
+  valid plan another session of the account reported keeps showing (the
+  fallback exists only across sessions, never to an older reading of the
+  same session). The proxy forwards a session result
   without awaiting anything, so the result reaches the worker (which drops
   session updates until a load completes) before a `usage_update` that `agy`
-  wrote right behind it, and that reading already carries the new plan. Each
-  stored usage reading stays one whole observation: a counter-only worker
-  snapshot after a reconnect that repeats the stored counters leaves the
-  stored reading, and its plan, in place; different counters replace it
-  whole, and the next `usage_update` carries the plan again. The plan never
+  wrote right behind it, and that reading already carries the new plan. A
+  prompt result instead waits for its turn's evidence to settle, and the
+  turn stays observed until then. A worker's counter-only usage snapshot
+  after a reconnect replaces the stored reading like any other, so the
+  session's plan may be absent until its next `usage_update`. The plan never
   gates anything.
 - **No raw tier.** The proxy removes `_meta.antigravity.tier` from every
   `_meta`, at any depth, of every message it forwards to the worker

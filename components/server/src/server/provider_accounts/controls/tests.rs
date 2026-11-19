@@ -724,6 +724,7 @@ async fn the_account_card_shows_the_newest_plan_its_sessions_reported() {
     let report = |id: &str, observed: i64, raw: Value| {
         let mut sessions = fake.sessions.lock();
         let (meta, _) = sessions.get_mut(id).unwrap();
+        meta.provider_version = "0.2.1".into();
         meta.usage = Some(crate::agent_model::SessionUsage {
             used: 10_457,
             size: 1_048_576,
@@ -784,6 +785,21 @@ async fn the_account_card_shows_the_newest_plan_its_sessions_reported() {
         .remove("sanitizer");
     report("s2", 300, legacy);
     assert_eq!(plan(&controls)["id"], "free-tier");
+    // A marked plan counts only from a session pinned to a sanitizing
+    // release: an earlier proxy forwarded a forged marker verbatim.
+    let pinned = |version: &str| {
+        report("s2", 300, reading("ultra", "Google AI Ultra"));
+        let mut sessions = fake.sessions.lock();
+        sessions.get_mut("s2").unwrap().0.provider_version = version.into();
+    };
+    for version in ["0.2.0", "0.1.9", "", "latest", "0.2.1-rc.1"] {
+        pinned(version);
+        assert_eq!(plan(&controls)["id"], "free-tier", "{version:?}");
+    }
+    for version in ["0.2.1", "0.3.0", "1.0.0"] {
+        pinned(version);
+        assert_eq!(plan(&controls)["id"], "ultra", "{version:?}");
+    }
     // The bound counts code points, like the proxy and the Web.
     let wide = "\u{1F680}".repeat(80);
     report("s2", 300, reading("wide", &wide));

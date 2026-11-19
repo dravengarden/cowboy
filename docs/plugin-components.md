@@ -89,8 +89,10 @@ reads the plan `agy` reports in `_meta.antigravity.tier` of a session result
 and carries it as `_meta.cowboy.account_plan` (`{id, name}`, never the tier's
 `upgradeUri`) on every `usage_update`, which the Controller shows on the
 account card; the Controller accepts it only beside the proxy's
-`_meta.cowboy.sanitizer: 1` marker. A session result is forwarded before any
-reading behind it, which already carries the plan, and the raw tier is
+`_meta.cowboy.sanitizer: 1` marker and from a session pinned to Antigravity
+0.2.1 or later. A session result is forwarded before any reading behind it,
+which already carries the plan; a prompt result still waits for its turn's
+evidence, with the turn observed until then. The raw tier is
 removed from every `_meta` of every forwarded message without altering any
 other field. Antigravity 0.2.1 also adds Recommended cards for Gemini 3.8
 Flash Medium and Low; Gemini 3.8 Flash High stays the default. Every other Provider
