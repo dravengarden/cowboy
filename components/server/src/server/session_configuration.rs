@@ -281,7 +281,9 @@ fn preview(
         let category = option.and_then(|option| option.get("category")).cloned().unwrap_or_else(|| {
             match id.as_str() {
                 "model" => json!("model"),
-                "effort" | "reasoning_effort" => json!("thought_level"),
+                // ACP names the reasoning category `thought_level`; a Provider
+                // may use it as the option id too (Antigravity).
+                "effort" | "reasoning_effort" | "thought_level" => json!("thought_level"),
                 _ => Value::Null,
             }
         });
@@ -340,6 +342,39 @@ mod tests {
         assert_eq!(model["currentValue"], "small");
         assert_eq!(model["options"].as_array().unwrap().len(), 2);
         assert_eq!(model["category"], "model");
+    }
+
+    #[test]
+    fn an_acp_thought_level_option_previews_as_reasoning_before_any_agent_reports_it() {
+        let preset = |id: &str, model: &str, level: Option<&str>, is_default| ConfigurationPreset {
+            id: id.into(),
+            name: id.into(),
+            detail: String::new(),
+            is_default,
+            values: std::iter::once(("model".to_owned(), model.to_owned()))
+                .chain(level.map(|level| ("thought_level".to_owned(), level.to_owned())))
+                .collect(),
+        };
+        let presets = vec![
+            preset("gemini-flash-high", "gemini-3.8-flash", Some("high"), true),
+            preset("gemini-flash-low", "gemini-3.8-flash", Some("low"), false),
+            preset("claude-sonnet-thinking", "claude-sonnet-4-6", None, false),
+        ];
+        let options = preview(&presets, &json!({"model": "claude-sonnet-4-6"}), None);
+        let option = |id: &str| {
+            options
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|option| option["id"] == id)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(option("thought_level")["category"], "thought_level");
+        // A preset without a level keeps the signed default's level.
+        assert_eq!(option("thought_level")["currentValue"], "high");
+        assert_eq!(option("model")["currentValue"], "claude-sonnet-4-6");
+        assert_eq!(option("model")["options"].as_array().unwrap().len(), 2);
     }
 
     #[test]

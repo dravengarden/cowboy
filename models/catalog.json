@@ -14,7 +14,7 @@
     "normalized_capability_rows": 118,
     "excluded_after_snapshot": 0,
     "methodology": "sha256:1a7de7d9cd0a1c404047d76b6a593960df7c2a8ec2cb733b81766a0613f3d9a3",
-    "targets": "sha256:4b0171a49f08943e98b08fc17b701ead2c76fadfe2f6b32dbb817b77b97975bb"
+    "targets": "sha256:fa358a91fc13435721495754829fb4e85a4f1a7a62fafaf11fa2d97468df5e7f"
   },
   "bindings": [
     {
@@ -123,6 +123,48 @@
       "values": {
         "model": "gemini-3.8-flash",
         "thought_level": "high"
+      }
+    },
+    {
+      "id": "gemini-3.8-flash:medium@antigravity",
+      "provider": "antigravity",
+      "preset": "gemini-flash-medium",
+      "values": {
+        "model": "gemini-3.8-flash",
+        "thought_level": "medium"
+      }
+    },
+    {
+      "id": "gemini-3.8-flash:low@antigravity",
+      "provider": "antigravity",
+      "preset": "gemini-flash-low",
+      "values": {
+        "model": "gemini-3.8-flash",
+        "thought_level": "low"
+      }
+    },
+    {
+      "id": "claude-sonnet-4-6:default@antigravity",
+      "provider": "antigravity",
+      "preset": "claude-sonnet-thinking",
+      "values": {
+        "model": "claude-sonnet-4-6"
+      }
+    },
+    {
+      "id": "claude-opus-4-6:default@antigravity",
+      "provider": "antigravity",
+      "preset": "claude-opus-thinking",
+      "values": {
+        "model": "claude-opus-4-6-thinking"
+      }
+    },
+    {
+      "id": "gpt-oss-120b:medium@antigravity",
+      "provider": "antigravity",
+      "preset": "gpt-oss-120b-medium",
+      "values": {
+        "model": "gpt-oss-120b-medium"
       }
     },
     {
@@ -736,6 +778,208 @@
       "values": {
         "model": "gemini-3.8-flash",
         "thought_level": "high"
+      },
+      "executable": true,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "cost_groups": {}
+    },
+    {
+      "id": "gemini-3.8-flash:medium@antigravity",
+      "vendor": "google",
+      "model": "gemini-3.8-flash",
+      "effort": "medium",
+      "provider": "antigravity",
+      "preset": "gemini-flash-medium",
+      "values": {
+        "model": "gemini-3.8-flash",
+        "thought_level": "medium"
+      },
+      "executable": true,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "cost_groups": {}
+    },
+    {
+      "id": "gemini-3.8-flash:low@antigravity",
+      "vendor": "google",
+      "model": "gemini-3.8-flash",
+      "effort": "low",
+      "provider": "antigravity",
+      "preset": "gemini-flash-low",
+      "values": {
+        "model": "gemini-3.8-flash",
+        "thought_level": "low"
+      },
+      "executable": true,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "cost_groups": {}
+    },
+    {
+      "id": "claude-sonnet-4-6:default@antigravity",
+      "vendor": "anthropic",
+      "model": "claude-sonnet-4-6",
+      "effort": "default",
+      "provider": "antigravity",
+      "preset": "claude-sonnet-thinking",
+      "values": {
+        "model": "claude-sonnet-4-6"
+      },
+      "executable": true,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "cost_groups": {}
+    },
+    {
+      "id": "claude-opus-4-6:default@antigravity",
+      "vendor": "anthropic",
+      "model": "claude-opus-4-6",
+      "effort": "default",
+      "provider": "antigravity",
+      "preset": "claude-opus-thinking",
+      "values": {
+        "model": "claude-opus-4-6-thinking"
+      },
+      "executable": true,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "cost_groups": {}
+    },
+    {
+      "id": "gpt-oss-120b:medium@antigravity",
+      "vendor": "openai",
+      "model": "gpt-oss-120b",
+      "effort": "medium",
+      "provider": "antigravity",
+      "preset": "gpt-oss-120b-medium",
+      "values": {
+        "model": "gpt-oss-120b-medium"
       },
       "executable": true,
       "provisional": false,

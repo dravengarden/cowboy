@@ -120,8 +120,10 @@ provider = "claude-code"
 preset = "sonnet-medium"
 values = { model = "sonnet", effort = "medium" }
 
-# Single-preset Providers. One harness per Provider, so each binding is its own
-# target even when the hosted model is shared.
+# Providers whose hosted models other Providers may share. One harness per
+# Provider, so each binding is its own target even when the hosted model is
+# shared. Antigravity's Claude and GPT-OSS cards sign no thinking level:
+# `agy` fixes it per model ("default").
 [[targets]]
 id = "gemini-3.8-flash:high@antigravity"
 vendor = "google"
@@ -130,6 +132,51 @@ effort = "high"
 provider = "antigravity"
 preset = "gemini-flash-high"
 values = { model = "gemini-3.8-flash", thought_level = "high" }
+
+[[targets]]
+id = "gemini-3.8-flash:medium@antigravity"
+vendor = "google"
+model = "gemini-3.8-flash"
+effort = "medium"
+provider = "antigravity"
+preset = "gemini-flash-medium"
+values = { model = "gemini-3.8-flash", thought_level = "medium" }
+
+[[targets]]
+id = "gemini-3.8-flash:low@antigravity"
+vendor = "google"
+model = "gemini-3.8-flash"
+effort = "low"
+provider = "antigravity"
+preset = "gemini-flash-low"
+values = { model = "gemini-3.8-flash", thought_level = "low" }
+
+[[targets]]
+id = "claude-sonnet-4-6:default@antigravity"
+vendor = "anthropic"
+model = "claude-sonnet-4-6"
+effort = "default"
+provider = "antigravity"
+preset = "claude-sonnet-thinking"
+values = { model = "claude-sonnet-4-6" }
+
+[[targets]]
+id = "claude-opus-4-6:default@antigravity"
+vendor = "anthropic"
+model = "claude-opus-4-6"
+effort = "default"
+provider = "antigravity"
+preset = "claude-opus-thinking"
+values = { model = "claude-opus-4-6-thinking" }
+
+[[targets]]
+id = "gpt-oss-120b:medium@antigravity"
+vendor = "openai"
+model = "gpt-oss-120b"
+effort = "medium"
+provider = "antigravity"
+preset = "gpt-oss-120b-medium"
+values = { model = "gpt-oss-120b-medium" }
 
 [[targets]]
 id = "deepseek-v4.1-flash:max@claude-deepseek"
