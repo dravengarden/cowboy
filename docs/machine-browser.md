@@ -1627,11 +1627,23 @@ own instance.
 `network: "ipv4_only_v1"` for an own named account's browser whose Provider,
 as installed on that Machine, declares the `ipv4_only_v1` runtime network
 policy (a named-only Provider whose manifest cannot be resolved is restricted
-too). The Machine then adds `RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK`,
-`SystemCallArchitectures=native` and
-`SystemCallFilter=~io_uring_setup io_uring_enter io_uring_register` to the
-instance's unit; other units are unchanged, and an `Open` naming another
-policy than its running unit replaces that unit.
+too). The Machine then launches the instance with
+`--sealed-profile cowboy-browser-sealed-ipv4` instead of
+`cowboy-browser-sealed`: the host's IPv4-only variant of the sealed profile,
+identical except that it grants no `inet6` socket. AppArmor mediates socket
+creation at the LSM hook, so a socket an `io_uring` operation creates is
+refused as well. Such an open needs that profile loaded in enforce mode
+(`host_requirements` otherwise), and confinement verification expects every
+display and browser process under its label. Other units are unchanged, and
+an `Open` naming another policy than its running unit replaces that unit.
+
+The restriction is deliberately not a unit property. `RestrictAddressFamilies`,
+`SystemCallFilter` and `SystemCallArchitectures` are seccomp filters, which a
+systemd user manager can only install by setting `no_new_privs` on the unit;
+under `no_new_privs` AppArmor refuses the launcher's `change_profile` from
+`cowboy-browser-bootstrap` to the sealed profile, so every such browser
+failed to start with `host_requirements` (`xauth could not start: AppArmor
+transition to cowboy-browser-sealed`).
 
 **Machine-enforced IPv4-only browsers.** A Machine whose Device setting
 `browser.ipv4_only` is `true` (restart-applied; see
@@ -1652,9 +1664,11 @@ predates the capability field refuses the hello of a Machine that sets it
 (`deny_unknown_fields`), so the Controller is upgraded before the setting is
 turned on; a Machine without the setting omits the field. A Machine that predates
 the field refuses such an `Open` (`deny_unknown_fields`) rather than run the
-browser unrestricted. The matching AppArmor rule (an `ipv4_only` variant of
-the sealed profile with `deny network inet6`) is host policy in Columbus
-`machines/ovh/apparmor` and is a separate host change.
+browser unrestricted. The `cowboy-browser-sealed-ipv4` profile, and the
+bootstrap rules that let the launcher change to it, are host policy in
+Columbus `machines/ovh/apparmor`; a Machine with the setting reports its
+browser capability unavailable (`host_requirements`) until that profile is
+enforced.
 
 The Machine checks that the host's AppArmor exposes the features these
 profiles rely on (`/sys/kernel/security/apparmor/features`: network

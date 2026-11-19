@@ -376,8 +376,7 @@ A proven infrastructure interruption (unit lost, target lost) is
   capability; OVH) where Antigravity is installed and its native login may
   run. An Antigravity account's own browser keeps naming `ipv4_only_v1` in
   its `Open` (R1-17).
-- **[R1-17]** The browser's unit gains
-  `RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK` for accounts of a
+- **[R1-17]** The browser runs IPv4-only (R3-15) for accounts of a
   Provider whose manifest declares `ipv4_only_v1`, before the first sign-in;
   acceptance records the address family of the OAuth requests through the
   host's connection table during a real sign-in.
@@ -502,9 +501,11 @@ why.
   neither they nor any ancestor can be renamed or replaced (`EBUSY`/`EROFS`).
   Acceptance tests ancestor replacement besides hook failures.
 - **[R3-15] Browser IPv6.** For accounts of an `ipv4_only_v1` Provider, the
-  account browser's unit adds `SystemCallArchitectures=native`, a syscall
-  filter without `io_uring`, `RestrictAddressFamilies=AF_INET AF_UNIX
-  AF_NETLINK`, and its AppArmor sealed profile denies `inet6`. Acceptance
+  account browser runs under the IPv4-only sealed AppArmor profile
+  (`cowboy-browser-sealed-ipv4`, no `inet6` socket, also for `io_uring`
+  socket creation). The unit carries no seccomp property: a user unit's
+  seccomp filter sets `no_new_privs`, which makes AppArmor refuse the
+  launcher's transition to the sealed profile (`docs/machine-browser.md`). Acceptance
   attempts IPv6 connections from the browser and requires failure, besides
   recording a real sign-in's address family.
 - **[R3-16] Several idle sessions.** Each session has its own runtime unit

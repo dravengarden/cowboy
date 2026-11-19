@@ -13,7 +13,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use tokio::time::Instant;
 
-use super::host::{self, BOOTSTRAP_PROFILE, SEALED_PROFILE};
+use super::host::{self, BOOTSTRAP_PROFILE};
 use super::launcher::{Control, FailureKind, LauncherEvent, LauncherRefusal, ReadyReport};
 use super::settings::Settings;
 use super::snapshot::{self, StagingLedger, StagingReservation};
@@ -397,6 +397,21 @@ pub struct BrowserManager {
     trust_confinement: std::sync::atomic::AtomicBool,
 }
 
+/// Whether a unit with this network policy runs IPv4-only, under the
+/// IPv4-only sealed profile.
+fn ipv4_only(network: Option<BrowserNetwork>) -> bool {
+    network == Some(BrowserNetwork::Ipv4OnlyV1)
+}
+
+/// The enforce-mode labels of a unit with this network policy: its
+/// launcher's bootstrap profile and the sealed profile of its children.
+fn confinement_labels(network: Option<BrowserNetwork>) -> (String, String) {
+    (
+        host::enforce_label(BOOTSTRAP_PROFILE),
+        host::enforce_label(host::sealed_profile(ipv4_only(network))),
+    )
+}
+
 impl BrowserManager {
     /// `headroom` reports the Device's current memory headroom for launch
     /// admission (the Machine passes its host-resource observer).
@@ -587,7 +602,10 @@ impl BrowserManager {
             .store(plan.is_some(), std::sync::atomic::Ordering::Relaxed);
         let plan = plan?;
         let settings = self.settings();
-        let (available, reason) = match host::check(&plan.contract.host_requirements) {
+        let (available, reason) = match host::check(
+            &plan.contract.host_requirements,
+            ipv4_only(self.enforced_network),
+        ) {
             Ok(()) => (true, None),
             Err(unmet) => {
                 tracing::info!(detail = %unmet.0, "Machine browser host requirements unmet");

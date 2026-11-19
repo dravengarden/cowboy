@@ -398,8 +398,7 @@ impl BrowserManager {
         #[cfg(not(test))]
         let trusted = false;
         if !trusted {
-            let bootstrap = host::enforce_label(BOOTSTRAP_PROFILE);
-            let sealed = host::enforce_label(SEALED_PROFILE);
+            let (bootstrap, sealed) = confinement_labels(instance.network);
             let supervisor = instance.live.lock().verified.supervisor.pid;
             let verified = verify::verify(
                 &self.expectations(instance, supervisor, &bootstrap, &sealed),

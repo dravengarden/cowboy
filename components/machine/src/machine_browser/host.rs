@@ -12,6 +12,23 @@ pub const BOOTSTRAP_PROFILE: &str = "cowboy-browser-bootstrap";
 /// Profile every display and browser process runs under; reached only by
 /// `change_profile` from the bootstrap profile.
 pub const SEALED_PROFILE: &str = "cowboy-browser-sealed";
+/// The sealed profile of an `ipv4_only_v1` browser: the same confinement
+/// without any `inet6` socket. `AppArmor` mediates socket creation at the
+/// LSM hook, so a socket an `io_uring` operation creates is refused too.
+/// The restriction cannot be a seccomp filter on the unit: a user manager
+/// installs one only with `no_new_privs`, under which `AppArmor` refuses the
+/// bootstrap-to-sealed transition.
+pub const SEALED_IPV4_PROFILE: &str = "cowboy-browser-sealed-ipv4";
+
+/// The sealed profile a browser with this network policy runs under.
+#[must_use]
+pub fn sealed_profile(ipv4_only: bool) -> &'static str {
+    if ipv4_only {
+        SEALED_IPV4_PROFILE
+    } else {
+        SEALED_PROFILE
+    }
+}
 
 const APPARMOR_ROOT: &str = "sys/kernel/security/apparmor";
 
@@ -20,19 +37,24 @@ const APPARMOR_ROOT: &str = "sys/kernel/security/apparmor";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unmet(pub String);
 
-/// Check the host rooted at `/`.
+/// Check the host rooted at `/` for a browser with this network policy
+/// (`ipv4_only` additionally needs the IPv4-only sealed profile).
 ///
 /// # Errors
 /// Returns the first unmet requirement.
-pub fn check(requirements: &MachineBrowserHostRequirements) -> Result<(), Unmet> {
-    check_in(Path::new("/"), requirements)
+pub fn check(requirements: &MachineBrowserHostRequirements, ipv4_only: bool) -> Result<(), Unmet> {
+    check_in(Path::new("/"), requirements, ipv4_only)
 }
 
 /// Check a host view rooted at `root` (tests build synthetic trees).
 ///
 /// # Errors
 /// Returns the first unmet requirement.
-pub fn check_in(root: &Path, requirements: &MachineBrowserHostRequirements) -> Result<(), Unmet> {
+pub fn check_in(
+    root: &Path,
+    requirements: &MachineBrowserHostRequirements,
+    ipv4_only: bool,
+) -> Result<(), Unmet> {
     let release = std::fs::read_to_string(root.join("proc/sys/kernel/osrelease"))
         .map_err(|error| Unmet(format!("kernel release unreadable: {error}")))?;
     let running = parse_kernel_release(release.trim()).ok_or_else(|| {
@@ -84,7 +106,7 @@ pub fn check_in(root: &Path, requirements: &MachineBrowserHostRequirements) -> R
     }
     let profiles = loaded_profiles(&apparmor)
         .ok_or_else(|| Unmet("AppArmor profile list is unreadable".to_owned()))?;
-    for profile in [BOOTSTRAP_PROFILE, SEALED_PROFILE] {
+    for profile in [BOOTSTRAP_PROFILE, sealed_profile(ipv4_only)] {
         if !profile_enforced(&profiles, profile) {
             return Err(Unmet(format!(
                 "AppArmor profile {profile} is not loaded in enforce mode"
@@ -187,33 +209,54 @@ mod tests {
             temp.path(),
             "cowboy-browser-bootstrap (enforce)\ncowboy-browser-sealed (enforce)\nother (complain)\n",
         );
-        check_in(temp.path(), &requirements()).unwrap();
+        check_in(temp.path(), &requirements(), false).unwrap();
 
         let complain = tempfile::tempdir().unwrap();
         synthetic_host(
             complain.path(),
             "cowboy-browser-bootstrap (enforce)\ncowboy-browser-sealed (complain)\n",
         );
-        let error = check_in(complain.path(), &requirements()).unwrap_err();
+        let error = check_in(complain.path(), &requirements(), false).unwrap_err();
         assert!(error.0.contains("cowboy-browser-sealed"), "{error:?}");
 
         let old = tempfile::tempdir().unwrap();
         synthetic_host(old.path(), "");
         std::fs::write(old.path().join("proc/sys/kernel/osrelease"), "5.15.0\n").unwrap();
-        let error = check_in(old.path(), &requirements()).unwrap_err();
+        let error = check_in(old.path(), &requirements(), false).unwrap_err();
         assert!(error.0.contains("older"), "{error:?}");
 
         let unmerged = tempfile::tempdir().unwrap();
         synthetic_host(unmerged.path(), "");
         std::fs::remove_file(unmerged.path().join("lib64")).unwrap();
         std::fs::create_dir(unmerged.path().join("lib64")).unwrap();
-        let error = check_in(unmerged.path(), &requirements()).unwrap_err();
+        let error = check_in(unmerged.path(), &requirements(), false).unwrap_err();
         assert!(error.0.contains("lib64"), "{error:?}");
 
         let mut without_feature = requirements();
         without_feature.apparmor_features.push("ptrace_v9".into());
-        let error = check_in(temp.path(), &without_feature).unwrap_err();
+        let error = check_in(temp.path(), &without_feature, false).unwrap_err();
         assert!(error.0.contains("ptrace_v9"), "{error:?}");
+
+        // An IPv4-only browser also needs its own sealed profile, enforced.
+        let error = check_in(temp.path(), &requirements(), true).unwrap_err();
+        assert!(error.0.contains(SEALED_IPV4_PROFILE), "{error:?}");
+        let ipv4 = tempfile::tempdir().unwrap();
+        synthetic_host(
+            ipv4.path(),
+            "cowboy-browser-bootstrap (enforce)\ncowboy-browser-sealed-ipv4 (complain)\n",
+        );
+        let error = check_in(ipv4.path(), &requirements(), true).unwrap_err();
+        assert!(error.0.contains(SEALED_IPV4_PROFILE), "{error:?}");
+        let enforced = tempfile::tempdir().unwrap();
+        synthetic_host(
+            enforced.path(),
+            "cowboy-browser-bootstrap (enforce)\ncowboy-browser-sealed-ipv4 (enforce)\n",
+        );
+        check_in(enforced.path(), &requirements(), true).unwrap();
+        // The ordinary sealed profile is not needed for an IPv4-only browser.
+        check_in(enforced.path(), &requirements(), false).unwrap_err();
+        assert_eq!(sealed_profile(true), SEALED_IPV4_PROFILE);
+        assert_eq!(sealed_profile(false), SEALED_PROFILE);
     }
 
     #[test]
@@ -232,10 +275,10 @@ mod tests {
         profile("cowboy-browser-bootstrap.179", BOOTSTRAP_PROFILE, "enforce");
         profile("cowboy-browser-sealed.178", SEALED_PROFILE, "complain");
         profile("other.3", "other", "enforce");
-        let error = check_in(temp.path(), &requirements()).unwrap_err();
+        let error = check_in(temp.path(), &requirements(), false).unwrap_err();
         assert!(error.0.contains(SEALED_PROFILE), "{error:?}");
         profile("cowboy-browser-sealed.178", SEALED_PROFILE, "enforce");
-        check_in(temp.path(), &requirements()).unwrap();
+        check_in(temp.path(), &requirements(), false).unwrap();
     }
 
     #[test]

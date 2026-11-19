@@ -225,8 +225,9 @@ next open, and running units keep the properties they were started with
 ## Machine browser network policy
 
 `browser.ipv4_only` (Device, boolean, restart) makes the Machine run every
-browser unit IPv4-only (`ipv4_only_v1`: `RestrictAddressFamilies=AF_INET
-AF_UNIX AF_NETLINK`, no `io_uring`), own or shared, named account or legacy
+browser unit IPv4-only (`ipv4_only_v1`: its processes run under the host's
+`cowboy-browser-sealed-ipv4` AppArmor profile, which grants no `inet6`
+socket; the host must have it enforced), own or shared, named account or legacy
 card, whatever the Controller's `Open` requests, and report it in its browser
 capability. The Controller places and opens a shared browser with an
 IPv4-only member (Antigravity, or any Provider declaring `ipv4_only_v1`) only

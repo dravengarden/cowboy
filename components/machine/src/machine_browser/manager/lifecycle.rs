@@ -76,7 +76,7 @@ impl BrowserManager {
             tracing::warn!(generation = %plan.generation_digest, "browser runtime generation retired before its start");
             return hibernated(Reason::NotAvailable);
         };
-        if let Err(unmet) = host::check(&plan.contract.host_requirements) {
+        if let Err(unmet) = host::check(&plan.contract.host_requirements, ipv4_only(network)) {
             tracing::warn!(detail = %unmet.0, "browser open refused: host requirements");
             return hibernated(Reason::HostRequirements);
         }
@@ -270,6 +270,7 @@ impl BrowserManager {
             snapshot_dir.as_deref(),
             viewport,
             &self.state_dir,
+            ipv4_only(network),
         )
         .map_err(Failure::internal)?;
         let launch = Launch {
@@ -281,7 +282,6 @@ impl BrowserManager {
             ),
             launcher: &plan.launcher,
             arguments,
-            ipv4_only: network == Some(BrowserNetwork::Ipv4OnlyV1),
         };
         let mut cgroup_dir = None;
         let mut invocation_id = None;
@@ -380,8 +380,7 @@ impl BrowserManager {
 
     /// Full confinement verification of a freshly started instance.
     fn verify_started(&self, instance: &Instance, main_pid: u32) -> Result<(), Failure> {
-        let bootstrap = host::enforce_label(BOOTSTRAP_PROFILE);
-        let sealed = host::enforce_label(SEALED_PROFILE);
+        let (bootstrap, sealed) = confinement_labels(instance.network);
         let verified = verify::verify(
             &self.expectations(instance, main_pid, &bootstrap, &sealed),
             &instance.report,

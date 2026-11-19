@@ -67,6 +67,7 @@ pub(super) fn launch_arguments(
     snapshot_dir: Option<&Path>,
     viewport: Viewport,
     state_dir: &Path,
+    ipv4_only: bool,
 ) -> Result<Vec<OsString>> {
     let runtime = &plan.contract.runtime;
     let helper = |name: &str| -> Result<&str> {
@@ -109,7 +110,9 @@ pub(super) fn launch_arguments(
     push("--xrandr", &helper("xrandr")?);
     push("--xkbcomp", &helper("xkbcomp")?);
     push("--xauth", &helper("xauth")?);
-    push("--sealed-profile", &SEALED_PROFILE);
+    // The launcher's children change to this profile; an `ipv4_only_v1`
+    // unit's never get an `inet6` socket.
+    push("--sealed-profile", &host::sealed_profile(ipv4_only));
     push("--mask", &state_dir);
     Ok(arguments)
 }
@@ -179,7 +182,6 @@ mod tests {
             limits: tight,
             launcher: Path::new("/launcher"),
             arguments: Vec::new(),
-            ipv4_only: false,
         };
         let arguments: Vec<String> = unit::systemd_run_arguments(&launch)
             .into_iter()
@@ -230,6 +232,7 @@ mod tests {
                 scale: 2,
             },
             Path::new("/state"),
+            false,
         )
         .unwrap();
         let text: Vec<String> = arguments
@@ -271,6 +274,31 @@ mod tests {
             .iter()
             .position(|argument| argument == "--sealed-profile")
             .unwrap();
-        assert_eq!(text[sealed + 1], SEALED_PROFILE);
+        assert_eq!(text[sealed + 1], host::SEALED_PROFILE);
+
+        // An IPv4-only unit seals its children without any inet6 socket.
+        let ipv4: Vec<String> = launch_arguments(
+            &plan,
+            &Settings::from_config(None),
+            Path::new("/run/user/1000/cowboy-browser/inst-1"),
+            Path::new("/state/provider-auth/accounts/a/browser/staging"),
+            None,
+            Viewport {
+                width: 1280,
+                height: 800,
+                scale: 2,
+            },
+            Path::new("/state"),
+            true,
+        )
+        .unwrap()
+        .iter()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect();
+        let sealed = ipv4
+            .iter()
+            .position(|argument| argument == "--sealed-profile")
+            .unwrap();
+        assert_eq!(ipv4[sealed + 1], host::SEALED_IPV4_PROFILE);
     }
 }
