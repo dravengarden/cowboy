@@ -3,20 +3,20 @@
     "cowboy-workers": {
       "inputs": {
         "cowboy-workers": "cowboy-workers_2",
-        "nixpkgs": "nixpkgs_36",
-        "rust-overlay": "rust-overlay_36"
+        "nixpkgs": "nixpkgs_37",
+        "rust-overlay": "rust-overlay_37"
       },
       "locked": {
-        "lastModified": 1795022843,
-        "narHash": "sha256-JeXFGtg7SiSRhWCOVWwAM8f3W7u3+CkBCWz92srOtjA=",
+        "lastModified": 1795105991,
+        "narHash": "sha256-pQkCHNPmXbgfZF0PRl9An6xeNgLaffEa/loQUZ+C2DY=",
         "ref": "refs/heads/main",
-        "rev": "99916eb0f943690f083b91ef08cd7242821bad20",
-        "revCount": 6322,
+        "rev": "62cb790357ffa97b9abb407d14d9ad18abcb3b17",
+        "revCount": 6362,
         "type": "git",
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       },
       "original": {
-        "rev": "99916eb0f943690f083b91ef08cd7242821bad20",
+        "rev": "62cb790357ffa97b9abb407d14d9ad18abcb3b17",
         "type": "git",
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
@@ -24,6 +24,27 @@
     "cowboy-workers_10": {
       "inputs": {
         "cowboy-workers": "cowboy-workers_11",
+        "nixpkgs": "nixpkgs_28",
+        "rust-overlay": "rust-overlay_28"
+      },
+      "locked": {
+        "lastModified": 1793977034,
+        "narHash": "sha256-NmxkbkA406PO82TpJw3E2IMVpZyS4zupGo5eZQO/sXQ=",
+        "ref": "refs/heads/main",
+        "rev": "2b154933ef0313f2590acf4a3ce0ab41fd1d68ea",
+        "revCount": 5709,
+        "type": "git",
+        "url": "ssh://git@github.com/dravengarden/cowboy.git"
+      },
+      "original": {
+        "rev": "2b154933ef0313f2590acf4a3ce0ab41fd1d68ea",
+        "type": "git",
+        "url": "ssh://git@github.com/dravengarden/cowboy.git"
+      }
+    },
+    "cowboy-workers_11": {
+      "inputs": {
+        "cowboy-workers": "cowboy-workers_12",
         "nixpkgs": "nixpkgs_27",
         "rust-overlay": "rust-overlay_27"
       },
@@ -42,9 +63,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_11": {
+    "cowboy-workers_12": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_12",
+        "cowboy-workers": "cowboy-workers_13",
         "nixpkgs": "nixpkgs_26",
         "rust-overlay": "rust-overlay_26"
       },
@@ -63,9 +84,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_12": {
+    "cowboy-workers_13": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_13",
+        "cowboy-workers": "cowboy-workers_14",
         "nixpkgs": "nixpkgs_25",
         "rust-overlay": "rust-overlay_25"
       },
@@ -84,9 +105,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_13": {
+    "cowboy-workers_14": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_14",
+        "cowboy-workers": "cowboy-workers_15",
         "nixpkgs": "nixpkgs_24",
         "rust-overlay": "rust-overlay_24"
       },
@@ -105,9 +126,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_14": {
+    "cowboy-workers_15": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_15",
+        "cowboy-workers": "cowboy-workers_16",
         "nixpkgs": "nixpkgs_23",
         "rust-overlay": "rust-overlay_23"
       },
@@ -126,9 +147,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_15": {
+    "cowboy-workers_16": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_16",
+        "cowboy-workers": "cowboy-workers_17",
         "nixpkgs": "nixpkgs_22",
         "rust-overlay": "rust-overlay_22"
       },
@@ -147,9 +168,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_16": {
+    "cowboy-workers_17": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_17",
+        "cowboy-workers": "cowboy-workers_18",
         "nixpkgs": "nixpkgs_21",
         "rust-overlay": "rust-overlay_21"
       },
@@ -168,9 +189,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_17": {
+    "cowboy-workers_18": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_18",
+        "cowboy-workers": "cowboy-workers_19",
         "nixpkgs": "nixpkgs_20",
         "rust-overlay": "rust-overlay_20"
       },
@@ -189,9 +210,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_18": {
+    "cowboy-workers_19": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_19",
+        "cowboy-workers": "cowboy-workers_20",
         "nixpkgs": "nixpkgs_19",
         "rust-overlay": "rust-overlay_19"
       },
@@ -210,9 +231,30 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_19": {
+    "cowboy-workers_2": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_20",
+        "cowboy-workers": "cowboy-workers_3",
+        "nixpkgs": "nixpkgs_36",
+        "rust-overlay": "rust-overlay_36"
+      },
+      "locked": {
+        "lastModified": 1795022843,
+        "narHash": "sha256-JeXFGtg7SiSRhWCOVWwAM8f3W7u3+CkBCWz92srOtjA=",
+        "ref": "refs/heads/main",
+        "rev": "99916eb0f943690f083b91ef08cd7242821bad20",
+        "revCount": 6322,
+        "type": "git",
+        "url": "ssh://git@github.com/dravengarden/cowboy.git"
+      },
+      "original": {
+        "rev": "99916eb0f943690f083b91ef08cd7242821bad20",
+        "type": "git",
+        "url": "ssh://git@github.com/dravengarden/cowboy.git"
+      }
+    },
+    "cowboy-workers_20": {
+      "inputs": {
+        "cowboy-workers": "cowboy-workers_21",
         "nixpkgs": "nixpkgs_18",
         "rust-overlay": "rust-overlay_18"
       },
@@ -231,30 +273,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_2": {
+    "cowboy-workers_21": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_3",
-        "nixpkgs": "nixpkgs_35",
-        "rust-overlay": "rust-overlay_35"
-      },
-      "locked": {
-        "lastModified": 1794966399,
-        "narHash": "sha256-qp+4rRIbwXP81DOz4ELKmePmAfs/pqOk6APqcx4wHbQ=",
-        "ref": "refs/heads/main",
-        "rev": "70c38af1c8be6d3e63332936e3e379397066d518",
-        "revCount": 6228,
-        "type": "git",
-        "url": "ssh://git@github.com/dravengarden/cowboy.git"
-      },
-      "original": {
-        "rev": "70c38af1c8be6d3e63332936e3e379397066d518",
-        "type": "git",
-        "url": "ssh://git@github.com/dravengarden/cowboy.git"
-      }
-    },
-    "cowboy-workers_20": {
-      "inputs": {
-        "cowboy-workers": "cowboy-workers_21",
+        "cowboy-workers": "cowboy-workers_22",
         "nixpkgs": "nixpkgs_17",
         "rust-overlay": "rust-overlay_17"
       },
@@ -273,9 +294,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_21": {
+    "cowboy-workers_22": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_22",
+        "cowboy-workers": "cowboy-workers_23",
         "nixpkgs": "nixpkgs_16",
         "rust-overlay": "rust-overlay_16"
       },
@@ -294,9 +315,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_22": {
+    "cowboy-workers_23": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_23",
+        "cowboy-workers": "cowboy-workers_24",
         "nixpkgs": "nixpkgs_15",
         "rust-overlay": "rust-overlay_15"
       },
@@ -315,9 +336,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_23": {
+    "cowboy-workers_24": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_24",
+        "cowboy-workers": "cowboy-workers_25",
         "nixpkgs": "nixpkgs_14",
         "rust-overlay": "rust-overlay_14"
       },
@@ -336,9 +357,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_24": {
+    "cowboy-workers_25": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_25",
+        "cowboy-workers": "cowboy-workers_26",
         "nixpkgs": "nixpkgs_13",
         "rust-overlay": "rust-overlay_13"
       },
@@ -357,9 +378,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_25": {
+    "cowboy-workers_26": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_26",
+        "cowboy-workers": "cowboy-workers_27",
         "nixpkgs": "nixpkgs_12",
         "rust-overlay": "rust-overlay_12"
       },
@@ -378,9 +399,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_26": {
+    "cowboy-workers_27": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_27",
+        "cowboy-workers": "cowboy-workers_28",
         "nixpkgs": "nixpkgs_11",
         "rust-overlay": "rust-overlay_11"
       },
@@ -399,9 +420,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_27": {
+    "cowboy-workers_28": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_28",
+        "cowboy-workers": "cowboy-workers_29",
         "nixpkgs": "nixpkgs_10",
         "rust-overlay": "rust-overlay_10"
       },
@@ -420,9 +441,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_28": {
+    "cowboy-workers_29": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_29",
+        "cowboy-workers": "cowboy-workers_30",
         "nixpkgs": "nixpkgs_9",
         "rust-overlay": "rust-overlay_9"
       },
@@ -441,9 +462,30 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_29": {
+    "cowboy-workers_3": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_30",
+        "cowboy-workers": "cowboy-workers_4",
+        "nixpkgs": "nixpkgs_35",
+        "rust-overlay": "rust-overlay_35"
+      },
+      "locked": {
+        "lastModified": 1794966399,
+        "narHash": "sha256-qp+4rRIbwXP81DOz4ELKmePmAfs/pqOk6APqcx4wHbQ=",
+        "ref": "refs/heads/main",
+        "rev": "70c38af1c8be6d3e63332936e3e379397066d518",
+        "revCount": 6228,
+        "type": "git",
+        "url": "ssh://git@github.com/dravengarden/cowboy.git"
+      },
+      "original": {
+        "rev": "70c38af1c8be6d3e63332936e3e379397066d518",
+        "type": "git",
+        "url": "ssh://git@github.com/dravengarden/cowboy.git"
+      }
+    },
+    "cowboy-workers_30": {
+      "inputs": {
+        "cowboy-workers": "cowboy-workers_31",
         "nixpkgs": "nixpkgs_8",
         "rust-overlay": "rust-overlay_8"
       },
@@ -462,30 +504,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_3": {
+    "cowboy-workers_31": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_4",
-        "nixpkgs": "nixpkgs_34",
-        "rust-overlay": "rust-overlay_34"
-      },
-      "locked": {
-        "lastModified": 1794959601,
-        "narHash": "sha256-S01Fesg+nrCTiFuCKjznkA9aNBmlvflmWmianCZz0JU=",
-        "ref": "refs/heads/main",
-        "rev": "1d90b1b1bdf491baf5d76cb52d523a52409acf23",
-        "revCount": 6214,
-        "type": "git",
-        "url": "ssh://git@github.com/dravengarden/cowboy.git"
-      },
-      "original": {
-        "rev": "1d90b1b1bdf491baf5d76cb52d523a52409acf23",
-        "type": "git",
-        "url": "ssh://git@github.com/dravengarden/cowboy.git"
-      }
-    },
-    "cowboy-workers_30": {
-      "inputs": {
-        "cowboy-workers": "cowboy-workers_31",
+        "cowboy-workers": "cowboy-workers_32",
         "nixpkgs": "nixpkgs_7",
         "rust-overlay": "rust-overlay_7"
       },
@@ -504,9 +525,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_31": {
+    "cowboy-workers_32": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_32",
+        "cowboy-workers": "cowboy-workers_33",
         "nixpkgs": "nixpkgs_6",
         "rust-overlay": "rust-overlay_6"
       },
@@ -525,9 +546,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_32": {
+    "cowboy-workers_33": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_33",
+        "cowboy-workers": "cowboy-workers_34",
         "nixpkgs": "nixpkgs_5",
         "rust-overlay": "rust-overlay_5"
       },
@@ -546,9 +567,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_33": {
+    "cowboy-workers_34": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_34",
+        "cowboy-workers": "cowboy-workers_35",
         "nixpkgs": "nixpkgs_4",
         "rust-overlay": "rust-overlay_4"
       },
@@ -567,9 +588,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_34": {
+    "cowboy-workers_35": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_35",
+        "cowboy-workers": "cowboy-workers_36",
         "nixpkgs": "nixpkgs_3",
         "rust-overlay": "rust-overlay_3"
       },
@@ -588,9 +609,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_35": {
+    "cowboy-workers_36": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_36",
+        "cowboy-workers": "cowboy-workers_37",
         "nixpkgs": "nixpkgs_2",
         "rust-overlay": "rust-overlay_2"
       },
@@ -609,7 +630,7 @@
         "type": "github"
       }
     },
-    "cowboy-workers_36": {
+    "cowboy-workers_37": {
       "inputs": {
         "nixpkgs": "nixpkgs",
         "rust-overlay": "rust-overlay"
@@ -632,6 +653,27 @@
     "cowboy-workers_4": {
       "inputs": {
         "cowboy-workers": "cowboy-workers_5",
+        "nixpkgs": "nixpkgs_34",
+        "rust-overlay": "rust-overlay_34"
+      },
+      "locked": {
+        "lastModified": 1794959601,
+        "narHash": "sha256-S01Fesg+nrCTiFuCKjznkA9aNBmlvflmWmianCZz0JU=",
+        "ref": "refs/heads/main",
+        "rev": "1d90b1b1bdf491baf5d76cb52d523a52409acf23",
+        "revCount": 6214,
+        "type": "git",
+        "url": "ssh://git@github.com/dravengarden/cowboy.git"
+      },
+      "original": {
+        "rev": "1d90b1b1bdf491baf5d76cb52d523a52409acf23",
+        "type": "git",
+        "url": "ssh://git@github.com/dravengarden/cowboy.git"
+      }
+    },
+    "cowboy-workers_5": {
+      "inputs": {
+        "cowboy-workers": "cowboy-workers_6",
         "nixpkgs": "nixpkgs_33",
         "rust-overlay": "rust-overlay_33"
       },
@@ -650,9 +692,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_5": {
+    "cowboy-workers_6": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_6",
+        "cowboy-workers": "cowboy-workers_7",
         "nixpkgs": "nixpkgs_32",
         "rust-overlay": "rust-overlay_32"
       },
@@ -671,9 +713,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_6": {
+    "cowboy-workers_7": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_7",
+        "cowboy-workers": "cowboy-workers_8",
         "nixpkgs": "nixpkgs_31",
         "rust-overlay": "rust-overlay_31"
       },
@@ -692,9 +734,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_7": {
+    "cowboy-workers_8": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_8",
+        "cowboy-workers": "cowboy-workers_9",
         "nixpkgs": "nixpkgs_30",
         "rust-overlay": "rust-overlay_30"
       },
@@ -713,9 +755,9 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
-    "cowboy-workers_8": {
+    "cowboy-workers_9": {
       "inputs": {
-        "cowboy-workers": "cowboy-workers_9",
+        "cowboy-workers": "cowboy-workers_10",
         "nixpkgs": "nixpkgs_29",
         "rust-overlay": "rust-overlay_29"
       },
@@ -730,27 +772,6 @@
       },
       "original": {
         "rev": "a9b8d77b04dc5ba840b6c127e48f72217b0d3521",
-        "type": "git",
-        "url": "ssh://git@github.com/dravengarden/cowboy.git"
-      }
-    },
-    "cowboy-workers_9": {
-      "inputs": {
-        "cowboy-workers": "cowboy-workers_10",
-        "nixpkgs": "nixpkgs_28",
-        "rust-overlay": "rust-overlay_28"
-      },
-      "locked": {
-        "lastModified": 1793977034,
-        "narHash": "sha256-NmxkbkA406PO82TpJw3E2IMVpZyS4zupGo5eZQO/sXQ=",
-        "ref": "refs/heads/main",
-        "rev": "2b154933ef0313f2590acf4a3ce0ab41fd1d68ea",
-        "revCount": 5709,
-        "type": "git",
-        "url": "ssh://git@github.com/dravengarden/cowboy.git"
-      },
-      "original": {
-        "rev": "2b154933ef0313f2590acf4a3ce0ab41fd1d68ea",
         "type": "git",
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
@@ -1251,6 +1272,22 @@
         "type": "github"
       }
     },
+    "nixpkgs_38": {
+      "locked": {
+        "lastModified": 1779560665,
+        "narHash": "sha256-tpyBcxPpcQb8ukyNF7DoCwfSY3VPsxHoYwj00Cayv5o=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "64c08a7ca051951c8eae34e3e3cb1e202fe36786",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
     "nixpkgs_4": {
       "locked": {
         "lastModified": 1779560665,
@@ -1350,13 +1387,14 @@
     "root": {
       "inputs": {
         "cowboy-workers": "cowboy-workers",
-        "nixpkgs": "nixpkgs_37",
-        "rust-overlay": "rust-overlay_37"
+        "nixpkgs": "nixpkgs_38",
+        "rust-overlay": "rust-overlay_38"
       }
     },
     "rust-overlay": {
       "inputs": {
         "nixpkgs": [
+          "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
@@ -1440,6 +1478,7 @@
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
+          "cowboy-workers",
           "nixpkgs"
         ]
       },
@@ -1460,6 +1499,7 @@
     "rust-overlay_11": {
       "inputs": {
         "nixpkgs": [
+          "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
@@ -1531,6 +1571,7 @@
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
+          "cowboy-workers",
           "nixpkgs"
         ]
       },
@@ -1551,6 +1592,7 @@
     "rust-overlay_13": {
       "inputs": {
         "nixpkgs": [
+          "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
@@ -1618,6 +1660,7 @@
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
+          "cowboy-workers",
           "nixpkgs"
         ]
       },
@@ -1638,6 +1681,7 @@
     "rust-overlay_15": {
       "inputs": {
         "nixpkgs": [
+          "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
@@ -1701,6 +1745,7 @@
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
+          "cowboy-workers",
           "nixpkgs"
         ]
       },
@@ -1721,6 +1766,7 @@
     "rust-overlay_17": {
       "inputs": {
         "nixpkgs": [
+          "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
@@ -1780,6 +1826,7 @@
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
+          "cowboy-workers",
           "nixpkgs"
         ]
       },
@@ -1800,6 +1847,7 @@
     "rust-overlay_19": {
       "inputs": {
         "nixpkgs": [
+          "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
@@ -1873,6 +1921,7 @@
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
+          "cowboy-workers",
           "nixpkgs"
         ]
       },
@@ -1893,6 +1942,7 @@
     "rust-overlay_20": {
       "inputs": {
         "nixpkgs": [
+          "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
@@ -1946,6 +1996,7 @@
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
+          "cowboy-workers",
           "nixpkgs"
         ]
       },
@@ -1966,6 +2017,7 @@
     "rust-overlay_22": {
       "inputs": {
         "nixpkgs": [
+          "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
@@ -2015,6 +2067,7 @@
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
+          "cowboy-workers",
           "nixpkgs"
         ]
       },
@@ -2035,6 +2088,7 @@
     "rust-overlay_24": {
       "inputs": {
         "nixpkgs": [
+          "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
@@ -2080,6 +2134,7 @@
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
+          "cowboy-workers",
           "nixpkgs"
         ]
       },
@@ -2100,6 +2155,7 @@
     "rust-overlay_26": {
       "inputs": {
         "nixpkgs": [
+          "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
@@ -2141,6 +2197,7 @@
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
+          "cowboy-workers",
           "nixpkgs"
         ]
       },
@@ -2170,6 +2227,7 @@
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
+          "cowboy-workers",
           "nixpkgs"
         ]
       },
@@ -2190,6 +2248,7 @@
     "rust-overlay_29": {
       "inputs": {
         "nixpkgs": [
+          "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
@@ -2252,6 +2311,7 @@
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
+          "cowboy-workers",
           "nixpkgs"
         ]
       },
@@ -2272,6 +2332,7 @@
     "rust-overlay_30": {
       "inputs": {
         "nixpkgs": [
+          "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
@@ -2305,6 +2366,7 @@
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
+          "cowboy-workers",
           "nixpkgs"
         ]
       },
@@ -2325,6 +2387,7 @@
     "rust-overlay_32": {
       "inputs": {
         "nixpkgs": [
+          "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
@@ -2354,6 +2417,7 @@
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
+          "cowboy-workers",
           "nixpkgs"
         ]
       },
@@ -2374,6 +2438,7 @@
     "rust-overlay_34": {
       "inputs": {
         "nixpkgs": [
+          "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
@@ -2399,6 +2464,7 @@
         "nixpkgs": [
           "cowboy-workers",
           "cowboy-workers",
+          "cowboy-workers",
           "nixpkgs"
         ]
       },
@@ -2420,6 +2486,7 @@
       "inputs": {
         "nixpkgs": [
           "cowboy-workers",
+          "cowboy-workers",
           "nixpkgs"
         ]
       },
@@ -2438,6 +2505,27 @@
       }
     },
     "rust-overlay_37": {
+      "inputs": {
+        "nixpkgs": [
+          "cowboy-workers",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1790756160,
+        "narHash": "sha256-NPs4nNLxCpho3Ctj8O7t/bzmX0zR8r0zndKghAFEz5U=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "ed3a19fd0439ed618ec5fe1e12f0ba69a8be38b5",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "rust-overlay_38": {
       "inputs": {
         "nixpkgs": [
           "nixpkgs"
@@ -2460,6 +2548,7 @@
     "rust-overlay_4": {
       "inputs": {
         "nixpkgs": [
+          "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
@@ -2545,6 +2634,7 @@
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
+          "cowboy-workers",
           "nixpkgs"
         ]
       },
@@ -2565,6 +2655,7 @@
     "rust-overlay_6": {
       "inputs": {
         "nixpkgs": [
+          "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
@@ -2646,6 +2737,7 @@
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
+          "cowboy-workers",
           "nixpkgs"
         ]
       },
@@ -2695,6 +2787,7 @@
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
+          "cowboy-workers",
           "nixpkgs"
         ]
       },
@@ -2715,6 +2808,7 @@
     "rust-overlay_9": {
       "inputs": {
         "nixpkgs": [
+          "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
           "cowboy-workers",
