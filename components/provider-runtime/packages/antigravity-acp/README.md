@@ -39,12 +39,21 @@ places its tree below `proxy/` in the account-sandbox runtime archive and adds
 - Account plan: the `_meta.antigravity.tier` of a `session/new|load|resume`
   result (`agy` 1.5.9: `{name: "Antigravity Starter Quota", id: "free-tier",
   upgradeUri}`) becomes the proxy's plan `{id, name}` when `id` is a slug of
-  at most 64 characters and `name` at most 80 printable characters; a tier it
-  cannot read clears the plan, a result without one keeps it. Every
-  `usage_update` then carries `_meta.cowboy.account_plan` (whatever `agy` put
-  under `_meta.cowboy` is dropped first), so the session usage the worker
-  already relays shows the Controller the account's plan. `upgradeUri` is
-  never copied. Nothing is requested for it: the plan is only what `agy`
+  at most 64 characters and `name` has no character of Unicode category C or
+  a line or paragraph separator anywhere (checked before trimming) and, once
+  its surrounding spaces are trimmed, 1 to 80 code points (the Controller and
+  the Web apply the same rule); a tier it cannot read clears the plan, a
+  result without one keeps it. The plan is applied as soon as the result is
+  read, before anything is awaited, so a `usage_update` that follows in the
+  same chunk already carries it. Every `usage_update` then carries
+  `_meta.cowboy.account_plan` (whatever `agy` put under `_meta.cowboy` is
+  dropped first), so the session usage the worker already relays shows the
+  Controller the account's plan. The raw tier (with its `upgradeUri`) is
+  removed from every message forwarded to the worker: each `_meta` at any
+  depth (results, error data, notifications, session updates, agent
+  requests, tool inputs and outputs) loses only its `antigravity.tier` and
+  the objects that leaves empty; nothing else is changed or dropped, however
+  deeply nested. Nothing is requested for it: the plan is only what `agy`
   reports while the owner runs a session.
 - `session/new|load|resume`: `mcpServers` becomes exactly
   `cowboy` = bundled Node + `facade-relay.mjs <socket> <channel>`;

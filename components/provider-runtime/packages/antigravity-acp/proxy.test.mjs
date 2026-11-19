@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AcpProxy, accountPlan, REFUSAL_PREFIX, VIOLATION_PREFIX } from "./proxy.mjs";
+import { AcpProxy, accountPlan, REFUSAL_PREFIX, stripTier, VIOLATION_PREFIX } from "./proxy.mjs";
 
 function harness({
   ready = true,
@@ -406,12 +406,155 @@ test("only a short tier id and printable name become the account plan", () => {
     { id: "pro", name: "   " },
     { id: "pro", name: "Pro\nUltra" },
     { id: "pro", name: "Pro\u202eartlU" },
+    { id: "pro", name: "Pro\u061c" },
+    { id: "pro", name: "Pro\u00ad" },
     { id: "pro", name: "P".repeat(81) },
+    { id: "pro", name: "Pro\ue000" },
+    { id: "pro", name: "Pro\u{10ffff}" },
+    // Forbidden characters at either end are not trimmed away.
+    { id: "pro", name: "\u2028Pro" },
+    { id: "pro", name: "Pro\t" },
+    { id: "pro", name: "\u2029 Pro " },
     { id: "pro", name: 7 },
   ]) {
     assert.equal(accountPlan({ antigravity: { tier } }), undefined, JSON.stringify(tier));
   }
   assert.equal(accountPlan(undefined), undefined);
+  // The bound counts code points, like the Controller and the Web.
+  const wide = "\u{1F680}".repeat(80);
+  assert.deepEqual(accountPlan({ antigravity: { tier: { id: "pro", name: wide } } }), {
+    id: "pro",
+    name: wide,
+  });
+});
+
+test("no ACP message leaves the proxy with the raw tier", async () => {
+  const tiered = { antigravity: { tier: TIER, other: 1 }, keep: true };
+  const stripped = { antigravity: { other: 1 }, keep: true };
+  assert.deepEqual(
+    stripTier({ jsonrpc: "2.0", id: 1, result: { stopReason: "end_turn", _meta: tiered } }),
+    { jsonrpc: "2.0", id: 1, result: { stopReason: "end_turn", _meta: stripped } },
+  );
+  assert.deepEqual(
+    stripTier({ jsonrpc: "2.0", id: 1, error: { code: 1, message: "x", data: { _meta: tiered } } }),
+    { jsonrpc: "2.0", id: 1, error: { code: 1, message: "x", data: { _meta: stripped } } },
+  );
+  const untouched = { jsonrpc: "2.0", id: 1, result: { _meta: { keep: true } } };
+  assert.equal(stripTier(untouched), untouched);
+  // Nested holders too: a permission request's tool call, its content
+  // blocks and array entries.
+  const nested = stripTier({
+    jsonrpc: "2.0",
+    id: 7,
+    method: "session/request_permission",
+    params: {
+      sessionId: "s",
+      toolCall: {
+        toolCallId: "t",
+        _meta: tiered,
+        content: [{ type: "content", content: { type: "text", text: "x", _meta: tiered } }],
+      },
+      options: [{ optionId: "allow", _meta: { antigravity: { tier: TIER } } }],
+    },
+  });
+  assert.deepEqual(nested.params.toolCall._meta, stripped);
+  assert.deepEqual(nested.params.toolCall.content[0].content._meta, stripped);
+  assert.deepEqual(nested.params.options[0], { optionId: "allow" });
+  assert.equal(JSON.stringify(nested).includes("upgradeUri"), false);
+  // A tier nested in a _meta's own value is stripped as well.
+  assert.deepEqual(stripTier({ result: { _meta: { inner: { _meta: tiered } } } }), {
+    result: { _meta: { inner: { _meta: stripped } } },
+  });
+  const { proxy, client } = harness();
+  // A non-usage update, with the tier on the update and on its params.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "s-new",
+      _meta: { antigravity: { tier: TIER } },
+      update: { sessionUpdate: "session_info_update", title: "t", _meta: tiered },
+    },
+  });
+  assert.deepEqual(client.at(-1), {
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "s-new",
+      update: { sessionUpdate: "session_info_update", title: "t", _meta: stripped },
+    },
+  });
+  assert.equal(JSON.stringify(client).includes("upgradeUri"), false);
+});
+
+test("stripping the tier leaves deep tool inputs and outputs intact", () => {
+  // A tool call whose raw input and output nest thousands of levels deep,
+  // with arrays, nulls and a `_meta` that has no tier.
+  let deep = { leaf: [1, null, { text: "x", _meta: { keep: 1 } }] };
+  for (let depth = 0; depth < 1000; depth += 1) deep = { level: depth, child: [deep, null] };
+  const message = {
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "s",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "t",
+        rawInput: deep,
+        rawOutput: { items: [deep, [[deep]]], empty: {}, none: null },
+        _meta: { antigravity: { tier: TIER } },
+      },
+    },
+  };
+  const before = JSON.stringify(message);
+  const stripped = stripTier(message);
+  // Only the tier (and the `_meta` it leaves empty) is gone.
+  const expected = JSON.parse(before);
+  delete expected.params.update._meta;
+  assert.equal(JSON.stringify(stripped), JSON.stringify(expected));
+  // Untouched subtrees are shared, and the input is not mutated.
+  assert.equal(stripped.params.update.rawInput, deep);
+  assert.equal(stripped.params.update.rawOutput, message.params.update.rawOutput);
+  assert.equal(JSON.stringify(message), before);
+
+  // A tier nested deep inside a tool output is removed; every sibling stays.
+  let nested = { _meta: { antigravity: { tier: TIER, keep: 2 } }, value: [null, 0, ""] };
+  for (let depth = 0; depth < 1000; depth += 1) nested = { wrap: [nested, { n: depth }] };
+  const output = stripTier({ jsonrpc: "2.0", id: 3, result: { rawOutput: nested, n: null } });
+  let cursor = output.result.rawOutput;
+  for (let depth = 999; depth >= 0; depth -= 1) {
+    assert.deepEqual(cursor.wrap[1], { n: depth });
+    cursor = cursor.wrap[0];
+  }
+  assert.deepEqual(cursor, { _meta: { antigravity: { keep: 2 } }, value: [null, 0, ""] });
+  assert.equal(output.result.n, null);
+  assert.equal(JSON.stringify(output).includes("upgradeUri"), false);
+
+  // A key named `__proto__` stays an ordinary own field.
+  const proto = JSON.parse(
+    '{"result":{"__proto__":{"x":1,"_meta":{"antigravity":{"tier":{"id":"a","name":"b"}}}}}}',
+  );
+  const clean = stripTier(proto);
+  assert.equal(Object.getPrototypeOf(clean.result), Object.prototype);
+  assert.equal(JSON.stringify(clean), '{"result":{"__proto__":{"x":1}}}');
+});
+
+test("a usage reading right behind a session result carries its new plan", async () => {
+  const { proxy, client } = harness();
+  await proxy.fromClient(request(2, "session/new", { cwd: "/work/repo", mcpServers: [] }));
+  // Both lines arrive in one stdout chunk: launch dispatches them without
+  // awaiting the first.
+  const settled = proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 2,
+    result: { sessionId: "s-new", _meta: { antigravity: { tier: TIER } } },
+  });
+  const reading = proxy.fromAgent(update("usage_update", { used: 1, size: 2 }));
+  await Promise.all([settled, reading]);
+  const usage = client.find((message) => message.method === "session/update");
+  assert.deepEqual(usage.params.update._meta, {
+    cowboy: { account_plan: { id: "free-tier", name: TIER.name } },
+  });
 });
 
 test("usage readings carry the plan agy reported, never its upgrade link", async () => {
@@ -426,10 +569,18 @@ test("usage readings carry the plan agy reported, never its upgrade link", async
   assert.deepEqual(client.at(-1), update("usage_update", { used: 1, size: 2 }));
 
   await proxy.fromClient(request(2, "session/new", { cwd: "/work/repo", mcpServers: [] }));
-  const result = { sessionId: "s-new", _meta: { antigravity: { tier: TIER } } };
+  const result = {
+    sessionId: "s-new",
+    _meta: { antigravity: { tier: TIER, other: 1 }, keep: true },
+  };
   await proxy.fromAgent({ jsonrpc: "2.0", id: 2, result });
-  // The session result itself is forwarded unchanged.
-  assert.deepEqual(client.at(-1), { jsonrpc: "2.0", id: 2, result });
+  // The session result is forwarded without the raw tier.
+  assert.deepEqual(client.at(-1), {
+    jsonrpc: "2.0",
+    id: 2,
+    result: { sessionId: "s-new", _meta: { antigravity: { other: 1 }, keep: true } },
+  });
+  assert.equal(result._meta.antigravity.tier, TIER);
 
   const reading = update("usage_update", {
     used: 10457,
@@ -448,6 +599,18 @@ test("usage readings carry the plan agy reported, never its upgrade link", async
   assert.equal(JSON.stringify(client.at(-1)).includes("antigravity.google"), false);
   // The original notification object is not mutated.
   assert.equal(reading.params.update._meta.cowboy.account_plan.name, "Forged");
+  // A raw tier on a reading is dropped too.
+  await proxy.fromAgent(
+    update("usage_update", { used: 2, size: 3, _meta: { antigravity: { tier: TIER } } }),
+  );
+  assert.deepEqual(
+    client.at(-1),
+    update("usage_update", {
+      used: 2,
+      size: 3,
+      _meta: { cowboy: { account_plan: { id: "free-tier", name: TIER.name } } },
+    }),
+  );
 
   // Titles, commands and thoughts pass through untouched.
   for (const notification of [
@@ -470,8 +633,14 @@ test("usage readings carry the plan agy reported, never its upgrade link", async
     id: 4,
     result: { _meta: { antigravity: { tier: { id: "free-tier", name: "\u0007" } } } },
   });
+  assert.deepEqual(client.at(-1), { jsonrpc: "2.0", id: 4, result: {} });
   await proxy.fromAgent(update("usage_update", { used: 5, size: 6 }));
   assert.deepEqual(client.at(-1), update("usage_update", { used: 5, size: 6 }));
+  // Without a plan, a reading's raw tier is still dropped.
+  await proxy.fromAgent(
+    update("usage_update", { used: 7, size: 8, _meta: { antigravity: { tier: TIER } } }),
+  );
+  assert.deepEqual(client.at(-1), update("usage_update", { used: 7, size: 8 }));
 });
 
 test("image prompts reach agy unchanged", async () => {

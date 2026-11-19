@@ -48,12 +48,90 @@ export function accountPlan(meta) {
   const { id, name } = tier;
   if (typeof id !== "string" || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(id)) return undefined;
   if (typeof name !== "string") return undefined;
+  // Printable text only: no character of category C (control, format,
+  // surrogate, private use, unassigned) or a line separator anywhere in the
+  // reported name (checked before trimming, so a tab or U+2028 at either end
+  // clears the plan instead of being trimmed away). Only then are the
+  // surrounding spaces trimmed; 1 to 80 code points remain. The Controller
+  // and the Web apply the same rule to the name they receive.
+  if (/[\p{C}\p{Zl}\p{Zp}]/u.test(name)) return undefined;
   const label = name.trim();
-  // Printable text only: no control, format or line-separator characters.
-  if (label.length === 0 || label.length > 80 || /[\p{C}\p{Zl}\p{Zp}]/u.test(label)) {
-    return undefined;
-  }
+  if (label.length === 0 || [...label].length > 80) return undefined;
   return { id, name: label };
+}
+
+/** Whether `value` is a plain JSON object. */
+const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+
+/** Whether `meta` (a `_meta` value) carries `antigravity.tier`. */
+const hasTier = (meta) =>
+  isObject(meta) && isObject(meta.antigravity) && Object.hasOwn(meta.antigravity, "tier");
+
+/** A shallow copy of an object or array. */
+const shallowCopy = (value) => (Array.isArray(value) ? value.slice() : { ...value });
+
+/**
+ * `message` (any ACP message `agy` sends) without a raw
+ * `_meta.antigravity.tier` at any depth: every `_meta` holder (params,
+ * updates, tool calls, tool inputs and outputs, content blocks, array
+ * entries, results, error data) loses that one field, plus the
+ * `antigravity` and `_meta` objects it leaves empty. Nothing else changes:
+ * the walk is iterative (no depth limit), only the objects on a path to a
+ * tier are copied, and a message without a tier is returned as is.
+ */
+export function stripTier(message) {
+  if (message === null || typeof message !== "object") return message;
+  /** Each found tier as a linked path `{ parent, key }` ending at its `_meta`. */
+  const found = [];
+  const stack = [{ value: message, path: undefined, meta: false, tierHolder: false }];
+  while (stack.length > 0) {
+    const entry = stack.pop();
+    const array = Array.isArray(entry.value);
+    for (const key of Object.keys(entry.value)) {
+      // A tier is removed whole, so its contents need no walk.
+      if (entry.tierHolder && key === "tier") continue;
+      const item = entry.value[key];
+      if (item === null || typeof item !== "object") continue;
+      const path = { parent: entry.path, key };
+      const meta = !array && key === "_meta";
+      if (meta && hasTier(item)) found.push(path);
+      stack.push({ value: item, path, meta, tierHolder: entry.meta && key === "antigravity" });
+    }
+  }
+  if (found.length === 0) return message;
+  const root = shallowCopy(message);
+  const copies = new Set([root]);
+  for (const end of found) {
+    const keys = [];
+    for (let node = end; node !== undefined; node = node.parent) keys.push(node.key);
+    keys.reverse();
+    let holder = root;
+    for (const key of keys.slice(0, -1)) {
+      let child = holder[key];
+      if (!copies.has(child)) {
+        child = shallowCopy(child);
+        copies.add(child);
+        // A JSON key such as `__proto__` is an own data property, never a setter.
+        Object.defineProperty(holder, key, {
+          value: child,
+          writable: true,
+          enumerable: true,
+          configurable: true,
+        });
+      }
+      holder = child;
+    }
+    const meta = { ...holder._meta };
+    const antigravity = { ...meta.antigravity };
+    delete antigravity.tier;
+    if (Object.keys(antigravity).length === 0) delete meta.antigravity;
+    else meta.antigravity = antigravity;
+    if (Object.keys(meta).length === 0) delete holder._meta;
+    else holder._meta = meta;
+    copies.add(meta);
+    if (meta.antigravity !== undefined) copies.add(meta.antigravity);
+  }
+  return root;
 }
 
 /**
@@ -195,21 +273,21 @@ export class AcpProxy {
   /**
    * Carry the account plan on every `usage_update`, the reading the worker
    * already relays as the session's usage, under Cowboy's own `_meta`
-   * namespace. Anything `agy` itself put there is dropped first.
+   * namespace. Anything `agy` itself put there is dropped first. `message`
+   * has already lost its raw tier (`stripTier`).
    */
   annotateUsage(message) {
     const update = message.params?.update;
     if (update?.sessionUpdate !== "usage_update") return message;
     const meta = update._meta;
-    const hasOwn = meta !== null && typeof meta === "object" && !Array.isArray(meta);
+    const hasOwn = isObject(meta);
     if (this.plan === undefined && !(hasOwn && Object.hasOwn(meta, "cowboy"))) return message;
-    const annotated = structuredClone(message);
-    const next = hasOwn ? { ...annotated.params.update._meta } : {};
+    const next = hasOwn ? { ...meta } : {};
     delete next.cowboy;
     if (this.plan !== undefined) next.cowboy = { account_plan: { ...this.plan } };
-    if (Object.keys(next).length === 0) delete annotated.params.update._meta;
-    else annotated.params.update._meta = next;
-    return annotated;
+    const { _meta: _old, ...rest } = update;
+    const annotated = Object.keys(next).length === 0 ? rest : { ...rest, _meta: next };
+    return { ...message, params: { ...message.params, update: annotated } };
   }
 
   /** A facade call's effect became unknown: end that session's turn. */
@@ -227,9 +305,9 @@ export class AcpProxy {
       if (id === undefined) {
         if (method === "session/update") {
           this.observe(message.params);
-          return this.client(this.annotateUsage(message));
+          return this.client(this.annotateUsage(stripTier(message)));
         }
-        if (AGENT_NOTIFICATIONS.includes(method)) this.client(message);
+        if (AGENT_NOTIFICATIONS.includes(method)) this.client(stripTier(message));
         return;
       }
       if (!AGENT_REQUESTS.includes(method)) {
@@ -259,22 +337,26 @@ export class AcpProxy {
         });
       }
       this.agentRequests.add(id);
-      return this.client(message);
+      return this.client(stripTier(message));
     }
     const record = this.pending.get(id);
     if (!record) return;
     this.pending.delete(id);
-    const runtime = await this.runtime;
-    if (record.channel && typeof message.result?.sessionId === "string") {
-      runtime.bindChannel(record.channel, message.result.sessionId);
-    }
     if (
       SESSION_REQUESTS.has(record.method) &&
       message.result?._meta?.antigravity?.tier !== undefined
     ) {
       // Informational, fail closed: a tier this proxy cannot read clears
-      // the plan; a result that reports none keeps the last one.
+      // the plan; a result that reports none keeps the last one. Applied
+      // before any await, so a `usage_update` read from the same chunk right
+      // after this result already carries the new plan.
       this.plan = accountPlan(message.result._meta);
+    }
+    // No result or error leaves the proxy with the raw tier.
+    message = stripTier(message);
+    const runtime = await this.runtime;
+    if (record.channel && typeof message.result?.sessionId === "string") {
+      runtime.bindChannel(record.channel, message.result.sessionId);
     }
     if (record.method !== "session/prompt") return this.client(message);
     const turn = this.turns.get(record.sessionId);
