@@ -360,8 +360,11 @@ pub(in crate::server) fn run_effects(
 /// member already in exactly that share), whose browser effects are none.
 /// Joining a legacy card needs a card the Service collects now, and joining
 /// a share whose browser already lives on a Machine needs that Machine to
-/// be able to host the member (`network::join_refusal`). A no-op and a
-/// replay are answered without these checks.
+/// be able to host the member (`network::join_refusal`). An operation
+/// already recorded (its replay, or a reuse the writer refuses) and a stale
+/// `expected_revision` (the writer's `revision_conflict`) are resolved by
+/// the writer first, so they never wait on, or read as, a Machine check; a
+/// no-op is answered without these checks too.
 pub(in crate::server) async fn update(
     state: &Arc<AppState>,
     owner: &str,
@@ -370,20 +373,16 @@ pub(in crate::server) async fn update(
 ) -> Result<(MutationResult, bool), &'static str> {
     let store = state.store.as_ref().ok_or("unavailable")?;
     let mut noop = false;
-    if let Change::SetBrowserShare { member, share_id } = &input.change {
+    if let Change::SetBrowserShare { member, share_id } = &input.change
+        && fresh_join(store, owner, operation, input.expected_revision).await?
+    {
         let shares = store
             .browser_shares(owner)
             .await
             .map_err(|_| "unavailable")?;
         noop = shares.membership(member).map(|row| &row.share_id) == share_id.as_ref();
-        let replay = store
-            .provider_account_receipt(owner, operation)
-            .await
-            .map_err(|_| "unavailable")?
-            .is_some();
         if let Some(share_id) = share_id
             && !noop
-            && !replay
         {
             if let Member::Card(card) = member
                 && !super::legacy::bound_cards(state).contains_key(&card.card)
@@ -398,6 +397,33 @@ pub(in crate::server) async fn update(
         .await
         .map_err(|_| "outcome_unknown")?;
     Ok((result, noop))
+}
+
+/// Whether a membership change is fresh and at the registry's revision, so
+/// its own checks run before the writer: no receipt is recorded under
+/// `operation`, and `expected_revision` is current. Revisions only advance,
+/// so a stale one stays the writer's conflict; the caller's owner fence
+/// serializes every share change, so a receipt cannot appear meanwhile.
+pub(in crate::server) async fn fresh_join(
+    store: &crate::store::Store,
+    owner: &str,
+    operation: &str,
+    expected_revision: i64,
+) -> Result<bool, &'static str> {
+    if store
+        .provider_account_receipt(owner, operation)
+        .await
+        .map_err(|_| "unavailable")?
+        .is_some()
+    {
+        return Ok(false);
+    }
+    let revision = store
+        .provider_accounts(owner)
+        .await
+        .map_err(|_| "unavailable")?
+        .revision;
+    Ok(revision == expected_revision)
 }
 
 /// Revoke a deleted share's profile on every Machine that holds it: the

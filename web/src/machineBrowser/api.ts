@@ -520,7 +520,7 @@ const ERROR_TEXT: Record<string, string> = {
   browser_share_family_drift:
     "An account of this group changed its kind since it used the profile. Reset the group's profile, or delete the group, before using it.",
   browser_share_machine_unsupported:
-    "This group's browser lives on a Machine that cannot host this account: an Antigravity account's group browser runs only on a Machine that enforces IPv4-only browsers and has Antigravity installed. Keep this account's own browser, or use a group whose browser is on such a Machine.",
+    "This group's browser lives (or would start) on a Machine that cannot host one of its accounts. An account that signs in only over IPv4 (such as Antigravity) needs a Machine that enforces IPv4-only browsers, and an account that signs in only on its own Machine needs its Provider installed and allowed there. Keep this account's own browser, or use a group whose browser is on a Machine that meets these.",
   browser_share_machine_unknown:
     "Cowboy could not confirm right now whether this group's browser Machine can host it (the Machine may be offline). Nothing changed; try again shortly.",
   browser_share_reset_pending:

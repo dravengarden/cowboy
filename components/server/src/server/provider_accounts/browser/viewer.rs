@@ -221,13 +221,14 @@ async fn attach(
         instance.incarnation,
         &connection,
     );
-    let still = super::admit(state, owner, member).await.and_then(|now| {
-        if now.key == *account {
-            Ok(())
-        } else {
-            Err("browser_share_changed")
-        }
-    });
+    let still = match super::admit(state, owner, member).await {
+        Ok(now) if now.key != *account => Err("browser_share_changed"),
+        // A share's browser is attached only over a connection its gate
+        // admits (an uninstalled Provider, a Machine that stopped enforcing
+        // IPv4-only): the viewer never reaches a refused placement.
+        Ok(now) => super::network::admitted_on(state, &now, &connection).await,
+        Err(code) => Err(code),
+    };
     if let Err(code) = still {
         state
             .browsers
@@ -598,9 +599,10 @@ async fn principal_valid(state: &Arc<AppState>, session: &ViewerSession) -> bool
 }
 
 /// Ends the stream unless the account is still admitted (Service gate,
-/// availability, browser enablement), this attachment is still the
-/// account's viewer and its Machine connection is still current. The
-/// viewer is told the refusal code first.
+/// availability, browser enablement, and a share's Machine gate on the
+/// attached connection), this attachment is still the account's viewer and
+/// its Machine connection is still current. The viewer is told the refusal
+/// code first.
 async fn still_admitted<S>(
     state: &Arc<AppState>,
     session: &ViewerSession,
@@ -621,15 +623,11 @@ where
     }
     // The member must still be admitted and still use the attached browser:
     // leaving a share, or the share's deletion, ends the viewer.
-    let still = super::admit(state, &session.principal.user_id, &session.account)
-        .await
-        .and_then(|now| {
-            if now.key == session.key {
-                Ok(())
-            } else {
-                Err("browser_share_changed")
-            }
-        });
+    let still = match super::admit(state, &session.principal.user_id, &session.account).await {
+        Ok(now) if now.key != session.key => Err("browser_share_changed"),
+        Ok(now) => super::network::admitted_on(state, &now, &session.connection).await,
+        Err(code) => Err(code),
+    };
     if let Err(code) = still {
         let _ = send_json(viewer_sink, &json!({"type":"error","code":code})).await;
         return Err("admission_withdrawn");

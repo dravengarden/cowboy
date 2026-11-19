@@ -244,18 +244,23 @@ impl BrowserManager {
                 )
                 .await;
         }
+        // The record vouches for the live unit's network policy only when
+        // systemd names the very invocation it recorded.
+        let identified = invocation_identified(&record.invocation_id, &status.invocation_id);
         match self.adopt(&record, &status, capacity).await {
-            Ok(instance) if !self.complies(instance.network) => {
+            Ok(instance) if !self.survivor_serves(instance.network, identified) => {
                 // A unit started before this Device enforced its network
-                // policy (`browser.ipv4_only`) never serves again: it is
-                // stopped with a stop-time snapshot before it is registered,
-                // so no attach or command can reach it, and the next open
-                // starts it under the policy. The inventory fence holds
-                // every open of the account meanwhile.
+                // policy (`browser.ipv4_only`), or one whose invocation
+                // cannot be matched to its record (so its recorded policy
+                // proves nothing), never serves again: it is stopped with a
+                // stop-time snapshot before it is registered, so no attach
+                // or command can reach it, and the next open starts it
+                // under the policy. The inventory fence holds every open of
+                // the account meanwhile.
                 tracing::warn!(event_name = "browser.adopt.network_replaced",
                     instance = %record.instance_id, running = ?instance.network,
-                    enforced = ?self.enforced_network,
-                    "surviving browser unit predates the Device network policy; stopping");
+                    enforced = ?self.enforced_network, identified,
+                    "surviving browser unit not proven to run the Device network policy; stopping");
                 let slot = self.slot(&instance.account_id);
                 let _lifecycle = slot.lifecycle.lock().await;
                 self.stop_locked(&instance, Reason::Superseded, true, None)
@@ -274,6 +279,17 @@ impl BrowserManager {
                     .await
             }
         }
+    }
+
+    /// Whether an adopted survivor that recorded `network` may be registered:
+    /// on a Device enforcing a policy, only one started with it whose live
+    /// invocation is the recorded one (`identified`).
+    pub(super) fn survivor_serves(
+        &self,
+        network: Option<BrowserNetwork>,
+        identified: bool,
+    ) -> bool {
+        self.enforced_network.is_none() || (identified && self.complies(network))
     }
 
     fn discard_record(&self, record: &InstanceRecord, why: &str) -> Result<()> {
@@ -525,4 +541,11 @@ impl BrowserManager {
         }
         Ok(())
     }
+}
+
+/// Whether systemd's live invocation of a unit is exactly the one its
+/// record names: both known (nonempty) and equal. An empty ID on either side
+/// cannot tell a reused unit name apart from the recorded start.
+pub(super) fn invocation_identified(recorded: &str, live: &str) -> bool {
+    !recorded.is_empty() && recorded == live
 }

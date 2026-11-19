@@ -748,4 +748,8 @@ test("an Antigravity account shares as family google with its Machine refusals e
     subscriptionRejectionText("browser_share_machine_unknown").includes("try again"),
     true,
   );
+  // The mismatch copy covers every cause, not only Antigravity's.
+  const unsupported = subscriptionRejectionText("browser_share_machine_unsupported");
+  assertEquals(unsupported.includes("IPv4-only"), true);
+  assertEquals(unsupported.includes("installed and allowed"), true);
 });

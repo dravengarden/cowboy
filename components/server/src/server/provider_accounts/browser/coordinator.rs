@@ -104,7 +104,10 @@ struct Inventory {
 pub(in crate::server) struct Coordinator {
     /// The current connection of each Machine, as of its hello.
     connections: parking_lot::RwLock<HashMap<String, ConnectionToken>>,
-    capabilities: parking_lot::RwLock<HashMap<String, Capability>>,
+    /// Per Machine: the browser capability its current connection reported,
+    /// with that connection, so a reader can bind it to the exact connection
+    /// a command will travel on.
+    capabilities: parking_lot::RwLock<HashMap<String, (ConnectionToken, Capability)>>,
     /// Per Machine and account: the latest observation of that Machine's
     /// instance. One Machine's report never replaces another's.
     states: parking_lot::RwLock<HashMap<Key, Observed>>,
@@ -138,7 +141,7 @@ impl Coordinator {
         self.connections
             .write()
             .insert(machine_id.clone(), connection.clone());
-        self.observe_capability(&machine_id, capability);
+        self.observe_capability(connection, capability);
         self.inventories.lock().insert(
             machine_id.clone(),
             Inventory {
@@ -169,7 +172,7 @@ impl Coordinator {
             current
         };
         if current {
-            self.observe_capability(machine_id, None);
+            self.observe_capability(connection, None);
         }
         let mut inventories = self.inventories.lock();
         if inventories
@@ -194,13 +197,14 @@ impl Coordinator {
 
     pub(in crate::server) fn observe_capability(
         &self,
-        machine_id: &str,
+        connection: &ConnectionToken,
         capability: Option<Capability>,
     ) {
+        let machine_id = connection.machine_id();
         let mut capabilities = self.capabilities.write();
         match capability {
             Some(capability) => {
-                capabilities.insert(machine_id.to_owned(), capability);
+                capabilities.insert(machine_id.to_owned(), (connection.clone(), capability));
             }
             None => {
                 capabilities.remove(machine_id);
@@ -209,7 +213,24 @@ impl Coordinator {
     }
 
     pub(in crate::server) fn capability(&self, machine_id: &str) -> Option<Capability> {
-        self.capabilities.read().get(machine_id).cloned()
+        self.capabilities
+            .read()
+            .get(machine_id)
+            .map(|(_, capability)| capability.clone())
+    }
+
+    /// The capability `connection` itself reported; `None` once its Machine
+    /// reported none or another connection replaced it, so nothing learned
+    /// on one connection ever vouches for another.
+    pub(in crate::server) fn capability_on(
+        &self,
+        connection: &ConnectionToken,
+    ) -> Option<Capability> {
+        self.capabilities
+            .read()
+            .get(connection.machine_id())
+            .filter(|(known, _)| known.same(connection))
+            .map(|(_, capability)| capability.clone())
     }
 
     /// The Machines whose current connection reported an available browser
@@ -219,7 +240,7 @@ impl Coordinator {
             .capabilities
             .read()
             .iter()
-            .filter(|(_, capability)| capability.available)
+            .filter(|(_, (_, capability))| capability.available)
             .map(|(machine, _)| machine.clone())
             .collect();
         machines.sort();
@@ -272,10 +293,10 @@ impl Coordinator {
                 self.end_mismatched_viewer(&key, state);
             }
             Event::Capability(capability) => {
-                self.observe_capability(machine_id, Some(capability.clone()));
+                self.observe_capability(connection, Some(capability.clone()));
             }
             Event::CapabilityLost => {
-                self.observe_capability(machine_id, None);
+                self.observe_capability(connection, None);
                 self.cancel_viewers_where(|(machine, _), _| machine == machine_id);
             }
         }

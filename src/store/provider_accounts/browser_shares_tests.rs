@@ -1060,6 +1060,7 @@ fn a_bound_member_now_of_the_joining_family_blocks_it() {
             family: "anthropic".into(),
             member: Member::account(lark.id.clone()),
         }],
+        unreadable_bindings: Vec::new(),
     };
     let registry = Registry {
         revision: 1,
@@ -1296,4 +1297,76 @@ async fn a_pending_share_reset_fences_membership_until_its_outcome() {
     )
     .await;
     assert!(store.pending_share_resets().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn an_unreadable_binding_is_kept_and_blocks_its_family_until_a_confirmed_reset() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = sqlite_store(&dir).await;
+    let lark = named_account(&store, "garbled-lark", "claude-code").await;
+    let share = applied(
+        &store,
+        "garbled-create",
+        Change::CreateBrowserShare {
+            label: "Google".into(),
+        },
+    )
+    .await
+    .browser_share_id
+    .unwrap();
+    let StorageBackend::Sqlite(db) = &store.backend else {
+        panic!("sqlite")
+    };
+    sqlx::query("INSERT INTO provider_browser_share_bindings (owner_user_id,share_id,family,member) VALUES ($1,$2,$3,$4)")
+        .bind(OWNER).bind(&share).bind("anthropic").bind("account:garbled")
+        .execute(&db.pool).await.unwrap();
+    let unreadable = |shares: &Shares| shares.unreadable_bindings.clone();
+    let shares = store.browser_shares(OWNER).await.unwrap();
+    assert!(shares.bindings.is_empty());
+    assert_eq!(
+        unreadable(&shares),
+        vec![UnreadableBinding {
+            share_id: share.clone(),
+            family: "anthropic".into(),
+            member: "account:garbled".into(),
+        }]
+    );
+    // A rewrite of the owner's shares keeps it verbatim.
+    applied(
+        &store,
+        "garbled-rename",
+        Change::RenameBrowserShare {
+            share_id: share.clone(),
+            label: "Renamed".into(),
+        },
+    )
+    .await;
+    let shares = store.browser_shares(OWNER).await.unwrap();
+    assert_eq!(unreadable(&shares).len(), 1);
+    // It may be any identity of its family: none of that family joins.
+    assert_eq!(
+        invalid(
+            &store,
+            "garbled-lark-join",
+            join(Member::account(lark.clone()), &share)
+        )
+        .await,
+        "browser_share_family_bound"
+    );
+    // A confirmed reset wiped whatever it stood for.
+    assert!(confirmed_reset(&store, &share, "ovh", "garbled-reset").await);
+    assert!(
+        store
+            .browser_shares(OWNER)
+            .await
+            .unwrap()
+            .unreadable_bindings
+            .is_empty()
+    );
+    applied(
+        &store,
+        "garbled-lark-join-2",
+        join(Member::account(lark), &share),
+    )
+    .await;
 }

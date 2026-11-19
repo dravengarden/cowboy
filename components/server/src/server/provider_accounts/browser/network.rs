@@ -18,6 +18,7 @@
 //! not connected, an unreadable inventory, an unresolved Provider) refuses as
 //! `browser_share_machine_unknown`, never as a downgrade.
 use super::{BrowserAccount, Resolved};
+use crate::machine_control::ConnectionToken;
 use crate::machine_protocol::machine_browser::BrowserNetwork;
 use crate::provider_account::{named_only, native_only};
 use crate::server::AppState;
@@ -36,11 +37,26 @@ pub(in crate::server) const MACHINE_UNKNOWN: &str = "browser_share_machine_unkno
 
 /// Whether `machine_id` runs every browser unit IPv4-only, as its current
 /// connection's browser capability reports; `None` while it reports none
-/// (not connected, or no browser Plugin).
+/// (not connected, or no browser Plugin). For what a read shows only: a
+/// command is bound to its connection through `enforces_ipv4_only_on`.
 pub(in crate::server) fn enforces_ipv4_only(state: &AppState, machine_id: &str) -> Option<bool> {
     state
         .browsers
         .capability(machine_id)
+        .map(|capability| capability.network == Some(BrowserNetwork::Ipv4OnlyV1))
+}
+
+/// Whether the Machine process behind `connection` runs every browser unit
+/// IPv4-only, as that connection itself reported (the setting is applied
+/// at the Machine's start, so it holds for the connection's lifetime);
+/// `None` once the connection reports none or was replaced.
+pub(in crate::server) fn enforces_ipv4_only_on(
+    state: &AppState,
+    connection: &ConnectionToken,
+) -> Option<bool> {
+    state
+        .browsers
+        .capability_on(connection)
         .map(|capability| capability.network == Some(BrowserNetwork::Ipv4OnlyV1))
 }
 
@@ -213,12 +229,21 @@ pub(in crate::server) fn identity_of(
 
 /// The identities share `share_id`'s browser serves: its current members
 /// (each with the family recorded at join) and every identity whose family
-/// is bound to its profile.
+/// is bound to its profile. A binding whose member cannot be read may hold
+/// any identity's cookies: the share is `browser_share_machine_unknown`
+/// until it is readable again or a confirmed reset releases it.
 pub(in crate::server) fn share_identities(
     shares: &Shares,
     share_id: &str,
     registry: &Registry,
-) -> Vec<Identity> {
+) -> Result<Vec<Identity>, &'static str> {
+    if shares
+        .unreadable_bindings
+        .iter()
+        .any(|row| row.share_id == share_id)
+    {
+        return Err(MACHINE_UNKNOWN);
+    }
     let current = shares
         .members_of(share_id)
         .into_iter()
@@ -228,10 +253,11 @@ pub(in crate::server) fn share_identities(
         .iter()
         .filter(|row| row.share_id == share_id)
         .map(|row| identity_of(&row.member, Some(row.family.clone()), registry, false));
-    current.chain(bound).collect()
+    Ok(current.chain(bound).collect())
 }
 
-/// Whether `provider` is an active installation on `machine_id`: `None`
+/// Whether `provider` is an active Agent Provider installation on
+/// `machine_id` (a Plugin of another kind under that id never is): `None`
 /// when the Machine's reported Plugin inventory is absent or unreadable,
 /// so a retry is asked for instead of another group.
 fn installed(machines: &[MachineRecord], machine_id: &str, provider: &str) -> Option<bool> {
@@ -249,6 +275,7 @@ fn installed(machines: &[MachineRecord], machine_id: &str, provider: &str) -> Op
         serde_json::from_value(inventory.clone()).ok()?;
     Some(plugins.iter().any(|plugin| {
         plugin.plugin_id == provider
+            && plugin.plugin_kind == cowboy_plugin_sdk::PluginKind::AgentProvider
             && plugin.state == crate::machine_protocol::PluginInstallationState::Active
     }))
 }
@@ -275,7 +302,7 @@ impl ShareGate {
         let (Ok(registry), Ok(shares)) = (registry, shares) else {
             return Err(MACHINE_UNKNOWN);
         };
-        let identities = share_identities(&shares, share_id, &registry);
+        let identities = share_identities(&shares, share_id, &registry)?;
         Self::for_identities(state, &identities).await
     }
 
@@ -295,23 +322,60 @@ impl ShareGate {
         Ok(Self { needs, machines })
     }
 
-    /// Whether the share's browser may live on `machine_id` now.
+    /// Whether the share's browser may live on `machine_id` now, as its
+    /// current connection reports; what a read shows and a join preflight.
     pub(in crate::server) fn check(
         &self,
         state: &AppState,
         machine_id: &str,
     ) -> Result<(), &'static str> {
-        admission(
-            &self.needs,
-            enforces_ipv4_only(state, machine_id),
-            |provider| {
-                let machines = self.machines.as_deref()?;
-                Some(
-                    state.supervisor.runtime_allowed(provider, machine_id)
-                        && installed(machines, machine_id, provider)?,
-                )
-            },
+        self.admit(state, machine_id, enforces_ipv4_only(state, machine_id))
+    }
+
+    /// Whether the share's browser may be opened, attached or driven over
+    /// exactly `connection`: its enforcement as that connection itself
+    /// reported, so a replacement connection is never vouched for by its
+    /// predecessor's capability.
+    pub(in crate::server) fn check_on(
+        &self,
+        state: &AppState,
+        connection: &ConnectionToken,
+    ) -> Result<(), &'static str> {
+        self.admit(
+            state,
+            connection.machine_id(),
+            enforces_ipv4_only_on(state, connection),
         )
+    }
+
+    fn admit(
+        &self,
+        state: &AppState,
+        machine_id: &str,
+        enforced: Option<bool>,
+    ) -> Result<(), &'static str> {
+        admission(&self.needs, enforced, |provider| {
+            let machines = self.machines.as_deref()?;
+            Some(
+                state.supervisor.runtime_allowed(provider, machine_id)
+                    && installed(machines, machine_id, provider)?,
+            )
+        })
+    }
+}
+
+/// Whether the browser `resolved` uses may be attached or driven over
+/// `connection` now: always for an own browser, else the share's gate
+/// checked against that connection. Owner cleanup (hibernate, reset) never
+/// asks this.
+pub(in crate::server) async fn admitted_on(
+    state: &AppState,
+    resolved: &Resolved,
+    connection: &ConnectionToken,
+) -> Result<(), &'static str> {
+    match gate(state, resolved).await? {
+        Some(gate) => gate.check_on(state, connection),
+        None => Ok(()),
     }
 }
 
@@ -329,8 +393,9 @@ pub(in crate::server) async fn gate(
     }
 }
 
-/// The policy an open of the browser `resolved` uses names on `machine_id`:
-/// `ipv4_only_v1` where the Machine enforces it on every unit anyway;
+/// The policy an open of the browser `resolved` uses names over
+/// `connection`: `ipv4_only_v1` where that connection's Machine enforces it
+/// on every unit anyway;
 /// elsewhere none for a share (whose gate admitted that Machine) or a
 /// legacy card, and an own named browser's Provider rule as installed there
 /// (a named-only Provider whose installed manifest cannot be resolved is
@@ -338,9 +403,10 @@ pub(in crate::server) async fn gate(
 pub(super) async fn policy(
     state: &AppState,
     resolved: &Resolved,
-    machine_id: &str,
+    connection: &ConnectionToken,
 ) -> Option<BrowserNetwork> {
-    if enforces_ipv4_only(state, machine_id) == Some(true) {
+    let machine_id = connection.machine_id();
+    if enforces_ipv4_only_on(state, connection) == Some(true) {
         return Some(BrowserNetwork::Ipv4OnlyV1);
     }
     let (None, BrowserAccount::Named(account)) = (&resolved.share, &resolved.account) else {
@@ -399,7 +465,7 @@ pub(in crate::server) async fn join_refusal(
         .browser_shares(owner)
         .await
         .map_err(|_| MACHINE_UNKNOWN)?;
-    let mut identities = share_identities(&shares, share_id, &registry);
+    let mut identities = share_identities(&shares, share_id, &registry)?;
     identities.push(identity_of(member, Some(family), &registry, true));
     let gate = ShareGate::for_identities(state, &identities).await?;
     for placement in placements {
@@ -557,6 +623,34 @@ mod tests {
         let absent = [record(serde_json::json!({}))];
         assert_eq!(installed(&absent, "ovh", "antigravity"), None);
         let garbled = [record(serde_json::json!({"plugins": "garbled"}))];
-        assert_eq!(installed(&garbled, "ovh", "antigravity"), None);
+        assert_eq!(installed(&garbled, "ovh", "antigravity"), None); // Only an active Agent Provider installation counts.
+        let plugin = |kind: &str| {
+            serde_json::json!({"plugins": [{
+                "plugin_id": "antigravity", "plugin_version": "1.0.0", "plugin_kind": kind,
+                "generation_digest": "d", "contract_fingerprint": "f", "state": "active"}]})
+        };
+        let provider = [record(plugin("agent_provider"))];
+        assert_eq!(installed(&provider, "ovh", "antigravity"), Some(true));
+        let other = [record(plugin("workspace_extension"))];
+        assert_eq!(installed(&other, "ovh", "antigravity"), Some(false));
+    }
+
+    #[test]
+    fn an_unreadable_binding_keeps_its_share_unknown_until_released() {
+        use crate::store::provider_accounts::browser_shares::UnreadableBinding;
+        let registry = Registry::default();
+        let mut shares = Shares::default();
+        assert_eq!(share_identities(&shares, "s", &registry), Ok(Vec::new()));
+        shares.unreadable_bindings.push(UnreadableBinding {
+            share_id: "s".into(),
+            family: "google".into(),
+            member: "account:garbled".into(),
+        });
+        assert_eq!(
+            share_identities(&shares, "s", &registry),
+            Err(MACHINE_UNKNOWN)
+        );
+        // Another share is unaffected.
+        assert_eq!(share_identities(&shares, "t", &registry), Ok(Vec::new()));
     }
 }

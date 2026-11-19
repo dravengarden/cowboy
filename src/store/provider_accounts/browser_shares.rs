@@ -163,12 +163,25 @@ pub struct Binding {
     pub member: Member,
 }
 
+/// A stored binding whose member cannot be decoded. It is kept verbatim
+/// (never dropped by a rewrite): the profile may still hold that identity's
+/// cookies, so no member of its family joins and the share's browser is not
+/// admitted anywhere until a confirmed reset releases it or the share is
+/// deleted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnreadableBinding {
+    pub share_id: String,
+    pub family: String,
+    pub member: String,
+}
+
 /// One owner's shares, memberships and family bindings.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Shares {
     pub shares: Vec<Share>,
     pub members: Vec<ShareMember>,
     pub bindings: Vec<Binding>,
+    pub unreadable_bindings: Vec<UnreadableBinding>,
 }
 
 impl Shares {
@@ -233,6 +246,9 @@ impl Shares {
                 || !(released.contains(&row.member)
                     || renewed.iter().any(|(member, _)| member == &row.member))
         });
+        // The confirmed reset wiped whatever an unreadable binding stood for.
+        self.unreadable_bindings
+            .retain(|row| row.share_id != share_id);
         self.bindings
             .extend(renewed.into_iter().map(|(member, family)| Binding {
                 share_id: share_id.to_owned(),
@@ -373,6 +389,14 @@ fn join(
     {
         return Ok(());
     }
+    // An unreadable binding of this family may be any other identity's.
+    if shares
+        .unreadable_bindings
+        .iter()
+        .any(|row| row.share_id == share_id && row.family == family)
+    {
+        return Err("browser_share_family_bound");
+    }
     if shares
         .members_of(share_id)
         .iter()
@@ -467,6 +491,9 @@ pub fn apply(
             let key = shares.live(share_id)?.browser_key.clone();
             shares.members.retain(|row| &row.share_id != share_id);
             shares.bindings.retain(|row| &row.share_id != share_id);
+            shares
+                .unreadable_bindings
+                .retain(|row| &row.share_id != share_id);
             // Deletion revokes the profile anyway; a pending reset is moot.
             if let Some(share) = shares
                 .shares
@@ -550,6 +577,22 @@ fn decode(
     members: Vec<(String, String, String)>,
     bindings: Vec<(String, String, String)>,
 ) -> Shares {
+    let (mut readable, mut unreadable_bindings) = (Vec::new(), Vec::new());
+    for (share_id, family, member) in bindings {
+        match Member::decode(&member) {
+            Some(member) => readable.push(Binding {
+                share_id,
+                family,
+                member,
+            }),
+            None => unreadable_bindings.push(UnreadableBinding {
+                share_id,
+                family,
+                member,
+            }),
+        }
+    }
+    let bindings = readable;
     Shares {
         shares: rows
             .into_iter()
@@ -586,16 +629,8 @@ fn decode(
                 })
             })
             .collect(),
-        bindings: bindings
-            .into_iter()
-            .filter_map(|(share_id, family, member)| {
-                Member::decode(&member).map(|member| Binding {
-                    share_id,
-                    family,
-                    member,
-                })
-            })
-            .collect(),
+        bindings,
+        unreadable_bindings,
     }
 }
 
@@ -621,6 +656,11 @@ macro_rules! write_bindings {
         for row in &$shares.bindings {
             sqlx::query("INSERT INTO provider_browser_share_bindings (owner_user_id,share_id,family,member) VALUES ($1,$2,$3,$4)")
                 .bind($owner).bind(&row.share_id).bind(&row.family).bind(row.member.encode()).execute(&mut *$tx).await?;
+        }
+        // Kept verbatim: a rewrite never forgets an identity it cannot read.
+        for row in &$shares.unreadable_bindings {
+            sqlx::query("INSERT INTO provider_browser_share_bindings (owner_user_id,share_id,family,member) VALUES ($1,$2,$3,$4)")
+                .bind($owner).bind(&row.share_id).bind(&row.family).bind(&row.member).execute(&mut *$tx).await?;
         }
     }};
 }

@@ -585,3 +585,24 @@ async fn an_ipv4_only_device_runs_every_unit_ipv4_only_and_reports_it() {
     assert_eq!(plain.manager.enforced_network, None);
     assert!(plain.manager.complies(None));
 }
+
+#[tokio::test]
+async fn an_ipv4_only_device_trusts_a_survivors_policy_only_for_its_recorded_invocation() {
+    // Only a known, equal invocation identifies the recorded start.
+    assert!(reconcile::invocation_identified("inv-1", "inv-1"));
+    assert!(!reconcile::invocation_identified("inv-1", ""));
+    assert!(!reconcile::invocation_identified("", ""));
+    assert!(!reconcile::invocation_identified("inv-1", "inv-2"));
+    let enforcing = fixture_on(Some("schema = 1\n[browser]\nipv4_only = true\n")).await;
+    let ipv4 = Some(BrowserNetwork::Ipv4OnlyV1);
+    assert!(enforcing.manager.survivor_serves(ipv4, true));
+    // A record naming the policy proves nothing for an unidentified unit:
+    // it is stopped (with its snapshot) instead of registered.
+    assert!(!enforcing.manager.survivor_serves(ipv4, false));
+    assert!(!enforcing.manager.survivor_serves(None, true));
+    assert!(!enforcing.manager.survivor_serves(None, false));
+    // A Device without the setting adopts as before.
+    let plain = fixture_on(None).await;
+    assert!(plain.manager.survivor_serves(None, false));
+    assert!(plain.manager.survivor_serves(ipv4, true));
+}

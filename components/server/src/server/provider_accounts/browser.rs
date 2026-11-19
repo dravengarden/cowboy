@@ -390,6 +390,8 @@ pub(in crate::server) fn named_instance(
 /// Machines that enforce IPv4-only browsers, pinned members only where
 /// their Provider is installed and its native login may run): a first
 /// placement skips Machines that do not, and an existing one is refused.
+/// The gate and the capability are read from the exact connection returned,
+/// the one the open is dispatched on.
 async fn machine_for(
     state: &AppState,
     owner: &str,
@@ -397,6 +399,8 @@ async fn machine_for(
     (pinned, gate): (Option<&str>, Option<&network::ShareGate>),
 ) -> Result<(String, ConnectionToken), &'static str> {
     let admitted = |machine: &str| gate.map_or(Ok(()), |gate| gate.check(state, machine));
+    let admitted_on =
+        |connection: &ConnectionToken| gate.map_or(Ok(()), |gate| gate.check_on(state, connection));
     let (account_id, account) = (&resolved.id, &resolved.account);
     let store = state.store.as_ref().ok_or("unavailable")?;
     let placements = store
@@ -412,15 +416,18 @@ async fn machine_for(
                 return Err("browser_not_placed");
             }
         }
-        admitted(machine)?;
-        let capable = state
+        let Ok(connection) = connection_for(state, machine) else {
+            admitted(machine)?;
+            return Err("browser_machine_unavailable");
+        };
+        admitted_on(&connection)?;
+        if !state
             .browsers
-            .capability(machine)
-            .is_some_and(|capability| capability.available);
-        let connection = connection_for(state, machine)
-            .ok()
-            .filter(|_| capable)
-            .ok_or("browser_machine_unavailable")?;
+            .capability_on(&connection)
+            .is_some_and(|capability| capability.available)
+        {
+            return Err("browser_machine_unavailable");
+        }
         return Ok((machine.to_owned(), connection));
     }
     let single = resolved.shared().is_some() && !placements.is_empty();
@@ -438,18 +445,21 @@ async fn machine_for(
     let mut seen_capable = false;
     let mut refused = None;
     for machine in candidates {
-        if let Err(code) = admitted(&machine) {
+        let Some((connection, protocol)) = state.machine_control.connection_protocol(&machine)
+        else {
+            if let Err(code) = admitted(&machine) {
+                refused.get_or_insert(code);
+            }
+            continue;
+        };
+        if let Err(code) = admitted_on(&connection) {
             refused.get_or_insert(code);
             continue;
         }
-        let Some((connection, protocol)) = state.machine_control.connection_protocol(&machine)
-        else {
-            continue;
-        };
         if protocol < MACHINE_BROWSER_PROTOCOL_VERSION {
             continue;
         }
-        match state.browsers.capability(&machine) {
+        match state.browsers.capability_on(&connection) {
             Some(capability) if capability.available => return Ok((machine, connection)),
             Some(_) => seen_capable = true,
             None => {}
@@ -737,11 +747,14 @@ pub(in crate::server) async fn refresh_placements(
 /// the owner's share fence (`fence`), taken in that order and held from the
 /// identity and gate checks through this admission, so no join or other
 /// membership change lands in between. The policy the open names depends
-/// only on the account and the Machine.
+/// only on the account and the connection. A share's `gate` is checked once
+/// more against that connection right before the open leaves, so a Machine
+/// that reconnected meanwhile is never opened on by its predecessor's
+/// admission.
 async fn dispatch_open(
     state: &AppState,
     owner: &str,
-    resolved: &Resolved,
+    (resolved, gate): (&Resolved, Option<&network::ShareGate>),
     (machine_id, connection): (&str, &ConnectionToken),
     (purpose, viewport): (Purpose, Viewport),
     (dispatch, fence): (
@@ -752,7 +765,7 @@ async fn dispatch_open(
     let store = state.store.as_ref().ok_or("unavailable")?;
     let account_id = &resolved.key;
     let instance = instance_id(owner, account_id, machine_id);
-    let network = network::policy(state, resolved, machine_id).await;
+    let network = network::policy(state, resolved, connection).await;
     let admitted = match (
         resolved.shared(),
         shares::member_of(&resolved.id, &resolved.account),
@@ -790,6 +803,9 @@ async fn dispatch_open(
             "unavailable"
         })?
         .map_err(Refusal::code)?;
+    if let Some(gate) = gate {
+        gate.check_on(state, connection)?;
+    }
     let event = state
         .machine_control
         .browser_command(
@@ -917,7 +933,7 @@ pub(in crate::server) async fn open_tab(
         let event = dispatch_open(
             state,
             owner,
-            &resolved,
+            (&resolved, gate.as_ref()),
             (&machine_id, &connection),
             (Purpose::Tab, viewport),
             (dispatch, fence),
@@ -936,7 +952,9 @@ const OPEN_KEY_ATTEMPTS: usize = 3;
 /// that Machine still reports exactly the named instance and incarnation:
 /// the command never reaches another Machine's browser of the same account
 /// nor a newer incarnation the owner has not seen. The instance is named as
-/// the member's card was shown it and commanded on the browser key.
+/// the member's card was shown it and commanded on the browser key. A
+/// command that drives a share's browser (`Authority::Launch`) needs the
+/// share's gate on the connection it travels on; owner cleanup does not.
 pub(in crate::server) async fn instance_command(
     state: &AppState,
     owner: &str,
@@ -948,6 +966,9 @@ pub(in crate::server) async fn instance_command(
     let resolved = authorize(state, owner, account_id, authority).await?;
     let instance = resolved.inbound(instance)?;
     let observed = named_instance(state, &resolved.key, machine_id, &instance)?;
+    if authority == Authority::Launch {
+        network::admitted_on(state, &resolved, &observed.connection).await?;
+    }
     let command = command(instance);
     let request = request_id("browser");
     if let Command::Hibernate { instance } = &command {

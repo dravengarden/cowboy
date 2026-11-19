@@ -44,6 +44,7 @@ fn google(share_id: &str) -> Shares {
         }],
         members: vec![row("anthropic"), row("openai"), row("xai")],
         bindings: Vec::new(),
+        unreadable_bindings: Vec::new(),
     }
 }
 
@@ -728,5 +729,50 @@ fn an_identity_bound_open_refuses_another_browser_identity() {
     assert_eq!(
         expected_identity(Some(&format!("share:{share_id}:3")), &pika),
         Err("browser_identity_changed")
+    );
+}
+
+#[tokio::test]
+async fn a_replayed_or_stale_join_is_left_to_the_writer_before_any_machine_check() {
+    let root = tempfile::tempdir().unwrap();
+    let store = crate::store::Store::connect("sqlite::memory:", root.path().join("artifacts"))
+        .await
+        .unwrap();
+    store.migrate().await.unwrap();
+    let revision = store.provider_accounts(OWNER).await.unwrap().revision;
+    // A fresh join at the current revision runs its own checks.
+    assert_eq!(
+        fresh_join(&store, OWNER, "join-1", revision).await,
+        Ok(true)
+    );
+    // A stale revision is the writer's conflict, never a Machine refusal.
+    assert_eq!(
+        fresh_join(&store, OWNER, "join-1", revision + 1).await,
+        Ok(false)
+    );
+    // A recorded operation is answered from its receipt.
+    let created = store
+        .mutate_browser_shares(
+            OWNER,
+            "create-1",
+            &Mutation {
+                expected_revision: revision,
+                change: Change::CreateBrowserShare {
+                    label: "Google".into(),
+                },
+            },
+        )
+        .await
+        .unwrap();
+    let MutationResult::Applied(receipt) = created else {
+        panic!("{created:?}")
+    };
+    assert_eq!(
+        fresh_join(&store, OWNER, "create-1", receipt.registry.revision).await,
+        Ok(false)
+    );
+    assert_eq!(
+        fresh_join(&store, OWNER, "join-2", receipt.registry.revision).await,
+        Ok(true)
     );
 }

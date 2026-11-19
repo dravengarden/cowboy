@@ -1642,8 +1642,9 @@ the `Open` names, and reports it in its browser capability
 (`Capability.network: "ipv4_only_v1"`, sent in the hello and on every
 capability change). The setting is read once when the Machine starts: before
 the restart inventory admits anything, a surviving unit whose record names
-no `ipv4_only_v1` policy is stopped with a stop-time snapshot instead of
-being adopted, so it never serves a viewer or a command again, and the next
+no `ipv4_only_v1` policy, or whose live systemd `InvocationID` is not exactly
+the (nonempty) one its record names, so the record proves nothing about it,
+is stopped with a stop-time snapshot instead of being adopted, so it never serves a viewer or a command again, and the next
 open starts it under the policy. Everything such a Machine runs is therefore
 IPv4-only, with no per-instance confirmation by the Controller. The Controller
 also names `ipv4_only_v1` in every `Open` to such a Machine. A Controller that
@@ -1895,10 +1896,37 @@ shared: every card keeps its own browser exactly as above.
   So neither an open nor a join can slip past the other. The first-Machine
   chooser offers only Machines the gate admits, and a state read reports a
   placed or requested Machine the gate refuses as its `admission`, so a
-  client never offers an open the server refuses. Attaching to and driving a
-  running unit need no further check: whatever an enforcing Machine runs is
-  IPv4-only. A join that changes nothing (the member already in exactly that
-  share) is answered without a check and has no browser effect.
+  client never offers an open the server refuses.
+  **Connection binding.** The Controller keeps each Machine's browser
+  capability together with the connection that reported it. An open checks
+  the gate against the exact connection it then dispatches `Open` on (once
+  when choosing the Machine, again right before the command leaves), so a
+  Machine that reconnected without the setting is never opened on by its
+  predecessor's capability; the open is refused instead. Attaching a viewer,
+  every viewer lease renewal and heartbeat, and every command that drives the
+  browser (`navigate`, `resize`, `snapshot`) check the gate against the
+  connection the running instance was observed on, so an uninstalled Provider
+  or a newly required policy ends viewers and refuses commands. Owner cleanup
+  (`hibernate`, `reset`) is never gated.
+  **Unreadable bindings.** A binding row whose member cannot be decoded is
+  kept verbatim (never dropped by a rewrite). It refuses a join of its family
+  (`browser_share_family_bound`) and makes the share's admission
+  `browser_share_machine_unknown` until it is readable again, a confirmed
+  reset releases it, or the share is deleted.
+  A join whose operation already has a receipt (a replay, or a reuse) or
+  whose `expected_revision` is stale goes straight to the writer, which
+  answers the receipt, `operation_reused` or `revision_conflict`, before any
+  Machine preflight. A join that changes nothing (the member already in
+  exactly that share) is answered without a check and has no browser effect.
+  **Known gaps.** (1) A native-only member (Claude) whose Provider's signed
+  release is known not to require IPv4-only is admitted from the Machine's
+  saved Plugin inventory, which may be stale while the Machine is offline.
+  (2) When a restart stops a survivor and its stop-time snapshot fails, the
+  loss (`unsaved_state_lost`) is not reported to a later query. (3) A state
+  read of an unplaced share whose opening member's credentials live only on
+  refused Machines reports no `admission`, so the client may offer an open
+  that the server then refuses. None of these lets an unrestricted unit serve
+  a share that requires IPv4-only.
 - **Profiles.** A new share starts with a fresh empty profile under its key.
   Cookies are never copied between keys. Members' own profiles are retained
   untouched and are what the member uses again after leaving the share.
