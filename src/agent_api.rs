@@ -198,7 +198,12 @@ pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login.
 // Antigravity (named-only) accounts: list().account_controls.accounts[] is {account_id,provider_id,admitted,
 // state:ok|verification_required|location_unsupported|rate_limited|suspended|blocked|unknown_refusal|needs_attention,
 // reason,until_ms,revision,turn:{session_id,turn_id,state:reserved|may_have_dispatched}|null,
-// fences:{machine_id,action:stop|admit,state:pending|confirmed,detail}[],stop_confirmed,uncertain_effects:{session_id,method,sequence}[]}.
+// fences:{machine_id,action:stop|admit,state:pending|confirmed,detail}[],stop_confirmed,uncertain_effects:{session_id,method,sequence}[],
+// in_use_by,logout,plan:{id,name,observed_at_ms}|null}. plan is informational: the newest plan the Provider reported in one
+// of the account's sessions (id a lowercase slug <=64; name 1-80 printable code points), never queried, never gating.
+// Typed view of list().account_controls (its accounts are the named-only ones): cast to AccountControls.
+export interface AccountControls {loaded:boolean;accounts:{account_id:string;provider_id:string;admitted:boolean;state:string;
+revision:number;plan:{id:string;name:string;observed_at_ms:number}|null;[key:string]:unknown}[]}
 // Any non-ok state, a missing admission or another session's turn parks the account's queues (prompts stay
 // queued; the session's wait shows why). One turn per account. A rate limit resumes on a new owner send after until_ms.
 // Owner actions via control.apply accounts.control {account,body:{action,expected_revision?,confirm?}};

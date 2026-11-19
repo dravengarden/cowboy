@@ -43,17 +43,19 @@ places its tree below `proxy/` in the account-sandbox runtime archive and adds
   a line or paragraph separator anywhere (checked before trimming) and, once
   its surrounding spaces are trimmed, 1 to 80 code points (the Controller and
   the Web apply the same rule); a tier it cannot read clears the plan, a
-  result without one keeps it. The plan is applied as soon as the result is
-  read, before anything is awaited, so a `usage_update` that follows in the
-  same chunk already carries it. Every `usage_update` then carries
-  `_meta.cowboy.account_plan` (whatever `agy` put under `_meta.cowboy` is
-  dropped first), so the session usage the worker already relays shows the
-  Controller the account's plan. The raw tier (with its `upgradeUri`) is
+  result without one keeps it. A session result is forwarded without awaiting
+  anything, so it reaches the worker before a `usage_update` that follows in
+  the same chunk, and that reading already carries the plan. Every
+  `usage_update` then carries `_meta.cowboy = {sanitizer: 1, account_plan}`
+  (whatever `agy` put under `_meta.cowboy` is dropped first; the Controller
+  accepts a plan only beside `sanitizer: 1`), so the session usage the
+  worker already relays shows the Controller the account's plan. The raw tier (with its `upgradeUri`) is
   removed from every message forwarded to the worker: each `_meta` at any
   depth (results, error data, notifications, session updates, agent
   requests, tool inputs and outputs) loses only its `antigravity.tier` and
   the objects that leaves empty; nothing else is changed or dropped, however
-  deeply nested. Nothing is requested for it: the plan is only what `agy`
+  deeply nested. One iterative post-order walk copies each changed object
+  once. Nothing is requested for it: the plan is only what `agy`
   reports while the owner runs a session.
 - `session/new|load|resume`: `mcpServers` becomes exactly
   `cowboy` = bundled Node + `facade-relay.mjs <socket> <channel>`;

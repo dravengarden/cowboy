@@ -733,7 +733,7 @@ async fn the_account_card_shows_the_newest_plan_its_sessions_reported() {
     };
     let reading = |id: &str, name: &str| {
         json!({"sessionUpdate": "usage_update", "used": 10_457, "size": 1_048_576,
-            "_meta": {"cowboy": {"account_plan": {"id": id, "name": name}}}})
+            "_meta": {"cowboy": {"sanitizer": 1, "account_plan": {"id": id, "name": name}}}})
     };
     report("s1", 100, reading("free-tier", "Antigravity Starter Quota"));
     assert_eq!(
@@ -756,6 +756,8 @@ async fn the_account_card_shows_the_newest_plan_its_sessions_reported() {
         ("pro", "Pro\u{e000}"),
         ("pro", "Pro\u{10ffff}"),
         ("pro", "Pro\u{2029}"),
+        // Unassigned (`Cn`) in every Unicode version so far.
+        ("pro", "Pro\u{0378}"),
         // Untrimmed or forbidden at either end: the proxy only forwards a
         // trimmed name, so neither is one it sent.
         ("pro", "Pro\t"),
@@ -767,6 +769,21 @@ async fn the_account_card_shows_the_newest_plan_its_sessions_reported() {
         report("s2", 300, reading(id, name));
         assert_eq!(plan(&controls)["id"], "free-tier", "{id:?} {name:?}");
     }
+    // A plan from a proxy that did not rebuild `_meta.cowboy` (no marker,
+    // or another generation) may be `agy`'s own: it is ignored.
+    for marker in [Value::Null, json!(0), json!("1"), json!(2)] {
+        let mut raw = reading("ultra", "Google AI Ultra");
+        raw["_meta"]["cowboy"]["sanitizer"] = marker.clone();
+        report("s2", 300, raw);
+        assert_eq!(plan(&controls)["id"], "free-tier", "{marker}");
+    }
+    let mut legacy = reading("ultra", "Google AI Ultra");
+    legacy["_meta"]["cowboy"]
+        .as_object_mut()
+        .unwrap()
+        .remove("sanitizer");
+    report("s2", 300, legacy);
+    assert_eq!(plan(&controls)["id"], "free-tier");
     // The bound counts code points, like the proxy and the Web.
     let wide = "\u{1F680}".repeat(80);
     report("s2", 300, reading("wide", &wide));

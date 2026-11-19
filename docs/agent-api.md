@@ -705,8 +705,8 @@ plan the Provider reported during one of the account's sessions
 (informational, never queried, never gating anything). `id` is a lowercase
 slug of at most 64 characters (`[a-z0-9][a-z0-9_-]*`); `name` is 1 to 80
 code points, already trimmed, with no character of Unicode category C
-(control, format, surrogate, private use, unassigned) or a line or paragraph
-separator; `observed_at_ms` is when the session reported it. A reported value
+(control, format, surrogate, private use, unassigned; Unicode 17.0 at the
+Controller) or a line or paragraph separator; `observed_at_ms` is when the session reported it. A reported value
 outside these rules is dropped, never shown; the Provider's raw tier and its
 upgrade link are not exposed. See the [design](antigravity-real-accounts-design.md#antigravity-features-021)).
 Owner actions use `control.apply` `accounts.control {account, body:{action,

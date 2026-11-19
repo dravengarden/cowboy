@@ -1,14 +1,19 @@
 //! The plan of a named-only account, as its Provider last reported it during
 //! one of the account's sessions. The ACP proxy carries it on each
-//! `usage_update` under `_meta.cowboy.account_plan` (`{id, name}`), which the
-//! worker already relays and the Controller already persists as the
+//! `usage_update` under `_meta.cowboy` (`{sanitizer: 1, account_plan: {id,
+//! name}}`), which the worker already relays and the Controller already persists as the
 //! session's usage. Nothing is requested for it; it is informational only
 //! and never gates admission, dispatch or revival. A value this module
 //! cannot read is ignored.
 use super::*;
 
+mod unprintable;
+
 const MAX_ID: usize = 64;
 const MAX_NAME: usize = 80;
+/// The `_meta.cowboy.sanitizer` generation of the Antigravity proxy whose
+/// usage readings carry a plan it validated itself.
+const SANITIZER: u64 = 1;
 
 fn valid_id(id: &str) -> bool {
     id.len() <= MAX_ID
@@ -21,61 +26,46 @@ fn valid_id(id: &str) -> bool {
         })
 }
 
-/// Printable text only, at most [`MAX_NAME`] code points: no control (`Cc`),
-/// format (`Cf`), private-use (`Co`) or noncharacter code point and no line
-/// or paragraph separator. The proxy and the Web apply the full
-/// `[\p{C}\p{Zl}\p{Zp}]` rule with their Unicode tables; this dependency-free
-/// copy additionally admits code points unassigned in Unicode, which the
-/// proxy never reports. The proxy rejects a forbidden character anywhere and
-/// then trims, so a name it reports is already trimmed.
+/// Printable text only, 1 to [`MAX_NAME`] code points, already trimmed: no
+/// character of Unicode category C (control, format, surrogate, private use,
+/// unassigned) and no line or paragraph separator. This is the proxy's and
+/// the Web's `[\p{C}\p{Zl}\p{Zp}]` rule, as the table generated from it for
+/// the Unicode version recorded in `plan/unprintable.rs`. The proxy rejects a
+/// forbidden character anywhere and then trims, so a name it reports is
+/// already trimmed.
 fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.trim() == name
         && name.chars().count() <= MAX_NAME
-        && !name.chars().any(forbidden_in_name)
+        && !name.chars().any(unprintable)
 }
 
-/// The `Cf` code points of Unicode 16.
-const FORMAT: &[(u32, u32)] = &[
-    (0x00AD, 0x00AD),
-    (0x0600, 0x0605),
-    (0x061C, 0x061C),
-    (0x06DD, 0x06DD),
-    (0x070F, 0x070F),
-    (0x0890, 0x0891),
-    (0x08E2, 0x08E2),
-    (0x180E, 0x180E),
-    (0x200B, 0x200F),
-    (0x202A, 0x202E),
-    (0x2060, 0x2064),
-    (0x2066, 0x206F),
-    (0xFEFF, 0xFEFF),
-    (0xFFF9, 0xFFFB),
-    (0x110BD, 0x110BD),
-    (0x110CD, 0x110CD),
-    (0x13430, 0x1343F),
-    (0x1BCA0, 0x1BCA3),
-    (0x1D173, 0x1D17A),
-    (0xE0001, 0xE0001),
-    (0xE0020, 0xE007F),
-];
-
-fn forbidden_in_name(character: char) -> bool {
+fn unprintable(character: char) -> bool {
     let code = u32::from(character);
-    character.is_control()
-        || matches!(code, 0x2028 | 0x2029)
-        || matches!(code, 0xE000..=0xF8FF | 0xF0000..=0xFFFFD | 0x100000..=0x10FFFD)
-        || matches!(code, 0xFDD0..=0xFDEF)
-        || code & 0xFFFE == 0xFFFE
-        || FORMAT
-            .iter()
-            .any(|&(low, high)| (low..=high).contains(&code))
+    unprintable::RANGES
+        .binary_search_by(|&(low, high)| {
+            if high < code {
+                std::cmp::Ordering::Less
+            } else if low > code {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .is_ok()
 }
 
 /// One session's reported plan and when it was observed.
 fn reported(meta: &SessionMeta) -> Option<(i64, &str, &str)> {
     let usage = meta.usage.as_ref()?;
-    let plan = usage.raw.pointer("/_meta/cowboy/account_plan")?;
+    let cowboy = usage.raw.pointer("/_meta/cowboy")?;
+    // Only a proxy that rebuilds `_meta.cowboy` itself stamps this marker. An
+    // earlier proxy forwarded `agy`'s `_meta` verbatim, so a plan without
+    // the marker (a stored reading or a still-pinned worker) is ignored.
+    if cowboy.get("sanitizer") != Some(&json!(SANITIZER)) {
+        return None;
+    }
+    let plan = cowboy.get("account_plan")?;
     let id = plan.get("id")?.as_str().filter(|id| valid_id(id))?;
     let name = plan.get("name")?.as_str().filter(|name| valid_name(name))?;
     Some((usage.observed_at_ms, id, name))

@@ -461,6 +461,20 @@ test("no ACP message leaves the proxy with the raw tier", async () => {
   assert.deepEqual(nested.params.toolCall.content[0].content._meta, stripped);
   assert.deepEqual(nested.params.options[0], { optionId: "allow" });
   assert.equal(JSON.stringify(nested).includes("upgradeUri"), false);
+  // A wrapper left empty by a nested tier-only `_meta` goes too, whatever
+  // the order of its fields.
+  assert.deepEqual(
+    stripTier({
+      result: { _meta: { antigravity: { tier: TIER, _meta: { antigravity: { tier: TIER } } } } },
+    }),
+    { result: {} },
+  );
+  assert.deepEqual(
+    stripTier({
+      result: { _meta: { antigravity: { _meta: { antigravity: { tier: TIER } } }, tier: 1 } },
+    }),
+    { result: { _meta: { tier: 1 } } },
+  );
   // A tier nested in a _meta's own value is stripped as well.
   assert.deepEqual(stripTier({ result: { _meta: { inner: { _meta: tiered } } } }), {
     result: { _meta: { inner: { _meta: stripped } } },
@@ -530,6 +544,24 @@ test("stripping the tier leaves deep tool inputs and outputs intact", () => {
   assert.equal(output.result.n, null);
   assert.equal(JSON.stringify(output).includes("upgradeUri"), false);
 
+  // Many tiers under one deep shared parent: each ancestor is copied once,
+  // every untouched sibling is shared.
+  const shared = { keep: { deep: true } };
+  let wide = {
+    items: Array.from({ length: 2000 }, (_, index) => ({
+      index,
+      _meta: { antigravity: { tier: TIER } },
+    })),
+    shared,
+  };
+  for (let depth = 0; depth < 1000; depth += 1) wide = { wrap: wide };
+  const flattened = stripTier({ result: wide });
+  let inner = flattened.result;
+  for (let depth = 0; depth < 1000; depth += 1) inner = inner.wrap;
+  assert.equal(inner.shared, shared);
+  assert.deepEqual(inner.items[1999], { index: 1999 });
+  assert.equal(JSON.stringify(flattened).includes("upgradeUri"), false);
+
   // A key named `__proto__` stays an ordinary own field.
   const proto = JSON.parse(
     '{"result":{"__proto__":{"x":1,"_meta":{"antigravity":{"tier":{"id":"a","name":"b"}}}}}}',
@@ -551,9 +583,14 @@ test("a usage reading right behind a session result carries its new plan", async
   });
   const reading = proxy.fromAgent(update("usage_update", { used: 1, size: 2 }));
   await Promise.all([settled, reading]);
-  const usage = client.find((message) => message.method === "session/update");
-  assert.deepEqual(usage.params.update._meta, {
-    cowboy: { account_plan: { id: "free-tier", name: TIER.name } },
+  // The result reaches the worker first: it drops session updates until the
+  // session request completes.
+  assert.deepEqual(
+    client.map((message) => message.id ?? message.method),
+    [2, "session/update"],
+  );
+  assert.deepEqual(client[1].params.update._meta, {
+    cowboy: { sanitizer: 1, account_plan: { id: "free-tier", name: TIER.name } },
   });
 });
 
@@ -564,7 +601,11 @@ test("usage readings carry the plan agy reported, never its upgrade link", async
   await proxy.fromAgent(update("usage_update", { used: 0, size: 1048576 }));
   assert.deepEqual(client.at(-1), update("usage_update", { used: 0, size: 1048576 }));
   await proxy.fromAgent(
-    update("usage_update", { used: 1, size: 2, _meta: { cowboy: { account_plan: { id: "x" } } } }),
+    update("usage_update", {
+      used: 1,
+      size: 2,
+      _meta: { cowboy: { sanitizer: 1, account_plan: { id: "x" } } },
+    }),
   );
   assert.deepEqual(client.at(-1), update("usage_update", { used: 1, size: 2 }));
 
@@ -593,7 +634,10 @@ test("usage readings carry the plan agy reported, never its upgrade link", async
     update("usage_update", {
       used: 10457,
       size: 1048576,
-      _meta: { other: 1, cowboy: { account_plan: { id: "free-tier", name: TIER.name } } },
+      _meta: {
+        other: 1,
+        cowboy: { sanitizer: 1, account_plan: { id: "free-tier", name: TIER.name } },
+      },
     }),
   );
   assert.equal(JSON.stringify(client.at(-1)).includes("antigravity.google"), false);
@@ -608,7 +652,7 @@ test("usage readings carry the plan agy reported, never its upgrade link", async
     update("usage_update", {
       used: 2,
       size: 3,
-      _meta: { cowboy: { account_plan: { id: "free-tier", name: TIER.name } } },
+      _meta: { cowboy: { sanitizer: 1, account_plan: { id: "free-tier", name: TIER.name } } },
     }),
   );
 

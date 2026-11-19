@@ -63,75 +63,78 @@ export function accountPlan(meta) {
 /** Whether `value` is a plain JSON object. */
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 
-/** Whether `meta` (a `_meta` value) carries `antigravity.tier`. */
-const hasTier = (meta) =>
-  isObject(meta) && isObject(meta.antigravity) && Object.hasOwn(meta.antigravity, "tier");
-
-/** A shallow copy of an object or array. */
-const shallowCopy = (value) => (Array.isArray(value) ? value.slice() : { ...value });
+/** A removed field, in the changes a parent applies to its copy. */
+const REMOVED = Symbol("removed");
 
 /**
  * `message` (any ACP message `agy` sends) without a raw
  * `_meta.antigravity.tier` at any depth: every `_meta` holder (params,
  * updates, tool calls, tool inputs and outputs, content blocks, array
  * entries, results, error data) loses that one field, plus the
- * `antigravity` and `_meta` objects it leaves empty. Nothing else changes:
- * the walk is iterative (no depth limit), only the objects on a path to a
- * tier are copied, and a message without a tier is returned as is.
+ * `antigravity` and `_meta` objects it leaves empty. Nothing else changes.
+ * One iterative post-order walk (no depth limit) visits each value once;
+ * an object is copied once, after all its children, only when one of them
+ * changed, and a message without a tier is returned as is.
  */
 export function stripTier(message) {
   if (message === null || typeof message !== "object") return message;
-  /** Each found tier as a linked path `{ parent, key }` ending at its `_meta`. */
-  const found = [];
-  const stack = [{ value: message, path: undefined, meta: false, tierHolder: false }];
-  while (stack.length > 0) {
-    const entry = stack.pop();
-    const array = Array.isArray(entry.value);
-    for (const key of Object.keys(entry.value)) {
+  const frame = (value, kind, parent, key) => ({
+    value,
+    kind,
+    parent,
+    key,
+    keys: Object.keys(value),
+    next: 0,
+    changes: undefined,
+  });
+  let current = frame(message, undefined, undefined, undefined);
+  for (;;) {
+    if (current.next < current.keys.length) {
+      const key = current.keys[current.next];
+      current.next += 1;
       // A tier is removed whole, so its contents need no walk.
-      if (entry.tierHolder && key === "tier") continue;
-      const item = entry.value[key];
-      if (item === null || typeof item !== "object") continue;
-      const path = { parent: entry.path, key };
-      const meta = !array && key === "_meta";
-      if (meta && hasTier(item)) found.push(path);
-      stack.push({ value: item, path, meta, tierHolder: entry.meta && key === "antigravity" });
-    }
-  }
-  if (found.length === 0) return message;
-  const root = shallowCopy(message);
-  const copies = new Set([root]);
-  for (const end of found) {
-    const keys = [];
-    for (let node = end; node !== undefined; node = node.parent) keys.push(node.key);
-    keys.reverse();
-    let holder = root;
-    for (const key of keys.slice(0, -1)) {
-      let child = holder[key];
-      if (!copies.has(child)) {
-        child = shallowCopy(child);
-        copies.add(child);
-        // A JSON key such as `__proto__` is an own data property, never a setter.
-        Object.defineProperty(holder, key, {
-          value: child,
-          writable: true,
-          enumerable: true,
-          configurable: true,
-        });
+      if (current.kind === "antigravity" && key === "tier") {
+        current.changes ??= new Map();
+        current.changes.set(key, REMOVED);
+        continue;
       }
-      holder = child;
+      const item = current.value[key];
+      if (item === null || typeof item !== "object") continue;
+      const holder = !Array.isArray(current.value);
+      const kind =
+        holder && key === "_meta"
+          ? "meta"
+          : current.kind === "meta" && key === "antigravity" && !Array.isArray(item)
+            ? "antigravity"
+            : undefined;
+      current = frame(item, kind, current, key);
+      continue;
     }
-    const meta = { ...holder._meta };
-    const antigravity = { ...meta.antigravity };
-    delete antigravity.tier;
-    if (Object.keys(antigravity).length === 0) delete meta.antigravity;
-    else meta.antigravity = antigravity;
-    if (Object.keys(meta).length === 0) delete holder._meta;
-    else holder._meta = meta;
-    copies.add(meta);
-    if (meta.antigravity !== undefined) copies.add(meta.antigravity);
+    let result = current.value;
+    if (current.changes !== undefined) {
+      result = Array.isArray(result) ? result.slice() : { ...result };
+      for (const [key, value] of current.changes) {
+        if (value === REMOVED) delete result[key];
+        // A JSON key such as `__proto__` is an own data property, never a setter.
+        else
+          Object.defineProperty(result, key, {
+            value,
+            writable: true,
+            enumerable: true,
+            configurable: true,
+          });
+      }
+      // A `_meta` or its `antigravity` emptied by the removal goes too.
+      if (current.kind !== undefined && Object.keys(result).length === 0) result = REMOVED;
+    }
+    const parent = current.parent;
+    if (parent === undefined) return result;
+    if (result !== current.value) {
+      parent.changes ??= new Map();
+      parent.changes.set(current.key, result);
+    }
+    current = parent;
   }
-  return root;
 }
 
 /**
@@ -188,7 +191,8 @@ export class AcpProxy {
       return this.refuse(id, `cowboy_antigravity_unavailable: ${error.message}`, -32603);
     }
     const forwarded = structuredClone(message);
-    const record = { method };
+    // The reply is handled with this runtime, without awaiting it again.
+    const record = { method, runtime };
     if (method === "initialize") {
       // `agy` must never delegate file or terminal work to the worker: the
       // worker runs on the runtime Machine, not on the session's target.
@@ -284,7 +288,9 @@ export class AcpProxy {
     if (this.plan === undefined && !(hasOwn && Object.hasOwn(meta, "cowboy"))) return message;
     const next = hasOwn ? { ...meta } : {};
     delete next.cowboy;
-    if (this.plan !== undefined) next.cowboy = { account_plan: { ...this.plan } };
+    // `sanitizer` tells the Controller this proxy rebuilt `_meta.cowboy`;
+    // it ignores a plan without it, which an earlier proxy forwarded verbatim.
+    if (this.plan !== undefined) next.cowboy = { sanitizer: 1, account_plan: { ...this.plan } };
     const { _meta: _old, ...rest } = update;
     const annotated = Object.keys(next).length === 0 ? rest : { ...rest, _meta: next };
     return { ...message, params: { ...message.params, update: annotated } };
@@ -347,17 +353,19 @@ export class AcpProxy {
       message.result?._meta?.antigravity?.tier !== undefined
     ) {
       // Informational, fail closed: a tier this proxy cannot read clears
-      // the plan; a result that reports none keeps the last one. Applied
-      // before any await, so a `usage_update` read from the same chunk right
-      // after this result already carries the new plan.
+      // the plan; a result that reports none keeps the last one.
       this.plan = accountPlan(message.result._meta);
     }
     // No result or error leaves the proxy with the raw tier.
     message = stripTier(message);
-    const runtime = await this.runtime;
+    const { runtime } = record;
     if (record.channel && typeof message.result?.sessionId === "string") {
       runtime.bindChannel(record.channel, message.result.sessionId);
     }
+    // Nothing is awaited before a non-prompt reply is forwarded, so it
+    // reaches the worker before any notification read after it (the worker
+    // drops session updates until `session/load` completes), and that
+    // notification already carries the plan it reported.
     if (record.method !== "session/prompt") return this.client(message);
     const turn = this.turns.get(record.sessionId);
     this.turns.delete(record.sessionId);
