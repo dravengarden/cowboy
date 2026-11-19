@@ -114,6 +114,8 @@ pub(super) fn command_authored_cmid(cmd: &Inbound) -> Option<String> {
         Inbound::Submit { cmid, .. }
         | Inbound::AddDraft { cmid, .. }
         | Inbound::ActivateDraft { cmid, .. }
+        | Inbound::RequestSendQueued { cmid, .. }
+        | Inbound::ForcePushQueued { cmid, .. }
         | Inbound::ScheduleDraft { cmid, .. }
         | Inbound::EditQueued { cmid, .. }
         | Inbound::RemoveQueued { cmid, .. }

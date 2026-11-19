@@ -977,9 +977,19 @@ pub enum Inbound {
     ClearQueue { session_id: String },
     /// "Send now": move a queued prompt to the front and drain it if the session
     /// can take a turn this instant; otherwise it just becomes next in line.
-    RequestSendQueued { session_id: String, id: String },
+    RequestSendQueued {
+        session_id: String,
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cmid: Option<String>,
+    },
     /// "Force push": interrupt the running turn and make this prompt run next.
-    ForcePushQueued { session_id: String, id: String },
+    ForcePushQueued {
+        session_id: String,
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cmid: Option<String>,
+    },
     /// Move a queued prompt back to drafts.
     QueuedToDraft { session_id: String, id: String },
     /// Hold (or release, with `id: null`) the queue head for editing — pauses the

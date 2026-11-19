@@ -18,7 +18,7 @@ import {
 import { Sheet } from "./Sheet";
 import { announceContext, type SessionContext } from "./sessionContext";
 import { shouldShowSessionErrorSnackbar } from "./sessionErrorNotice";
-import { activateDraft, confirmedPending, frontPrompt, submitPrompt, useStore } from "./store";
+import { activateDraft, confirmedPending, frontPrompt, requestSendQueued, submitPrompt, useStore } from "./store";
 import { bindProductSyncPrincipal } from "./productSyncIdentity";
 import { getDraft, setDraft } from "./draftStore";
 import { managementEntryFixture } from "./providerManagement.fixture";
@@ -87,6 +87,7 @@ export async function runSessionContextBrowserConformance(
   const writes: { url: string; body: Record<string, unknown> }[] = [];
   const contextReads: string[] = [];
   let heldMessage: WireQueued | undefined;
+  let staleQueueView = false;
   const queueCommands: Inbound[] = [];
   class Socket {
     static active: Socket[] = [];
@@ -115,6 +116,12 @@ export async function runSessionContextBrowserConformance(
       const command = JSON.parse(raw) as Inbound;
       if (command.type === "activate_draft" || command.type === "request_send_queued" ||
         command.type === "queued_to_draft") queueCommands.push(command);
+      if (command.type === "request_send_queued") {
+        setTimeout(() => this.publish({
+          type: "command_result", session_id: command.session_id, cmid: command.cmid,
+          outcome: "rejected", message: "Context changes are pending",
+        }), 20);
+      }
       if (command.type !== "queued_to_draft" || heldMessage?.id !== command.id) return;
       const draft = heldMessage;
       setTimeout(() => this.publish({
@@ -209,7 +216,9 @@ export async function runSessionContextBrowserConformance(
             : context.applied_revision,
         };
       }
-      return Response.json(context);
+      return Response.json(staleQueueView
+        ? { ...context, revision: context.applied_revision, next_agent: null }
+        : context);
     }
     if (url === "/api/plugins") {
       return Response.json({
@@ -347,6 +356,10 @@ export async function runSessionContextBrowserConformance(
           >
             {state.lastError?.message}
           </output>
+          <output hidden data-queue-recovery={JSON.stringify([
+            state.queues.get(sessions[0]!.id)?.map((row) => row.id) ?? [],
+            state.optimisticMessages.get(sessions[0]!.id)?.length ?? 0,
+          ])} />
           <SessionContinuedFrom sessionId={sessions[3]!.id} />
           <SessionProvenance sessionId={sessions[3]!.id} />
           <SessionContinuedFrom sessionId={sessions[2]!.id} />
@@ -756,7 +769,6 @@ export async function runSessionContextBrowserConformance(
         text: "Continue the selected work",
         content: [{ type: "image", mimeType: "image/png", data: "AQID" }],
       };
-      const queueCommandCount = queueCommands.length;
       Socket.active.at(-1)?.publish({
         type: "sync_patch",
         state: `queue:${sourceId}`,
@@ -769,6 +781,23 @@ export async function runSessionContextBrowserConformance(
         '[aria-label="Use queued message in Composer"]',
       );
       await until(() => useQueued()?.disabled === false);
+      staleQueueView = true;
+      try {
+        await requestSendQueued(sourceId, heldMessage.id);
+      } finally {
+        staleQueueView = false;
+      }
+      await until(() =>
+        container.querySelector("[data-context-error]")?.textContent === "Context changes are pending" &&
+        container.querySelector("[data-queue-recovery]")?.getAttribute("data-queue-recovery") ===
+          JSON.stringify([[heldMessage!.id], 0])
+      );
+      const attemptedSend = queueCommands.at(-1);
+      check(
+        attemptedSend?.type === "request_send_queued" && Boolean(attemptedSend.cmid),
+        `${mode}: an addressed refusal restores the original queue row and clears the waiting bubble`,
+      );
+      const queueCommandCount = queueCommands.length;
       setDraft(sourceId, { text: "Different local draft", attachments: [] });
       useQueued()!.click();
       await until(() => Boolean(

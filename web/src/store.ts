@@ -1824,9 +1824,7 @@ function handle(msg: Outbound): void {
       break;
     }
     case "command_result": {
-      // An addressed refusal for a command THIS device authored. Every other
-      // client ignores an id it does not own. The row stops retrying, says
-      // why, and waits for a decision instead of timing out again and again.
+      // A refusal only changes the outbox that owns its operation ID.
       const client = qClients.get(msg.session_id);
       const pending = client?.pending().find((mutation) => {
         const rowCmid = (mutation.args as { row?: QueuedMessage }).row?.cmid;
@@ -1841,14 +1839,14 @@ function handle(msg: Outbound): void {
         break;
       }
       const reason = msg.outcome === "not_found" ? "This session no longer exists" : msg.message;
-      const rowCmid = (pending.args as { row?: QueuedMessage }).row?.cmid;
-      for (const id of new Set([pending.id, msg.cmid, ...(rowCmid === undefined ? [] : [rowCmid])])) {
+      for (const id of deliveryStatusIds(pending.id, (pending.args as { row?: QueuedMessage }).row?.cmid)) {
         qStatus.set(id, "failed");
         qFailure.set(id, reason);
       }
       commitQueue(msg.session_id);
       persistHeld(msg.session_id);
       if (msg.outcome === "not_found") void rescueOrphanedDelivery(msg.session_id, pending);
+      else if (msg.outcome === "rejected" && isQueuedSend(pending.name)) void restoreRefusedQueuedSend(msg.session_id, pending.id, reason);
       break;
     }
     case "error": {
@@ -3855,11 +3853,8 @@ function commandForQueueMutation(sessionId: string, m: { name: string; id: strin
       cmid: args.row?.cmid ?? m.id,
     };
   }
-  if (m.name === "sendQueued" && args.id !== undefined) {
-    return { type: "request_send_queued", session_id: sessionId, id: args.id };
-  }
-  if (m.name === "forceQueued" && args.id !== undefined) {
-    return { type: "force_push_queued", session_id: sessionId, id: args.id };
+  if (isQueuedSend(m.name) && args.id !== undefined) {
+    return { type: m.name === "sendQueued" ? "request_send_queued" : "force_push_queued", session_id: sessionId, id: args.id, cmid: m.id };
   }
   if (m.name === "returnQueuedToDraft" && args.id !== undefined) {
     return { type: "queued_to_draft", session_id: sessionId, id: args.id };
@@ -4387,7 +4382,7 @@ function resolveStalledDelivery(
     m.id === mutationId
   );
   // Confirmed, discarded or moved on while the deadline ran.
-  if (mutation === undefined || qStatus.get(mutationId) !== phase) return;
+  if (mutation === undefined || (qStatus.get(mutationId) ?? "pending") !== phase) return;
   const statusIds = deliveryStatusIds(
     mutationId,
     (mutation.args as { row?: QueuedMessage }).row?.cmid,
@@ -4613,6 +4608,13 @@ function pendingNamed(
     const echoCmid = (mutation.args as { row?: QueuedMessage }).row?.cmid;
     return mutation.id === cmid || echoCmid === cmid;
   });
+}
+
+function isQueuedSend(name: string): boolean { return name === "sendQueued" || name === "forceQueued"; }
+
+async function restoreRefusedQueuedSend(sessionId: string, id: string, reason: string): Promise<void> {
+  await returnFailedQueued(sessionId, id).catch(() => undefined);
+  notify(reason);
 }
 
 /** Park a failed local send back in the list it left. */
@@ -5178,8 +5180,6 @@ export async function frontPrompt(sessionId: string, text: string, attachments: 
   }
 }
 
-// "Send now" on a queued row: the daemon sends it if it can take a turn this
-// instant, otherwise moves it to the front to drain next.
 function sessionDispatchable(sessionId: string): boolean {
   const sess = state.sessions.find((s) => s.id === sessionId);
   return sess !== undefined &&
@@ -5319,7 +5319,6 @@ export async function removeQueued(sessionId: string, id: string): Promise<void>
   );
 }
 
-// Drop a session's whole queue (the "Clear All" header action).
 export function clearQueue(sessionId: string): Promise<void> {
   return sendWithAck(
     { type: "clear_queue", session_id: sessionId },

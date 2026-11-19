@@ -1030,11 +1030,11 @@ pub(super) fn queue_command(
             state.hub.clear_queue(&session_id);
             Ok(())
         }
-        Inbound::RequestSendQueued { session_id, id } => {
+        Inbound::RequestSendQueued { session_id, id, .. } => {
             state.hub.request_send_queued(&session_id, &id);
             Ok(())
         }
-        Inbound::ForcePushQueued { session_id, id } => {
+        Inbound::ForcePushQueued { session_id, id, .. } => {
             // Interrupt the running turn so the promoted prompt runs next; on an
             // idle session there's nothing to cancel, so just send it now.
             state.hub.request_send_queued(&session_id, &id); // promote to front either way

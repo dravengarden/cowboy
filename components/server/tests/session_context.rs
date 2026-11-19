@@ -551,6 +551,28 @@ async fn legacy_draft_send_cannot_strand_a_message_behind_a_staged_agent() {
     .await
     .expect("the stale draft send must receive a definite refusal");
     assert_eq!(refusal["outcome"], "rejected");
+    for kind in ["request_send_queued", "force_push_queued"] {
+        socket
+            .send(Message::Text(
+                json!({"type":kind,"session_id":"source","id":"q1","cmid":kind})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while let Some(Ok(Message::Text(text))) = socket.next().await {
+                let value: Value = serde_json::from_str(&text).unwrap();
+                if value["type"] == "command_result" && value["cmid"] == kind {
+                    assert_eq!(value["outcome"], "rejected");
+                    return;
+                }
+            }
+            panic!("socket closed without the addressed refusal");
+        })
+        .await
+        .expect("the queued send must receive a definite refusal");
+    }
     let saved: String = sqlx::query_scalar("SELECT drafts FROM sessions WHERE id = 'source'")
         .fetch_one(&fixture.store)
         .await
