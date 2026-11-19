@@ -210,7 +210,14 @@ test("the account card shows the plan the Provider reported, and nothing it cann
     { id: "Free Tier", name: "Starter" }, { id: "free-tier", name: "" }, { id: "free-tier", name: " Starter" },
     { id: "free-tier", name: "Starter\nUltra" }, { id: "free-tier", name: "Pro\u202eartlU" },
     { id: "free-tier", name: "P".repeat(81) }, { id: 7, name: "Starter" },
+    { id: "free-tier", name: "Pro\u061c" }, { id: "free-tier", name: "Pro\u00ad" },
+    { id: "free-tier", name: "Pro\ue000" }, { id: "free-tier", name: "Pro\u{10ffff}" },
+    { id: "free-tier", name: "Pro\t" }, { id: "free-tier", name: "\u2028Pro" },
+    { id: "free-tier", name: "Pro\u3000" }, { id: "free-tier", name: "\u{1F680}".repeat(81) },
   ]) assertEquals(accountPlanLabel(control({ plan: plan as never })), undefined, JSON.stringify(plan));
+  // The bound counts code points, like the proxy and the Controller.
+  const wide = "\u{1F680}".repeat(80);
+  assertEquals(accountPlanLabel(control({ plan: { id: "wide", name: wide } })), wide);
   // A bad plan never invalidates the account's controls.
   assert(validAccountControls({ loaded: true, accounts: [control({ plan: "Ultra" as never })] }));
   const markup = render(createElement(AccountControlsPanel, {

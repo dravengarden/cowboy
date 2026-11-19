@@ -13,10 +13,12 @@ import {
   runConfigCurrentTitle,
   runConfigDraftChanges,
   runConfigPresetChanges,
+  runConfigPresetChangesModel,
   runConfigPresets,
   runConfigSummary,
   supportedRunConfigPresets,
   withRunConfigDraft,
+  withRunConfigEdit,
 } from "./runConfigPresets";
 import { readComposerSource } from "./appSource.test.ts";
 
@@ -161,7 +163,70 @@ test("another model's reasoning limits do not hide signed recommendations", () =
     }], live),
     [],
   );
-  assertEquals(supportedRunConfigPresets([astra], live.slice(0, 1)), []);
+  // The current model may offer no reasoning option at all (a model-only
+  // preset is selected): the other model's signed level stays available and
+  // is applied after the model.
+  const modelOnly = live.slice(0, 1);
+  const [onlyAstra] = supportedRunConfigPresets([astra], modelOnly);
+  assertEquals(onlyAstra?.id, astra.id);
+  assertEquals(runConfigPresetChanges(onlyAstra!, modelOnly), [
+    { configId: "model", value: "astra" },
+    { configId: "effort", value: "max" },
+  ]);
+  assertEquals(runConfigPresetChangesModel(onlyAstra!, modelOnly), true);
+  // Without a model change, a value the session does not show is refused.
+  assertEquals(
+    supportedRunConfigPresets([{
+      ...astra,
+      values: { model: "spark", effort: "max" },
+    }], modelOnly),
+    [],
+  );
+});
+
+test("Gemini reasoning cards stay after a model-only preset is selected", () => {
+  const model = (current: string): ConfigOption => ({
+    ...selectOption("model", current, ["gemini-flash", "claude-sonnet"]),
+    category: "model",
+  });
+  const cards: DeclaredPreset[] = ["high", "medium", "low"].map((level) => ({
+    id: `gemini-flash-${level}`,
+    name: `Gemini Flash · ${level}`,
+    detail: "",
+    is_default: level === "high",
+    values: { model: "gemini-flash", thought_level: level },
+  }));
+  cards.push({
+    id: "claude-sonnet",
+    name: "Claude Sonnet",
+    detail: "",
+    is_default: false,
+    values: { model: "claude-sonnet" },
+  });
+  // Claude is selected and its preview offers no thought_level.
+  const claude = [model("claude-sonnet")];
+  const presets = supportedRunConfigPresets(cards, claude);
+  assertEquals(
+    presets.map((preset) => preset.id),
+    cards.map((card) => card.id),
+  );
+  assertEquals(activeRunConfigPreset(presets, claude)?.id, "claude-sonnet");
+  assertEquals(runConfigPresetChanges(presets[1]!, claude), [
+    { configId: "model", value: "gemini-flash" },
+    { configId: "thought_level", value: "medium" },
+  ]);
+  // The desktop draft sends the level after the model, and a later model
+  // change drops it.
+  let draft = {};
+  for (const change of runConfigPresetChanges(presets[1]!, claude)) {
+    draft = withRunConfigEdit(claude, draft, change.configId, change.value);
+  }
+  assertEquals(runConfigDraftChanges(claude, draft), [
+    { configId: "model", value: "gemini-flash" },
+    { configId: "thought_level", value: "medium" },
+  ]);
+  draft = withRunConfigEdit(claude, draft, "model", "claude-sonnet");
+  assertEquals(runConfigDraftChanges(claude, draft), []);
 });
 
 // The Desktop Run configuration: its fields and the dialog around them.
