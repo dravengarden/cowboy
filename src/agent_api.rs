@@ -199,11 +199,12 @@ pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login.
 // state:ok|verification_required|location_unsupported|rate_limited|suspended|blocked|unknown_refusal|needs_attention,
 // reason,until_ms,revision,turn:{session_id,turn_id,state:reserved|may_have_dispatched}|null,
 // fences:{machine_id,action:stop|admit,state:pending|confirmed,detail}[],stop_confirmed,uncertain_effects:{session_id,method,sequence}[],
-// in_use_by,logout,plan:{id,name,observed_at_ms}|null}. plan is informational: the newest plan the Provider reported in one
-// of the account's sessions (id a lowercase slug <=64; name 1-80 printable code points), never queried, never gating.
-// Typed view of list().account_controls (its accounts are the named-only ones): cast to AccountControls.
+// in_use_by,logout,plan:{id,name,observed_at_ms}|null}. plan is informational: the newest plan in the current usage of
+// the account's Antigravity >=0.2.1 sessions (id a lowercase slug <=64; name 1-80 printable code points), never queried,
+// never gating; null until a session reports one (also after a worker reconnect, until its next usage reading).
 export interface AccountControls {loaded:boolean;accounts:{account_id:string;provider_id:string;admitted:boolean;state:string;
 revision:number;plan:{id:string;name:string;observed_at_ms:number}|null;[key:string]:unknown}[]}
+export interface AccountList {account_controls:AccountControls}
 // Any non-ok state, a missing admission or another session's turn parks the account's queues (prompts stay
 // queued; the session's wait shows why). One turn per account. A rate limit resumes on a new owner send after until_ms.
 // Owner actions via control.apply accounts.control {account,body:{action,expected_revision?,confirm?}};
@@ -408,6 +409,7 @@ pub fn revision() -> &'static str {
             control::SDK,
             SUPERAGENT_SDK,
             WIDGETS_TYPES,
+            ACCOUNTS_SDK,
         ] {
             hash.update(source.as_bytes());
         }
@@ -435,7 +437,7 @@ SDK_HEADER: r#"// cowboy-ts-v1. CODE: async ({cowboy})=>{ CODE }; module: export
 // JSON<=16KiB; <=16 calls; no network/files; errors: .code.
 export interface Cowboy {
   api: {
-    help(topic: string): Promise<unknown>;
+    help(topic: string):Promise<unknown>;
   };
 }
 "#,
@@ -484,15 +486,15 @@ export type SearchPage = {matches:{seq:Seq;path:string;text:string;offset:number
 SESSION_SDK: r#"
 export interface Cowboy {
   session: {
-    info(): Promise<SessionView>;
-    usage(): Promise<SessionUsageView>;
-    queue(q?: MessageQuery): Promise<Message[]>;
-    drafts(q?: MessageQuery): Promise<Message[]>;
-    message(id: string, q?: TextWindow): Promise<Message>; // full queued/draft text in pages
-    events(q?: EventQuery): Promise<EventPage>;
-    history(q?: Omit<EventQuery,"after">): Promise<HistoryPage>; // saved, backward, may lag; no wake
-    event(seq:Seq, q?:EventDetailQuery): Promise<EventDetail>;
-    search(q:SearchQuery): Promise<SearchPage>;
+    info():Promise<SessionView>;
+    usage():Promise<SessionUsageView>;
+    queue(q?: MessageQuery):Promise<Message[]>;
+    drafts(q?: MessageQuery):Promise<Message[]>;
+    message(id: string, q?: TextWindow):Promise<Message>; // full queued/draft text in pages
+    events(q?: EventQuery):Promise<EventPage>;
+    history(q?: Omit<EventQuery,"after">):Promise<HistoryPage>; // saved, backward, may lag; no wake
+    event(seq:Seq, q?:EventDetailQuery):Promise<EventDetail>;
+    search(q:SearchQuery):Promise<SearchPage>;
   };
 }
 "#,
@@ -516,44 +518,45 @@ export type CallCapabilities = {
 };
 export interface Cowboy {
   calls: {
-    list(q?:{before?:string;limit?:number}): Promise<{calls:CallSummary[];next_before:string|null}>; // newest first; default20/max100
-    capabilities(): Promise<CallCapabilities>;
-    capabilities(q:{capability:"image.generate"|"image.edit";if_revision?:string}): Promise<{revision:string;unchanged?:boolean;providers?:{id:string;available:boolean;reason:string|null}[];[key:string]:unknown}>;
-    inspect(call_id: string): Promise<CallView>;
-    wait(call_id: string, timeout_ms?: number): Promise<CallView>;
-    result(call_id: string, q?: TextWindow): Promise<CallView>;
-    observe(request_id: string): Promise<CallView>;
+    list(q?:{before?:string;limit?:number}):Promise<{calls:CallSummary[];next_before:string|null}>; // newest first; default20/max100
+    capabilities():Promise<CallCapabilities>;
+    capabilities(q:{capability:"image.generate"|"image.edit";if_revision?:string}):Promise<{revision:string;unchanged?:boolean;providers?:{id:string;available:boolean;reason:string|null}[];[key:string]:unknown}>;
+    inspect(call_id: string):Promise<CallView>;
+    wait(call_id: string, timeout_ms?: number):Promise<CallView>;
+    result(call_id: string, q?: TextWindow):Promise<CallView>;
+    observe(request_id: string):Promise<CallView>;
   };
 }
 "#,
 ACCOUNTS_READ_SDK: r#"
+export interface AccountList {registry:{revision:number;accounts:{id:string;provider_id:string;label:string;enabled:boolean;revoking:boolean}[];defaults:Record<string,string>};display_preferences:{scope:"subscriptions";revision:number;values:{legacy_labels:Record<string,string>}};session_admission:string;session_providers:string[]}
 export interface AccountLogin {status:string;request_id:string;account_id:string;provider_id:string;machine_id:string;cancel_requested:boolean;native_generation:number|null;continue_url:string}
 export interface Cowboy {
   accounts: {
-    usage(account_id:string): Promise<unknown>;
-    logins(account_id:string,q?:{after_machine?:string;limit?:number}): Promise<{account_id:string;provider_id:string;logins:AccountLogin[];next_after_machine:string|null}>;
-    login_status(account_id:string,request_id:string): Promise<AccountLogin>;
-    revocation_status(account_id:string): Promise<{status:string;account_id:string;completion?:{account_completed:boolean;missing:{kind:string;target:string}[]}}>;
-    transition_status(operation:string): Promise<{operation:string;stage:string;evidence:string;worker_state:string}>;
-    list(): Promise<{registry:{revision:number;accounts:{id:string;provider_id:string;label:string;enabled:boolean;revoking:boolean}[];defaults:Record<string,string>};display_preferences:{scope:"subscriptions";revision:number;values:{legacy_labels:Record<string,string>}};session_admission:string;session_providers:string[]}>;
-    login_options(account_id:string,machine_id:string): Promise<{account_id:string;provider_id:string;machine_id:string;registry_revision:number;available:boolean;reason:string|null;release:{provider_version:string;generation_digest:string}|null;methods:{id:string;available:boolean;reason:string|null}[];session_admission:string}>;
-    browser(account_id:string): Promise<{machine_id:string|null;state:unknown;admission:string|null}>;
+    usage(account_id:string):Promise<unknown>;
+    logins(account_id:string,q?:{after_machine?:string;limit?:number}):Promise<{account_id:string;provider_id:string;logins:AccountLogin[];next_after_machine:string|null}>;
+    login_status(account_id:string,request_id:string):Promise<AccountLogin>;
+    revocation_status(account_id:string):Promise<{status:string;account_id:string;completion?:{account_completed:boolean;missing:{kind:string;target:string}[]}}>;
+    transition_status(operation:string):Promise<{operation:string;stage:string;evidence:string;worker_state:string}>;
+    list():Promise<AccountList>;
+    login_options(account_id:string,machine_id:string):Promise<{account_id:string;provider_id:string;machine_id:string;registry_revision:number;available:boolean;reason:string|null;release:{provider_version:string;generation_digest:string}|null;methods:{id:string;available:boolean;reason:string|null}[];session_admission:string}>;
+    browser(account_id:string):Promise<{machine_id:string|null;state:unknown;admission:string|null}>;
   };
 }
 "#,
 SESSIONS_SDK: r#"
 export interface Cowboy {
   sessions: { // same owner; id order; default50/max200; live pages; after=next
-    list(q?:{after?:string;status?:string;limit?:number;query?:string;provider?:string;machine?:string;workspace?:string}): Promise<{sessions:SessionView[];next:string|null}>;
-    info(id: string): Promise<SessionView>;
-    usage(id: string): Promise<SessionUsageView>;
-    queue(id: string, q?: MessageQuery): Promise<Message[]>;
-    drafts(id: string, q?: MessageQuery): Promise<Message[]>;
-    message(id: string, message_id: string, q?: TextWindow): Promise<Message>;
-    events(id: string, q?: EventQuery): Promise<EventPage>;
-    history(id: string, q?: Omit<EventQuery,"after">): Promise<HistoryPage>;
-    event(id:string, seq:Seq, q?:EventDetailQuery): Promise<EventDetail>;
-    search(id:string, q:SearchQuery): Promise<SearchPage>;
+    list(q?:{after?:string;status?:string;limit?:number;query?:string;provider?:string;machine?:string;workspace?:string}):Promise<{sessions:SessionView[];next:string|null}>;
+    info(id: string):Promise<SessionView>;
+    usage(id: string):Promise<SessionUsageView>;
+    queue(id: string, q?: MessageQuery):Promise<Message[]>;
+    drafts(id: string, q?: MessageQuery):Promise<Message[]>;
+    message(id: string, message_id: string, q?: TextWindow):Promise<Message>;
+    events(id: string, q?: EventQuery):Promise<EventPage>;
+    history(id: string, q?: Omit<EventQuery,"after">):Promise<HistoryPage>;
+    event(id:string, seq:Seq, q?:EventDetailQuery):Promise<EventDetail>;
+    search(id:string, q:SearchQuery):Promise<SearchPage>;
   };
 }
 "#,
@@ -563,9 +566,9 @@ export type UsageQuery = {section?:"quota"|"account"|"activity";path?:string;off
 export type UsagePage = UsageAccount & {section:string;available:boolean;page:{path:string;kind:"object"|"array"|"value";describe:boolean;data:unknown;range:{offset:number;next:number|null;total:number}}};
 export interface Cowboy {
   usage: { // Service account observations, visible to active product users; no collector is started
-    list(q?:{after?:string;limit?:number}): Promise<{accounts:(UsageAccount & {sections:Record<"account"|"quota"|"activity",boolean>})[];next:string|null;next_refresh_at_ms:number;refresh_interval_ms:number}>;
-    read(account:string, q?:UsageQuery): Promise<UsagePage>;
-    diagnostics(q?:Selection): Promise<Selected>; // collector placement/eligibility, no refresh
+    list(q?:{after?:string;limit?:number}):Promise<{accounts:(UsageAccount & {sections:Record<"account"|"quota"|"activity",boolean>})[];next:string|null;next_refresh_at_ms:number;refresh_interval_ms:number}>;
+    read(account:string, q?:UsageQuery):Promise<UsagePage>;
+    diagnostics(q?:Selection):Promise<Selected>; // collector placement/eligibility, no refresh
   };
 }
 // list: account ID order, default20/max100. read: quota by default; Provider JSON stays intact.
@@ -586,8 +589,8 @@ export type Selected = {page:{path:string;kind:string;data:unknown;range:{offset
 MACHINES_SDK: r#"
 export interface Cowboy {
   machines: {
-    list(q?:{after?:string;limit?:number}): Promise<{machines:{id:string;name:string;status:string;connected:boolean;schedulable:boolean;health:unknown;capacity:unknown;active_sessions:number;resources:unknown;plugins:number;workspaces:number}[];next:string|null}>; // ID order, default20/max100
-    read(id:string, q?:Selection & {section?:"resources"|"plugins"|"workspaces"|"capabilities"}): Promise<Selected>;
+    list(q?:{after?:string;limit?:number}):Promise<{machines:{id:string;name:string;status:string;connected:boolean;schedulable:boolean;health:unknown;capacity:unknown;active_sessions:number;resources:unknown;plugins:number;workspaces:number}[];next:string|null}>; // ID order, default20/max100
+    read(id:string, q?:Selection & {section?:"resources"|"plugins"|"workspaces"|"capabilities"}):Promise<Selected>;
   };
 }
 // active_sessions counts workers, not saved history. Resource observations include timestamps; absence is unknown.
@@ -595,8 +598,8 @@ export interface Cowboy {
 CONFIGURATION_SDK: r#"
 export interface Cowboy {
   configuration: {
-    schema(scope:"service"|"device", q?:Selection): Promise<Selected>; // typed TOML registry, defaults/constraints/reload classes
-    read(scope:"service"|"session"|"tools"|"mcp", q?:Selection & {session_id?:string}): Promise<Selected & {revision:string}>;
+    schema(scope:"service"|"device", q?:Selection):Promise<Selected>; // typed TOML registry, defaults/constraints/reload classes
+    read(scope:"service"|"session"|"tools"|"mcp", q?:Selection & {session_id?:string}):Promise<Selected & {revision:string}>;
   };
 }
 // service: effective config-file fields + sources/reload classes. session: exact Provider options and DB preferences.
@@ -609,8 +612,8 @@ export type DocumentMeta = {id:string;kind:"document"|"folder";title:string;pare
 export type Document = DocumentMeta & {body:string;attachments:number;range:TextRange};
 export interface Cowboy {
   documents: { // owner's Drafts; id order; last id resumes, default50/max200
-    list(q?: {after?: string; limit?: number; include_deleted?: boolean}): Promise<DocumentMeta[]>;
-    read(id: string, q?: TextWindow & {include_deleted?: boolean}): Promise<Document>;
+    list(q?: {after?: string; limit?: number; include_deleted?: boolean}):Promise<DocumentMeta[]>;
+    read(id: string, q?: TextWindow & {include_deleted?: boolean}):Promise<Document>;
   };
 }
 // Text pages carry body_revision: restart if it changes between reads.
