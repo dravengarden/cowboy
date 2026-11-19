@@ -3428,33 +3428,21 @@ impl Hub {
     /// the resumed context's real size, so idle hibernation and context
     /// rollover would treat a large expired context as empty. Only Clear and
     /// renewal, which discard the native context, reset the reading.
-    ///
-    /// A counter-only reading (a worker snapshot: no raw update, no
-    /// observation time) keeps the last reported raw update, such as the
-    /// account plan, instead of erasing it.
-    pub fn set_session_usage(&self, session_id: &str, mut usage: crate::agent_model::SessionUsage) {
+    pub fn set_session_usage(&self, session_id: &str, usage: crate::agent_model::SessionUsage) {
         if usage.used == 0 && usage.size == 0 {
             return;
         }
         let changed = {
             let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return;
-            };
-            if let Some(previous) = s.meta.usage.as_ref()
-                && usage.raw.is_null()
-                && usage.observed_at_ms == 0
-            {
-                usage.raw = previous.raw.clone();
-                usage.observed_at_ms = previous.observed_at_ms;
+            match sessions.get_mut(session_id) {
+                Some(s) if s.meta.usage.as_ref() != Some(&usage) => {
+                    s.meta.context_used = usage.used;
+                    s.meta.context_size = usage.size;
+                    s.meta.usage = Some(usage.clone());
+                    true
+                }
+                _ => false,
             }
-            let changed = s.meta.usage.as_ref() != Some(&usage);
-            if changed {
-                s.meta.context_used = usage.used;
-                s.meta.context_size = usage.size;
-                s.meta.usage = Some(usage.clone());
-            }
-            changed
         };
         if changed {
             if let Some(tx) = self.inner.store_tx.as_ref() {

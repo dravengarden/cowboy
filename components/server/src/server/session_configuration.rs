@@ -240,32 +240,9 @@ fn preview(
     preferences: &Value,
     observed: Option<&Value>,
 ) -> Value {
-    // Options other than the model come from the presets of the selected
-    // model only: a model-only preset (Antigravity's Claude or GPT-OSS) must
-    // not show another model's reasoning level.
-    let model = preferences
-        .get("model")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            presets
-                .iter()
-                .find(|preset| preset.is_default)
-                .and_then(|preset| preset.values.get("model"))
-                .map(String::as_str)
-        });
-    let of_model =
-        |preset: &&ConfigurationPreset| preset.values.get("model").map(String::as_str) == model;
-    let scoped: Vec<&ConfigurationPreset> = if presets.iter().any(|preset| of_model(&preset)) {
-        presets.iter().filter(of_model).collect()
-    } else {
-        presets.iter().collect()
-    };
     let mut values = std::collections::BTreeMap::<String, Vec<Value>>::new();
     for preset in presets {
         for (id, value) in &preset.values {
-            if id != "model" && !scoped.iter().any(|scoped| std::ptr::eq(*scoped, preset)) {
-                continue;
-            }
             let choices = values.entry(id.clone()).or_default();
             let value = json!(value);
             if !choices.contains(&value) {
@@ -273,34 +250,20 @@ fn preview(
             }
         }
     }
-    let observed = observed.and_then(Value::as_array);
-    // A stored preference of a model-specific option (one some preset
-    // defines) applies only while the selected model's presets, or the
-    // agent's advertised options, still offer it: a Gemini reasoning level
-    // chosen earlier must not return on a model-only preset.
-    let offered = |id: &str| {
-        id == "model"
-            || !presets.iter().any(|preset| preset.values.contains_key(id))
-            || scoped.iter().any(|preset| preset.values.contains_key(id))
-            || observed.is_some_and(|options| options.iter().any(|option| option["id"] == id))
-    };
     // These are the target session's signed defaults or explicit selections.
     // Do not guess defaults from a peer, especially its permissions or model.
     if let Some(preferences) = preferences.as_object() {
-        for (id, value) in preferences.iter().filter(|(id, _)| offered(id)) {
+        for (id, value) in preferences {
             let choices = values.entry(id.clone()).or_default();
             if !choices.contains(value) {
                 choices.push(value.clone());
             }
         }
     }
+    let observed = observed.and_then(Value::as_array);
     json!(values.into_iter().filter_map(|(id, values)| {
         let current = preferences.get(&id).cloned().or_else(|| {
-            let pool: Vec<&ConfigurationPreset> =
-                if id == "model" { presets.iter().collect() } else { scoped.clone() };
-            let defines = |preset: &&&ConfigurationPreset| preset.values.contains_key(&id);
-            pool.iter().filter(defines).find(|preset| preset.is_default)
-                .or_else(|| pool.iter().find(defines))
+            presets.iter().find(|preset| preset.is_default)
                 .and_then(|preset| preset.values.get(&id)).map(|value| json!(value))
         })?;
         let option = observed.and_then(|options| options.iter().find(|option| option["id"] == id));
@@ -383,46 +346,20 @@ mod tests {
 
     #[test]
     fn an_acp_thought_level_option_previews_as_reasoning_before_any_agent_reports_it() {
-        let preset = |id: &str, model: &str, level: Option<&str>, is_default| ConfigurationPreset {
+        let preset = |id: &str, level: &str, is_default| ConfigurationPreset {
             id: id.into(),
             name: id.into(),
             detail: String::new(),
             is_default,
-            values: std::iter::once(("model".to_owned(), model.to_owned()))
-                .chain(level.map(|level| ("thought_level".to_owned(), level.to_owned())))
+            values: [("model", "gemini-3.8-flash"), ("thought_level", level)]
+                .into_iter()
+                .map(|(id, value)| (id.to_owned(), value.to_owned()))
                 .collect(),
         };
         let presets = vec![
-            preset("gemini-flash-high", "gemini-3.8-flash", Some("high"), true),
-            preset("gemini-flash-low", "gemini-3.8-flash", Some("low"), false),
-            preset("claude-sonnet-thinking", "claude-sonnet-4-6", None, false),
+            preset("gemini-flash-high", "high", true),
+            preset("gemini-flash-low", "low", false),
         ];
-        // A Gemini level stored earlier stays with Gemini.
-        let options = preview(
-            &presets,
-            &json!({"model": "claude-sonnet-4-6", "thought_level": "low"}),
-            None,
-        );
-        let option = |id: &str| {
-            options
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|option| option["id"] == id)
-                .unwrap()
-                .clone()
-        };
-        // A model-only preset shows no reasoning level of another model.
-        assert!(
-            options
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|option| option["id"] != "thought_level")
-        );
-        assert_eq!(option("model")["currentValue"], "claude-sonnet-4-6");
-        assert_eq!(option("model")["options"].as_array().unwrap().len(), 2);
-        // A Gemini model offers its own levels, defaulting to the signed one.
         let options = preview(&presets, &json!({}), None);
         let level = options
             .as_array()

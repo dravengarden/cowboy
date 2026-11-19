@@ -59,33 +59,6 @@
         "model": "gemini-3.8-flash",
         "thought_level": "low"
       }
-    },
-    {
-      "id": "claude-sonnet-thinking",
-      "name": "Claude Sonnet 4.6 · Thinking",
-      "detail": "Claude Sonnet 4.6 (Thinking) · Antigravity-managed thinking",
-      "is_default": false,
-      "values": {
-        "model": "claude-sonnet-4-6"
-      }
-    },
-    {
-      "id": "claude-opus-thinking",
-      "name": "Claude Opus 4.6 · Thinking",
-      "detail": "Claude Opus 4.6 (Thinking) · Antigravity-managed thinking",
-      "is_default": false,
-      "values": {
-        "model": "claude-opus-4-6-thinking"
-      }
-    },
-    {
-      "id": "gpt-oss-120b-medium",
-      "name": "GPT-OSS 120B · Medium",
-      "detail": "GPT-OSS 120B · Medium reasoning (fixed by the model)",
-      "is_default": false,
-      "values": {
-        "model": "gpt-oss-120b-medium"
-      }
     }
   ],
   "host": {
@@ -206,7 +179,7 @@
         "id": "cowboy-antigravity-acp",
         "version": "1.0.1",
         "source": "cowboy:components/provider-runtime/packages/antigravity-acp",
-        "integrity": "sha256:d79059b1708c1d26d193a36b958d15a9c0d7bb299e57849cbdd2ffe4b883405b",
+        "integrity": "sha256:80c077b0fa57b07d1ac7cefff0890beb538ef39bbdbfb5525a9b7e95b739ddfb",
         "private": true
       },
       {

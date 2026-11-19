@@ -841,26 +841,20 @@ request is added for any of it.
 
 - **Recommended cards.** `configuration_presets` follow the `configOptions`
   of `session/new`: Gemini 3.8 Flash High (default), Medium and Low set
-  `model` and `thought_level`; Claude Sonnet 4.6 (Thinking), Claude Opus 4.6
-  (Thinking) and GPT-OSS 120B set only `model`. The legacy
-  `models.availableModels` enumerates thinking variants only for Gemini
-  (`gemini-3.8-flash-high|medium|low`) and one entry for each other model,
-  so a level is not signed where `agy` gives no evidence that it applies; a
-  card that set an option `agy` then withdrew would never read as current.
-  Values reach `agy` through the generic serial `session/set_config_option`
-  queue (the model first), which the proxy forwards. A card is validated
-  against its own target model: while a model-only card is current, the
-  session (and the preview of an unstarted one) shows no reasoning option,
-  yet the Gemini cards stay offered, because their level is applied after
-  their model and judged by it. A stored reasoning preference stays with the
-  model whose presets or advertised options offer it; it is not shown, or
-  replayed, on a model-only card.
+  `model` and `thought_level` of the one Gemini model, so every card is
+  judged by the options that model advertises and the generic preset rules
+  apply unchanged. Values reach `agy` through the generic serial
+  `session/set_config_option` queue, which the proxy forwards. `agy`'s other
+  models (Claude Sonnet 4.6 and Opus 4.6 Thinking, GPT-OSS 120B) stay
+  selectable through its own `model` option in the session settings; they
+  get no card, because a card for a model without a reasoning level would
+  need model-scoped reasoning previews, replay and drafts that no other
+  Provider needs.
 - **No Plan card.** Recommended cards are (model, reasoning) configurations:
   the picker labels them so, each binds one `models/targets.toml` evaluation
   target, and a card is current when all its values match. A card setting
-  `mode` would be shadowed by the model-only card of the same model, or force
-  every card to pin `mode=default` and silently reset the owner's live mode on
-  each card switch. `agy`'s own `mode` option (`default`, `accept-edits`,
+  `mode` would force every card to pin `mode=default` and silently reset the
+  owner's live mode on each card switch. `agy`'s own `mode` option (`default`, `accept-edits`,
   `auto`, `plan`) is already shown per session as "Agent mode" and persists
   as a session preference, so Plan stays one choice away. How `plan` behaves
   with every built-in tool denied is not observed yet; it is an acceptance
@@ -869,28 +863,42 @@ request is added for any of it.
 - **Account plan.** `session/new|load|resume` results carry
   `_meta.antigravity.tier` (`{name: "Antigravity Starter Quota", id:
   "free-tier", upgradeUri}`). The proxy keeps `{id, name}` only and adds it
-  to every `usage_update` as `_meta.cowboy.account_plan`; the worker already
-  relays that reading as the session's usage, and the Controller persists it.
+  to every `usage_update` as `_meta.cowboy.account_plan`, beside
+  `_meta.cowboy.sanitizer: 1`, which marks a `_meta.cowboy` the proxy rebuilt
+  itself; the worker already relays that reading as the session's usage, and
+  the Controller persists it. The Controller ignores a plan without that
+  marker: the 0.2.0 proxy forwarded `agy`'s `_meta` verbatim, so a stored
+  reading or a still-pinned worker could carry a plan nobody validated.
   `accounts.list()` reports, per named-only account, the newest valid plan of
   its sessions (`plan: {id, name, observed_at_ms}` or `null`); the account
   card shows "Plan · <name>" beside "Usage · Not available". One rule holds
   at the proxy, the Controller and the Web: `id` is a slug of at most 64
   characters; `name` has no character of Unicode category C or a line or
   paragraph separator anywhere, and is 1 to 80 code points once trimmed. The
-  proxy checks the reported name before trimming (so a tab or U+2028 at
+  proxy and the Web evaluate `[\p{C}\p{Zl}\p{Zp}]` with their engine's
+  Unicode tables; the Controller uses a dependency-free range table
+  generated from that same expression by the pinned Bun
+  (`tools/generate-plan-name-table.ts`, Unicode 17.0), unassigned code
+  points included. The proxy checks the reported name before trimming (so a tab or U+2028 at
   either end clears the plan) and forwards it trimmed; the Controller and
-  the Web accept only an already trimmed name. Anything else is dropped. The
-  proxy applies a session result's plan before it awaits anything, so a
-  `usage_update` that `agy` writes right behind the result carries the new
-  plan. A counter-only worker snapshot keeps the last reported reading, so a
-  reconnect does not erase the plan. The plan never gates anything.
+  the Web accept only an already trimmed name. Anything else is dropped, and
+  an older valid reading keeps showing. The proxy forwards a session result
+  without awaiting anything, so the result reaches the worker (which drops
+  session updates until a load completes) before a `usage_update` that `agy`
+  wrote right behind it, and that reading already carries the new plan. Each
+  stored usage reading stays one whole observation: a counter-only worker
+  snapshot after a reconnect that repeats the stored counters leaves the
+  stored reading, and its plan, in place; different counters replace it
+  whole, and the next `usage_update` carries the plan again. The plan never
+  gates anything.
 - **No raw tier.** The proxy removes `_meta.antigravity.tier` from every
   `_meta`, at any depth, of every message it forwards to the worker
   (results, error data, notifications, session updates, permission requests,
   tool inputs and outputs), together with the `antigravity` and `_meta`
-  objects that removal leaves empty. Nothing else is altered or dropped: the
-  walk is iterative with no depth limit and copies only the objects on the
-  path to a tier. The `upgradeUri` is therefore never copied, so no link to
+  objects that removal leaves empty, however they nest. Nothing else is
+  altered or dropped: one iterative post-order walk with no depth limit
+  visits each value once and copies an object once, after its children,
+  only when one of them changed. The `upgradeUri` is therefore never copied, so no link to
   Google appears outside the account browser.
 - **Generic paths, unchanged.** `usage_update` (`size` 1,048,576) drives the
   context meter; `promptCapabilities.image` needs no declaration (image

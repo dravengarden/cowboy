@@ -24,7 +24,6 @@ import {
 } from "./providerConfigOptions";
 import {
   activeRunConfigPreset,
-  runConfigPresetBlocked,
   runConfigPresetChanges,
   runConfigPresets,
 } from "./runConfigPresets";
@@ -106,7 +105,10 @@ export function SessionStartSettings(
     unavailable ||
     providerConfigOptionDisabled(session!.status, presentations.get(option.id));
   const presetDisabled = (preset: (typeof presets)[number]): boolean =>
-    unavailable || runConfigPresetBlocked(preset, options, optionDisabled);
+    unavailable || runConfigPresetChanges(preset, options).some((change) => {
+      const option = options.find((item) => item.id === change.configId);
+      return !option || optionDisabled(option);
+    });
   const renderOption = (
     option: ConfigOption,
     compact: boolean,

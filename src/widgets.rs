@@ -78,8 +78,7 @@ pub fn valid_id(id: &str) -> bool {
 
 /// Unicode format characters (`Cf`) that can make a label read differently
 /// from what it says: bidirectional controls, zero-width and invisible ones.
-#[must_use]
-pub fn format_char(c: char) -> bool {
+fn format_char(c: char) -> bool {
     matches!(u32::from(c),
         0x00AD | 0x0600..=0x0605 | 0x061C | 0x06DD | 0x070F | 0x0890..=0x0891 | 0x08E2 | 0x180E
         | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F | 0xFEFF

@@ -28,47 +28,24 @@ export function runConfigCurrentTitle(presetName: string | undefined): string {
   return `Current · ${presetName ?? "Custom"}`;
 }
 
-/** Whether `preset` switches to another model the session advertises. */
-function changesModel(
+function supportsPreset(
   preset: Pick<RunConfigPreset, "values">,
   optionById: ReadonlyMap<string, ConfigOption>,
 ): boolean {
-  return Object.entries(preset.values).some(([id, value]) => {
+  const changingModel = Object.entries(preset.values).some(([id, value]) => {
     const option = optionById.get(id);
     return option?.category === "model" &&
       String(option.currentValue) !== value &&
       option.options.some((candidate) => String(candidate.value) === value);
   });
-}
-
-function supportsPreset(
-  preset: Pick<RunConfigPreset, "values">,
-  optionById: ReadonlyMap<string, ConfigOption>,
-): boolean {
-  const changingModel = changesModel(preset, optionById);
-  return Object.entries(preset.values).every(([id, value]) => {
-    const option = optionById.get(id);
-    return option?.options.some((candidate) =>
+  return Object.entries(preset.values).every(([id, value]) =>
+    optionById.get(id)?.options.some((candidate) =>
         String(candidate.value) === value
       ) === true ||
-      // Reasoning choices describe the CURRENT model, which may offer none
-      // at all (a model-only preset such as Antigravity's Claude). A signed
-      // preset is validated against its own target model: the serial config
-      // path applies the model first, then that model validates its effort.
-      (changingModel &&
-        (option === undefined || option.category === "thought_level"));
-  });
-}
-
-/** Whether applying `preset` switches the model first: its other values are
- *  then judged by the new model, even ones the current model does not show. */
-export function runConfigPresetChangesModel(
-  preset: Pick<RunConfigPreset, "values">,
-  options: readonly ConfigOption[],
-): boolean {
-  return changesModel(
-    preset,
-    new Map(options.map((option) => [option.id, option])),
+    // Reasoning choices describe the CURRENT model. A signed preset for a
+    // different advertised model must not inherit that model's restrictions.
+    // The serial config path applies the model first, then validates its effort.
+    (changingModel && optionById.get(id)?.category === "thought_level")
   );
 }
 
@@ -127,21 +104,6 @@ export function runConfigPresetChanges(
   );
 }
 
-/** Whether applying `preset` needs an option `disabled` blocks. A value for
- *  an option the current model does not show is applied after the preset's
- *  model change, which then validates it. */
-export function runConfigPresetBlocked(
-  preset: RunConfigPreset,
-  options: readonly ConfigOption[],
-  disabled: (option: ConfigOption) => boolean,
-): boolean {
-  const changingModel = runConfigPresetChangesModel(preset, options);
-  return runConfigPresetChanges(preset, options).some((change) => {
-    const option = options.find((item) => item.id === change.configId);
-    return option ? disabled(option) : !changingModel;
-  });
-}
-
 /** Unsaved Run configuration edits, by option id. */
 export type RunConfigDraft = Readonly<Record<string, string | boolean>>;
 
@@ -157,38 +119,12 @@ export function withRunConfigDraft(
   );
 }
 
-/** The draft after one edit. Changing the model drops drafted values of
- *  options the current model does not show: they belonged to the model the
- *  draft switched to before, and the next preset brings its own. */
-export function withRunConfigEdit(
-  options: readonly ConfigOption[],
-  draft: RunConfigDraft,
-  id: string,
-  value: string | boolean,
-): RunConfigDraft {
-  const option = options.find((candidate) => candidate.id === id);
-  const kept = option?.category === "model"
-    ? Object.fromEntries(
-      Object.entries(draft).filter(([key]) =>
-        options.some((candidate) => candidate.id === key)
-      ),
-    )
-    : draft;
-  return { ...kept, [id]: value };
-}
-
 /** What saving the draft sends: only values that differ from the agent's,
- *  the model first because effort choices depend on it. A drafted value for
- *  an option the current model does not show (a preset's reasoning level
- *  for the model it switches to) follows the model change. */
+ *  the model first because effort choices depend on it. */
 export function runConfigDraftChanges(
   options: readonly ConfigOption[],
   draft: RunConfigDraft,
 ): { configId: string; value: string | boolean }[] {
-  const known = new Set(options.map((option) => option.id));
-  const unshown = Object.entries(draft)
-    .filter(([id]) => !known.has(id))
-    .map(([configId, value]) => ({ configId, value, model: false }));
   const changes = options.flatMap((option) => {
     if (!Object.hasOwn(draft, option.id)) return [];
     const value = draft[option.id]!;
@@ -198,7 +134,7 @@ export function runConfigDraftChanges(
     )?.value ?? value;
     return [{ configId: option.id, value: typed, model: option.category === "model" || option.id === "model" }];
   });
-  return [...changes, ...unshown]
+  return changes
     .sort((left, right) => Number(right.model) - Number(left.model))
     .map(({ configId, value }) => ({ configId, value }));
 }

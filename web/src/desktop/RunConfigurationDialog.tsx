@@ -16,7 +16,6 @@ import {
   runConfigDraftChanges,
   runConfigPresets,
   withRunConfigDraft,
-  withRunConfigEdit,
 } from "../runConfigPresets";
 import { setSessionConfigOptions } from "../store";
 import { SessionToolsSection } from "../AgentToolsPanel";
@@ -262,11 +261,11 @@ function useRunConfigDraft(
   }, [configOpen, sessionId]);
   const editConfig = useCallback(
     (id: string, value: string | boolean): void => {
-      setConfigDraft((draft) => withRunConfigEdit(options, draft, id, value));
+      setConfigDraft((draft) => ({ ...draft, [id]: value }));
       setDiscardArmed(false);
       setApplyError("");
     },
-    [options],
+    [],
   );
   const discardConfig = useCallback((): void => {
     setConfigDraft({});
