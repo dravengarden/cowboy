@@ -382,6 +382,9 @@ pub struct BrowserManager {
     pins: Arc<GenerationPins>,
     /// Host paths every instance must hide behind a read-only mask.
     masks: Vec<PathBuf>,
+    /// The network policy every unit runs with, whatever an open requests
+    /// (`browser.ipv4_only`, read once at start: a restart setting).
+    enforced_network: Option<BrowserNetwork>,
     receipts: parking_lot::Mutex<VecDeque<(String, StateEvent)>>,
     headroom: fn() -> Option<u64>,
     /// The Device launch ledger every instance's admitted memory budget is
@@ -428,6 +431,9 @@ impl BrowserManager {
             .context("kernel boot identity unavailable")?
             .to_string();
         let uid = rustix::process::getuid().as_raw();
+        let enforced_network = Settings::from_config(device_config.as_ref())
+            .ipv4_only
+            .then_some(BrowserNetwork::Ipv4OnlyV1);
         let manager = Arc::new_cyclic(|this| Self {
             state_dir: state_dir.to_path_buf(),
             providers,
@@ -449,6 +455,7 @@ impl BrowserManager {
             starts: Arc::new(StartGate::default()),
             pins: Arc::default(),
             masks: sensitive_paths(state_dir, uid),
+            enforced_network,
             receipts: parking_lot::Mutex::new(VecDeque::new()),
             headroom,
             ledger,
@@ -594,6 +601,7 @@ impl BrowserManager {
             available,
             reason,
             max_instances: settings.max_instances,
+            network: self.enforced_network,
         })
     }
 
@@ -764,6 +772,14 @@ impl BrowserManager {
         if let Err(error) = self.reconcile_accounts().await {
             tracing::warn!(%error, "browser account reconciliation incomplete");
         }
+    }
+
+    /// Whether a unit started with `network` may serve on this Device: any
+    /// unit when the Device enforces no policy, else only one started with
+    /// the enforced policy.
+    fn complies(&self, network: Option<BrowserNetwork>) -> bool {
+        self.enforced_network
+            .is_none_or(|enforced| network == Some(enforced))
     }
 
     fn settings(&self) -> Settings {

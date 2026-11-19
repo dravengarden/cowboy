@@ -1,5 +1,6 @@
 //! Device settings of the Machine browser (`browser.*`), read at every open.
 //! Running units keep the properties they were started with.
+//! `browser.ipv4_only` is a restart setting: the manager reads it once.
 
 use std::time::Duration;
 
@@ -26,6 +27,8 @@ pub struct Settings {
     pub max_width: u32,
     pub max_height: u32,
     pub disk_low_watermark: u64,
+    /// Every unit runs IPv4-only, whatever an open requests.
+    pub ipv4_only: bool,
 }
 
 impl Settings {
@@ -53,6 +56,7 @@ impl Settings {
             max_width: integer(&schema::DEVICE_BROWSER_MAX_WIDTH),
             max_height: integer(&schema::DEVICE_BROWSER_MAX_HEIGHT),
             disk_low_watermark: config.get(&schema::DEVICE_DISK_LOW_WATERMARK),
+            ipv4_only: config.get(&schema::DEVICE_BROWSER_IPV4_ONLY),
         }
     }
 
@@ -90,5 +94,6 @@ mod tests {
         assert!(settings.geometry_allowed(2560, 1600));
         assert!(!settings.geometry_allowed(2561, 1600));
         assert!(!settings.geometry_allowed(319, 800));
+        assert!(!settings.ipv4_only);
     }
 }

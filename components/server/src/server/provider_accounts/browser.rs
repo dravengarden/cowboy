@@ -1670,6 +1670,7 @@ mod tests {
             available,
             reason: None,
             max_instances: 2,
+            network: None,
         };
         let mut connections = Vec::new();
         for (machine, protocol, available) in [

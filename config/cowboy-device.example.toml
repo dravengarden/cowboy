@@ -135,3 +135,9 @@ schema = 1
 # Largest framebuffer height a viewer may request for a browser.
 # integer from 480 to 4096; applies live.
 # max_height = 1600
+# Run every browser unit on this Device IPv4-only (ipv4_only_v1), whatever
+# the open requests, and report it to the Controller, which places a
+# shared browser with an IPv4-only member only on such a Device. At start
+# a surviving unit without the policy is stopped (snapshotted) first.
+# boolean (true or false); needs a restart.
+# ipv4_only = false

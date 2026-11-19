@@ -50,6 +50,15 @@ fn plan() -> MachineBrowserRuntimePlan {
 }
 
 async fn fixture() -> Fixture {
+    fixture_on(None).await
+}
+
+/// The fixture on a Device whose configuration file reads `device_toml`.
+async fn fixture_on(device_toml: Option<&str>) -> Fixture {
+    let device_config = device_toml.map(|text| {
+        let report = crate::config::check_text(crate::config::Scope::Device, text, None);
+        crate::config::Handle::new(report.config.expect("valid Device configuration"))
+    });
     let temp = tempfile::tempdir().unwrap();
     let state = temp.path().join("state");
     std::fs::create_dir_all(&state).unwrap();
@@ -67,7 +76,7 @@ async fn fixture() -> Fixture {
     let manager = BrowserManager::build(
         &state,
         Arc::new(store),
-        None,
+        device_config,
         || None,
         Box::leak(Box::new(Ledger::new())),
         Arc::clone(&units) as Arc<dyn UnitControl>,
@@ -538,4 +547,41 @@ async fn an_open_never_reuses_a_unit_with_another_network_policy() {
             .as_ref()
             .is_some_and(|current| Arc::ptr_eq(current, &fixture.instance))
     );
+}
+
+#[tokio::test]
+async fn an_ipv4_only_device_runs_every_unit_ipv4_only_and_reports_it() {
+    let fixture = fixture_on(Some("schema = 1\n[browser]\nipv4_only = true\n")).await;
+    assert_eq!(
+        fixture.manager.enforced_network,
+        Some(BrowserNetwork::Ipv4OnlyV1)
+    );
+    let viewport = Viewport {
+        width: 1280,
+        height: 800,
+        scale: 1,
+    };
+    // A surviving unit is adopted only with the enforced policy.
+    assert!(fixture.manager.complies(Some(BrowserNetwork::Ipv4OnlyV1)));
+    assert!(!fixture.manager.complies(None));
+    // The fixture's unit is unrestricted: whatever an open names (here
+    // nothing, as for a share's member), it is replaced, never reused.
+    fixture.units.make_stoppable("cowboy-browser-inst-1");
+    let replaced = fixture
+        .manager
+        .open(
+            "o1",
+            fixture.account.clone(),
+            "inst-1".into(),
+            Purpose::Tab,
+            viewport,
+            None,
+        )
+        .await;
+    assert_eq!(replaced.state, State::Hibernated);
+    assert!(!fixture.units.terminations().is_empty());
+    // A Device without the setting enforces (and reports) nothing.
+    let plain = fixture_on(None).await;
+    assert_eq!(plain.manager.enforced_network, None);
+    assert!(plain.manager.complies(None));
 }

@@ -328,6 +328,7 @@ pub const DEVICE_BROWSER_STAGING_MAX_BYTES: Key<u64> =
     Key::new(Scope::Device, "browser.staging_max_bytes");
 pub const DEVICE_BROWSER_MAX_WIDTH: Key<i64> = Key::new(Scope::Device, "browser.max_width");
 pub const DEVICE_BROWSER_MAX_HEIGHT: Key<i64> = Key::new(Scope::Device, "browser.max_height");
+pub const DEVICE_BROWSER_IPV4_ONLY: Key<bool> = Key::new(Scope::Device, "browser.ipv4_only");
 
 pub const DEVICE_FILE_BUFFERS_ENABLED: Key<bool> = Key::new(Scope::Device, "file_buffers.enabled");
 pub const DEVICE_FILE_BUFFERS_MAX_FILE_SIZE: Key<u64> =
@@ -636,5 +637,12 @@ pub static DEVICE_FIELDS: &[Field] = &[
         default: Value::Integer(1600),
         reload: Reload::Live,
         doc: "Largest framebuffer height a viewer may request for a browser.",
+    },
+    Field {
+        key: "browser.ipv4_only",
+        kind: Kind::Bool,
+        default: Value::Bool(false),
+        reload: Reload::Restart,
+        doc: "Run every browser unit on this Device IPv4-only (ipv4_only_v1), whatever\nthe open requests, and report it to the Controller, which places a\nshared browser with an IPv4-only member only on such a Device. At start\na surviving unit without the policy is stopped (snapshotted) first.",
     },
 ];

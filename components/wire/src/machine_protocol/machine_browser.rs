@@ -356,6 +356,14 @@ pub struct Capability {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<Reason>,
     pub max_instances: u32,
+    /// The network policy this Machine enforces on every browser unit it
+    /// runs, whatever an `Open` requests (the Device setting
+    /// `browser.ipv4_only`, fixed for the Machine process's life). Absent on
+    /// a Machine that enforces only what each `Open` names. Sent only when
+    /// set, so a Machine without the setting stays readable by Controllers
+    /// that predate it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<BrowserNetwork>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -582,5 +590,32 @@ mod tests {
         assert!(!event.unsaved_state_lost);
         let json = serde_json::to_string(&Event::CapabilityLost).unwrap();
         assert_eq!(json, r#"{"kind":"capability_lost"}"#);
+    }
+
+    #[test]
+    fn a_machine_enforced_network_policy_is_reported_only_when_set() {
+        let capability = |network| Capability {
+            plugin_id: "machine-browser".to_owned(),
+            plugin_version: "1.0.0".to_owned(),
+            generation_digest: "sha256:0".to_owned(),
+            available: true,
+            reason: None,
+            max_instances: 1,
+            network,
+        };
+        let plain = serde_json::to_value(capability(None)).unwrap();
+        assert!(plain.get("network").is_none());
+        assert_eq!(
+            serde_json::from_value::<Capability>(plain).unwrap().network,
+            None
+        );
+        let enforced = serde_json::to_value(capability(Some(BrowserNetwork::Ipv4OnlyV1))).unwrap();
+        assert_eq!(enforced["network"], "ipv4_only_v1");
+        assert_eq!(
+            serde_json::from_value::<Capability>(enforced)
+                .unwrap()
+                .network,
+            Some(BrowserNetwork::Ipv4OnlyV1)
+        );
     }
 }

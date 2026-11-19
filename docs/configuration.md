@@ -214,11 +214,29 @@ ignored: it admits nothing. Remove it and list the admitted accounts instead.
 | Device | `browser.staging_max_bytes` | `"1GiB"` | live |
 | Device | `browser.max_width` | `2560` | live |
 | Device | `browser.max_height` | `1600` | live |
+| Device | `browser.ipv4_only` | `false` | restart |
 
 `cowboy config explain --scope <scope>` is authoritative; this table is a
 convenience. The `browser.*` keys govern Machine browser instances
 ([`machine-browser.md`](machine-browser.md)); a changed value applies to the
-next open, and running units keep the properties they were started with.
+next open, and running units keep the properties they were started with
+(`browser.ipv4_only` is the exception below).
+
+## Machine browser network policy
+
+`browser.ipv4_only` (Device, boolean, restart) makes the Machine run every
+browser unit IPv4-only (`ipv4_only_v1`: `RestrictAddressFamilies=AF_INET
+AF_UNIX AF_NETLINK`, no `io_uring`), own or shared, named account or legacy
+card, whatever the Controller's `Open` requests, and report it in its browser
+capability. The Controller places and opens a shared browser with an
+IPv4-only member (Antigravity, or any Provider declaring `ipv4_only_v1`) only
+on a Machine that reports it. It is read once at the Machine's start; that
+start also stops (with a stop-time snapshot) any surviving browser unit
+started without the policy before it can serve again, so the first restart
+after enabling it may take a little longer. Upgrade the Controller before
+enabling it: an older Controller refuses a Machine hello that reports the
+policy. OVH, the Machine where Antigravity signs in, sets it to `true`. See
+`docs/machine-browser.md`, "Machine-enforced IPv4-only browsers".
 
 ## Dormant session re-pinning
 

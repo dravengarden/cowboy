@@ -15,6 +15,10 @@ impl BrowserManager {
     ) -> StateEvent {
         let hibernated =
             |reason: Reason| hibernated_event(request_id, &account_id, &instance_id, reason, None);
+        // A Machine that enforces a policy on every unit (`browser.ipv4_only`)
+        // runs this one with it whatever the open names; an existing unit
+        // was started (or kept at adoption) only with it.
+        let network = self.enforced_network.or(network);
         // Browser instances are plain per-account tabs, independent of any
         // native login. The retired sign-in purpose stays decodable on the
         // wire for protocol 45 peers but is refused.

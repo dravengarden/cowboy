@@ -105,16 +105,19 @@ impl BrowserManager {
     }
 
     /// Whether a record's instance is registered or retained already (an
-    /// earlier, incomplete pass reached it).
+    /// earlier, incomplete pass reached it, or stopped it for the Device's
+    /// network policy without confirming its exit).
     fn record_accounted(&self, record: &InstanceRecord) -> bool {
         self.running()
             .iter()
             .any(|instance| instance.instance_id == record.instance_id)
-            || self
-                .unconfirmed
-                .lock()
-                .values()
-                .any(|retained| retained.record.as_deref() == Some(&record.instance_id))
+            || self.unconfirmed.lock().values().any(|retained| {
+                retained.record.as_deref() == Some(&record.instance_id)
+                    || retained
+                        .incarnation
+                        .as_ref()
+                        .is_some_and(|incarnation| incarnation.instance_id == record.instance_id)
+            })
     }
 
     /// Classify one listed unit; `false` when its invocation cannot be told
@@ -242,6 +245,23 @@ impl BrowserManager {
                 .await;
         }
         match self.adopt(&record, &status, capacity).await {
+            Ok(instance) if !self.complies(instance.network) => {
+                // A unit started before this Device enforced its network
+                // policy (`browser.ipv4_only`) never serves again: it is
+                // stopped with a stop-time snapshot before it is registered,
+                // so no attach or command can reach it, and the next open
+                // starts it under the policy. The inventory fence holds
+                // every open of the account meanwhile.
+                tracing::warn!(event_name = "browser.adopt.network_replaced",
+                    instance = %record.instance_id, running = ?instance.network,
+                    enforced = ?self.enforced_network,
+                    "surviving browser unit predates the Device network policy; stopping");
+                let slot = self.slot(&instance.account_id);
+                let _lifecycle = slot.lifecycle.lock().await;
+                self.stop_locked(&instance, Reason::Superseded, true, None)
+                    .await;
+                Ok(())
+            }
             Ok(instance) => {
                 *self.slot(&instance.account_id).instance.lock() = Some(Arc::clone(&instance));
                 self.spawn_supervisor(&instance);
