@@ -21,20 +21,17 @@ fn valid_id(id: &str) -> bool {
         })
 }
 
-/// Printable text only: no control, bidirectional or zero-width characters.
+/// Printable text only: no control, line-separator or format (`Cf`:
+/// bidirectional, zero-width, invisible) characters. The proxy and the Web
+/// apply the same rule.
 fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.trim() == name
         && name.chars().count() <= MAX_NAME
         && !name.chars().any(|character| {
             character.is_control()
-                || matches!(
-                    character,
-                    '\u{200b}'..='\u{200f}'
-                        | '\u{2028}'..='\u{202e}'
-                        | '\u{2060}'..='\u{206f}'
-                        | '\u{feff}'
-                )
+                || matches!(character, '\u{2028}' | '\u{2029}')
+                || crate::widgets::format_char(character)
         })
 }
 

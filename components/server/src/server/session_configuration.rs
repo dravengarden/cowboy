@@ -240,9 +240,32 @@ fn preview(
     preferences: &Value,
     observed: Option<&Value>,
 ) -> Value {
+    // Options other than the model come from the presets of the selected
+    // model only: a model-only preset (Antigravity's Claude or GPT-OSS) must
+    // not show another model's reasoning level.
+    let model = preferences
+        .get("model")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            presets
+                .iter()
+                .find(|preset| preset.is_default)
+                .and_then(|preset| preset.values.get("model"))
+                .map(String::as_str)
+        });
+    let of_model =
+        |preset: &&ConfigurationPreset| preset.values.get("model").map(String::as_str) == model;
+    let scoped: Vec<&ConfigurationPreset> = if presets.iter().any(|preset| of_model(&preset)) {
+        presets.iter().filter(of_model).collect()
+    } else {
+        presets.iter().collect()
+    };
     let mut values = std::collections::BTreeMap::<String, Vec<Value>>::new();
     for preset in presets {
         for (id, value) in &preset.values {
+            if id != "model" && !scoped.iter().any(|scoped| std::ptr::eq(*scoped, preset)) {
+                continue;
+            }
             let choices = values.entry(id.clone()).or_default();
             let value = json!(value);
             if !choices.contains(&value) {
@@ -263,7 +286,11 @@ fn preview(
     let observed = observed.and_then(Value::as_array);
     json!(values.into_iter().filter_map(|(id, values)| {
         let current = preferences.get(&id).cloned().or_else(|| {
-            presets.iter().find(|preset| preset.is_default)
+            let pool: Vec<&ConfigurationPreset> =
+                if id == "model" { presets.iter().collect() } else { scoped.clone() };
+            let defines = |preset: &&&ConfigurationPreset| preset.values.contains_key(&id);
+            pool.iter().filter(defines).find(|preset| preset.is_default)
+                .or_else(|| pool.iter().find(defines))
                 .and_then(|preset| preset.values.get(&id)).map(|value| json!(value))
         })?;
         let option = observed.and_then(|options| options.iter().find(|option| option["id"] == id));
@@ -370,11 +397,27 @@ mod tests {
                 .unwrap()
                 .clone()
         };
-        assert_eq!(option("thought_level")["category"], "thought_level");
-        // A preset without a level keeps the signed default's level.
-        assert_eq!(option("thought_level")["currentValue"], "high");
+        // A model-only preset shows no reasoning level of another model.
+        assert!(
+            options
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|option| option["id"] != "thought_level")
+        );
         assert_eq!(option("model")["currentValue"], "claude-sonnet-4-6");
         assert_eq!(option("model")["options"].as_array().unwrap().len(), 2);
+        // A Gemini model offers its own levels, defaulting to the signed one.
+        let options = preview(&presets, &json!({}), None);
+        let level = options
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|option| option["id"] == "thought_level")
+            .unwrap();
+        assert_eq!(level["category"], "thought_level");
+        assert_eq!(level["currentValue"], "high");
+        assert_eq!(level["options"].as_array().unwrap().len(), 2);
     }
 
     #[test]
