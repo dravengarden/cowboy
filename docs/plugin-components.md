@@ -88,12 +88,12 @@ lock moves the Cowboy-owned `cowboy-antigravity-acp` to 1.0.1: `agy-proxy`
 reads the plan `agy` reports in `_meta.antigravity.tier` of a session result
 and carries it as `_meta.cowboy.account_plan` (`{id, name}`, never the tier's
 `upgradeUri`) on every `usage_update`, which the Controller shows on the
-account card. The plan is applied before the proxy awaits anything, so a
-reading right behind the session result carries it, and the raw tier is
+account card; the Controller accepts it only beside the proxy's
+`_meta.cowboy.sanitizer: 1` marker. A session result is forwarded before any
+reading behind it, which already carries the plan, and the raw tier is
 removed from every `_meta` of every forwarded message without altering any
 other field. Antigravity 0.2.1 also adds Recommended cards for Gemini 3.8
-Flash Medium and Low, Claude Sonnet 4.6 (Thinking), Claude Opus 4.6 (Thinking)
-and GPT-OSS 120B; Gemini 3.8 Flash High stays the default. Every other Provider
+Flash Medium and Low; Gemini 3.8 Flash High stays the default. Every other Provider
 that pins provider-runtime advances one patch version without behavior
 changes: claude-code 3.20.48, claude-deepseek 3.1.66, codex 3.6.6,
 codex-deepseek 3.1.66, deepseek-harness 1.0.24 and grok 3.2.5. Native pins are
