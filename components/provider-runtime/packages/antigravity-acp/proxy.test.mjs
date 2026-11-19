@@ -281,6 +281,32 @@ test("a built-in tool that executes ends the turn as a policy violation", async 
   assert.equal(error.error.data.cowboy.antigravity_backend.class, "ok");
 });
 
+test("a built-in tool read in the same chunk as the prompt result is a violation", async () => {
+  const { proxy, agent, client, turns } = harness();
+  await proxy.fromClient(request(9, "session/prompt", { sessionId: "s", prompt: [] }));
+  await proxy.fromAgent(
+    toolUpdate({ sessionUpdate: "tool_call", toolCallId: "b", name: "run_command" }),
+  );
+  // Both lines arrive in one stdout chunk: launch dispatches them without
+  // awaiting the first.
+  const reply = proxy.fromAgent({ jsonrpc: "2.0", id: 9, result: { stopReason: "end_turn" } });
+  // The turn's facade calls are fenced before anything is awaited.
+  assert.deepEqual(turns.at(-1), ["end", "s", false]);
+  const executed = proxy.fromAgent(
+    toolUpdate({ sessionUpdate: "tool_call_update", toolCallId: "b", status: "completed" }),
+  );
+  await Promise.all([reply, executed]);
+  assert.equal(agent.at(-1).method, "session/cancel");
+  const error = client.at(-1);
+  assert.equal(error.id, 9);
+  assert.equal(error.result, undefined);
+  assert.equal(error.error.message, `${VIOLATION_PREFIX}run_command`);
+  assert.equal(error.error.data.cowboy.policy_violation, "run_command");
+  // The turn is over once its reply is sent.
+  await proxy.fromClient(request(10, "session/prompt", { sessionId: "s", prompt: [] }));
+  assert.equal(agent.at(-1).id, 10);
+});
+
 test("a violation survives an agent error reply and unsafe names are not echoed", async () => {
   const { proxy, client } = harness();
   await proxy.fromClient(request(9, "session/prompt", { sessionId: "s", prompt: [] }));

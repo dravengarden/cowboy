@@ -367,12 +367,12 @@ export class AcpProxy {
     // drops session updates until `session/load` completes), and that
     // notification already carries the plan it reported.
     if (record.method !== "session/prompt") return this.client(message);
+    // A prompt reply is never forwarded at once. The turn's facade calls
+    // are fenced now, but the turn stays observed until its evidence has
+    // settled: a built-in tool reported in the same chunk as this result,
+    // or while it settles, still turns the reply into a violation.
     const turn = this.turns.get(record.sessionId);
-    this.turns.delete(record.sessionId);
     await runtime.facade.endTurn(record.sessionId);
-    const violation = turn?.violation;
-    const uncertain = turn?.uncertain;
-    const cowboy = {};
     // Every ending is classified, a vendor error too: its log window may
     // hold a refusal; an error without one is `unknown_refusal`, never a
     // vendor message the Controller cannot attribute.
@@ -381,6 +381,10 @@ export class AcpProxy {
       record.sessionId,
       message.result?.stopReason,
     );
+    if (this.turns.get(record.sessionId) === turn) this.turns.delete(record.sessionId);
+    const violation = turn?.violation;
+    const uncertain = turn?.uncertain;
+    const cowboy = {};
     cowboy.antigravity_backend =
       message.result || backend.class !== "ok" ? backend : { ...backend, class: "unknown_refusal" };
     if (uncertain !== undefined) cowboy.uncertain_effect = uncertain;

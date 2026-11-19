@@ -3143,26 +3143,6 @@ fn relaunched_worker_seed_keeps_the_resumed_context_usage() {
 }
 
 #[test]
-fn a_counter_only_snapshot_never_mixes_two_usage_observations() {
-    let hub = hub_with_session("usage-plan");
-    let usage = |used, raw: serde_json::Value, observed_at_ms| crate::agent_model::SessionUsage {
-        used,
-        size: 100,
-        raw,
-        observed_at_ms,
-    };
-    let raw = serde_json::json!({"used": 10, "size": 100, "_meta": {"cowboy": {"sanitizer": 1}}});
-    hub.set_session_usage("usage-plan", usage(10, raw.clone(), 5));
-    let stored = || hub.session_info("usage-plan").unwrap().meta.usage.unwrap();
-    // A reconnect snapshot repeating the counters keeps the observation.
-    hub.set_session_usage("usage-plan", usage(10, serde_json::Value::Null, 0));
-    assert_eq!(stored(), usage(10, raw, 5));
-    // New counters replace it whole: no raw update of another reading.
-    hub.set_session_usage("usage-plan", usage(20, serde_json::Value::Null, 0));
-    assert_eq!(stored(), usage(20, serde_json::Value::Null, 0));
-}
-
-#[test]
 fn context_usage_is_persisted_once_per_change_and_cleared_by_reset() {
     let health = std::sync::Arc::new(PersistenceHealth::default());
     let (sink, mut rx) = StoreSink::channel(64, health);

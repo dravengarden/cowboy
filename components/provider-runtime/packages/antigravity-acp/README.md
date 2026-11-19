@@ -45,7 +45,10 @@ places its tree below `proxy/` in the account-sandbox runtime archive and adds
   the Web apply the same rule); a tier it cannot read clears the plan, a
   result without one keeps it. A session result is forwarded without awaiting
   anything, so it reaches the worker before a `usage_update` that follows in
-  the same chunk, and that reading already carries the plan. Every
+  the same chunk, and that reading already carries the plan. A
+  `session/prompt` result is not: its turn stays observed until its evidence
+  settles, so a built-in tool reported in the same chunk still makes the
+  reply a policy violation. Every
   `usage_update` then carries `_meta.cowboy = {sanitizer: 1, account_plan}`
   (whatever `agy` put under `_meta.cowboy` is dropped first; the Controller
   accepts a plan only beside `sanitizer: 1`), so the session usage the
