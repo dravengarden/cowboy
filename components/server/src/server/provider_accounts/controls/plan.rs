@@ -21,24 +21,55 @@ fn valid_id(id: &str) -> bool {
         })
 }
 
-/// Printable text only: no character of the Unicode general category
-/// `Other` (`Cc` control, `Cf` format, `Cs` surrogate, `Co` private use, `Cn`
-/// unassigned) and no line or paragraph separator, at most [`MAX_NAME`] code
-/// points. The proxy and the Web apply the same rule (`[\p{C}\p{Zl}\p{Zp}]`).
-/// The proxy rejects a forbidden character anywhere and then trims, so a
-/// name it reports is already trimmed; an untrimmed one is not its output.
+/// Printable text only, at most [`MAX_NAME`] code points: no control (`Cc`),
+/// format (`Cf`), private-use (`Co`) or noncharacter code point and no line
+/// or paragraph separator. The proxy and the Web apply the full
+/// `[\p{C}\p{Zl}\p{Zp}]` rule with their Unicode tables; this dependency-free
+/// copy additionally admits code points unassigned in Unicode, which the
+/// proxy never reports. The proxy rejects a forbidden character anywhere and
+/// then trims, so a name it reports is already trimmed.
 fn valid_name(name: &str) -> bool {
-    use unicode_properties::{GeneralCategory, GeneralCategoryGroup, UnicodeGeneralCategory as _};
     !name.is_empty()
         && name.trim() == name
         && name.chars().count() <= MAX_NAME
-        && !name.chars().any(|character| {
-            character.general_category_group() == GeneralCategoryGroup::Other
-                || matches!(
-                    character.general_category(),
-                    GeneralCategory::LineSeparator | GeneralCategory::ParagraphSeparator
-                )
-        })
+        && !name.chars().any(forbidden_in_name)
+}
+
+/// The `Cf` code points of Unicode 16.
+const FORMAT: &[(u32, u32)] = &[
+    (0x00AD, 0x00AD),
+    (0x0600, 0x0605),
+    (0x061C, 0x061C),
+    (0x06DD, 0x06DD),
+    (0x070F, 0x070F),
+    (0x0890, 0x0891),
+    (0x08E2, 0x08E2),
+    (0x180E, 0x180E),
+    (0x200B, 0x200F),
+    (0x202A, 0x202E),
+    (0x2060, 0x2064),
+    (0x2066, 0x206F),
+    (0xFEFF, 0xFEFF),
+    (0xFFF9, 0xFFFB),
+    (0x110BD, 0x110BD),
+    (0x110CD, 0x110CD),
+    (0x13430, 0x1343F),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0xE0001, 0xE0001),
+    (0xE0020, 0xE007F),
+];
+
+fn forbidden_in_name(character: char) -> bool {
+    let code = u32::from(character);
+    character.is_control()
+        || matches!(code, 0x2028 | 0x2029)
+        || matches!(code, 0xE000..=0xF8FF | 0xF0000..=0xFFFFD | 0x100000..=0x10FFFD)
+        || matches!(code, 0xFDD0..=0xFDEF)
+        || code & 0xFFFE == 0xFFFE
+        || FORMAT
+            .iter()
+            .any(|&(low, high)| (low..=high).contains(&code))
 }
 
 /// One session's reported plan and when it was observed.

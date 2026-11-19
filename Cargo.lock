@@ -939,7 +939,6 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
- "unicode-properties",
  "url",
  "uuid",
  "webauthn-rs",

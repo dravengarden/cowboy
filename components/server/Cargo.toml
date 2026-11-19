@@ -76,9 +76,6 @@ semver = "1"
 mime_guess = "2"
 p256 = { version = "0.13", features = ["ecdsa", "pem", "pkcs8"] }
 rand = "0.8"
-# Unicode general categories: plan names shown to people follow the same
-# printable rule (`\p{C}`, `\p{Zl}`, `\p{Zp}` rejected) as the proxy and the Web.
-unicode-properties = { version = "0.1.4", default-features = false, features = ["general-category"] }
 cowboy-provider-sdk = { version = "=3.6.0", path = "../provider-sdk" }
 cowboy-plugin-sdk = { version = "=1.19.0", path = "../plugin-sdk" }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
