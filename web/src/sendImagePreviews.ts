@@ -1,9 +1,20 @@
 import { type Attachment, attachmentDisplayParts, isLoadablePreviewUrl, stripImageTokens } from "./attachments";
 import type { Envelope } from "./protocol";
+import type { State } from "./store";
 import { isTurnActivityUpdate } from "./turnWaiting";
 import { shouldPaintTranscriptLifecycle } from "./transcriptLoadingPresentation";
 
 const previewsByCmid = new Map<string, string[]>();
+
+export function transcriptDeliveryVisible(
+  snapshot: Pick<State, "optimisticMessages" | "timelines">,
+  sessionId: string,
+  cmid: string,
+  attachments: readonly Attachment[],
+): boolean {
+  return snapshot.optimisticMessages.get(sessionId)?.some((message) => message.cmid === cmid) === true ||
+    promptEchoReadyToReplaceOptimistic({ cmid, attachments }, snapshot.timelines.get(sessionId) ?? []);
+}
 
 /** Keep the in-memory send preview so the confirmed bubble can paint the same
  * pixels instead of remounting an `/api/artifacts/…` fetch. */

@@ -88,6 +88,7 @@ export async function runSessionContextBrowserConformance(
   const contextReads: string[] = [];
   let heldMessage: WireQueued | undefined;
   let staleQueueView = false;
+  let legacyQueueSend = false;
   const queueCommands: Inbound[] = [];
   class Socket {
     static active: Socket[] = [];
@@ -116,7 +117,7 @@ export async function runSessionContextBrowserConformance(
       const command = JSON.parse(raw) as Inbound;
       if (command.type === "activate_draft" || command.type === "request_send_queued" ||
         command.type === "queued_to_draft") queueCommands.push(command);
-      if (command.type === "request_send_queued") {
+      if (command.type === "request_send_queued" && !legacyQueueSend) {
         setTimeout(() => this.publish({
           type: "command_result", session_id: command.session_id, cmid: command.cmid,
           outcome: "rejected", message: "Context changes are pending",
@@ -796,6 +797,32 @@ export async function runSessionContextBrowserConformance(
       check(
         attemptedSend?.type === "request_send_queued" && Boolean(attemptedSend.cmid),
         `${mode}: an addressed refusal restores the original queue row and clears the waiting bubble`,
+      );
+      heldMessage = { ...heldMessage, cmid: `legacy-message-${mode}` };
+      Socket.active.at(-1)?.publish({
+        type: "sync_patch", state: `queue:${sourceId}`, version: 1,
+        value: { queue: [heldMessage], drafts: [] }, confirmed: [heldMessage.cmid], resync: true,
+      });
+      legacyQueueSend = true;
+      staleQueueView = true;
+      try {
+        await requestSendQueued(sourceId, heldMessage.id);
+      } finally {
+        legacyQueueSend = false;
+        staleQueueView = false;
+      }
+      const queuePresentation = () => container.querySelector("[data-queue-recovery]")
+        ?.getAttribute("data-queue-recovery");
+      await until(() => queuePresentation() === JSON.stringify([[], 1]));
+      const sendsBeforeResync = queueCommands.length;
+      Socket.active.at(-1)?.publish({
+        type: "sync_patch", state: `queue:${sourceId}`, version: 1,
+        value: { queue: [heldMessage], drafts: [] }, confirmed: [heldMessage.cmid], resync: true,
+      });
+      await until(() => queuePresentation() === JSON.stringify([[heldMessage!.id], 0]));
+      check(
+        queueCommands.length === sendsBeforeResync && confirmedPending(sourceId)?.queue[0]?.attachments.length === 1,
+        `${mode}: held queue reconciles a legacy send with no refusal receipt or replay`,
       );
       const queueCommandCount = queueCommands.length;
       setDraft(sourceId, { text: "Different local draft", attachments: [] });

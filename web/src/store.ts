@@ -34,6 +34,7 @@ import {
   promptEchoReadyToReplaceOptimistic,
   promptEchoText,
   rememberSendImagePreviews,
+  transcriptDeliveryVisible,
 } from "./sendImagePreviews";
 import {
   checkReconnectAdmission,
@@ -111,7 +112,7 @@ import { notifyHaptic } from "./haptic";
 import { reportClientDuration, reportClientLog, reportClientMetric, startClientSpan } from "./observability";
 import { ClientOperations } from "./otelOperations.ts";
 import { isTurnActivityUpdate } from "./turnWaiting.ts";
-import { ContextNavigationNotice, requireCurrentAgentContext, sendWithContext } from "./sessionContext";
+import { ContextNavigationNotice, loadSessionContext, requireCurrentAgentContext, sendWithContext, stagedNextAgent } from "./sessionContext";
 import { composeDraftForStagedAgent } from "./contextPendingPrompt";
 
 const telemetryOperations = new ClientOperations(
@@ -898,25 +899,6 @@ function waitForPresentedState(
   label: string,
 ): Promise<void> {
   return waitForSnapshot(() => presentedState, listeners, predicate, label, NETWORK_ACTION_TIMEOUT_MS);
-}
-
-function transcriptDeliveryVisible(
-  snapshot: State,
-  sessionId: string,
-  cmid: string,
-  attachments: readonly Attachment[],
-): boolean {
-  if (
-    (snapshot.optimisticMessages.get(sessionId) ?? []).some((message) =>
-      message.cmid === cmid
-    )
-  ) {
-    return true;
-  }
-  return promptEchoReadyToReplaceOptimistic(
-    { cmid, attachments },
-    snapshot.timelines.get(sessionId) ?? [],
-  );
 }
 
 let confirmedActionProbe = 0;
@@ -5192,6 +5174,24 @@ function findQueued(sessionId: string, id: string): QueuedMessage | undefined {
 
 export function confirmedPending(sessionId: string): QValue | undefined {
   return qClients.get(sessionId)?.baseValue();
+}
+
+/** Retire only old send attempts whose original message is still in the held queue. */
+export async function reconcileStagedQueue(sessionId: string, revision: number): Promise<void> {
+  const store = await durableQueue(sessionId);
+  const context = await loadSessionContext(sessionId);
+  if (!stagedNextAgent(context) || context.revision !== revision) return;
+  for (const mutation of store.pending()) {
+    if (!isQueuedSend(mutation.name)) continue;
+    const { id, row } = mutation.args as { id: string; row: QueuedMessage };
+    if (store.baseValue().queue.some((item) => item.id === id && item.cmid === row.cmid)) {
+      await returnFailedQueued(sessionId, mutation.id);
+    }
+  }
+  const visible = new Set(store.get().queue.map((row) => row.cmid));
+  const confirmed = new Set(store.baseValue().queue.filter((row) => visible.has(row.cmid)).map((row) => row.cmid));
+  const optimisticMessages = reconcileOptimistic(state.optimisticMessages, sessionId, confirmed);
+  if (optimisticMessages !== state.optimisticMessages) setInteractiveState({ ...state, optimisticMessages });
 }
 
 function findDraft(sessionId: string, id: string): QueuedMessage | undefined {

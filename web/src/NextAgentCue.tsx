@@ -1,9 +1,10 @@
 import { Box, Button, Typography } from "@mui/material";
+import { useEffect } from "react";
 import { expandComposerStackPanel } from "./composerStackAccordion";
 import { checkComposerAvailable, composePendingPrompt } from "./contextPendingPrompt";
 import { useNetworkActionState } from "./NetworkActionFeedback";
 import { loadSessionContext, stagedNextAgent } from "./sessionContext";
-import { confirmedPending, notify, sendWithAck, useStoreSelector } from "./store";
+import { confirmedPending, notify, reconcileStagedQueue, sendWithAck, useStoreSelector } from "./store";
 
 const buttonSx = { flexShrink: 0, minWidth: 0, textTransform: "none" };
 
@@ -15,6 +16,9 @@ export function NextAgentCue(
   const queue = useStoreSelector(() => confirmedPending(sessionId)?.queue);
   const move = useNetworkActionState();
   const count = queue?.length ?? 0;
+  useEffect(() => {
+    if (queue?.length) void reconcileStagedQueue(sessionId, revision).catch(() => undefined);
+  }, [queue, sessionId, revision]);
   const recover = async (): Promise<void> => {
     if (count !== 1 || !queue?.[0]) {
       expandComposerStackPanel("queued");
