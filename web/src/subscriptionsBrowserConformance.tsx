@@ -15,6 +15,7 @@ import { SubscriptionLogin, SubscriptionLoginForm } from "./SubscriptionLogin";
 import { subscriptionLoginIsolationBrowser } from "./subscriptionLoginIsolationBrowser";
 import { accountIdentityBrowser } from "./accountIdentityBrowser";
 import { portableAccountBrowser } from "./portableAccountBrowser";
+import { namedOnlyAccountsBrowser } from "./namedOnlyAccountsBrowser";
 import { remoteClipboardBrowser } from "./machineBrowser/remoteClipboardBrowser";
 export { accountIdentityBrowser };
 
@@ -26,7 +27,7 @@ function SubscriptionPicker({ desktop }: { desktop: boolean }): React.JSX.Elemen
 }
 
 export async function runSubscriptionsBrowserConformance(observe?: (surface: string, stage: string) => Promise<void>): Promise<string[]> {
-  const checks: string[] = [];
+  const checks: string[] = await namedOnlyAccountsBrowser();
   for (const surface of ["mobile", "desktop"] as const) {
     checks.push(...(await runSurface(surface, observe)).map((check) => `${surface}: ${check}`));
   }

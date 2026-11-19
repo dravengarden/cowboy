@@ -51,6 +51,7 @@ import {
   useProviderCatalog,
 } from "./providerCatalog";
 import { groupProviderAuthentications } from "./providerAuthenticationGroups.ts";
+import { withoutNamedOnly } from "./accountControls.ts";
 import {
   providerAuthenticationCompleted,
   providerAuthenticationPromoting,
@@ -364,9 +365,12 @@ function ProviderManagement(
     () => latestProviderEntries(catalog?.providers ?? []),
     [catalog],
   );
+  // A named-only Provider has no Service credential: its accounts are the
+  // named cards, and a Service sign-in could only be refused.
+  const namedOnly = accounts?.namedOnly.join("\n") ?? "";
   const serviceEntries = useMemo(
-    () => serviceAuthenticationProviderEntries(catalog?.providers ?? []),
-    [catalog],
+    () => withoutNamedOnly(serviceAuthenticationProviderEntries(catalog?.providers ?? []), namedOnly.split("\n")),
+    [catalog, namedOnly],
   );
   const serviceCredentialGroups = useMemo(
     () => groupProviderAuthentications(serviceEntries),

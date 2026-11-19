@@ -187,3 +187,11 @@ test("a Max report without a 5-hour window is shown as Ultra; nothing else is in
   assertEquals(displayPlan({ ...usage({ "x": window(10080) }), provider: "openai" } as never, "max"), "max");
 });
 
+
+test("a named-only Provider reports only its named accounts, never a Service card", () => {
+  setup();
+  const accounts: SubscriptionSnapshot = { ...registry, named_only_providers: ["claude-code"] };
+  const cards = registeredUsageAccounts(snapshot, accounts, [session]);
+  assertEquals(cards.map((card) => card.id), ["openai", "otter"]);
+  assertEquals(cards.find((card) => card.id === "otter")?.collector, undefined);
+});

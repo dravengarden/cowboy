@@ -105,6 +105,12 @@ export function namedOnlyProvider(data: ControlledAccounts | undefined, provider
   return data?.named_only_providers?.includes(provider) === true;
 }
 
+/** `entries` without named-only Providers: those have no default (Service)
+ * account, so no Service card, sign-in or usage may represent them. */
+export function withoutNamedOnly<T extends { provider_id: string }>(entries: readonly T[], namedOnly: readonly string[] | undefined): T[] {
+  return entries.filter((entry) => !namedOnly?.includes(entry.provider_id));
+}
+
 export function accountControl(data: ControlledAccounts | undefined, account: string | undefined | null): AccountControl | undefined {
   return account ? data?.account_controls?.accounts.find((control) => control.account_id === account) : undefined;
 }

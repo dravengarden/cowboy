@@ -2,6 +2,7 @@ import type { SessionMeta } from "./protocol";
 import type { SubscriptionSnapshot } from "./subscriptionAccounts";
 import { sessionQuota } from "./sessionQuota";
 import type { NativeAccountUsage } from "./nativeAccountUsage";
+import { namedOnlyProvider } from "./accountControls";
 import { accountProviderLabel, providerUsage, type ProviderUsage, type UsageSnapshot, usageCardProviders, usagePluginId } from "./usageLimits";
 
 export interface UsageAccountCard {
@@ -74,6 +75,8 @@ export function registeredUsageAccounts(
   };
   for (const usage of usageCardProviders(snapshot)) {
     const provider = usagePluginId(usage.provider);
+    // A named-only Provider has no Service account to report.
+    if (namedOnlyProvider(accounts, provider)) continue;
     const label = accounts?.display_preferences?.values.legacy_labels[provider];
     const group = named.filter((account) => account.provider_id === provider);
     const isDefault = group.length > 0 && (!accounts?.registry.defaults[provider] || accounts.registry.defaults[provider] === "default");

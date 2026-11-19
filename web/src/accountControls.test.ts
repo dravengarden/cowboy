@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { assert, assertEquals, assertStringIncludes } from "../../tools/test-assert.ts";
 import {
   type AccountControl, accountPlanLabel, accountStateBadge, acknowledgementTarget, acknowledgeUncertainEffect, controlActions, controlRequest, logoutStatus,
-  pickerUnavailableReason, postAccountControl, sessionParkedReason, sessionPlanKey, signInObservation, validAccountControls,
+  pickerUnavailableReason, postAccountControl, sessionParkedReason, sessionPlanKey, signInObservation, validAccountControls, withoutNamedOnly,
 } from "./accountControls";
 import { AccountControlsPanel } from "./AccountControlsPanel";
 import { UncertainEffectAcknowledge } from "./SessionAccountControl";
@@ -248,4 +248,12 @@ test("a changed session plan for the account changes its refresh key", () => {
   assertEquals(sessionPlanKey([...sessions].reverse(), ACCOUNT), key);
   assert(sessionPlanKey([...sessions, { provider_account_id: ACCOUNT, usage: reading("g1-pro-tier", "Pro") }], ACCOUNT) !== key);
   assert(sessionPlanKey([{ provider_account_id: ACCOUNT, usage: reading("free-tier", "Starter 2") }], ACCOUNT) !== key);
+});
+
+test("a named-only Provider never offers a Service account card or sign-in", () => {
+  const entries = [{ provider_id: "antigravity" }, { provider_id: "codex" }, { provider_id: "claude-code" }];
+  assertEquals(withoutNamedOnly(entries, ["antigravity"]).map((entry) => entry.provider_id), ["codex", "claude-code"]);
+  // Before the snapshot loads, or from a Controller that predates the field.
+  assertEquals(withoutNamedOnly(entries, undefined).length, 3);
+  assertEquals(withoutNamedOnly(entries, [""]).length, 3);
 });

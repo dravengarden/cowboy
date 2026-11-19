@@ -17,7 +17,7 @@ import { browserErrorText } from "./machineBrowser/api";
 import { ProviderAccountIdentity, providerAccountCardSx } from "./ProviderAccountIdentity";
 import { legacySubscriptionLabel, validLegacyLabels, validSubscriptionLabel } from "./subscriptionDisplay";
 import { providerDefault, type SubscriptionSnapshot as Snapshot, validSubscriptionSnapshot } from "./subscriptionAccounts";
-import { accountControl } from "./accountControls";
+import { accountControl, namedOnlyProvider } from "./accountControls";
 import { AccountControlsPanel } from "./AccountControlsPanel";
 import { useNativeAccountUsage } from "./nativeAccountUsage";
 export { validSubscriptionSnapshot } from "./subscriptionAccounts";
@@ -94,6 +94,8 @@ export function subscriptionRejectionText(code: string): string {
 export interface SubscriptionCards {
   legacy: (provider: string) => { title: string | undefined; controls: ReactNode };
   named: { id: string; provider: string; content: ReactNode }[];
+  /** Providers with no default (Service) account: only their named cards render. */
+  namedOnly: string[];
 }
 
 /** One account surface; signed Provider UI continues to own credential actions. */
@@ -218,7 +220,7 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
   const legacyProviders = snapshot?.display_preferences ? [...new Set([
     ...providers.map((entry) => entry.provider_id), ...snapshot.registry.accounts.map((account) => account.provider_id),
     ...Object.keys(snapshot.display_preferences.values.legacy_labels),
-  ])] : [];
+  ])].filter((id) => !namedOnlyProvider(snapshot, id)) : [];
   const disabled = busy || Boolean(pending) || !snapshot || !journalReady;
   const legacy: SubscriptionCards["legacy"] = (id) => {
     const current = legacySubscriptionLabel(snapshot?.display_preferences, id);
@@ -293,7 +295,7 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
       <Typography variant="caption" color="text.secondary">Add an account, then choose a Machine to see its supported sign-in methods.</Typography>
     </Stack>}
     {snapshot?.session_admission !== "enabled" && <Typography variant="caption" color="text.secondary">Additional accounts support sign-in setup. Creating sessions with them is not enabled yet.</Typography>}
-    {renderAccounts ? renderAccounts({ legacy, named }) : <>
+    {renderAccounts ? renderAccounts({ legacy, named, namedOnly: snapshot?.named_only_providers ?? [] }) : <>
       {legacyProviders.map((id) => <Box key={`legacy:${id}`}>{legacy(id).controls}</Box>)}
       {named.map((card) => card.content)}
     </>}
