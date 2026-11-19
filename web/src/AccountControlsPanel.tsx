@@ -1,8 +1,8 @@
 import { Alert, Button, FormControlLabel, Link, Stack, Switch, Typography } from "@mui/material";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   type AccountControl, accountPlanLabel, accountStateBadge, type ControlAction, controlActions, controlReasonText, logoutStatus,
-  postAccountControl, signInObservation,
+  postAccountControl, sessionPlanKey, signInObservation,
 } from "./accountControls";
 import { ProviderAccountStatus } from "./ProviderAccountIdentity";
 import { ConfirmSheet } from "./Sheet";
@@ -21,6 +21,9 @@ const CONFIRM: Partial<Record<ControlAction, { title: string; body: string; butt
     button: "Sign out",
   },
 };
+
+/** Debounce for reloading account controls after a session reports a plan. */
+const PLAN_REFRESH_MS = 1_000;
 
 /** Account controls of a named-only (Antigravity) account card: state,
  * the session using it, usage, admission and the owner's kill switch. */
@@ -41,6 +44,18 @@ export function AccountControlsPanel({ control, observation, disabled, onChange 
   const pendingFences = control.fences.filter((fence) => fence.state !== "confirmed");
   const logout = logoutStatus(control.logout);
   const plan = accountPlanLabel(control);
+  // A session broadcast reporting another plan for this account refreshes
+  // the account's controls (debounced), so the card never keeps a stale plan.
+  const reported = useStoreSelector((state) => sessionPlanKey(state.sessions, control.account_id));
+  const seen = useRef(reported);
+  const refresh = useRef(onChange);
+  refresh.current = onChange;
+  useEffect(() => {
+    if (seen.current === reported) return;
+    seen.current = reported;
+    const timer = setTimeout(() => refresh.current(), PLAN_REFRESH_MS);
+    return () => clearTimeout(timer);
+  }, [reported]);
   async function run(action: ControlAction) {
     setBusy(true); setError("");
     try {

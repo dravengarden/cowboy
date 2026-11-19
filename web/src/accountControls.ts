@@ -73,6 +73,23 @@ export function accountPlanLabel(control: Pick<AccountControl, "plan">): string 
   return name;
 }
 
+/** The plans the account's sessions currently report in their usage
+ * readings, as one comparable key. A change means the Controller's account
+ * plan may have changed, so the account controls are worth reloading. */
+export function sessionPlanKey(
+  sessions: readonly { provider_account_id?: string; usage?: { raw: Record<string, unknown> | null } }[],
+  account: string,
+): string {
+  const plans = new Set<string>();
+  for (const session of sessions) {
+    if (session.provider_account_id !== account) continue;
+    const meta = session.usage?.raw?._meta;
+    const plan = record(meta) && record(meta.cowboy) ? meta.cowboy.account_plan : undefined;
+    if (record(plan)) plans.add(JSON.stringify([plan.id, plan.name]));
+  }
+  return [...plans].sort().join("\n");
+}
+
 export function validAccountControls(value: unknown): value is AccountControls {
   return record(value) && typeof value.loaded === "boolean" && Array.isArray(value.accounts) && value.accounts.every(validControl);
 }

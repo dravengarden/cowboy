@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { assert, assertEquals, assertStringIncludes } from "../../tools/test-assert.ts";
 import {
   type AccountControl, accountPlanLabel, accountStateBadge, acknowledgementTarget, acknowledgeUncertainEffect, controlActions, controlRequest, logoutStatus,
-  pickerUnavailableReason, postAccountControl, sessionParkedReason, signInObservation, validAccountControls,
+  pickerUnavailableReason, postAccountControl, sessionParkedReason, sessionPlanKey, signInObservation, validAccountControls,
 } from "./accountControls";
 import { AccountControlsPanel } from "./AccountControlsPanel";
 import { UncertainEffectAcknowledge } from "./SessionAccountControl";
@@ -230,4 +230,22 @@ test("the account card shows the plan the Provider reported, and nothing it cann
   assert(!render(createElement(AccountControlsPanel, {
     control: control(), observation: { available: true }, disabled: false, onChange: () => undefined,
   })).includes("Plan ·"));
+});
+
+test("a changed session plan for the account changes its refresh key", () => {
+  const reading = (id: string, name: string) => ({ raw: { _meta: { cowboy: { account_plan: { id, name } } } } });
+  const sessions = [
+    { provider_account_id: ACCOUNT, usage: reading("free-tier", "Starter") },
+    { provider_account_id: ACCOUNT, usage: reading("free-tier", "Starter") },
+    { provider_account_id: "other", usage: reading("ultra", "Ultra") },
+    { provider_account_id: ACCOUNT, usage: { raw: null } },
+    { provider_account_id: ACCOUNT },
+  ];
+  const key = sessionPlanKey(sessions, ACCOUNT);
+  assertEquals(sessionPlanKey([], ACCOUNT), "");
+  // Another account's plan, or a repeated one, changes nothing.
+  assertEquals(sessionPlanKey([...sessions, { provider_account_id: "other", usage: reading("pro", "Pro") }], ACCOUNT), key);
+  assertEquals(sessionPlanKey([...sessions].reverse(), ACCOUNT), key);
+  assert(sessionPlanKey([...sessions, { provider_account_id: ACCOUNT, usage: reading("g1-pro-tier", "Pro") }], ACCOUNT) !== key);
+  assert(sessionPlanKey([{ provider_account_id: ACCOUNT, usage: reading("free-tier", "Starter 2") }], ACCOUNT) !== key);
 });
