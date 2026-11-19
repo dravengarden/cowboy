@@ -1624,13 +1624,32 @@ audit logging, and denies `ptrace` and `signal` toward anything outside its
 own instance.
 
 **IPv4-only Providers (R3-15).** The Controller's `Open` carries
-`network: "ipv4_only_v1"` for an account whose Provider, as installed on that
-Machine, declares the `ipv4_only_v1` runtime network policy (a named-only
-Provider whose manifest cannot be resolved is restricted too). The Machine
-then adds `RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK`,
+`network: "ipv4_only_v1"` for an own named account's browser whose Provider,
+as installed on that Machine, declares the `ipv4_only_v1` runtime network
+policy (a named-only Provider whose manifest cannot be resolved is restricted
+too). The Machine then adds `RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK`,
 `SystemCallArchitectures=native` and
 `SystemCallFilter=~io_uring_setup io_uring_enter io_uring_register` to the
-instance's unit; other accounts' units are unchanged. A Machine that predates
+instance's unit; other units are unchanged, and an `Open` naming another
+policy than its running unit replaces that unit.
+
+**Machine-enforced IPv4-only browsers.** A Machine whose Device setting
+`browser.ipv4_only` is `true` (restart-applied; see
+[`configuration.md`](configuration.md#machine-browser-network-policy)) runs
+*every* browser unit with those properties, own or
+[shared](#shared-browser-profiles), named account or legacy card, whatever
+the `Open` names, and reports it in its browser capability
+(`Capability.network: "ipv4_only_v1"`, sent in the hello and on every
+capability change). The setting is read once when the Machine starts: before
+the restart inventory admits anything, a surviving unit whose record names
+no `ipv4_only_v1` policy is stopped with a stop-time snapshot instead of
+being adopted, so it never serves a viewer or a command again, and the next
+open starts it under the policy. Everything such a Machine runs is therefore
+IPv4-only, with no per-instance confirmation by the Controller. The Controller
+also names `ipv4_only_v1` in every `Open` to such a Machine. A Controller that
+predates the capability field refuses the hello of a Machine that sets it
+(`deny_unknown_fields`), so the Controller is upgraded before the setting is
+turned on; a Machine without the setting omits the field. A Machine that predates
 the field refuses such an `Open` (`deny_unknown_fields`) rather than run the
 browser unrestricted. The matching AppArmor rule (an `ipv4_only` variant of
 the sealed profile with `deny network inet6`) is host policy in Columbus
@@ -1651,7 +1670,9 @@ directories and canary files, before it is installed on OVH.
 
 Isolation is per **browser identity**: an account card, or an owner-defined
 [share](#shared-browser-profiles) of cards of pairwise distinct account-usage
-families. The browsers of different browser identities share no profile,
+families; a share exists only by the owner's explicit choice and is the one
+exception to one browser per account. The browsers of different browser
+identities share no profile,
 display, temporary, shared-memory, IPC or socket state, and nothing a page
 can store in one identity's browser can be read by another's. Two accounts of
 the same family (two Claude accounts, two OpenAI accounts) are never one
@@ -1762,10 +1783,12 @@ shared: every card keeps its own browser exactly as above.
   `account:<id>`) or a legacy card (`{card}`, stored `card:<card>`). A member
   belongs to at most one share (primary key `(owner, member)`).
 - **Family rule (hard).** Families come only from a closed, versioned table
-  in Cowboy code (`store::provider_accounts::browser_families`, version 1,
+  in Cowboy code (`store::provider_accounts::browser_families`, version 2,
   pinned by a test), never from the mutable Provider catalog: named-account
   Providers `claude-code` → `anthropic`, `codex` → `openai`, `grok` → `xai`,
-  `claude-deepseek`, `codex-deepseek` and `deepseek-harness` → `deepseek`;
+  `claude-deepseek`, `codex-deepseek` and `deepseek-harness` → `deepseek`,
+  `antigravity` → `google` (version 2; named-only, so the family has no legacy
+  card and only named members);
   legacy cards `anthropic`, `openai`, `xai` and `deepseek` by their id. A
   named account's Provider never changes, so neither does its family. A
   Provider or card outside the table has no family and never joins
@@ -1781,8 +1804,8 @@ shared: every card keeps its own browser exactly as above.
   remedy) stay possible.
   A member, even one leaving or not in any share, must be the owner's own
   identity (`account_not_found` otherwise).
-  So Claude · Lark can never be linked with Claude · Lynx, and two OpenAI
-  accounts never share.
+  So Claude · Lark can never be linked with Claude · Lynx, two OpenAI
+  accounts never share, and neither do two Antigravity accounts.
 - **Family binding (hard).** The profile may keep a member's cookies after it
   leaves, so each family of a share's profile stays bound to the first member
   of that family that joined (`provider_browser_share_bindings`, recorded at
@@ -1834,7 +1857,48 @@ shared: every card keeps its own browser exactly as above.
   two concurrent first opens on different Machines only one is placed (the
   other gets `browser_not_placed`).
   Its first Machine follows the opening member's credential Machines (else the
-  first-Machine chooser). Members' own placements are never reused.
+  first-Machine chooser), skipping Machines the share's gate refuses.
+  Members' own placements are never reused.
+- **Machine gate and network policy.** A share's unit is one browser for
+  several identities, so its policy never depends on who joined when: it is
+  the policy its Machine enforces (see
+  [Machine-enforced IPv4-only browsers](#host-sandbox-policy-outside-cowboy)).
+  A share with an IPv4-only identity is therefore placed and opened only on a
+  Machine that reports `Capability.network: "ipv4_only_v1"`. That identity
+  is any current member or any identity whose family is still bound to the
+  profile (its cookies may remain). A named account is decided by its own
+  Provider: IPv4-only when it is named-only (Antigravity) or a signed release
+  of it the Service holds declares `ipv4_only_v1`, unknown when the Service
+  holds none (a known sibling of its family never vouches for it). A legacy
+  card or a deleted account's binding is decided by its family: IPv4-only
+  when any of its Providers in the family table is, unknown when none has a
+  release to decide by. An unknown identity is hosted only where the Machine
+  enforces IPv4-only (never a downgrade). A current member of a named-only or
+  native-only Provider (Antigravity, Claude) also needs that Provider
+  installed on the Machine and its native login allowed there
+  (`runtime_allowed`, the configured sign-in Machine).
+  A Machine that reports no browser capability now (not connected), an
+  unreadable Machine inventory, account list or share list, or an unknown
+  identity on a Machine that does not enforce IPv4-only is
+  `browser_share_machine_unknown` (retry; nothing changed). A Machine
+  confirmed not to enforce IPv4-only, or without the pinned Provider
+  installed or allowed, is `browser_share_machine_unsupported`.
+  **Ordering.** An open takes the browser key's lifecycle lock first and then
+  the owner's share fence, authorizes again under both (a key that changed
+  meanwhile is resolved again), and checks the gate, chooses the Machine and
+  admits the placement under them; the fence is never held while waiting for
+  an earlier open of the key. A join is checked under the same fence, which
+  the membership writer holds, against the share's existing placements for
+  the whole prospective share (the incoming member with the current members
+  and bindings); an unknown account or a Provider outside the family table is
+  left to the writer (`account_not_found`, `browser_share_family_unknown`).
+  So neither an open nor a join can slip past the other. The first-Machine
+  chooser offers only Machines the gate admits, and a state read reports a
+  placed or requested Machine the gate refuses as its `admission`, so a
+  client never offers an open the server refuses. Attaching to and driving a
+  running unit need no further check: whatever an enforcing Machine runs is
+  IPv4-only. A join that changes nothing (the member already in exactly that
+  share) is answered without a check and has no browser effect.
 - **Profiles.** A new share starts with a fresh empty profile under its key.
   Cookies are never copied between keys. Members' own profiles are retained
   untouched and are what the member uses again after leaving the share.

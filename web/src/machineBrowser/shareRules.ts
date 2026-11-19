@@ -18,6 +18,7 @@ const FAMILY_NAMES: Record<string, string> = {
   openai: "OpenAI",
   xai: "Grok",
   deepseek: "DeepSeek",
+  google: "Antigravity",
 };
 
 /** The product name of an account-usage family. */

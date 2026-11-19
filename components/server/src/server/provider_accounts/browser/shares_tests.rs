@@ -445,6 +445,23 @@ fn only_deleting_a_share_revokes_its_browser() {
             }
         }
     }
+    // A named account joining never touches the share's running browser:
+    // its network policy is the Machine's, not the membership's.
+    let husky = named("antigravity", "Husky", true);
+    assert_eq!(
+        change_effects(
+            OWNER,
+            &Change::SetBrowserShare {
+                member: Member::account(husky.id.clone()),
+                share_id: Some(share_id.clone()),
+            },
+            &receipt(husky.id.clone())
+        ),
+        vec![
+            Effect::EndMemberViewers(husky.id.clone()),
+            Effect::HibernateOwn(husky.id.clone(), "browser_share_changed"),
+        ]
+    );
     // Deleting the share revokes exactly the share's browser.
     assert_eq!(
         change_effects(

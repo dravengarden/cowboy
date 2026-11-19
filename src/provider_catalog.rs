@@ -223,6 +223,22 @@ mod service_catalog {
                 })
         }
 
+        /// Whether any signed release of `provider_id` the Service holds
+        /// declares the `ipv4_only_v1` runtime network policy; `None` when it
+        /// holds none (unknown, never "unrestricted").
+        pub fn declares_ipv4_only(&self, provider_id: &str) -> Option<bool> {
+            let external = self.external.read();
+            let mut releases = external
+                .values()
+                .filter(|artifact| artifact.entry.provider_id == provider_id)
+                .peekable();
+            releases.peek()?;
+            Some(releases.any(|artifact| {
+                artifact.package.manifest.runtime.network
+                    == Some(cowboy_provider_sdk::RuntimeNetworkPolicy::Ipv4OnlyV1)
+            }))
+        }
+
         /// Providers whose newest signed release supports named native
         /// accounts. Session admission still checks the exact pinned release.
         pub fn native_account_providers(&self) -> std::collections::BTreeSet<String> {

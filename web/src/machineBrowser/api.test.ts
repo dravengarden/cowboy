@@ -53,6 +53,8 @@ test("admission and refusal codes never reach people raw", () => {
     "browser_attach_failed",
     "invalid_viewport",
     "resize_failed",
+    "browser_share_machine_unsupported",
+    "browser_share_machine_unknown",
   ];
   const fallback = browserErrorText("future_code");
   for (const code of codes) {

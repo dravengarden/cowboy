@@ -67,6 +67,48 @@ impl Fixture {
 }
 
 #[test]
+fn one_antigravity_account_joins_a_share_of_other_families() {
+    let husky = named("antigravity", "Husky");
+    let otter = named("antigravity", "Otter");
+    let fixture = Fixture {
+        registry: Registry {
+            revision: 3,
+            accounts: vec![husky.clone(), otter.clone()],
+            defaults: BTreeMap::new(),
+        },
+        placed: BTreeSet::new(),
+    };
+    let mut shares = Shares::default();
+    let heron = fixture.create(&mut shares, "Heron");
+    for card in ["anthropic", "openai", "xai"] {
+        fixture
+            .set(&mut shares, Member::card(card), Some(&heron))
+            .unwrap();
+    }
+    fixture
+        .set(&mut shares, Member::account(husky.id.clone()), Some(&heron))
+        .unwrap();
+    let joined = shares
+        .membership(&Member::account(husky.id.clone()))
+        .unwrap();
+    assert_eq!(joined.family, "google");
+    assert!(families_distinct(&shares.members_of(&heron)));
+    // Two Antigravity accounts never share one browser, nor does a second
+    // one use a profile the first left behind.
+    assert_eq!(
+        fixture.set(&mut shares, Member::account(otter.id.clone()), Some(&heron)),
+        Err("browser_share_family_conflict")
+    );
+    fixture
+        .set(&mut shares, Member::account(husky.id.clone()), None)
+        .unwrap();
+    assert_eq!(
+        fixture.set(&mut shares, Member::account(otter.id.clone()), Some(&heron)),
+        Err("browser_share_family_bound")
+    );
+}
+
+#[test]
 fn a_share_holds_at_most_one_member_per_family() {
     let lark = named("claude-code", "Lark");
     let codex = named("codex", "Work");

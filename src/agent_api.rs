@@ -181,7 +181,11 @@ pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login.
 // and browser_share_families is Cowboy's static family table {version,providers,cards} (never the
 // catalog; anything outside it: browser_share_family_unknown). A share holds at most ONE member per family
 // (browser_share_family_conflict: two Claude or two OpenAI accounts never share; a family whose member
-// left stays bound until a confirmed reset: browser_share_family_bound). While a share reset is
+// left stays bound until a confirmed reset: browser_share_family_bound; antigravity is family google, so
+// one Antigravity account per share). A share with an IPv4-only identity lives only on a Machine that
+// runs every browser IPv4-only (its Device setting browser.ipv4_only), and an Antigravity member only
+// where Antigravity is installed and may run: browser_share_machine_unsupported (browser_share_machine_unknown:
+// retry). While a share reset is
 // unsettled, membership changes of it are refused: browser_share_reset_pending. Members still need
 // their own browser enabled. Members address the share through their own account_id; reset from any
 // member resets the share's profile (accounts.browser().share lists who is affected). Deleting a

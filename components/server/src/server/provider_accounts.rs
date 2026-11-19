@@ -252,13 +252,18 @@ pub(super) async fn update_value(
         .await
         .map_err(|_| "unavailable")?
         .is_some();
-    let result = if input.change.is_browser_share() {
+    // A no-op share change (the member already in exactly that share)
+    // commits its receipt but has no browser effect.
+    let (result, noop) = if input.change.is_browser_share() {
         browser::shares::update(state, owner, operation, input).await?
     } else {
-        store
-            .mutate_provider_accounts(owner, operation, input)
-            .await
-            .map_err(|_| "outcome_unknown")?
+        (
+            store
+                .mutate_provider_accounts(owner, operation, input)
+                .await
+                .map_err(|_| "outcome_unknown")?,
+            false,
+        )
     };
     match result {
         MutationResult::Applied(receipt) => {
@@ -274,7 +279,7 @@ pub(super) async fn update_value(
                 state,
                 owner,
                 &input.change,
-                browser::shares::fresh_effects(owner, &input.change, &receipt, replay),
+                browser::shares::fresh_effects(owner, &input.change, &receipt, replay || noop),
             );
             Ok(receipt_value(&receipt))
         }

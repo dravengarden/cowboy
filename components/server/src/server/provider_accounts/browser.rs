@@ -386,12 +386,17 @@ pub(in crate::server) fn named_instance(
 /// A share has one placement: once its browser lives on a Machine, it opens
 /// only there, whichever member opens it; its first Machine follows the
 /// opening member's credentials. Members' own placements are never reused.
+/// A share's Machine must also pass its `gate` (IPv4-only identities only on
+/// Machines that enforce IPv4-only browsers, pinned members only where
+/// their Provider is installed and its native login may run): a first
+/// placement skips Machines that do not, and an existing one is refused.
 async fn machine_for(
     state: &AppState,
     owner: &str,
     resolved: &Resolved,
-    pinned: Option<&str>,
+    (pinned, gate): (Option<&str>, Option<&network::ShareGate>),
 ) -> Result<(String, ConnectionToken), &'static str> {
+    let admitted = |machine: &str| gate.map_or(Ok(()), |gate| gate.check(state, machine));
     let (account_id, account) = (&resolved.id, &resolved.account);
     let store = state.store.as_ref().ok_or("unavailable")?;
     let placements = store
@@ -407,6 +412,7 @@ async fn machine_for(
                 return Err("browser_not_placed");
             }
         }
+        admitted(machine)?;
         let capable = state
             .browsers
             .capability(machine)
@@ -430,7 +436,12 @@ async fn machine_for(
         }
     }
     let mut seen_capable = false;
+    let mut refused = None;
     for machine in candidates {
+        if let Err(code) = admitted(&machine) {
+            refused.get_or_insert(code);
+            continue;
+        }
         let Some((connection, protocol)) = state.machine_control.connection_protocol(&machine)
         else {
             continue;
@@ -446,6 +457,8 @@ async fn machine_for(
     }
     Err(if seen_capable {
         "browser_host_requirements"
+    } else if let Some(code) = refused {
+        code
     } else {
         "machine_unavailable"
     })
@@ -483,10 +496,12 @@ fn owner_chooses_machine(
 }
 
 /// The Machines a first open may choose from: connected on the browser
-/// protocol with an available browser capability on that connection.
+/// protocol with an available browser capability on that connection, and
+/// admitted by the share's gate for a share.
 fn capable_machines(
     browsers: &coordinator::Coordinator,
     control: &crate::machine_control::MachineControl,
+    admitted: impl Fn(&str) -> bool,
 ) -> Vec<Value> {
     browsers
         .available_machines()
@@ -495,6 +510,7 @@ fn capable_machines(
             control
                 .connection_protocol(machine)
                 .is_some_and(|(_, protocol)| protocol >= MACHINE_BROWSER_PROTOCOL_VERSION)
+                && admitted(machine)
         })
         .map(|machine_id| json!({ "machine_id": machine_id }))
         .collect()
@@ -590,11 +606,44 @@ pub(in crate::server) async fn state_value(
     let (pinned, observed) = read_target(current_observations(state, key), &placements, machine);
     let native = credential_machines(state, owner, (account_id, &resolved.account)).await?;
     let choose = owner_chooses_machine(&placements, &native);
+    // A share is offered only what its gate admits: the chooser lists only
+    // admitted Machines (none when the gate is unreadable), and a placed or
+    // requested Machine that cannot host it now reports the refusal as the
+    // read's admission, so no client offers an open the server refuses.
+    let share_gate = match resolved.shared() {
+        Some(_) => Some(
+            network::gate(state, &resolved)
+                .await
+                .and_then(|gate| gate.ok_or("unavailable")),
+        ),
+        None => None,
+    };
+    let capable = capable_machines(&state.browsers, &state.machine_control, |machine| {
+        share_gate.as_ref().is_none_or(|gate| {
+            gate.as_ref()
+                .is_ok_and(|gate| gate.check(state, machine).is_ok())
+        })
+    });
+    // The Machine an open from this read would target: the one shown (when
+    // it holds the browser), a requested first Machine, or the placement.
+    let target = pinned
+        .as_deref()
+        .or(machine.filter(|_| choose))
+        .or_else(|| {
+            placements
+                .first()
+                .map(|placement| placement.machine_id.as_str())
+        });
+    let gate = gate.or_else(|| match (&share_gate, target) {
+        (Some(Err(code)), _) => Some(*code),
+        (Some(Ok(share_gate)), Some(target)) => share_gate.check(state, target).err(),
+        _ => None,
+    });
     for placement in &mut placements {
         placement.account_id = account_id.clone();
     }
     let mut value = json!({"machine_id": Value::Null, "state": Value::Null, "placements": placements, "admission": gate,
-        "choose_machine": choose, "capable_machines": capable_machines(&state.browsers, &state.machine_control),
+        "choose_machine": choose, "capable_machines": capable,
         "share": resolved.shared().map(|share| share.value(owner)), "browser_identity": resolved.identity()});
     if let Some(observed) = &observed {
         value["machine_id"] = json!(observed.machine_id);
@@ -684,19 +733,26 @@ pub(in crate::server) async fn refresh_placements(
 /// A disable that raced the open is honoured once the open answers. A
 /// share's placement is admitted for the opening member, and a member that
 /// lost its access meanwhile never stops the share's browser for the others.
+/// The caller holds the browser key's lifecycle lock (`dispatch`) and then
+/// the owner's share fence (`fence`), taken in that order and held from the
+/// identity and gate checks through this admission, so no join or other
+/// membership change lands in between. The policy the open names depends
+/// only on the account and the Machine.
 async fn dispatch_open(
     state: &AppState,
     owner: &str,
     resolved: &Resolved,
     (machine_id, connection): (&str, &ConnectionToken),
     (purpose, viewport): (Purpose, Viewport),
-    fence: Option<tokio::sync::OwnedMutexGuard<()>>,
+    (dispatch, fence): (
+        tokio::sync::OwnedMutexGuard<()>,
+        tokio::sync::OwnedMutexGuard<()>,
+    ),
 ) -> Result<StateEvent, &'static str> {
     let store = state.store.as_ref().ok_or("unavailable")?;
     let account_id = &resolved.key;
     let instance = instance_id(owner, account_id, machine_id);
-    let lifecycle = state.browsers.lifecycle_lock(account_id.as_str());
-    let dispatch = lifecycle.lock().await;
+    let network = network::policy(state, resolved, machine_id).await;
     let admitted = match (
         resolved.shared(),
         shares::member_of(&resolved.id, &resolved.account),
@@ -725,9 +781,8 @@ async fn dispatch_open(
                 .await
         }
     };
-    // An identity-bound open (a restart's reopen) held the owner's share
-    // fence from its identity check through this admission; the placement
-    // is committed for exactly the identity it checked.
+    // The placement is committed for exactly the identity and Machine the
+    // caller checked under the fence.
     drop(fence);
     admitted
         .map_err(|error| {
@@ -745,7 +800,7 @@ async fn dispatch_open(
                 instance_id: instance,
                 purpose,
                 viewport,
-                network: network::policy(state, resolved, machine_id).await,
+                network,
             },
             OPEN_TIMEOUT,
         )
@@ -823,9 +878,15 @@ fn post_open_cleanup(shared: bool, started: BrowserState) -> bool {
 /// when the caller names one.
 ///
 /// `expected_browser` binds the open to the browser identity the caller
-/// confirmed (a restart's reopen): it is checked under the owner's share
-/// fence, held until the placement is admitted, and a changed identity is
-/// refused (`browser_identity_changed`) instead of opening another profile.
+/// confirmed (a restart's reopen): a changed identity is refused
+/// (`browser_identity_changed`) instead of opening another profile.
+///
+/// The browser key's lifecycle lock is taken first, then the owner's share
+/// fence; the account is authorized again under both, and the share gate,
+/// the Machine choice and the placement admission run under them. A key
+/// that changed while the locks were awaited (the member joined or left a
+/// share) is resolved again. No owner-wide fence is ever held while an
+/// earlier open of the same key is in flight.
 pub(in crate::server) async fn open_tab(
     state: &AppState,
     owner: &str,
@@ -833,25 +894,43 @@ pub(in crate::server) async fn open_tab(
     viewport: Viewport,
     (machine, expected_browser): (Option<&str>, Option<&str>),
 ) -> Result<Value, &'static str> {
-    let fence = match expected_browser {
-        Some(_) => Some(state.browsers.share_lock(owner).lock_owned().await),
-        None => None,
-    };
-    let resolved = authorize(state, owner, account_id, Authority::Launch).await?;
-    expected_identity(expected_browser, &resolved)?;
     viewport.validate().map_err(|_| "invalid_viewport")?;
-    let (machine_id, connection) = machine_for(state, owner, &resolved, machine).await?;
-    let event = dispatch_open(
-        state,
-        owner,
-        &resolved,
-        (&machine_id, &connection),
-        (Purpose::Tab, viewport),
-        fence,
-    )
-    .await?;
-    Ok(resolved.state_json(&machine_id, &event))
+    let mut key = authorize(state, owner, account_id, Authority::Launch)
+        .await?
+        .key;
+    for _ in 0..OPEN_KEY_ATTEMPTS {
+        let dispatch = state
+            .browsers
+            .lifecycle_lock(key.as_str())
+            .lock_owned()
+            .await;
+        let fence = state.browsers.share_lock(owner).lock_owned().await;
+        let resolved = authorize(state, owner, account_id, Authority::Launch).await?;
+        if resolved.key != key {
+            key = resolved.key;
+            continue;
+        }
+        expected_identity(expected_browser, &resolved)?;
+        let gate = network::gate(state, &resolved).await?;
+        let (machine_id, connection) =
+            machine_for(state, owner, &resolved, (machine, gate.as_ref())).await?;
+        let event = dispatch_open(
+            state,
+            owner,
+            &resolved,
+            (&machine_id, &connection),
+            (Purpose::Tab, viewport),
+            (dispatch, fence),
+        )
+        .await?;
+        return Ok(resolved.state_json(&machine_id, &event));
+    }
+    Err("browser_share_changed")
 }
+
+/// How often an open resolves its browser key again when a membership
+/// change moved it while the open waited for its locks.
+const OPEN_KEY_ATTEMPTS: usize = 3;
 
 /// Forward one instance-scoped command to the named Machine, only while
 /// that Machine still reports exactly the named instance and incarnation:
@@ -1695,7 +1774,7 @@ mod tests {
             connections.push(connection);
         }
         assert_eq!(
-            capable_machines(&coordinator, &control),
+            capable_machines(&coordinator, &control, |_| true),
             vec![
                 json!({"machine_id": "alpha"}),
                 json!({"machine_id": "zulu"})
@@ -1704,7 +1783,7 @@ mod tests {
         // A disconnected Machine is no longer offered.
         coordinator.disconnected(&connections[0]);
         assert_eq!(
-            capable_machines(&coordinator, &control),
+            capable_machines(&coordinator, &control, |_| true),
             vec![json!({"machine_id": "alpha"})]
         );
     }

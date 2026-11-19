@@ -32,6 +32,7 @@ import {
 import { accountBrowserEntry } from "./entryRules";
 import {
   browserIdentityKey,
+  familyName,
   identityBinding,
   identityRequiredFor,
   newEntryLatch,
@@ -728,4 +729,23 @@ test("only a carried-out shared reset re-reads the account inventory", () => {
   for (const reason of ["superseded", "busy", "failed"] as const) {
     assertEquals(resetChangesAccounts(`share:${SHARE}:2`, answer(reason)), false);
   }
+});
+
+test("an Antigravity account shares as family google with its Machine refusals explained", () => {
+  assertEquals(familyName("google"), "Antigravity");
+  for (const code of ["browser_share_machine_unsupported", "browser_share_machine_unknown"]) {
+    assertEquals(subscriptionWriteRejected(422, code), true);
+    // Neither refusal ever advises deleting the group or its profile.
+    assertEquals(/delete|reset/i.test(subscriptionRejectionText(code)), false);
+  }
+  // A placement mismatch and an unreadable inventory read differently.
+  assertEquals(
+    subscriptionRejectionText("browser_share_machine_unsupported") ===
+      subscriptionRejectionText("browser_share_machine_unknown"),
+    false,
+  );
+  assertEquals(
+    subscriptionRejectionText("browser_share_machine_unknown").includes("try again"),
+    true,
+  );
 });

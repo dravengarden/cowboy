@@ -355,32 +355,49 @@ pub(in crate::server) fn run_effects(
     }
 }
 
-/// Apply a share change through the registry writer. Joining a legacy card
-/// needs a card the Service collects now (a replay is always answered).
+/// Apply a share change through the registry writer, under the owner's
+/// share fence (held by the caller), and report whether it was a no-op (the
+/// member already in exactly that share), whose browser effects are none.
+/// Joining a legacy card needs a card the Service collects now, and joining
+/// a share whose browser already lives on a Machine needs that Machine to
+/// be able to host the member (`network::join_refusal`). A no-op and a
+/// replay are answered without these checks.
 pub(in crate::server) async fn update(
     state: &Arc<AppState>,
     owner: &str,
     operation: &str,
     input: &Mutation,
-) -> Result<MutationResult, &'static str> {
+) -> Result<(MutationResult, bool), &'static str> {
     let store = state.store.as_ref().ok_or("unavailable")?;
-    if let Change::SetBrowserShare {
-        member: Member::Card(card),
-        share_id: Some(_),
-    } = &input.change
-        && !super::legacy::bound_cards(state).contains_key(&card.card)
-        && store
+    let mut noop = false;
+    if let Change::SetBrowserShare { member, share_id } = &input.change {
+        let shares = store
+            .browser_shares(owner)
+            .await
+            .map_err(|_| "unavailable")?;
+        noop = shares.membership(member).map(|row| &row.share_id) == share_id.as_ref();
+        let replay = store
             .provider_account_receipt(owner, operation)
             .await
             .map_err(|_| "unavailable")?
-            .is_none()
-    {
-        return Err("account_unavailable");
+            .is_some();
+        if let Some(share_id) = share_id
+            && !noop
+            && !replay
+        {
+            if let Member::Card(card) = member
+                && !super::legacy::bound_cards(state).contains_key(&card.card)
+            {
+                return Err("account_unavailable");
+            }
+            super::network::join_refusal(state, owner, (member, share_id)).await?;
+        }
     }
-    store
+    let result = store
         .mutate_browser_shares(owner, operation, input)
         .await
-        .map_err(|_| "outcome_unknown")
+        .map_err(|_| "outcome_unknown")?;
+    Ok((result, noop))
 }
 
 /// Revoke a deleted share's profile on every Machine that holds it: the

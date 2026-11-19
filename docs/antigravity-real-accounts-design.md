@@ -366,7 +366,16 @@ A proven infrastructure interruption (unit lost, target lost) is
   the account's `browser_enabled`; one browser identity per account.
 - Browser profile state remains within the recorded same-user trust
   boundary of the Machine browser (owner decision); browsers of different
-  accounts stay strictly isolated from each other.
+  accounts stay strictly isolated from each other. The explicit exception is
+  an owner-configured browser share (`docs/machine-browser.md`, "Shared
+  browser profiles"): an Antigravity account (family `google`) may join one
+  share with accounts of other families, never with another Antigravity
+  account, only while the share's browser lives on a Machine that enforces
+  IPv4-only browsers (its Device setting `browser.ipv4_only`, which runs
+  every browser unit there IPv4-only and is reported in its browser
+  capability; OVH) where Antigravity is installed and its native login may
+  run. An Antigravity account's own browser keeps naming `ipv4_only_v1` in
+  its `Open` (R1-17).
 - **[R1-17]** The browser's unit gains
   `RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK` for accounts of a
   Provider whose manifest declares `ipv4_only_v1`, before the first sign-in;
