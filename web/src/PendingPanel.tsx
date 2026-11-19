@@ -1,7 +1,7 @@
 import { ScrollEdges } from "@cowboy/app-shell";
 import { desktopSize, glyphSize } from "./surface/desktopSize";
-import { DeliveryPicker } from "./DeliveryPicker";
 import { NativeDeliveryRow } from "./NativeDeliveryRow";
+import { QueuedDeliveryAction } from "./QueuedDeliveryAction";
 import { QueueDeliverySettings } from "./QueueDeliverySettings";
 import { moveSessionDraftToDocument } from "./documents/sessionDraftImport";
 import { ProtectedImage } from "./ProtectedImage";
@@ -38,7 +38,9 @@ import { useVimSetting } from "./vimSetting";
 import { DESKTOP_SHORTCUTS, DESKTOP_WORKSPACE_KEYS, desktopWorkspaceSequence } from "./desktop/commands/workspaceShortcuts";
 import { type Attachment, filesToAttachments, fileToAttachment, pendingImageAttachment, imageTokensInText, promoteUnplacedImageTokens, reconcileDeletedInlineImages, settlePendingAttachments, stripImageTokens } from "./attachments";
 import { getInlineAttachment, registerInlineAttachment, seedInlineAttachments } from "./inlineImages";
-import { cancelTurn, currentTurnPrompt, activateAllDrafts, activateDraft, clearDrafts, clearQueue, discardQueued, returnFailedQueued, editDraft, editQueued, type QueuedMessage, notify, queuedToDraft, removeDraft, removeQueued, reorderDrafts, reorderQueue, requestSendQueued, retryQueued, setQueueEditing, useConnected, useStoreSelector } from "./store";
+import { activateAllDrafts, activateDraft, clearDrafts, clearQueue, discardQueued, returnFailedQueued, editDraft, editQueued, type QueuedMessage, notify, queuedToDraft, removeDraft, removeQueued, reorderDrafts, reorderQueue, retryQueued, setQueueEditing, useConnected, useStoreSelector } from "./store";
+import { type SessionContext, stagedNextAgent } from "./sessionContext";
+import { isOnlyConfirmedQueuedMessage, loadStagedQueuePrompt } from "./stagedQueuePrompt";
 import { fireLabel } from "./scheduleTime";
 import { haptic, importantHaptic, navigationHaptic } from "./haptic";
 import { useSortable } from "./useSortable";
@@ -758,6 +760,7 @@ export function PendingPanel({
   sessionId,
   items,
   status,
+  nextAgentContext,
   commands,
   onMoveDraft,
   onScheduleDraft,
@@ -769,16 +772,12 @@ export function PendingPanel({
   kind: "queued" | "draft";
   sessionId: string;
   items: QueuedMessage[];
-  /** Session status — drives Send-now vs Force-push (queued) / Send vs Queue (draft). */
   status: Status;
-  /** Agent-advertised `/` commands, threaded into the row's inline editor. */
+  /** A pending agent switch holds the old queue until its first prompt is chosen. */
+  nextAgentContext?: SessionContext | undefined;
   commands: () => AvailableCommand[];
-  /** Open the "move to another session" picker for a draft (draft kind only).
-      Owned by the Composer so it survives this panel unmounting when the last
-      draft leaves. Absent → the row's kebab omits the Move action. */
+  /** Composer owns these draft pickers so they survive the panel unmounting. */
   onMoveDraft?: ((id: string) => void) | undefined;
-  /** Open the schedule picker for a draft (draft kind only) — set/reschedule/
-      cancel its future auto-send. Owned by the Composer (survives unmount). */
   onScheduleDraft?: ((id: string) => void) | undefined;
   /** Mobile parent projection used to yield the ordinary composer while this
    *  panel owns the only active writing surface. */
@@ -1704,6 +1703,8 @@ export function PendingPanel({
                         sessionId={sessionId}
                         message={m}
                         status={status}
+                        nextAgentContext={nextAgentContext}
+                        onlyQueuedMessage={count === 1}
                         commands={rowCommands}
                         editing={editingId === m.id}
                         keyboardOpen={keyboardOpen}
@@ -1768,12 +1769,6 @@ export function PendingPanel({
     </Box>
   );
 }
-
-// One queued prompt. Read mode shows the (clamped) text + a primary action +
-// Edit / Delete. Desktop edit mode is transactional: Mod+S saves and Esc
-// asks before discarding. The primary action depends on whether the session can take a turn
-// right now: dispatchable → a plain "Send now" (sends immediately, revives a
-// dead session); busy messages remain queued until the active turn ends.
 
 // Container-query breakpoint for a row's secondary actions (see PendingPanel's
 // containerName). Above this panel width the row shows every action inline; below
@@ -1848,6 +1843,8 @@ export function PendingRow({
   sessionId,
   message,
   status,
+  nextAgentContext,
+  onlyQueuedMessage,
   commands,
   editing,
   keyboardOpen,
@@ -1863,6 +1860,8 @@ export function PendingRow({
   sessionId: string;
   message: QueuedMessage;
   status: Status;
+  nextAgentContext?: SessionContext | undefined;
+  onlyQueuedMessage?: boolean;
   commands: () => AvailableCommand[];
   editing: boolean;
   /** Panel-owned software-keyboard state, shared by every row. */
@@ -1931,43 +1930,9 @@ export function PendingRow({
   // Per-row delete confirm. Dropping a queued message / draft is irreversible, so
   // the × opens this modal instead of deleting on a single tap.
   const [confirmRemove, setConfirmRemove] = useState(false);
-  // A queued message while the session works: the same delivery choices as
-  // the Prompt's busy Send, scoped to a message that is already queued.
-  const [deliveryAnchor, setDeliveryAnchor] = useState<HTMLElement | null>(null);
-  const queuedAhead = useStoreSelector((snapshot) =>
-    kind === "queued"
-      ? Math.max(
-        0,
-        (snapshot.queues.get(sessionId) ?? []).findIndex((row) => row.id === message.id),
-      )
-      : 0
+  const canLoadForNextAgent = useStoreSelector(() =>
+    Boolean(nextAgentContext && onlyQueuedMessage && isOnlyConfirmedQueuedMessage(sessionId, message))
   );
-  const queuePaused = useStoreSelector((snapshot) =>
-    snapshot.sessions.find((session) => session.id === sessionId)?.paused ?? false
-  );
-  const queueSteerCapable = useStoreSelector((snapshot) =>
-    snapshot.sessions.find((session) => session.id === sessionId)
-      ?.supports_current_turn === true
-  );
-  const queueConnected = useConnected();
-  const steerQueued = (
-    target: import("./currentTurnDelivery").DeliveryTarget | undefined,
-    nextCheckpoint = false,
-  ): void => {
-    setDeliveryAnchor(null);
-    // The current-turn row persists the content first and owns its receipt
-    // (a failed delivery is retained there), so removing the queued original
-    // afterwards can neither lose the message nor send it twice.
-    void currentTurnPrompt(
-      sessionId,
-      message.text,
-      message.attachments,
-      target,
-      nextCheckpoint,
-    )
-      .then(() => removeQueued(sessionId, message.id))
-      .catch((error: Error) => notify(error.message));
-  };
   const [confirmDiscardEdit, setConfirmDiscardEdit] = useState(false);
   const doRemove = (): void => {
     importantHaptic();
@@ -2825,11 +2790,7 @@ export function PendingRow({
     remove: { badge: "X" },
   };
 
-  // Primary action — always inline. Drafts always Send (send-or-queue); a queued
-  // row sends now only when the session is free.
-  // Built as a statement to avoid a nested ternary in the JSX.
-  let primary: React.JSX.Element;
-  const primaryEnabled = true;
+  let primary: React.JSX.Element | null = null;
   if (kind === "draft") {
     primary = (
       <Tooltip title={dispatchable ? "Send" : "Add to queue"}>
@@ -2845,49 +2806,39 @@ export function PendingRow({
         </NetworkIconButton>
       </Tooltip>
     );
-  } else if (dispatchable) {
-    primary = (
-      <Tooltip title="Send now">
-        <NetworkIconButton
+  } else if (nextAgentContext) {
+    if (canLoadForNextAgent && stagedNextAgent(nextAgentContext)) {
+      primary = (
+        <NetworkButton
           data-desktop-item-action="default"
           size="small"
-          color="primary"
-          aria-label="send now"
           reliableTouch={!desktop}
-          networkAction={() => requestSendQueued(sessionId, message.id)}
+          networkAction={() => loadStagedQueuePrompt(sessionId, nextAgentContext.revision, message)}
+          sx={{ textTransform: "none", whiteSpace: "nowrap", ...(!desktop && { minHeight: 44 }) }}
         >
-          <Send fontSize="small" />
-        </NetworkIconButton>
-      </Tooltip>
-    );
+          Use in Composer
+        </NetworkButton>
+      );
+    }
   } else {
-    // Busy: never a dead button. Steer it into the current turn, or let it
-    // run first when this turn ends.
     primary = (
-      <Tooltip title="Send: Steer into the current turn, or run it first">
-        <IconButton
-          data-desktop-item-action="default"
-          size="small"
-          color="primary"
-          aria-label="send now"
-          aria-haspopup="menu"
-          aria-expanded={deliveryAnchor !== null}
-          onClick={(event): void => setDeliveryAnchor(event.currentTarget)}
-        >
-          <Send fontSize="small" />
-        </IconButton>
-      </Tooltip>
+      <QueuedDeliveryAction
+        desktop={desktop}
+        dispatchable={dispatchable}
+        sessionId={sessionId}
+        message={message}
+        status={status}
+      />
     );
   }
 
-  if (desktop) {
+  if (desktop && primary) {
     const primaryControl = primary;
     primary = (
       <Suspense fallback={primaryControl}>
         <DesktopContextShortcut
           badge="S"
           itemScoped
-          enabled={primaryEnabled}
           placement="corner"
         >
           {primaryControl}
@@ -2985,30 +2936,6 @@ export function PendingRow({
         }}
       >
         {primary}
-        {kind === "queued" && deliveryAnchor && (
-          <DeliveryPicker
-            sessionId={sessionId}
-            anchor={deliveryAnchor}
-            busy={status === "busy"}
-            steerReady={queueConnected && status === "busy" && queueSteerCapable}
-            paused={queuePaused}
-            queueCount={queuedAhead}
-            queued
-            onClose={(): void => setDeliveryAnchor(null)}
-            onNextTurn={(): void => setDeliveryAnchor(null)}
-            onQueueFront={(): void => {
-              setDeliveryAnchor(null);
-              void requestSendQueued(sessionId, message.id)
-                .catch((error: Error) => notify(error.message));
-            }}
-            onSteer={steerQueued}
-            onSendAndPause={(): void => setDeliveryAnchor(null)}
-            onStop={(): void => {
-              setDeliveryAnchor(null);
-              cancelTurn(sessionId);
-            }}
-          />
-        )}
         {/* Secondary actions — inline on a roomy (iPad/desktop) panel … */}
         <Stack
           direction="row"

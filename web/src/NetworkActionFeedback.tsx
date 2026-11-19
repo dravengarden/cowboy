@@ -157,20 +157,28 @@ export interface NetworkButtonProps
   extends Omit<ButtonProps, "onClick" | "action"> {
   networkAction: () => Promise<void> | void;
   children: ReactNode;
+  /** Also commit stationary touch when iOS drops the compatibility click. */
+  reliableTouch?: boolean;
 }
 
 export function NetworkButton(
-  { networkAction, children, disabled, sx, ...props }: NetworkButtonProps,
+  { networkAction, children, disabled, reliableTouch = false, sx, ...props }: NetworkButtonProps,
 ): React.JSX.Element {
   const state = useNetworkActionState();
+  const run = (): void => {
+    if (!disabled && !state.pending) void state.run(networkAction);
+  };
+  const tap = useReliableTouchTap<HTMLButtonElement>(run);
   return (
     <Button
       {...props}
       aria-busy={state.pending || undefined}
       disabled={disabled || state.pending}
-      onClick={(): void => {
-        void state.run(networkAction);
-      }}
+      onPointerDown={reliableTouch ? tap.onPointerDown : props.onPointerDown}
+      onPointerMove={reliableTouch ? tap.onPointerMove : props.onPointerMove}
+      onPointerUp={reliableTouch ? tap.onPointerUp : props.onPointerUp}
+      onPointerCancel={reliableTouch ? tap.onPointerCancel : props.onPointerCancel}
+      onClick={reliableTouch ? tap.onClick : run}
       sx={{
         position: "relative",
         // box-shadow/transform ride along so a NetworkButton used as a sheet's

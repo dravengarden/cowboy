@@ -45,18 +45,20 @@ test("pending rows show every delivery phase and failed rows offer return-to-hom
   );
 });
 
-test("mobile pending delivery arrows survive a dropped iOS compatibility click", () => {
+test("mobile pending delivery actions survive a dropped iOS compatibility click", async () => {
   const body = declarationSource(composer, "PendingRow");
+  const queuedAction = await readFile(new URL("./QueuedDeliveryAction.tsx", import.meta.url), "utf8");
   assert(body.length > 0);
   assertEquals(body.match(/reliableTouch=\{!desktop\}/g)?.length, 2);
   assert(
     body.includes("networkAction={() => activateDraft(sessionId, message.id)}"),
   );
   assert(
-    body.includes(
+    queuedAction.includes(
       "networkAction={() => requestSendQueued(sessionId, message.id)}",
     ),
   );
+  assert(queuedAction.includes("reliableTouch={!desktop}"));
 });
 
 test("tool UI selection uses fill instead of purple leading rails", () => {

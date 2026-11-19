@@ -6,6 +6,10 @@ import { BrowserProductTheme } from "./browserProductTheme";
 import { SurfaceContext } from "./surface/SurfaceProfile";
 import { classifySurface } from "./surface/profile";
 import { SessionContextSettings } from "./SessionContextSettings";
+import { ComposerWorkspace } from "./Composer";
+import { DesktopWorkspaceProvider } from "./desktop/DesktopWorkspaceController";
+import { DesktopCommandProvider } from "./desktop/commands/DesktopCommandProvider";
+import { expandComposerStackPanel } from "./composerStackAccordion";
 import { PreparingConversation } from "./PreparingConversation";
 import { DeleteSessionShell } from "./DeleteSessionShell";
 import { SessionContextCue, SessionContinuedFrom, SessionHandedOffDock, SessionNextMessageBadge, SessionProvenance } from "./SessionContextCue";
@@ -18,7 +22,7 @@ import {
 import { Sheet } from "./Sheet";
 import { announceContext, type SessionContext } from "./sessionContext";
 import { shouldShowSessionErrorSnackbar } from "./sessionErrorNotice";
-import { activateDraft, confirmedPending, frontPrompt, requestSendQueued, submitPrompt, useStore } from "./store";
+import { confirmedPending, frontPrompt, requestSendQueued, submitPrompt, useStore } from "./store";
 import { bindProductSyncPrincipal } from "./productSyncIdentity";
 import { getDraft, setDraft } from "./draftStore";
 import { managementEntryFixture } from "./providerManagement.fixture";
@@ -84,7 +88,7 @@ export async function runSessionContextBrowserConformance(
   let context!: SessionContext;
   let sendFailure: number | null = null;
   let parentDismissals = 0;
-  const writes: { url: string; body: Record<string, unknown> }[] = [];
+  const writes: { url: string; body: Record<string, unknown>; targetAccount?: string }[] = [];
   const contextReads: string[] = [];
   let heldMessage: WireQueued | undefined;
   let staleQueueView = false;
@@ -182,7 +186,10 @@ export async function runSessionContextBrowserConformance(
     }
     if (url.endsWith("/context/send")) {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      writes.push({ url, body });
+      writes.push({
+        url, body,
+        ...(context.next_agent && { targetAccount: context.next_agent.provider_account_id }),
+      });
       if (sendFailure) {
         return new Response("Payload too large", { status: sendFailure });
       }
@@ -334,6 +341,13 @@ export async function runSessionContextBrowserConformance(
   };
   function Fixture({ desktop }: { desktop: boolean }) {
     const state = useStore();
+    const composer = (
+      <ComposerWorkspace
+        sessionId={sessions[0]!.id}
+        status={state.sessions.find((row) => row.id === sessions[0]!.id)?.status ?? "exited"}
+        surface={desktop ? "desktop" : "mobile"}
+      />
+    );
     return (
       <SurfaceContext.Provider
         value={classifySurface({
@@ -366,7 +380,13 @@ export async function runSessionContextBrowserConformance(
           <SessionContinuedFrom sessionId={sessions[2]!.id} />
           <SessionHandedOffDock sessionId={sessions[1]!.id} desktop={desktop} />
           <SessionHandedOffDock sessionId={sessions[2]!.id} desktop={desktop} />
-          <SessionContextCue sessionId={sessions[0]!.id} desktop={desktop} />
+          {desktop
+            ? (
+              <DesktopWorkspaceProvider>
+                <DesktopCommandProvider>{composer}</DesktopCommandProvider>
+              </DesktopWorkspaceProvider>
+            )
+            : composer}
           <SessionNextMessageBadge sessionId={sessions[0]!.id} />
           <SessionContextCue sessionId={sessions[0]!.id} desktop={desktop} placement="end" />
           {desktop ? (
@@ -836,7 +856,37 @@ export async function runSessionContextBrowserConformance(
         `${mode}: recovery leaves an existing Composer draft and the queued message alone`,
       );
       setDraft(sourceId, { text: "", attachments: [] });
-      useQueued()!.click();
+      expandComposerStackPanel("queued");
+      const queueRowAction = () =>
+        container.querySelector<HTMLButtonElement>('[data-pending-content-action="row-actions"] [data-desktop-item-action="default"]');
+      const extraMessage = { ...heldMessage, id: "another-message", cmid: `another-message-${mode}` };
+      Socket.active.at(-1)?.publish({
+        type: "sync_patch", state: `queue:${sourceId}`, version: 1,
+        value: { queue: [heldMessage, extraMessage], drafts: [] },
+        confirmed: [heldMessage.cmid, extraMessage.cmid], resync: true,
+      });
+      await until(() => queuePresentation() === JSON.stringify([[heldMessage!.id, extraMessage.id], 0]));
+      check(
+        !queueRowAction() && Boolean(container.querySelector('[aria-label="Review queued messages"]')),
+        `${mode}: a held queue with multiple messages offers review and hides direct send`,
+      );
+      Socket.active.at(-1)?.publish({
+        type: "sync_patch", state: `queue:${sourceId}`, version: 1,
+        value: { queue: [heldMessage], drafts: [] }, confirmed: [heldMessage.cmid], resync: true,
+      });
+      await until(() => queueRowAction()?.disabled === false);
+      check(
+        queueRowAction()?.textContent === "Use in Composer" && !container.querySelector('[aria-label="send now"]'),
+        `${mode}: a held queue row offers Use in Composer in place of Send now`,
+      );
+      const useRow = queueRowAction()!;
+      if (desktop) useRow.click();
+      else {
+        // iOS may omit the click when the tap first stops queue-panel scrolling.
+        const touch = { bubbles: true, pointerId: 1, pointerType: "touch", isPrimary: true };
+        useRow.dispatchEvent(new PointerEvent("pointerdown", touch));
+        useRow.dispatchEvent(new PointerEvent("pointerup", touch));
+      }
       await until(() => getDraft(sourceId).text === heldMessage?.text);
       check(
         queueCommands.length === queueCommandCount + 1 &&
@@ -844,23 +894,18 @@ export async function runSessionContextBrowserConformance(
           confirmedPending(sourceId)?.drafts[0]?.id === heldMessage.id &&
           getDraft(sourceId).attachments[0]?.block.data === "AQID" &&
           writes.filter((write) => write.url.endsWith("/send")).length === 1,
-        `${mode}: the queued prompt and image reach the Composer and a saved Draft without sending`,
+        `${mode}: the queue row loads its prompt and image into the Composer and keeps a saved Draft`,
       );
-      setDraft(sourceId, { text: "", attachments: [] });
-      await activateDraft(sourceId, heldMessage.id);
-      const recovered = getDraft(sourceId);
-      check(
-        recovered.text === heldMessage.text && recovered.attachments[0]?.block.data === "AQID" &&
-          queueCommands.length === queueCommandCount + 1,
-        `${mode}: a staged agent loads a saved draft in the Composer without activating the old queue`,
-      );
-      await submitPrompt(sourceId, recovered.text, recovered.attachments);
-      setDraft(sourceId, { text: "", attachments: [] });
+      const composerSend = () => container.querySelector<HTMLButtonElement>('button[aria-label="send"]');
+      await until(() => composerSend()?.disabled === false);
+      composerSend()!.click();
+      await until(() => writes.filter((write) => write.url.endsWith("/send")).length === 2);
       const contextSend = writes.findLast((write) => write.url.endsWith("/send"));
       check(
         contextSend?.body.text === heldMessage.text &&
-          JSON.stringify(contextSend.body.content).includes("AQID"),
-        `${mode}: explicit Composer send takes the recovered content to the staged agent`,
+          JSON.stringify(contextSend.body.content).includes("AQID") &&
+          contextSend.targetAccount === "mink",
+        `${mode}: pressing Send in the Composer starts the staged agent with the recovered prompt and image`,
       );
       check(
         writes.some((write) =>

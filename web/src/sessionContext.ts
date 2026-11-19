@@ -60,9 +60,12 @@ export function pendingSources(context: SessionContext): string[] {
   return context.pending_links ?? [];
 }
 
+export function pendingAgentSwitch(context: SessionContext | undefined): SessionContext | undefined {
+  return context?.next_agent && context.revision !== context.applied_revision ? context : undefined;
+}
+
 export function stagedNextAgent(context: SessionContext): boolean {
-  return context.next_agent != null &&
-    context.revision !== context.applied_revision &&
+  return pendingAgentSwitch(context) !== undefined &&
     context.delivery?.state !== "preparing" &&
     context.delivery?.state !== "unknown";
 }

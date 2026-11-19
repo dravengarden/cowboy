@@ -120,6 +120,7 @@ import {
   sessionSettingsFocusFromEvent,
   sessionSettingsEventMatches,
 } from "./sessionSettingsOpen";
+import { pendingAgentSwitch } from "./sessionContext";
 
 import { PendingPanel, DesktopRegionShortcut, TOOLBAR_ICON_BTN, AttachmentPreviews } from "./PendingPanel";
 import { ComposerSheet, SessionActionConfirmDialog } from "./ComposerSheet";
@@ -366,11 +367,8 @@ export function ComposerWorkspace({
   const preparing = status === "starting";
   // The context cue strip hides while the mobile keyboard owns the screen, so
   // the placeholder repeats that the next message starts a new agent.
-  const linkedContext = useAnnouncedSessionContext(sessionId);
-  const messagePlaceholder = linkedContext?.next_agent &&
-      linkedContext.revision !== linkedContext.applied_revision
-    ? "Message the new agent…"
-    : "Message the agent…";
+  const nextAgentContext = pendingAgentSwitch(useAnnouncedSessionContext(sessionId));
+  const messagePlaceholder = nextAgentContext ? "Message the new agent…" : "Message the agent…";
   const queue = useStoreSelector((snapshot) =>
     snapshot.queues.get(sessionId) ?? EMPTY_QUEUED_MESSAGES
   );
@@ -1414,6 +1412,7 @@ export function ComposerWorkspace({
               sessionId={sessionId}
               items={queue}
               status={status}
+              nextAgentContext={nextAgentContext}
               commands={(): AvailableCommand[] => availableCommands}
               onEditingChange={onMobileQueuedEditingChange}
               onResumeKeyboardSurface={resumeMobileKeyboardSurface}
@@ -1460,6 +1459,7 @@ export function ComposerWorkspace({
               sessionId={sessionId}
               items={queue}
               status={status}
+              nextAgentContext={nextAgentContext}
               commands={(): AvailableCommand[] => availableCommands}
             />
           )}
