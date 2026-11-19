@@ -76,6 +76,18 @@ const BROADCAST_CAPACITY: usize = 1_024;
 /// above is the primary bound; this limits render work for many tiny events.
 pub const HISTORY_PAGE: usize = 64;
 
+/// Whether `next` adds nothing to the stored reading `last`: the same
+/// observation, or a counter-only snapshot repeating its counters.
+fn same_reading(
+    last: &crate::agent_model::SessionUsage,
+    next: &crate::agent_model::SessionUsage,
+) -> bool {
+    last == next
+        || (next.raw.is_null()
+            && next.observed_at_ms == 0
+            && (last.used, last.size) == (next.used, next.size))
+}
+
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
@@ -3428,6 +3440,12 @@ impl Hub {
     /// the resumed context's real size, so idle hibernation and context
     /// rollover would treat a large expired context as empty. Only Clear and
     /// renewal, which discard the native context, reset the reading.
+    ///
+    /// Each stored reading is one whole observation. A counter-only reading
+    /// (a worker snapshot after a reconnect: no raw update, no observation
+    /// time) that repeats the stored counters adds nothing, so the stored
+    /// observation, with its raw update such as the account plan, stays;
+    /// different counters replace it whole.
     pub fn set_session_usage(&self, session_id: &str, usage: crate::agent_model::SessionUsage) {
         if usage.used == 0 && usage.size == 0 {
             return;
@@ -3435,7 +3453,13 @@ impl Hub {
         let changed = {
             let mut sessions = self.inner.sessions.lock();
             match sessions.get_mut(session_id) {
-                Some(s) if s.meta.usage.as_ref() != Some(&usage) => {
+                Some(s)
+                    if !s
+                        .meta
+                        .usage
+                        .as_ref()
+                        .is_some_and(|last| same_reading(last, &usage)) =>
+                {
                     s.meta.context_used = usage.used;
                     s.meta.context_size = usage.size;
                     s.meta.usage = Some(usage.clone());
