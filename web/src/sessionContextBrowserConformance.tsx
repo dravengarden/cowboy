@@ -18,13 +18,13 @@ import {
 import { Sheet } from "./Sheet";
 import { announceContext, type SessionContext } from "./sessionContext";
 import { shouldShowSessionErrorSnackbar } from "./sessionErrorNotice";
-import { frontPrompt, submitPrompt, useStore } from "./store";
+import { activateDraft, confirmedPending, frontPrompt, submitPrompt, useStore } from "./store";
 import { bindProductSyncPrincipal } from "./productSyncIdentity";
-import { getDraft } from "./draftStore";
+import { getDraft, setDraft } from "./draftStore";
 import { managementEntryFixture } from "./providerManagement.fixture";
 import { runCreateDefaultsBrowserChecks } from "./createDefaultsBrowserChecks";
 import { resetProviderCatalog } from "./providerCatalogRegistry";
-import type { MachineSummary, SessionMeta } from "./protocol";
+import type { Inbound, MachineSummary, SessionMeta, WireQueued } from "./protocol";
 
 export async function runSessionContextBrowserConformance(
   observe?: (stage: string) => Promise<void>,
@@ -86,6 +86,8 @@ export async function runSessionContextBrowserConformance(
   let parentDismissals = 0;
   const writes: { url: string; body: Record<string, unknown> }[] = [];
   const contextReads: string[] = [];
+  let heldMessage: WireQueued | undefined;
+  const queueCommands: Inbound[] = [];
   class Socket {
     static active: Socket[] = [];
     static OPEN = 1;
@@ -109,7 +111,20 @@ export async function runSessionContextBrowserConformance(
     publish(value: unknown) {
       this.onmessage?.({ data: JSON.stringify(value) });
     }
-    send() {}
+    send(raw: string) {
+      const command = JSON.parse(raw) as Inbound;
+      if (command.type === "activate_draft" || command.type === "request_send_queued" ||
+        command.type === "queued_to_draft") queueCommands.push(command);
+      if (command.type !== "queued_to_draft" || heldMessage?.id !== command.id) return;
+      const draft = heldMessage;
+      setTimeout(() => this.publish({
+        type: "sync_patch",
+        state: `queue:${command.session_id}`,
+        version: 2,
+        value: { queue: [], drafts: [draft] },
+        confirmed: [draft.cmid],
+      }), 20);
+    }
     close() {
       this.readyState = 3;
     }
@@ -734,7 +749,63 @@ export async function runSessionContextBrowserConformance(
         `${mode}: rejected sends publish a visible error without consuming context`,
       );
       sendFailure = null;
-      await submitPrompt(sessions[0]!.id, "Continue the selected work");
+      const sourceId = sessions[0]!.id;
+      heldMessage = {
+        id: "held-message",
+        cmid: `held-message-${mode}`,
+        text: "Continue the selected work",
+        content: [{ type: "image", mimeType: "image/png", data: "AQID" }],
+      };
+      const queueCommandCount = queueCommands.length;
+      Socket.active.at(-1)?.publish({
+        type: "sync_patch",
+        state: `queue:${sourceId}`,
+        version: 1,
+        value: { queue: [heldMessage], drafts: [] },
+        confirmed: [heldMessage.cmid],
+        resync: true,
+      });
+      const useQueued = () => container.querySelector<HTMLButtonElement>(
+        '[aria-label="Use queued message in Composer"]',
+      );
+      await until(() => useQueued()?.disabled === false);
+      setDraft(sourceId, { text: "Different local draft", attachments: [] });
+      useQueued()!.click();
+      await until(() => Boolean(
+        container.querySelector("[data-context-error]")?.textContent?.includes("current Composer draft"),
+      ) && useQueued()?.disabled === false);
+      check(
+        getDraft(sourceId).text === "Different local draft" &&
+          queueCommands.length === queueCommandCount,
+        `${mode}: recovery leaves an existing Composer draft and the queued message alone`,
+      );
+      setDraft(sourceId, { text: "", attachments: [] });
+      useQueued()!.click();
+      await until(() => getDraft(sourceId).text === heldMessage?.text);
+      check(
+        queueCommands.length === queueCommandCount + 1 &&
+          queueCommands.at(-1)?.type === "queued_to_draft" &&
+          confirmedPending(sourceId)?.drafts[0]?.id === heldMessage.id &&
+          getDraft(sourceId).attachments[0]?.block.data === "AQID" &&
+          writes.filter((write) => write.url.endsWith("/send")).length === 1,
+        `${mode}: the queued prompt and image reach the Composer and a saved Draft without sending`,
+      );
+      setDraft(sourceId, { text: "", attachments: [] });
+      await activateDraft(sourceId, heldMessage.id);
+      const recovered = getDraft(sourceId);
+      check(
+        recovered.text === heldMessage.text && recovered.attachments[0]?.block.data === "AQID" &&
+          queueCommands.length === queueCommandCount + 1,
+        `${mode}: a staged agent loads a saved draft in the Composer without activating the old queue`,
+      );
+      await submitPrompt(sourceId, recovered.text, recovered.attachments);
+      setDraft(sourceId, { text: "", attachments: [] });
+      const contextSend = writes.findLast((write) => write.url.endsWith("/send"));
+      check(
+        contextSend?.body.text === heldMessage.text &&
+          JSON.stringify(contextSend.body.content).includes("AQID"),
+        `${mode}: explicit Composer send takes the recovered content to the staged agent`,
+      );
       check(
         writes.some((write) =>
           write.url.endsWith("/send") && Boolean(write.body.operation)

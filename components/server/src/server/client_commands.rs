@@ -84,10 +84,18 @@ pub(super) fn refuse_command(
         return true;
     }
     if let Some(sid) = &session_id_for_err
-        && matches!(&cmd, Inbound::Prompt { .. } | Inbound::Submit { .. })
+        && matches!(
+            cmd,
+            Inbound::Prompt { .. }
+                | Inbound::Submit { .. }
+                | Inbound::ActivateDraft { .. }
+                | Inbound::ActivateAllDrafts { .. }
+                | Inbound::RequestSendQueued { .. }
+                | Inbound::ForcePushQueued { .. }
+        )
         && crate::session_context::pending(&state.hub, sid)
     {
-        let message = "Context changes are pending. Send with the current context revision or cancel those changes.";
+        let message = "Context changes are pending. Send from the Composer with the selected context, or cancel the switch.";
         if let Some(cmid) = &authored_cmid {
             state
                 .hub
@@ -105,6 +113,7 @@ pub(super) fn command_authored_cmid(cmd: &Inbound) -> Option<String> {
     match cmd {
         Inbound::Submit { cmid, .. }
         | Inbound::AddDraft { cmid, .. }
+        | Inbound::ActivateDraft { cmid, .. }
         | Inbound::ScheduleDraft { cmid, .. }
         | Inbound::EditQueued { cmid, .. }
         | Inbound::RemoveQueued { cmid, .. }

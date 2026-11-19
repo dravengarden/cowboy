@@ -112,6 +112,7 @@ import { reportClientDuration, reportClientLog, reportClientMetric, startClientS
 import { ClientOperations } from "./otelOperations.ts";
 import { isTurnActivityUpdate } from "./turnWaiting.ts";
 import { ContextNavigationNotice, requireCurrentAgentContext, sendWithContext } from "./sessionContext";
+import { composeDraftForStagedAgent } from "./contextPendingPrompt";
 
 const telemetryOperations = new ClientOperations(
   startClientSpan,
@@ -924,7 +925,7 @@ function acknowledgeActionProbe(nonce: number): boolean {
   confirmedActionProbe++;
   return true;
 }
-function sendWithAck(
+export function sendWithAck(
   command: Inbound,
   predicate: (snapshot: State) => boolean,
   label: string,
@@ -5189,9 +5190,8 @@ function findQueued(sessionId: string, id: string): QueuedMessage | undefined {
   return (state.queues.get(sessionId) ?? []).find((message) => message.id === id);
 }
 
-/** The last queue the daemon acknowledged, without local optimistic moves. */
-function serverQueue(sessionId: string): readonly QueuedMessage[] {
-  return qClients.get(sessionId)?.baseValue().queue ?? [];
+export function confirmedPending(sessionId: string): QValue | undefined {
+  return qClients.get(sessionId)?.baseValue();
 }
 
 function findDraft(sessionId: string, id: string): QueuedMessage | undefined {
@@ -5242,10 +5242,11 @@ async function editPendingRow(
 }
 
 export async function requestSendQueued(sessionId: string, id: string): Promise<void> {
+  await requireCurrentAgentContext(sessionId);
   await prepareAuthoredSend(sessionId, findQueued(sessionId, id)?.cmid);
   const row = findQueued(sessionId, id);
   if (row === undefined) return Promise.resolve();
-  const target = queuedSendTarget(serverQueue(sessionId), row);
+  const target = queuedSendTarget(confirmedPending(sessionId)?.queue ?? [], row);
   if (target.kind === "local") {
     if (destinationForPrompt(sessionDispatchable(sessionId), true) === "transcript") {
       await optimisticMessage(sessionId, row.text, row.attachments, "queue", row.cmid);
@@ -5448,12 +5449,11 @@ export function clearDrafts(sessionId: string): Promise<void> {
   );
 }
 
-// Activate a draft: the daemon submits it (send-or-queue) and removes it from
-// drafts.
 export async function activateDraft(sessionId: string, id: string): Promise<void> {
   await prepareAuthoredSend(sessionId, findDraft(sessionId, id)?.cmid);
   const row = findDraft(sessionId, id);
   if (row === undefined) return Promise.resolve();
+  if (await composeDraftForStagedAgent(sessionId, row)) return;
   const dest = destinationForPrompt(
     sessionDispatchable(sessionId),
     (state.queues.get(sessionId)?.length ?? 0) === 0,

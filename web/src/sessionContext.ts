@@ -60,6 +60,13 @@ export function pendingSources(context: SessionContext): string[] {
   return context.pending_links ?? [];
 }
 
+export function stagedNextAgent(context: SessionContext): boolean {
+  return context.next_agent != null &&
+    context.revision !== context.applied_revision &&
+    context.delivery?.state !== "preparing" &&
+    context.delivery?.state !== "unknown";
+}
+
 const reads = new Map<string, Promise<SessionContext>>();
 const configured = new Set<string>();
 const readRevisions = new Map<string, number>();
@@ -320,7 +327,7 @@ export async function requireCurrentAgentContext(id: string): Promise<void> {
     context.delivery?.state === "unknown"
   ) {
     throw new Error(
-      "Context changes apply on the next turn. Choose next turn, or cancel the pending context changes.",
+      "Send from the Composer with the selected context, or cancel the pending context changes.",
     );
   }
 }

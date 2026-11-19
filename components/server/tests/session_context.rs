@@ -1,10 +1,12 @@
 #![cfg(feature = "full")]
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use futures::{SinkExt, StreamExt};
 use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
 use serde_json::{Value, json};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
+use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 
 struct Controller(Child);
 
@@ -238,7 +240,7 @@ impl Fixture {
         (controller, base)
     }
 
-    fn request(&self, method: reqwest::Method, url: &str) -> reqwest::RequestBuilder {
+    fn browser_proof(&self, method: &str, target: &str) -> String {
         use rand::RngCore as _;
         let mut nonce = [0; 32];
         rand::rngs::OsRng.fill_bytes(&mut nonce);
@@ -246,19 +248,23 @@ impl Fixture {
         let public =
             URL_SAFE_NO_PAD.encode(self.key.verifying_key().to_encoded_point(false).as_bytes());
         let time = chrono::Utc::now().timestamp_millis();
-        let target = reqwest::Url::parse(url).unwrap().path().to_owned();
         let message = format!(
             "cowboy-browser-proof-v1\n{}\nhttps://cowboy.example\n{public}\n{method}\n{target}\n{time}\n{nonce}",
             self.epoch
         );
         let signature: Signature = self.key.sign(message.as_bytes());
-        let proof = URL_SAFE_NO_PAD.encode(
+        URL_SAFE_NO_PAD.encode(
             serde_json::to_vec(&json!({
                 "key":public,"epoch":self.epoch,"origin":"https://cowboy.example","time":time,
                 "nonce":nonce,"signature":URL_SAFE_NO_PAD.encode(signature.to_bytes())
             }))
             .unwrap(),
-        );
+        )
+    }
+
+    fn request(&self, method: reqwest::Method, url: &str) -> reqwest::RequestBuilder {
+        let target = reqwest::Url::parse(url).unwrap();
+        let proof = self.browser_proof(method.as_str(), target.path());
         let request = self
             .http
             .request(method, url)
@@ -470,6 +476,86 @@ async fn refused_fresh_agent_records_failure_and_releases_its_destination_fence(
         .await
         .unwrap();
     assert_eq!(clear.status(), 200);
+}
+
+#[tokio::test]
+async fn legacy_draft_send_cannot_strand_a_message_behind_a_staged_agent() {
+    let mut fixture = Fixture::new().await;
+    let draft = json!([{
+        "id":"q1","cmid":"original-draft","text":"Continue",
+        "content":[{"type":"image","mimeType":"image/png","data":"AQID"}]
+    }]);
+    sqlx::query("UPDATE sessions SET drafts = ?1 WHERE id = 'source'")
+        .bind(draft.to_string())
+        .execute(&fixture.store)
+        .await
+        .unwrap();
+    let (_controller, base) = fixture.start().await;
+    let staged = fixture
+        .request(
+            reqwest::Method::PUT,
+            &format!("{base}/api/sessions/source/context"),
+        )
+        .json(&json!({
+            "revision":0,"sources":["source"],"next_agent":{
+                "provider":"codex","provider_account_id":"default",
+                "machine_id":"offline-fixture","cwd":"missing-project","inherit_settings":false
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(staged.status(), 200);
+    let dataset = fixture.get(&format!("{base}/api/sync/dataset")).await;
+    let target = format!(
+        "/ws?bootstrap=lazy&client_kind=browser&client_id=context-draft-fixture&dataset={}",
+        dataset["dataset_id"].as_str().unwrap()
+    );
+    let mut request = format!("{}{target}", base.replace("http://", "ws://"))
+        .into_client_request()
+        .unwrap();
+    let headers = request.headers_mut();
+    headers.insert("cookie", fixture.cookie.as_ref().unwrap().parse().unwrap());
+    headers.insert("origin", "https://cowboy.example".parse().unwrap());
+    headers.insert("x-forwarded-proto", "https".parse().unwrap());
+    headers.insert(
+        "x-cowboy-browser-proof",
+        fixture.browser_proof("GET", &target).parse().unwrap(),
+    );
+    headers.insert("sec-websocket-protocol", "cowboy-sync-v1".parse().unwrap());
+    let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    socket
+        .send(Message::Text(
+            json!({
+                "type":"activate_draft","session_id":"source","id":"q1","cmid":"legacy-draft-send"
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let refusal = tokio::time::timeout(Duration::from_secs(3), async {
+        while let Some(Ok(Message::Text(text))) = socket.next().await {
+            let value: Value = serde_json::from_str(&text).unwrap();
+            if value["type"] == "command_result" && value["cmid"] == "legacy-draft-send" {
+                return value;
+            }
+            assert!(
+                value["state"] != "queue:source"
+                    || value["value"]["queue"].as_array().is_none_or(Vec::is_empty),
+                "the draft was put on the queue that the staged agent holds"
+            );
+        }
+        panic!("socket closed before draft send result");
+    })
+    .await
+    .expect("the stale draft send must receive a definite refusal");
+    assert_eq!(refusal["outcome"], "rejected");
+    let saved: String = sqlx::query_scalar("SELECT drafts FROM sessions WHERE id = 'source'")
+        .fetch_one(&fixture.store)
+        .await
+        .unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&saved).unwrap(), draft);
 }
 
 #[tokio::test]

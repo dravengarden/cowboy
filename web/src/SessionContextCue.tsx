@@ -10,6 +10,7 @@ import ChevronRightRounded from "@mui/icons-material/ChevronRightRounded";
 import { glyphSize } from "./surface/desktopSize";
 import { mobileComposerPanelFrameSx, mobileComposerPanelHeaderMinHeight } from "./mobileComposerPrimitives";
 import { ProviderIcon } from "./ProviderIcon";
+import { NextAgentCue } from "./NextAgentCue";
 import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import {
   CONTEXT_CHANGED,
@@ -181,11 +182,6 @@ export function SessionContextCue(
       </Box>
     );
   }
-  const summary = cue.kind === "pending_agent"
-    ? `Starts ${cue.label}`
-    : cue.kind === "pending_links"
-    ? `Links ${cue.count} session${cue.count === 1 ? "" : "s"} as context`
-    : text;
   // One more row of the Prompt stack: it borrows the Plan panel's frame and
   // label grammar, and sits on the Composer whose next send it changes.
   return (
@@ -228,15 +224,15 @@ export function SessionContextCue(
       >
         Next message
       </Typography>
-      <Typography
-        variant="caption"
-        noWrap
-        color="text.secondary"
-        sx={{ flex: 1, minWidth: 0 }}
-        title={text}
-      >
-        {summary}
-      </Typography>
+      {cue.kind === "pending_agent" ? (
+        <NextAgentCue sessionId={sessionId} revision={context.revision} label={cue.label} />
+      ) : (
+        <Typography variant="caption" noWrap color="text.secondary" title={text} sx={{ flex: 1, minWidth: 0 }}>
+          {cue.kind === "pending_links"
+            ? `Links ${cue.count} session${cue.count === 1 ? "" : "s"} as context`
+            : text}
+        </Typography>
+      )}
       <Button
         size="small"
         color="inherit"

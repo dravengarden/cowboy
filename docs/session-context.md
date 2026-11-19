@@ -298,9 +298,14 @@ injection is never replaced while its prompt is queued for retry, and a session
 deleted while waiting is skipped rather than refusing the prompt. A Web send
 waits for link edits still being saved. `POST .../context/send` still accepts
 waiting links, for callers that want a receipt. Only a staged new agent is
-pending. The queue holds scheduled wakeups, activated drafts and manual drain
-requests until that send. Saving it closes queue admission
-under the same Hub lock before awaiting storage. Messages arriving during that
+pending. It holds automatic queue delivery and refuses direct draft and queue
+sends to the current agent. Sending an unscheduled draft from the Web while
+a switch is staged loads it into the Composer. When one queued message holds
+the switch, **Use message** returns it to Drafts and loads it into an empty
+Composer. The saved draft is available for recovery, and an explicit Composer
+send applies the selected agent. With several queued messages, **Review queue**
+opens the queue so they can be resolved individually. Saving a switch closes
+queue admission under the same Hub lock before awaiting storage. Messages arriving during that
 write remain queued. Clearing context is allowed with a held queue and releases
 it under the normal Pause policy. A bootstrap precedes messages queued during
 its preparation, while continuing to respect Pause.

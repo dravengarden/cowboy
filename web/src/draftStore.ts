@@ -277,6 +277,12 @@ export function getDraft(sessionId: string): Draft {
   return drafts.get(sessionId) ?? EMPTY;
 }
 
+export function composerDraftIsEmpty(sessionId: string): boolean {
+  const draft = getDraft(sessionId);
+  return !draft.text.trim() && draft.attachments.length === 0 &&
+    !awaitingDatabase.has(sessionId);
+}
+
 /** Called once when the product database exists. Reads back every draft
  * whose bytes live there and tells mounted composers about them. */
 export function attachDraftDatabase(db: DraftDatabase): void {
@@ -409,6 +415,18 @@ export function appendDraftText(sessionId: string, text: string): void {
     ...draft,
     text: draft.text ? `${draft.text.trimEnd()}\n\n${text}` : text,
   });
+}
+
+export function appendComposerDraft(
+  sessionId: string,
+  { text, attachments }: Draft,
+): void {
+  if (attachments.length > 0) {
+    const draft = getDraft(sessionId);
+    setDraft(sessionId, { ...draft, attachments: [...draft.attachments, ...attachments] });
+    announceDraft(sessionId);
+  }
+  appendDraftText(sessionId, text);
 }
 
 export function subscribeDraftAppend(
