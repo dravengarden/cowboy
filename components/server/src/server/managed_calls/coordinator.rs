@@ -1099,6 +1099,12 @@ pub(super) async fn cancel_call(state: &Arc<AppState>, parent: &str, call: &str)
             next.finished_at_ms = Some(next.updated_at_ms);
         }
         if store.advance_managed_call(&record, &next).await.ok()? {
+            // Withdraw a still-queued prompt at once, so no drain can start it
+            // before the runner's next poll; the runner then sees a call that
+            // never started and finishes it as cancelled.
+            let _ = state
+                .hub
+                .discard_managed_prompt(&record.child_session_id, call);
             super::runner::ensure_runner(state, &next);
             state.managed_calls.notify();
             return Some(next);

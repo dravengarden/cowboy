@@ -144,6 +144,13 @@ async fn advance(
     }
     if next.state.terminal() {
         next.finished_at_ms = Some(next.updated_at_ms);
+        // Withdraw a leftover prompt before the terminal write, not after it:
+        // a crash in between would otherwise leave a row no runner owns, which
+        // could later run on the child. If the write fails, the still-active
+        // call resubmits its prompt through ordinary recovery.
+        let _ = state
+            .hub
+            .discard_managed_prompt(&next.child_session_id, &next.call_id);
     }
     match store.advance_managed_call(previous, &next).await {
         Ok(advanced) => {
@@ -1286,6 +1293,9 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
         }
         _ => {}
     }
+    if let Some(step) = redeliver(state, store, record, &turn, elapsed).await {
+        return step;
+    }
     if record.state == State::Stopping && elapsed > STOP_GRACE_MS {
         // Stop only this exact child worker; its turn never confirmed.
         state.supervisor.delete_session(child);
@@ -1318,12 +1328,20 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
 /// across a restart).
 async fn withdraw_unstarted(state: &AppState, store: &Store, record: &Record) -> Option<Step> {
     let cancelled = record.cancel_requested_at_ms.is_some();
-    if record.state != State::Running
-        || !(cancelled || review_admissible(state, record).is_err())
-        || !state
-            .hub
-            .discard_managed_prompt(&record.child_session_id, &record.call_id)
-    {
+    if record.state != State::Running || !(cancelled || review_admissible(state, record).is_err()) {
+        return None;
+    }
+    let child = record.child_session_id.as_str();
+    let withdrawn = state.hub.discard_managed_prompt(child, &record.call_id);
+    // Cancellation may already have withdrawn the row: nothing queued, in
+    // flight or echoed after the cursor means no native turn ever started.
+    let never_started = withdrawn
+        || (cancelled
+            && record
+                .child_cursor
+                .and_then(|cursor| state.hub.managed_turn(child, cursor))
+                .is_some_and(|turn| !turn.prompted));
+    if !never_started {
         return None;
     }
     if !cancelled {
@@ -1344,6 +1362,40 @@ async fn withdraw_unstarted(state: &AppState, store: &Store, record: &Record) ->
         .await;
     }
     Some(Step::Again)
+}
+
+/// A running call's prompt still queued with nothing in flight is retried:
+/// an idle worker is offered it again (a full dispatch channel requeues it
+/// without a retry), and a worker that exited before delivery (for example
+/// across a reboot) is started with the call's confirmed preset, after which
+/// the queue drains into it. The automatic drain never revives a worker.
+async fn redeliver(
+    state: &AppState,
+    store: &Store,
+    record: &Record,
+    turn: &crate::core::ManagedTurn,
+    elapsed: i64,
+) -> Option<Step> {
+    if record.state != State::Running || !turn.queued {
+        return None;
+    }
+    let child = record.child_session_id.as_str();
+    match turn.status {
+        Status::Running => state.hub.retry_managed_dispatch(child),
+        Status::Exited if elapsed > PROMPT_RECOVERY_MS => {
+            let request = store
+                .managed_call_input(&record.placement.parent_session_id, &record.call_id)
+                .await
+                .ok()
+                .flatten()?;
+            if let Err(step) = reconfirm(state, store, record, &request).await {
+                return Some(step);
+            }
+            state.hub.retry_managed_dispatch(child);
+        }
+        _ => {}
+    }
+    None
 }
 
 /// Stop a child whose call was refused before its prompt ran. A fresh child

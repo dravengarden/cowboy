@@ -165,16 +165,22 @@ and the preference write, so A, B and D share one validation.
   keeps owning its identity; pass `fresh:true` to run a new review.
 - `configuration::ready` keeps its existing preference/observation
   handshake; it is not rewritten here.
-- Queue and delivery layer (pre-existing, needs its own design): a queued
-  row's removal is persisted asynchronously, so a Controller crash after
-  Machine acceptance can restore a row for work already accepted; a queued
-  row drained by a replacement worker relies on its replay of the
-  runner-written preferences, which skips unsupported options; a prompt can
-  be dispatched between an accepted cancellation and the runner's next
-  poll; a terminal call's leftover row survives a crash between the ledger
-  write and settlement; and a queued row on an exited worker or a full
-  dispatch channel is not retried. The rules above narrow, but do not close,
-  these windows.
+- Queue and delivery layer. Closed since: cancellation withdraws a
+  still-queued prompt as soon as its ledger write commits, and the runner
+  finishes a call that never started (nothing queued, in flight or echoed
+  after its cursor) as cancelled at once; every terminal runner transition
+  withdraws a leftover prompt before its ledger write, so a crash cannot leave
+  a row for a finished call; a running call whose prompt is still queued is
+  offered to an idle worker again on every poll (a full dispatch channel
+  requeues without a retry), and a worker that exited before delivery is
+  started with the confirmed preset so the queue drains into it. Still open:
+  queue-row removal is persisted asynchronously, so a Controller crash after
+  Machine acceptance can restore a row for work already accepted (closing it
+  needs Machine-side delivery evidence keyed by the call's message id); and a
+  queued row drained by a replacement worker relies on its replay of the
+  runner-written preferences, which skips options the worker does not offer
+  (with the generation frozen and only signed preset values written, the
+  same generation offers them).
 - A refused continuation whose worker is still starting cannot be
   hibernated yet; idle hibernation reclaims it later.
 - Capabilities publish presets from the read-only profile's generation. An

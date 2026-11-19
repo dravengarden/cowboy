@@ -41,6 +41,13 @@ impl Hub {
         !self.is_managed_child(session_id) && self.edit_queued(session_id, id, text, content)
     }
 
+    /// Offer a managed child's queued prompt to its worker again. The automatic
+    /// drain runs only into an alive, idle worker, so this never revives one;
+    /// it recovers a prompt requeued after a full dispatch channel.
+    pub fn retry_managed_dispatch(&self, session_id: &str) {
+        self.try_drain(session_id);
+    }
+
     pub fn is_managed_child(&self, session_id: &str) -> bool {
         self.inner.sessions.lock().get(session_id).is_some_and(|s| {
             s.meta
