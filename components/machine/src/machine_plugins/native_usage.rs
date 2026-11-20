@@ -108,8 +108,8 @@ impl MachinePluginStore {
                 &mut payload,
             )
             .context("native_usage_collector_unavailable")?;
-        let mut environment = resolved.environment;
-        native_only_environment(&mut environment).context("native_usage_home_unsupported")?;
+        let environment = resolved.environment;
+        native_only_environment(&environment).context("native_usage_home_unsupported")?;
         invocation.remaining()?;
         let (program, arguments) = resolved
             .command
@@ -163,6 +163,90 @@ impl MachinePluginStore {
         })
     }
 
+    /// Spend one banked usage reset the owner confirmed or scheduled, through
+    /// the same signed collector, CLI identity, account home guard and deadline
+    /// as [`Self::collect_native_usage`]. The collector re-reads availability
+    /// and refuses a changed grant before it posts. Unlike a read, the reset
+    /// keeps the installation lifecycle until it ends, as Service resets do.
+    /// `started` on a failure means the collector may have reached the
+    /// Provider; such an outcome is unknown and never retried automatically.
+    pub async fn consume_native_reset(
+        &self,
+        invocation: Invocation,
+        request: &crate::machine_protocol::NativeResetRequest,
+    ) -> std::result::Result<serde_json::Value, PluginHostInvocationFailure> {
+        let refuse = |code: &'static str| Err(anyhow::anyhow!(code).into());
+        let profile = &invocation.profile;
+        if !request.valid() {
+            return refuse("native_reset_request_invalid");
+        }
+        let _observation = tokio::time::timeout(
+            invocation.remaining()?,
+            self.native_observations
+                .account(&profile.account_id)
+                .lock_owned(),
+        )
+        .await
+        .context("native_usage_busy")?;
+        let _lifecycle = tokio::time::timeout(invocation.remaining()?, self.lifecycle.lock())
+            .await
+            .context("native_usage_busy")?;
+        self.validate_native_usage(profile)
+            .context("native_usage_profile_changed")?;
+        let (active, active_digest) = self
+            .active_package(&profile.provider_id)?
+            .context("native_usage_collector_unavailable")?;
+        // An account-sandbox credential never leaves its daemon's custody.
+        if account_sandbox::sandboxed(&active) {
+            return refuse("native_reset_unsupported");
+        }
+        let mut payload = serde_json::to_value(request).map_err(anyhow::Error::from)?;
+        let resolved = self
+            .resolve_host_invocation(
+                &profile.provider_id,
+                &active.manifest.version,
+                &active_digest,
+                HostAuthentication::Native(profile),
+                PluginHostOperation::ResetUsage,
+                &mut payload,
+            )
+            .context("native_usage_collector_unavailable")?;
+        native_only_environment(&resolved.environment).context("native_usage_home_unsupported")?;
+        if !resolved
+            .environment
+            .contains_key("CLAUDE_SECURESTORAGE_CONFIG_DIR")
+        {
+            return refuse("native_reset_unsupported");
+        }
+        invocation.remaining()?;
+        let (program, arguments) = resolved
+            .command
+            .split_first()
+            .context("native_usage_collector_unavailable")?;
+        let output = crate::plugin_process::run_plugin_command_with_environment_on_started(
+            program,
+            arguments,
+            &serde_json::to_vec(&payload).map_err(anyhow::Error::from)?,
+            &resolved.environment,
+            || {},
+        )
+        .await
+        .map_err(|failure| PluginHostInvocationFailure {
+            started: failure.started,
+            error: anyhow::anyhow!(if failure.started {
+                "native_reset_outcome_unknown"
+            } else {
+                "native_usage_collector_failed"
+            }),
+        })?;
+        // The collector answers every reset, refused or not, on stdout. Only
+        // its closed fields leave the Machine; never stderr or credentials.
+        decode_host_response(&output).map_err(|_| PluginHostInvocationFailure {
+            started: true,
+            error: anyhow::anyhow!("native_reset_outcome_unknown"),
+        })
+    }
+
     pub(super) fn validate_native_usage(&self, profile: &NativeProfileReceipt) -> Result<()> {
         // A native profile receipt exists only for a Provider whose signed
         // login recipe verified the identity; the receipt is the capability.
@@ -191,18 +275,21 @@ impl MachinePluginStore {
     }
 }
 
-fn native_only_environment(environment: &mut BTreeMap<String, String>) -> Result<()> {
+fn native_only_environment(environment: &BTreeMap<String, String>) -> Result<()> {
     let home = environment
         .get("HOME")
         .context("native usage home missing")?
         .clone();
-    // The signed Claude collector's optional credits enrichment reads this
-    // variable. Omit it so only native auth-status/get_usage accesses credentials.
-    // Native Claude must resolve the exact same .claude home, never a fallback.
-    // Other Providers' collectors read their native home through HOME alone.
-    if let Some(directory) = environment.remove("CLAUDE_SECURESTORAGE_CONFIG_DIR") {
+    // The signed Claude collector reads this account's own credential file,
+    // read-only, for its reset-credit, prepaid-balance and plan-tier
+    // enrichment and for an owner-confirmed reset, after the native CLI had
+    // its chance to refresh the token. Native Claude must resolve the exact
+    // same .claude home, never another account's or a shared one: any other
+    // layout refuses the whole query. Other Providers' collectors read their
+    // native home through HOME alone.
+    if let Some(directory) = environment.get("CLAUDE_SECURESTORAGE_CONFIG_DIR") {
         ensure!(
-            Path::new(&directory) == Path::new(&home).join(".claude"),
+            Path::new(directory) == Path::new(&home).join(".claude"),
             "native usage credential layout unsupported"
         );
     }
@@ -248,18 +335,63 @@ mod tests {
                 "/accounts/lynx/.claude".into(),
             ),
         ]);
-        assert!(native_only_environment(&mut environment).is_err());
+        assert!(native_only_environment(&environment).is_err());
         environment.insert(
             "CLAUDE_SECURESTORAGE_CONFIG_DIR".into(),
             "/accounts/otter/home/.claude".into(),
         );
-        native_only_environment(&mut environment).unwrap();
-        assert_eq!(environment["HOME"], "/accounts/otter/home");
-        assert!(!environment.contains_key("CLAUDE_SECURESTORAGE_CONFIG_DIR"));
+        // The account's own credential directory is admitted, and stays in
+        // the collector environment for its read-only enrichment.
+        native_only_environment(&environment).unwrap();
+        // A relative or nested spelling is not the account's .claude home.
+        for other in [
+            "accounts/otter/home/.claude",
+            "/accounts/otter/home/.claude/x",
+        ] {
+            let mut spelled = environment.clone();
+            spelled.insert("CLAUDE_SECURESTORAGE_CONFIG_DIR".into(), other.into());
+            assert!(native_only_environment(&spelled).is_err(), "{other}");
+        }
         // Providers without a separate credential directory read HOME alone.
-        native_only_environment(&mut environment).unwrap();
+        environment.remove("CLAUDE_SECURESTORAGE_CONFIG_DIR");
+        native_only_environment(&environment).unwrap();
         environment.remove("HOME");
-        assert!(native_only_environment(&mut environment).is_err());
+        assert!(native_only_environment(&environment).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_reset_that_cannot_be_admitted_never_starts_the_collector() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MachinePluginStore::new(dir.path(), Platform::Linux, "x86_64".into()).unwrap();
+        let profile: NativeProfileReceipt = serde_json::from_value(serde_json::json!({
+            "account_id":"11111111-1111-4111-8111-111111111111",
+            "provider_id":"claude-code","request_id":"login","generation":1,
+            "method":"native","provider_version":"1","generation_digest":"digest",
+            "auth_contract_fingerprint":"contract","identity":{"authority":"claude","subject":"otter"}
+        }))
+        .unwrap();
+        let request = crate::machine_protocol::NativeResetRequest {
+            provider: "anthropic".into(),
+            idempotency_key: "cowboy-reset-1-2-3".into(),
+            expected_credit_id: Some("grant:1".into()),
+        };
+        let invalid = crate::machine_protocol::NativeResetRequest {
+            idempotency_key: "not a key".into(),
+            ..request.clone()
+        };
+        for (request, code) in [
+            (invalid, "native_reset_request_invalid"),
+            // No verified login of this generation exists in its home.
+            (request, "native_usage_profile_changed"),
+        ] {
+            let invocation = Invocation::new(profile.clone(), Arc::new(AtomicBool::new(true)));
+            let failure = store
+                .consume_native_reset(invocation, &request)
+                .await
+                .unwrap_err();
+            assert!(!failure.started, "{code}");
+            assert_eq!(failure.error.to_string(), code);
+        }
     }
 
     #[tokio::test]

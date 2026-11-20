@@ -33,7 +33,11 @@ pub mod telemetry_recovery_audit;
 mod challenge_proof;
 pub use challenge_proof::{challenge_proof_v1, challenge_proof_v2, challenge_proof_v3};
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 48;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 49;
+/// An owner-confirmed or owner-scheduled reset of a named native account's
+/// banked usage limit (`ConsumeNativeReset`), sent only by that account's
+/// signed collector inside its verified native home.
+pub const NATIVE_RESET_PROTOCOL_VERSION: u16 = 49;
 /// Controller-owned account-sandbox controls: fences (`AccountSandboxFence`,
 /// the kill switch and suspension stop an account's units through the
 /// Machine's daemon) and the revocation's removal of an account's home and
@@ -78,7 +82,7 @@ mod host_resources;
 pub use host_resources::{BrowserResources, HostResources, ObservedHostResources};
 mod native_usage;
 mod portable_bundle;
-pub use native_usage::native_usage_error_code;
+pub use native_usage::{NativeResetRequest, native_usage_error_code};
 
 pub const CURRENT_TURN_PROTOCOL_VERSION: u16 = 34;
 pub const DELIVERY_CONTROLS_PROTOCOL_VERSION: u16 = 35;
@@ -843,6 +847,14 @@ pub enum MachineCommand {
     CollectNativeUsage {
         request_id: String,
         profile: Box<crate::provider_account::NativeProfileReceipt>,
+    },
+    /// Spend one banked usage reset of a verified named native login through
+    /// its signed collector; answered by `PluginHostResponse`, whose `started`
+    /// says whether the collector may have reached the Provider.
+    ConsumeNativeReset {
+        request_id: String,
+        profile: Box<crate::provider_account::NativeProfileReceipt>,
+        request: NativeResetRequest,
     },
     NativeLogout {
         request_id: String,

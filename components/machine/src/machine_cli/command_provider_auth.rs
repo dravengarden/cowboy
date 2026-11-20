@@ -169,6 +169,9 @@ pub(super) fn handle(
                 });
             });
         }
+        reset @ MachineCommand::ConsumeNativeReset { .. } => {
+            consume_native_reset(protocol, events, providers, execution, reset);
+        }
         MachineCommand::PrepareNativeBinding {
             request_id,
             binding,
@@ -185,6 +188,65 @@ pub(super) fn handle(
             "machine command routed to the wrong family (command_provider_auth)"
         ),
     }
+}
+
+/// Answer `ConsumeNativeReset` with the collector's own reply (success or its
+/// closed refusal) or a closed Machine code. `started` keeps whether the
+/// collector may have reached the Provider, so the Controller never retries an
+/// unknown outcome.
+fn consume_native_reset(
+    protocol: u16,
+    events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+    providers: Arc<MachinePluginStore>,
+    execution: &PluginExecutionScope,
+    command: MachineCommand,
+) {
+    let MachineCommand::ConsumeNativeReset {
+        request_id,
+        profile,
+        request,
+    } = command
+    else {
+        return;
+    };
+    let account = profile.account_id.clone();
+    let generation = profile.generation;
+    let invocation = execution.native_usage(*profile);
+    tokio::spawn(async move {
+        let result = if protocol >= crate::machine_protocol::NATIVE_RESET_PROTOCOL_VERSION {
+            providers.consume_native_reset(invocation, &request).await
+        } else {
+            Err(anyhow::anyhow!("machine_usage_update_required").into())
+        };
+        let event = match result {
+            Ok(payload) => MachineEvent::PluginHostResponse {
+                request_id,
+                accepted: true,
+                started: true,
+                payload: Some(payload),
+                detail: None,
+            },
+            Err(failure) => {
+                let code =
+                    crate::machine_protocol::native_usage_error_code(&failure.error.to_string());
+                tracing::warn!(
+                    account = account.as_str(),
+                    generation,
+                    started = failure.started,
+                    reason = code,
+                    "Native account reset failed"
+                );
+                MachineEvent::PluginHostResponse {
+                    request_id,
+                    accepted: false,
+                    started: failure.started,
+                    payload: None,
+                    detail: Some(code.to_owned()),
+                }
+            }
+        };
+        let _ = events.send(event);
+    });
 }
 
 /// A named envelope carries an account vault's Service-held credential (an

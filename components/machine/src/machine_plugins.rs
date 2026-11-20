@@ -1375,10 +1375,14 @@ impl MachinePluginStore {
         // only those request-local bytes; later requests verify from disk again.
         let scoped;
         let (store, generation) = if let Some(profile) = native {
+            // A native profile only reads its quota or spends a reset the
+            // owner confirmed (`consume_native_reset`); never sidecars.
             ensure!(
-                operation == PluginHostOperation::CollectUsage
-                    && usage.collector_sidecars.is_empty(),
-                "native usage cannot mutate an account or query sidecars"
+                matches!(
+                    operation,
+                    PluginHostOperation::CollectUsage | PluginHostOperation::ResetUsage
+                ) && usage.collector_sidecars.is_empty(),
+                "native usage cannot run this operation or query sidecars"
             );
             scoped = self.for_account(&profile.account_id)?;
             (&scoped, Some(profile.generation))

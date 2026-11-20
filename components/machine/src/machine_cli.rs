@@ -2585,6 +2585,7 @@ fn handle_machine_command(
         | MachineCommand::FinalizeProviderAuthCandidate { .. }
         | MachineCommand::QueryNativeProfile { .. }
         | MachineCommand::CollectNativeUsage { .. }
+        | MachineCommand::ConsumeNativeReset { .. }
         | MachineCommand::PrepareNativeBinding { .. }) => {
             command_provider_auth::handle(command, context, execution)
         }
