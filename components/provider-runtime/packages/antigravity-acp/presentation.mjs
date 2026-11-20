@@ -1,4 +1,4 @@
-// How Cowboy shows the facade's tool calls. `agy` reports every MCP call as
+// How Cowboy shows the facade's tool calls and `agy`'s web built-ins. `agy` reports every MCP call as
 // kind `other` titled "Run mcp_cowboy_<Tool>"; the proxy rewrites the call it
 // forwards so the transcript shows what the tool does on the target, in the
 // same ACP fields native Providers use (kind, title, locations, diff
@@ -20,11 +20,52 @@ const TOOLS = Object.freeze({
   StopCommand: { name: "Stop", kind: "execute" },
 });
 
+/**
+ * `agy`'s network-only built-ins the gate allows (hook.mjs `WEB_TOOLS`),
+ * shown like Claude's and Codex's web tools: a search titled by its query, a
+ * URL read by its URL.
+ */
+const WEB = Object.freeze({
+  search_web: { name: "WebSearch", kind: "search" },
+  read_url_content: { name: "WebFetch", kind: "fetch" },
+  view_content_chunk: { name: "WebFetch", kind: "fetch" },
+});
+
 /** The facade tool a call names, or `undefined`. */
 export function facadeTool(name) {
   if (typeof name !== "string" || !name.startsWith(PREFIX)) return undefined;
   const tool = name.slice(PREFIX.length);
   return Object.hasOwn(TOOLS, tool) ? tool : undefined;
+}
+
+/** The facade tool or web built-in a call names, or `undefined`. */
+export function presentedTool(name) {
+  if (typeof name === "string" && Object.hasOwn(WEB, name)) return name;
+  return facadeTool(name);
+}
+
+/** The first argument whose key mentions `url`, when it is text. */
+function urlArgument(input) {
+  for (const [key, value] of Object.entries(input)) {
+    if (/url/i.test(key) && typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+/** Title and input of one web built-in call. */
+function describeWeb(tool, input) {
+  switch (tool) {
+    case "search_web": {
+      const query = text(input.query) ?? text(input.Query);
+      return query?.trim() ? line(query) : "Web search";
+    }
+    case "read_url_content": {
+      const url = urlArgument(input);
+      return url ? line(url) : "Fetch URL";
+    }
+    default:
+      return "Read fetched content";
+  }
 }
 
 const text = (value) => (typeof value === "string" ? value : undefined);
@@ -96,8 +137,18 @@ function describe(tool, input, root) {
  */
 export function presentToolCall(toolCall, { root, known } = {}) {
   if (!isObject(toolCall)) return toolCall;
-  const tool = facadeTool(toolCall.name) ?? known;
+  const tool = presentedTool(toolCall.name) ?? known;
   if (tool === undefined) return toolCall;
+  if (Object.hasOwn(WEB, tool)) {
+    const shown = { ...toolCall, name: WEB[tool].name, kind: WEB[tool].kind };
+    const input = isObject(toolCall.rawInput) ? toolCall.rawInput : undefined;
+    // Without input `agy`'s own title (if any) stays.
+    if (input === undefined) return shown;
+    const { toolSummary: _summary, ...rest } = input;
+    shown.title = describeWeb(tool, rest);
+    shown.rawInput = rest;
+    return shown;
+  }
   const shown = { ...toolCall, name: TOOLS[tool].name, kind: TOOLS[tool].kind };
   const input = isObject(toolCall.rawInput) ? toolCall.rawInput : undefined;
   if (input === undefined) {

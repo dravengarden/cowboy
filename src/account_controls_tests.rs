@@ -139,6 +139,62 @@ fn stop_reasons_are_classified_from_the_proxys_structured_result_only() {
     );
 }
 
+/// The proxy's turn error as the worker renders it (`agy-proxy` code
+/// `-32603`, `data.message` for display beside `data.cowboy`).
+fn displayed_proxy_error(message: &str, text: &str, cowboy: &serde_json::Value) -> String {
+    let data = serde_json::json!({ "message": text, "cowboy": cowboy });
+    let data = serde_json::to_string_pretty(&data).unwrap();
+    format!("error: {message}: {data}")
+}
+
+#[test]
+fn the_proxys_displayed_turn_errors_keep_their_classification() {
+    // sess-1795107755038: a policy violation maps to needs_attention, never
+    // unknown_refusal, when the error also carries its display text.
+    let violation = classify_stop_reason(&displayed_proxy_error(
+        "antigravity_policy_violation:search_web",
+        "A built-in Antigravity tool ran despite Cowboy's gate.",
+        &serde_json::json!({
+            "antigravity_backend": {"class": "ok", "successes": 1, "barrier": true},
+            "policy_violation": "search_web",
+        }),
+    ));
+    assert_eq!(violation, Signal::PolicyViolation("search_web".into()));
+    assert_eq!(
+        signal_transition(&violation).map(|t| (t.state, t.reason)),
+        Some((
+            AccountState::NeedsAttention,
+            "policy_violation:search_web".to_owned()
+        ))
+    );
+    assert_eq!(
+        classify_stop_reason(&displayed_proxy_error(
+            "antigravity_backend_refusal:rate_limited",
+            "Google rate-limited this Antigravity account.",
+            &serde_json::json!({"antigravity_backend": {"class": "rate_limited"}}),
+        )),
+        Signal::Refused(AccountState::RateLimited)
+    );
+    // A built-in the hook denied never ran: the proxy settles the turn as
+    // an ordinary ending, which raises nothing.
+    assert_eq!(signal_transition(&classify_stop_reason("EndTurn")), None);
+    // The worker presents ACP's `-32000` (auth_required) as rejected
+    // credentials and keeps only the data; that rewrite is not the proxy's
+    // closed code, which is why the proxy no longer uses `-32000`.
+    assert_eq!(
+        classify_stop_reason(&format!(
+            "error: Provider authentication required - Antigravity credentials expired or \
+             were rejected.: {}",
+            serde_json::to_string_pretty(&serde_json::json!({"cowboy": {
+                "antigravity_backend": {"class": "ok"},
+                "policy_violation": "search_web",
+            }}))
+            .unwrap()
+        )),
+        Signal::Unclassified
+    );
+}
+
 #[test]
 fn vendor_text_never_selects_a_transition() {
     let backend = |class: &str| serde_json::json!({"antigravity_backend": {"class": class}});

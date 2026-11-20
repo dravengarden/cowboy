@@ -5,7 +5,6 @@
       "write_file(*)",
       "command(*)",
       "unsandboxed(*)",
-      "read_url(*)",
       "execute_url(*)"
     ]
   },

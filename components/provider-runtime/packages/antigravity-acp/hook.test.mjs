@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { ALLOWED_TOOLS, decide } from "./hook.mjs";
+import { ALLOWED_TOOLS, decide, URL_DENIAL_REASON, WEB_TOOLS } from "./hook.mjs";
 
 const hook = fileURLToPath(new URL("./hook.mjs", import.meta.url));
-const input = (name) => JSON.stringify({ toolCall: { name, args: {} } });
+const input = (name, args = {}) => JSON.stringify({ toolCall: { name, args } });
 
 test("only the cowboy server's tools and ask_question are allowed", () => {
   for (const name of ALLOWED_TOOLS) assert.deepEqual(decide(input(name)), { decision: "allow" });
@@ -26,7 +26,9 @@ test("only the cowboy server's tools and ask_question are allowed", () => {
     "schedule",
     "swarm",
     "run_workflow",
-    "search_web",
+    "read_browser_page",
+    "open_browser_url",
+    "browser_subagent",
     "mcp_cowboy_ReadFile ",
     "mcp_other_ReadFile",
     "mcp_cowboy_",
@@ -38,6 +40,39 @@ test("only the cowboy server's tools and ask_question are allowed", () => {
     "",
   ]) {
     assert.equal(decide(input(name)).decision, "deny", name);
+  }
+});
+
+test("the network-only web built-ins are allowed", () => {
+  assert.deepEqual(WEB_TOOLS, ["search_web", "read_url_content", "view_content_chunk"]);
+  assert.deepEqual(decide(input("search_web", { query: "acp spec" })), { decision: "allow" });
+  assert.deepEqual(decide(input("view_content_chunk", { document_id: "d1", position: 2 })), {
+    decision: "allow",
+  });
+  for (const args of [
+    { Url: "https://example.com/docs" },
+    { url: "http://example.com" },
+    { Url: "https://example.com", toolSummary: "Read the docs" },
+  ]) {
+    assert.deepEqual(decide(input("read_url_content", args)), { decision: "allow" }, args);
+  }
+});
+
+test("a URL read names only http(s) URLs", () => {
+  for (const args of [
+    {},
+    undefined,
+    { Url: "file:///etc/passwd" },
+    { Url: "ftp://example.com" },
+    { Url: "javascript:alert(1)" },
+    { Url: "not a url" },
+    { Url: 7 },
+    { Url: "https://example.com", BaseUrl: "file:///home" },
+    { Url: `https://example.com/${"a".repeat(9000)}` },
+  ]) {
+    const decision = decide(input("read_url_content", args));
+    assert.equal(decision.decision, "deny", JSON.stringify(args));
+    assert.equal(decision.reason, URL_DENIAL_REASON);
   }
 });
 

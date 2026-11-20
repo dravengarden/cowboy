@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AcpProxy, accountPlan, REFUSAL_PREFIX, stripTier, VIOLATION_PREFIX } from "./proxy.mjs";
+import {
+  AcpProxy,
+  accountPlan,
+  REFUSAL_PREFIX,
+  stripTier,
+  TURN_ERROR_CODE,
+  TURN_ERROR_TEXT,
+  VIOLATION_PREFIX,
+} from "./proxy.mjs";
 
 function harness({
   ready = true,
@@ -249,6 +257,11 @@ test("a turn carries backend evidence; a refusal becomes a fixed error", async (
   assert.equal(error.result, undefined);
   assert.equal(error.error.message, `${REFUSAL_PREFIX}verification_required`);
   assert.equal(error.error.data.cowboy.antigravity_backend.class, "verification_required");
+  // Never ACP's auth_required code: the worker would show it as expired
+  // credentials and the Controller could no longer classify the refusal.
+  assert.equal(error.error.code, TURN_ERROR_CODE);
+  assert.notEqual(error.error.code, -32000);
+  assert.equal(error.error.data.message, TURN_ERROR_TEXT.verification_required);
 });
 
 test("cancel and an unknown facade outcome end the turn", async () => {
@@ -320,6 +333,56 @@ test("a built-in tool that executes ends the turn as a policy violation", async 
   assert.equal(error.error.message, `${VIOLATION_PREFIX}read_file`);
   assert.equal(error.error.data.cowboy.policy_violation, "read_file");
   assert.equal(error.error.data.cowboy.antigravity_backend.class, "ok");
+  assert.equal(error.error.code, TURN_ERROR_CODE);
+  assert.equal(error.error.data.message, TURN_ERROR_TEXT.violation);
+});
+
+test("a built-in the hook denied never ran and is not a violation", async () => {
+  // agy 1.5.9 announces every call `in_progress`, then reports a hook-denied
+  // one `failed` (sess-1795107755038: two `search_web` calls).
+  const { proxy, agent, client } = harness();
+  await proxy.fromClient(request(9, "session/prompt", { sessionId: "s", prompt: [] }));
+  for (const toolCallId of ["w1", "w2"]) {
+    await proxy.fromAgent(
+      toolUpdate({
+        sessionUpdate: "tool_call",
+        toolCallId,
+        name: "read_file",
+        status: "in_progress",
+        rawInput: { AbsolutePath: "/etc/hostname" },
+      }),
+    );
+    await proxy.fromAgent(
+      toolUpdate({ sessionUpdate: "tool_call_update", toolCallId, status: "failed" }),
+    );
+  }
+  assert.equal(agent.filter((message) => message.method === "session/cancel").length, 0);
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 9, result: { stopReason: "end_turn" } });
+  assert.equal(client.at(-1).error, undefined);
+  assert.equal(client.at(-1).result._meta.cowboy.policy_violation, undefined);
+});
+
+test("agy's web built-ins run without a violation", async () => {
+  const { proxy, agent, client } = harness();
+  await proxy.fromClient(request(9, "session/prompt", { sessionId: "s", prompt: [] }));
+  for (const [toolCallId, name] of [
+    ["q", "search_web"],
+    ["u", "read_url_content"],
+    ["c", "view_content_chunk"],
+  ]) {
+    await proxy.fromAgent(
+      toolUpdate({ sessionUpdate: "tool_call", toolCallId, name, status: "in_progress" }),
+    );
+    await proxy.fromAgent(
+      toolUpdate({ sessionUpdate: "tool_call_update", toolCallId, status: "in_progress" }),
+    );
+    await proxy.fromAgent(
+      toolUpdate({ sessionUpdate: "tool_call_update", toolCallId, status: "completed" }),
+    );
+  }
+  assert.equal(agent.filter((message) => message.method === "session/cancel").length, 0);
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 9, result: { stopReason: "end_turn" } });
+  assert.equal(client.at(-1).result._meta.cowboy.policy_violation, undefined);
 });
 
 test("a built-in tool read in the same chunk as the prompt result is a violation", async () => {

@@ -6,7 +6,7 @@
 import { Compaction, compactionStatus } from "./compaction.mjs";
 import { allowedTool } from "./hook.mjs";
 import { EVIDENCE_LIMITS, promptText, recall, updateObservation } from "./memory.mjs";
-import { facadeTool, presentToolCall } from "./presentation.mjs";
+import { presentedTool, presentToolCall } from "./presentation.mjs";
 
 /** Client requests a `runtime` unit forwards; everything else is refused. */
 export const RUNTIME_REQUESTS = Object.freeze([
@@ -29,6 +29,31 @@ export const REFUSAL_PREFIX = "antigravity_backend_refusal:";
 export const VIOLATION_PREFIX = "antigravity_policy_violation:";
 /** Tool call states that mean the tool ran (or is running). */
 const EXECUTED = new Set(["in_progress", "completed"]);
+/**
+ * The JSON-RPC code of a settled turn's refusal or violation. Never ACP's
+ * `-32000` (`auth_required`): the worker presents that code as rejected
+ * credentials and the Controller then cannot read the proxy's closed code.
+ */
+export const TURN_ERROR_CODE = -32603;
+/** What the owner reads for each closed code (the error's `data.message`). */
+export const TURN_ERROR_TEXT = Object.freeze({
+  violation:
+    "A built-in Antigravity tool ran despite Cowboy's gate. The turn was ended and the " +
+    "account's units are being stopped; review the account before continuing.",
+  verification_required:
+    "Google asks to verify this Antigravity account. Verify it in the account's browser " +
+    "before continuing.",
+  location_unsupported:
+    "Google refused this Antigravity account: the service is not available in the runtime " +
+    "Machine's location.",
+  rate_limited:
+    "Google rate-limited this Antigravity account. Wait for the limit to reset before " +
+    "sending again.",
+  suspended: "Google reported this Antigravity account as suspended.",
+  unknown_refusal:
+    "Cowboy could not prove Google's outcome for this turn from the account's log. Review " +
+    "the account before continuing.",
+});
 /** Tool call names remembered per turn (tool_call_update omits the name). */
 const MAX_TOOL_CALLS = 1024;
 
@@ -215,7 +240,7 @@ export class AcpProxy {
   /** `toolCall` as Cowboy shows it (see presentation.mjs). */
   present(toolCall) {
     const id = toolCall?.toolCallId;
-    const tool = facadeTool(toolCall?.name);
+    const tool = presentedTool(toolCall?.name);
     if (tool !== undefined && typeof id === "string") {
       if (this.calls.size >= MAX_TOOL_CALLS) this.calls.delete(this.calls.keys().next().value);
       this.calls.set(id, tool);
@@ -372,9 +397,11 @@ export class AcpProxy {
 
   /**
    * Detection behind the gate (design "Account controls", step 5): an ACP
-   * tool call outside the allow-list that reached `in_progress` or
-   * `completed` means a built-in tool ran. The turn is cancelled and ends
-   * with a policy-violation error; the Controller stops the account.
+   * tool call outside the allow-list that was reported running (an
+   * `in_progress` update after its announcement) or `completed` means a
+   * built-in tool ran. A call the hook denied is not one. The turn is
+   * cancelled and ends with a policy-violation error; the Controller stops
+   * the account.
    */
   observe(params) {
     const sessionId = params?.sessionId;
@@ -387,6 +414,11 @@ export class AcpProxy {
     }
     const name = typeof update.name === "string" ? update.name : turn.tools.get(id);
     if (!EXECUTED.has(update.status)) return;
+    // `agy` announces every call as an `in_progress` `tool_call` before its
+    // `PreToolUse` hook decides; a denied call then fails without running
+    // (in_progress -> failed). Only a later `in_progress` update or a
+    // completion proves that a tool ran.
+    if (update.sessionUpdate === "tool_call" && update.status === "in_progress") return;
     // A tool that ran must be attributable to a facade tool. One without a
     // name, with an unknown call ID or past the per-turn name bound cannot
     // be, so it is a violation like a named built-in.
@@ -602,16 +634,21 @@ export class AcpProxy {
     if (uncertain !== undefined) cowboy.uncertain_effect = uncertain;
     if (violation !== undefined) cowboy.policy_violation = violation;
     if (violation !== undefined || cowboy.antigravity_backend.class !== "ok") {
+      const text =
+        violation !== undefined
+          ? TURN_ERROR_TEXT.violation
+          : (TURN_ERROR_TEXT[cowboy.antigravity_backend.class] ?? TURN_ERROR_TEXT.unknown_refusal);
       return this.endPrompt(record, {
         jsonrpc: "2.0",
         id,
         error: {
-          code: -32000,
+          code: TURN_ERROR_CODE,
           message:
             violation !== undefined
               ? `${VIOLATION_PREFIX}${violation}`
               : `${REFUSAL_PREFIX}${cowboy.antigravity_backend.class}`,
-          data: { cowboy },
+          // `message` is what Cowboy shows; the Controller reads `cowboy`.
+          data: { message: text, cowboy },
         },
       });
     }

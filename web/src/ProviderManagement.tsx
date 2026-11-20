@@ -52,6 +52,7 @@ import {
 } from "./providerCatalog";
 import { groupProviderAuthentications } from "./providerAuthenticationGroups.ts";
 import { withoutNamedOnly } from "./accountControls.ts";
+import { namedOnlyPlacement, sortByProviderCardOrder } from "./providerCardOrder.ts";
 import {
   providerAuthenticationCompleted,
   providerAuthenticationPromoting,
@@ -377,7 +378,7 @@ function ProviderManagement(
     [serviceEntries],
   );
   const allProviderRows = useMemo(
-    () =>
+    () => sortByProviderCardOrder(
       scope === "machine"
         ? joinProviderInstallations(catalog?.providers ?? [], inventory, {
           platform: machine.platform,
@@ -402,6 +403,9 @@ function ProviderManagement(
             installedEntry: undefined,
           };
         }),
+      (row) => serviceCredentialGroups.find((group) => group.authenticationScope === row.providerId)
+        ?.entries.map((entry) => entry.provider_id) ?? [row.providerId],
+    ),
     [catalog, inventory, machine, scope, serviceCredentialGroups],
   );
   const providerRows = useMemo(() => {
@@ -418,6 +422,13 @@ function ProviderManagement(
       ) === true;
     });
   }, [allProviderRows, focusProviderId, serviceCredentialGroups]);
+  // Named-only Providers (Antigravity) have no row; their account cards take
+  // their place in the deliberate order (providerCardOrder.ts).
+  const namedOnlyCards = namedOnlyPlacement(
+    providerRows.map((row) => ({ key: row.providerId, providers: serviceCredentialGroups.find((group) => group.authenticationScope === row.providerId)?.entries.map((entry) => entry.provider_id) ?? [row.providerId] })),
+    [...new Set(accounts?.named.filter((card) => !serviceCredentialGroups.some((group) => group.entries.some((provider) => provider.provider_id === card.provider))).map((card) => card.provider))],
+  );
+  const namedCards = (providers: readonly string[] = []) => accounts?.named.filter((card) => providers.includes(card.provider)).map((card) => card.content) ?? [];
   // Unbound catalog declarations are not running publication jobs. Warn only
   // when this screen has no signed runtime to perform the sign-in action.
   const unavailableAuthenticationEntries = providerRows.flatMap((row) =>
@@ -759,7 +770,7 @@ function ProviderManagement(
             </Typography>
           )
           : null}
-        {providerRows.map((row) => {
+        {providerRows.flatMap((row) => [...namedCards(namedOnlyCards.before.get(row.providerId)), (() => {
           const {
             providerId,
             latestEntry,
@@ -1165,8 +1176,8 @@ function ProviderManagement(
             {accounts?.named.filter((card) => credentialEntries.some((provider) => provider.provider_id === card.provider)).map((card) => card.content)}
             </Fragment>
           );
-        })}
-        {accounts?.named.filter((card) => !serviceCredentialGroups.some((group) => group.entries.some((provider) => provider.provider_id === card.provider))).map((card) => card.content)}
+        })()])}
+        {namedCards(namedOnlyCards.trailing)}
       </Box>
 
       <ConfirmSheet

@@ -241,7 +241,8 @@ pipes; install probes use the `probe` mode.
 **Facade identity [R1-5].** MCP server name `cowboy`; exact tool set
 `ReadFile`, `ListDirectory`, `SearchFiles`, `WriteFile`, `EditFile`,
 `RunCommand`, `StopCommand`. The hook allows exactly
-`mcp_cowboy_ReadFile` … `mcp_cowboy_StopCommand` plus `ask_question`, and
+`mcp_cowboy_ReadFile` … `mcp_cowboy_StopCommand` plus `ask_question` (and,
+since 2026-11-20, the web built-ins; see "Web search and URL reading"), and
 denies everything else, including unknown names. Startup verifies `agy`'s
 tool listing does not contain any other MCP tool. `agy`'s user and workspace
 configuration sources are fixed: the daemon bind-mounts read-only, from the
@@ -1105,6 +1106,73 @@ request is added for any of it.
   only while the title is the creation default, so a later agent title could
   not tell an owner's rename from Cowboy's own title without a new title
   source, which would also change every other Provider that emits one.
+
+## Web search and URL reading (2026-11-20)
+
+`agy`'s network-only built-ins are allowed for parity with Claude's and
+Codex's WebSearch/WebFetch: `search_web` (a Google-backend search the model
+summarizes; it never touches a file or process), `read_url_content` (an HTTP
+GET from `agy` that converts HTML to Markdown) and `view_content_chunk` (pages
+of a document `read_url_content` fetched). The hook allows them by exact name;
+`read_url_content` only when every argument whose key mentions `url` is an
+`http:`/`https:` URL, so `file:` and other schemes are denied. `settings.json`
+no longer denies `read_url(*)`; `execute_url(*)` (browser) stays denied and the
+browser tools stay outside the allow-list.
+
+Reachability is the unit's, not the hook's: the account unit has only
+`AF_INET`/`AF_UNIX`/`AF_NETLINK` and `IPAddressDeny=` always covers loopback,
+link-local (cloud metadata), multicast, RFC 1918 and `100.64.0.0/10`, plus the
+host's own public address on OVH (`ip_deny`); only the resolver stub
+`127.0.0.53` is allowed. These are packet filters, so `0.0.0.0` or a DNS name
+that resolves to a private address are refused too; the 2026-11-18 daemon
+acceptance saw TCP to `127.0.0.1`, the host's public address and a Tailscale
+peer denied. A URL read therefore reaches only public Internet hosts, like a
+WebFetch, and its content is untrusted model input like any web page.
+
+A hook-denied built-in is not a violation. `agy` 1.5.9 announces every call
+as an `in_progress` `tool_call` before the hook decides, then reports a denied
+call `failed` (the 2026-11-17 spike's denied `read_file`, `run_command`,
+`schedule`, `swarm` and `invoke_subagent`; production session
+`sess-1795107755038`'s two `search_web` calls). The proxy used to read that
+announcement as execution; it now counts only a later `in_progress` update or
+a completion. A built-in that ran and failed is indistinguishable from a
+denial; the hook remains the boundary and isolation bounds the rest
+("Split execution declaration").
+
+The same session showed why the proxy's turn errors no longer use JSON-RPC
+`-32000`: the worker treats ACP's `auth_required` code as rejected
+credentials, replaced the message with "Provider authentication required",
+and the Controller, no longer seeing `antigravity_policy_violation:<tool>`,
+settled the account `unknown_refusal` and parked its sessions. The proxy now
+answers `-32603` and adds the owner-facing sentence as `data.message` (shown
+by the Web) beside `data.cowboy` (read by the Controller).
+
+## Account quota (investigation, 2026-11-20)
+
+The account card shows the plan only. What `agy` 1.5.9 exposes:
+
+- Cloud Code `v1internal:retrieveUserQuota` (buckets: `modelId`,
+  `tokenType`, `remainingFraction`, `remainingAmount`, `resetTime`),
+  `retrieveUserQuotaSummary` and `fetchAvailableModels` (per-model
+  `quotaInfo`), called with the account's OAuth token.
+- Print-mode slash commands: `agy -p "/usage"` (also `/quota`, `/credits`)
+  emits one tab-separated record per line, `--json` with UTC reset times, and
+  forces a fresh quota reload.
+- `agy acp` sends only the context window (`usage_update`) and the tier in
+  `_meta.antigravity.tier`; no quota reaches the ACP stream, so a session's
+  runtime cannot observe it.
+
+A collector must not run outside the account's custody (the Machine's
+signed Plugin collectors run as `ubuntu` with no access to the token), so the
+safe design is a daemon `usage` unit: the same confinement as `probe`, as the
+account's identity over its own home, running `agy -p "/usage" --json` with a
+bounded timeout and output, never concurrently with a login. The Machine
+parses only model ID, remaining fraction and reset time and reports them as
+the account's usage reading, which the Controller stores like the plan and
+the card renders per model. Not implemented: it needs a daemon mode, a
+Machine command and a Controller read model, and `/usage`'s exact output on a
+signed-in account (and whether a second `agy` beside a running `acp` shares
+its state safely) is an acceptance item.
 
 ## Residual risks
 

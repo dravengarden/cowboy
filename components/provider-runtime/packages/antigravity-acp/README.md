@@ -38,7 +38,9 @@ places its tree below `proxy/` in the account-sandbox runtime archive and adds
   Everything else (`authenticate`, `logout`, unknown) is refused with
   `-32601`. `initialize` never offers client `fs` or `terminal`.
 - Agent requests: only `session/request_permission`, and only for the facade
-  tools and `ask_question`; any other tool's request is rejected by the proxy
+  tools, `ask_question` and the web built-ins (`search_web`,
+  `read_url_content` for http(s) URLs, `view_content_chunk`; see the design's
+  "Web search and URL reading"); any other tool's request is rejected by the proxy
   without reaching the worker. A facade tool's request is approved by the
   proxy itself (Cowboy's default, like Claude's `bypassPermissions`) unless
   the worker selected `agy`'s `plan` mode; only then, and for
@@ -138,14 +140,21 @@ carries `_meta.cowboy.antigravity_backend` (`class`, `successes`,
 `transient`, `barrier`, `refusals`), and an error ending without a refusal
 record settles `unknown_refusal`, so the Controller never sees an
 unattributed vendor error. Any class but `ok` turns the response into
-JSON-RPC error `-32000` whose message is
+JSON-RPC error `-32603` whose message is
 `antigravity_backend_refusal:<class>`, matched by Antigravity's signed
-`error_rules`.
+`error_rules`, and whose `data` carries the owner-facing sentence as
+`message` beside the evidence in `cowboy`. Never `-32000`: that is ACP's
+`auth_required`, which the worker presents as rejected credentials (keeping
+only the data), so the Controller could not read the closed code and settled
+`unknown_refusal` (sess-1795107755038).
 
 Detection behind the gate: an ACP `tool_call`/`tool_call_update` whose tool
 (its `name`, remembered per `toolCallId` within the turn) is outside the
-allow-list and reaches `in_progress` or `completed` means a built-in tool ran.
-The proxy sends `session/cancel` and ends the turn with error `-32000`
+allow-list and is reported running (an `in_progress` `tool_call_update`) or
+`completed` means a built-in tool ran. `agy` 1.5.9 announces every call as an
+`in_progress` `tool_call` before its `PreToolUse` hook decides and reports a
+denied one `failed`; that announcement alone is not a violation.
+The proxy sends `session/cancel` and ends the turn with error `-32603`
 `antigravity_policy_violation:<tool>` (a name outside `[A-Za-z0-9_.-]{1,128}`
 becomes `unknown`), with `data.cowboy.policy_violation` beside the backend
 evidence, even when `agy` answers the cancelled prompt with an error. The

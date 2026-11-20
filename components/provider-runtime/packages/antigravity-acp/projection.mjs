@@ -35,6 +35,7 @@ export const ROUTING = [
   "mcp_cowboy_StopCommand. Built-in file, command, subagent, schedule and workflow tools are",
   "disabled and will be denied; do not try them. Paths are relative to the working directory",
   "below or absolute inside it. The local directory of this process is not the workspace.",
+  "Web search (search_web) and reading public http(s) URLs (read_url_content) remain available.",
 ].join("\n");
 
 /** Parse the Git probe's tab-separated lines. */

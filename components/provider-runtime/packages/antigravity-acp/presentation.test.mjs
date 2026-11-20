@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { facadeTool, presentToolCall } from "./presentation.mjs";
+import { facadeTool, presentedTool, presentToolCall } from "./presentation.mjs";
 
 const root = "/srv/work/repo";
 const call = (name, rawInput, extra = {}) => ({
@@ -103,4 +103,43 @@ test("an update without its name uses the recorded tool and keeps its title", ()
   assert.equal(shown.name, "Run");
   assert.equal(Object.hasOwn(shown, "title"), false);
   assert.deepEqual(shown.content, update.content);
+});
+
+test("agy's web built-ins show as a web search and URL reads", () => {
+  assert.equal(presentedTool("search_web"), "search_web");
+  assert.equal(facadeTool("search_web"), undefined);
+  assert.equal(presentedTool("read_file"), undefined);
+  // sess-1795107755038: agy titles a search `"<query>" on Web`.
+  const search = presentToolCall(
+    call(
+      "search_web",
+      { query: "Claude Code prompt cache TTL", toolSummary: "Search" },
+      { kind: "search", title: '"Claude Code prompt cache TTL" on Web' },
+    ),
+    { root },
+  );
+  assert.equal(search.name, "WebSearch");
+  assert.equal(search.kind, "search");
+  assert.equal(search.title, "Claude Code prompt cache TTL");
+  assert.deepEqual(search.rawInput, { query: "Claude Code prompt cache TTL" });
+  assert.equal(search.locations, undefined);
+  const fetch = presentToolCall(
+    call("read_url_content", { Url: "https://agentclientprotocol.com/protocol/tool-calls" }),
+    { root },
+  );
+  assert.equal(fetch.name, "WebFetch");
+  assert.equal(fetch.kind, "fetch");
+  assert.equal(fetch.title, "https://agentclientprotocol.com/protocol/tool-calls");
+  const chunk = presentToolCall(call("view_content_chunk", { document_id: "d", position: 1 }), {
+    root,
+  });
+  assert.equal(chunk.kind, "fetch");
+  assert.equal(chunk.title, "Read fetched content");
+  // A later update names the call only by ID.
+  const update = presentToolCall(
+    { sessionUpdate: "tool_call_update", toolCallId: "c1", status: "completed", title: "t" },
+    { root, known: "search_web" },
+  );
+  assert.equal(update.kind, "search");
+  assert.equal(update.title, "t");
 });

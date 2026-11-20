@@ -23,6 +23,25 @@ test("usage-limit JSON dumps keep the human sentence", () => {
   );
 });
 
+test("an Antigravity turn error shows the proxy's sentence, not its closed code", () => {
+  // agy-proxy's error as the worker renders it: the closed code the
+  // Controller classifies, then the data with the owner-facing `message`.
+  const detail = `antigravity_policy_violation:search_web: ${
+    JSON.stringify(
+      {
+        message: "A built-in Antigravity tool ran despite Cowboy's gate.",
+        cowboy: { antigravity_backend: { class: "ok" }, policy_violation: "search_web" },
+      },
+      null,
+      2,
+    )
+  }`;
+  assertEquals(
+    prettifyCrashDetail(detail),
+    "A built-in Antigravity tool ran despite Cowboy's gate.",
+  );
+});
+
 test("plain crash details stay as written", () => {
   assertEquals(
     prettifyCrashDetail("runtime: broken pipe"),
