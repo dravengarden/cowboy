@@ -20242,7 +20242,7 @@
                 "version": "1.3.6"
               }
             ],
-            "source_digest": "sha256:3771250c054e2d5648736963b5ff0dd80f97fe34a25f0ff7c556162a89311ac0"
+            "source_digest": "sha256:8ea732102c3d8dc0b6f483d57ad15950c27b2717bf6b475e56c3faec6df65bf8"
           },
           "claude-code": {
             "component_release": "3.120.0",

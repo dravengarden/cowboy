@@ -74,33 +74,33 @@
   },
   "configuration_presets": [
     {
-      "id": "gemini-flash-high",
-      "name": "Gemini 3.8 Flash · High",
-      "detail": "Gemini 3.8 Flash · High thinking",
-      "is_default": true,
+      "id": "gemini-neon-high",
+      "name": "Gemini 4 Neon · High",
+      "detail": "Gemini 4 Neon · High thinking · strongest",
+      "is_default": false,
       "values": {
-        "model": "gemini-3.8-flash",
+        "model": "gemini-4-neon",
         "thought_level": "high"
       }
     },
     {
-      "id": "gemini-flash-medium",
-      "name": "Gemini 3.8 Flash · Medium",
-      "detail": "Gemini 3.8 Flash · Medium thinking",
+      "id": "gemini-hydrogen-xhigh",
+      "name": "Gemini 4 Hydrogen · Extra",
+      "detail": "Gemini 4 Hydrogen · Extra thinking",
       "is_default": false,
       "values": {
-        "model": "gemini-3.8-flash",
-        "thought_level": "medium"
+        "model": "gemini-4-hydrogen",
+        "thought_level": "xhigh"
       }
     },
     {
-      "id": "gemini-flash-low",
-      "name": "Gemini 3.8 Flash · Low",
-      "detail": "Gemini 3.8 Flash · Low thinking",
-      "is_default": false,
+      "id": "gemini-hydrogen-high",
+      "name": "Gemini 4 Hydrogen · High",
+      "detail": "Gemini 4 Hydrogen · High thinking · daily",
+      "is_default": true,
       "values": {
-        "model": "gemini-3.8-flash",
-        "thought_level": "low"
+        "model": "gemini-4-hydrogen",
+        "thought_level": "high"
       }
     }
   ],

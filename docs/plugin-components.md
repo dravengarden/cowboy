@@ -89,7 +89,12 @@ Component release 3.120.0 records provider-runtime 1.3.6, whose
 target path and an edit's diff) and approves a facade tool's permission
 request itself unless the session is in `agy`'s `plan` mode, so Antigravity
 sessions do not prompt by default. Antigravity 0.2.5 pins it, takes a
-gradient arch mark and a rising-particle activity glyph with its own phrases.
+gradient arch mark, a rising-particle activity glyph with its own phrases,
+and new Recommended cards: Gemini 4 Neon · High (strongest), Gemini 4
+Hydrogen · Extra and Gemini 4 Hydrogen · High (default). Neon gains one index
+point from Extra over High (61 vs 60 on the Artificial Analysis Intelligence
+Index) while Hydrogen gains three (54 vs 51) at half Neon's price, so Neon is
+offered at High and Hydrogen at both.
 The other six Providers again advance one unpublished patch version
 (claude-code 3.20.51, claude-deepseek 3.1.69, codex 3.6.9, codex-deepseek
 3.1.69, deepseek-harness 1.0.27, grok 3.2.8).

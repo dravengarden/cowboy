@@ -124,31 +124,31 @@ values = { model = "sonnet", effort = "medium" }
 # Provider, so each binding is its own target even when the hosted model is
 # shared.
 [[targets]]
-id = "gemini-3.8-flash:high@antigravity"
+id = "gemini-4-neon:high@antigravity"
 vendor = "google"
-model = "gemini-3.8-flash"
+model = "gemini-4-neon"
 effort = "high"
 provider = "antigravity"
-preset = "gemini-flash-high"
-values = { model = "gemini-3.8-flash", thought_level = "high" }
+preset = "gemini-neon-high"
+values = { model = "gemini-4-neon", thought_level = "high" }
 
 [[targets]]
-id = "gemini-3.8-flash:medium@antigravity"
+id = "gemini-4-hydrogen:xhigh@antigravity"
 vendor = "google"
-model = "gemini-3.8-flash"
-effort = "medium"
+model = "gemini-4-hydrogen"
+effort = "xhigh"
 provider = "antigravity"
-preset = "gemini-flash-medium"
-values = { model = "gemini-3.8-flash", thought_level = "medium" }
+preset = "gemini-hydrogen-xhigh"
+values = { model = "gemini-4-hydrogen", thought_level = "xhigh" }
 
 [[targets]]
-id = "gemini-3.8-flash:low@antigravity"
+id = "gemini-4-hydrogen:high@antigravity"
 vendor = "google"
-model = "gemini-3.8-flash"
-effort = "low"
+model = "gemini-4-hydrogen"
+effort = "high"
 provider = "antigravity"
-preset = "gemini-flash-low"
-values = { model = "gemini-3.8-flash", thought_level = "low" }
+preset = "gemini-hydrogen-high"
+values = { model = "gemini-4-hydrogen", thought_level = "high" }
 
 [[targets]]
 id = "deepseek-v4.1-flash:max@claude-deepseek"

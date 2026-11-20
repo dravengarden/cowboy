@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "as_of": "2026-11-18",
+  "as_of": "2026-11-20",
   "inputs": {
     "repository": {
       "count": 90,
@@ -14,7 +14,7 @@
     "normalized_capability_rows": 118,
     "excluded_after_snapshot": 0,
     "methodology": "sha256:1a7de7d9cd0a1c404047d76b6a593960df7c2a8ec2cb733b81766a0613f3d9a3",
-    "targets": "sha256:73321cba1457f48a711a4fd9b95bf481905ebd56bf3efe6c2e6f1b987eec26a4"
+    "targets": "sha256:f43db974eb2a8c961c0d0c230b6ac988195f32547cd18e49c5128b0a26de3178"
   },
   "bindings": [
     {
@@ -117,30 +117,30 @@
       }
     },
     {
-      "id": "gemini-3.8-flash:high@antigravity",
+      "id": "gemini-4-neon:high@antigravity",
       "provider": "antigravity",
-      "preset": "gemini-flash-high",
+      "preset": "gemini-neon-high",
       "values": {
-        "model": "gemini-3.8-flash",
+        "model": "gemini-4-neon",
         "thought_level": "high"
       }
     },
     {
-      "id": "gemini-3.8-flash:medium@antigravity",
+      "id": "gemini-4-hydrogen:xhigh@antigravity",
       "provider": "antigravity",
-      "preset": "gemini-flash-medium",
+      "preset": "gemini-hydrogen-xhigh",
       "values": {
-        "model": "gemini-3.8-flash",
-        "thought_level": "medium"
+        "model": "gemini-4-hydrogen",
+        "thought_level": "xhigh"
       }
     },
     {
-      "id": "gemini-3.8-flash:low@antigravity",
+      "id": "gemini-4-hydrogen:high@antigravity",
       "provider": "antigravity",
-      "preset": "gemini-flash-low",
+      "preset": "gemini-hydrogen-high",
       "values": {
-        "model": "gemini-3.8-flash",
-        "thought_level": "low"
+        "model": "gemini-4-hydrogen",
+        "thought_level": "high"
       }
     },
     {
@@ -206,7 +206,7 @@
           "mean": 0.637,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "medium"
         },
         "code_review": {
@@ -214,7 +214,7 @@
           "mean": 1,
           "uncertainty": 0.05,
           "lineages": 3,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "high"
         },
         "reasoning": {
@@ -222,7 +222,7 @@
           "mean": 0.95,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "medium"
         },
         "long_context": {
@@ -268,7 +268,7 @@
           "mean": 0.65,
           "uncertainty": 0.103,
           "lineages": 3,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "high"
         },
         "reasoning": {
@@ -276,7 +276,7 @@
           "mean": 0.875,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "medium"
         },
         "long_context": {
@@ -318,7 +318,7 @@
           "mean": 0.604,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "medium"
         },
         "code_review": {
@@ -330,7 +330,7 @@
           "mean": 0.841,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "medium"
         },
         "long_context": {
@@ -375,7 +375,7 @@
           "mean": 0.633,
           "uncertainty": 0.072,
           "lineages": 3,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "high"
         },
         "reasoning": {
@@ -383,7 +383,7 @@
           "mean": 0.771,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "medium"
         },
         "long_context": {
@@ -424,7 +424,7 @@
           "mean": 0.129,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "medium"
         },
         "code_review": {
@@ -436,7 +436,7 @@
           "mean": 0.321,
           "uncertainty": 0.106,
           "lineages": 3,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "high"
         },
         "long_context": {
@@ -477,7 +477,7 @@
           "mean": 0.657,
           "uncertainty": 0.069,
           "lineages": 3,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "high"
         },
         "code_review": {
@@ -489,7 +489,7 @@
           "mean": 0.888,
           "uncertainty": 0.063,
           "lineages": 3,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "high"
         },
         "long_context": {
@@ -538,7 +538,7 @@
           "mean": 0.831,
           "uncertainty": 0.071,
           "lineages": 3,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "high"
         },
         "long_context": {
@@ -586,7 +586,7 @@
           "mean": 0.688,
           "uncertainty": 0.08,
           "lineages": 3,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "high"
         },
         "long_context": {
@@ -676,7 +676,7 @@
           "mean": 0.597,
           "uncertainty": 0.066,
           "lineages": 4,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "high"
         },
         "long_context": {
@@ -724,7 +724,7 @@
           "mean": 0.3,
           "uncertainty": 0.055,
           "lineages": 3,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "high"
         },
         "long_context": {
@@ -745,14 +745,14 @@
       }
     },
     {
-      "id": "gemini-3.8-flash:high@antigravity",
+      "id": "gemini-4-neon:high@antigravity",
       "vendor": "google",
-      "model": "gemini-3.8-flash",
+      "model": "gemini-4-neon",
       "effort": "high",
       "provider": "antigravity",
-      "preset": "gemini-flash-high",
+      "preset": "gemini-neon-high",
       "values": {
-        "model": "gemini-3.8-flash",
+        "model": "gemini-4-neon",
         "thought_level": "high"
       },
       "executable": true,
@@ -786,15 +786,15 @@
       "cost_groups": {}
     },
     {
-      "id": "gemini-3.8-flash:medium@antigravity",
+      "id": "gemini-4-hydrogen:xhigh@antigravity",
       "vendor": "google",
-      "model": "gemini-3.8-flash",
-      "effort": "medium",
+      "model": "gemini-4-hydrogen",
+      "effort": "xhigh",
       "provider": "antigravity",
-      "preset": "gemini-flash-medium",
+      "preset": "gemini-hydrogen-xhigh",
       "values": {
-        "model": "gemini-3.8-flash",
-        "thought_level": "medium"
+        "model": "gemini-4-hydrogen",
+        "thought_level": "xhigh"
       },
       "executable": true,
       "provisional": false,
@@ -827,15 +827,15 @@
       "cost_groups": {}
     },
     {
-      "id": "gemini-3.8-flash:low@antigravity",
+      "id": "gemini-4-hydrogen:high@antigravity",
       "vendor": "google",
-      "model": "gemini-3.8-flash",
-      "effort": "low",
+      "model": "gemini-4-hydrogen",
+      "effort": "high",
       "provider": "antigravity",
-      "preset": "gemini-flash-low",
+      "preset": "gemini-hydrogen-high",
       "values": {
-        "model": "gemini-3.8-flash",
-        "thought_level": "low"
+        "model": "gemini-4-hydrogen",
+        "thought_level": "high"
       },
       "executable": true,
       "provisional": false,
@@ -1045,7 +1045,7 @@
           "mean": 0.633,
           "uncertainty": 0.053,
           "lineages": 3,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "high"
         },
         "code_review": {
@@ -1057,7 +1057,7 @@
           "mean": 0.777,
           "uncertainty": 0.077,
           "lineages": 3,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "high"
         },
         "long_context": {
@@ -1100,7 +1100,7 @@
           "mean": 0.748,
           "uncertainty": 0.083,
           "lineages": 3,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "high"
         },
         "long_context": {
@@ -1169,7 +1169,7 @@
           "mean": 0.637,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "medium"
         },
         "code_review": {
@@ -1181,7 +1181,7 @@
           "mean": 0.654,
           "uncertainty": 0.074,
           "lineages": 2,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "medium"
         },
         "long_context": {
@@ -1215,7 +1215,7 @@
           "mean": 0.651,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "medium"
         },
         "code_review": {
@@ -1227,7 +1227,7 @@
           "mean": 0.905,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "medium"
         },
         "long_context": {
@@ -1261,7 +1261,7 @@
           "mean": 0.569,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "medium"
         },
         "code_review": {
@@ -1273,7 +1273,7 @@
           "mean": 0.689,
           "uncertainty": 0.077,
           "lineages": 3,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "high"
         },
         "long_context": {
@@ -1342,7 +1342,7 @@
           "mean": 0.545,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "medium"
         },
         "code_review": {
@@ -1421,7 +1421,7 @@
           "mean": 0.272,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "medium"
         },
         "code_review": {
@@ -1433,7 +1433,7 @@
           "mean": 0.416,
           "uncertainty": 0.067,
           "lineages": 3,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "high"
         },
         "long_context": {
@@ -1467,7 +1467,7 @@
           "mean": 0.354,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "medium"
         },
         "code_review": {
@@ -1479,7 +1479,7 @@
           "mean": 0.447,
           "uncertainty": 0.124,
           "lineages": 3,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "high"
         },
         "long_context": {
@@ -1513,7 +1513,7 @@
           "mean": 0.128,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "medium"
         },
         "code_review": {
@@ -1525,7 +1525,7 @@
           "mean": 0.262,
           "uncertainty": 0.137,
           "lineages": 3,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "high"
         },
         "long_context": {
@@ -1613,7 +1613,7 @@
           "mean": 0.592,
           "uncertainty": 0.16,
           "lineages": 2,
-          "max_age_days": 117,
+          "max_age_days": 119,
           "confidence": "medium"
         },
         "writing": {
@@ -1643,7 +1643,7 @@
           "mean": 0.583,
           "uncertainty": 0.083,
           "lineages": 3,
-          "max_age_days": 0,
+          "max_age_days": 2,
           "confidence": "high"
         },
         "reasoning": {
