@@ -1124,8 +1124,8 @@ impl Broker {
                     .insert(session_id.clone());
             }
         }
-        if let Some(launch) = launch {
-            sessions.insert(session_id.clone(), launch);
+        if let Some(mut launch) = launch {
+            mcp_launch::declare(&mut sessions, &mut launch, true);
         }
         drop(sessions);
         self.session_states.lock().insert(session_id, state);
@@ -1966,9 +1966,7 @@ impl Broker {
         // `adopt_only` describes this controller message, not how a future
         // replacement worker should be launched or report its own snapshot.
         session.adopt_only = false;
-        self.sessions
-            .lock()
-            .insert(session.session_id.clone(), session.clone());
+        mcp_launch::declare(&mut self.sessions.lock(), &mut session, adopt_only);
         let desired_generation = self.desired_generation.lock().clone();
         let existing = {
             let mut workers = self.workers.lock();
@@ -7757,6 +7755,46 @@ mod tests {
     fn reconnecting_worker_rebuilds_broker_launch_state() {
         let (broker, launch, _) = reconnecting_worker_fixture();
         assert_eq!(broker.sessions.lock().get("sess-1"), Some(&launch));
+    }
+
+    #[tokio::test]
+    async fn worker_reports_and_adoptions_keep_the_declared_session_extensions() {
+        // A worker reports its launch without the Controller's extension
+        // switches. Caching that report made a reload relaunch from a
+        // declaration MCP launch refuses (2026-11-20, sess-1795152728753).
+        let (broker, mut launch, _rx) = reconnecting_worker_fixture();
+        let broker = Arc::new(broker);
+        launch.extensions = Some(crate::runtime_wire::SessionExtensions {
+            schema: crate::runtime_wire::SESSION_EXTENSIONS_SCHEMA,
+            memory_tools: true,
+            memory_recall: false,
+        });
+        broker
+            .sessions
+            .lock()
+            .insert("sess-1".into(), launch.clone());
+        let mut report = broker.workers.lock()["sess-1"].snapshot.clone();
+        report.last_runtime_seq += 1;
+        assert!(report.launch.as_ref().unwrap().extensions.is_none());
+        assert!(broker.update_snapshot(report, 1));
+        assert_eq!(
+            broker.sessions.lock()["sess-1"].extensions,
+            launch.extensions
+        );
+        // A Controller adoption seeded from that report keeps them too.
+        let mut adopt = launch.clone();
+        adopt.adopt_only = true;
+        adopt.extensions = None;
+        broker.ensure_session(adopt).await;
+        assert_eq!(
+            broker.sessions.lock()["sess-1"].extensions,
+            launch.extensions
+        );
+        // An explicit launch declaration remains authoritative.
+        let mut explicit = launch.clone();
+        explicit.extensions = None;
+        broker.ensure_session(explicit).await;
+        assert_eq!(broker.sessions.lock()["sess-1"].extensions, None);
     }
 
     #[test]

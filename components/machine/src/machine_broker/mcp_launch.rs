@@ -67,6 +67,25 @@ pub(super) async fn ensure_worker_accepts_plan(worker: &std::path::Path) -> Resu
     Ok(())
 }
 
+/// Cache `session` as the declaration every Machine-owned relaunch (reset,
+/// cutover) starts from. A worker reports its launch from its own CLI, which
+/// never carries the session-extension switches, and a Controller adoption is
+/// seeded from that report; neither `reported` form may drop the declared
+/// switches, without which an MCP launch is refused (2026-11-20,
+/// sess-1795152728753 crashed on reload).
+pub(super) fn declare(
+    sessions: &mut std::collections::HashMap<String, StartSession>,
+    session: &mut StartSession,
+    reported: bool,
+) {
+    if reported && session.extensions.is_none() {
+        session.extensions = sessions
+            .get(&session.session_id)
+            .and_then(|declared| declared.extensions);
+    }
+    sessions.insert(session.session_id.clone(), session.clone());
+}
+
 pub(super) fn same_placement(old: &StartSession, session: &StartSession) -> bool {
     old.cwd == session.cwd && old.mcp_plan == session.mcp_plan
 }

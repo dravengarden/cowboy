@@ -1700,23 +1700,15 @@ async fn send_pending<W: tokio::io::AsyncWrite + Unpin>(
                 continue;
             }
         }
+        // A denied reset declaration withdraws its stop during this pass.
+        if !shared.pending.lock().contains_key(&key) {
+            continue;
+        }
         let Some(command) = reset_admission::current(shared, &key, command, &mut deferred) else {
             continue;
         };
         if !native_admission::send(shared, writer, command.clone()).await? {
-            if let Some(session_id) = command.session_id() {
-                handle_frame(
-                    shared,
-                    Frame::CommandAck {
-                        session_id: session_id.to_owned(),
-                        command_id: key,
-                        accepted: false,
-                        reason: Some("Worker launch admission denied".into()),
-                    },
-                    writer,
-                )
-                .await?;
-            }
+            reset_admission::denied(shared, writer, key, &command).await?;
             continue;
         }
         shared.sent.lock().insert(key);
@@ -2332,10 +2324,13 @@ fn update_declaration(shared: &Shared, worker: &WorkerSnapshot) {
         return;
     };
     session.adopt_only = true;
-    shared
-        .declarations
-        .lock()
-        .insert(session.session_id.clone(), session);
+    let mut declarations = shared.declarations.lock();
+    // A worker never reports its session-extension switches; keep the declared ones.
+    let declared = declarations
+        .get(&session.session_id)
+        .and_then(|old| old.extensions);
+    session.extensions = session.extensions.or(declared);
+    declarations.insert(session.session_id.clone(), session);
 }
 
 fn worker_status(state: WorkerState) -> Status {

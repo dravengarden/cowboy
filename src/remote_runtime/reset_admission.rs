@@ -9,8 +9,17 @@
 //! session stalled about four minutes per automatic update (five times on OVH
 //! in a week). The declaration and its stop now wait together, bounded, and
 //! leave with the plan of the release they declare.
+//!
+//! A same-release reload waits the same way. The plan owner is bound to the
+//! worker it observed, and a resetting worker is no longer observable, so the
+//! reload's own declaration resolves no plan until the recovery pass prepares
+//! a fresh owner. Admission denied it while its stop still left, and the
+//! Machine relaunched from a cached declaration that MCP launch refuses
+//! (2026-11-20, sess-1795152728753 crashed on every reload). A declaration
+//! that admission still denies now cancels its reset: the stop never leaves
+//! and the running worker is kept.
 
-use super::{CoreCommand, Duration, HashMap, HashSet, Mutex, Shared};
+use super::{CoreCommand, Duration, Frame, HashMap, HashSet, Mutex, Result, Shared, Status};
 
 /// Longer than the MCP launch recovery pass needs (5-second ticks); after it
 /// the declaration meets ordinary admission, as before.
@@ -43,9 +52,7 @@ pub(super) fn current(
     }
     let mut session = match command {
         CoreCommand::EnsureSession { session }
-            if session.adopt_only
-                && shared.resetting.lock().contains(&session.session_id)
-                && cross_release(shared, &session) =>
+            if session.adopt_only && shared.resetting.lock().contains(&session.session_id) =>
         {
             session
         }
@@ -97,18 +104,67 @@ pub(super) fn current(
     Some(CoreCommand::EnsureSession { session })
 }
 
-/// A same-release reset (a stuck or reconnecting worker) keeps its previous
-/// admission: its cached Machine declaration already names this release.
-fn cross_release(shared: &Shared, session: &super::StartSession) -> bool {
-    shared
+/// Admission denied `command` before writing it. Report it like a Machine
+/// refusal; a reset's declaration also cancels that reset (see module docs).
+pub(super) async fn denied<W: tokio::io::AsyncWrite + Unpin>(
+    shared: &Shared,
+    writer: &mut W,
+    key: String,
+    command: &CoreCommand,
+) -> Result<()> {
+    let Some(session_id) = command.session_id().map(str::to_owned) else {
+        return Ok(());
+    };
+    let reset = matches!(command, CoreCommand::EnsureSession { session } if session.adopt_only)
+        && cancel(shared, &session_id);
+    let reason = if reset {
+        "Worker launch admission denied; the reload was cancelled and the current worker keeps running"
+    } else {
+        "Worker launch admission denied"
+    };
+    super::handle_frame(
+        shared,
+        Frame::CommandAck {
+            session_id,
+            command_id: key,
+            accepted: false,
+            reason: Some(reason.into()),
+        },
+        writer,
+    )
+    .await
+}
+
+/// Withdraw a reset whose declaration was denied before its stop left.
+/// Returns false when `session_id` has no such reset in flight.
+fn cancel(shared: &Shared, session_id: &str) -> bool {
+    if !shared.resetting.lock().contains(session_id) {
+        return false;
+    }
+    let sent = shared.sent.lock().clone();
+    let mut withdrawn = false;
+    shared.pending.lock().retain(|key, command| {
+        let stop = matches!(command, CoreCommand::StopSession { session_id: id, command_id }
+            if id == session_id && command_id.starts_with("reset-"))
+            && !sent.contains(key);
+        withdrawn |= stop;
+        !stop
+    });
+    if !withdrawn {
+        // Its stop is already with the Machine, which owns the outcome.
+        return false;
+    }
+    WAITING.lock().remove(session_id);
+    shared.resetting.lock().remove(session_id);
+    shared.reset_replacements.lock().remove(session_id);
+    let status = shared
         .workers
         .lock()
-        .get(&session.session_id)
-        .and_then(|worker| worker.launch.as_ref())
-        .is_none_or(|running| {
-            running.provider_version != session.provider_version
-                || running.provider_generation_digest != session.provider_generation_digest
-        })
+        .get(session_id)
+        .map_or(Status::Crashed, |worker| super::worker_status(worker.state));
+    tracing::warn!(session = %session_id, ?status, "reset declaration denied; reset cancelled");
+    shared.hub.set_status(session_id, status, None);
+    true
 }
 
 #[cfg(test)]
@@ -181,5 +237,70 @@ mod tests {
             "{commands:?}"
         );
         assert!(WAITING.lock().get("s").is_none());
+    }
+
+    fn bound_session(hub: &Hub, id: &str) -> String {
+        hub.create_local_session(
+            id.to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::model::SessionOrigin::Web,
+            false,
+        );
+        let bindings = format!(
+            "{}{id}",
+            crate::core::settings_keys::SESSION_MCP_BINDINGS_PREFIX
+        );
+        hub.set_setting(bindings.clone(), serde_json::json!({"bindings": ["x"]}));
+        bindings
+    }
+
+    fn reset_stop(command: &CoreCommand) -> bool {
+        matches!(command, CoreCommand::StopSession { command_id, .. } if command_id.starts_with("reset-"))
+    }
+
+    #[tokio::test]
+    async fn a_same_release_reload_waits_for_its_launch_plan() {
+        // The plan owner was bound to the worker being reset, so a reload's
+        // declaration resolves no plan until a fresh owner is prepared. Its
+        // stop must wait instead of relaunching from the Machine's cache
+        // (2026-11-20, sess-1795152728753).
+        let hub = Hub::new();
+        let bindings = bound_session(&hub, "same-release");
+        let worker = super::super::tests::snapshot("same-release");
+        let runtime = RemoteRuntime::for_test(hub.clone(), vec![worker.clone()]);
+        runtime.connect_for_test();
+        runtime.reset(worker.launch.clone().unwrap());
+        let early = wire(&runtime).await;
+        assert!(early.is_empty(), "{early:?}");
+        assert!(runtime.pending_for_test().iter().any(reset_stop));
+        hub.set_setting(bindings, serde_json::Value::Null);
+        let commands = wire(&runtime).await;
+        assert!(commands.iter().any(reset_stop), "{commands:?}");
+        assert!(WAITING.lock().get("same-release").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_denied_reset_declaration_cancels_its_stop_and_keeps_the_worker() {
+        let hub = Hub::new();
+        bound_session(&hub, "denied");
+        let worker = super::super::tests::snapshot("denied");
+        let runtime = RemoteRuntime::for_test(hub.clone(), vec![worker.clone()]);
+        runtime.connect_for_test();
+        runtime.reset(worker.launch.clone().unwrap());
+        // The plan wait is exhausted: the declaration meets admission, which
+        // denies it because no current plan exists.
+        let expired = std::time::Instant::now()
+            .checked_sub(PLAN_WAIT + Duration::from_secs(1))
+            .unwrap();
+        WAITING.lock().insert("denied".to_owned(), expired);
+        let commands = wire(&runtime).await;
+        assert!(!commands.iter().any(reset_stop), "{commands:?}");
+        assert!(!runtime.pending_for_test().iter().any(reset_stop));
+        assert!(!runtime.shared.resetting.lock().contains("denied"));
+        assert!(runtime.shared.workers.lock().contains_key("denied"));
+        assert_eq!(hub.status("denied"), Some(super::super::Status::Busy));
+        assert!(WAITING.lock().get("denied").is_none());
     }
 }
