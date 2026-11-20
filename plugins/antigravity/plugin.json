@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "id": "antigravity",
-  "version": "0.2.9",
-  "component_release": "3.124.0",
+  "version": "0.2.10",
+  "component_release": "3.125.0",
   "publisher": "cowboy-first-party",
   "kind": "agent_provider",
   "entrypoint": "provider.json",

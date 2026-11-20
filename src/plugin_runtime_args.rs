@@ -1725,7 +1725,10 @@ mod tests {
             ["codex", "claude", "deepseek-harness"]
         );
         assert_eq!(usage_activity_agent_ids("openai"), &[] as &[&str]);
-        assert_eq!(usage_accounts(), ["anthropic", "openai", "xai", "deepseek"]);
+        assert_eq!(
+            usage_accounts(),
+            ["anthropic", "openai", "xai", "deepseek", "antigravity"]
+        );
         assert_eq!(
             provider_info_urls_env("deepseek"),
             "COWBOY_PROVIDER_INFO_DEEPSEEK_URLS"

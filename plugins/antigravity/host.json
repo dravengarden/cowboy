@@ -12,6 +12,7 @@
     }
   },
   "slots": [
+    "provider.usage",
     "provider.setup",
     "provider.empty",
     "provider.settings"
@@ -19,9 +20,17 @@
   "ui": {
     "schema_version": 1,
     "renderers": {
+      "provider.usage": "provider-usage-v1",
       "provider.setup": "provider-surface-v1",
       "provider.empty": "provider-surface-v1",
       "provider.settings": "provider-surface-v1"
     }
+  },
+  "usage": {
+    "account": "antigravity",
+    "product": "Antigravity",
+    "error_auth": "Antigravity usage authorization expired. Sign in to this account again.",
+    "order": 7,
+    "empty": "No Antigravity quota reported for this account yet."
   }
 }

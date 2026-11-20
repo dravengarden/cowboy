@@ -1171,13 +1171,13 @@ A collector must not run outside the account's custody (the Machine's
 signed Plugin collectors run as `ubuntu` with no access to the token), so the
 quota is a daemon `usage` unit.
 
-## Account quota (Antigravity 0.2.9)
+## Account quota (Antigravity 0.2.10)
 
 **Path.** The Controller's existing native account usage pipeline
 (`provider_accounts/usage.rs`: owner/binding admission, the shared five-minute
 budget, coalesced refresh, persisted observations, transient-error rules)
 dispatches `CollectNativeUsage` to the account's sign-in Machine, as for a
-named Claude account. Antigravity 0.2.9 declares `host.account_usage`
+named Claude account. Antigravity 0.2.10 declares `host.account_usage`
 (`antigravity`) and a `usage` binding without a collector command, so the
 Service-level aggregator runs nothing for it and the Web shows no Service card
 (named-only). For an `account_sandbox_v1` Provider the Machine
@@ -1236,8 +1236,8 @@ the account controls (the plan its sessions report); the Subscriptions card's
 - Acceptance items on a signed-in OVH account: the exact report and window
   labels, the absence of any turn in `num_turns`/the quota, and a report
   beside running `acp` units.
-- Logins of 0.2.8 and earlier keep "This Provider does not support background
-  account usage" until the account signs in again on 0.2.9 (a Provider update
+- Logins of 0.2.9 and earlier keep "This Provider does not support background
+  account usage" until the account signs in again on 0.2.10 (a Provider update
   invalidates native logins).
 
 ## Feature inventory and Cowboy adaptation (2026-11-20)

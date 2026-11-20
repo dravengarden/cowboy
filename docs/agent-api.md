@@ -305,7 +305,7 @@ operation, reset credits or query Machine. Native Claude subscriptions have
 their own bounded background collector on a Machine with a current login. It
 uses the exact signed collector and native CLI in that account's private home,
 without a model prompt, credential export, sidecars or private-API credits
-enrichment. Antigravity accounts (0.2.9+) use the same path: their Machine asks
+enrichment. Antigravity accounts (0.2.10+) use the same path: their Machine asks
 the account-sandbox daemon for the account's own read-only quota report, so no
 collector runs outside the account's custody. Owner, account, enrollment, login
 generation and connection are checked around dispatch and publication. Machine protocol 37 is required; older

@@ -46,7 +46,7 @@ async fn observes_binding(
 }
 
 /// Internal: a verified native login exists, but its Provider generation
-/// declares no account usage (Antigravity before 0.2.9). Public as
+/// declares no account usage (Antigravity before 0.2.10). Public as
 /// `account_usage_unsupported`; the read model still reports the sign-in
 /// (`signed_in`).
 const SIGNED_IN_USAGE_UNSUPPORTED: &str = "account_usage_unsupported_signed_in";
