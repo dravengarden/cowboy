@@ -3,7 +3,7 @@ import { assertEquals } from "../../tools/test-assert.ts";
 import type { SessionMeta } from "./protocol";
 import { applyUsageHostPlugins, type UsageSnapshot, usageLimits } from "./usageLimits";
 import type { SubscriptionSnapshot } from "./subscriptionAccounts";
-import { displayPlan, orderUsageAccounts, registeredUsageAccounts, sessionAccountQuota, usageCardManageUrl, usageCardResetSchedule, usageResetTarget } from "./usageAccounts";
+import { displayPlan, orderUsageAccounts, registeredUsageAccounts, sessionAccountQuota, usageCardManageUrl, usageCardResetSchedule, usageResetTarget, usageScheduleTarget } from "./usageAccounts";
 import { loadProviderCatalog, resetProviderCatalog } from "./providerCatalogRegistry";
 import { providerUiManifestFixture } from "./providerUiContract.fixture";
 
@@ -253,8 +253,13 @@ test("a named card owns its reset lane only when its own usage reports reset cre
   const quiet = { ...observed, usage: { ...observed.usage, rate_limits: {} } };
   const [, plain] = registeredUsageAccounts(service, registry, [], [quiet]);
   assertEquals(usageResetTarget(plain!), undefined);
-  assertEquals(usageCardResetSchedule(service, plain!), undefined);
+  // Its persisted schedule stays visible and cancellable on its own lane.
+  assertEquals(usageCardResetSchedule(service, plain!)?.fire_at_ms, 900);
+  assertEquals(usageScheduleTarget(plain!), { kind: "account", accountId: "otter" });
   assertEquals(usageCardManageUrl(plain!), undefined);
+  const unscheduled = { ...quiet, reset_schedule: undefined };
+  const [, none] = registeredUsageAccounts(service, registry, [], [unscheduled]);
+  assertEquals(usageCardResetSchedule(service, none!), undefined);
   // A session-reported quota is never a reset lane.
   const [, reported] = registeredUsageAccounts(service, registry, [session], []);
   assertEquals(usageResetTarget(reported!), undefined);

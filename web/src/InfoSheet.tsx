@@ -61,7 +61,7 @@ import { ClientStorageInfoSection, ServiceStorageInfoSection } from "./InfoRunti
 import { SessionMaintenancePanel } from "./SessionMaintenancePanel";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { AccountBrowserEntry } from "./machineBrowser/AccountBrowserEntry";
-import { displayPlan, orderUsageAccounts, registeredUsageAccounts, type UsageAccountCard, usageCardManageUrl, usageCardResetSchedule, usageResetTarget } from "./usageAccounts";
+import { displayPlan, orderUsageAccounts, registeredUsageAccounts, type UsageAccountCard, usageCardManageUrl, usageCardResetSchedule, usageResetTarget, usageScheduleTarget } from "./usageAccounts";
 import { UsageResetActions, UsageResetFields, useUsageResetFlow } from "./UsageResetFlow";
 import { useProviderCatalog } from "./providerCatalog";
 import { useNativeAccountUsage } from "./nativeAccountUsage";
@@ -205,7 +205,10 @@ function ProviderUsageCardBody({ account: identity, usage, schedule, now, onUsag
   const nearestCreditId = str(nearestCredit?.id);
   const resetTarget = usageResetTarget(identity);
   const manageUrl = usageCardManageUrl(identity);
-  const reset = useUsageResetFlow(resetTarget, nearestCreditId, onUsageChanged);
+  const reset = useUsageResetFlow(resetTarget, nearestCreditId, onUsageChanged, usageScheduleTarget(identity));
+  // A persisted schedule stays visible and cancellable even without a usable
+  // credit row (credits gone, account disabled).
+  const scheduleInCredits = resetTarget !== undefined && credits.some((credit) => str(credit.id) === nearestCreditId);
   const summary = record(usage.activity?.summary);
   const title = identity.title;
   const stale = usage.refresh?.stale === true;
@@ -480,6 +483,21 @@ function ProviderUsageCardBody({ account: identity, usage, schedule, now, onUsag
               )}
             </AccordionDetails>
           </Accordion>
+        )}
+        {schedule && !scheduleInCredits && (
+          <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
+            <Box>
+              <Typography variant="caption" color="primary.main" fontWeight={700}>
+                {scheduledResetCountdown(schedule.fire_at_ms, now)}
+              </Typography>
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+                {fullDateTime(schedule.fire_at_ms / 1000)}
+              </Typography>
+            </Box>
+            <NetworkButton size="small" disabled={reset.busy} networkAction={reset.cancelSchedule}>
+              Cancel
+            </NetworkButton>
+          </Stack>
         )}
         {manageUrl !== undefined && (
           <Button

@@ -18,6 +18,7 @@ import {
   readUsage,
   scheduleNearestReset,
   readUsageExecutors,
+  ResetOutcomeUnknown,
   refreshSessionUsage,
   refreshUsage,
   setUsageExecutor,
@@ -298,16 +299,35 @@ test("reset actions address the card's own lane", async () => {
   try {
     const account = { kind: "account", accountId: "11111111-1111-4111-8111-111111111111" } as const;
     await consumeNearestReset({ kind: "service", provider: "anthropic" }, "g:1", "confirm");
-    await consumeNearestReset(account, "g:1", "confirm");
+    await consumeNearestReset(account, "g:1", "confirm", "web-op-1");
     await scheduleNearestReset(account, 5, "confirm");
     await cancelNearestResetSchedule(account);
     const named = `/api/provider-accounts/${account.accountId}/usage/reset`;
     assertEquals(requests, [
       { url: "/api/usage/anthropic/reset", method: "POST", body: { confirm: "confirm", expected_credit_id: "g:1" } },
-      { url: named, method: "POST", body: { confirm: "confirm", expected_credit_id: "g:1" } },
+      { url: named, method: "POST", body: { confirm: "confirm", expected_credit_id: "g:1", operation_id: "web-op-1" } },
       { url: `${named}/schedule`, method: "PUT", body: { fire_at_ms: 5, confirm: "confirm" } },
       { url: `${named}/schedule`, method: "DELETE", body: null },
     ]);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("an unknown reset outcome is distinguishable from a refusal", async () => {
+  const original = globalThis.fetch;
+  const account = { kind: "account", accountId: "11111111-1111-4111-8111-111111111111" } as const;
+  try {
+    for (const [code, unknown] of [["reset_outcome_unknown", true], ["reset_in_progress", true], ["reset_failed", false]] as const) {
+      globalThis.fetch = () =>
+        Promise.resolve(Response.json({ error: { code, message: "m" } }, { status: 409 }));
+      let caught: unknown;
+      await consumeNearestReset(account, "g:1", "confirm", "web-op-2").catch((error: unknown) => {
+        caught = error;
+      });
+      assertEquals(caught instanceof ResetOutcomeUnknown, unknown, code);
+      assertEquals(caught instanceof Error, true, code);
+    }
   } finally {
     globalThis.fetch = original;
   }

@@ -98,7 +98,7 @@ import {
 } from "../usageWidget";
 import { useSubscriptionAccounts } from "../subscriptionAccounts";
 import { useNativeAccountUsage } from "../nativeAccountUsage";
-import { registeredUsageAccounts, type UsageAccountCard, usageCardResetSchedule, usageResetTarget } from "../usageAccounts";
+import { registeredUsageAccounts, type UsageAccountCard, usageCardResetSchedule, usageResetTarget, usageScheduleTarget } from "../usageAccounts";
 import { AccountBrowserEntry } from "../machineBrowser/AccountBrowserEntry";
 import { DesktopModal } from "./DesktopModal";
 import { RunConfigurationDialog } from "./RunConfigurationDialog";
@@ -356,10 +356,12 @@ function UsageProviderSummary(
 }
 
 function DesktopUsageExtras(
-  { usage, target, schedule, onUsageChanged }: {
+  { usage, target, scheduleTarget, schedule, onUsageChanged }: {
     usage: ProviderUsage;
     /** This card's own reset lane, if it owns reset actions. */
     target: UsageResetTarget | undefined;
+    /** Where its persisted schedule is cancelled, even without a target. */
+    scheduleTarget: UsageResetTarget | undefined;
     schedule: { fire_at_ms: number } | undefined;
     onUsageChanged: () => Promise<void>;
   },
@@ -372,7 +374,7 @@ function DesktopUsageExtras(
     )
     : [];
   const nearestCreditId = textValue(nearestAvailableResetCredit(usage)?.id);
-  const reset = useUsageResetFlow(target, nearestCreditId, onUsageChanged);
+  const reset = useUsageResetFlow(target, nearestCreditId, onUsageChanged, scheduleTarget);
   const summary = record(usage.activity?.summary);
   const session = record(usage.activity?.session);
   const cost = record(session?.cost);
@@ -383,8 +385,9 @@ function DesktopUsageExtras(
 
   return (
     <>
-      {target !== undefined && credits.length > 0 && (
+      {((target !== undefined && credits.length > 0) || schedule) && (
         <Stack spacing={0.6}>
+          {target !== undefined && credits.length > 0 && (<>
           <Stack
             direction="row"
             alignItems="baseline"
@@ -503,6 +506,7 @@ function DesktopUsageExtras(
               );
             })}
           </Box>
+          </>)}
           {schedule && (
             <Stack
               direction="row"
@@ -688,9 +692,10 @@ function DesktopProviderUsage({ account, schedule, onUsageChanged, onRefresh, re
         <ProviderUsageCredits rows={usageContext.creditDetails} />
         {account.native?.message && <Typography variant="caption" color="text.secondary">{account.native.message}</Typography>}
         {account.native?.machine_id && <Typography variant="caption" color="text.secondary">Usage query Machine: {account.native.machine_id}</Typography>}
-        {(account.collector || resetTarget) && <DesktopUsageExtras
+        {(account.collector || resetTarget || schedule) && <DesktopUsageExtras
           usage={usage}
           target={resetTarget}
+          scheduleTarget={usageScheduleTarget(account)}
           schedule={schedule}
           onUsageChanged={onUsageChanged}
         />}

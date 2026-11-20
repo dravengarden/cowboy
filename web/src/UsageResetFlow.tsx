@@ -14,6 +14,7 @@ import { acceptedScheduleTime } from "./usageLimits";
 import {
   cancelNearestResetSchedule,
   consumeNearestReset,
+  ResetOutcomeUnknown,
   scheduleNearestReset,
   type UsageResetTarget,
 } from "./usageApi";
@@ -41,19 +42,44 @@ export interface UsageResetFlow {
   submit: () => Promise<void>;
 }
 
+/** The account and grant the owner confirmed when the dialog opened, and the
+ * stable operation that makes a retried request return its original receipt. */
+interface ResetIntent {
+  target: string;
+  creditId: string | undefined;
+  operationId: string;
+}
+
+function targetKey(target: UsageResetTarget | undefined): string {
+  return target === undefined ? "" : target.kind === "service" ? `service:${target.provider}` : `account:${target.accountId}`;
+}
+
+function operationId(): string {
+  return `web-${crypto.randomUUID()}`;
+}
+
 export function useUsageResetFlow(
   target: UsageResetTarget | undefined,
   nearestCreditId: string | undefined,
   onUsageChanged: () => Promise<void>,
+  /** Where this card's persisted schedule is cancelled, even when it has no
+   * reset target now (its credits disappeared or the account is disabled). */
+  scheduleTarget: UsageResetTarget | undefined = target,
 ): UsageResetFlow {
   const [open, setOpen] = useState(false);
+  const [intent, setIntent] = useState<ResetIntent | null>(null);
+  /** An unknown outcome locks the dialog until it is opened again. */
+  const [locked, setLocked] = useState(false);
   const [mode, setMode] = useState<UsageResetMode>("schedule");
   const [fireAt, setFireAt] = useState("");
   const [confirmText, setConfirmText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const scheduleValid = fireAt !== "" && new Date(fireAt).getTime() > Date.now();
-  const ready = !busy && confirmText === "confirm" &&
+  // A different account or grant than the one opened needs a new confirmation.
+  const changed = open && intent !== null &&
+    (intent.target !== targetKey(target) || (mode === "now" && intent.creditId !== nearestCreditId));
+  const ready = !busy && !locked && !changed && confirmText === "confirm" &&
     (mode !== "schedule" || scheduleValid);
   const clear = (): void => {
     setMode("schedule");
@@ -68,18 +94,23 @@ export function useUsageResetFlow(
       await action();
       await onUsageChanged();
     } catch (cause) {
+      if (cause instanceof ResetOutcomeUnknown) {
+        setLocked(true);
+        void onUsageChanged().catch(() => undefined);
+      }
       setError(cause instanceof Error ? cause.message : failure);
     } finally {
       setBusy(false);
     }
   };
   const submit = async (): Promise<void> => {
-    if (target === undefined || !ready) return;
+    if (target === undefined || intent === null || !ready) return;
     await run(async () => {
       if (mode === "schedule") {
         await scheduleNearestReset(target, new Date(fireAt).getTime(), confirmText);
       } else {
-        await consumeNearestReset(target, nearestCreditId, confirmText);
+        // The grant confirmed at open, under the same operation on a retry.
+        await consumeNearestReset(target, intent.creditId, confirmText, intent.operationId);
       }
       setOpen(false);
       setMode("schedule");
@@ -93,12 +124,14 @@ export function useUsageResetFlow(
     fireAt,
     confirmText,
     busy,
-    error,
+    error: error ?? (changed ? "The available reset changed. Close and confirm again." : null),
     ready,
     setFireAt,
     setConfirmText,
     openDialog: () => {
       clear();
+      setLocked(false);
+      setIntent({ target: targetKey(target), creditId: nearestCreditId, operationId: operationId() });
       setOpen(true);
     },
     close: () => {
@@ -113,8 +146,8 @@ export function useUsageResetFlow(
       setError(null);
     },
     cancelSchedule: async () => {
-      if (target === undefined) return;
-      await run(() => cancelNearestResetSchedule(target), "Could not cancel schedule");
+      if (scheduleTarget === undefined) return;
+      await run(() => cancelNearestResetSchedule(scheduleTarget), "Could not cancel schedule");
     },
     submit,
   };
