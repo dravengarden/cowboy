@@ -607,6 +607,42 @@ pub(in crate::server) async fn image_capabilities(
     value
 }
 
+/// Cached quota evidence for review selection: legacy Service collectors for
+/// legacy defaults, each named default account's own usage read otherwise.
+async fn quota_evidence(
+    state: &AppState,
+    meta: &crate::core::SessionMeta,
+    accounts: &[String],
+    named: &[crate::provider_account::ProviderAccountId],
+) -> Value {
+    if !state.product_auth_enabled || meta.owner_user_id.is_some() {
+        let now = chrono::Utc::now().timestamp_millis();
+        let (mut quota, interval) = state
+            .usage
+            .cached_view(|snapshot, _, _| {
+                (
+                    super::selection::quota(snapshot, accounts, now),
+                    snapshot.refresh_interval_ms,
+                )
+            })
+            .await;
+        if let (Some(owner), Some(list)) = (
+            meta.owner_user_id.as_deref(),
+            quota["accounts"].as_array_mut(),
+        ) {
+            for id in named {
+                let read = super::super::provider_accounts::usage::read_one(state, owner, id)
+                    .await
+                    .unwrap_or_else(|code| json!({"account_id":id,"reason":code}));
+                list.push(super::selection::named_quota(&read, now, interval));
+            }
+        }
+        quota
+    } else {
+        json!({"status":"permission_denied"})
+    }
+}
+
 async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger: &Ledger) -> Value {
     let placement = ledger.placement();
     let policy = agent_tools::effective(state, meta).calls;
@@ -704,32 +740,7 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
         .filter_map(|provider| provider["quota_account"].as_str().map(str::to_owned))
         .filter(|account| !named.iter().any(|id| id.as_str() == account))
         .collect();
-    let quota = if !state.product_auth_enabled || meta.owner_user_id.is_some() {
-        let now = chrono::Utc::now().timestamp_millis();
-        let (mut quota, interval) = state
-            .usage
-            .cached_view(|snapshot, _, _| {
-                (
-                    super::selection::quota(snapshot, &accounts, now),
-                    snapshot.refresh_interval_ms,
-                )
-            })
-            .await;
-        if let (Some(owner), Some(list)) = (
-            meta.owner_user_id.as_deref(),
-            quota["accounts"].as_array_mut(),
-        ) {
-            for id in &named {
-                let read = super::super::provider_accounts::usage::read_one(state, owner, id)
-                    .await
-                    .unwrap_or_else(|code| json!({"account_id":id,"reason":code}));
-                list.push(super::selection::named_quota(&read, now, interval));
-            }
-        }
-        quota
-    } else {
-        json!({"status":"permission_denied"})
-    };
+    let quota = quota_evidence(state, meta, &accounts, &named).await;
     // Account observations must not outlive the parent/user permission that
     // was checked before the readiness and cache awaits.
     if let Err(code) =
