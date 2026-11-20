@@ -218,3 +218,16 @@ test("a named-only account's collected quota shows the plan its sessions reporte
   const pending = registeredUsageAccounts(snapshot, accounts, [], [{ ...observation, usage: null, reason: "native_login_required" }]);
   assertEquals(pending.find((item) => item.id === "otter")?.statusLabel, "NOT SIGNED IN");
 });
+
+test("a named-only account is never asked to sign in again after a Provider update", () => {
+  setup();
+  const accounts: SubscriptionSnapshot = { ...registry, named_only_providers: ["claude-code"] };
+  const outdated = { account_id: "otter", provider_id: "claude-code", refreshing: false, reason: "native_login_outdated",
+    message: "The Provider was updated after this account signed in. Sign in again to use it and query its usage." };
+  const card = registeredUsageAccounts(snapshot, accounts, [], [outdated]).find((item) => item.id === "otter");
+  assertEquals(card?.statusLabel, "NOT REPORTED");
+  assertEquals(card?.emptyMessage?.includes("Sign in again"), false);
+  // A native Claude login keeps the explicit instruction.
+  const claude = registeredUsageAccounts(snapshot, registry, [], [outdated]).find((item) => item.id === "otter");
+  assertEquals(claude?.statusLabel, "SIGN IN AGAIN");
+});

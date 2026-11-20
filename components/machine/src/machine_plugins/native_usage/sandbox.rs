@@ -9,15 +9,19 @@ use crate::account_sandbox as daemon;
 use serde_json::{Value, json};
 
 impl MachinePluginStore {
-    /// Collect through the daemon. `observation` (this account's usage
+    /// Collect through the daemon on the Provider's active generation
+    /// `active_digest` (the account's credential does not belong to a
+    /// release; the daemon checks its signed-in generation). `observation` (this account's usage
     /// guard) is held until the daemon answered, even when the admission
     /// deadline ends the wait first, so reports of one account never overlap.
     pub(super) async fn collect_sandbox_usage(
         &self,
         invocation: &Invocation,
+        active_digest: &str,
         observation: tokio::sync::OwnedMutexGuard<()>,
     ) -> Result<Value> {
         let profile = invocation.profile.clone();
+        let digest = active_digest.to_owned();
         let account = self
             .for_account(&profile.account_id)
             .context("native_usage_profile_changed")?;
@@ -25,8 +29,8 @@ impl MachinePluginStore {
             invocation.remaining()?,
             tokio::task::spawn_blocking(move || {
                 let _observation = observation;
-                let mut connection = account
-                    .account_sandbox_connection(&profile.provider_id, &profile.generation_digest)?;
+                let mut connection =
+                    account.account_sandbox_connection(&profile.provider_id, &digest)?;
                 let collect = |client: &mut daemon::Client| {
                     client.collect_usage(
                         &connection.key,

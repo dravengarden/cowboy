@@ -45,10 +45,10 @@ async fn observes_binding(
         .is_ok_and(|fingerprint| account.identity_fingerprint.as_ref() == Some(&fingerprint)))
 }
 
-/// Internal: a verified native login exists, but its Provider generation
-/// declares no account usage (Antigravity before 0.2.10). Public as
-/// `account_usage_unsupported`; the read model still reports the sign-in
-/// (`signed_in`).
+/// Internal: a verified native login exists, but the generation that would
+/// query it declares no account usage (an Antigravity Machine before 0.2.10).
+/// Public as `account_usage_unsupported`; the read model still reports the
+/// sign-in (`signed_in`).
 const SIGNED_IN_USAGE_UNSUPPORTED: &str = "account_usage_unsupported_signed_in";
 
 fn public_code(code: &'static str) -> &'static str {
@@ -134,26 +134,17 @@ async fn target(
         {
             continue;
         }
-        if let Err(error) = resolve_provider_generation_with_auth(
-            &state.provider_catalog,
-            &state.plugin_catalog,
-            &[installed],
-            &account.provider_id,
-            SchedulingAuthentication::Native(&completion.profile),
-        ) {
-            // A Provider upgrade invalidates native logins by design; say so
-            // instead of implying the account never signed in.
-            outdated |= error == "native_provider_generation_mismatch";
-            continue;
-        }
-        let provider = state
-            .provider_catalog
-            .account_usage_provider(
-                &account.provider_id,
-                &completion.profile.provider_version,
-                &completion.profile.generation_digest,
-            )
-            .ok_or(SIGNED_IN_USAGE_UNSUPPORTED)?;
+        let provider = match usage_provider(state, &installed, &completion.profile) {
+            Ok(provider) => provider,
+            // A Provider upgrade invalidates a native Claude login by design;
+            // say so instead of implying the account never signed in.
+            Err(UsageGeneration::Outdated) => {
+                outdated = true;
+                continue;
+            }
+            Err(UsageGeneration::Unavailable) => continue,
+            Err(UsageGeneration::Unsupported) => return Err(SIGNED_IN_USAGE_UNSUPPORTED),
+        };
         let binding = state
             .usage
             .plugin_bindings()
@@ -174,6 +165,99 @@ async fn target(
     } else {
         "native_login_required"
     })
+}
+
+/// Why a Machine's installed generation cannot serve an account's usage.
+#[derive(Debug, PartialEq, Eq)]
+enum UsageGeneration {
+    /// The native login predates an incompatible Provider update.
+    Outdated,
+    /// This Machine's installation cannot run the query now.
+    Unavailable,
+    /// The generation that would run it declares no account usage.
+    Unsupported,
+}
+
+/// The account-usage provider of the generation a usage query runs on.
+///
+/// A native Claude login binds its exact signed release: the query runs only
+/// where that login still resolves, and that release's declaration decides.
+/// An account-sandbox Provider (Antigravity) keeps its credential in the
+/// daemon's account home, independent of the Provider release: the query
+/// runs on the Machine's active trusted generation, whose declaration
+/// decides, and the daemon admits only the login's current signed-in
+/// credential generation of an unfenced account.
+fn usage_provider(
+    state: &AppState,
+    installed: &crate::machine_protocol::PluginInventory,
+    profile: &crate::provider_account::NativeProfileReceipt,
+) -> Result<String, UsageGeneration> {
+    let package = state.provider_catalog.package(
+        &installed.plugin_id,
+        &installed.plugin_version,
+        &installed.generation_digest,
+    );
+    let resolve = |authentication| {
+        resolve_provider_generation_with_auth(
+            &state.provider_catalog,
+            &state.plugin_catalog,
+            std::slice::from_ref(installed),
+            &profile.provider_id,
+            authentication,
+        )
+        .map(drop)
+    };
+    choose_usage_provider(
+        package.as_ref(),
+        installed,
+        profile,
+        || resolve(SchedulingAuthentication::Native(profile)),
+        || resolve(SchedulingAuthentication::Discovery),
+        || {
+            state.provider_catalog.account_usage_provider(
+                &profile.provider_id,
+                &profile.provider_version,
+                &profile.generation_digest,
+            )
+        },
+    )
+}
+
+/// [`usage_provider`]'s decision, given the installed generation's trusted
+/// package and the resolutions it may need.
+fn choose_usage_provider(
+    installed_package: Option<&cowboy_provider_sdk::ProviderPackage>,
+    installed: &crate::machine_protocol::PluginInventory,
+    profile: &crate::provider_account::NativeProfileReceipt,
+    resolve_login: impl FnOnce() -> Result<(), String>,
+    resolve_installed: impl FnOnce() -> Result<(), String>,
+    signed_in_usage: impl FnOnce() -> Option<String>,
+) -> Result<String, UsageGeneration> {
+    let sandboxed = installed_package.is_some_and(|package| {
+        package.manifest.runtime.isolation
+            == Some(cowboy_provider_sdk::RuntimeIsolationPolicy::AccountSandboxV1)
+    });
+    if !sandboxed {
+        resolve_login().map_err(|error| {
+            if error == "native_provider_generation_mismatch" {
+                UsageGeneration::Outdated
+            } else {
+                UsageGeneration::Unavailable
+            }
+        })?;
+        return signed_in_usage().ok_or(UsageGeneration::Unsupported);
+    }
+    if profile.account_id.is_default()
+        || profile.generation == 0
+        || profile.provider_id != installed.plugin_id
+    {
+        return Err(UsageGeneration::Unavailable);
+    }
+    resolve_installed().map_err(|_| UsageGeneration::Unavailable)?;
+    installed_package
+        .and_then(|package| package.manifest.host.account_usage.as_ref())
+        .map(|usage| usage.provider.clone())
+        .ok_or(UsageGeneration::Unsupported)
 }
 
 fn error_message(code: &str) -> &str {
@@ -494,10 +578,10 @@ async fn collect(state: &AppState, owner: &str, target: &Target) -> Result<Value
     store.with_native_login_binding(owner, &target.operation, completion, || {
         anyhow::ensure!(state.machine_control.is_current(&connection), "machine_connection_changed");
         anyhow::ensure!(state.supervisor.runtime_allowed(&completion.profile.provider_id, &completion.machine_id), "runtime_not_allowed");
-        resolve_provider_generation_with_auth(
-            &state.provider_catalog, &state.plugin_catalog, &[installed],
-            &completion.profile.provider_id, SchedulingAuthentication::Native(&completion.profile),
-        ).map_err(anyhow::Error::msg)?;
+        anyhow::ensure!(
+            usage_provider(state, &installed, &completion.profile).as_deref() == Ok(target.provider.as_str()),
+            "native_usage_unavailable"
+        );
         anyhow::ensure!(raw["status"] == "available" && raw["rate_limits"].is_object(), "native_usage_unavailable");
         Ok(json!({
             "provider":target.provider,"status":"available","source":target.source,
@@ -594,6 +678,158 @@ pub(in crate::server) async fn run(state: Arc<AppState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn package(source: &str) -> cowboy_provider_sdk::ProviderPackage {
+        let source: cowboy_provider_sdk::StandardProviderSource =
+            serde_json::from_str(source).unwrap();
+        cowboy_provider_sdk::build_package(source.compile().unwrap()).unwrap()
+    }
+
+    fn installed(
+        package: &cowboy_provider_sdk::ProviderPackage,
+    ) -> crate::machine_protocol::PluginInventory {
+        serde_json::from_value(json!({
+            "plugin_id": package.manifest.id, "plugin_version": package.manifest.version,
+            "generation_digest": "sha256:installed", "contract_fingerprint": "contract",
+            "state": "active",
+        }))
+        .unwrap()
+    }
+
+    fn profile(
+        provider: &str,
+        version: &str,
+        generation: u64,
+    ) -> crate::provider_account::NativeProfileReceipt {
+        serde_json::from_value(json!({
+            "account_id": "11111111-1111-4111-8111-111111111111",
+            "provider_id": provider, "request_id": "login", "generation": generation,
+            "method": "google-subscription", "provider_version": version,
+            "generation_digest": "sha256:signed-in", "auth_contract_fingerprint": "contract",
+            "identity": {"authority": "google", "subject": "owner", "tenant": null},
+        }))
+        .unwrap()
+    }
+
+    fn mismatch() -> Result<(), String> {
+        Err("native_provider_generation_mismatch".into())
+    }
+
+    #[test]
+    fn a_sandboxed_login_reads_quota_on_the_installed_generation_across_upgrades() {
+        let antigravity = package(include_str!(
+            "../../../../../plugins/antigravity/provider.json"
+        ));
+        let installed = installed(&antigravity);
+        // Signed in on an earlier release that declared no usage: the
+        // installed generation's declaration decides, never the login's.
+        let old = profile("antigravity", "0.2.5", 1);
+        assert_eq!(
+            choose_usage_provider(
+                Some(&antigravity),
+                &installed,
+                &old,
+                mismatch,
+                || Ok(()),
+                || None
+            ),
+            Ok("antigravity".to_owned())
+        );
+        // The installed generation must still be trusted on this Machine.
+        assert_eq!(
+            choose_usage_provider(
+                Some(&antigravity),
+                &installed,
+                &old,
+                || Ok(()),
+                || Err("untrusted".into()),
+                || None
+            ),
+            Err(UsageGeneration::Unavailable)
+        );
+        for invalid in [
+            profile("antigravity", "0.2.5", 0),
+            profile("claude-code", "0.2.5", 1),
+        ] {
+            assert_eq!(
+                choose_usage_provider(
+                    Some(&antigravity),
+                    &installed,
+                    &invalid,
+                    || Ok(()),
+                    || Ok(()),
+                    || None
+                ),
+                Err(UsageGeneration::Unavailable)
+            );
+        }
+        let mut silent = antigravity.clone();
+        silent.manifest.host.account_usage = None;
+        assert_eq!(
+            choose_usage_provider(
+                Some(&silent),
+                &installed,
+                &old,
+                || Ok(()),
+                || Ok(()),
+                || None
+            ),
+            Err(UsageGeneration::Unsupported)
+        );
+    }
+
+    #[test]
+    fn a_native_claude_login_still_binds_its_signed_release() {
+        let claude = package(include_str!(
+            "../../../../../plugins/claude-code/provider.json"
+        ));
+        let installed = installed(&claude);
+        let login = profile("claude-code", "3.0.0", 1);
+        assert_eq!(
+            choose_usage_provider(
+                Some(&claude),
+                &installed,
+                &login,
+                mismatch,
+                || Ok(()),
+                || Some("x".into())
+            ),
+            Err(UsageGeneration::Outdated)
+        );
+        assert_eq!(
+            choose_usage_provider(
+                Some(&claude),
+                &installed,
+                &login,
+                || Err("other".into()),
+                || Ok(()),
+                || None
+            ),
+            Err(UsageGeneration::Unavailable)
+        );
+        assert_eq!(
+            choose_usage_provider(
+                Some(&claude),
+                &installed,
+                &login,
+                || Ok(()),
+                || Ok(()),
+                || None
+            ),
+            Err(UsageGeneration::Unsupported)
+        );
+        assert_eq!(
+            choose_usage_provider(
+                Some(&claude),
+                &installed,
+                &login,
+                || Ok(()),
+                || Ok(()),
+                || Some("anthropic".into())
+            ),
+            Ok("anthropic".to_owned())
+        );
+    }
 
     #[test]
     fn an_outdated_login_explains_the_provider_update() {

@@ -1180,13 +1180,18 @@ dispatches `CollectNativeUsage` to the account's sign-in Machine, as for a
 named Claude account. Antigravity 0.2.10 declares `host.account_usage`
 (`antigravity`) and a `usage` binding without a collector command, so the
 Service-level aggregator runs nothing for it and the Web shows no Service card
-(named-only). For an `account_sandbox_v1` Provider the Machine
-(`native_usage/sandbox.rs`) runs no collector: it asks the daemon
-(`collect_usage`) for the login's exact credential generation and runtime,
-holding the account's usage guard until the daemon answers, and maps the
-daemon's projection onto the generic `rateLimitsByLimitId` document. No wire,
-SDK or worker interface changes; the account card renders the rows with the
-existing usage components.
+(named-only). Unlike a native Claude login, which binds its exact signed
+release (an incompatible update asks to sign in again), an account-sandbox
+login resolves its usage target on the sign-in Machine's active trusted
+generation: that generation's `account_usage` declaration decides, and the
+daemon admits only the login's current signed-in credential generation of an
+unfenced account, as for session launches. For an `account_sandbox_v1` Provider
+the Machine (`native_usage/sandbox.rs`) runs no collector: it asks the daemon
+(`collect_usage`) on the active generation's runtime for the login's credential
+generation, holding the account's usage guard until the daemon answers, and
+maps the daemon's projection onto the generic `rateLimitsByLimitId` document.
+No wire, SDK or worker interface changes; the account card renders the rows
+with the existing usage components.
 
 **Daemon.** `collect_usage` starts a `usage` unit:
 `bin/agy-launch -p /usage --output-format json --log-file /tmp/agy-usage.log`
@@ -1236,9 +1241,10 @@ the account controls (the plan its sessions report); the Subscriptions card's
 - Acceptance items on a signed-in OVH account: the exact report and window
   labels, the absence of any turn in `num_turns`/the quota, and a report
   beside running `acp` units.
-- Logins of 0.2.9 and earlier keep "This Provider does not support background
-  account usage" until the account signs in again on 0.2.10 (a Provider update
-  invalidates native logins).
+- No new sign-in is needed after an upgrade: the account's credential lives in
+  the daemon's account home and does not belong to a Provider release. Until
+  the account's sign-in Machine runs 0.2.10 or later, the card keeps "This
+  Provider does not support background account usage".
 
 ## Feature inventory and Cowboy adaptation (2026-11-20)
 

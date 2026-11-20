@@ -56,7 +56,12 @@ export function registeredUsageAccounts(
       const usage = sessionQuota(session);
       return usage ? [usage] : [];
     }) : [];
-    const native = enabled ? observations.find((item) => item.account_id === account.id && item.provider_id === account.provider_id) : undefined;
+    const observed = enabled ? observations.find((item) => item.account_id === account.id && item.provider_id === account.provider_id) : undefined;
+    // An account-sandbox (named-only) credential survives Provider upgrades,
+    // so an "updated after this account signed in" reason never applies.
+    const native: NativeAccountUsage | undefined = observed?.reason === "native_login_outdated" && namedOnlyProvider(accounts, account.provider_id)
+      ? withoutReason(observed)
+      : observed;
     const collected = native?.usage ?? undefined;
     const usage = collected ?? reports.sort((a, b) => b.observed_at_ms - a.observed_at_ms)[0];
     const provider = usage?.provider ?? snapshot?.providers.find((item) =>
@@ -100,6 +105,14 @@ export function registeredUsageAccounts(
     if (!added.has(account.id)) cards.push(namedCard(account));
   }
   return cards;
+}
+
+/** `observation` without its refusal reason and message. */
+function withoutReason(observation: NativeAccountUsage): NativeAccountUsage {
+  const copy = { ...observation };
+  delete copy.reason;
+  delete copy.message;
+  return copy;
 }
 
 /** Old Provider orders keep their accounts together; explicit account order wins. */

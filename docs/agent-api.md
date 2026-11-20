@@ -306,8 +306,9 @@ their own bounded background collector on a Machine with a current login. It
 uses the exact signed collector and native CLI in that account's private home,
 without a model prompt, credential export, sidecars or private-API credits
 enrichment. Antigravity accounts (0.2.10+) use the same path: their Machine asks
-the account-sandbox daemon for the account's own read-only quota report, so no
-collector runs outside the account's custody. Owner, account, enrollment, login
+the account-sandbox daemon for the account's own read-only quota report on its
+active Provider generation, so no collector runs outside the account's custody
+and a Provider upgrade needs no new sign-in. Owner, account, enrollment, login
 generation and connection are checked around dispatch and publication. Machine protocol 37 is required; older
 Machines report an update requirement instead of querying the Service account.
 Cached observations are separate from authentication authority and are discarded

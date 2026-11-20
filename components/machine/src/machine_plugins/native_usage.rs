@@ -79,12 +79,22 @@ impl MachinePluginStore {
         if account_sandbox::sandboxed(&active) {
             // The credential lives only in the daemon's account home.
             drop(lifecycle);
-            let usage = self.collect_sandbox_usage(&invocation, observation).await?;
+            // The credential is independent of the Provider release: the
+            // query runs on the active generation, and the daemon admits only
+            // the login's current signed-in credential generation.
+            let usage = self
+                .collect_sandbox_usage(&invocation, &active_digest, observation)
+                .await?;
             let _lifecycle = tokio::time::timeout(invocation.remaining()?, self.lifecycle.lock())
                 .await
                 .context("native_usage_busy")?;
             self.validate_native_usage(profile)
                 .context("native_usage_profile_changed")?;
+            ensure!(
+                self.active_package(&profile.provider_id)?
+                    .is_some_and(|(_, digest)| digest == active_digest),
+                "native_usage_installation_changed"
+            );
             return Ok(usage);
         }
         let _observation = observation;
