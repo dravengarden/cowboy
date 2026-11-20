@@ -35,7 +35,7 @@ struct PersistedEntry {
 #[serde(untagged)]
 pub enum Scope {
     /// A verified native login on one Machine.
-    Native(NativeCompletion),
+    Native(Box<NativeCompletion>),
     /// A named portable account's vault identity. Its credential generation
     /// is deliberately absent: a refresh rotation keeps the observation.
     Portable(PortableScope),
@@ -55,7 +55,7 @@ pub struct PortableScope {
 
 impl From<NativeCompletion> for Scope {
     fn from(completion: NativeCompletion) -> Self {
-        Self::Native(completion)
+        Self::Native(Box::new(completion))
     }
 }
 

@@ -17,14 +17,14 @@ struct Target {
 
 /// The read model's account target: which credential an observation binds.
 enum Resolved {
-    Native(Target),
-    Portable(portable::Target),
+    Native(Box<Target>),
+    Portable(Box<portable::Target>),
 }
 
 impl Resolved {
     fn scope(&self) -> Scope {
         match self {
-            Self::Native(target) => Scope::Native(target.completion.clone()),
+            Self::Native(target) => Scope::from(target.completion.clone()),
             Self::Portable(target) => Scope::Portable(target.scope.clone()),
         }
     }
@@ -107,7 +107,7 @@ async fn target(
     // A vault account's sessions run from its Service replica on any
     // Machine, whatever native login it may also have.
     if let Some(portable) = portable::target(state, account) {
-        return portable.map(Resolved::Portable);
+        return portable.map(|target| Resolved::Portable(Box::new(target)));
     }
     if !state
         .provider_catalog
@@ -183,12 +183,12 @@ async fn target(
             .into_iter()
             .find(|binding| binding.account == provider)
             .ok_or(SIGNED_IN_USAGE_UNSUPPORTED)?;
-        return Ok(Resolved::Native(Target {
+        return Ok(Resolved::Native(Box::new(Target {
             operation,
             completion,
             provider,
             source: binding.product_label().into(),
-        }));
+        })));
     }
     Err(if pending {
         "native_login_pending"
@@ -522,12 +522,12 @@ async fn refresh_owned(
     let cache = state.usage.native.entry(owner, id.as_str());
     let collection = Arc::clone(&cache.collection).lock_owned().await;
     let target = match target(state, owner, id).await.map_err(public_code)? {
-        Resolved::Native(target) => target,
+        Resolved::Native(target) => *target,
         Resolved::Portable(target) => {
             return portable::refresh(state, owner, id, &target, &cache, collection).await;
         }
     };
-    let scope = Scope::Native(target.completion.clone());
+    let scope = Scope::from(target.completion.clone());
     let key = crate::usage::limiter::Limiter::account_key(owner, id.as_str());
     let mut permit = None;
     let due = state
