@@ -83,6 +83,16 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.118.0 records provider-runtime 1.3.4, whose
+`cowboy-antigravity-acp` 1.0.2 accepts the execution descriptor with
+systemd's `LoadCredential` mode (root 0440 plus an ACL for the unit's user):
+1.0.1 refused any group bit, so the first OVH runtime stopped before
+`initialize`. Group write and any access for others are still refused.
+Antigravity 0.2.3 pins it. Every other Provider that pins provider-runtime
+advances one patch version without behavior changes and stays unpublished
+until a later release needs it: claude-code 3.20.49, claude-deepseek 3.1.67,
+codex 3.6.7, codex-deepseek 3.1.67, deepseek-harness 1.0.25 and grok 3.2.6.
+
 Component release 3.117.0 changes only Antigravity: 0.2.2 declares split
 execution (`provider.execution-jsonrpc.v1`, the shared `jsonrpc_v1` executor
 digest), so an Antigravity session runs `agy` on OVH with its workspace tools on

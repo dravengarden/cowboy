@@ -220,6 +220,11 @@ test("descriptor, policy, mirror and environment checks", async (t) => {
   assert.equal(descriptor.endpoint, `unix:${setup.socket}`);
   chmodSync(join(setup.credentials, "descriptor"), 0o644);
   await assert.rejects(readDescriptor(setup.credentials), /private regular file/);
+  chmodSync(join(setup.credentials, "descriptor"), 0o460);
+  await assert.rejects(readDescriptor(setup.credentials), /private regular file/);
+  // systemd's LoadCredential mode.
+  chmodSync(join(setup.credentials, "descriptor"), 0o440);
+  assert.equal((await readDescriptor(setup.credentials)).endpoint, `unix:${setup.socket}`);
   chmodSync(join(setup.credentials, "descriptor"), 0o600);
   writeFileSync(
     join(setup.credentials, "descriptor"),

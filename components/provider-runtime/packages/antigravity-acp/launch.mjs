@@ -57,7 +57,10 @@ export async function readDescriptor(credentials) {
   }
   const path = join(credentials, "descriptor");
   const stat = await lstat(path);
-  if (!stat.isFile() || stat.size > 32768 || stat.mode & 0o077) {
+  // systemd hands a LoadCredential file over as root:root 0440 with an ACL
+  // for the unit's user, inside a directory only that unit can reach: group
+  // read is systemd's own convention, any other access is refused.
+  if (!stat.isFile() || stat.size > 32768 || stat.mode & 0o027) {
     throw new Error("execution descriptor must be a private regular file");
   }
   const descriptor = JSON.parse(await readFile(path, "utf8"));
