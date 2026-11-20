@@ -1,4 +1,4 @@
-import { Alert, Box, Button, Link, Stack, Typography } from "@mui/material";
+import { Alert, Box, Button, Stack, Typography } from "@mui/material";
 import WarningAmberRounded from "@mui/icons-material/WarningAmberRounded";
 import { useEffect, useState } from "react";
 import {
@@ -9,7 +9,6 @@ import { glyphSize, desktopSize } from "./surface/desktopSize";
 import { mobileComposerPanelHeaderMinHeight } from "./mobileComposerPrimitives";
 import type { SessionMeta } from "./protocol";
 import { ConfirmSheet } from "./Sheet";
-import { requestPickSession } from "./sessionPickRequest";
 import { useStoreSelector } from "./store";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { sessionAccountIdentity } from "./accountIdentity";
@@ -74,17 +73,6 @@ export function UncertainEffectAcknowledge({ session, effect, onDone, size = "sm
   </>;
 }
 
-function ParkedText({ parked }: { parked: ParkedReason }): React.JSX.Element {
-  const sessions = useStoreSelector((state) => state.sessions);
-  if (!parked.waitingFor) return <>{parked.text}</>;
-  const holder = sessions.find((item) => item.id === parked.waitingFor);
-  return <>
-    Waiting for the account's active turn in{" "}
-    <Link component="button" type="button" variant="caption" sx={{ verticalAlign: "baseline" }}
-      onClick={() => requestPickSession(parked.waitingFor!, holder)}>{holder?.title || parked.waitingFor}</Link>
-  </>;
-}
-
 /** Session Settings: the account's state and why its queue is parked. */
 export function SessionAccountState({ session }: { session: SessionMeta }): React.JSX.Element | null {
   const { control, parked, refresh } = useSessionAccountControl(session);
@@ -95,7 +83,7 @@ export function SessionAccountState({ session }: { session: SessionMeta }): Reac
     <Typography variant="caption" color={badge.tone === "success" ? "success.main" : badge.tone === "default" ? "text.secondary" : "warning.main"}>
       {badge.label}{badge.detail ? ` · ${badge.detail}` : ""}{control.admitted ? "" : " · Not admitted"}
     </Typography>
-    {parked && <Typography variant="caption" color="warning.main" data-session-parked><ParkedText parked={parked} /></Typography>}
+    {parked && <Typography variant="caption" color="warning.main" data-session-parked>{parked.text}</Typography>}
     {parked?.uncertain && <Box><UncertainEffectAcknowledge session={session.id} effect={parked.uncertain} onDone={() => void refresh()} /></Box>}
   </Stack>;
 }
@@ -116,7 +104,7 @@ export function AccountParkedStatus({ sessionId, desktop }: { sessionId: string;
     <WarningAmberRounded sx={{ fontSize: glyphSize(16), flexShrink: 0, color: "warning.main" }} />
     <Typography variant="caption" component="span" sx={{ flex: 1, minWidth: 0, color: "text.secondary", overflowWrap: "anywhere" }}>
       <Box component="span" sx={{ color: "text.primary", fontWeight: 650 }}>{title}</Box>
-      {" · "}<ParkedText parked={parked} />
+      {" · "}{parked.text}
     </Typography>
     {parked.uncertain && <UncertainEffectAcknowledge session={session.id} effect={parked.uncertain} onDone={() => void refresh()} />}
   </Stack>;

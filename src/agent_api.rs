@@ -203,14 +203,14 @@ pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login.
 // state:ok|verification_required|location_unsupported|rate_limited|suspended|blocked|unknown_refusal|needs_attention,
 // reason,until_ms,revision,turn:{session_id,turn_id,state:reserved|may_have_dispatched}|null,
 // fences:{machine_id,action:stop|admit,state:pending|confirmed,detail}[],stop_confirmed,uncertain_effects:{session_id,method,sequence}[],
-// in_use_by,logout,plan:{id,name,observed_at_ms}|null}. plan is informational: the newest plan in the current usage of
+// logout,plan:{id,name,observed_at_ms}|null}. plan is informational: the newest plan in the current usage of
 // the account's Antigravity >=0.2.1 sessions (id a lowercase slug <=64; name 1-80 printable code points), never queried,
 // never gating; null until a session reports one (also after a worker reconnect, until its next usage reading).
 export interface AccountControls {loaded:boolean;accounts:{account_id:string;provider_id:string;admitted:boolean;state:string;
 revision:number;plan:{id:string;name:string;observed_at_ms:number}|null;[key:string]:unknown}[]}
 export interface AccountList {account_controls:AccountControls}
-// Any non-ok state, a missing admission or another session's turn parks the account's queues (prompts stay
-// queued; the session's wait shows why). One turn per account. A rate limit resumes on a new owner send after until_ms.
+// Any non-ok state or a missing admission parks the account's queues (prompts stay queued; the session's wait
+// shows why). Many sessions of one account run concurrently. A rate limit resumes on a new owner send after until_ms.
 // Owner actions via control.apply accounts.control {account,body:{action,expected_revision?,confirm?}};
 // sessions.acknowledge_uncertain_effect {session_id,body:{sequence}} releases a queue parked by an unknown target effect.
 // Write: cowboy_execute({action:"accounts.update",operation,arguments:{expected_revision,change:AccountChange}}).

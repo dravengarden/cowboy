@@ -1,4 +1,4 @@
-import { Alert, Button, FormControlLabel, Link, Stack, Switch, Typography } from "@mui/material";
+import { Alert, Button, FormControlLabel, Stack, Switch, Typography } from "@mui/material";
 import { useEffect, useRef, useState } from "react";
 import {
   type AccountControl, accountPlanLabel, accountStateBadge, type ControlAction, controlActions, controlReasonText, logoutStatus,
@@ -6,7 +6,6 @@ import {
 } from "./accountControls";
 import { ProviderAccountStatus } from "./ProviderAccountIdentity";
 import { ConfirmSheet } from "./Sheet";
-import { requestPickSession } from "./sessionPickRequest";
 import { useStoreSelector } from "./store";
 
 const CONFIRM: Partial<Record<ControlAction, { title: string; body: string; button: string }>> = {
@@ -37,10 +36,8 @@ export function AccountControlsPanel({ control, observation, disabled, onChange 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [confirming, setConfirming] = useState<ControlAction>();
-  const sessions = useStoreSelector((state) => state.sessions);
   const badge = accountStateBadge(control, signInObservation(observation));
   const actions = controlActions(control);
-  const holder = control.in_use_by ? sessions.find((session) => session.id === control.in_use_by) : undefined;
   const pendingFences = control.fences.filter((fence) => fence.state !== "confirmed");
   const logout = logoutStatus(control.logout);
   const plan = accountPlanLabel(control);
@@ -69,13 +66,6 @@ export function AccountControlsPanel({ control, observation, disabled, onChange 
   return <Stack spacing={0.75} data-account-controls={control.account_id} data-account-state={control.state}>
     <ProviderAccountStatus label={badge.label} tone={badge.tone === "success" ? "success" : badge.tone === "default" ? "default" : "warning"}
       {...(badge.detail ? { detail: badge.detail } : {})} />
-    {control.in_use_by && <Typography variant="caption" color="text.secondary" data-account-in-use>
-      In use by{" "}
-      <Link component="button" type="button" variant="caption" sx={{ verticalAlign: "baseline" }}
-        onClick={() => requestPickSession(control.in_use_by!, holder)}>
-        {holder?.title || control.in_use_by}
-      </Link>
-    </Typography>}
     {plan && <Typography variant="caption" color="text.secondary" data-account-plan={control.plan?.id}
       title="Reported by the Provider during a session of this account">Plan · {plan}</Typography>}
     <Typography variant="caption" color="text.secondary">Usage · Not available</Typography>

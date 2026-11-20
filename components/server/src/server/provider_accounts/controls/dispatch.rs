@@ -1,7 +1,7 @@
 //! The account gate of one dispatch: admission, account state and uncertain
-//! effects. One runtime per account (the daemon's unit limit and the launch
-//! gate) bounds an account to one turn, so nothing is reserved here
-//! (`docs/antigravity-real-accounts-design.md`, "Revision 5 simplification").
+//! effects. Sessions of one account run concurrently and nothing is reserved
+//! here (`docs/antigravity-real-accounts-design.md`, "Revision 5
+//! simplification" and "Revision 6: concurrent sessions per account").
 use super::*;
 
 /// The account gate of every dispatch of `session` (user prompts and

@@ -9,9 +9,9 @@
 //!   login start and completion, session creation ([`super::named_only_admitted`]),
 //!   every prompt dispatch ([`Controls::before_dispatch`]) and every worker
 //!   launch or revival ([`revival_gate`]);
-//! - one runtime per account: the daemon refuses a second runtime unit, and
-//!   the launch gate explains it before a second session of the account
-//!   starts or wakes ("in use by session X; hibernate it first");
+//! - concurrent sessions per account ("Revision 6"): every session runs its
+//!   own daemon unit over the shared account home, so nothing here gates a
+//!   session on another session of the same account;
 //! - backend signals: a governed session's turn ending moves its account to
 //!   the state the proxy's structured result names; nothing waits for or is
 //!   settled by a turn ending;
@@ -45,7 +45,6 @@ pub(in crate::server) trait Env: Send + Sync + 'static {
     /// A session's metadata and whether a prompt of it is in flight.
     fn session(&self, id: &str) -> Option<(SessionMeta, bool)>;
     fn sessions(&self) -> Vec<SessionMeta>;
-    fn live_worker(&self, session: &str) -> bool;
     fn worker(&self, session: &str) -> Option<crate::runtime_wire::WorkerSnapshot>;
     fn machine_connected(&self, machine: &str) -> bool;
     fn admitted(&self, account: &ProviderAccountId) -> bool;
@@ -84,10 +83,6 @@ impl Env for AppEnv {
 
     fn sessions(&self) -> Vec<SessionMeta> {
         self.0.hub.session_list()
-    }
-
-    fn live_worker(&self, session: &str) -> bool {
-        self.0.supervisor.has_live_worker(session)
     }
 
     fn worker(&self, session: &str) -> Option<crate::runtime_wire::WorkerSnapshot> {
@@ -181,8 +176,6 @@ impl Env for AppEnv {
 pub(in crate::server) struct Cache {
     controls: parking_lot::RwLock<HashMap<String, Control>>,
     fences: parking_lot::RwLock<Vec<Fence>>,
-    /// Account display names (`label`), for the in-use explanation.
-    labels: parking_lot::RwLock<HashMap<String, String>>,
     /// Fence operations with a Machine command in flight.
     fencing: parking_lot::Mutex<HashSet<String>>,
     /// Backend signals of each account observed but not yet committed: the
@@ -202,10 +195,6 @@ pub(in crate::server) struct Cache {
 impl Cache {
     fn control(&self, account: &str) -> Option<Control> {
         self.controls.read().get(account).cloned()
-    }
-
-    fn label(&self, account: &str) -> Option<String> {
-        self.labels.read().get(account).cloned()
     }
 
     fn account_fences(&self, account: &str) -> Vec<Fence> {
@@ -248,18 +237,6 @@ pub(in crate::server) async fn blocked(
         .await
         .map(|control| control.is_some_and(|control| control.state == AccountState::Blocked))
         .map_err(|_| "unavailable")
-}
-
-/// The session of `account` whose worker is live, from the Controller's
-/// state (the daemon runs one runtime per account).
-pub(in crate::server) fn in_use(state: &AppState, account: &ProviderAccountId) -> Option<String> {
-    state
-        .hub
-        .session_list()
-        .into_iter()
-        .filter(|meta| governed(meta) && meta.provider_account_id == *account)
-        .find(|meta| state.supervisor.has_live_worker(&meta.id))
-        .map(|meta| meta.id)
 }
 
 fn governed(meta: &SessionMeta) -> bool {
@@ -346,9 +323,7 @@ impl Controls {
             ))
         }
         .await;
-        self.apply(started, loaded)?;
-        self.refresh_labels().await;
-        Ok(())
+        self.apply(started, loaded)
     }
 
     /// Apply one load in start order (see [`Self::refresh`]).
@@ -389,52 +364,6 @@ impl Controls {
         *self.cache.fences.write() = fences;
         self.cache.loaded.store(true, Ordering::Release);
         Ok(())
-    }
-
-    /// Learn the display names of governed sessions' accounts not yet known.
-    async fn refresh_labels(&self) {
-        let missing: BTreeSet<String> = self
-            .env
-            .sessions()
-            .into_iter()
-            .filter(|meta| {
-                governed(meta)
-                    && self
-                        .cache
-                        .label(meta.provider_account_id.as_str())
-                        .is_none()
-            })
-            .filter_map(|meta| meta.owner_user_id)
-            .collect();
-        for owner in missing {
-            if let Ok(registry) = self.store.provider_accounts(&owner).await {
-                self.learn_labels(&registry);
-            }
-        }
-    }
-
-    fn learn_labels(&self, registry: &crate::store::provider_accounts::Registry) {
-        let mut labels = self.cache.labels.write();
-        for account in &registry.accounts {
-            labels.insert(account.id.as_str().to_owned(), account.label.clone());
-        }
-    }
-
-    /// The other session of `meta`'s account whose worker is live: the
-    /// daemon runs one runtime per account, so `meta` may not start now.
-    pub(in crate::server) fn in_use_by(
-        &self,
-        account: &ProviderAccountId,
-        except: &str,
-    ) -> Option<String> {
-        self.env
-            .sessions()
-            .into_iter()
-            .filter(|other| {
-                governed(other) && other.provider_account_id == *account && other.id != except
-            })
-            .find(|other| self.env.live_worker(&other.id))
-            .map(|other| other.id)
     }
 
     /// The session's unacknowledged uncertain effect: the live worker
@@ -526,16 +455,7 @@ impl Controls {
             control.as_ref(),
             now_ms(),
         )
-        .map_err(|reason| wait(&reason))?;
-        // One runtime per account: another session's live worker holds it.
-        if let Some(holder) = self.in_use_by(&meta.provider_account_id, &meta.id) {
-            let label = self
-                .cache
-                .label(meta.provider_account_id.as_str())
-                .unwrap_or_else(|| meta.provider_account_id.as_str().to_owned());
-            return Err(wait(&policy::in_use_reason(&label, &holder)));
-        }
-        Ok(())
+        .map_err(|reason| wait(&reason))
     }
 
     /// The Machines that may run units of `account`: those holding its
@@ -712,7 +632,6 @@ impl Controls {
                     "until_ms": control.as_ref().and_then(|c| c.until_ms),
                     "updated_at_ms": control.as_ref().map(|c| c.updated_at_ms),
                     "revision": control.as_ref().map_or(0, |c| c.revision),
-                    "in_use_by": self.in_use_by(id, ""),
                     "fences": self.cache.account_fences(account).iter().map(|fence| json!({
                         "machine_id": fence.machine_id, "action": fence.action,
                         "state": fence.state, "detail": fence.detail,
@@ -755,10 +674,7 @@ pub(in crate::server) fn read_value(
         .collect();
     of(state).map_or_else(
         || json!({"loaded": false, "accounts": []}),
-        |controls| {
-            controls.learn_labels(registry);
-            controls.read_value(&accounts)
-        },
+        |controls| controls.read_value(&accounts),
     )
 }
 

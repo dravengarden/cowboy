@@ -199,7 +199,6 @@ fn signals_map_to_account_transitions() {
     let unknown = signal_transition(&Signal::Unclassified).unwrap();
     assert_eq!(unknown.state, AccountState::UnknownRefusal);
     assert!(!unknown.stop_units);
-    assert!(in_use_reason("work", "sess-1").contains("in use by another session (sess-1)"));
 }
 
 #[test]

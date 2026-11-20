@@ -698,9 +698,8 @@ Machine.
 
 Antigravity accounts carry account controls in `accounts.list().account_controls`
 (`{loaded, accounts:[{account_id, provider_id, admitted, state, reason,
-until_ms, revision, in_use_by, fences, stop_confirmed, uncertain_effects, logout,
-plan}]}`; `in_use_by` names the session whose live worker holds the account's
-single runtime; `plan` is `{id, name, observed_at_ms}` or `null`, the newest
+until_ms, revision, fences, stop_confirmed, uncertain_effects, logout,
+plan}]}`; any number of sessions may run one account concurrently; `plan` is `{id, name, observed_at_ms}` or `null`, the newest
 plan among the current usage readings of the account's sessions pinned to
 Antigravity 0.2.1 or later (informational, never queried, never gating
 anything; it may be absent after a worker reconnect until the next reading). `id` is a lowercase

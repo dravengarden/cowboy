@@ -30,8 +30,6 @@ export interface AccountControl {
   reason?: string | null;
   until_ms?: number | null;
   revision: number;
-  /** The session whose live worker holds the account's single runtime. */
-  in_use_by?: string | null;
   fences: AccountControlFence[];
   stop_confirmed: boolean;
   uncertain_effects: UncertainEffect[];
@@ -54,7 +52,6 @@ function validControl(value: unknown): value is AccountControl {
   return record(value) && text(value.account_id) && text(value.provider_id) && typeof value.admitted === "boolean" &&
     text(value.state) && optional(value.reason, (reason) => typeof reason === "string") &&
     optional(value.until_ms, number) && number(value.revision) && typeof value.stop_confirmed === "boolean" &&
-    optional(value.in_use_by, text) &&
     Array.isArray(value.fences) && value.fences.every((fence) => record(fence) && text(fence.machine_id) && text(fence.action) && text(fence.state)) &&
     Array.isArray(value.uncertain_effects) && value.uncertain_effects.every((effect) =>
       record(effect) && text(effect.session_id) && text(effect.method) && number(effect.sequence)) &&
@@ -212,8 +209,8 @@ export function logoutStatus(logout: AccountLogout | null | undefined): string |
 }
 
 /** Why a new session cannot use this named-only account, if it cannot:
- * only admitted, signed-in, `ok` accounts no other session runs are
- * choosable. */
+ * only admitted, signed-in, `ok` accounts are choosable. Any number of
+ * sessions may run one account concurrently. */
 export function pickerUnavailableReason(control: AccountControl | undefined, loginReason: string | undefined, now = Date.now()): string | undefined {
   if (!control) return "Account state not loaded";
   if (!control.admitted) return "Not admitted for sessions";
@@ -221,15 +218,11 @@ export function pickerUnavailableReason(control: AccountControl | undefined, log
     const badge = accountStateBadge(control, undefined, now);
     return badge.detail && control.state !== "blocked" ? `${badge.label} · ${badge.detail}` : badge.label;
   }
-  // One runtime per account: another session's live worker holds it.
-  if (control.in_use_by) return `In use by another session (${control.in_use_by}); hibernate it first`;
   return loginReason;
 }
 
 export interface ParkedReason {
   text: string;
-  /** Another session's live runtime holds the account. */
-  waitingFor?: string | undefined;
   /** An uncertain target effect needs the owner's acknowledgement. */
   uncertain?: UncertainEffect | undefined;
 }
@@ -248,9 +241,6 @@ export function sessionParkedReason(control: AccountControl | undefined, session
     const badge = accountStateBadge(control, undefined, now);
     return { text: badge.detail ? `${badge.label} · ${badge.detail}` : badge.label };
   }
-  if (control?.in_use_by && control.in_use_by !== session) {
-    return { text: "In use by another session; hibernate it first.", waitingFor: control.in_use_by };
-  }
   if (wait) return { text: wait.startsWith(WAIT_PREFIX) ? wait.slice(WAIT_PREFIX.length) : wait };
   return undefined;
 }
@@ -265,7 +255,6 @@ export function controlErrorText(code: string | undefined): string {
     case "expected_revision_required":
     case "revision_conflict": return "The account changed. Review its refreshed state and try again.";
     case "permission_denied": return "Only the Service owner can change admission.";
-    case "antigravity_account_in_use": return "In use by another session; hibernate it first.";
     case "no_uncertain_effect": return "Nothing is waiting for acknowledgement.";
     case "uncertain_effect_changed": return "Another uncertain effect arrived. Review it before acknowledging.";
     case "outcome_unknown": return "The outcome is not confirmed. Check the account before retrying.";

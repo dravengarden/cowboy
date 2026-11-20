@@ -77,11 +77,9 @@ pub(super) async fn resolve_for_create(
     // scope; other accounts serve exactly their own Provider.
     let scope = state.provider_catalog.portable_account_scope(provider);
     let id = registry.resolve_in_scope(provider, &scope, explicit)?;
+    // Any number of sessions may run one account concurrently (design
+    // "Revision 6"); the daemon's per-account bound is the only cap.
     named_only_admitted(state, provider, &id).await?;
-    // One runtime per account: the account card names the holding session.
-    if crate::provider_account::named_only(provider) && controls::in_use(state, &id).is_some() {
-        return Err("antigravity_account_in_use");
-    }
     if !id.is_default() {
         allow_named_creation(
             named_session_provider(state, provider),

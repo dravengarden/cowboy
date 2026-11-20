@@ -6,8 +6,9 @@
 //! This module is pure policy over the stored records; the Controller's
 //! dispatcher, reconciler and owner actions apply it. Nothing here reads
 //! model text: a turn ending is classified only from the proxy's closed
-//! refusal and violation codes. One runtime per account (the daemon's unit
-//! limit) bounds an account to one turn, so no turn is reserved or settled.
+//! refusal and violation codes. Several sessions of one account run
+//! concurrently ("Revision 6"); no turn is reserved or settled, and a signal
+//! of any of them moves the one account state.
 
 use serde::{Deserialize, Serialize};
 
@@ -398,15 +399,6 @@ pub struct Transition {
     pub state: AccountState,
     pub reason: String,
     pub stop_units: bool,
-}
-
-/// The owner-facing explanation of why another session of the account may
-/// not start: the daemon runs one runtime per account.
-#[must_use]
-pub fn in_use_reason(account_name: &str, session_id: &str) -> String {
-    format!(
-        "Antigravity \u{b7} {account_name} is in use by another session ({session_id}); hibernate it first"
-    )
 }
 
 /// Owner actions on an account's controls.

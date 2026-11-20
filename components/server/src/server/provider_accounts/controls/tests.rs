@@ -1,6 +1,6 @@
 //! Account controls against a real SQLite store and a scripted Controller
-//! environment: admission at dispatch and revival, parking, one runtime per
-//! account, backend signals, the kill switch ordering and uncertain effects.
+//! environment: admission at dispatch and revival, parking, concurrent
+//! sessions of one account, backend signals, the kill switch ordering and uncertain effects.
 use super::*;
 use crate::runtime_wire::WorkerSnapshot;
 
@@ -11,7 +11,6 @@ struct Fake {
     sessions: parking_lot::Mutex<HashMap<String, (SessionMeta, bool)>>,
     /// The Machine's current enrollment fingerprint; `None` accepts any.
     enrollment: parking_lot::Mutex<Option<String>>,
-    live: parking_lot::Mutex<HashSet<String>>,
     workers: parking_lot::Mutex<HashMap<String, WorkerSnapshot>>,
     connected: parking_lot::Mutex<HashSet<String>>,
     admitted: parking_lot::Mutex<HashSet<String>>,
@@ -34,9 +33,6 @@ impl Env for Fake {
             .values()
             .map(|(meta, _)| meta.clone())
             .collect()
-    }
-    fn live_worker(&self, session: &str) -> bool {
-        self.live.lock().contains(session)
     }
     fn worker(&self, session: &str) -> Option<WorkerSnapshot> {
         self.workers.lock().get(session).cloned()
@@ -130,7 +126,6 @@ impl Fake {
         }))
         .unwrap();
         self.workers.lock().insert(id.into(), worker);
-        self.live.lock().insert(id.into());
     }
 
     fn uncertain(&self, id: &str, sequence: u64) {
@@ -244,30 +239,38 @@ async fn admission_and_account_state_gate_dispatch_and_revival() {
 }
 
 #[tokio::test]
-async fn one_runtime_per_account_refuses_another_sessions_start() {
+async fn sessions_of_one_account_start_and_dispatch_concurrently() {
     let (fake, controls, _root) = fixture().await;
-    controls
-        .cache
-        .labels
-        .write()
-        .insert(ACCOUNT.into(), "Work".into());
+    fake.add("s3", Status::Running);
+    // s1 and s2 already run the account's units; a third session still
+    // wakes, revives and dispatches (Revision 6).
     fake.live("s1", "epoch-1");
-    // The session holding the runtime may keep (re)starting it.
-    assert!(controls.revival_gate(&meta(&fake, "s1")).is_ok());
-    let refused = controls.revival_gate(&meta(&fake, "s2")).unwrap_err();
-    assert!(
-        refused.contains("Antigravity \u{b7} Work is in use by another session (s1)")
-            && refused.contains("hibernate it first"),
-        "{refused}"
-    );
+    fake.live("s2", "epoch-1");
+    for session in ["s1", "s2", "s3"] {
+        assert!(controls.revival_gate(&meta(&fake, session)).is_ok());
+        assert!(controls.parked_reason(&meta(&fake, session)).is_none());
+        controls.before_dispatch(session, false).await.unwrap();
+    }
     let account: ProviderAccountId = ACCOUNT.parse().unwrap();
     let value = controls.read_value(&[(account, "antigravity".into())]);
-    assert_eq!(value["accounts"][0]["in_use_by"], "s1");
-    // Hibernated: the other session may start.
-    fake.live.lock().clear();
-    assert!(controls.revival_gate(&meta(&fake, "s2")).is_ok());
-    let value = controls.read_value(&[(ACCOUNT.parse().unwrap(), "antigravity".into())]);
-    assert!(value["accounts"][0]["in_use_by"].is_null());
+    assert!(value["accounts"][0].get("in_use_by").is_none());
+    // An account-wide state still parks every session of the account.
+    let current = control(&controls).await;
+    controls
+        .enter(
+            &current,
+            AccountState::VerificationRequired,
+            "verification_required",
+            None,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    for session in ["s1", "s2", "s3"] {
+        assert!(controls.revival_gate(&meta(&fake, session)).is_err());
+        parked(controls.before_dispatch(session, true).await, "verify");
+    }
 }
 
 #[tokio::test]

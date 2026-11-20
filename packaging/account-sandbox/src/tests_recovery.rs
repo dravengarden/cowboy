@@ -135,7 +135,8 @@ fn a_unit_is_settled_only_after_systemd_confirms_it_gone() {
 
 #[test]
 fn a_client_exit_during_start_keeps_the_running_unit_owned() {
-    let f = fixture();
+    // One unit per account, so the held unit is observable as `limit`.
+    let f = fixture_with(|config| config.max_runtime_units = 1);
     f.host.client_exits_on_spawn.store(true, Ordering::Relaxed);
     let other = f.daemon.connect(0);
     let unit = unit_of(&f.start_on(&other, Mode::Probe, 0).unwrap());

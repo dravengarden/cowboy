@@ -1,7 +1,8 @@
 # Antigravity real accounts on OVH — design
 
-Status: design, revision 5, 2026-11-18 (implementation in progress; the
-"Revision 5 simplification" section takes precedence over earlier sections). Implemented so far: the sandbox
+Status: design, revision 6, 2026-11-20 (implementation in progress; the
+"Revision 6: concurrent sessions per account" section takes precedence over
+"Revision 5 simplification", which takes precedence over earlier sections). Implemented so far: the sandbox
 daemon (`packaging/account-sandbox/`), Machine step 3a (manifest isolation,
 runtime archive, worker launch, native login/logout through the daemon) and
 step 3b (Unix execution bridge, trusted process ledger in the worker endpoint,
@@ -183,7 +184,7 @@ returned to the worker as daemon-created pipes. Properties:
 | Process | `NoNewPrivileges=yes`, `RestrictSUIDSGID=yes`, `LockPersonality=yes`, `ProtectKernelTunables/Modules/Logs=yes`, `ProtectControlGroups=yes`, `ProtectClock=yes`, `ProtectHostname=yes`, `RestrictNamespaces=yes`, `RestrictRealtime=yes`, `MemoryDenyWriteExecute=no` (Node JIT), `SystemCallArchitectures=native`, `SystemCallFilter=@system-service` without `io_uring_*`, `SystemCallErrorNumber=ENOSYS` (a filtered call fails instead of killing the process: Node's libuv probes `io_uring_setup` and falls back on `ENOSYS`), `CapabilityBoundingSet=` empty, `ProtectProc=invisible`, `ProcSubset=pid`, `PrivateIPC=yes`, `RemoveIPC=yes`, `UMask=0077` |
 | Network | `RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK`; `IPAddressDeny=localhost link-local multicast` so no host loopback service is reachable **[R2-6]**; acceptance enumerates OVH's abstract Unix sockets and pathname sockets reachable from the unit |
 | Environment | closed: `HOME`, `PATH`, `LANG`, `TZ`, `TMPDIR`, `AGY_CLI_DISABLE_AUTO_UPDATE=true`, `DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent`, `CREDENTIALS_DIRECTORY` **[R1-4]** |
-| Resources | per unit `MemoryMax`, `TasksMax`; `Slice=cowboy-accounts-<key>.slice` (at most one `runtime` and one `login`/`logout` unit per account) under `cowboy-accounts.slice` with a host-wide `MemoryMax` and unit count; home size quota checked by the daemon before each start **[R2-18]** |
+| Resources | per unit `MemoryMax`, `TasksMax`; `Slice=cowboy-accounts-<key>.slice` (at most `max_runtime_units` `runtime`/`probe` units and one `login`/`logout` unit per account; see Revision 6) under `cowboy-accounts.slice` with a host-wide `MemoryMax` and unit count; home size quota checked by the daemon before each start **[R2-18]** |
 
 **Unit ownership [R2-9].** The daemon ties each unit to the requesting
 connection: when the worker's connection closes, the daemon stops the unit and
@@ -799,7 +800,9 @@ to simplify them; account isolation (L1–L4) is unchanged. This section takes
 precedence over "Account controls", R1-8, R2-11, R3-5/R3-6, R3-9, R3-10 and
 R3-16 where they differ.
 
-- **One runtime per account, enforced by the daemon.** `max_runtime_units` is
+- **One runtime per account, enforced by the daemon** (superseded by
+  [Revision 6](#revision-6-concurrent-sessions-per-account-owner-decision-2026-11-20)).
+  `max_runtime_units` is
   1 for every account; a second runtime start is refused (`limit`). There is
   no Controller turn reservation, no reservation settlement, no cross-Machine
   termination query and no per-turn evidence settlement. The Controller only
@@ -837,7 +840,7 @@ query and force release of "Controller account controls (step 5a)" and the
 - **Records.** The unreleased migrations `0085` (PostgreSQL) and `0059`
   (SQLite) were amended: `provider_account_turns` is gone;
   `provider_account_controls` and `provider_account_fences` remain.
-- **In use.** The launch gate (`Supervisor::start_session`: create, wake,
+- **In use** (removed by Revision 6). The launch gate (`Supervisor::start_session`: create, wake,
   revive, reset, reload) refuses a governed session while another session of
   the same account has a live worker: "Antigravity · <name> is in use by
   another session (<id>); hibernate it first". Session creation refuses with
@@ -912,7 +915,8 @@ query and force release of "Controller account controls (step 5a)" and the
   nothing exists. A refused logout start (a failed first login) is settled by
   the daemon's token cleanup, which certifies an unused generation only
   with no token present, so revocation can finish.
-- **Daemon.** `max_runtime_units` other than 1 is a configuration error.
+- **Daemon.** `max_runtime_units` other than 1 is a configuration error
+  (Revision 6: 1 to 64, default 8).
   Loopback, link-local, multicast, RFC 1918 and `100.64.0.0/10` are always
   denied; `ip_deny` only appends (the host's public address). A unit counts
   as live while its cgroup still holds a process. A unit whose
@@ -935,6 +939,93 @@ query and force release of "Controller account controls (step 5a)" and the
   conditional `apply` (`$COWBOY_EXECUTION_FILE_HELPER`, the Claude runtime's
   primitive). Guidance files are read only as regular files whose canonical
   path is themselves inside the repository.
+
+## Revision 6: concurrent sessions per account (owner decision, 2026-11-20)
+
+The owner runs many sessions of one Antigravity account at once, as with a
+Claude or Codex account. Revision 5's "one runtime per account" refused a second session
+with "in use by another session; hibernate it first". This section supersedes
+that bullet, the "In use" implementation decision and the `max_runtime_units`
+part of the "Daemon" decision; everything else in Revision 5 holds.
+
+**What changes.**
+
+- **Daemon.** `max_runtime_units` defaults to 8 and accepts 1 to 64. Each
+  session's worker starts its own `runtime` unit; `probe` units share the
+  bound; a start beyond it is still `limit`, which the worker explains as
+  "Antigravity · account <prefix> already runs its maximum number of
+  sessions; hibernate one first".
+- **Controller.** The launch gate (create, wake, revive, reset, reload) no
+  longer looks at other sessions of the account, session creation no longer
+  refuses `antigravity_account_in_use`, and the account read model drops
+  `in_use_by` (with the label cache that only named the holder). Admission,
+  account state, signal parking, uncertain effects and fences gate every
+  session exactly as before.
+- **Web.** The picker, the account card and the session's parked text no
+  longer show "In use by … hibernate it first"; a Controller that still
+  reports `in_use_by` is accepted and the field ignored.
+
+**Why it is safe (analysis of N units of one account).**
+
+- **Credential custody.** No unit receives a seeded copy of the credential
+  and nothing is written back: every unit binds the same persistent account
+  home (one ext4 image, mounted once), where `agy` keeps its own token file,
+  exactly like several `agy` processes of one desktop user. The daemon never
+  reads the token; it only checks its presence (login outcome) and removes
+  it (interrupted login, logout cleanup). The daemon's credential generation
+  lives in root-owned `meta.json`, outside every mount, and changes only on
+  login and logout transitions under the account lock; runtime units never
+  move it, so concurrent units cannot race or regress it. Token refresh is
+  `agy`'s own concern: Google OAuth refresh tokens of installed apps do not
+  rotate on refresh, so two units refreshing at once each obtain a valid
+  access token and neither invalidates the other; `agy` 1.5.9 also links a
+  file-lock library around its token storage. The runtime-mode ACP
+  allow-list still refuses `authenticate` and `logout`, so no runtime can
+  change or clear the sign-in.
+- **Authentication exclusivity.** Unchanged and per account: a `login` or
+  `logout` start first stops and confirms every `runtime` and `probe` unit of
+  the account, and while an authentication unit is recorded every runtime
+  start is refused (`fenced`). Tests start several runtimes and check that a
+  login or logout stops all of them.
+- **Fence and stop.** `stop_account` already stops every recorded unit, every
+  live `cga-<key>-*` unit systemd lists and the account slice, then confirms
+  none is live; a kill switch, `suspended` or `needs_attention` therefore
+  stops all N sessions' units. A test fences an account running three
+  runtimes.
+- **Signals.** Turns of several sessions may now end concurrently. Each
+  ending registers its signal before acknowledgement (a per-account counter,
+  not a flag), and each raise is one store transaction compared with the
+  stored state that never lowers a more severe state, so concurrent raises
+  converge to the most severe one. The account state remains one value that
+  parks every session of the account.
+- **Unit naming and private files.** Unit names carry a random 8-byte nonce
+  (`cga-<key>-<mode>-<nonce>.service`); each unit's descriptor, execution
+  socket and process ledger live under its own `units/<nonce>/` directory, so
+  units of one account never share a per-unit path.
+- **Resources.** A live runtime unit measured about 190 MiB (peak 220 MiB,
+  29 tasks) on OVH; each unit keeps `MemoryMax=3G`, `MemorySwapMax=0` and
+  `TasksMax=512`. Eight per account covers the owner's parallel work (OVH's
+  Machine admits 40 sessions over every Provider) while a runaway client
+  cannot start unbounded units. The bound is per account; the host-wide
+  budget of all accounts belongs to the host configuration (an OVH
+  `cowboy-accounts.slice` memory and task drop-in), not to the daemon.
+
+**Residuals.**
+
+- Between a backend refusal of one session's turn and the stop fence that
+  follows (`suspended`, `blocked`, `needs_attention`), turns other sessions of
+  the account already dispatched keep running; only new dispatches park.
+  Revision 5 bounded this window to the one refused turn.
+- Concurrent turns of one account are visible to Google as concurrent
+  requests of one installation, as from one user running several `agy`
+  terminals.
+- Several `agy` processes share the account's conversation store and caches
+  in the home. Each session uses its own conversation; how `agy` arbitrates
+  concurrent writers to shared state is the vendor's, and an `agy` failure
+  there would surface as an ordinary turn error (`unknown_refusal`, owner
+  clears it).
+- A rate limit is account-wide: an explicit owner send in any session of the
+  account resumes all of them.
 
 ## Antigravity features (0.2.1)
 

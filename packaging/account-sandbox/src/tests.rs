@@ -230,14 +230,121 @@ fn runtime_needs_the_current_signed_in_generation() {
 }
 
 #[test]
-fn one_runtime_per_account_by_default() {
+fn several_runtimes_per_account_up_to_the_bound() {
     let f = fixture();
-    assert_eq!(f.config.max_runtime_units, 1);
+    assert_eq!(
+        f.config.max_runtime_units,
+        crate::config::DEFAULT_MAX_RUNTIME_UNITS
+    );
     f.sign_in(1);
-    f.start(Mode::Runtime, 1).unwrap();
-    // A second session of the account is refused: `limit`.
+    // Every session of the account runs its own unit (Revision 6), each
+    // with a distinct name, private run directory and execution socket over
+    // the one shared home; the credential generation never moves.
+    let mut units = Vec::new();
+    for _ in 1..f.config.max_runtime_units {
+        units.push(
+            f.start(Mode::Runtime, 1).unwrap()["unit"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
+    }
+    // Probes share the runtime-class bound.
+    units.push(
+        f.start(Mode::Probe, 1).unwrap()["unit"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    );
+    let meta = f.meta();
+    assert_eq!(meta.units.len(), f.config.max_runtime_units);
+    let nonces: std::collections::HashSet<_> = meta
+        .units
+        .iter()
+        .map(|record| record.nonce.clone())
+        .collect();
+    assert_eq!(nonces.len(), units.len(), "unit names never collide");
+    for record in &meta.units {
+        let dir = f.config.run_dir.join("units").join(&record.nonce);
+        assert_eq!(record.mode == Mode::Runtime, dir.join("exec.sock").exists());
+    }
+    assert_eq!(meta.credential.generation, 1);
+    assert_eq!(meta.credential.state, CredentialState::SignedIn);
+    assert_eq!(std::fs::read(f.token()).unwrap(), b"token");
+    // Beyond the bound a start is `limit`; a finished unit frees its slot.
     assert_eq!(code(f.start(Mode::Runtime, 1)), Code::Limit);
     assert_eq!(code(f.start(Mode::Probe, 1)), Code::Limit);
+    f.host.finish(&units[0], Some(0));
+    f.wait_for("a slot freed", |meta| {
+        meta.units.len() < f.config.max_runtime_units
+    });
+    f.start(Mode::Runtime, 1).unwrap();
+}
+
+#[test]
+fn the_fence_stops_every_unit_of_the_account() {
+    let f = fixture();
+    f.sign_in(1);
+    let units: Vec<String> = (0..3)
+        .map(|_| {
+            f.start(Mode::Runtime, 1).unwrap()["unit"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    let stopped = f
+        .call(Request::StopAccount {
+            key: f.key.clone(),
+            revision: None,
+            operation_id: None,
+        })
+        .unwrap();
+    let mut reported: Vec<String> = serde_json::from_value(stopped["stopped"].clone()).unwrap();
+    reported.sort();
+    let mut expected = units.clone();
+    expected.sort();
+    assert_eq!(reported, expected);
+    for unit in &units {
+        assert!(f.host.unit_status_of(unit).is_none(), "{unit} still runs");
+    }
+    assert!(f.meta().units.is_empty());
+    assert_eq!(code(f.start(Mode::Runtime, 1)), Code::Fenced);
+}
+
+#[test]
+fn a_login_stops_every_runtime_and_holds_the_account() {
+    let f = fixture();
+    f.sign_in(1);
+    let units: Vec<String> = (0..3)
+        .map(|_| {
+            f.start(Mode::Runtime, 1).unwrap()["unit"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    std::fs::remove_file(f.token()).unwrap();
+    let login = f.start(Mode::Login, 2).unwrap()["unit"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for unit in &units {
+        assert!(f.host.unit_status_of(unit).is_none(), "{unit} still runs");
+    }
+    let meta = f.meta();
+    assert_eq!(meta.units.len(), 1);
+    assert_eq!(meta.units[0].unit, login);
+    // While authentication holds the account no runtime starts.
+    assert_eq!(code(f.start(Mode::Runtime, 1)), Code::Fenced);
+    assert_eq!(code(f.start(Mode::Runtime, 2)), Code::Fenced);
+    std::fs::write(f.token(), b"token-2").unwrap();
+    f.host.finish(&login, Some(0));
+    f.wait_for("sign-in", |meta| {
+        meta.credential.state == CredentialState::SignedIn
+    });
+    f.start(Mode::Runtime, 2).unwrap();
+    f.start(Mode::Runtime, 2).unwrap();
 }
 
 #[test]
@@ -297,8 +404,8 @@ fn interrupted_login_removes_only_its_partial_token() {
 
 #[test]
 fn authentication_transitions_stop_runtime_units_first() {
-    // Several units of one account (a raised `max_runtime_units`).
-    let f = fixture_with(|config| config.max_runtime_units = 4);
+    // Several units of one account (Revision 6).
+    let f = fixture();
     f.sign_in(1);
     let a = f.start(Mode::Runtime, 1).unwrap()["unit"]
         .as_str()
@@ -412,8 +519,8 @@ fn the_fence_blocks_starts_until_admitted() {
 
 #[test]
 fn closing_the_connection_stops_its_units() {
-    // Several units of one account (a raised `max_runtime_units`).
-    let f = fixture_with(|config| config.max_runtime_units = 4);
+    // Several units of one account (Revision 6).
+    let f = fixture();
     f.sign_in(1);
     let other = f.daemon.connect(0);
     let mine = f.start_on(&other, Mode::Runtime, 1).unwrap()["unit"]
