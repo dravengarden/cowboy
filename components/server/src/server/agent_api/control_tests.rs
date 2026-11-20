@@ -587,6 +587,9 @@ mod machine_scope_and_tools {
             "usage.reset",
             "usage.reset_schedule",
             "usage.reset_cancel",
+            "usage.account_reset",
+            "usage.account_reset_schedule",
+            "usage.account_reset_cancel",
             "usage.executor_set",
         ] {
             assert_eq!(

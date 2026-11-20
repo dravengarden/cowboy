@@ -110,13 +110,11 @@ impl MachineCommand {
             Self::RecoverTelemetryBinding { .. } | Self::QueryTelemetryRecovery { .. } => {
                 TELEMETRY_BINDING_RECOVERY_PROTOCOL_VERSION
             }
-            Self::CommitTelemetryBinding { .. } => TELEMETRY_BINDING_COMMIT_PROTOCOL_VERSION,
-            Self::QueryTelemetryBinding { step, .. } => {
-                if step.schema == 1 {
-                    TELEMETRY_BINDING_OBSERVATION_PROTOCOL_VERSION
-                } else {
-                    TELEMETRY_BINDING_COMMIT_PROTOCOL_VERSION
-                }
+            Self::QueryTelemetryBinding { step, .. } if step.schema == 1 => {
+                TELEMETRY_BINDING_OBSERVATION_PROTOCOL_VERSION
+            }
+            Self::CommitTelemetryBinding { .. } | Self::QueryTelemetryBinding { .. } => {
+                TELEMETRY_BINDING_COMMIT_PROTOCOL_VERSION
             }
             Self::ObservePluginInstallation { .. }
             | Self::InstallPluginStep { .. }

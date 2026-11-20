@@ -3,6 +3,8 @@ use super::*;
 use crate::provider_account::ProviderAccountId;
 use crate::store::provider_accounts::logins::NativeCompletion;
 
+pub(in crate::server) mod reset;
+
 struct Target {
     operation: String,
     completion: NativeCompletion,
@@ -296,6 +298,17 @@ fn error_message(code: &str) -> &str {
         "usage_admission_unavailable" => {
             "Usage collection is paused. The Service admission ledger needs repair and a restart."
         }
+        "account_reset_unsupported" | "native_reset_unsupported" => {
+            "This account's Provider does not offer usage resets."
+        }
+        "usage_reset_paced" => {
+            "Usage requests to this Provider are paced; no reset was sent. Try again in a minute."
+        }
+        "native_reset_outcome_unknown" => {
+            "The reset outcome is unknown. Refresh usage before trying again."
+        }
+        "reset_confirmation_required" => "Type confirm to use a reset.",
+        "reset_schedule_too_soon" => "Choose a time at least one minute ahead.",
         _ => "Account usage could not be refreshed. Cowboy will retry automatically.",
     }
 }
@@ -316,6 +329,9 @@ pub(in crate::server) async fn read_one(
         .find(|account| &account.id == id)
         .ok_or("account_unavailable")?;
     let mut value = json!({"account_id":id,"provider_id":account.provider_id,"refreshing":false});
+    if let Some(schedule) = reset::schedule_of(store, id).await {
+        value["reset_schedule"] = schedule;
+    }
     let target = match target(state, owner, id).await {
         Ok(target) => target,
         Err(code) => {

@@ -64,6 +64,15 @@ pub(super) fn provider_routes() -> Router<Arc<AppState>> {
             get(provider_accounts::usage::read).post(provider_accounts::usage::refresh),
         )
         .route(
+            "/api/provider-accounts/{account_id}/usage/reset",
+            post(provider_accounts::usage::reset::http_reset),
+        )
+        .route(
+            "/api/provider-accounts/{account_id}/usage/reset/schedule",
+            put(provider_accounts::usage::reset::http_schedule)
+                .delete(provider_accounts::usage::reset::http_cancel),
+        )
+        .route(
             "/api/provider-accounts/{account_id}/revocation",
             get(provider_accounts::lifecycle::http_status)
                 .post(provider_accounts::lifecycle::http_start)

@@ -1,6 +1,6 @@
-//! Account-control adapters: the Antigravity account controls and the
-//! uncertain-effect acknowledgement an agent may drive for its owner, bound
-//! to the product handlers.
+//! Account-control adapters: the Antigravity account controls, named-account
+//! usage resets and the uncertain-effect acknowledgement an agent may drive
+//! for its owner, bound to the product handlers.
 use super::*;
 
 /// The product route behind an account-control operation, if `name` is one.
@@ -12,6 +12,21 @@ pub(super) fn account_route(
             "POST",
             "/api/provider-accounts/{account}/controls",
             post(web::provider_accounts::controls::http::http_control),
+        ),
+        "usage.account_reset" => (
+            "POST",
+            "/api/provider-accounts/{account}/usage/reset",
+            post(web::provider_accounts::usage::reset::http_reset),
+        ),
+        "usage.account_reset_schedule" => (
+            "PUT",
+            "/api/provider-accounts/{account}/usage/reset/schedule",
+            put(web::provider_accounts::usage::reset::http_schedule),
+        ),
+        "usage.account_reset_cancel" => (
+            "DELETE",
+            "/api/provider-accounts/{account}/usage/reset/schedule",
+            delete(web::provider_accounts::usage::reset::http_cancel),
         ),
         "sessions.acknowledge_uncertain_effect" => (
             "POST",

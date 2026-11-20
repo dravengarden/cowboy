@@ -30,6 +30,9 @@ use crate::plugin_process::run_plugin_command;
 mod execution;
 pub mod limiter;
 pub mod native;
+mod reset;
+use reset::consume_plugin_reset;
+pub use reset::{ResetError, ResetReservation, ResetResult, ResetSchedule, parse_reset_response};
 
 pub const AUTO_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_mins(5);
 // All collection entry points share the same budget, including failed attempts.
@@ -112,67 +115,6 @@ pub struct UsageSnapshot {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub refreshing: Vec<String>,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResetSchedule {
-    pub fire_at_ms: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResetResult {
-    pub outcome: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub credit_id: Option<String>,
-}
-
-/// A Provider-paced admission held for one reset attempt. It owns the reset
-/// serialization, so the charged start is the actual invocation time. Dropping
-/// an unused reservation keeps its charged start but records no failure.
-pub struct ResetReservation {
-    account: String,
-    permit: Option<limiter::Permit>,
-    _serial: tokio::sync::OwnedMutexGuard<()>,
-}
-
-impl ResetReservation {
-    fn take(&mut self, account: &str) -> std::result::Result<limiter::Permit, ResetError> {
-        if self.account != account {
-            return Err(ResetError {
-                call_may_have_reached_provider: false,
-                credit_id: None,
-                source: anyhow::anyhow!("usage reset binding changed; no reset was sent"),
-            });
-        }
-        self.permit.take().ok_or_else(|| ResetError {
-            call_may_have_reached_provider: false,
-            credit_id: None,
-            source: anyhow::anyhow!("usage reset reservation was already used"),
-        })
-    }
-}
-
-impl Drop for ResetReservation {
-    fn drop(&mut self) {
-        if let Some(permit) = self.permit.take() {
-            permit.finish(limiter::Outcome::Unused, now_ms());
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct ResetError {
-    pub call_may_have_reached_provider: bool,
-    pub credit_id: Option<String>,
-    source: anyhow::Error,
-}
-
-impl std::fmt::Display for ResetError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.source.fmt(formatter)
-    }
-}
-
-impl std::error::Error for ResetError {}
 
 #[derive(Clone)]
 pub struct UsageService {
@@ -971,11 +913,7 @@ impl UsageService {
         let key = limiter::Limiter::account_key("service", &binding.account);
         self.limiter
             .start_action(&binding.account, &key, now_ms())
-            .map(|permit| ResetReservation {
-                account: binding.account.clone(),
-                permit: Some(permit),
-                _serial: serial,
-            })
+            .map(|permit| ResetReservation::new(binding.account.clone(), permit, serial))
             .map_err(|budget| ResetError {
                 call_may_have_reached_provider: false,
                 credit_id: None,
@@ -1635,109 +1573,6 @@ async fn collector_activity(store: Option<&crate::store::Store>, account: &str) 
             })
         }
     }
-}
-
-async fn consume_plugin_reset(
-    binding: &PluginUsageSpec,
-    idempotency_key: &str,
-    expected_credit_id: Option<&str>,
-    route: PluginCommandRoute,
-    machine_control: &crate::machine_control::MachineControl,
-) -> std::result::Result<ResetResult, ResetError> {
-    let request = json!({
-        "operation": "consume_reset",
-        "provider": binding.account,
-        "idempotency_key": idempotency_key,
-        "expected_credit_id": expected_credit_id,
-    });
-    let response = match route {
-        PluginCommandRoute::Machine { machine_id, plugin } => machine_control
-            .plugin_host_request(
-                &machine_id,
-                &plugin,
-                PluginHostOperation::ResetUsage,
-                request,
-            )
-            .await
-            .map_err(|error| ResetError {
-                call_may_have_reached_provider: error.started,
-                credit_id: None,
-                source: anyhow::anyhow!(error.detail),
-            })?,
-        PluginCommandRoute::Unavailable(detail) => {
-            return Err(ResetError {
-                call_may_have_reached_provider: false,
-                credit_id: None,
-                source: anyhow::anyhow!(detail),
-            });
-        }
-        PluginCommandRoute::Bootstrap => {
-            let Some((program, args)) = binding.reset_argv.split_first() else {
-                return Err(ResetError {
-                    call_may_have_reached_provider: false,
-                    credit_id: None,
-                    source: anyhow::anyhow!("plugin reset argv is empty"),
-                });
-            };
-            let request = serde_json::to_vec(&request).map_err(|source| ResetError {
-                call_may_have_reached_provider: false,
-                credit_id: None,
-                source: anyhow::Error::new(source).context("serialize plugin usage reset request"),
-            })?;
-            let output = run_plugin_command(program, args, &request)
-                .await
-                .map_err(|failure| ResetError {
-                    call_may_have_reached_provider: failure.started,
-                    credit_id: None,
-                    source: failure.error,
-                })?;
-            if !output.status.success() {
-                return Err(ResetError {
-                    call_may_have_reached_provider: true,
-                    credit_id: None,
-                    source: anyhow::anyhow!(
-                        "plugin usage reset exited {}: {}",
-                        output.status,
-                        String::from_utf8_lossy(&output.stderr).trim()
-                    ),
-                });
-            }
-            serde_json::from_slice(&output.stdout).map_err(|source| ResetError {
-                call_may_have_reached_provider: true,
-                credit_id: None,
-                source: anyhow::Error::new(source).context("parsing plugin usage reset result"),
-            })?
-        }
-    };
-    match serde_json::from_value::<PluginResetCommandResponse>(response) {
-        Ok(PluginResetCommandResponse::Success(result)) => Ok(result),
-        Ok(PluginResetCommandResponse::Failure { error }) => Err(ResetError {
-            call_may_have_reached_provider: error.call_may_have_reached_provider,
-            credit_id: error.credit_id,
-            source: anyhow::anyhow!(error.message),
-        }),
-        Err(source) => Err(ResetError {
-            call_may_have_reached_provider: true,
-            credit_id: None,
-            source: anyhow::Error::new(source).context("parsing plugin usage reset result"),
-        }),
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum PluginResetCommandResponse {
-    Success(ResetResult),
-    Failure { error: PluginResetCommandError },
-}
-
-#[derive(Debug, Deserialize)]
-struct PluginResetCommandError {
-    message: String,
-    #[serde(default)]
-    call_may_have_reached_provider: bool,
-    #[serde(default)]
-    credit_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -28,10 +28,12 @@ mod installation;
 pub mod local_roots;
 mod mcp_transport;
 mod native_mcp;
+mod native_reset;
 pub use native_mcp::{
     NativeMcpLaunchPlan, NativeMcpLaunchPreparation, NativeMcpPreparation,
     NativeMcpSessionPreparation,
 };
+pub use native_reset::NativeResetFailure;
 #[cfg(test)]
 mod projects_tests;
 mod reply;
