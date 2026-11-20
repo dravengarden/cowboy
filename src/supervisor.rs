@@ -263,7 +263,6 @@ impl Supervisor {
     pub fn runtime_allowed(&self, provider: &str, machine: &str) -> bool {
         self.runtime_restrictions.allows(provider, machine)
     }
-
     /// See `RuntimeRestrictions::allows_vendor_request` (fail closed for Claude).
     pub fn vendor_request_allowed(&self, provider: &str, machine: &str) -> bool {
         self.runtime_restrictions
