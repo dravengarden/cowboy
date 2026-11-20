@@ -13,6 +13,7 @@ export const PROJECTION_LIMITS = Object.freeze({
   statusLines: 200,
   guidanceTotal: 64 * 1024,
   guidanceFile: 16 * 1024,
+  guidanceWholeFile: 1024 * 1024,
   gitTimeoutMs: 15_000,
 });
 const GUIDANCE_NAMES = ["AGENTS.md", "GEMINI.md"];
@@ -72,18 +73,38 @@ export function guidanceDirectories(top, cwd) {
 async function readGuidance(facade, file, room, root) {
   const at = pathToFileURL(file).href;
   const call = (method, params) => facade.connection.call(method, params);
-  const handleId = `cowboy-${randomUUID()}`;
+  let metadata;
   try {
     const canonical = fileURLToPath((await call("fs/canonicalize", { path: at })).path);
     if (canonical !== file || !inside(root, canonical)) return undefined;
-    const metadata = await call("fs/getMetadata", { path: at });
+    metadata = await call("fs/getMetadata", { path: at });
     if (!metadata?.isFile || metadata.isSymlink) return undefined;
+  } catch {
+    return undefined;
+  }
+  const limit = Math.min(PROJECTION_LIMITS.guidanceFile, room);
+  try {
+    // The same whole-file read the facade's ReadFile uses; guidance files are
+    // small, and every executor generation serves it.
+    if (metadata.size <= PROJECTION_LIMITS.guidanceWholeFile) {
+      const read = await call("fs/readFile", { path: at });
+      const bytes = Buffer.from(read.dataBase64, "base64");
+      return {
+        text: bytes.subarray(0, limit).toString(),
+        cut: bytes.length > limit,
+        size: bytes.length,
+      };
+    }
+  } catch {
+    return undefined;
+  }
+  const handleId = `cowboy-${randomUUID()}`;
+  try {
     await call("fs/open", { handleId, path: at });
   } catch {
     return undefined;
   }
   try {
-    const limit = Math.min(PROJECTION_LIMITS.guidanceFile, room);
     const block = await call("fs/readBlock", { handleId, offset: 0, len: limit + 1 });
     const bytes = Buffer.from(block.chunk, "base64");
     const cut = bytes.length > limit;

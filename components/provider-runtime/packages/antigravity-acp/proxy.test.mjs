@@ -852,7 +852,7 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 test("memory recalls for the owner's prompt and learns only the owner turn", async () => {
   const memory = fakeMemory();
-  const { proxy, agent } = harness({ memory });
+  const { proxy, agent, client } = harness({ memory });
   await settle();
   // An update replayed outside any turn is not evidence.
   await proxy.fromAgent(
@@ -861,7 +861,22 @@ test("memory recalls for the owner's prompt and learns only the owner turn", asy
   await proxy.fromClient(
     request(2, "session/prompt", { sessionId: "s", prompt: [{ type: "text", text: "hello" }] }),
   );
-  assert.deepEqual(agent.at(-1).params.prompt[0], { type: "text", text: "RECALLED" });
+  assert.deepEqual(agent.at(-1).params.prompt[0], {
+    type: "text",
+    text: "<cowboy_memory_context>\nRECALLED\n</cowboy_memory_context>",
+  });
+  // agy echoes the injected block as an owner message; it never reaches the worker.
+  const shown = client.length;
+  await proxy.fromAgent(
+    updateIn("user_message_chunk", {
+      content: { type: "text", text: agent.at(-1).params.prompt[0].text },
+    }),
+  );
+  assert.equal(client.length, shown);
+  await proxy.fromAgent(
+    updateIn("user_message_chunk", { content: { type: "text", text: "hello" } }),
+  );
+  assert.equal(client.length, shown + 1);
   for (const message of [
     updateIn("agent_message_chunk", { content: { type: "text", text: "hi " } }),
     updateIn("agent_message_chunk", { content: { type: "text", text: "there" } }),

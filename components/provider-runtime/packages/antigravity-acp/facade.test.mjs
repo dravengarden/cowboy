@@ -278,6 +278,17 @@ test("projection fences repository guidance and bounds Git status", async (t) =>
   });
 });
 
+test("guidance is read through fs/readFile even when the executor has no handles", async (t) => {
+  const { facade, root } = await fixture(t, {
+    fail: (method) =>
+      method === "fs/open" ? { code: -32601, message: "method not found" } : undefined,
+  });
+  writeFileSync(join(root, "AGENTS.md"), "ROOT_GUIDANCE\n");
+  const projection = await buildProjection(facade, root);
+  assert.match(projection, /<repository_guidance>/);
+  assert.match(projection, /ROOT_GUIDANCE/);
+});
+
 test("a worker-reported unknown outcome fences the turn at once", async (t) => {
   const { facade, call, uncertain, endpoint } = await fixture(t, {
     fail: (method) =>

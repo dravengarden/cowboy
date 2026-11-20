@@ -23,6 +23,22 @@ export const RUNTIME_REQUESTS = Object.freeze([
 export const RUNTIME_NOTIFICATIONS = Object.freeze(["session/cancel"]);
 /** Agent requests and notifications forwarded to the worker. */
 export const AGENT_REQUESTS = Object.freeze(["session/request_permission"]);
+/** Recalled memory as the prompt block Cowboy prepends. */
+export const MEMORY_OPEN = "<cowboy_memory_context>";
+export function memoryBlock(context) {
+  return `${MEMORY_OPEN}\n${context}\n</cowboy_memory_context>`;
+}
+
+/** A `user_message_chunk` echo of a block Cowboy injected into the prompt. */
+export function injectedEcho(update) {
+  if (update?.sessionUpdate !== "user_message_chunk") return false;
+  const text = update.content?.type === "text" ? update.content.text : undefined;
+  return (
+    typeof text === "string" &&
+    (text.startsWith(MEMORY_OPEN) || text.startsWith("<cowboy_context_restated>"))
+  );
+}
+
 export const AGENT_NOTIFICATIONS = Object.freeze(["session/update"]);
 export const REFUSAL_PREFIX = "antigravity_backend_refusal:";
 /** A built-in tool executed despite the gate: the turn ends with this error. */
@@ -351,7 +367,7 @@ export class AcpProxy {
         const context = await recall(runtime.memory, text);
         if (context) {
           forwarded.params.prompt = [
-            { type: "text", text: context },
+            { type: "text", text: memoryBlock(context) },
             ...(Array.isArray(forwarded.params.prompt) ? forwarded.params.prompt : []),
           ];
         }
@@ -511,6 +527,9 @@ export class AcpProxy {
           } else if (update?.sessionUpdate === "config_option_update") {
             this.reportMode(message.params.sessionId, update);
           }
+          // agy echoes every prompt block as the owner's message; the blocks
+          // Cowboy injected (recalled memory, restated context) are not.
+          if (injectedEcho(update)) return;
           this.observe(message.params);
           // Evidence and the worker see the same sanitized update.
           const clean = stripTier(message);
