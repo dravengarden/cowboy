@@ -108,8 +108,10 @@ impl UsageService {
     /// default of a newer or older release.
     #[must_use]
     pub fn exact_usage_binding(&self, plugin: &PluginInventory) -> Option<PluginUsageSpec> {
-        let super::UsageBindingSource::Catalog(catalog) = &self.bindings else {
-            return None;
+        let catalog = match &self.bindings {
+            super::UsageBindingSource::Catalog(catalog) => catalog,
+            #[cfg(any(test, feature = "test-support"))]
+            super::UsageBindingSource::Static(_) => return None,
         };
         catalog
             .runtime()?
