@@ -104,6 +104,30 @@ pub(super) fn quota(snapshot: &UsageSnapshot, accounts: &[String], now: i64) -> 
     json!({"observed_now_ms":now,"accounts":accounts,"unavailable_accounts":missing})
 }
 
+/// The quota evidence of a named account, from its owner-scoped usage read
+/// (`provider_accounts::usage::read_one`). A child runs on this account, so
+/// the Provider-wide legacy collector never stands in for it.
+pub(super) fn named_quota(read: &Value, now: i64, interval_ms: i64) -> Value {
+    let usage = &read["usage"];
+    let observed = usage["observed_at_ms"].as_i64().unwrap_or(0);
+    let limits = usage.get("rate_limits").filter(|value| !value.is_null());
+    let bounded =
+        limits.filter(|value| serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= 8192));
+    json!({
+        "account": read["account_id"],
+        "provider_id": read["provider_id"],
+        "status": usage["status"].as_str().unwrap_or("unavailable"),
+        "observed_at_ms": (observed > 0).then_some(observed),
+        "stale": observed <= 0
+            || now.saturating_sub(observed) > interval_ms.max(60_000) * 2
+            || usage["refresh"]["stale"].as_bool().unwrap_or(true),
+        "limits": bounded,
+        "needs_read": limits.is_some() && bounded.is_none(),
+        "reason": read.get("reason"),
+        "message": read.get("message"),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,5 +249,30 @@ mod tests {
         let view = quota(&snapshot, &accounts, 2000);
         assert_eq!(view["accounts"][0]["needs_read"], true);
         assert!(view["accounts"][0]["limits"].is_null());
+    }
+
+    #[test]
+    fn named_quota_reports_the_account_read_and_its_freshness() {
+        let fresh = json!({"account_id":"a","provider_id":"claude-code","usage":{
+            "status":"available","observed_at_ms":1000,
+            "rate_limits":{"rateLimitsByLimitId":{"claude-seven_day":{"primary":{"usedPercent":62}}}},
+            "refresh":{"stale":false}}});
+        let view = named_quota(&fresh, 2000, 60_000);
+        assert_eq!(view["account"], "a");
+        assert_eq!(view["status"], "available");
+        assert_eq!(view["stale"], false);
+        assert_eq!(
+            view["limits"]["rateLimitsByLimitId"]["claude-seven_day"]["primary"]["usedPercent"],
+            62
+        );
+        // Old, refresh-stale or refused reads are never ample evidence.
+        assert_eq!(named_quota(&fresh, 1000 + 200_000, 60_000)["stale"], true);
+        let refused =
+            json!({"account_id":"a","reason":"native_login_required","message":"Sign in"});
+        let view = named_quota(&refused, 2000, 60_000);
+        assert_eq!(view["status"], "unavailable");
+        assert_eq!(view["stale"], true);
+        assert_eq!(view["reason"], "native_login_required");
+        assert!(view["limits"].is_null());
     }
 }

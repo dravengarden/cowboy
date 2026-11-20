@@ -613,6 +613,7 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
     let mut providers = Vec::new();
     let mut read_only_providers = Vec::new();
     let mut image_providers = Vec::new();
+    let mut named = Vec::new();
     for provider in agent_tools::CALL_TARGETS {
         let target = policy
             .targets
@@ -688,7 +689,8 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             "version": readiness.generation.as_ref().map(|generation| &generation.version),
             "preset": target.and_then(|target| target.preset.as_ref()),
             "options": target.and_then(|target| target.options.as_ref()),
-            "quota_account": readiness.generation.as_ref().and_then(|generation| state.provider_catalog.account_usage_provider(provider, &generation.version, &generation.digest)),
+            // A named default's own usage, never the Provider-wide legacy card.
+            "quota_account": if readiness.account.is_default() { readiness.generation.as_ref().and_then(|generation| state.provider_catalog.account_usage_provider(provider, &generation.version, &generation.digest)) } else { named.push(readiness.account.clone()); Some(readiness.account.as_str().to_owned()) },
             // `--preset` choices; the session's Tools choose otherwise.
             "presets": runnable_presets,
             "review_candidates": super::selection::candidates(&runnable_presets, provider, &policy.review, false).iter().filter_map(|p| p["id"].as_str()).collect::<Vec<_>>(),
@@ -700,14 +702,31 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
     let accounts: Vec<String> = providers
         .iter()
         .filter_map(|provider| provider["quota_account"].as_str().map(str::to_owned))
+        .filter(|account| !named.iter().any(|id| id.as_str() == account))
         .collect();
     let quota = if !state.product_auth_enabled || meta.owner_user_id.is_some() {
-        state
+        let now = chrono::Utc::now().timestamp_millis();
+        let (mut quota, interval) = state
             .usage
             .cached_view(|snapshot, _, _| {
-                super::selection::quota(snapshot, &accounts, chrono::Utc::now().timestamp_millis())
+                (
+                    super::selection::quota(snapshot, &accounts, now),
+                    snapshot.refresh_interval_ms,
+                )
             })
-            .await
+            .await;
+        if let (Some(owner), Some(list)) = (
+            meta.owner_user_id.as_deref(),
+            quota["accounts"].as_array_mut(),
+        ) {
+            for id in &named {
+                let read = super::super::provider_accounts::usage::read_one(state, owner, id)
+                    .await
+                    .unwrap_or_else(|code| json!({"account_id":id,"reason":code}));
+                list.push(super::selection::named_quota(&read, now, interval));
+            }
+        }
+        quota
     } else {
         json!({"status":"permission_denied"})
     };

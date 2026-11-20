@@ -114,6 +114,13 @@ signed package offers it. The scoped `calls.capabilities({capability})` reports
 no model request, no quota refresh. The model decides; nothing here routes a task
 or adds to a resident prompt.
 
+`quota` is cached evidence for review selection. A child runs on its owner's
+default account of the Provider; when that default is a named account,
+`providers[].quota_account` is the account ID and its `quota.accounts[]` entry
+comes from that account's own cached usage read (with `reason`/`message` when
+it has none). The Provider-wide Service collector of a legacy default card never
+stands in for a named account.
+
 ## Records
 
 Nothing changes in the record or the request. The capability is read from
