@@ -87,7 +87,12 @@ Component release 3.121.0 records Provider SDK 3.7.0 (plugin-sdk 1.20.0,
 provider-ui 3.8.0, provider-authoring 1.0.19), which adds the levitating
 activity indicator (`mark_levitate`, normalized to `asset_levitate`); a
 package using it requires SDK 3.7.0, so older Controllers, Webs and Machines
-skip it. Antigravity 0.2.6 uses it (a 2.6 s period). Every Plugin pins the
+skip it. Antigravity 0.2.6 uses it (a 2.6 s period), takes the official arch
+mark, and gains the session extensions of a Claude or Codex session (Cowboy
+MCP, MCP bindings, Matrix memory; design "Session extensions"): it declares
+`provider.mcp-bindings.v1`, and provider-runtime 1.3.7 ships
+`cowboy-antigravity-acp` 1.0.5 with `@cowboy/memory-client` 0.2.2 (an
+injectable transport) as a component module of its archive. Every Plugin pins the
 SDKs and advances one patch version: claude-code 3.20.52, claude-deepseek
 3.1.70, codex 3.6.10, codex-deepseek 3.1.70, deepseek-harness 1.0.28, github
 0.2.15, grok 3.2.9, machine-browser 1.0.12, matrix 1.0.13, review 1.0.16 and

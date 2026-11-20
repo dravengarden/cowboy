@@ -7,9 +7,17 @@ import { ALLOWED_TOOLS, decide } from "./hook.mjs";
 const hook = fileURLToPath(new URL("./hook.mjs", import.meta.url));
 const input = (name) => JSON.stringify({ toolCall: { name, args: {} } });
 
-test("only the exact facade tools and ask_question are allowed", () => {
+test("only the cowboy server's tools and ask_question are allowed", () => {
   for (const name of ALLOWED_TOOLS) assert.deepEqual(decide(input(name)), { decision: "allow" });
   assert.equal(ALLOWED_TOOLS.length, 8);
+  // The session's extensions are tools of the same server.
+  for (const name of [
+    "mcp_cowboy_cowboy_read",
+    "mcp_cowboy_memory_search",
+    "mcp_cowboy_suger_read",
+  ]) {
+    assert.deepEqual(decide(input(name)), { decision: "allow" }, name);
+  }
   for (const name of [
     "read_file",
     "run_command",
@@ -20,10 +28,11 @@ test("only the exact facade tools and ask_question are allowed", () => {
     "run_workflow",
     "search_web",
     "mcp_cowboy_ReadFile ",
-    "mcp_cowboy_readfile",
     "mcp_other_ReadFile",
+    "mcp_cowboy_",
+    "mcp_cowboy_a b",
+    "mcp_cowboy_x.y",
     "ReadFile",
-    "mcp_cowboy_Delete",
     "constructor",
     "__proto__",
     "",

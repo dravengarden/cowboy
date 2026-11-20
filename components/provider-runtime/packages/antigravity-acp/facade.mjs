@@ -65,6 +65,8 @@ export class Facade {
     this.shell = shell;
     this.onUncertain = onUncertain;
     this.sessions = new Map();
+    /** The session's extension tools (`extensions.mjs`), once started. */
+    this.extensions = undefined;
   }
 
   /** Canonicalize the binding's workspace root and build the facade. */
@@ -80,7 +82,7 @@ export class Facade {
   }
 
   tools() {
-    return structuredClone(TOOLS);
+    return [...structuredClone(TOOLS), ...(this.extensions?.tools() ?? [])];
   }
 
   session(sessionId) {
@@ -154,7 +156,11 @@ export class Facade {
       RunCommand: () => this.runCommand(session, turn, args),
       StopCommand: () => this.stopCommand(session, args),
     };
-    if (!Object.hasOwn(handlers, name)) return failure(`Unknown tool ${String(name)}`);
+    if (!Object.hasOwn(handlers, name)) {
+      // Cowboy MCP, the folder's bindings and memory answer for themselves.
+      if (this.extensions?.has(name)) return await this.extensions.call(name, args);
+      return failure(`Unknown tool ${String(name)}`);
+    }
     try {
       return { content: [{ type: "text", text: await handlers[name]() }] };
     } catch (error) {

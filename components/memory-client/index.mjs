@@ -370,7 +370,10 @@ export class MatrixClient {
     }
   }
   async #exchange(action, payload, binding) {
-    const response = await fetch(
+    // A sandboxed caller (Antigravity's proxy) reaches its relay through the
+    // worker instead of the network: it supplies the transport.
+    const transport = typeof this.config.fetch === "function" ? this.config.fetch : fetch;
+    const response = await transport(
       new URL("/v1/" + action, this.config.endpoint),
       {
         method: "POST",

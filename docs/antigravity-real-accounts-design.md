@@ -720,6 +720,39 @@ the runtime store and the proxy refuses `initialize` unless the file has the
 gate's exact shape. Tools that ask permission keep the proxy as their second,
 independent layer.
 
+## Session extensions (2026-11-20)
+
+An Antigravity session gets what a Claude or Codex session on the same
+runtime gets: Cowboy MCP (with managed calls), the folder's MCP bindings
+(Suger, ...) and Matrix memory (recall, learning and its tools).
+
+- **One namespace.** `agy` still has exactly one MCP server, `cowboy`. The
+  facade adds every extension tool to it (a name a facade tool or an earlier
+  server holds takes its server's name as a prefix), so the PreToolUse gate
+  allows `mcp_cowboy_<tool>` and `ask_question` and nothing else; `cowboy` is
+  the only server `agy` is given, so the namespace is Cowboy's.
+- **Target servers.** Cowboy MCP (`<cowboy> mcp`) and each binding
+  (`<cowboy> mcp --binding <descriptor>`) run on the target through the
+  execution connection, stdin piped, as Claude's runtime runs them; the
+  target keeper supplies the session's call context. The worker derives
+  their exact argv from its own extension descriptor and the ledger admits
+  exactly those commands outside a turn (at most 16 live), keeps them across
+  turns and ends them at teardown. Any other start still needs a turn.
+- **Memory.** The unit reaches no host loopback service, so the worker
+  serves `cowboy/memory` on the unit's execution socket: `POST /v1/<action>`
+  and `POST|DELETE /mcp` to this session's relay only, with the relay token
+  the unit never receives. The proxy runs the shared `@cowboy/memory-client`
+  (shipped as a component module of its archive) over that transport:
+  recall before each owner prompt, the turn's words and tool results after
+  it, and the memory tools through the same bridge.
+- **What the unit learns.** Its execution descriptor gains `extensions`:
+  server names and argv, memory switches and tool names, and the installed
+  call guidance. Relay addresses, tokens and Machine paths stay with the
+  worker.
+- Permission requests for these tools are approved by the proxy like the
+  facade's (except in `plan` mode); the transcript shows them as the MCP calls
+  they are (`mcp__<server>__<tool>`).
+
 ## Revision 5 simplification (owner decision, 2026-11-18)
 
 Two code reviews of the implementation (calls `call-c61a3380faee24839460a248`

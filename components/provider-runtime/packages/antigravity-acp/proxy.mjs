@@ -3,7 +3,8 @@
 // R2-16). It admits only the runtime mode's methods, replaces every session's
 // MCP servers with the Cowboy facade, appends the target projection to the
 // system prompt, and settles each turn with backend refusal evidence.
-import { ALLOWED_TOOLS } from "./hook.mjs";
+import { allowedTool } from "./hook.mjs";
+import { promptText, updateObservation } from "./memory.mjs";
 import { facadeTool, presentToolCall } from "./presentation.mjs";
 
 /** Client requests a `runtime` unit forwards; everything else is refused. */
@@ -165,6 +166,8 @@ export class AcpProxy {
     Promise.resolve(runtime).then(
       (ready) => {
         this.root = ready?.facade?.root;
+        this.facade = ready?.facade;
+        this.memory = ready?.memory ?? null;
       },
       () => {},
     );
@@ -195,6 +198,14 @@ export class AcpProxy {
       this.calls.set(id, tool);
     }
     const known = typeof id === "string" ? this.calls.get(id) : undefined;
+    // An extension tool shows as the MCP call it is (Cowboy, memory, ...).
+    const name = typeof toolCall?.name === "string" ? toolCall.name : undefined;
+    const route = name?.startsWith("mcp_cowboy_")
+      ? this.facade?.extensions?.route(name.slice("mcp_cowboy_".length))
+      : undefined;
+    if (route && tool === undefined) {
+      return { ...toolCall, name: `mcp__${route.server}__${route.tool}`, kind: "other" };
+    }
     return presentToolCall(toolCall, { root: this.root, known });
   }
 
@@ -277,11 +288,23 @@ export class AcpProxy {
       }
       record.sessionId = sessionId;
       record.cursor = await runtime.evidence.mark();
+      // Memory recalls for the owner's words, as for Claude and Codex.
+      const text = promptText(forwarded.params?.prompt);
+      if (runtime.memory && text.trim() && !text.trimStart().startsWith("/")) {
+        const context = await runtime.memory.begin(text);
+        if (context) {
+          forwarded.params.prompt = [
+            { type: "text", text: context },
+            ...(Array.isArray(forwarded.params.prompt) ? forwarded.params.prompt : []),
+          ];
+        }
+      }
       this.turns.set(sessionId, {
         id,
         uncertain: undefined,
         violation: undefined,
         tools: new Map(),
+        said: "",
       });
       runtime.facade.beginTurn(sessionId);
     }
@@ -318,7 +341,7 @@ export class AcpProxy {
     // A tool that ran must be attributable to a facade tool. One without a
     // name, with an unknown call ID or past the per-turn name bound cannot
     // be, so it is a violation like a named built-in.
-    if (name !== undefined && ALLOWED_TOOLS.includes(name)) return;
+    if (allowedTool(name)) return;
     if (turn.violation !== undefined) return;
     turn.violation = name === undefined ? "unknown" : toolCode(name);
     this.log(`built-in tool ${turn.violation} executed; ending the turn`);
@@ -347,6 +370,19 @@ export class AcpProxy {
     return { ...message, params: { ...message.params, update: annotated } };
   }
 
+  /** The turn's evidence for memory: the agent's words and finished tools. */
+  remember(params) {
+    if (!this.memory) return;
+    const observation = updateObservation(params?.update);
+    if (!observation) return;
+    const turn = this.turns.get(params.sessionId);
+    if (observation[0] === "assistant") {
+      if (turn && turn.said.length < 200_000) turn.said += observation[1];
+    } else {
+      this.memory.add(...observation);
+    }
+  }
+
   /** A facade call's effect became unknown: end that session's turn. */
   uncertain(sessionId, method) {
     const turn = this.turns.get(sessionId);
@@ -362,6 +398,7 @@ export class AcpProxy {
       if (id === undefined) {
         if (method === "session/update") {
           this.observe(message.params);
+          this.remember(message.params);
           return this.client(this.presentUpdate(this.annotateUsage(stripTier(message))));
         }
         if (AGENT_NOTIFICATIONS.includes(method)) this.client(stripTier(message));
@@ -377,7 +414,7 @@ export class AcpProxy {
       // Defense in depth beside the PreToolUse hook: a permission request
       // for any tool but the facade's is rejected here, never shown.
       const name = message.params?.toolCall?.name;
-      if (!ALLOWED_TOOLS.includes(name)) {
+      if (!allowedTool(name)) {
         const options = Array.isArray(message.params?.options) ? message.params.options : [];
         const reject =
           options.find((option) => option?.kind === "reject_once") ??
@@ -396,7 +433,7 @@ export class AcpProxy {
       // Cowboy's own tools need no prompt, like a Claude session's default
       // bypassPermissions; plan mode still asks.
       const sessionId = message.params?.sessionId;
-      if (facadeTool(name) !== undefined && this.modes.get(sessionId) !== "plan") {
+      if (name !== "ask_question" && this.modes.get(sessionId) !== "plan") {
         const options = Array.isArray(message.params?.options) ? message.params.options : [];
         const allow =
           options.find((option) => option?.kind === "allow_once") ??
@@ -453,6 +490,10 @@ export class AcpProxy {
       message.result?.stopReason,
     );
     if (this.turns.get(record.sessionId) === turn) this.turns.delete(record.sessionId);
+    if (this.memory) {
+      if (turn?.said) this.memory.add("assistant", turn.said);
+      await this.memory.finish();
+    }
     const violation = turn?.violation;
     const uncertain = turn?.uncertain;
     const cowboy = {};

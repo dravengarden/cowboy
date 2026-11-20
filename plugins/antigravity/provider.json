@@ -216,9 +216,9 @@
       },
       {
         "id": "cowboy-antigravity-acp",
-        "version": "1.0.4",
+        "version": "1.0.5",
         "source": "cowboy:components/provider-runtime/packages/antigravity-acp",
-        "integrity": "sha256:16c75003d0d40d9acd1dc91a8817af487ced30f5924f04003cf02519bf4e86ab",
+        "integrity": "sha256:8b19466f8969e65a7f993e6de995d27c4a16ab353dcdf08209bbe904ff17650c",
         "private": true
       },
       {
@@ -260,6 +260,7 @@
     "required_capabilities": [
       "provider.runtime.v1",
       "provider.execution-jsonrpc.v1",
+      "provider.mcp-bindings.v1",
       "provider.native-custody.v1"
     ],
     "network": "ipv4_only_v1",

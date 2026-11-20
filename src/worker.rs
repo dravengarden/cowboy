@@ -29,6 +29,7 @@ use crate::runtime_wire::{
 const BROKER_RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(100);
 mod execution_launch;
 mod mcp_launch;
+mod sandbox_extensions;
 pub mod startup_gate;
 const BROKER_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
 const BROKER_CONNECTION_STABLE_AFTER: Duration = Duration::from_secs(10);

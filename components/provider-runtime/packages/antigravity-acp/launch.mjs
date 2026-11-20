@@ -17,7 +17,9 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Connection } from "../../execution-connection.mjs";
 import { AgyLog } from "./evidence.mjs";
+import { Extensions } from "./extensions.mjs";
 import { Facade, serveMcp } from "./facade.mjs";
+import { openMemory } from "./memory.mjs";
 import { buildProjection } from "./projection.mjs";
 import { AcpProxy } from "./proxy.mjs";
 
@@ -113,6 +115,26 @@ export async function checkPolicy(home, paths) {
   await access(paths.hook, constants.X_OK);
 }
 
+/**
+ * What the system prompt says about the session's extensions: they are tools
+ * of the `cowboy` server, with each server's own instructions and the
+ * installed call guidance.
+ */
+export function extensionGuidance(summary, extensions) {
+  const notes = extensions?.instructions() ?? "";
+  const calls = typeof summary?.call_guidance === "string" ? summary.call_guidance : "";
+  if (!notes && !calls && !extensions?.tools().length) return "";
+  return [
+    "<cowboy_extensions>",
+    "Cowboy MCP, the folder's MCP servers and memory are tools of the `cowboy` MCP server here (mcp_cowboy_<tool>).",
+    calls,
+    notes,
+    "</cowboy_extensions>",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 /** The unit-private target-path directory `agy` sees must hold nothing. */
 export function checkMirror(cwd) {
   if (!isAbsolute(cwd)) throw new Error("session cwd must be absolute");
@@ -188,6 +210,17 @@ export async function prepareRuntime({
   if (JSON.stringify(listed) !== JSON.stringify(EXPECTED_TOOLS)) {
     throw new Error("facade tool set differs");
   }
+  // Session extensions run beside the facade; none of them gates readiness.
+  const memory = await openMemory(connection, descriptor.extensions, {
+    stateDir: join(home, ".cache", "cowboy-memory"),
+    cwd: facade.root,
+  });
+  facade.extensions = await Extensions.open(connection, descriptor.extensions, {
+    root: facade.root,
+    memoryBinding: memory?.binding ?? { project: "relay", machine: "relay", session: "relay" },
+    reserved: EXPECTED_TOOLS,
+    log: (line) => process.stderr.write(`cowboy: ${line}\n`),
+  });
   await buildProjection(facade, facade.root);
   const { server, socketPath, channels } = await listen(facade, temporary);
   return {
@@ -204,7 +237,14 @@ export async function prepareRuntime({
     // the binding's canonical workspace root and every other path is kept
     // for the projection to confine.
     sessionCwd: (cwd) => (cwd === descriptor.binding.runtime?.cwd ? facade.root : cwd),
-    projection: (cwd) => buildProjection(facade, cwd),
+    projection: async (cwd) =>
+      [
+        await buildProjection(facade, cwd),
+        extensionGuidance(descriptor.extensions, facade.extensions),
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+    memory,
     newChannel: () => {
       const channel = randomUUID();
       channels.set(channel, undefined);

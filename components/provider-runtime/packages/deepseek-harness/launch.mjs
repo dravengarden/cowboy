@@ -20,8 +20,7 @@ const MAX_FRAME_BYTES = 64 * 1024 * 1024;
 // Users still choose any advertised model through the session configuration.
 // dsh's local web_fetch refuses every non-public DNS answer, which includes a
 // fake-IP resolver, so fetches use DeepSeek's Fetch API through the gateway.
-export const COWBOY_PATCH =
-  `# Written by Cowboy at every launch; local edits are replaced.
+export const COWBOY_PATCH = `# Written by Cowboy at every launch; local edits are replaced.
 - id: acp
   config:
     provider: deepseek-official
@@ -37,9 +36,7 @@ export const COWBOY_PATCH =
 `;
 
 function record(value) {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value
-    : {};
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
 function text(value) {
@@ -50,9 +47,7 @@ function displayPath(path, cwd) {
   if (!path) return "";
   if (!isAbsolute(path)) return path;
   const inside = relative(cwd, path);
-  return inside && !inside.startsWith("..") && !isAbsolute(inside)
-    ? inside
-    : path;
+  return inside && !inside.startsWith("..") && !isAbsolute(inside) ? inside : path;
 }
 
 function absolutePath(path, cwd) {
@@ -69,9 +64,7 @@ export function presentation(name, rawInput, cwd) {
   const input = record(rawInput);
   const filePath = text(input.file_path) || text(input.path);
   const shown = displayPath(filePath, cwd);
-  const location = filePath
-    ? [{ path: absolutePath(filePath, cwd) }]
-    : undefined;
+  const location = filePath ? [{ path: absolutePath(filePath, cwd) }] : undefined;
   switch (name) {
     case "bash": {
       const command = text(input.command);
@@ -81,15 +74,11 @@ export function presentation(name, rawInput, cwd) {
       };
     }
     case "read": {
-      const offset = typeof input.offset === "number"
-        ? input.offset
-        : undefined;
+      const offset = typeof input.offset === "number" ? input.offset : undefined;
       return {
         kind: "read",
         title: shown ? `Read ${shown}` : "Read",
-        locations: location?.map((entry) =>
-          offset ? { ...entry, line: offset } : entry
-        ),
+        locations: location?.map((entry) => (offset ? { ...entry, line: offset } : entry)),
       };
     }
     case "read_image":
@@ -119,11 +108,7 @@ export function presentation(name, rawInput, cwd) {
           locations: location,
         };
       }
-      const verb = command === "create"
-        ? "Write"
-        : command === "insert"
-        ? "Insert into"
-        : "Edit";
+      const verb = command === "create" ? "Write" : command === "insert" ? "Insert into" : "Edit";
       return {
         kind: "edit",
         title: shown ? `${verb} ${shown}` : verb,
@@ -146,9 +131,7 @@ export function presentation(name, rawInput, cwd) {
         : [];
       return {
         kind: "search",
-        title: queries.length
-          ? `Web search: ${queries.join(" · ")}`
-          : "Web search",
+        title: queries.length ? `Web search: ${queries.join(" · ")}` : "Web search",
       };
     }
     case "web_fetch":
@@ -189,17 +172,16 @@ export function presentation(name, rawInput, cwd) {
  */
 export function fileText(value) {
   const framed =
-    /^<path>[^\n]*<\/path>\n<type>[^\n]*<\/type>\n<content>\n([\s\S]*?)\n?<\/content>\s*$/u
-      .exec(value);
+    /^<path>[^\n]*<\/path>\n<type>[^\n]*<\/type>\n<content>\n([\s\S]*?)\n?<\/content>\s*$/u.exec(
+      value,
+    );
   const body = framed ? framed[1] : value;
   const lines = body.split("\n");
   let end = lines.length;
   while (end > 0 && lines[end - 1] === "") end -= 1;
   let note = "";
   if (end > 0 && /^\(.*\)$/u.test(lines[end - 1])) {
-    note = /^\(End of file - total \d+ lines?\)$/u.test(lines[end - 1])
-      ? ""
-      : lines[end - 1];
+    note = /^\(End of file - total \d+ lines?\)$/u.test(lines[end - 1]) ? "" : lines[end - 1];
     end -= 1;
     while (end > 0 && lines[end - 1] === "") end -= 1;
   }
@@ -218,9 +200,7 @@ function resultText(content) {
   if (!Array.isArray(content)) return "";
   return content
     .map((block) =>
-      block?.type === "content" && block.content?.type === "text"
-        ? block.content.text
-        : ""
+      block?.type === "content" && block.content?.type === "text" ? block.content.text : "",
     )
     .join("");
 }
@@ -236,18 +216,15 @@ export function presentedContent(name, rawInput, content, status, cwd) {
       return content.map((block) =>
         block?.type === "content" && block.content?.type === "text"
           ? {
-            ...block,
-            content: { ...block.content, text: fileText(block.content.text) },
-          }
-          : block
+              ...block,
+              content: { ...block.content, text: fileText(block.content.text) },
+            }
+          : block,
       );
     case "write":
-      return path && typeof input.content === "string"
-        ? diff(null, input.content)
-        : content;
+      return path && typeof input.content === "string" ? diff(null, input.content) : content;
     case "edit":
-      return path && typeof input.old_string === "string" &&
-          typeof input.new_string === "string"
+      return path && typeof input.old_string === "string" && typeof input.new_string === "string"
         ? diff(input.old_string, input.new_string)
         : content;
     case "str_replace_editor": {
@@ -257,7 +234,8 @@ export function presentedContent(name, rawInput, content, status, cwd) {
         return diff(null, input.file_text);
       }
       if (
-        command === "str_replace" && typeof input.old_str === "string" &&
+        command === "str_replace" &&
+        typeof input.old_str === "string" &&
         typeof input.new_str === "string"
       ) {
         return diff(input.old_str, input.new_str);
@@ -318,19 +296,11 @@ export function presentMessage(message, calls, cwd) {
   if (kind === "tool_call" || update.title !== undefined) {
     next.title = shown.title;
   }
-  if (
-    shown.locations && (kind === "tool_call" || update.locations !== undefined)
-  ) {
+  if (shown.locations && (kind === "tool_call" || update.locations !== undefined)) {
     next.locations = shown.locations;
   }
   if (update.content !== undefined) {
-    next.content = presentedContent(
-      call.name,
-      call.rawInput,
-      update.content,
-      update.status,
-      cwd,
-    );
+    next.content = presentedContent(call.name, call.rawInput, update.content, update.status, cwd);
   }
   if (update.status === "completed" || update.status === "failed") {
     calls.delete(id);
@@ -355,10 +325,8 @@ export function presentMessage(message, calls, cwd) {
 /** Track the working directory a client request establishes for its session. */
 export function requestCwd(message) {
   const method = message?.method;
-  if (
-    method !== "session/new" && method !== "session/resume" &&
-    method !== "session/load"
-  ) return undefined;
+  if (method !== "session/new" && method !== "session/resume" && method !== "session/load")
+    return undefined;
   const cwd = message.params?.cwd;
   return typeof cwd === "string" && isAbsolute(cwd) ? cwd : undefined;
 }
@@ -383,17 +351,10 @@ export function sessionRoutedEnvironment(env = process.env) {
   )?.[1];
   if (!session) return env;
   const routed = { ...env };
-  for (
-    const name of [
-      "DEEPSEEK_BASE_URL",
-      "DEEPSEEK_SEARCH_BASE_URL",
-      "DEEPSEEK_WEB_BASE_URL",
-    ]
-  ) {
+  for (const name of ["DEEPSEEK_BASE_URL", "DEEPSEEK_SEARCH_BASE_URL", "DEEPSEEK_WEB_BASE_URL"]) {
     if (!env[name]) continue;
     const url = new URL(env[name]);
-    url.pathname = `/cowboy-session/${session}${url.pathname}`
-      .replace(/\/+$/u, "");
+    url.pathname = `/cowboy-session/${session}${url.pathname}`.replace(/\/+$/u, "");
     routed[name] = url.href;
   }
   return routed;
@@ -430,12 +391,9 @@ function lines(stream, onLine) {
 }
 
 async function main(argv) {
-  const dsh = fileURLToPath(
-    new URL("./node_modules/@deepseek-ai/dsh/lib/bin.js", import.meta.url),
-  );
+  const dsh = fileURLToPath(new URL("./node_modules/@deepseek-ai/dsh/lib/bin.js", import.meta.url));
   const args = argv[0] === "--cowboy-private-cli" ? argv.slice(1) : [...argv];
-  const acp = args.includes("--profile") &&
-    args[args.indexOf("--profile") + 1] === "acp";
+  const acp = args.includes("--profile") && args[args.indexOf("--profile") + 1] === "acp";
   const home = dshHome();
   if (acp && home) args.push("--patch", await writePatch(home));
   const child = spawn(process.execPath, [dsh, ...args], {
@@ -488,9 +446,7 @@ async function main(argv) {
   });
 }
 
-if (
-  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main(process.argv.slice(2)).catch((error) => {
     process.stderr.write(`cowboy dsh launcher: ${error.message}\n`);
     process.exit(1);

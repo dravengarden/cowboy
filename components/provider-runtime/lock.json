@@ -180,16 +180,18 @@
     },
     "cowboy-antigravity-acp": {
       "kind": "node_npm",
-      "version": "1.0.4",
+      "version": "1.0.5",
       "package_dir": "packages/antigravity-acp",
       "script": "cowboy-launch.mjs",
       "launcher": "packages/antigravity-acp/launch.mjs",
       "files": [
         "evidence.mjs",
+        "extensions.mjs",
         "facade.mjs",
         "facade-relay.mjs",
         "facade-tools.mjs",
         "hook.mjs",
+        "memory.mjs",
         "presentation.mjs",
         "projection.mjs",
         "proxy.mjs",
@@ -199,6 +201,9 @@
       "shared_files": [
         "execution-connection.mjs"
       ],
+      "component_modules": {
+        "@cowboy/memory-client": "memory-client/index.mjs"
+      },
       "probe": [
         "--cowboy-probe"
       ]

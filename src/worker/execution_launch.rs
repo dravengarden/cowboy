@@ -86,8 +86,18 @@ pub(super) async fn prepare(
             path.is_some(),
             "a sandboxed execution binding requires the Machine's process ledger"
         );
-        client.set_ledger(Ledger::open(&args.session_id, path)?);
-        let (endpoint, bridge) = Endpoint::start_unix(Arc::clone(&client))?;
+        let ledger = Ledger::open(&args.session_id, path)?;
+        let extensions = super::sandbox_extensions::load()
+            .map(|extensions| super::sandbox_extensions::derive(&extensions));
+        let summary = extensions.map(|extensions| {
+            ledger.set_session_servers(extensions.servers);
+            if let Some(memory) = extensions.memory {
+                client.set_memory(memory);
+            }
+            extensions.summary
+        });
+        client.set_ledger(ledger);
+        let (endpoint, bridge) = Endpoint::start_unix(Arc::clone(&client), summary)?;
         spec.execution_bridge = Some(bridge);
         return Ok((Some(endpoint), managed_round));
     }

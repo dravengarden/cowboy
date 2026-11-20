@@ -512,7 +512,7 @@ impl UnixFixture {
     fn with(handler: Handler) -> Self {
         let target = Target::new(handler);
         let root = tempfile::tempdir().unwrap();
-        let (endpoint, bridge) = Endpoint::start_unix(Arc::clone(&target.client)).unwrap();
+        let (endpoint, bridge) = Endpoint::start_unix(Arc::clone(&target.client), None).unwrap();
         assert!(endpoint.descriptor().is_none());
         let socket = root.path().join("exec.sock");
         let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
@@ -787,4 +787,71 @@ async fn an_uncertain_effect_reported_by_the_agent_side_is_recorded_unforwarded(
     assert_eq!(ledger.uncertain_effect().as_deref(), Some("file publish"));
     assert_eq!(ledger.uncertain_sequence(), 1);
     assert!(target.log().is_empty(), "never forwarded to the target");
+}
+
+#[tokio::test]
+async fn declared_session_servers_start_outside_turns_and_outlive_them() {
+    let target = Target::new(processes());
+    let ledger = ledger(&target.client, None);
+    ledger.set_readiness(false);
+    ledger.set_session_servers(vec![vec!["/bin/cowboy".into(), "mcp".into()]]);
+    // Only the exact declared argv starts outside a turn.
+    let other = target
+        .client
+        .relay(
+            "process/start".into(),
+            json!({"processId": "x", "argv": ["/bin/cowboy", "mcp", "--extra"]}),
+        )
+        .await;
+    assert!(other.get("error").is_some());
+    let server = target
+        .client
+        .relay(
+            "process/start".into(),
+            json!({"processId": "s1", "argv": ["/bin/cowboy", "mcp"]}),
+        )
+        .await;
+    assert_eq!(server["result"]["processId"], "s1");
+    // A turn's end terminates its own processes, never the session server.
+    ledger.begin_turn("turn-1");
+    let reply = target
+        .client
+        .relay("process/start".into(), start("p1"))
+        .await;
+    assert_eq!(reply["result"]["processId"], "p1");
+    target.client.finish_turn("turn-1").unwrap().await;
+    assert_eq!(ledger.live(), ["s1"]);
+    assert!(
+        !target
+            .log()
+            .iter()
+            .any(|line| line == "process/terminate s1")
+    );
+    // Teardown ends it.
+    tokio::time::timeout(Duration::from_secs(10), target.client.settle_all())
+        .await
+        .unwrap();
+    assert!(
+        target
+            .log()
+            .iter()
+            .any(|line| line == "process/terminate s1")
+    );
+}
+
+#[tokio::test]
+async fn memory_requests_need_the_sessions_bridge() {
+    let target = Target::new(processes());
+    let _ledger = ledger(&target.client, None);
+    let reply = target
+        .client
+        .relay("cowboy/memory".into(), json!({"path": "/v1/context"}))
+        .await;
+    assert!(
+        reply["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("memory is not available")
+    );
+    assert!(target.log().is_empty());
 }

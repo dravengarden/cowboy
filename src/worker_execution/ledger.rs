@@ -39,6 +39,11 @@ const MAX_LEDGER_BYTES: u64 = 256 * 1024;
 const MAX_FENCED_TURNS: usize = 64;
 /// The ledger turn the readiness probe is recorded under.
 const READINESS_TURN: &str = "cowboy-readiness";
+/// The ledger owner of the session's MCP servers on the target (Cowboy MCP
+/// and the folder's bindings): they outlive turns and end at teardown.
+const SERVER_TURN: &str = "cowboy-session-servers";
+/// Live session servers one session may hold.
+const MAX_SERVERS: usize = 16;
 /// The endpoint's own request: the agent side reports an uncertain effect
 /// it detected (`UNCERTAIN_REPORT` in the Antigravity facade). Never
 /// forwarded to the target.
@@ -112,6 +117,9 @@ struct State {
     /// readiness window admits): the only processes whose output carries no
     /// result the agent acts on. Kept after their exit.
     probes: HashSet<String>,
+    /// The exact argv of each MCP server this session may keep running on
+    /// the target, set by the worker from its own extension plan.
+    servers: Vec<Vec<String>>,
     closed: bool,
 }
 
@@ -188,6 +196,11 @@ impl Ledger {
         self.state.lock().readiness = starting;
     }
 
+    /// The MCP servers (exact argv) the session may run outside its turns.
+    pub fn set_session_servers(&self, servers: Vec<Vec<String>>) {
+        self.state.lock().servers = servers;
+    }
+
     pub fn begin_turn(&self, turn: &str) {
         let mut state = self.state.lock();
         state.current_turn = Some(turn.to_owned());
@@ -237,7 +250,33 @@ impl Ledger {
         let process = process_id(params)
             .filter(|process| !process.is_empty() && process.len() <= 256)
             .ok_or("process start needs a valid processId")?;
+        let server = !state.closed
+            && params
+                .get("argv")
+                .and_then(Value::as_array)
+                .is_some_and(|argv| {
+                    state.servers.iter().any(|server| {
+                        server.len() == argv.len()
+                            && server
+                                .iter()
+                                .zip(argv)
+                                .all(|(want, got)| got.as_str() == Some(want))
+                    })
+                });
         let turn = match state.active_turn() {
+            // A session server is the worker's own declared command, never
+            // a turn's effect: it outlives turns and ends at teardown.
+            _ if server => {
+                let live = state
+                    .processes
+                    .values()
+                    .filter(|owner| *owner == SERVER_TURN)
+                    .count();
+                if live >= MAX_SERVERS {
+                    return Err("session server limit reached; process start refused");
+                }
+                SERVER_TURN.to_owned()
+            }
             Some(turn) => turn,
             None if state.readiness && !state.closed => {
                 // The readiness probe: exactly the projection's Git probe,
@@ -456,6 +495,11 @@ impl Client {
         self.ledger.get()
     }
 
+    /// Bridge memory requests of the sandboxed unit to the session's relay.
+    pub fn set_memory(&self, memory: super::memory_bridge::MemoryBridge) {
+        let _ = self.memory.set(memory);
+    }
+
     /// Relay one native request from the agent side. Without a ledger this
     /// is the plain invocation; with one, effects are admitted (and starts
     /// recorded) first and lost replies mark the session's effect uncertain.
@@ -469,6 +513,12 @@ impl Client {
                 .await
                 .unwrap_or_else(|_| unavailable());
         };
+        if method == super::memory_bridge::MEMORY_REQUEST {
+            return match self.memory.get() {
+                Some(memory) => memory.forward(&params).await,
+                None => refused("memory is not available in this session"),
+            };
+        }
         if method == UNCERTAIN_REPORT {
             // The facade detected an unknown outcome every transport call
             // of which was answered (a timed-out publish): recorded like a

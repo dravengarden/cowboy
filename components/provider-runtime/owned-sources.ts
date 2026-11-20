@@ -16,6 +16,27 @@ export interface OwnedNodeRecipe {
   files?: string[];
   /** Plain file names in `components/provider-runtime`, shipped as `app/<name>`. */
   shared_files?: string[];
+  /**
+   * Published Cowboy component modules the package imports by name, shipped
+   * as `app/<file>`: `{ "@cowboy/memory-client": "memory-client/index.mjs" }`
+   * (a path below `components/`) becomes `app/memory-client.mjs`.
+   */
+  component_modules?: Record<string, string>;
+}
+
+const COMPONENT_MODULE = /^@cowboy\/([a-z0-9-]+)$/;
+const COMPONENT_PATH = /^([a-z0-9-]+)\/[a-z0-9._-]+\.mjs$/;
+
+/** `[specifier, runtime-root-relative source, archive file]` per component module. */
+export function componentModules(recipe: OwnedNodeRecipe): Array<[string, string, string]> {
+  return Object.entries(recipe.component_modules ?? {}).map(([specifier, path]) => {
+    const name = COMPONENT_MODULE.exec(specifier)?.[1];
+    const owner = COMPONENT_PATH.exec(path)?.[1];
+    if (!name || owner !== name) {
+      throw new Error(`owned node package ${recipe.package_dir} has an unsafe component module`);
+    }
+    return [specifier, `../${path}`, `${name}.mjs`];
+  });
 }
 
 const PLAIN = /^[a-z0-9][a-z0-9._-]*$/;
@@ -37,12 +58,17 @@ export function ownedNodeInputs(recipe: OwnedNodeRecipe): string[] {
   ) {
     throw new Error(`owned node package ${recipe.package_dir} has unsafe files`);
   }
+  const modules = componentModules(recipe);
+  if (modules.some(([, , file]) => names.includes(file))) {
+    throw new Error(`owned node package ${recipe.package_dir} has unsafe files`);
+  }
   return [
     `${recipe.package_dir}/package.json`,
     `${recipe.package_dir}/package-lock.json`,
     recipe.launcher,
     ...files.map((name) => `${recipe.package_dir}/${name}`),
     ...shared,
+    ...modules.map(([, source]) => source),
   ];
 }
 
@@ -69,10 +95,17 @@ export async function ownedNodeIntegrity(
  * Owned modules import the shared provider-runtime modules by their source
  * path (`../../<name>`); in the archive they sit beside them in `app/`.
  */
-export function rewriteSharedImports(source: string, shared: string[]): string {
+export function rewriteSharedImports(
+  source: string,
+  shared: string[],
+  modules: Array<[string, string, string]> = [],
+): string {
   let rewritten = source;
   for (const name of shared) {
     rewritten = rewritten.replaceAll(`"../../${name}"`, `"./${name}"`);
+  }
+  for (const [specifier, , file] of modules) {
+    rewritten = rewritten.replaceAll(`"${specifier}"`, `"./${file}"`);
   }
   if (/["']\.\.\//.test(rewritten)) {
     throw new Error("owned node module imports outside its archive");
@@ -96,6 +129,7 @@ export async function copyOwnedNode(
     throw new Error(`owned node source mismatch for ${dependency.id}`);
   }
   const shared = owned ? (recipe.shared_files ?? []) : [];
+  const modules = owned ? componentModules(recipe) : [];
   const copies: Array<[string, string]> = [
     [recipe.launcher ?? "", "cowboy-launch.mjs"],
     ...(owned ? (recipe.files ?? []) : []).map((name): [string, string] => [
@@ -103,12 +137,13 @@ export async function copyOwnedNode(
       name,
     ]),
     ...shared.map((name): [string, string] => [name, name]),
+    ...modules.map(([, source, file]): [string, string] => [source, file]),
   ];
   for (const [source, name] of copies) {
     const text = await readFile(join(runtimeRoot, source), "utf8");
     await writeFile(
       join(app, name),
-      owned && name.endsWith(".mjs") ? rewriteSharedImports(text, shared) : text,
+      owned && name.endsWith(".mjs") ? rewriteSharedImports(text, shared, modules) : text,
     );
   }
 }

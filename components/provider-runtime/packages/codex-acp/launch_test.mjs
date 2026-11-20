@@ -3,14 +3,7 @@ import test from "node:test";
 import { PassThrough } from "node:stream";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import {
-  chmodSync,
-  existsSync,
-  mkdtempSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import {
@@ -47,12 +40,13 @@ test("lazy registration and failed handshakes recover before startup or a user t
     let reply = { id: frame.id, result: {} };
     if (frame.method === "environment/info") {
       infoCalls++;
-      reply = failures-- > 0
-        ? { id: frame.id, error: { message: "initialize handshake timed out" } }
-        : {
-          id: frame.id,
-          result: { shell: { name: "bash", path: "/bin/bash" } },
-        };
+      reply =
+        failures-- > 0
+          ? { id: frame.id, error: { message: "initialize handshake timed out" } }
+          : {
+              id: frame.id,
+              result: { shell: { name: "bash", path: "/bin/bash" } },
+            };
     }
     child.stdout.write(JSON.stringify(reply) + "\n");
   });
@@ -68,15 +62,10 @@ test("lazy registration and failed handshakes recover before startup or a user t
     }
     assert.ok(condition());
   };
-  input.write(
-    JSON.stringify({ id: 1, method: "initialize", params: {} }) + "\n",
-  );
+  input.write(JSON.stringify({ id: 1, method: "initialize", params: {} }) + "\n");
   await waitFor(() => received.some((frame) => frame.id === 1));
   assert.equal(infoCalls, 2);
-  assert.equal(
-    sent.filter((frame) => frame.method === "environment/add").length,
-    1,
-  );
+  assert.equal(sent.filter((frame) => frame.method === "environment/add").length, 1);
   failures = 2;
   input.write(
     JSON.stringify({
@@ -88,22 +77,14 @@ test("lazy registration and failed handshakes recover before startup or a user t
   await waitFor(() => received.some((frame) => frame.id === 2));
   assert.equal(infoCalls, 5);
   assert.equal(sent.filter((frame) => frame.method === "turn/start").length, 1);
-  assert.equal(
-    received.length,
-    2,
-    "private recovery responses must not escape",
-  );
+  assert.equal(received.length, 2, "private recovery responses must not escape");
   failures = Infinity;
-  input.write(
-    JSON.stringify({ id: 3, method: "turn/start", params: {} }) + "\n",
-  );
+  input.write(JSON.stringify({ id: 3, method: "turn/start", params: {} }) + "\n");
   await waitFor(() => received.some((frame) => frame.id === 3));
   assert.equal(received.find((frame) => frame.id === 3).error.code, -32000);
   assert.equal(sent.filter((frame) => frame.method === "turn/start").length, 1);
   failures = 0;
-  input.write(
-    JSON.stringify({ id: 4, method: "turn/start", params: {} }) + "\n",
-  );
+  input.write(JSON.stringify({ id: 4, method: "turn/start", params: {} }) + "\n");
   await waitFor(() => received.some((frame) => frame.id === 4));
   assert.ok(received.find((frame) => frame.id === 4).result);
   assert.equal(sent.filter((frame) => frame.method === "turn/start").length, 2);
@@ -113,23 +94,22 @@ test("lazy registration and failed handshakes recover before startup or a user t
 });
 
 test("the private CLI process receives the configured argv without a shell", () => {
-  const echo = (process.env.PATH ?? "").split(delimiter)
-    .map((directory) => join(directory, "echo")).find(existsSync);
+  const echo = (process.env.PATH ?? "")
+    .split(delimiter)
+    .map((directory) => join(directory, "echo"))
+    .find(existsSync);
   assert.ok(echo, "the pinned test shell must supply echo");
-  const output = execFileSync(process.execPath, [
-    fileURLToPath(new URL("./launch.mjs", import.meta.url)),
-    "--cowboy-private-cli",
-    "app-server",
-  ], {
-    env: {
-      COWBOY_PRIVATE_CODEX_EXECUTABLE: echo,
-      COWBOY_PRIVATE_CODEX_ARGUMENTS: JSON.stringify([
-        "-c",
-        "model_context_window=680000",
-      ]),
+  const output = execFileSync(
+    process.execPath,
+    [fileURLToPath(new URL("./launch.mjs", import.meta.url)), "--cowboy-private-cli", "app-server"],
+    {
+      env: {
+        COWBOY_PRIVATE_CODEX_EXECUTABLE: echo,
+        COWBOY_PRIVATE_CODEX_ARGUMENTS: JSON.stringify(["-c", "model_context_window=680000"]),
+      },
+      encoding: "utf8",
     },
-    encoding: "utf8",
-  });
+  );
   assert.equal(output, "-c model_context_window=680000 app-server\n");
 });
 
@@ -156,9 +136,7 @@ test("probe and authentication arguments still belong to the upstream adapter", 
 });
 
 test("invalid or incomplete configuration never reaches an executable", () => {
-  for (
-    const args of [["-c"], ["--config", "--help"], ["-c", "../escape=true"]]
-  ) {
+  for (const args of [["-c"], ["--config", "--help"], ["-c", "../escape=true"]]) {
     assert.throws(() => splitConfigurationArguments(args));
   }
 });
@@ -184,18 +162,17 @@ test("native new and resumed turns get the same exact environment without rewrit
       params: { cwd: "/runtime/entry", input: [{ text: "quotes '$() 中文" }] },
     };
     const actual = bindExecutionRequest(original, descriptor());
-    assert.deepEqual(actual.params.environments, [{
-      environmentId: "environment-one",
-      cwd: "/target/worktree",
-      runtimeWorkspaceRoots: ["/target/worktree"],
-    }]);
+    assert.deepEqual(actual.params.environments, [
+      {
+        environmentId: "environment-one",
+        cwd: "/target/worktree",
+        runtimeWorkspaceRoots: ["/target/worktree"],
+      },
+    ]);
     assert.deepEqual(actual.params.input, original.params.input);
     assert.equal(original.params.environments, undefined);
     assert.throws(() =>
-      bindExecutionRequest(
-        { method, params: { environments: [] } },
-        descriptor(),
-      )
+      bindExecutionRequest({ method, params: { environments: [] } }, descriptor()),
     );
   }
   const resume = { method: "thread/resume", params: { threadId: "saved" } };
@@ -213,14 +190,12 @@ test("execution descriptor rejects public files, symlinks, arbitrary hosts and u
     chmodSync(path, 0o600);
     symlinkSync(path, join(directory, "alias"));
     await assert.rejects(readExecutionDescriptor(join(directory, "alias")));
-    for (
-      const patch of [
-        { endpoint: "ws://remote.example/" },
-        { endpoint: "ws://127.0.0.1/?secret=x" },
-        { bearer_token: "short" },
-        { schema: 2 },
-      ]
-    ) {
+    for (const patch of [
+      { endpoint: "ws://remote.example/" },
+      { endpoint: "ws://127.0.0.1/?secret=x" },
+      { bearer_token: "short" },
+      { schema: 2 },
+    ]) {
       writeFileSync(path, JSON.stringify({ ...descriptor(), ...patch }));
       await assert.rejects(readExecutionDescriptor(path));
     }

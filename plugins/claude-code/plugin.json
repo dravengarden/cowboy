@@ -29,11 +29,11 @@
     },
     {
       "id": "cowboy.provider-runtime",
-      "version": "1.3.6"
+      "version": "1.3.7"
     },
     {
       "id": "cowboy.memory-client",
-      "version": "0.2.1"
+      "version": "0.2.2"
     }
   ]
 }

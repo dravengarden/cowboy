@@ -4,8 +4,10 @@
 //! model tools.
 
 mod ledger;
+mod memory_bridge;
 mod relay;
 pub use ledger::{LEDGER_ENV, Ledger, MAX_PROCESSES};
+pub use memory_bridge::MemoryBridge;
 
 use std::collections::{BTreeMap, HashSet};
 use std::os::fd::OwnedFd;
@@ -59,6 +61,8 @@ pub struct Client {
     event_cursor: Mutex<Option<u64>>,
     /// The trusted process ledger of an account-sandboxed session.
     ledger: OnceLock<Arc<Ledger>>,
+    /// The session's memory relay, bridged for an account-sandboxed unit.
+    memory: OnceLock<MemoryBridge>,
 }
 
 /// Wire calls at least this slow are logged individually.
@@ -79,6 +83,7 @@ impl Client {
             notify,
             event_cursor: Mutex::new(None),
             ledger: OnceLock::new(),
+            memory: OnceLock::new(),
         })
     }
 
@@ -502,11 +507,18 @@ impl Endpoint {
     /// bounds as the loopback endpoint.
     pub fn start_unix(
         client: Arc<Client>,
+        extensions: Option<Value>,
     ) -> Result<(Self, crate::account_sandbox::ExecutionBridge)> {
         let token = bearer_token();
-        let descriptor = serde_json::to_vec(&json!({"schema": 1, "binding": client.binding,
+        let mut descriptor = json!({"schema": 1, "binding": client.binding,
             "endpoint": format!("unix:{}", crate::account_sandbox::UNIT_EXEC_SOCKET),
-            "bearer_token": token}))?;
+            "bearer_token": token});
+        // What the session's extensions offer the unit; never a relay
+        // address, token or host path (`extensions::unit_summary`).
+        if let Some(extensions) = extensions {
+            descriptor["extensions"] = extensions;
+        }
+        let descriptor = serde_json::to_vec(&descriptor)?;
         let (listeners, mut received) = mpsc::unbounded_channel::<OwnedFd>();
         let mut admission = Admission::new(token, Arc::clone(&client));
         let listener = tokio::spawn(async move {

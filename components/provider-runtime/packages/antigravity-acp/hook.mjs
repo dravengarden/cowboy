@@ -2,9 +2,12 @@
 // sandbox (docs/antigravity-real-accounts-design.md, "Two denial layers").
 //
 // `agy` runs this hook before every tool call with a JSON description on
-// stdin and reads one JSON decision from stdout. Only the Cowboy facade tools
-// and `ask_question` are allowed; every other name, including unknown and
-// future tools, is denied. Any failure to read or understand the input also
+// stdin and reads one JSON decision from stdout. Only the tools of the
+// `cowboy` MCP server (the facade and the session extensions it carries:
+// Cowboy MCP, the folder's MCP servers, memory) and `ask_question` are
+// allowed; every other name, including unknown and future tools, is denied.
+// `cowboy` is the only MCP server `agy` is given (the proxy replaces
+// `mcpServers` and `agy` loads no customizations), so its namespace is ours. Any failure to read or understand the input also
 // denies: the hook never answers `allow` unless it parsed an exact name.
 import { pathToFileURL } from "node:url";
 
@@ -19,6 +22,13 @@ export const ALLOWED_TOOLS = Object.freeze([
   "ask_question",
 ]);
 const ALLOWED = new Set(ALLOWED_TOOLS);
+/** A tool of the `cowboy` MCP server, as `agy` names it. */
+const COWBOY_TOOL = /^mcp_cowboy_[A-Za-z0-9_-]{1,64}$/;
+
+/** Whether `agy` may run the tool named `name`. */
+export function allowedTool(name) {
+  return typeof name === "string" && (ALLOWED.has(name) || COWBOY_TOOL.test(name));
+}
 const MAX_INPUT = 1024 * 1024;
 const READ_TIMEOUT_MS = 5000;
 
@@ -26,7 +36,7 @@ export const DENIAL_REASON =
   "Cowboy runs this session's workspace on another machine, so built-in file, command, " +
   "subagent, schedule and workflow tools are disabled. Use only the tools of the `cowboy` " +
   "MCP server (ReadFile, ListDirectory, SearchFiles, WriteFile, EditFile, RunCommand, " +
-  "StopCommand).";
+  "StopCommand, and the session's Cowboy, memory and folder tools).";
 
 /** The decision for one hook input (a string as read from stdin). */
 export function decide(input) {
@@ -38,7 +48,7 @@ export function decide(input) {
   } catch {
     name = undefined;
   }
-  if (typeof name === "string" && ALLOWED.has(name)) {
+  if (allowedTool(name)) {
     return { decision: "allow" };
   }
   return { decision: "deny", reason: DENIAL_REASON };
