@@ -12,10 +12,12 @@ proxy and the Cowboy MCP facade,
 and step 5a (the Controller's account controls, queue parking on
 `uncertain_effect` and the kill switch; see
 [Controller account controls](#controller-account-controls-step-5a)); the
-controls UI (step 5b) remains. Split execution stays
-unavailable: native acceptance on 2026-11-18 found that `settings.json`
-`permissions.deny` does not deny built-in tools in `agy acp` 1.5.9, so the
-second denial layer of [R2-14] does not hold (see "Step 4 acceptance"). It extends
+controls UI (step 5b) remains. Native acceptance on 2026-11-18 found that
+`settings.json` `permissions.deny` does not deny built-in tools in `agy acp`
+1.5.9, so the second denial layer of [R2-14] does not hold for read-only
+built-ins (see "Step 4 acceptance"); on 2026-11-20 the owner accepted the hook
+as their only layer and Antigravity 0.2.2 declares split execution (see
+[Split execution declaration](#split-execution-declaration-owner-decision-2026-11-20)). It extends
 [`antigravity-provider-plan.md`](antigravity-provider-plan.md) Phases 3 and 4
 under the
 [Antigravity consumer-subscription boundary](requirements.md#antigravity-consumer-subscription-boundary).
@@ -692,11 +694,31 @@ target directory as a `unix:` execution endpoint.
   gate's shape at readiness and rejects every `session/request_permission`
   for a non-facade tool itself (an independent layer only for tools that ask:
   `run_command`, `write_file`). Read-only built-ins remain gated by the hook
-  alone; split execution stays undeclared until a second layer is proven or
-  the owner accepts the hook as the only one for reads.
+  alone; split execution stayed undeclared until a second layer was proven or
+  the owner accepted the hook as the only one for reads, which the owner did
+  on 2026-11-20 (next section).
 - The (b) and (c) cases with `settings.json` present were not run (prompt
   budget); with the deny layer shown ineffective they reduce to the absent
   rows.
+
+## Split execution declaration (owner decision, 2026-11-20)
+
+The owner accepted the `PreToolUse` hook as the only layer that denies `agy`'s
+read-only built-ins (`read_file` and the other tools that never ask
+permission), so Antigravity runs like every other Provider: `agy` on OVH,
+workspace tools on the session's development Machine. Antigravity 0.2.2
+(component release 3.117.0) declares `provider.execution-jsonrpc.v1` with the
+same `jsonrpc_v1` executor digest as Claude and Codex.
+
+The residual risk is bounded by isolation, not by the deny layers: should the
+hook fail open, a read-only built-in reads inside the account's own sandbox,
+which holds only that account's home and token, never another account's,
+another Provider's credentials, `ubuntu`'s home or the target. The one failure
+the acceptance found that silently disables the hook, an unparseable
+`hooks.json`, cannot arise at runtime: the daemon bind-mounts it read-only from
+the runtime store and the proxy refuses `initialize` unless the file has the
+gate's exact shape. Tools that ask permission keep the proxy as their second,
+independent layer.
 
 ## Revision 5 simplification (owner decision, 2026-11-18)
 

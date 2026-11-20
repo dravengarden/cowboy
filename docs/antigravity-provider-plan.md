@@ -345,7 +345,10 @@ unless a zero-inference probe proves facade and projection. Declare
 `provider.execution-jsonrpc.v1` only after exact-generation native tests pass for
 fresh, resumed and compacted tool dispatch, implicit filesystem access,
 cancellation, target loss and lost mutation replies. Auth and history stay on
-OVH. Ordinary OVH sessions stay unavailable until this passes.
+OVH. Ordinary OVH sessions stay unavailable until this passes. Antigravity
+0.2.2 declares it after the owner accepted the hook as the only layer for
+read-only built-ins (2026-11-20; see the design's "Split execution
+declaration").
 
 ### Phase 5 — Extras
 

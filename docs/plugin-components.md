@@ -83,6 +83,13 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.117.0 changes only Antigravity: 0.2.2 declares split
+execution (`provider.execution-jsonrpc.v1`, the shared `jsonrpc_v1` executor
+digest), so an Antigravity session runs `agy` on OVH with its workspace tools on
+the development Machine, following the owner decision in
+[Antigravity real accounts](antigravity-real-accounts-design.md#split-execution-declaration-owner-decision-2026-11-20).
+Every other Plugin keeps its 3.116.0 version and closure.
+
 Component release 3.116.0 (unpublished) records provider-runtime 1.3.3, whose
 lock moves the Cowboy-owned `cowboy-antigravity-acp` to 1.0.1: `agy-proxy`
 reads the plan `agy` reports in `_meta.antigravity.tier` of a session result

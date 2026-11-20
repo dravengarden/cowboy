@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "antigravity",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.6.0",
   "display": {
@@ -148,7 +148,13 @@
           "classification": "antigravity-policy-violation",
           "keep_worker_alive": true
         }
-      ]
+      ],
+      "execution": {
+        "interface": "jsonrpc_v1",
+        "executor_digests": [
+          "sha256:8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479"
+        ]
+      }
     },
     "arguments": [
       "acp",
@@ -220,6 +226,7 @@
     ],
     "required_capabilities": [
       "provider.runtime.v1",
+      "provider.execution-jsonrpc.v1",
       "provider.native-custody.v1"
     ],
     "network": "ipv4_only_v1",
