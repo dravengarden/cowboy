@@ -3,10 +3,9 @@
 //! never runs it (no bootstrap fallback) and never sees a credential.
 
 use super::{PluginUsageSpec, UsageService};
-use crate::machine_control::NativeResetFailure;
 use crate::machine_control::{MachineControl, Reply, ReplyKind, RequestBinding};
 use crate::machine_protocol::portable_usage::{
-    PortableResetRequest, PortableUsageRequest, portable_usage_error_code,
+    PortableSidecar, PortableUsageRequest, portable_usage_error_code,
 };
 use crate::machine_protocol::{
     MachineCommand, PluginHostOperation, PluginInstallationState, PluginInventory,
@@ -103,6 +102,34 @@ impl UsageService {
         })
     }
 
+    /// The exact active generation of each sidecar Plugin on `machine_id`,
+    /// or `None` if one is missing there: a collection starts only that
+    /// checked set.
+    #[must_use]
+    pub fn sidecar_generations(
+        &self,
+        machine_id: &str,
+        plugins: &[String],
+    ) -> Option<Vec<PortableSidecar>> {
+        let installed = self.machine_control.connected_plugin_inventory();
+        plugins
+            .iter()
+            .map(|plugin| {
+                installed
+                    .iter()
+                    .find(|candidate| {
+                        candidate.machine_id == machine_id
+                            && &candidate.plugin.plugin_id == plugin
+                            && candidate.plugin.state == PluginInstallationState::Active
+                    })
+                    .map(|candidate| PortableSidecar {
+                        plugin_id: plugin.clone(),
+                        generation_digest: candidate.plugin.generation_digest.clone(),
+                    })
+            })
+            .collect()
+    }
+
     /// The usage binding of exactly this installed release: what its signed
     /// collector supports (resets, claim policy), never the presentation
     /// default of a newer or older release.
@@ -174,74 +201,6 @@ pub fn begin_collect<'a>(
             Ok(Err(_)) => Err("portable_usage_machine_unavailable"),
             Err(_) => Err("portable_usage_temporarily_unavailable"),
             Ok(Ok(_)) => Err("portable_usage_collector_failed"),
-        }
-    })
-}
-
-/// Spend one banked reset with the account's collector on `machine_id`. A
-/// refusal before dispatch never reached the Provider; a lost, late or
-/// malformed reply may follow a sent reset, so it is unknown.
-pub async fn consume_reset(
-    machine_control: &MachineControl,
-    machine_id: &str,
-    plugin: &PluginInventory,
-    request: PortableResetRequest,
-) -> Result<Value, NativeResetFailure> {
-    begin_reset(machine_control, machine_id, plugin, request)?.await
-}
-
-/// Enqueue one reset synchronously; `Err` means nothing was sent. Once this
-/// returns `Ok`, only the returned future's reply decides the outcome.
-pub fn begin_reset<'a>(
-    machine_control: &'a MachineControl,
-    machine_id: &str,
-    plugin: &PluginInventory,
-    request: PortableResetRequest,
-) -> Result<impl Future<Output = Result<Value, NativeResetFailure>> + 'a, NativeResetFailure> {
-    let unsent = |code| NativeResetFailure {
-        call_may_have_reached_provider: false,
-        code,
-    };
-    if !request.reset.valid() {
-        return Err(unsent("portable_reset_request_invalid"));
-    }
-    let binding = machine_control
-        .bind_plugin_host(machine_id, plugin, PluginHostOperation::ResetUsage)
-        .map_err(|_| unsent("portable_usage_machine_unavailable"))?;
-    let request_id = format!("portable-reset-{}", uuid::Uuid::new_v4());
-    let (reply, pending) = machine_control
-        .begin_request(
-            machine_id,
-            &request_id,
-            MachineCommand::ConsumePortableReset {
-                request_id: request_id.clone(),
-                request: Box::new(request),
-            },
-            ReplyKind::PluginHost,
-            Some(RequestBinding::Plugin(&binding)),
-        )
-        .map_err(|error| unsent(dispatch_error(&error)))?;
-    Ok(async move {
-        let _pending = pending;
-        match tokio::time::timeout(REPLY_TIMEOUT, reply).await {
-            Ok(Ok(Reply::PluginHost {
-                accepted: true,
-                payload: Some(value),
-                ..
-            })) if !value.is_null() => Ok(value),
-            Ok(Ok(Reply::PluginHost {
-                accepted: false,
-                started,
-                detail: Some(code),
-                ..
-            })) => Err(NativeResetFailure {
-                call_may_have_reached_provider: started,
-                code: portable_usage_error_code(&code),
-            }),
-            _ => Err(NativeResetFailure {
-                call_may_have_reached_provider: true,
-                code: "portable_reset_outcome_unknown",
-            }),
         }
     })
 }
@@ -394,98 +353,5 @@ mod tests {
             command.minimum_protocol(),
             crate::machine_protocol::PORTABLE_USAGE_PROTOCOL_VERSION
         );
-    }
-
-    fn reset() -> PortableResetRequest {
-        serde_json::from_value(serde_json::json!({
-            "account_id": "11111111-1111-4111-8111-111111111111", "plugin_id": "codex",
-            "plugin_version": "1.0.0", "generation_digest": "sha256:x", "auth_generation": 3,
-            "reset": {"provider": "openai", "idempotency_key": "cowboy-reset-1",
-                "expected_credit_id": "credit-1"},
-        }))
-        .unwrap()
-    }
-
-    #[tokio::test]
-    async fn resets_keep_whether_the_provider_may_have_been_reached() {
-        let control = std::sync::Arc::new(MachineControl::default());
-        // Never dispatched: an old Machine or no connection.
-        assert!(
-            !consume_reset(&control, "ovh", &plugin(), reset())
-                .await
-                .unwrap_err()
-                .call_may_have_reached_provider
-        );
-        let (_old, mut commands) = connect(
-            &control,
-            crate::machine_protocol::ACCOUNT_FENCE_PROTOCOL_VERSION,
-        );
-        let failure = consume_reset(&control, "ovh", &plugin(), reset())
-            .await
-            .unwrap_err();
-        assert_eq!(
-            failure,
-            NativeResetFailure {
-                call_may_have_reached_provider: false,
-                code: "machine_usage_update_required",
-            }
-        );
-        assert!(commands.try_recv().is_err());
-        for (accepted, started, payload, detail, expected) in [
-            (
-                true,
-                true,
-                Some(serde_json::json!({"outcome": "consumed"})),
-                None,
-                Ok(serde_json::json!({"outcome": "consumed"})),
-            ),
-            (
-                false,
-                false,
-                None,
-                Some("portable_usage_replica_pending"),
-                Err((false, "portable_usage_replica_pending")),
-            ),
-            (
-                false,
-                true,
-                None,
-                Some("collector stderr"),
-                Err((true, "portable_usage_collector_failed")),
-            ),
-        ] {
-            let (connection, mut commands) = connect(
-                &control,
-                crate::machine_protocol::PORTABLE_USAGE_PROTOCOL_VERSION,
-            );
-            let requester = std::sync::Arc::clone(&control);
-            let pending =
-                tokio::spawn(
-                    async move { consume_reset(&requester, "ovh", &plugin(), reset()).await },
-                );
-            let Some(MachineCommand::ConsumePortableReset {
-                request_id,
-                request: sent,
-            }) = commands.recv().await
-            else {
-                panic!("portable reset command expected");
-            };
-            assert_eq!(*sent, reset());
-            control.record_remote(
-                &connection,
-                crate::machine_protocol::MachineEvent::PluginHostResponse {
-                    request_id,
-                    accepted,
-                    started,
-                    payload,
-                    detail: detail.map(str::to_owned),
-                },
-            );
-            let result = pending
-                .await
-                .unwrap()
-                .map_err(|failure| (failure.call_may_have_reached_provider, failure.code));
-            assert_eq!(result, expected);
-        }
     }
 }

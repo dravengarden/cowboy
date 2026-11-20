@@ -28,7 +28,6 @@ impl MachineCommand {
             Self::CollectNativeUsage { .. }
             | Self::ConsumeNativeReset { .. }
             | Self::CollectPortableUsage { .. }
-            | Self::ConsumePortableReset { .. }
             | Self::AccountSandboxFence { .. }
             | Self::AccountSandboxRemove { .. }
             | Self::BeginNativeLogin { .. }
@@ -165,9 +164,7 @@ impl MachineCommand {
         match self {
             Self::CollectNativeUsage { .. } => NATIVE_USAGE_PROTOCOL_VERSION,
             Self::ConsumeNativeReset { .. } => NATIVE_RESET_PROTOCOL_VERSION,
-            Self::CollectPortableUsage { .. } | Self::ConsumePortableReset { .. } => {
-                PORTABLE_USAGE_PROTOCOL_VERSION
-            }
+            Self::CollectPortableUsage { .. } => PORTABLE_USAGE_PROTOCOL_VERSION,
             Self::AccountSandboxFence { .. } | Self::AccountSandboxRemove { .. } => {
                 ACCOUNT_FENCE_PROTOCOL_VERSION
             }

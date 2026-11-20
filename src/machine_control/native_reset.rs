@@ -3,7 +3,9 @@
 //! collector; the Controller only dispatches and classifies the answer.
 
 use super::{ConnectionToken, MachineControl, Reply, ReplyKind, RequestBinding};
-use crate::machine_protocol::{MachineCommand, NativeResetRequest, native_usage_error_code};
+use crate::machine_protocol::{
+    MachineCommand, NativeResetDispatch, NativeResetRequest, native_usage_error_code,
+};
 
 /// The collector starts the Provider CLI under a ten-second deadline and the
 /// Machine admission waits at most thirty seconds before it.
@@ -27,6 +29,7 @@ impl MachineControl {
         connection: &'a ConnectionToken,
         profile: &crate::provider_account::NativeProfileReceipt,
         request: NativeResetRequest,
+        dispatch: NativeResetDispatch,
     ) -> Result<impl Future<Output = Result<serde_json::Value, NativeResetFailure>> + 'a, String>
     {
         if profile.account_id.is_default() || profile.generation == 0 {
@@ -43,6 +46,7 @@ impl MachineControl {
                 request_id: request_id.clone(),
                 profile: Box::new(profile.clone()),
                 request,
+                dispatch,
             },
             ReplyKind::PluginHost,
             Some(RequestBinding::Connection(connection)),

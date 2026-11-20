@@ -28,45 +28,39 @@ with the session and does not become account-plan usage.
 
 ## Named portable accounts
 
-A named Codex or Grok subscription signed in once, or a named DeepSeek API key,
-keeps its credential in the account's Service vault, replicated to every Machine
-at account scope (Machine protocol 47). Its usage reuses the released signed
-collector of the Service account's usage host (the first member of the
-account's credential scope that declares one: `claude-deepseek` for DeepSeek),
-dispatched as `CollectPortableUsage` (Machine protocol 50; an older Machine is
-`machine_usage_update_required`). The Machine runs it through the Service host
-path at account scope, so the collector sees exactly the credential projection,
-home and sidecars of a session on that account. It refuses unless the account
-replica is the vault's current Ready generation the Controller named, refuses an
-observation whose generation changed while the collector ran, and holds the
-account's credential guard for the run so no apply or wipe overlaps it.
+A named Codex subscription signed in once, or a named DeepSeek API key, keeps
+its credential in the account's Service vault, replicated to every Machine at
+account scope (Machine protocol 47). Its usage is read-only and reuses the
+released signed collector of the Service account's usage host (the first
+member of the account's credential scope that declares one: `claude-deepseek`
+for DeepSeek), dispatched as `CollectPortableUsage` (Machine protocol 50; an
+older Machine is `machine_usage_update_required`). The Machine runs it through
+the Service host path at account scope, so the collector sees exactly the
+credential projection and home of a session on that account, and starts only
+the exact sidecar Plugin generations the Controller checked for that Machine.
+Every participant must hold one committed shared vault generation; the Machine
+refuses otherwise, refuses an observation whose generation changed while the
+collector ran, and holds the account's credential guard for the run.
 
-**Refresh-token decision.** A usage query or reset of a named portable account
-never redeems a refresh token. A Service compare-and-swap after a refresh
-cannot repair a refresh token that a session on another Machine redeemed
-concurrently, so the coordination must precede the vendor call; the only
-writer allowed to redeem is the sessions' existing refresh path. The Machine
-adds `"token_refresh": false` to every portable request and, for a Provider
-whose CLI rotates credentials (`compare_and_swap`), runs only a collector whose
-exact signed release declares (`collector/portable-account.json`,
-`token_refresh: "request"`) that it then reports authentication required
-instead of refreshing. The Controller places only on such a release and
-otherwise reports `portable_usage_refresh_unsupported`. Codex's collector
-declares it (effective from its next Plugin release); Grok's CLI may renew its
-sign-in on start, so named Grok usage and resets stay off until a refresh-free
-Grok collector exists. An entered DeepSeek key is never refreshed.
+**Refresh-token decision.** A usage query of a named portable account never
+redeems a refresh token. A Service compare-and-swap after a refresh cannot
+repair a refresh token that a session on another Machine redeemed
+concurrently, so coordination must precede the vendor call; the only writer
+allowed to redeem is the sessions' existing refresh path. The Controller puts
+`"token_refresh": false` in every portable request and the Machine sets it
+again. For a Provider whose CLI rotates credentials (`compare_and_swap`) only a
+collector whose exact signed release declares (`collector/portable-account.json`,
+`token_refresh: "request"`) that it then reports authentication required runs;
+otherwise `portable_usage_refresh_unsupported`. Codex 3.6.14 declares it;
+Grok's CLI may renew its sign-in on start, so named Grok usage stays off. No
+Machine speaking protocol 50 was released before this, so no other capability
+negotiation is needed. An entered DeepSeek key is never refreshed.
 
 Placement: among Machines with an exact released active collector generation
 that host runtime policy admits for the collector and every sidecar Plugin it
 starts, Cowboy picks the one running most of the owner's live sessions on the
 account, then the lowest Machine ID, and never inherits the Service account's
-configured usage query Machine.
-
-Banked resets of a portable Codex or Grok account (`ConsumePortableReset`, also
-protocol 50) run the collector's `consume_reset` under the same admission and on
-the same Machine and replica as its quota read, holding the installation
-lifecycle until the collector ends as Service resets do. A failure after the
-collector started keeps `started`, so its outcome is unknown and never retried.
+configured usage query Machine. Named portable accounts have no resets.
 
 ## Operator CLI
 
@@ -111,7 +105,7 @@ Starts are evenly spaced (one minute with these defaults), with at most one
 active collector per Provider. The oldest named account is tried first.
 Anthropic's Service account and named native accounts share the same Provider
 budget; account observations remain isolated by owner, account and native login.
-Named portable accounts (Codex, Grok, DeepSeek API key) likewise share their
+Named portable accounts (Codex, DeepSeek API key) likewise share their
 Provider's budget with its Service account, one start per account interval, and
 their observations stay isolated by owner, account and vault identity.
 OpenAI, DeepSeek and xAI have independent Provider budgets. Passive ACP usage,
@@ -161,15 +155,15 @@ the invocation ends, so the charged time is the actual call time. A scheduled
 reset reserves its start before any one-shot claim, so pacing only delays it. A refused or changed reset records no failure backoff; an
 authentication failure does.
 
-A named native Claude account's confirmed or scheduled reset runs on the
-Machine holding its native login, through the same signed collector, CLI
-identity and token as its quota read (Machine protocol 49). It takes its start
-from the same Anthropic Provider window and spacing, on the account's own lane,
-and holds the account's collection lock, so a quota read and a reset of one
-account never overlap. Its schedule lives in the same persisted
-scheduled-action table (lane `account-<id>`) and follows the same one-shot
-claim, preflight-retry and unknown-outcome rules. A reset that never reached
-the Machine's collector records no failure backoff.
+A named native Claude account's confirmed reset is immediate only (named
+accounts have no schedules) and runs on the Machine holding its native login,
+through the same signed collector, CLI identity and token as its quota read
+(Machine protocol 49), on the exact release the Controller selected and never
+after its dispatch expiry. It takes its start from the same Anthropic Provider
+window and spacing, on the account's own lane, and holds the account's
+collection lock, so a quota read and a reset of one account never overlap. A
+reset that never reached the Machine's collector records no failure backoff;
+an authentication failure backs off even after the call was sent.
 
 Claude usage reads and resets (Service card and named accounts) contact
 Anthropic only from a Machine that host policy explicitly pins for

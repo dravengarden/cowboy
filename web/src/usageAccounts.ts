@@ -149,17 +149,11 @@ export function usageResetTarget(card: UsageAccountCard): UsageResetTarget | und
   return record(collected.rate_limits?.rateLimitResetCredits) ? { kind: "account", accountId: card.id } : undefined;
 }
 
-/** The scheduled reset shown on this card, from its own lane. A named card
- * shows its persisted schedule even while it cannot spend now (credits gone,
- * account disabled), so the owner can always see and cancel it. */
+/** The scheduled reset shown on this card. Only Service cards schedule;
+ * a named card's reset is immediate only. */
 export function usageCardResetSchedule(snapshot: UsageSnapshot | null, card: UsageAccountCard): { fire_at_ms: number } | undefined {
-  if (!card.collector) return card.native?.reset_schedule;
-  return usageResetTarget(card) ? usageResetSchedule(snapshot, card.usage) : undefined;
-}
-
-/** Where this card's persisted schedule is cancelled: its own lane. */
-export function usageScheduleTarget(card: UsageAccountCard): UsageResetTarget | undefined {
-  return card.collector ? usageResetTarget(card) : { kind: "account", accountId: card.id };
+  const target = usageResetTarget(card);
+  return target?.kind === "service" ? usageResetSchedule(snapshot, card.usage) : undefined;
 }
 
 /** The Provider's plan and reset page, on the cards that own reset actions. */

@@ -329,7 +329,7 @@ const MACHINE_RECONNECT_SWEEP_INTERVAL: std::time::Duration = std::time::Duratio
 const PROVIDER_UNINSTALL_RETENTION_MS: i64 = 3 * 24 * 60 * 60 * 1_000;
 const PROVIDER_UNINSTALL_PLAN_TTL_MS: i64 = 10 * 60 * 1_000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 enum ScheduledResetFailurePolicy {
     RetryPreflight,
     StopFailed,
@@ -1350,7 +1350,6 @@ async fn serve_axum(
         tokio::spawn(run_usage_broadcast(Arc::clone(&state))),
         tokio::spawn(superagent::run(Arc::clone(&state))),
         tokio::spawn(provider_accounts::usage::run(Arc::clone(&state))),
-        tokio::spawn(provider_accounts::usage::reset::run(Arc::clone(&state))),
         tokio::spawn(session_context::rollover::observe(Arc::clone(&state))),
     ];
     let code_buffers = Arc::clone(&state.code_buffers);

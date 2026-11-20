@@ -20,7 +20,7 @@
 //! lowest Machine ID. Like every additional account it never inherits the
 //! Service account's configured usage query Machine.
 use super::*;
-use crate::machine_protocol::portable_usage::{PortableResetRequest, PortableUsageRequest};
+use crate::machine_protocol::portable_usage::PortableUsageRequest;
 use crate::store::provider_accounts::portable::Use;
 use crate::usage::native::{PortableScope, Scope, Slot};
 
@@ -32,9 +32,9 @@ pub(super) struct Target {
     members: Vec<String>,
     /// The vault's current Ready generation of `plugin_id`.
     auth_generation: u64,
-    /// The vault generation of every other member whose sidecar the
-    /// collector starts; the Machine fences each replica on it.
-    scope_generations: BTreeMap<String, u64>,
+    /// Other scope members whose sidecar the collector starts. They share
+    /// `auth_generation`; the Machine fences each replica on it.
+    sidecar_plugins: Vec<String>,
 }
 
 /// `None` when the account's Provider keeps no named credential in a vault.
@@ -72,9 +72,14 @@ pub(super) fn target(
             collector.as_ref(),
         )
         .and_then(|mut target| {
+            // One committed shared generation across every participant, or
+            // no observation: a half-distributed key replacement never mixes
+            // two credentials in one balance.
             for (plugin, status) in sidecars {
-                let generation = ready(status.as_ref())?;
-                target.scope_generations.insert(plugin, generation);
+                if ready(status.as_ref())? != target.auth_generation {
+                    return Err("portable_usage_replica_pending");
+                }
+                target.sidecar_plugins.push(plugin);
             }
             Ok(target)
         }),
@@ -118,7 +123,7 @@ fn ready_target(
         plugin_id,
         members,
         auth_generation: generation,
-        scope_generations: BTreeMap::new(),
+        sidecar_plugins: Vec::new(),
     })
 }
 
@@ -134,6 +139,8 @@ struct Candidate {
     /// The owner's live (worker-running, untrashed) sessions on this account
     /// there.
     sessions: usize,
+    /// Every sidecar Plugin has an exact active generation there.
+    complete: bool,
     /// The collector there can never redeem a refresh token (its release
     /// declares it, or the Provider CLI does not rotate credentials).
     refresh_safe: bool,
@@ -151,7 +158,11 @@ fn choose(candidates: &[Candidate]) -> Result<&str, &'static str> {
     if current.is_empty() {
         return Err("machine_usage_update_required");
     }
-    current
+    let complete: Vec<_> = current.into_iter().filter(|c| c.complete).collect();
+    if complete.is_empty() {
+        return Err("portable_usage_collector_unavailable");
+    }
+    complete
         .into_iter()
         .filter(|candidate| candidate.refresh_safe)
         .min_by(|left, right| {
@@ -164,12 +175,20 @@ fn choose(candidates: &[Candidate]) -> Result<&str, &'static str> {
         .ok_or("portable_usage_refresh_unsupported")
 }
 
-pub(super) fn placement(
+/// One placed collection: the Machine, the exact collector release and the
+/// exact sidecar Plugin generations checked for that Machine.
+type Placement = (
+    String,
+    crate::machine_protocol::PluginInventory,
+    Vec<crate::machine_protocol::portable_usage::PortableSidecar>,
+);
+
+fn placement(
     state: &AppState,
     owner: &str,
     id: &ProviderAccountId,
     target: &Target,
-) -> Result<(String, crate::machine_protocol::PluginInventory), &'static str> {
+) -> Result<Placement, &'static str> {
     let host = state
         .usage
         .portable_usage_host(&target.members)
@@ -187,19 +206,25 @@ pub(super) fn placement(
             package.manifest.authentication.refresh
                 == cowboy_provider_sdk::RefreshOwnership::CompareAndSwap
         });
+    let sidecars = |machine: &str| {
+        state
+            .usage
+            .sidecar_generations(machine, &target.sidecar_plugins)
+    };
     let candidates: Vec<_> = host
         .candidates
         .iter()
         .map(|(machine, _, refresh_free)| Candidate {
             refresh_safe: *refresh_free || !rotates,
+            complete: sidecars(machine).is_some(),
             machine_id: machine.clone(),
             current: state.machine_control.machine_supports(
                 machine,
                 crate::machine_protocol::PORTABLE_USAGE_PROTOCOL_VERSION,
             ) && super::super::portable::machine_ready(state, machine, &target.plugin_id),
             allowed: std::iter::once(&target.plugin_id)
-                .chain(target.scope_generations.keys())
-                .all(|plugin| state.supervisor.runtime_allowed(plugin, machine)),
+                .chain(&target.sidecar_plugins)
+                .all(|plugin| state.supervisor.vendor_request_allowed(plugin, machine)),
             sessions: sessions
                 .iter()
                 .filter(|meta| {
@@ -213,11 +238,13 @@ pub(super) fn placement(
         })
         .collect();
     let machine = choose(&candidates)?;
-    host.candidates
+    let (machine, plugin, _) = host
+        .candidates
         .iter()
         .find(|(candidate, _, _)| candidate == machine)
-        .map(|(machine, plugin, _)| (machine.clone(), plugin.clone()))
-        .ok_or("portable_usage_machine_unavailable")
+        .ok_or("portable_usage_machine_unavailable")?;
+    let sidecars = sidecars(machine).ok_or("portable_usage_collector_unavailable")?;
+    Ok((machine.clone(), plugin.clone(), sidecars))
 }
 
 /// The Machine a collection would run on now, for the read model.
@@ -229,7 +256,7 @@ pub(super) fn selected_machine(
 ) -> Option<String> {
     placement(state, owner, id, target)
         .ok()
-        .map(|(machine, _)| machine)
+        .map(|(machine, _, _)| machine)
 }
 
 /// One budgeted, coalesced collection; the caller holds `collection`.
@@ -298,18 +325,22 @@ async fn under_account_lock<T>(
                 .and_then(|vault| vault.status(plugin))
                 .and_then(|status| ready(Some(&status)).ok())
         };
-        generation(&target.plugin_id) == Some(target.auth_generation)
-            && target
-                .scope_generations
-                .iter()
-                .all(|(plugin, expected)| generation(plugin) == Some(*expected))
+        std::iter::once(&target.plugin_id)
+            .chain(&target.sidecar_plugins)
+            .all(|plugin| generation(plugin) == Some(target.auth_generation))
     };
     let locked = store
         .with_portable_account(
             owner,
             id,
             Use::Observe,
-            |account| account.provider_id == target.scope.portable_provider,
+            // The reserved authority, not just the Provider: a new sign-in
+            // or key between selection and enqueue refuses the dispatch.
+            |account| {
+                account.provider_id == target.scope.portable_provider
+                    && account.admission_revision == target.scope.admission_revision
+                    && account.identity_fingerprint == target.scope.identity_fingerprint
+            },
             || {
                 if current() {
                     match enqueue() {
@@ -337,7 +368,7 @@ async fn collect(
     id: &ProviderAccountId,
     target: &Target,
 ) -> Result<Value, &'static str> {
-    let (machine, plugin) = placement(state, owner, id, target)?;
+    let (machine, plugin, sidecars) = placement(state, owner, id, target)?;
     // Activity attachments are Provider-wide request telemetry with no
     // account dimension; attaching them would show other accounts' spend.
     let request = PortableUsageRequest {
@@ -346,13 +377,15 @@ async fn collect(
         plugin_version: plugin.plugin_version.clone(),
         generation_digest: plugin.generation_digest.clone(),
         auth_generation: target.auth_generation,
+        // Usage never redeems a refresh token (the Machine enforces it too).
         payload: json!({
             "operation": "collect",
             "provider": target.binding.account,
             "product": target.binding.product_label(),
             "activity": null,
+            "token_refresh": false,
         }),
-        scope_generations: target.scope_generations.clone(),
+        sidecars,
     };
     let (pending, code) = under_account_lock(state, owner, id, target, || {
         crate::usage::portable::begin_collect(&state.machine_control, &machine, &plugin, request)
@@ -368,41 +401,6 @@ async fn collect(
         _ => return Err("account_binding_changed"),
     }
     observation(target, &raw)
-}
-
-/// Spend one banked reset on the Machine and exact release the reservation
-/// selected, under the same account-lock admission as a collection.
-pub(super) async fn consume_reset(
-    state: &AppState,
-    owner: &str,
-    id: &ProviderAccountId,
-    (target, machine, plugin): (&Target, &str, &crate::machine_protocol::PluginInventory),
-    reset: crate::machine_protocol::NativeResetRequest,
-) -> Result<Value, crate::machine_control::NativeResetFailure> {
-    let request = PortableResetRequest {
-        account_id: id.clone(),
-        plugin_id: plugin.plugin_id.clone(),
-        plugin_version: plugin.plugin_version.clone(),
-        generation_digest: plugin.generation_digest.clone(),
-        auth_generation: target.auth_generation,
-        reset,
-        scope_generations: target.scope_generations.clone(),
-    };
-    let (pending, code) = under_account_lock(state, owner, id, target, || {
-        crate::usage::portable::begin_reset(&state.machine_control, machine, plugin, request)
-            .map_err(|failure| failure.code)
-    })
-    .await;
-    let Some(pending) = pending else {
-        return Err(crate::machine_control::NativeResetFailure {
-            call_may_have_reached_provider: false,
-            code,
-        });
-    };
-    pending.await.inspect_err(|failure| {
-        tracing::info!(account_id = id.as_str(), %machine, reason = failure.code,
-            reached = failure.call_may_have_reached_provider, "portable account reset failed");
-    })
 }
 
 /// The stored observation: the collector's account, windows and Provider
@@ -437,6 +435,7 @@ mod tests {
             allowed,
             sessions,
             refresh_safe: true,
+            complete: true,
         }
     }
 
@@ -469,6 +468,17 @@ mod tests {
         );
         assert_eq!(
             choose(&[rotating, candidate("hawk", true, true, 0)]),
+            Ok("hawk")
+        );
+        // A Machine missing a checked sidecar Plugin never runs it.
+        let mut partial = candidate("ovh", true, true, 3);
+        partial.complete = false;
+        assert_eq!(
+            choose(&[partial.clone()]),
+            Err("portable_usage_collector_unavailable")
+        );
+        assert_eq!(
+            choose(&[partial, candidate("hawk", true, true, 0)]),
             Ok("hawk")
         );
         // Policy excludes a Machine even when the owner's sessions run there.
@@ -506,7 +516,7 @@ mod tests {
             plugin_id: "codex".into(),
             members: vec!["codex".into()],
             auth_generation: 9,
-            scope_generations: BTreeMap::new(),
+            sidecar_plugins: Vec::new(),
         }
     }
 

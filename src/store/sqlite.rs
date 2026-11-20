@@ -2058,7 +2058,7 @@ impl SqliteStorage {
              VALUES (?1, 'rate_limit_reset', ?2, ?3) \
              ON CONFLICT (provider) DO UPDATE SET action = excluded.action, \
              fire_at_ms = excluded.fire_at_ms, idempotency_key = excluded.idempotency_key, \
-             attempt_count = 0, next_attempt_at_ms = excluded.fire_at_ms, in_flight_at_ms = NULL, authority = NULL",
+             attempt_count = 0, next_attempt_at_ms = excluded.fire_at_ms",
         )
         .bind(provider)
         .bind(fire_at_ms)
@@ -5765,7 +5765,7 @@ impl SqliteStorage {
             }
         }
 
-        let action_logs = self.provider_action_logs(200).await?;
+        let action_logs = self.service_action_logs().await?;
         summaries.extend(
             action_logs
                 .into_iter()
@@ -5843,7 +5843,7 @@ impl SqliteStorage {
                 ),
             >(
                 "SELECT provider, action, trigger, status, phase, message, credit_id, \
-                 idempotency_suffix, created_at_ms FROM provider_action_logs WHERE id = ?1",
+                 idempotency_suffix, created_at_ms FROM provider_action_logs WHERE id = ?1 AND provider NOT LIKE 'account-%'",
             )
             .bind(action_id)
             .fetch_optional(&self.pool)

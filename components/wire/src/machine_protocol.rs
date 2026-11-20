@@ -87,7 +87,10 @@ mod native_usage;
 mod portable_bundle;
 pub use portable_bundle::PortableCredentialBundle;
 pub mod portable_usage;
-pub use native_usage::{NativeResetRequest, native_usage_error_code};
+pub use native_usage::{
+    NATIVE_RESET_OUTCOMES, NativeResetDispatch, NativeResetRequest, native_usage_error_code,
+    project_native_reset_reply,
+};
 
 pub const CURRENT_TURN_PROTOCOL_VERSION: u16 = 34;
 pub const DELIVERY_CONTROLS_PROTOCOL_VERSION: u16 = 35;
@@ -850,16 +853,12 @@ pub enum MachineCommand {
         request_id: String,
         profile: Box<crate::provider_account::NativeProfileReceipt>,
         request: NativeResetRequest,
+        dispatch: native_usage::NativeResetDispatch,
     },
     /// Answered only by `PluginHostResponse`; see [`portable_usage`].
     CollectPortableUsage {
         request_id: String,
         request: Box<portable_usage::PortableUsageRequest>,
-    },
-    /// Answered only by `PluginHostResponse`; see [`portable_usage`].
-    ConsumePortableReset {
-        request_id: String,
-        request: Box<portable_usage::PortableResetRequest>,
     },
     NativeLogout {
         request_id: String,

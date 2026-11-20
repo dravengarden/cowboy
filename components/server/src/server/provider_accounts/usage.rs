@@ -10,6 +10,7 @@ mod portable;
 
 pub(in crate::server) mod reset;
 
+#[derive(Clone)]
 struct Target {
     operation: String,
     completion: NativeCompletion,
@@ -88,10 +89,27 @@ fn public_code(code: &'static str) -> &'static str {
     }
 }
 
+/// What a native login is resolved for: any usage-capable login, or only
+/// a login whose Machine can spend a banked reset under host policy.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Purpose {
+    Usage,
+    Reset,
+}
+
 async fn target(
     state: &AppState,
     owner: &str,
     id: &ProviderAccountId,
+) -> Result<Resolved, &'static str> {
+    target_for(state, owner, id, Purpose::Usage).await
+}
+
+async fn target_for(
+    state: &AppState,
+    owner: &str,
+    id: &ProviderAccountId,
+    purpose: Purpose,
 ) -> Result<Resolved, &'static str> {
     let store = state.store.as_ref().ok_or("unavailable")?;
     let registry = store
@@ -119,7 +137,25 @@ async fn target(
         return Err("account_usage_unsupported");
     }
     let machines = store.list_machines().await.map_err(|_| "unavailable")?;
-    let mut machines: Vec<_> = machines.iter().filter(|machine| !machine.revoked).collect();
+    let mut machines: Vec<_> = machines
+        .iter()
+        .filter(|machine| !machine.revoked)
+        // A reset considers only logins whose Machine can spend one under
+        // host policy, before ranking: an old or disallowed login never
+        // masks an eligible one.
+        .filter(|machine| {
+            purpose == Purpose::Usage
+                || state
+                    .machine_control
+                    .connection_protocol(&machine.id)
+                    .is_some_and(|(_, version)| {
+                        version >= crate::machine_protocol::NATIVE_RESET_PROTOCOL_VERSION
+                    })
+                    && state
+                        .supervisor
+                        .vendor_request_allowed(&account.provider_id, &machine.id)
+        })
+        .collect();
     // Prefer the login whose Machine can serve every named-usage operation
     // (reads and resets) under host policy, so an old or disallowed login
     // never masks an eligible one; the order is deterministic.
@@ -375,21 +411,23 @@ fn error_message(code: &str) -> &str {
         "usage_admission_unavailable" => {
             "Usage collection is paused. The Service admission ledger needs repair and a restart."
         }
-        "account_reset_unsupported" | "native_reset_unsupported" | "portable_reset_unsupported" => {
+        "account_reset_unsupported" | "native_reset_unsupported" => {
             "This account's Provider does not offer usage resets."
         }
         "usage_reset_paced" => {
             "Usage requests to this Provider are paced; no reset was sent. Try again in a minute."
         }
-        "native_reset_outcome_unknown" | "portable_reset_outcome_unknown" => {
-            "The reset outcome is unknown. Refresh usage before trying again."
+        "native_reset_outcome_unknown" | "reset_outcome_unknown" => {
+            "The reset outcome is unknown. Check credits before trying again."
         }
+        "native_reset_expired" => "The reset was not started in time; no reset was sent.",
         "reset_confirmation_required" => "Type confirm to use a reset.",
-        "reset_in_progress" => {
-            "This reset is still running. Refresh usage to see its result before trying again."
+        "reset_authentication_required" => {
+            "This account's sign-in needs renewal before a reset can be used."
         }
-        "reset_operation_invalid" => "The reset operation ID is invalid.",
-        "reset_schedule_too_soon" => "Choose a time at least one minute ahead.",
+        "reset_credit_changed" => "The available reset changed. Refresh usage and confirm again.",
+        "reset_unavailable" => "No reset is currently usable for this account.",
+        "reset_refused" => "The Provider refused this reset; no reset was sent.",
         _ => "Account usage could not be refreshed. Cowboy will retry automatically.",
     }
 }
@@ -410,9 +448,6 @@ pub(in crate::server) async fn read_one(
         .find(|account| &account.id == id)
         .ok_or("account_unavailable")?;
     let mut value = json!({"account_id":id,"provider_id":account.provider_id,"refreshing":false});
-    if let Some(schedule) = reset::schedule_of(store, id).await {
-        value["reset_schedule"] = schedule;
-    }
     let target = match target(state, owner, id).await {
         Ok(target) => target,
         Err(code) => {
@@ -431,8 +466,8 @@ pub(in crate::server) async fn read_one(
     });
     value["available"] = json!(true);
     value["signed_in"] = json!(true);
-    // Whether this account's reset endpoints can spend a banked reset.
-    value["resets_supported"] = json!(reset::supported(state, owner, id).await);
+    // Whether a reset of exactly this resolved binding can be spent now.
+    value["resets_supported"] = json!(reset::supported_for(state, &target).await);
     let cache = state.usage.native.entry(owner, id.as_str());
     value["refreshing"] = json!(cache.collection.try_lock().is_err());
     // A read neither takes the database admission write lock nor binds a cache

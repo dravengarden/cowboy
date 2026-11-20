@@ -151,8 +151,8 @@ pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login.
 // Read: await cowboy.accounts.usage(account_id) -> {account_id,provider_id,machine_id?,usage?,refreshing,reason?,message?,next_refresh_at_ms?}.
 // Named usage is cached, owner-scoped and native-profile-bound. Missing usage is unknown, not zero.
 // Refresh via control.apply("usage.refresh",{account:account_id}); its 5-minute budget is shared with background collection.
-// Banked resets (Claude): usage.account_reset / usage.account_reset_schedule / usage.account_reset_cancel
-// with {account:account_id}; only on explicit owner intent. reset_schedule:{fire_at_ms} appears in accounts.usage.
+// Banked resets (named Claude only): usage.account_reset with {account:account_id}, immediate,
+// only on explicit owner intent; accounts.usage(id).resets_supported says whether it can run now.
 // Read: await cowboy.accounts.login_options(account_id,machine_id) -> local login readiness,
 // exact installed release, methods and reason codes. No vendor requests or credentials.
 // Readiness is a snapshot, not permission; start rechecks admission.

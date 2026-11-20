@@ -3,7 +3,7 @@ import { assertEquals } from "../../tools/test-assert.ts";
 import type { SessionMeta } from "./protocol";
 import { applyUsageHostPlugins, type UsageSnapshot, usageLimits } from "./usageLimits";
 import type { SubscriptionSnapshot } from "./subscriptionAccounts";
-import { displayPlan, orderUsageAccounts, registeredUsageAccounts, sessionAccountQuota, usageCardManageUrl, usageCardResetSchedule, usageResetTarget, usageScheduleTarget } from "./usageAccounts";
+import { displayPlan, orderUsageAccounts, registeredUsageAccounts, sessionAccountQuota, usageCardManageUrl, usageCardResetSchedule, usageResetTarget } from "./usageAccounts";
 import { loadProviderCatalog, resetProviderCatalog } from "./providerCatalogRegistry";
 import { providerUiManifestFixture } from "./providerUiContract.fixture";
 
@@ -238,7 +238,7 @@ test("a named card owns its reset lane only when its own usage reports reset cre
   ]);
   const credits = { availableCount: 1, credits: [{ id: "grant:1", status: "available", title: "5h reset (1 left)" }] };
   const observed = { account_id: "otter", provider_id: "claude-code", available: true, refreshing: false,
-    resets_supported: true, reset_schedule: { fire_at_ms: 900 },
+    resets_supported: true,
     usage: { provider: "anthropic", status: "available", source: "Anthropic", observed_at_ms: 300,
       rate_limits: { rateLimitResetCredits: credits } } };
   const service = { ...snapshot, reset_schedules: { anthropic: { fire_at_ms: 500 } } };
@@ -247,19 +247,15 @@ test("a named card owns its reset lane only when its own usage reports reset cre
   assertEquals(usageCardResetSchedule(service, lynx!)?.fire_at_ms, 500);
   // The named card spends and schedules only its own account's resets.
   assertEquals(usageResetTarget(otter!), { kind: "account", accountId: "otter" });
-  assertEquals(usageCardResetSchedule(service, otter!)?.fire_at_ms, 900);
+  // Named resets are immediate only: never a schedule, never the Service's.
+  assertEquals(usageCardResetSchedule(service, otter!), undefined);
   assertEquals(usageCardManageUrl(otter!), "https://claude.ai/settings/usage");
   // Without its own credit report it neither borrows the Service lane nor links out.
   const quiet = { ...observed, usage: { ...observed.usage, rate_limits: {} } };
   const [, plain] = registeredUsageAccounts(service, registry, [], [quiet]);
   assertEquals(usageResetTarget(plain!), undefined);
-  // Its persisted schedule stays visible and cancellable on its own lane.
-  assertEquals(usageCardResetSchedule(service, plain!)?.fire_at_ms, 900);
-  assertEquals(usageScheduleTarget(plain!), { kind: "account", accountId: "otter" });
+  assertEquals(usageCardResetSchedule(service, plain!), undefined);
   assertEquals(usageCardManageUrl(plain!), undefined);
-  const unscheduled = { ...quiet, reset_schedule: undefined };
-  const [, none] = registeredUsageAccounts(service, registry, [], [unscheduled]);
-  assertEquals(usageCardResetSchedule(service, none!), undefined);
   // A session-reported quota is never a reset lane.
   const [, reported] = registeredUsageAccounts(service, registry, [session], []);
   assertEquals(usageResetTarget(reported!), undefined);

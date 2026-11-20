@@ -1200,6 +1200,7 @@ impl MachinePluginStore {
     /// `admission` bounds the wait for the lifecycle lock by its deadline and
     /// rechecks it (and its connection) immediately before the command starts,
     /// so a request its Controller abandoned never starts late.
+    #[allow(clippy::too_many_lines)] // One fenced path from admission to the decoded reply.
     async fn invoke_executable_host_admitted(
         &self,
         request: PluginHostRequest,
@@ -1233,9 +1234,12 @@ impl MachinePluginStore {
             .map_err(PluginHostInvocationFailure::from)?;
         let mut environment = resolved.environment;
         let mut prepared_sidecars = if operation == PluginHostOperation::CollectUsage {
-            self.prepare_usage_sidecars(&resolved.collector_sidecars)
-                .await
-                .map_err(PluginHostInvocationFailure::from)?
+            self.prepare_usage_sidecars(
+                &resolved.collector_sidecars,
+                admission.and_then(native_usage::HostAdmission::sidecars),
+            )
+            .await
+            .map_err(PluginHostInvocationFailure::from)?
         } else {
             PreparedUsageSidecars {
                 children: Vec::new(),
@@ -1495,9 +1499,12 @@ impl MachinePluginStore {
         Ok(())
     }
 
+    /// `allowed` (plugin ID to exact generation digest), when given, is the
+    /// only set of sidecar Plugins that may start; anything else is skipped.
     async fn prepare_usage_sidecars(
         &self,
         targets: &[PluginUsageSidecar],
+        allowed: Option<&BTreeMap<String, String>>,
     ) -> Result<PreparedUsageSidecars> {
         let mut prepared = PreparedUsageSidecars {
             children: Vec::new(),
@@ -1513,6 +1520,11 @@ impl MachinePluginStore {
         for target in targets {
             let mut candidates = Vec::new();
             for installed in &inventory {
+                if allowed.is_some_and(|allowed| {
+                    allowed.get(&installed.plugin_id) != Some(&installed.generation_digest)
+                }) {
+                    continue;
+                }
                 let Ok((plugin, release, content)) = self
                     .verified_plugin_generation(&installed.plugin_id, &installed.generation_digest)
                 else {
@@ -5080,7 +5092,7 @@ mod tests {
         )
         .unwrap();
         assert!(store.inventory().is_err());
-        let sidecars = store.prepare_usage_sidecars(&[]).await.unwrap();
+        let sidecars = store.prepare_usage_sidecars(&[], None).await.unwrap();
         assert!(sidecars.children.is_empty());
         assert!(sidecars.targets.is_empty());
     }

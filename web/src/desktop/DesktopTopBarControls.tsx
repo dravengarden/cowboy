@@ -98,7 +98,7 @@ import {
 } from "../usageWidget";
 import { useSubscriptionAccounts } from "../subscriptionAccounts";
 import { useNativeAccountUsage } from "../nativeAccountUsage";
-import { registeredUsageAccounts, type UsageAccountCard, usageCardResetSchedule, usageResetTarget, usageScheduleTarget } from "../usageAccounts";
+import { registeredUsageAccounts, type UsageAccountCard, usageCardResetSchedule, usageResetTarget } from "../usageAccounts";
 import { AccountBrowserEntry } from "../machineBrowser/AccountBrowserEntry";
 import { DesktopModal } from "./DesktopModal";
 import { RunConfigurationDialog } from "./RunConfigurationDialog";
@@ -356,12 +356,10 @@ function UsageProviderSummary(
 }
 
 function DesktopUsageExtras(
-  { usage, target, scheduleTarget, schedule, onUsageChanged }: {
+  { usage, target, schedule, onUsageChanged }: {
     usage: ProviderUsage;
     /** This card's own reset lane, if it owns reset actions. */
     target: UsageResetTarget | undefined;
-    /** Where its persisted schedule is cancelled, even without a target. */
-    scheduleTarget: UsageResetTarget | undefined;
     schedule: { fire_at_ms: number } | undefined;
     onUsageChanged: () => Promise<void>;
   },
@@ -374,7 +372,7 @@ function DesktopUsageExtras(
     )
     : [];
   const nearestCreditId = textValue(nearestAvailableResetCredit(usage)?.id);
-  const reset = useUsageResetFlow(target, nearestCreditId, onUsageChanged, scheduleTarget);
+  const reset = useUsageResetFlow(target, nearestCreditId, onUsageChanged);
   const summary = record(usage.activity?.summary);
   const session = record(usage.activity?.session);
   const cost = record(session?.cost);
@@ -385,9 +383,8 @@ function DesktopUsageExtras(
 
   return (
     <>
-      {((target !== undefined && credits.length > 0) || schedule) && (
+      {target !== undefined && credits.length > 0 && (
         <Stack spacing={0.6}>
-          {target !== undefined && credits.length > 0 && (<>
           <Stack
             direction="row"
             alignItems="baseline"
@@ -459,7 +456,7 @@ function DesktopUsageExtras(
                       sx={{ color: "primary.main", flexShrink: 0 }}
                     >
                       <Typography variant="caption" fontWeight={700}>
-                        {schedule ? "Scheduled" : "Schedule"}
+                        {schedule ? "Scheduled" : reset.scheduling ? "Schedule" : "Use"}
                       </Typography>
                       {!schedule && (
                         <ArrowForwardRounded
@@ -478,11 +475,11 @@ function DesktopUsageExtras(
                 >
                   {actionable && !schedule
                     ? (
-                      <Tooltip title="Schedule or use the nearest-expiring reset">
+                      <Tooltip title={reset.scheduling ? "Schedule or use the nearest-expiring reset" : "Use the nearest-expiring reset"}>
                         <ButtonBase
                           data-desktop-usage-schedule
                           onClick={reset.openDialog}
-                          aria-label="Schedule nearest full reset"
+                          aria-label={reset.scheduling ? "Schedule nearest full reset" : "Use nearest full reset"}
                           sx={{
                             width: "100%",
                             display: "block",
@@ -506,7 +503,6 @@ function DesktopUsageExtras(
               );
             })}
           </Box>
-          </>)}
           {schedule && (
             <Stack
               direction="row"
@@ -692,10 +688,9 @@ function DesktopProviderUsage({ account, schedule, onUsageChanged, onRefresh, re
         <ProviderUsageCredits rows={usageContext.creditDetails} />
         {account.native?.message && <Typography variant="caption" color="text.secondary">{account.native.message}</Typography>}
         {account.native?.machine_id && <Typography variant="caption" color="text.secondary">Usage query Machine: {account.native.machine_id}</Typography>}
-        {(account.collector || resetTarget || schedule) && <DesktopUsageExtras
+        {(account.collector || resetTarget) && <DesktopUsageExtras
           usage={usage}
           target={resetTarget}
-          scheduleTarget={usageScheduleTarget(account)}
           schedule={schedule}
           onUsageChanged={onUsageChanged}
         />}

@@ -33,6 +33,8 @@ export interface UsageResetFlow {
   error: string | null;
   /** The confirmation and, for a schedule, its time are complete. */
   ready: boolean;
+  /** Only Service cards schedule; a named card's reset is immediate. */
+  scheduling: boolean;
   setFireAt: (value: string) => void;
   setConfirmText: (value: string) => void;
   openDialog: () => void;
@@ -42,47 +44,34 @@ export interface UsageResetFlow {
   submit: () => Promise<void>;
 }
 
-/** The account and grant the owner confirmed when the dialog opened, and the
- * stable operation that makes a retried request return its original receipt. */
-interface ResetIntent {
-  target: string;
-  creditId: string | undefined;
-  operationId: string;
-}
-
 function targetKey(target: UsageResetTarget | undefined): string {
   return target === undefined ? "" : target.kind === "service" ? `service:${target.provider}` : `account:${target.accountId}`;
-}
-
-function operationId(): string {
-  return `web-${crypto.randomUUID()}`;
 }
 
 export function useUsageResetFlow(
   target: UsageResetTarget | undefined,
   nearestCreditId: string | undefined,
   onUsageChanged: () => Promise<void>,
-  /** Where this card's persisted schedule is cancelled, even when it has no
-   * reset target now (its credits disappeared or the account is disabled). */
-  scheduleTarget: UsageResetTarget | undefined = target,
 ): UsageResetFlow {
+  const scheduling = target?.kind !== "account";
+  const initialMode: UsageResetMode = scheduling ? "schedule" : "now";
   const [open, setOpen] = useState(false);
-  const [intent, setIntent] = useState<ResetIntent | null>(null);
+  const [mode, setMode] = useState<UsageResetMode>(initialMode);
+  /** The account and grant confirmed at open; a change needs a new confirmation. */
+  const [pinned, setPinned] = useState<{ target: string; creditId: string | undefined } | null>(null);
   /** An unknown outcome locks the dialog until it is opened again. */
   const [locked, setLocked] = useState(false);
-  const [mode, setMode] = useState<UsageResetMode>("schedule");
   const [fireAt, setFireAt] = useState("");
   const [confirmText, setConfirmText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const scheduleValid = fireAt !== "" && new Date(fireAt).getTime() > Date.now();
-  // A different account or grant than the one opened needs a new confirmation.
-  const changed = open && intent !== null &&
-    (intent.target !== targetKey(target) || (mode === "now" && intent.creditId !== nearestCreditId));
+  const changed = open && pinned !== null &&
+    (pinned.target !== targetKey(target) || (mode === "now" && pinned.creditId !== nearestCreditId));
   const ready = !busy && !locked && !changed && confirmText === "confirm" &&
     (mode !== "schedule" || scheduleValid);
   const clear = (): void => {
-    setMode("schedule");
+    setMode(initialMode);
     setFireAt("");
     setConfirmText("");
     setError(null);
@@ -104,16 +93,16 @@ export function useUsageResetFlow(
     }
   };
   const submit = async (): Promise<void> => {
-    if (target === undefined || intent === null || !ready) return;
+    if (target === undefined || pinned === null || !ready) return;
     await run(async () => {
       if (mode === "schedule") {
         await scheduleNearestReset(target, new Date(fireAt).getTime(), confirmText);
       } else {
-        // The grant confirmed at open, under the same operation on a retry.
-        await consumeNearestReset(target, intent.creditId, confirmText, intent.operationId);
+        // Exactly the grant confirmed when the dialog opened.
+        await consumeNearestReset(target, pinned.creditId, confirmText);
       }
       setOpen(false);
-      setMode("schedule");
+      setMode(initialMode);
       setConfirmText("");
     }, "Could not use reset");
   };
@@ -126,12 +115,13 @@ export function useUsageResetFlow(
     busy,
     error: error ?? (changed ? "The available reset changed. Close and confirm again." : null),
     ready,
+    scheduling,
     setFireAt,
     setConfirmText,
     openDialog: () => {
       clear();
       setLocked(false);
-      setIntent({ target: targetKey(target), creditId: nearestCreditId, operationId: operationId() });
+      setPinned({ target: targetKey(target), creditId: nearestCreditId });
       setOpen(true);
     },
     close: () => {
@@ -140,14 +130,14 @@ export function useUsageResetFlow(
       clear();
     },
     changeMode: (value) => {
-      if (!value || value === mode || busy) return;
+      if (!value || value === mode || busy || (value === "schedule" && !scheduling)) return;
       setMode(value);
       setConfirmText("");
       setError(null);
     },
     cancelSchedule: async () => {
-      if (scheduleTarget === undefined) return;
-      await run(() => cancelNearestResetSchedule(scheduleTarget), "Could not cancel schedule");
+      if (target === undefined) return;
+      await run(() => cancelNearestResetSchedule(target), "Could not cancel schedule");
     },
     submit,
   };
@@ -162,7 +152,7 @@ export function UsageResetFields({ flow }: { flow: UsageResetFlow }): React.JSX.
           ? "At the selected time, Cowboy will use the earliest-expiring reset then available."
           : "Cowboy will immediately use the earliest-expiring available reset. This cannot be undone."}
       </DialogContentText>
-      <ToggleButtonGroup
+      {flow.scheduling && <ToggleButtonGroup
         exclusive
         fullWidth
         value={flow.mode}
@@ -172,7 +162,7 @@ export function UsageResetFields({ flow }: { flow: UsageResetFlow }): React.JSX.
       >
         <ToggleButton value="schedule">Schedule</ToggleButton>
         <ToggleButton value="now" color="error">Now</ToggleButton>
-      </ToggleButtonGroup>
+      </ToggleButtonGroup>}
       {flow.mode === "schedule" && (
         <TextField
           type="datetime-local"

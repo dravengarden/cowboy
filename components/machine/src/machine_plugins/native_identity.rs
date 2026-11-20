@@ -131,6 +131,54 @@ impl<'de> serde::Deserialize<'de> for UniqueJson {
 
 /// Shared by identity and credential export: enforce the bound before reading
 /// and on the opened descriptor, including files that grow after fstat.
+/// Check a credential file of a native home from descriptor metadata only,
+/// never reading its bytes into this process: every component is opened
+/// without following links (`O_PATH` for the file), and the file must be a
+/// regular file with exactly one link, owned by this Machine's user. `false`
+/// when it does not exist; any other shape is an error.
+pub(super) fn credential_file_safe(home: &Path, relative_path: &str) -> Result<bool> {
+    let parts: Vec<_> = Path::new(relative_path).components().collect();
+    ensure!(
+        !parts.is_empty()
+            && parts
+                .iter()
+                .all(|part| matches!(part, Component::Normal(_))),
+        "unsafe native credential path"
+    );
+    let directory_flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let absent = |error: rustix::io::Errno| error == rustix::io::Errno::NOENT;
+    let mut directory = open(home, directory_flags, Mode::empty())
+        .map_err(std::io::Error::from)
+        .context("opening native home")?;
+    for part in &parts[..parts.len() - 1] {
+        directory = match openat(&directory, part.as_os_str(), directory_flags, Mode::empty()) {
+            Ok(next) => next,
+            Err(error) if absent(error) => return Ok(false),
+            Err(error) => {
+                return Err(std::io::Error::from(error)).context("native credential parent");
+            }
+        };
+    }
+    let file = match openat(
+        &directory,
+        parts.last().unwrap().as_os_str(),
+        OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(file) => file,
+        Err(error) if absent(error) => return Ok(false),
+        Err(error) => return Err(std::io::Error::from(error)).context("native credential file"),
+    };
+    let metadata = fstat(&file)?;
+    ensure!(
+        FileType::from_raw_mode(metadata.st_mode) == FileType::RegularFile
+            && metadata.st_nlink == 1
+            && metadata.st_uid == rustix::process::geteuid().as_raw(),
+        "native credential is not a private regular file"
+    );
+    Ok(true)
+}
+
 pub(super) fn read_login_file(home: &Path, relative_path: &str, limit: usize) -> Result<Vec<u8>> {
     let parts: Vec<_> = Path::new(relative_path).components().collect();
     ensure!(
@@ -418,6 +466,32 @@ mod tests {
             missing.downcast_ref::<std::io::Error>().unwrap().kind(),
             std::io::ErrorKind::NotFound
         );
+    }
+
+    #[test]
+    fn credential_files_are_checked_without_reading_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        let path = ".claude/.credentials.json";
+        assert!(!credential_file_safe(&home, path).unwrap());
+        std::fs::write(home.join(path), b"{}").unwrap();
+        assert!(credential_file_safe(&home, path).unwrap());
+        // A second link to the same bytes is another holder of the token.
+        std::fs::hard_link(home.join(path), dir.path().join("copy")).unwrap();
+        assert!(credential_file_safe(&home, path).is_err());
+        std::fs::remove_file(dir.path().join("copy")).unwrap();
+        // A symlink to another subscription's credential is refused.
+        std::fs::remove_file(home.join(path)).unwrap();
+        std::fs::write(dir.path().join("other"), b"{}").unwrap();
+        std::os::unix::fs::symlink(dir.path().join("other"), home.join(path)).unwrap();
+        assert!(credential_file_safe(&home, path).is_err());
+        // So is a linked parent directory.
+        std::fs::remove_file(home.join(path)).unwrap();
+        std::fs::remove_dir(home.join(".claude")).unwrap();
+        std::fs::create_dir(dir.path().join("elsewhere")).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("elsewhere"), home.join(".claude")).unwrap();
+        assert!(credential_file_safe(&home, path).is_err());
     }
 
     #[test]

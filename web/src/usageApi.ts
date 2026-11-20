@@ -118,37 +118,25 @@ function resetEndpoint(target: UsageResetTarget): string {
 /** The reset may have been spent: never retried without a fresh look. */
 export class ResetOutcomeUnknown extends Error {}
 
-/** Spend the earliest-expiring available reset credit. A named account's
- * `operationId` makes the request idempotent: repeating it after a lost
- * response returns the original receipt instead of spending again. */
+/** Spend the earliest-expiring available reset credit. */
 export async function consumeNearestReset(
   target: UsageResetTarget,
   expectedCreditId: string | undefined,
   confirm: string,
-  operationId?: string,
 ): Promise<void> {
   const response = await fetch(resetEndpoint(target), {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      confirm,
-      expected_credit_id: expectedCreditId,
-      ...(target.kind === "account" && operationId ? { operation_id: operationId } : {}),
-    }),
+    body: JSON.stringify({ confirm, expected_credit_id: expectedCreditId }),
   });
   if (response.status === 409) {
-    const text = await response.clone().text().catch(() => "");
-    const code = (() => {
-      try {
-        return (JSON.parse(text) as { error?: { code?: unknown } }).error?.code;
-      } catch {
-        return undefined;
-      }
-    })();
-    if (code === "reset_outcome_unknown" || code === "reset_in_progress") {
-      throw new ResetOutcomeUnknown(
-        "The reset outcome is unknown. Refresh usage and check the reset before trying again.",
-      );
+    const code = await response
+      .clone()
+      .json()
+      .then((body: { error?: { code?: unknown } }) => body.error?.code)
+      .catch(() => undefined);
+    if (code === "reset_outcome_unknown") {
+      throw new ResetOutcomeUnknown("Outcome unknown — check credits before trying again.");
     }
   }
   await expectHttpOk(response, "Could not use the nearest reset");

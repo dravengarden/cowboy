@@ -26,31 +26,21 @@ pub struct PortableUsageRequest {
     pub auth_generation: u64,
     /// The collector's JSON request; the Machine sets its `operation`.
     pub payload: serde_json::Value,
-    /// The vault generation of every other scope member whose replica the
-    /// collector uses (the gateway sidecars). The Machine refuses unless
-    /// each account replica is exactly this generation, so one observation
-    /// never mixes two credentials.
-    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub scope_generations: std::collections::BTreeMap<String, u64>,
+    /// The exact sidecar Plugin generations (the gateways) the
+    /// Controller checked for this Machine. All participants share the
+    /// collector's vault generation: the Machine refuses unless each account
+    /// replica is exactly `auth_generation`, and starts only these sidecars,
+    /// so one observation never mixes two credentials or unchecked Plugins.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sidecars: Vec<PortableSidecar>,
 }
 
-/// One owner-confirmed or scheduled banked reset of a named portable
-/// account, run by the same signed collector (`consume_reset`) in the same
-/// account replica scope and generation as [`PortableUsageRequest`]. Answered
-/// only by `MachineEvent::PluginHostResponse`; a failure keeps `started`.
+/// One exact sidecar Plugin generation a portable collection may start.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PortableResetRequest {
-    pub account_id: crate::provider_account::ProviderAccountId,
+pub struct PortableSidecar {
     pub plugin_id: String,
-    pub plugin_version: String,
     pub generation_digest: String,
-    pub auth_generation: u64,
-    /// The collector's bounded `consume_reset` input.
-    pub reset: super::NativeResetRequest,
-    /// As [`PortableUsageRequest::scope_generations`].
-    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub scope_generations: std::collections::BTreeMap<String, u64>,
 }
 
 /// The signed collector file whose presence declares that it never asks its
@@ -155,7 +145,7 @@ pub enum UsageFailureKind {
 /// credentials never leave the Machine; only one of these codes does.
 #[must_use]
 pub fn portable_usage_error_code(detail: &str) -> &'static str {
-    const CLOSED: [&str; 14] = [
+    const CLOSED: [&str; 11] = [
         "machine_usage_update_required",
         "machine_connection_changed",
         "portable_usage_account_required",
@@ -166,9 +156,6 @@ pub fn portable_usage_error_code(detail: &str) -> &'static str {
         "portable_usage_collector_failed",
         "portable_usage_temporarily_unavailable",
         "portable_usage_throttled",
-        "portable_reset_request_invalid",
-        "portable_reset_unsupported",
-        "portable_reset_outcome_unknown",
         "portable_usage_refresh_unsupported",
     ];
     if let Some(code) = CLOSED.iter().find(|code| **code == detail) {

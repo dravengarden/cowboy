@@ -55,7 +55,7 @@ mod workspace_documents;
 pub use core_security::HandoffPoint;
 mod plugin_installations;
 mod plugin_operations;
-mod provider_resets;
+mod provider_action_reads;
 mod sqlite;
 pub mod task_notifications;
 mod telemetry_bindings;
@@ -65,7 +65,6 @@ mod usage_execution;
 use sqlite::SqliteStorage;
 
 pub use copy::postgres_to_sqlite;
-pub use provider_resets::ResetFlight;
 
 use crate::agent_model::{Event, Status};
 use crate::model::{
@@ -3040,7 +3039,7 @@ impl PostgresStorage {
              VALUES ($1, 'rate_limit_reset', $2, $3) \
              ON CONFLICT (provider) DO UPDATE SET action = EXCLUDED.action, \
              fire_at_ms = EXCLUDED.fire_at_ms, idempotency_key = EXCLUDED.idempotency_key, \
-             attempt_count = 0, next_attempt_at_ms = EXCLUDED.fire_at_ms, in_flight_at_ms = NULL, authority = NULL",
+             attempt_count = 0, next_attempt_at_ms = EXCLUDED.fire_at_ms",
         )
         .bind(provider)
         .bind(fire_at_ms)
@@ -6735,7 +6734,7 @@ impl PostgresStorage {
                 NULL::text AS model,
                 'provider_automation'::text AS classification
               FROM provider_action_logs log
-              WHERE log.created_at_ms >= $1 AND log.created_at_ms <= $2
+              WHERE log.created_at_ms >= $1 AND log.created_at_ms <= $2 AND log.provider NOT LIKE 'account-%'
             ), logs AS (
               SELECT * FROM runtime_logs
               UNION ALL SELECT * FROM provider_error_logs
@@ -6887,7 +6886,7 @@ impl PostgresStorage {
                 ),
             >(
                 "SELECT provider, action, trigger, status, phase, message, credit_id, \
-                 idempotency_suffix, created_at_ms FROM provider_action_logs WHERE id = $1",
+                 idempotency_suffix, created_at_ms FROM provider_action_logs WHERE id = $1 AND provider NOT LIKE 'account-%'",
             )
             .bind(action_id)
             .fetch_optional(&self.pool)

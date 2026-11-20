@@ -117,9 +117,7 @@ operations! {
     "usage.reset", true, "{account:string,body:{confirm:'confirm',expected_credit_id:string}}; consumes a reset credit; explicit user intent required";
     "usage.reset_schedule", true, "{account:string,body:{fire_at_ms:number,confirm:'confirm'}}; schedules credit consumption";
     "usage.reset_cancel", true, "{account:string}; cancels only a scheduled reset";
-    "usage.account_reset", true, "{account:string,body:{confirm:'confirm',expected_credit_id:string}}; named account (accounts.list id) only: spends the confirmed banked reset (accounts.usage(id).usage.rate_limits.rateLimitResetCredits.credits[].id, status available) through the Machine holding its native login; explicit current owner intent required. 409 reset_failed sent nothing; reset_outcome_unknown may have spent it: read usage, never retry blindly";
-    "usage.account_reset_schedule", true, "{account:string,body:{fire_at_ms:number,confirm:'confirm'}}; named account only: at fire_at_ms (at least a minute ahead) spend the Provider's next banked reset once; replaces its schedule; accounts.usage(id).reset_schedule shows it; explicit owner intent required";
-    "usage.account_reset_cancel", true, "{account:string}; named account only: cancels only its scheduled reset";
+    "usage.account_reset", true, "{account:string,body:{confirm:'confirm',expected_credit_id:string}}; named Claude account (accounts.list id) only, immediate: spends the confirmed banked reset (accounts.usage(id).usage.rate_limits.rateLimitResetCredits.credits[].id, status available) through the Machine holding its native login; explicit current owner intent required. 409 reset_failed sent nothing; reset_outcome_unknown may have spent it: read usage, never retry blindly";
     "usage.executor_set", true, "{account:string,body:{machine_id:string|null}}";
     "usage.activity", false, "{account:string,query?:{window?:string,model?:string,agent?:string,from_ms?:number,to_ms?:number}}; cached activity; model/agent are comma-separated filters";
     "usage.logs", false, "{}; select the required collector log";

@@ -313,34 +313,39 @@ active Provider generation, so no collector runs outside the account's custody
 and a Provider upgrade needs no new sign-in. Owner, account, enrollment, login
 generation and connection are checked around dispatch and publication. Machine protocol 37 is required; older
 Machines report an update requirement instead of querying the Service account.
-Portable accounts (Codex and Grok subscriptions signed in once, and the DeepSeek
-API-key account shared by `claude-deepseek`, `codex-deepseek` and
-`deepseek-harness`) keep their credential in the account's Service vault. Their
-usage runs the same released signed collector as the Service account, on one
-connected Machine, inside the account's own vault replica: the credential, home
-and sidecars a session on that account launches with, never the Machine's
-Service credential and never on the Controller. The command is enqueued under
-the owner's account lock after availability and the exact vault generations
-are rechecked. The Machine must hold exactly those generations (the
-collector's and every sidecar member's) and holds the account's credential
-guard so no apply or wipe overlaps the collector; a request not started within
-its deadline, or whose Controller connection ended, never starts. The Machine
-is chosen deterministically among those with an exact released active
-collector generation that host runtime policy allows for the collector and
-every sidecar Plugin: the one running most of the owner's live sessions on the
-account, then the lowest Machine ID; `machine_id` reports the current choice.
-A usage query or reset never redeems a refresh token: the request carries
-`"token_refresh": false`, and a Provider whose CLI rotates credentials runs
-only a collector release that declares it then reports authentication required
-instead (`collector/portable-account.json`); otherwise the account reports
-`portable_usage_refresh_unsupported`. Codex declares it from its next release;
-Grok does not yet. Expired tokens are renewed by sessions. Activity
+Portable accounts (Codex subscriptions signed in once, and the DeepSeek API-key
+account shared by `claude-deepseek`, `codex-deepseek` and `deepseek-harness`)
+keep their credential in the account's Service vault. Their usage is read-only:
+the same released signed collector as the Service account runs on one
+connected Machine inside the account's own vault replica (the credential, home
+and checked sidecars a session on that account launches with), never with the
+Machine's Service credential and never on the Controller. Portable accounts
+have no resets (`resets_supported` is false). The command is enqueued under the
+owner's account lock after availability, the reserved identity and admission
+revision, and the exact vault generation are rechecked. Every participant (the
+collector and each sidecar, such as the DeepSeek gateways) must hold one
+committed shared generation; otherwise no observation is taken. The Machine
+must hold exactly that generation for each, holds the account's credential
+guard so no apply or wipe overlaps the collector, starts only the exact sidecar
+Plugin generations the Controller checked for that Machine, and never starts a
+request after its deadline or Controller connection ended. The Machine is
+chosen deterministically among those with an exact released active collector
+generation that host runtime policy allows for the collector and every sidecar
+Plugin: the one running most of the owner's live sessions on the account, then
+the lowest Machine ID; `machine_id` reports the current choice. A usage query
+never redeems a refresh token: the Controller and the Machine both put
+`"token_refresh": false` in the request, and a Provider whose CLI rotates
+credentials runs only a collector release that declares it then reports
+authentication required instead (`collector/portable-account.json`; Codex from
+3.6.14), otherwise `portable_usage_refresh_unsupported`. Grok stays off. No
+Machine speaking protocol 50 was ever released, so no further capability
+negotiation exists. Expired tokens are renewed by sessions. Activity
 attachments stay with the Service account because request telemetry has no
 account dimension. Machine protocol 50 is required (`machine_usage_update_required`).
 Portable reasons are `portable_credentials_required`,
 `portable_usage_machine_unavailable`, `portable_usage_replica_pending`,
 `portable_usage_authentication_required`, `portable_usage_busy`,
-`portable_usage_throttled`, `portable_usage_collector_unavailable` and
+`portable_usage_throttled`, `portable_usage_collector_unavailable`,
 `portable_usage_refresh_unsupported` and `portable_usage_collector_failed`, each
 with a fixed `message`; an observation binds the account's sign-in identity and
 admission revision (an entered key's vault generation), so a credential refresh
@@ -357,58 +362,37 @@ while one runs joins it, and results reach every surface through the same
 broadcasts. Collection is serial and independent of session workers, including
 while all sessions are asleep.
 
-A named Claude card whose own usage reports reset credits also has the Service
-card's reset actions, on its own lane: `POST
-/api/provider-accounts/{account_id}/usage/reset` (typed `confirm` and the
-confirmed `expected_credit_id`) and `PUT|DELETE .../usage/reset/schedule`, or
-`control.apply("usage.account_reset" | "usage.account_reset_schedule" |
-"usage.account_reset_cancel", {account:account_id,...})`. Admission is the quota
-read's (owner, binding, identity, enabled account, sign-in Machine and the
-host's `--provider-runtime-machine` policy, rechecked at dispatch); another
-owner's account is `404 account_unavailable`. The Machine holding the native
-login runs the signed collector's `consume_reset` with the same CLI identity,
-token, guard and deadline as the quota read (`ConsumeNativeReset`, Machine
-protocol 49; older Machines report `machine_usage_update_required`). Pacing is
-the Service reset's: a start from the shared Provider window and the account's
-own lane, never an extra poll. `409 reset_failed` sent nothing;
-`409 reset_outcome_unknown` may have spent the grant and is never retried. A
-schedule persists as lane `account-<id>`, fires the Provider's next grant once
-and shows as `reset_schedule` in the account's usage read (and on the card even
-while it cannot spend, so it can always be cancelled). It is bound to the
-sign-in that created it: a changed login, identity, key, disabled account or
-disabled owner withdraws it unspent. A due schedule moves to in flight before
-any Provider call, so a cancel or replacement while it waits for pacing wins,
-and an attempt interrupted by a restart is recorded as unknown and never run
-again; only a proven preflight refusal rearms it.
-
-A manual reset may carry `operation_id` (8 to 128 of `[A-Za-z0-9_-]`): the spend
-runs in a Service-owned task and repeating the same operation returns its
-receipt (or waits for the running attempt) instead of spending again, also
-after a restart (an attempt that only started is unknown). In
-`control.apply`, `409 reset_outcome_unknown` and `reset_in_progress` are
-`unknown` receipts, never `rejected`. Every reset reply is projected onto
-bounded fields; a success needs a determinate outcome and a refusal must state
-that nothing reached the Provider, otherwise it is unknown. A named lane's log
-rows (`usage.logs`, `/api/usage/logs` and product diagnostics) are visible only
-to the account's owner. Before a Claude collector reads the native credential
-or spends, the Machine requires its credential files to be regular unlinked
-files and the live home to still hold the receipt's login identity.
-
-Named portable Codex and Grok accounts use the same endpoints, pacing, claims,
-lanes and schedules. Their reset runs the account's signed collector
-`consume_reset` on the Machine and account replica its quota read would use now
-(same placement, host runtime policy, current vault generation and account
-credential guard; `ConsumePortableReset`, Machine protocol 50). A failure after
-the collector started is `portable_reset_outcome_unknown` and never retried. The
-DeepSeek balance collector declares no reset, so a DeepSeek account answers
-`account_reset_unsupported`. Reset support and the claim policy come from the
-exact release installed on the selected Machine, resolved with its
-operation-specific eligibility (protocol, host policy, placement) before a
-reset is reserved or a schedule taken, and retained through dispatch. The
-usage read's `resets_supported` reports exactly that eligibility; Web shows
-reset actions on a named card only when it is true and the card's own usage
-reports reset credits. The dialog pins the account and grant it opened with and
-asks for a fresh confirmation if either changes or after an unknown outcome.
+A named Claude card shows its credits, prepaid balance, plan tier and manage
+link, and, when its own usage reports reset credits, an immediate reset only
+(no schedules): `POST /api/provider-accounts/{account_id}/usage/reset` (typed
+`confirm` and the confirmed `expected_credit_id`) or
+`control.apply("usage.account_reset", {account:account_id,...})`. Admission is
+the quota read's (owner, binding, identity, enabled account), but only logins on
+a Machine that speaks protocol 49 and that host policy pins for `claude-code`
+(`--provider-runtime-machine claude-code=ovh`) are considered; another owner's
+account is `404 account_unavailable`. `resets_supported` in the usage read is
+derived from the same resolved login and the exact release installed on its
+Machine. The Machine holding the native login runs the signed collector's
+`consume_reset` with the same CLI identity and home guard as the quota read
+(`ConsumeNativeReset`), on exactly the release the Controller selected (checked
+under the Machine lifecycle lock) and never after the Controller's dispatch
+expiry. Immediately before the spend, in the same invocation, the collector's
+own report of the credential's account must match the login. Pacing is the
+Service reset's: a start from the shared Provider window and the account's own
+lane. The request is synchronous: `409 reset_failed` sent nothing;
+`409 reset_outcome_unknown` may have spent the grant, is never retried, and in
+`control.apply` is an `unknown` receipt, never `rejected`. Only closed success
+outcomes (`reset`, `already_used`) are successes, and only fixed codes with
+fixed messages leave the Machine; collector text never does. A named lane's
+action-log rows are visible only to the account's owner (`usage.logs`,
+`/api/usage/logs`, filtered before the row limit) and never in the diagnostics
+view. Before a Claude collector reads the native credential or spends, the
+Machine checks the credential file from descriptor metadata only (regular,
+single link, owned by the Machine user, inside the verified home, never read
+into the Machine), and the live home's login metadata must name the receipt's
+identity. Web pins the account and grant when the dialog opens and asks for a
+fresh confirmation if either changes; after an unknown outcome it shows
+"Outcome unknown — check credits before trying again" and requires reopening.
 
 `cowboy.accounts.usage(account_id)` reads the same owner-scoped observation as
 `GET /api/provider-accounts/{account_id}/usage`. Explicit

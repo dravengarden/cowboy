@@ -330,8 +330,9 @@ pub(super) async fn api_provider_reset_cancel(
 
 /// Service collector lanes are Service-wide; a named account's lane
 /// (`account-<id>`, its credit IDs, outcomes and diagnostics) is visible only
-/// to the account's owner. HTTP, MCP (`usage.logs`) and the diagnostics view
-/// all read through this filter.
+/// to the account's owner. The filter runs in SQL before the row limit. HTTP
+/// and MCP (`usage.logs`) read through this handler; the diagnostics view
+/// never lists named lanes.
 pub(super) async fn api_usage_logs(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthenticatedProductRequest>,
@@ -343,50 +344,20 @@ pub(super) async fn api_usage_logs(
         )
             .into_response();
     };
-    match store.provider_action_logs(100).await {
-        Ok(logs) => {
-            Json(owned_action_logs(store, &auth.principal.user_id, logs).await).into_response()
+    let lanes = match store.provider_accounts(&auth.principal.user_id).await {
+        Ok(registry) => registry
+            .accounts
+            .iter()
+            .map(|account| provider_accounts::usage::reset::lane(&account.id))
+            .collect::<Vec<_>>(),
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
         }
+    };
+    match store.visible_provider_action_logs(100, &lanes).await {
+        Ok(logs) => Json(logs).into_response(),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
     }
-}
-
-/// Keep Service lanes and the caller's own named-account lanes.
-pub(super) async fn owned_action_logs(
-    store: &crate::store::Store,
-    caller: &str,
-    logs: Vec<crate::store::ProviderActionLog>,
-) -> Vec<crate::store::ProviderActionLog> {
-    let mut owners = BTreeMap::<String, bool>::new();
-    let mut kept = Vec::with_capacity(logs.len());
-    for log in logs {
-        let Some(account) = log.provider.strip_prefix("account-") else {
-            kept.push(log);
-            continue;
-        };
-        let owned = match owners.get(account) {
-            Some(owned) => *owned,
-            None => {
-                let owned = match crate::provider_account::ProviderAccountId::try_from(
-                    account.to_owned(),
-                ) {
-                    Ok(id) => store
-                        .provider_account_owner(&id)
-                        .await
-                        .ok()
-                        .flatten()
-                        .is_some_and(|owner| owner == caller),
-                    Err(_) => false,
-                };
-                owners.insert(account.to_owned(), owned);
-                owned
-            }
-        };
-        if owned {
-            kept.push(log);
-        }
-    }
-    kept
 }
 
 /// A committed Service credential supersedes a usage authentication failure.
