@@ -360,5 +360,12 @@ export async function runProxy({
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   // The release probe: every module and the bundled `ws` resolved.
-  process.exit(process.argv[2] === "--cowboy-probe" ? 0 : await runProxy());
+  if (process.argv[2] === "--cowboy-probe") process.exit(0);
+  // The account-sandbox `usage` unit: a quota report, no ACP.
+  if (process.argv[2] === "--cowboy-usage") {
+    const { runUsage } = await import("./usage.mjs");
+    const appDirectory = dirname(fileURLToPath(import.meta.url));
+    process.exit(await runUsage({ agy: runtimePaths(appDirectory).agy }));
+  }
+  process.exit(await runProxy());
 }

@@ -56,6 +56,15 @@ case "${1-}" in
     exit
     ;;
 esac
+# The account-sandbox `usage` unit runs this exact print-mode report. Its
+# Node helper runs it unchanged and, only when print mode's eligibility check
+# refuses a paid account for its free tier's location, asks Cloud Code's
+# quota summary itself with the token `agy` just refreshed in this home
+# (`proxy/app/usage.mjs`). The helper runs as the account's own identity;
+# this launcher still never reads credentials.
+if [ "$sandboxed" = true ] && [ "$*" = "-p /usage --output-format json --log-file /tmp/agy-usage.log" ]; then
+  exec "$cowboy_root/bin/agy-proxy" --cowboy-usage
+fi
 # Only an ACP runtime session owns its account home. Version and other probes
 # may run with the Machine user's real HOME and must never write to it.
 if [ "${1-}" != "acp" ] || [ "$sandboxed" = true ]; then

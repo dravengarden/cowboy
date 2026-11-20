@@ -124,7 +124,11 @@ stdout, waits up to 25 s, stops and confirms the unit, and answers only the
 validated projection `{"groups":[{"name","buckets":[{"name","id"?,
 "window"?,"disabled"?,"remaining_fraction"?,"reset_at"?}]}]}` (`reset_at` in
 Unix seconds; at most 32 groups and 128 buckets; labels printable, cut at 80
-characters). A report that fails or is malformed is `internal` with a fixed
+characters). Inside the runtime archive the launcher hands this exact command
+to the proxy component's quota helper, which falls back to Cloud Code's quota
+summary only when print mode's eligibility check refuses a paid account for its
+free tier's location (`docs/antigravity-real-accounts-design.md`, "Eligibility
+fallback"). A report that fails or is malformed is `internal` with a fixed
 message; vendor text and stderr never leave the daemon. `start` refuses mode
 `usage`.
 
