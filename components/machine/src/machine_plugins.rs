@@ -1194,6 +1194,17 @@ impl MachinePluginStore {
         &self,
         request: PluginHostRequest,
     ) -> std::result::Result<serde_json::Value, PluginHostInvocationFailure> {
+        self.invoke_executable_host_admitted(request, None).await
+    }
+
+    /// `admission` bounds the wait for the lifecycle lock by its deadline and
+    /// rechecks it (and its connection) immediately before the command starts,
+    /// so a request its Controller abandoned never starts late.
+    async fn invoke_executable_host_admitted(
+        &self,
+        request: PluginHostRequest,
+        admission: Option<&native_usage::HostAdmission>,
+    ) -> std::result::Result<serde_json::Value, PluginHostInvocationFailure> {
         let PluginHostRequest {
             plugin_id,
             plugin_version,
@@ -1203,7 +1214,12 @@ impl MachinePluginStore {
             mut payload,
         } = request;
         let admitted_at = Instant::now();
-        let mut lifecycle = Some(self.lifecycle.lock().await);
+        let mut lifecycle = Some(match admission {
+            Some(admission) => tokio::time::timeout(admission.remaining()?, self.lifecycle.lock())
+                .await
+                .map_err(|_| anyhow::anyhow!("portable_usage_busy"))?,
+            None => self.lifecycle.lock().await,
+        });
         let queue_ms = admitted_at.elapsed().as_millis();
         let resolved = self
             .resolve_host_invocation(
@@ -1237,6 +1253,12 @@ impl MachinePluginStore {
         let input = serde_json::to_vec(&payload)
             .map_err(anyhow::Error::from)
             .map_err(PluginHostInvocationFailure::from)?;
+        if let Some(Err(error)) = admission.map(native_usage::HostAdmission::remaining) {
+            for child in &mut prepared_sidecars.children {
+                let _ = child.kill().await;
+            }
+            return Err(error.into());
+        }
         let preparation_ms = admitted_at.elapsed().as_millis();
         tracing::info!(%plugin_id, ?operation, queue_ms, preparation_ms, "Plugin host preparation completed");
         let command_started = Instant::now();

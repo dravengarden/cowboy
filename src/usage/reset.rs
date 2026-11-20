@@ -172,13 +172,15 @@ pub(super) async fn consume_plugin_reset(
             })?
         }
     };
-    parse_reset_response(response)
+    parse_reset_response(&response)
 }
 
 /// The signed collector's `consume_reset` reply: its result, or its refusal
-/// with the collector's own reached-Provider ambiguity. Anything else may
-/// follow a sent reset, so it is unknown.
-pub fn parse_reset_response(response: Value) -> std::result::Result<ResetResult, ResetError> {
+/// with the collector's own reached-Provider ambiguity, projected onto
+/// bounded fields first. Only explicit evidence is a success or a refusal that
+/// sent nothing; anything else may follow a sent reset, so it is unknown.
+pub fn parse_reset_response(response: &Value) -> std::result::Result<ResetResult, ResetError> {
+    let response = crate::machine_protocol::portable_usage::project_reset_reply(response);
     match serde_json::from_value::<PluginResetCommandResponse>(response) {
         Ok(PluginResetCommandResponse::Success(result)) => Ok(result),
         Ok(PluginResetCommandResponse::Failure { error }) => Err(ResetError {
@@ -204,7 +206,6 @@ enum PluginResetCommandResponse {
 #[derive(Debug, Deserialize)]
 struct PluginResetCommandError {
     message: String,
-    #[serde(default)]
     call_may_have_reached_provider: bool,
     #[serde(default)]
     credit_id: Option<String>,

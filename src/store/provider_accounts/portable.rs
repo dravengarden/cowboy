@@ -63,6 +63,9 @@ pub enum Use<'a> {
     Insert(&'a crate::model::SessionMeta),
     /// Lock an exact persisted binding for a bounded write or projection.
     Existing(&'a crate::model::SessionMeta),
+    /// Admit one bounded usage query or reset dispatch: the account stays
+    /// available and unrevoked until the dispatch is enqueued.
+    Observe,
 }
 
 /// Revocation evidence still missing for a portable account key, as
@@ -133,7 +136,7 @@ impl Store {
                     .await
                     .map(drop)?;
             }
-            Use::Insert(_) | Use::Existing(_) => {}
+            Use::Insert(_) | Use::Existing(_) | Use::Observe => {}
         }
         macro_rules! admit { ($db:expr) => {{
             let mut tx = $db.pool.begin().await?;
@@ -169,6 +172,7 @@ impl Store {
                         .bind(m.execution_binding.as_ref().map(crate::execution_environment::ExecutionBinding::record))
                         .bind(m.provider_account_id.as_str()).execute(&mut *tx).await?;
                 }
+                Use::Observe => {}
                 Use::Existing(m) => {
                     let row = sqlx::query("UPDATE sessions SET id=id WHERE id=$1 AND owner_user_id=$2 AND provider_account_id=$3 AND machine_id=$4 AND provider=$5 AND provider_version=$6 AND provider_generation_digest=$7 AND provider_auth_generation=$8")
                         .bind(&m.id).bind(owner).bind(account.as_str()).bind(&m.machine_id).bind(&m.provider)

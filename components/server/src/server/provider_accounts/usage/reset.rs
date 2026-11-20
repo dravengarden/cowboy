@@ -9,6 +9,8 @@ use super::*;
 use crate::machine_control::NativeResetFailure;
 use crate::usage::{ResetError, ResetReservation, ResetResult};
 
+mod receipts;
+
 /// The account's lane in the shared scheduled-action and action-log tables.
 /// Service collector lanes are signed reset IDs (`anthropic`), never this.
 pub(in crate::server) fn lane(id: &ProviderAccountId) -> String {
@@ -36,65 +38,147 @@ fn declares_reset(binding: &crate::plugin_host::PluginUsageSpec) -> bool {
     binding.reset.is_some() && !binding.reset_argv.is_empty()
 }
 
-/// The owner's admitted target whose signed usage binding declares resets.
-/// A portable account uses its collector Plugin's own binding (Codex, Grok;
-/// never the DeepSeek balance collector, which declares none).
-async fn reset_target(
-    state: &AppState,
-    owner: &str,
-    id: &ProviderAccountId,
-) -> Result<(Resolved, bool), &'static str> {
-    let resolved = target(state, owner, id).await.map_err(public_code)?;
-    let binding = binding(state, &resolved).ok_or("account_reset_unsupported")?;
-    Ok((resolved, binding.claims_reset_before_attempt()))
+/// Where and how one reset runs, resolved before a reservation or schedule
+/// claim and retained through dispatch: the Machine, and the usage binding of
+/// the exact installed release there (which decides reset support and the
+/// claim policy), never a presentation default.
+enum Route {
+    Native {
+        target: Box<Target>,
+        binding: Box<crate::plugin_host::PluginUsageSpec>,
+    },
+    Portable {
+        target: Box<portable::Target>,
+        machine: String,
+        plugin: Box<crate::machine_protocol::PluginInventory>,
+        binding: Box<crate::plugin_host::PluginUsageSpec>,
+    },
 }
 
-/// The signed usage binding that spends this target's resets, if any.
-pub(super) fn binding(
-    state: &AppState,
-    resolved: &Resolved,
-) -> Option<crate::plugin_host::PluginUsageSpec> {
-    match resolved {
-        Resolved::Native(target) => state
-            .usage
-            .plugin_bindings()
-            .into_iter()
-            .find(|binding| binding.account == target.provider && declares_reset(binding)),
-        Resolved::Portable(target) => Some(target.binding.clone()).filter(declares_reset),
+impl Route {
+    fn binding(&self) -> &crate::plugin_host::PluginUsageSpec {
+        match self {
+            Self::Native { binding, .. } | Self::Portable { binding, .. } => binding,
+        }
     }
 }
 
-/// Reserve a paced reset start for this account. It holds the account's
+/// The route a reset of this owner's account would take now, or why none is
+/// eligible: operation-specific Machine eligibility (protocol, host policy,
+/// placement) is resolved before any support is advertised or schedule taken.
+async fn route(
+    state: &AppState,
+    owner: &str,
+    id: &ProviderAccountId,
+) -> Result<Route, &'static str> {
+    match target(state, owner, id).await.map_err(public_code)? {
+        Resolved::Native(target) => native_route(state, *target).await,
+        Resolved::Portable(target) => {
+            let (machine, plugin) = portable::placement(state, owner, id, &target)?;
+            let binding = state
+                .usage
+                .exact_usage_binding(&plugin)
+                .filter(|binding| {
+                    declares_reset(binding) && binding.account == target.binding.account
+                })
+                .ok_or("account_reset_unsupported")?;
+            Ok(Route::Portable {
+                target,
+                machine,
+                plugin: Box::new(plugin),
+                binding: Box::new(binding),
+            })
+        }
+    }
+}
+
+async fn native_route(state: &AppState, target: Target) -> Result<Route, &'static str> {
+    let completion = &target.completion;
+    let (_, version) = state
+        .machine_control
+        .connection_protocol(&completion.machine_id)
+        .ok_or("machine_unavailable")?;
+    if version < crate::machine_protocol::NATIVE_RESET_PROTOCOL_VERSION {
+        return Err("machine_usage_update_required");
+    }
+    if !state
+        .supervisor
+        .runtime_allowed(&completion.profile.provider_id, &completion.machine_id)
+    {
+        return Err("runtime_not_allowed");
+    }
+    let machines = state
+        .store
+        .as_ref()
+        .ok_or("unavailable")?
+        .list_machines()
+        .await
+        .map_err(|_| "unavailable")?;
+    let installed = active_machine_plugin(
+        &machines,
+        &completion.machine_id,
+        &completion.profile.provider_id,
+    )
+    .map_err(|_| "machine_unavailable")?;
+    let binding = state
+        .usage
+        .exact_usage_binding(&installed)
+        .filter(|binding| declares_reset(binding) && binding.account == target.provider)
+        .ok_or("account_reset_unsupported")?;
+    Ok(Route::Native {
+        target: Box::new(target),
+        binding: Box::new(binding),
+    })
+}
+
+/// Whether a reset of this account is supported and eligible now.
+pub(super) async fn supported(state: &AppState, owner: &str, id: &ProviderAccountId) -> bool {
+    route(state, owner, id).await.is_ok()
+}
+
+/// The authority a schedule of this account is bound to: its current
+/// sign-in (native login, portable identity and admission revision, or an
+/// entered key's generation). A schedule outlives no change of it.
+pub(super) async fn authority(
+    state: &AppState,
+    owner: &str,
+    id: &ProviderAccountId,
+) -> Option<String> {
+    let scope = target(state, owner, id).await.ok()?.scope();
+    let bytes = serde_json::to_vec(&(owner, id, scope)).ok()?;
+    Some(format!("sha256:{}", crate::admin::hex_sha256(&bytes)))
+}
+
+/// Reserve a paced reset start on an eligible route. It holds the account's
 /// collection lock, so a quota read and a reset of one account never overlap.
 async fn reserve(
     state: &AppState,
     owner: &str,
     id: &ProviderAccountId,
-) -> Result<(ResetReservation, bool), &'static str> {
-    let (target, claims_before) = reset_target(state, owner, id).await?;
+) -> Result<(ResetReservation, Route), &'static str> {
+    let route = route(state, owner, id).await?;
     let slot = state.usage.native.entry(owner, id.as_str());
     let serial = Arc::clone(&slot.collection).lock_owned().await;
     let key = crate::usage::limiter::Limiter::account_key(owner, id.as_str());
     let permit = state
         .usage
         .limiter
-        .start_action(target.provider(), &key, now_ms())
+        .start_action(&route.binding().account, &key, now_ms())
         .map_err(|_| "usage_reset_paced")?;
-    Ok((ResetReservation::new(key, permit, serial), claims_before))
+    Ok((ResetReservation::new(key, permit, serial), route))
 }
 
 fn local(code: &'static str) -> ResetError {
     ResetError::new(false, None, error_message(code))
 }
 
-/// Spend one reset through the account's sign-in Machine. Admission is the
-/// quota read's: binding, identity, availability, sign-in Machine and the
-/// host's runtime policy (`--provider-runtime-machine`), checked again here.
+/// Spend one reset on the reserved route. Admission is rechecked at enqueue:
+/// the native login binding (or the portable account lock) and host policy.
 async fn consume(
     state: &Arc<AppState>,
     owner: &str,
     id: &ProviderAccountId,
-    mut reservation: ResetReservation,
+    (mut reservation, route): (ResetReservation, Route),
     idempotency_key: &str,
     expected_credit_id: Option<&str>,
 ) -> Result<ResetResult, ResetError> {
@@ -102,7 +186,21 @@ async fn consume(
         owner,
         id.as_str(),
     ))?;
-    let (result, outcome) = dispatch(state, owner, id, idempotency_key, expected_credit_id).await;
+    let request = crate::machine_protocol::NativeResetRequest {
+        provider: route.binding().account.clone(),
+        idempotency_key: idempotency_key.to_owned(),
+        expected_credit_id: expected_credit_id.map(str::to_owned),
+    };
+    let reply = match &route {
+        Route::Native { target, .. } => dispatch_native(state, owner, target, request).await,
+        Route::Portable {
+            target,
+            machine,
+            plugin,
+            ..
+        } => portable::consume_reset(state, owner, id, (target, machine, plugin), request).await,
+    };
+    let (result, outcome) = settle(reply);
     permit.finish(outcome, now_ms());
     drop(reservation);
     // Publish through the existing budgeted path; a reset just charged this
@@ -115,44 +213,26 @@ async fn consume(
     result
 }
 
-async fn dispatch(
-    state: &AppState,
-    owner: &str,
-    id: &ProviderAccountId,
-    idempotency_key: &str,
-    expected_credit_id: Option<&str>,
+/// The collector's reply (or the dispatch failure) as a reset result and the
+/// pacing outcome it charges.
+fn settle(
+    reply: Result<Value, NativeResetFailure>,
 ) -> (
     Result<ResetResult, ResetError>,
     crate::usage::limiter::Outcome,
 ) {
+    use crate::machine_protocol::portable_usage::{UsageFailureKind, classify_usage_failure};
     use crate::usage::limiter::Outcome;
-    let failure = |code| NativeResetFailure {
-        call_may_have_reached_provider: false,
-        code,
-    };
-    let request = |provider: &str| crate::machine_protocol::NativeResetRequest {
-        provider: provider.to_owned(),
-        idempotency_key: idempotency_key.to_owned(),
-        expected_credit_id: expected_credit_id.map(str::to_owned),
-    };
-    let reply = match reset_target(state, owner, id).await {
-        Err(code) => Err(failure(code)),
-        Ok((Resolved::Native(target), _)) => {
-            let request = request(&target.provider);
-            dispatch_native(state, owner, &target, request).await
-        }
-        Ok((Resolved::Portable(target), _)) => {
-            let request = request(&target.binding.account);
-            portable::consume_reset(state, owner, id, &target, request).await
-        }
-    };
     match reply {
         Ok(reply) => {
-            let result = crate::usage::parse_reset_response(reply);
+            let result = crate::usage::parse_reset_response(&reply);
             // A refused or changed reset is an answer, not an outage. Only
             // authentication failures back off.
             let outcome = match &result {
-                Err(error) if error.to_string().contains("authentication required") => {
+                Err(error)
+                    if classify_usage_failure(&error.to_string())
+                        == UsageFailureKind::Authentication =>
+                {
                     Outcome::Authentication
                 }
                 _ => Outcome::Success,
@@ -176,7 +256,9 @@ async fn dispatch(
 }
 
 /// The native login's Machine runs the reset under the login binding and the
-/// host's runtime policy (`--provider-runtime-machine`), checked again here.
+/// host's runtime policy (`--provider-runtime-machine`), checked again when
+/// it is enqueued. Once enqueued, only its reply decides the outcome, even if
+/// the binding transaction then fails to commit.
 async fn dispatch_native(
     state: &AppState,
     owner: &str,
@@ -196,59 +278,75 @@ async fn dispatch_native(
     if version < crate::machine_protocol::NATIVE_RESET_PROTOCOL_VERSION {
         return Err(unsent("machine_usage_update_required"));
     }
-    let pending = store
+    let mut sent = None;
+    let admitted = store
         .with_native_login_binding(owner, &target.operation, completion, || {
-            Ok(
-                if state
-                    .supervisor
-                    .runtime_allowed(&completion.profile.provider_id, &completion.machine_id)
-                {
-                    state
-                        .machine_control
-                        .begin_native_reset(&connection, &completion.profile, request)
-                        .map_err(|code| dispatch_error(&code))
-                } else {
-                    Err("runtime_not_allowed")
-                },
-            )
+            if !state
+                .supervisor
+                .runtime_allowed(&completion.profile.provider_id, &completion.machine_id)
+            {
+                return Ok(Err("runtime_not_allowed"));
+            }
+            Ok(state
+                .machine_control
+                .begin_native_reset(&connection, &completion.profile, request)
+                .map(|pending| sent = Some(pending))
+                .map_err(|code| dispatch_error(&code)))
         })
         .await;
-    let pending = match pending {
-        Ok(Ok(pending)) => pending,
-        Ok(Err(code)) => return Err(unsent(code)),
-        Err(_) => return Err(unsent("account_binding_changed")),
-    };
-    pending.await
+    match (sent, admitted) {
+        (Some(pending), _) => pending.await,
+        (None, Ok(Err(code))) => Err(unsent(code)),
+        (None, _) => Err(unsent("account_binding_changed")),
+    }
 }
 
 /// A named account's persisted schedule, as the timer sees it.
 struct NamedLane<'a> {
     state: &'a Arc<AppState>,
     owner: &'a str,
+    owner_enabled: bool,
     id: &'a ProviderAccountId,
     lane: String,
+    /// The route [`ResetLane::reserve`] resolved, retained for `consume`.
+    route: parking_lot::Mutex<Option<Route>>,
 }
 
 impl ResetLane for NamedLane<'_> {
     fn lane(&self) -> &str {
         &self.lane
     }
+    async fn admitted(&self, flight: &crate::store::ResetFlight) -> bool {
+        // A disabled owner, or any change of the sign-in that scheduled it,
+        // withdraws the spending authority.
+        self.owner_enabled
+            && flight.authority.is_some()
+            && authority(self.state, self.owner, self.id).await == flight.authority
+    }
     async fn reserve(&self) -> Result<(ResetReservation, bool), ResetError> {
-        reserve(self.state, self.owner, self.id)
+        let (reservation, route) = reserve(self.state, self.owner, self.id)
             .await
-            .map_err(local)
+            .map_err(local)?;
+        let claims_before = route.binding().claims_reset_before_attempt();
+        *self.route.lock() = Some(route);
+        Ok((reservation, claims_before))
     }
     async fn consume(
         &self,
         reservation: ResetReservation,
         idempotency_key: &str,
     ) -> Result<ResetResult, ResetError> {
+        let route = self
+            .route
+            .lock()
+            .take()
+            .ok_or_else(|| local("account_binding_changed"))?;
         // The timer spends the Provider's next grant, as Service schedules do.
         consume(
             self.state,
             self.owner,
             self.id,
-            reservation,
+            (reservation, route),
             idempotency_key,
             None,
         )
@@ -260,7 +358,8 @@ impl ResetLane for NamedLane<'_> {
 }
 
 /// Fire due named-account schedules until the server stops. Schedules live
-/// only in the store, so a restart resumes them and each fires once.
+/// only in the store, so a restart resumes them and each fires once. A
+/// disabled owner's schedules are withdrawn, never fired.
 pub(in crate::server) async fn run(state: Arc<AppState>) {
     loop {
         if let Some(store) = state.store.as_ref()
@@ -274,8 +373,10 @@ pub(in crate::server) async fn run(state: Arc<AppState>) {
                     let lane = NamedLane {
                         state: &state,
                         owner: &user.id,
+                        owner_enabled: user.disabled_at_ms.is_none(),
                         id: &account.id,
                         lane: lane(&account.id),
+                        route: parking_lot::Mutex::new(None),
                     };
                     fire_if_due(&lane, store).await;
                 }
@@ -294,11 +395,14 @@ pub(super) async fn schedule_of(
     Some(json!({"fire_at_ms": action.fire_at_ms}))
 }
 
+/// Persist a schedule bound to `authority`; it is withdrawn, unspent, once
+/// that authority changes.
 async fn persist_schedule(
     store: &crate::store::Store,
     owner: &str,
     id: &ProviderAccountId,
     fire_at_ms: i64,
+    authority: &str,
 ) -> Result<(), &'static str> {
     owned(store, owner, id).await?;
     let key = new_reset_idempotency_key();
@@ -307,6 +411,13 @@ async fn persist_schedule(
         .upsert_provider_reset(&lane, fire_at_ms, &key)
         .await
         .map_err(|_| "unavailable")?;
+    if !store
+        .bind_provider_reset_authority(&lane, &key, authority)
+        .await
+        .map_err(|_| "unavailable")?
+    {
+        return Err("unavailable");
+    }
     log_reset(
         store,
         &lane,
@@ -360,52 +471,107 @@ fn refusal(code: &'static str) -> Response {
         .into_response()
 }
 
+/// A named reset request. `operation_id` (8 to 128 of `[A-Za-z0-9_-]`) makes
+/// it idempotent: a repeat returns the original receipt and never spends again.
+#[derive(Deserialize)]
+pub(in crate::server) struct NamedResetRequest {
+    confirm: String,
+    expected_credit_id: String,
+    #[serde(default)]
+    operation_id: Option<String>,
+}
+
+fn receipt_response((status, body): receipts::Receipt) -> Response {
+    (status, Json(body)).into_response()
+}
+
 /// `POST /api/provider-accounts/{account_id}/usage/reset`: spend the
-/// confirmed grant now. Requires the typed `confirm` confirmation.
+/// confirmed grant now. Requires the typed `confirm` confirmation. The spend
+/// runs in a Service-owned task: a disconnecting caller recovers its terminal
+/// or unknown receipt by repeating the same `operation_id`.
 pub(in crate::server) async fn http_reset(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthenticatedProductRequest>,
     Path(id): Path<ProviderAccountId>,
-    Json(request): Json<ResetRequest>,
+    Json(request): Json<NamedResetRequest>,
 ) -> Response {
-    let owner = &auth.principal.user_id;
+    let owner = auth.principal.user_id.clone();
     if request.confirm != "confirm" {
         return refusal("reset_confirmation_required");
     }
-    let Some(store) = state.store.as_ref() else {
+    let Some(store) = state.store.clone() else {
         return refusal("unavailable");
     };
-    let reservation = match reserve(&state, owner, &id).await {
-        Ok((reservation, _)) => reservation,
+    let lane = lane(&id);
+    let key = match request.operation_id.as_deref() {
+        Some(operation) => match receipts::operation_key(&owner, &lane, operation) {
+            Ok(key) => key,
+            Err(code) => return refusal(code),
+        },
+        None => new_reset_idempotency_key(),
+    };
+    if let Err(code) = owned(&store, &owner, &id).await {
+        return refusal(code);
+    }
+    if let Some(receipt) = receipts::existing(&store, &lane, &key).await {
+        return receipt_response(receipt);
+    }
+    let reserved = match reserve(&state, &owner, &id).await {
+        Ok(reserved) => reserved,
         Err(code) => return refusal(code),
     };
-    let (lane, key) = (lane(&id), new_reset_idempotency_key());
-    let expected = Some(request.expected_credit_id.as_str());
+    let Some(publish) = receipts::begin(&lane, &key) else {
+        drop(reserved);
+        return receipts::existing(&store, &lane, &key)
+            .await
+            .map_or_else(|| refusal("reset_in_progress"), receipt_response);
+    };
+    let expected = request.expected_credit_id;
     log_reset(
-        store,
+        &store,
         &lane,
         "manual",
         "started",
         "preflight",
         "Manual reset attempt started",
-        expected,
+        Some(&expected),
         Some(&key),
     )
     .await;
-    match consume(&state, owner, &id, reservation, &key, expected).await {
+    let task = tokio::spawn(async move {
+        let result = consume(&state, &owner, &id, reserved, &key, Some(&expected)).await;
+        let receipt = record(&store, &lane, &key, result).await;
+        publish.send_replace(Some(receipt.clone()));
+        receipt
+    });
+    // A caller disconnect detaches this wait, never the spend or its receipt.
+    receipt_response(
+        task.await
+            .unwrap_or_else(|_| receipts::unknown(error_message("native_reset_outcome_unknown"))),
+    )
+}
+
+/// Log a manual attempt's terminal row and project it as its receipt.
+async fn record(
+    store: &crate::store::Store,
+    lane: &str,
+    key: &str,
+    result: Result<ResetResult, ResetError>,
+) -> receipts::Receipt {
+    match result {
         Ok(result) => {
             log_reset(
                 store,
-                &lane,
+                lane,
                 "manual",
                 "succeeded",
                 "provider_response",
                 &result.outcome,
                 result.credit_id.as_deref(),
-                Some(&key),
+                Some(key),
             )
             .await;
-            Json(result).into_response()
+            (StatusCode::OK, json!(result))
         }
         Err(error) => {
             let (status, phase, code) = if error.call_may_have_reached_provider {
@@ -416,20 +582,19 @@ pub(in crate::server) async fn http_reset(
             let message = error.to_string();
             log_reset(
                 store,
-                &lane,
+                lane,
                 "manual",
                 status,
                 phase,
                 &message,
                 error.credit_id.as_deref(),
-                Some(&key),
+                Some(key),
             )
             .await;
             (
                 StatusCode::CONFLICT,
-                Json(json!({"error":{"code":code,"message":message,"credit_id":error.credit_id}})),
+                json!({"error":{"code":code,"message":message,"credit_id":error.credit_id}}),
             )
-                .into_response()
         }
     }
 }
@@ -452,10 +617,14 @@ pub(in crate::server) async fn http_schedule(
     let Some(store) = state.store.as_ref() else {
         return refusal("unavailable");
     };
-    if let Err(code) = reset_target(&state, owner, &id).await {
+    // Only an eligible route is scheduled, bound to the current sign-in.
+    if let Err(code) = route(&state, owner, &id).await {
         return refusal(code);
     }
-    if let Err(code) = persist_schedule(store, owner, &id, request.fire_at_ms).await {
+    let Some(authority) = authority(&state, owner, &id).await else {
+        return refusal("account_binding_changed");
+    };
+    if let Err(code) = persist_schedule(store, owner, &id, request.fire_at_ms, &authority).await {
         return refusal(code);
     }
     state.hub.broadcast_account_usage_changed(owner);
@@ -518,11 +687,11 @@ mod tests {
         // The lane fits the shared table's Provider-ID shape.
         assert_eq!(lane(&account).len(), "account-".len() + 36);
         assert_eq!(
-            persist_schedule(&store, "intruder", &account, fire_at).await,
+            persist_schedule(&store, "intruder", &account, fire_at, "sha256:a").await,
             Err("account_unavailable")
         );
         assert!(schedule_of(&store, &account).await.is_none());
-        persist_schedule(&store, "owner", &account, fire_at)
+        persist_schedule(&store, "owner", &account, fire_at, "sha256:a")
             .await
             .unwrap();
         assert_eq!(
@@ -544,6 +713,51 @@ mod tests {
         let logs = store.provider_action_logs(10).await.unwrap();
         assert_eq!(logs.len(), 2);
         assert!(logs.iter().all(|log| log.provider == lane(&account)));
+    }
+
+    #[tokio::test]
+    async fn named_reset_logs_are_visible_only_to_their_owner() {
+        let root = tempfile::tempdir().unwrap();
+        let store = crate::store::Store::connect("sqlite::memory:", root.path().join("artifacts"))
+            .await
+            .unwrap();
+        store.migrate().await.unwrap();
+        let account = create(&store, "owner").await;
+        log_reset(
+            &store,
+            &lane(&account),
+            "manual",
+            "succeeded",
+            "provider_response",
+            "reset",
+            Some("grant:1"),
+            Some("cowboy-reset-op-1"),
+        )
+        .await;
+        log_reset(
+            &store,
+            "anthropic",
+            "manual",
+            "succeeded",
+            "provider_response",
+            "reset",
+            None,
+            None,
+        )
+        .await;
+        let logs = store.provider_action_logs(10).await.unwrap();
+        let visible = |caller: &'static str| {
+            let (store, logs) = (store.clone(), logs.clone());
+            async move {
+                crate::server::usage_api::owned_action_logs(&store, caller, logs)
+                    .await
+                    .into_iter()
+                    .map(|log| log.provider)
+                    .collect::<Vec<_>>()
+            }
+        };
+        assert_eq!(visible("owner").await.len(), 2);
+        assert_eq!(visible("intruder").await, ["anthropic"]);
     }
 
     #[test]

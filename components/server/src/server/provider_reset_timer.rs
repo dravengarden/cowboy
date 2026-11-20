@@ -19,6 +19,11 @@ pub(super) trait ResetLane {
     ) -> Result<ResetResult, ResetError>;
     /// The persisted schedule was claimed or cleared.
     async fn cleared(&self);
+    /// Whether the authority that created this schedule still holds. A
+    /// withdrawn schedule is dropped unspent, never deferred like pacing.
+    async fn admitted(&self, _flight: &crate::store::ResetFlight) -> bool {
+        true
+    }
 }
 
 struct ServiceLane<'a> {
@@ -80,10 +85,60 @@ pub(super) fn spawn_provider_reset_timer(
     })
 }
 
-/// Fire `lane`'s persisted schedule if it is due.
+/// Fire `lane`'s persisted schedule if it is due. Each lane fires serially,
+/// so a schedule found in flight was interrupted (a crash or a lost clear
+/// after its attempt): its outcome is unknown and it is never run again.
 pub(super) async fn fire_if_due(lane: &impl ResetLane, store: &Store) {
-    let action = store.load_provider_reset(lane.lane()).await.ok().flatten();
-    if let Some(action) = action.filter(|item| item.next_attempt_at_ms <= now_ms()) {
+    let (Ok(Some(action)), Ok(Some(flight))) = (
+        store.load_provider_reset(lane.lane()).await,
+        store.provider_reset_flight(lane.lane()).await,
+    ) else {
+        return;
+    };
+    if flight.idempotency_key != action.idempotency_key {
+        return;
+    }
+    let key = action.idempotency_key.clone();
+    let drop_with = |status, phase, message: &'static str| {
+        let key = key.clone();
+        async move {
+            log_reset(
+                store,
+                lane.lane(),
+                "scheduled",
+                status,
+                phase,
+                message,
+                None,
+                Some(&key),
+            )
+            .await;
+            clear(lane, store, &key).await;
+        }
+    };
+    if flight.in_flight {
+        tracing::error!(
+            lane = lane.lane(),
+            "interrupted scheduled provider reset; outcome unknown"
+        );
+        drop_with(
+            "unknown",
+            "consume",
+            "The scheduled reset was interrupted; its outcome is unknown and it is not retried.",
+        )
+        .await;
+        return;
+    }
+    if !lane.admitted(&flight).await {
+        drop_with(
+            "cancelled",
+            "timer",
+            "Scheduled reset withdrawn: the account's sign-in or availability changed.",
+        )
+        .await;
+        return;
+    }
+    if action.next_attempt_at_ms <= now_ms() {
         fire_due_reset(lane, store, action).await;
     }
 }
@@ -144,14 +199,20 @@ pub(super) async fn fire_due_reset(
             return;
         }
     };
-    if claim_before {
-        match store.claim_provider_reset(id, &key).await {
-            Ok(true) => lane.cleared().await,
-            Ok(false) => return,
-            Err(error) => {
-                tracing::error!(%error, lane = id, "claiming scheduled provider reset");
-                return;
-            }
+    // Atomically take exactly this pending schedule before any Provider call:
+    // a cancel or replacement while waiting for the reservation wins.
+    let taken = if claim_before {
+        store.claim_provider_reset(id, &key).await
+    } else {
+        store.begin_provider_reset(id, &key, now_ms()).await
+    };
+    match taken {
+        Ok(true) if claim_before => lane.cleared().await,
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(error) => {
+            tracing::error!(%error, lane = id, "taking scheduled provider reset");
+            return;
         }
     }
     let log = |status, phase, message: String, credit: Option<String>| {
@@ -212,8 +273,9 @@ pub(super) async fn fire_due_reset(
             };
             log(status, phase, error.to_string(), error.credit_id).await;
             if policy == ScheduledResetFailurePolicy::RetryPreflight {
+                // Proven unsent: only this exact schedule returns to pending.
                 let _ = store
-                    .defer_provider_reset(id, &key, now_ms().saturating_add(60_000))
+                    .rearm_provider_reset(id, &key, now_ms().saturating_add(60_000))
                     .await;
                 return;
             }
@@ -236,6 +298,7 @@ mod tests {
         starts: AtomicUsize,
         consumed: AtomicUsize,
         cleared: AtomicUsize,
+        admitted: bool,
     }
 
     impl Fake {
@@ -247,6 +310,7 @@ mod tests {
                 starts: AtomicUsize::new(0),
                 consumed: AtomicUsize::new(0),
                 cleared: AtomicUsize::new(0),
+                admitted: true,
             }
         }
     }
@@ -288,6 +352,9 @@ mod tests {
         async fn cleared(&self) {
             self.cleared.fetch_add(1, Ordering::SeqCst);
         }
+        async fn admitted(&self, _flight: &crate::store::ResetFlight) -> bool {
+            self.admitted
+        }
     }
 
     async fn store() -> (Store, tempfile::TempDir) {
@@ -318,6 +385,61 @@ mod tests {
             store.load_provider_reset(lane.lane()).await.unwrap(),
             statuses,
         )
+    }
+
+    #[tokio::test]
+    async fn interrupted_cancelled_or_withdrawn_schedules_never_run() {
+        // Interrupted: still in flight when the timer next looks.
+        let lane = Fake::new(false, None);
+        let (db, _root) = store().await;
+        db.upsert_provider_reset(lane.lane(), now_ms() - 1, "key")
+            .await
+            .unwrap();
+        assert!(
+            db.begin_provider_reset(lane.lane(), "key", now_ms())
+                .await
+                .unwrap()
+        );
+        fire_if_due(&lane, &db).await;
+        assert_eq!(lane.consumed.load(Ordering::SeqCst), 0);
+        assert!(db.load_provider_reset(lane.lane()).await.unwrap().is_none());
+        let logs = db.provider_action_logs(10).await.unwrap();
+        assert_eq!(logs[0].status, "unknown");
+
+        // Replaced while waiting for the reservation: the old key never runs.
+        let (replaced, _second) = store().await;
+        replaced
+            .upsert_provider_reset(lane.lane(), now_ms() - 1, "old")
+            .await
+            .unwrap();
+        let action = replaced
+            .load_provider_reset(lane.lane())
+            .await
+            .unwrap()
+            .unwrap();
+        replaced
+            .upsert_provider_reset(lane.lane(), now_ms() + 600_000, "new")
+            .await
+            .unwrap();
+        fire_due_reset(&lane, &replaced, action).await;
+        assert_eq!(lane.consumed.load(Ordering::SeqCst), 0);
+        let left = replaced
+            .provider_reset_flight(lane.lane())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (left.idempotency_key.as_str(), left.in_flight),
+            ("new", false)
+        );
+
+        // Withdrawn authority: dropped unspent, never deferred like pacing.
+        let mut withdrawn = Fake::new(false, None);
+        withdrawn.admitted = false;
+        let (left, logs) = fire(&withdrawn).await;
+        assert!(left.is_none());
+        assert_eq!(logs, ["cancelled"]);
+        assert_eq!(withdrawn.consumed.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

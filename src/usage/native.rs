@@ -51,6 +51,10 @@ pub struct PortableScope {
     pub identity_fingerprint: Option<String>,
     /// The account's last authority change: a new key or sign-in.
     pub admission_revision: Option<i64>,
+    /// An entered key's vault generation: it has no identity, and a key
+    /// replacement need not change the admission revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_generation: Option<u64>,
 }
 
 impl From<NativeCompletion> for Scope {
@@ -346,6 +350,7 @@ mod tests {
                 usage_provider: "xai".into(),
                 identity_fingerprint: Some("sha256:fox".into()),
                 admission_revision: Some(revision),
+                credential_generation: None,
             })
         };
         for (account, scope) in [("fox", portable(4)), ("mink", completion(4))] {

@@ -26,6 +26,7 @@ fn activated(id: &str, source: &str) -> ActivatedHostPlugin {
         rpc_argv: spec.rpc_argv,
         visual: spec.visual,
         native_capabilities: spec.native_capabilities,
+        refresh_free_collector: false,
     }
 }
 

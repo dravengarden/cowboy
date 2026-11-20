@@ -458,8 +458,32 @@ pub(super) fn parse_diagnostic_log_filter(
     })
 }
 
+/// Whether a product caller may see a reset-automation row of `provider`:
+/// Service lanes are Service-wide; a named account's lane only its owner's.
+/// The legacy admin console (no product principal) keeps Service-wide view.
+async fn automation_visible(
+    store: &crate::store::Store,
+    caller: Option<&AuthenticatedProductRequest>,
+    provider: Option<&str>,
+) -> bool {
+    let (Some(caller), Some(account)) = (caller, provider.and_then(|p| p.strip_prefix("account-")))
+    else {
+        return true;
+    };
+    match crate::provider_account::ProviderAccountId::try_from(account.to_owned()) {
+        Ok(id) => store
+            .provider_account_owner(&id)
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|owner| owner == caller.principal.user_id),
+        Err(_) => false,
+    }
+}
+
 pub(super) async fn api_diagnostic_logs(
     State(state): State<Arc<AppState>>,
+    caller: Option<Extension<AuthenticatedProductRequest>>,
     Query(query): Query<DiagnosticLogsQuery>,
 ) -> Response {
     let Some(store) = state.store.as_ref() else {
@@ -474,7 +498,16 @@ pub(super) async fn api_diagnostic_logs(
         Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
     };
     match store.diagnostic_logs(&filter).await {
-        Ok(mut items) => {
+        Ok(listed) => {
+            let caller = caller.as_ref().map(|Extension(auth)| auth);
+            let mut items = Vec::with_capacity(listed.len());
+            for item in listed {
+                if item.kind != "automation"
+                    || automation_visible(store, caller, item.provider.as_deref()).await
+                {
+                    items.push(item);
+                }
+            }
             let has_more = items.len() > usize::try_from(filter.limit).unwrap_or(100);
             items.truncate(usize::try_from(filter.limit).unwrap_or(100));
             let next_cursor = has_more && !items.is_empty();
@@ -492,6 +525,7 @@ pub(super) async fn api_diagnostic_logs(
 
 pub(super) async fn api_diagnostic_log_detail(
     State(state): State<Arc<AppState>>,
+    caller: Option<Extension<AuthenticatedProductRequest>>,
     Path(id): Path<String>,
 ) -> Response {
     let Some(store) = state.store.as_ref() else {
@@ -503,6 +537,20 @@ pub(super) async fn api_diagnostic_log_detail(
     };
     if id.is_empty() || id.len() > 512 {
         return (StatusCode::BAD_REQUEST, "invalid diagnostic log id").into_response();
+    }
+    if let Some(row) = id.strip_prefix("automation:") {
+        let provider = store.provider_action_logs(200).await.ok().and_then(|logs| {
+            logs.into_iter()
+                .find(|log| log.id.to_string() == row)
+                .map(|log| log.provider)
+        });
+        let caller = caller.as_ref().map(|Extension(auth)| auth);
+        // A product caller sees only rows whose lane it can attribute.
+        if (caller.is_some() && provider.is_none())
+            || !automation_visible(store, caller, provider.as_deref()).await
+        {
+            return StatusCode::NOT_FOUND.into_response();
+        }
     }
     match store.diagnostic_log_detail(&id).await {
         Ok(Some(detail)) => Json(detail).into_response(),

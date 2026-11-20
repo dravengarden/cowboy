@@ -245,6 +245,23 @@ test("Codex collector refreshes an expired token once and retries", async () => 
   );
 });
 
+test("a named account's Codex poll never redeems the refresh token", async () => {
+  const rpc = fakeCodex({
+    "account/read": [{ account: { type: "chatgpt" } }],
+    "account/rateLimits/read": [expired],
+  });
+  let message = "";
+  await collectCodex(rpc, { operation: "collect", token_refresh: false }).catch((error) => {
+    message = error.message;
+  });
+  equal(message.includes("authentication required"), true, "reports authentication");
+  equal(
+    rpc.calls.filter(([method]) => method === "account/read").map(([, p]) => p),
+    [{ refreshToken: false }],
+    "no refresh",
+  );
+});
+
 test("Codex collector never refreshes on other failures or a second expiry", async () => {
   const other = fakeCodex({
     "account/read": [{ account: { type: "chatgpt" } }],

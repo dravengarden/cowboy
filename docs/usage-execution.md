@@ -41,19 +41,26 @@ replica is the vault's current Ready generation the Controller named, refuses an
 observation whose generation changed while the collector ran, and holds the
 account's credential guard for the run so no apply or wipe overlaps it.
 
-**Refresh-token decision.** A collector may rotate the credential: the Codex
-collector asks its CLI to refresh once after the backend reports the access
-token expired, and Grok's CLI refreshes its own sign-in. The rotation can only
-land in the account's runtime projection, where the account-scope credential
-watch proposes it to the Service exactly like a session's refresh: the Service
-compare-and-swaps it into the account vault and redistributes the winner, or
-discards a stale loser and restores the vault generation on that Machine. The
-collector persists nothing elsewhere and never sees the Service account's
-credential. Placement keeps refreshes with the lineage sessions already use:
-among Machines with an exact released active collector generation that host
-runtime policy admits, Cowboy picks the one running most of the owner's sessions
-on the account, then the lowest Machine ID, and never inherits the Service
-account's configured usage query Machine.
+**Refresh-token decision.** A usage query or reset of a named portable account
+never redeems a refresh token. A Service compare-and-swap after a refresh
+cannot repair a refresh token that a session on another Machine redeemed
+concurrently, so the coordination must precede the vendor call; the only
+writer allowed to redeem is the sessions' existing refresh path. The Machine
+adds `"token_refresh": false` to every portable request and, for a Provider
+whose CLI rotates credentials (`compare_and_swap`), runs only a collector whose
+exact signed release declares (`collector/portable-account.json`,
+`token_refresh: "request"`) that it then reports authentication required
+instead of refreshing. The Controller places only on such a release and
+otherwise reports `portable_usage_refresh_unsupported`. Codex's collector
+declares it (effective from its next Plugin release); Grok's CLI may renew its
+sign-in on start, so named Grok usage and resets stay off until a refresh-free
+Grok collector exists. An entered DeepSeek key is never refreshed.
+
+Placement: among Machines with an exact released active collector generation
+that host runtime policy admits for the collector and every sidecar Plugin it
+starts, Cowboy picks the one running most of the owner's live sessions on the
+account, then the lowest Machine ID, and never inherits the Service account's
+configured usage query Machine.
 
 Banked resets of a portable Codex or Grok account (`ConsumePortableReset`, also
 protocol 50) run the collector's `consume_reset` under the same admission and on

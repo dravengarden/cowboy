@@ -22,8 +22,13 @@ pub struct PortableUsageHost {
     pub binding: PluginUsageSpec,
     /// Scope member whose host owns the collector.
     pub plugin_id: String,
-    /// Connected Machines holding an exact released active generation of it.
-    pub candidates: Vec<(String, PluginInventory)>,
+    /// Connected Machines holding an exact released active generation of it,
+    /// and whether that release's collector declares it never redeems a
+    /// refresh token on request.
+    pub candidates: Vec<(String, PluginInventory, bool)>,
+    /// Scope members whose sidecars the collector starts (the gateways):
+    /// host policy must admit each of them too.
+    pub sidecar_plugins: Vec<String>,
 }
 
 impl UsageService {
@@ -57,24 +62,64 @@ impl UsageService {
                 .collect();
             let candidates = installed
                 .iter()
-                .filter(|installed| {
-                    installed.plugin.state == PluginInstallationState::Active
-                        && hosts.iter().any(|host| {
-                            host.id == installed.plugin.plugin_id
-                                && host.plugin_version.as_deref()
-                                    == Some(installed.plugin.plugin_version.as_str())
-                                && host.artifact_digest.as_deref()
-                                    == Some(installed.plugin.generation_digest.as_str())
-                        })
+                .filter(|installed| installed.plugin.state == PluginInstallationState::Active)
+                .filter_map(|installed| {
+                    let host = hosts.iter().find(|host| {
+                        host.id == installed.plugin.plugin_id
+                            && host.plugin_version.as_deref()
+                                == Some(installed.plugin.plugin_version.as_str())
+                            && host.artifact_digest.as_deref()
+                                == Some(installed.plugin.generation_digest.as_str())
+                    })?;
+                    Some((
+                        installed.machine_id.clone(),
+                        installed.plugin.clone(),
+                        host.refresh_free_collector,
+                    ))
                 })
-                .map(|installed| (installed.machine_id.clone(), installed.plugin.clone()))
+                .collect();
+            let slots: Vec<_> = presentation
+                .collector_sidecars
+                .iter()
+                .map(|sidecar| sidecar.adapter_slot.as_str())
+                .collect();
+            let sidecar_plugins = members
+                .iter()
+                .filter(|other| {
+                    runtime.default_host(other).is_some_and(|host| {
+                        host.adapter_slot
+                            .as_deref()
+                            .is_some_and(|slot| slots.contains(&slot))
+                    })
+                })
+                .cloned()
                 .collect();
             Some(PortableUsageHost {
                 binding: presentation,
                 plugin_id: member.clone(),
                 candidates,
+                sidecar_plugins,
             })
         })
+    }
+
+    /// The usage binding of exactly this installed release: what its signed
+    /// collector supports (resets, claim policy), never the presentation
+    /// default of a newer or older release.
+    #[must_use]
+    pub fn exact_usage_binding(&self, plugin: &PluginInventory) -> Option<PluginUsageSpec> {
+        let super::UsageBindingSource::Catalog(catalog) = &self.bindings else {
+            return None;
+        };
+        catalog
+            .runtime()?
+            .exact_host(
+                &plugin.plugin_id,
+                &plugin.plugin_version,
+                &plugin.generation_digest,
+            )?
+            .usage
+            .clone()
     }
 }
 
@@ -86,11 +131,22 @@ pub async fn collect(
     plugin: &PluginInventory,
     request: PortableUsageRequest,
 ) -> Result<Value, &'static str> {
+    begin_collect(machine_control, machine_id, plugin, request)?.await
+}
+
+/// Enqueue a collection (synchronously, so a caller can hold an admission
+/// lock across exactly the enqueue); the future awaits its reply.
+pub fn begin_collect<'a>(
+    machine_control: &'a MachineControl,
+    machine_id: &str,
+    plugin: &PluginInventory,
+    request: PortableUsageRequest,
+) -> Result<impl Future<Output = Result<Value, &'static str>> + 'a, &'static str> {
     let binding = machine_control
         .bind_plugin_host(machine_id, plugin, PluginHostOperation::CollectUsage)
         .map_err(|_| "portable_usage_machine_unavailable")?;
     let request_id = format!("portable-usage-{}", uuid::Uuid::new_v4());
-    let (reply, _pending) = machine_control
+    let (reply, pending) = machine_control
         .begin_request(
             machine_id,
             &request_id,
@@ -102,19 +158,22 @@ pub async fn collect(
             Some(RequestBinding::Plugin(&binding)),
         )
         .map_err(|error| dispatch_error(&error))?;
-    match tokio::time::timeout(REPLY_TIMEOUT, reply).await {
-        Ok(Ok(Reply::PluginHost {
-            accepted: true,
-            payload: Some(value),
-            ..
-        })) if !value.is_null() => Ok(value),
-        Ok(Ok(Reply::PluginHost {
-            detail: Some(code), ..
-        })) => Err(portable_usage_error_code(&code)),
-        Ok(Err(_)) => Err("portable_usage_machine_unavailable"),
-        Err(_) => Err("portable_usage_temporarily_unavailable"),
-        Ok(Ok(_)) => Err("portable_usage_collector_failed"),
-    }
+    Ok(async move {
+        let _pending = pending;
+        match tokio::time::timeout(REPLY_TIMEOUT, reply).await {
+            Ok(Ok(Reply::PluginHost {
+                accepted: true,
+                payload: Some(value),
+                ..
+            })) if !value.is_null() => Ok(value),
+            Ok(Ok(Reply::PluginHost {
+                detail: Some(code), ..
+            })) => Err(portable_usage_error_code(&code)),
+            Ok(Err(_)) => Err("portable_usage_machine_unavailable"),
+            Err(_) => Err("portable_usage_temporarily_unavailable"),
+            Ok(Ok(_)) => Err("portable_usage_collector_failed"),
+        }
+    })
 }
 
 /// Spend one banked reset with the account's collector on `machine_id`. A
@@ -126,6 +185,17 @@ pub async fn consume_reset(
     plugin: &PluginInventory,
     request: PortableResetRequest,
 ) -> Result<Value, NativeResetFailure> {
+    begin_reset(machine_control, machine_id, plugin, request)?.await
+}
+
+/// Enqueue one reset synchronously; `Err` means nothing was sent. Once this
+/// returns `Ok`, only the returned future's reply decides the outcome.
+pub fn begin_reset<'a>(
+    machine_control: &'a MachineControl,
+    machine_id: &str,
+    plugin: &PluginInventory,
+    request: PortableResetRequest,
+) -> Result<impl Future<Output = Result<Value, NativeResetFailure>> + 'a, NativeResetFailure> {
     let unsent = |code| NativeResetFailure {
         call_may_have_reached_provider: false,
         code,
@@ -137,7 +207,7 @@ pub async fn consume_reset(
         .bind_plugin_host(machine_id, plugin, PluginHostOperation::ResetUsage)
         .map_err(|_| unsent("portable_usage_machine_unavailable"))?;
     let request_id = format!("portable-reset-{}", uuid::Uuid::new_v4());
-    let (reply, _pending) = machine_control
+    let (reply, pending) = machine_control
         .begin_request(
             machine_id,
             &request_id,
@@ -149,26 +219,29 @@ pub async fn consume_reset(
             Some(RequestBinding::Plugin(&binding)),
         )
         .map_err(|error| unsent(dispatch_error(&error)))?;
-    match tokio::time::timeout(REPLY_TIMEOUT, reply).await {
-        Ok(Ok(Reply::PluginHost {
-            accepted: true,
-            payload: Some(value),
-            ..
-        })) if !value.is_null() => Ok(value),
-        Ok(Ok(Reply::PluginHost {
-            accepted: false,
-            started,
-            detail: Some(code),
-            ..
-        })) => Err(NativeResetFailure {
-            call_may_have_reached_provider: started,
-            code: portable_usage_error_code(&code),
-        }),
-        _ => Err(NativeResetFailure {
-            call_may_have_reached_provider: true,
-            code: "portable_reset_outcome_unknown",
-        }),
-    }
+    Ok(async move {
+        let _pending = pending;
+        match tokio::time::timeout(REPLY_TIMEOUT, reply).await {
+            Ok(Ok(Reply::PluginHost {
+                accepted: true,
+                payload: Some(value),
+                ..
+            })) if !value.is_null() => Ok(value),
+            Ok(Ok(Reply::PluginHost {
+                accepted: false,
+                started,
+                detail: Some(code),
+                ..
+            })) => Err(NativeResetFailure {
+                call_may_have_reached_provider: started,
+                code: portable_usage_error_code(&code),
+            }),
+            _ => Err(NativeResetFailure {
+                call_may_have_reached_provider: true,
+                code: "portable_reset_outcome_unknown",
+            }),
+        }
+    })
 }
 
 /// Closed codes for refusals before the command left the Controller.

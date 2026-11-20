@@ -120,17 +120,20 @@ async fn target(
     }
     let machines = store.list_machines().await.map_err(|_| "unavailable")?;
     let mut machines: Vec<_> = machines.iter().filter(|machine| !machine.revoked).collect();
+    // Prefer the login whose Machine can serve every named-usage operation
+    // (reads and resets) under host policy, so an old or disallowed login
+    // never masks an eligible one; the order is deterministic.
     machines.sort_by_key(|machine| {
         (
-            match state.machine_control.connection_protocol(&machine.id) {
-                Some((_, version))
-                    if version >= crate::machine_protocol::NATIVE_USAGE_PROTOCOL_VERSION =>
-                {
-                    0
-                }
-                Some(_) => 1,
-                None => 2,
-            },
+            login_rank(
+                state
+                    .machine_control
+                    .connection_protocol(&machine.id)
+                    .map(|(_, version)| version),
+                state
+                    .supervisor
+                    .runtime_allowed(&account.provider_id, &machine.id),
+            ),
             machine.id.clone(),
         )
     });
@@ -199,6 +202,19 @@ async fn target(
     } else {
         "native_login_required"
     })
+}
+
+/// Placement rank of a native login's Machine: allowed by host policy and
+/// reset-capable first, then usage-capable, then connected, then offline.
+fn login_rank(protocol: Option<u16>, allowed: bool) -> (bool, u8) {
+    use crate::machine_protocol::{NATIVE_RESET_PROTOCOL_VERSION, NATIVE_USAGE_PROTOCOL_VERSION};
+    let capability = match protocol {
+        Some(version) if version >= NATIVE_RESET_PROTOCOL_VERSION => 0,
+        Some(version) if version >= NATIVE_USAGE_PROTOCOL_VERSION => 1,
+        Some(_) => 2,
+        None => 3,
+    };
+    (!allowed || protocol.is_none(), capability)
 }
 
 /// Why a Machine's installed generation cannot serve an account's usage.
@@ -347,6 +363,9 @@ fn error_message(code: &str) -> &str {
         "portable_usage_throttled" => {
             "The Provider asked Cowboy to slow down. Usage will refresh later."
         }
+        "portable_usage_refresh_unsupported" => {
+            "This Provider's installed usage collector could renew the account's sign-in, so it is not run for this account. A Provider update that never renews during usage queries enables it."
+        }
         "portable_usage_collector_unavailable" | "portable_usage_account_required" => {
             "The installed Provider cannot query this account's usage. Check its Machine installation."
         }
@@ -366,6 +385,10 @@ fn error_message(code: &str) -> &str {
             "The reset outcome is unknown. Refresh usage before trying again."
         }
         "reset_confirmation_required" => "Type confirm to use a reset.",
+        "reset_in_progress" => {
+            "This reset is still running. Refresh usage to see its result before trying again."
+        }
+        "reset_operation_invalid" => "The reset operation ID is invalid.",
         "reset_schedule_too_soon" => "Choose a time at least one minute ahead.",
         _ => "Account usage could not be refreshed. Cowboy will retry automatically.",
     }
@@ -409,7 +432,7 @@ pub(in crate::server) async fn read_one(
     value["available"] = json!(true);
     value["signed_in"] = json!(true);
     // Whether this account's reset endpoints can spend a banked reset.
-    value["resets_supported"] = json!(reset::binding(state, &target).is_some());
+    value["resets_supported"] = json!(reset::supported(state, owner, id).await);
     let cache = state.usage.native.entry(owner, id.as_str());
     value["refreshing"] = json!(cache.collection.try_lock().is_err());
     // A read neither takes the database admission write lock nor binds a cache
@@ -626,6 +649,7 @@ fn collection_outcome(error: Option<&str>) -> crate::usage::limiter::Outcome {
             | "portable_usage_busy"
             | "portable_usage_account_required"
             | "portable_usage_collector_unavailable"
+            | "portable_usage_refresh_unsupported"
             | "portable_usage_dispatch_failed",
         ) => Outcome::LocalFailure,
         Some(_) => Outcome::Failure,
@@ -922,6 +946,26 @@ mod tests {
                 || Some("anthropic".into())
             ),
             Ok("anthropic".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_old_or_disallowed_login_never_masks_an_eligible_one() {
+        use crate::machine_protocol::{
+            NATIVE_RESET_PROTOCOL_VERSION, NATIVE_USAGE_PROTOCOL_VERSION,
+        };
+        let eligible = login_rank(Some(NATIVE_RESET_PROTOCOL_VERSION), true);
+        for worse in [
+            login_rank(Some(NATIVE_USAGE_PROTOCOL_VERSION), true),
+            login_rank(Some(NATIVE_RESET_PROTOCOL_VERSION), false),
+            login_rank(Some(1), true),
+            login_rank(None, true),
+        ] {
+            assert!(eligible < worse, "{worse:?}");
+        }
+        assert!(
+            login_rank(Some(NATIVE_USAGE_PROTOCOL_VERSION), true)
+                < login_rank(Some(NATIVE_RESET_PROTOCOL_VERSION), false)
         );
     }
 

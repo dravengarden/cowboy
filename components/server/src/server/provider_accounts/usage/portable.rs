@@ -3,21 +3,25 @@
 //! Machine, so usage runs the Provider's signed collector on one Machine that
 //! holds the vault's current generation, in the account's own replica scope.
 //!
-//! Admission mirrors native accounts without a login transaction: the owner's
-//! available account must resolve to a Ready vault generation before the
-//! shared budget is charged, and to the same scope (identity and admission
-//! revision) again before an observation is stored. The Machine refuses a
-//! replica that is not exactly that generation, before and after the run, and
-//! holds the account's credential guard so no apply or wipe overlaps it.
+//! Admission: the owner's available account must resolve to a Ready vault
+//! generation before the shared budget is charged. The command is enqueued
+//! under the owner's account lock after ownership, availability and the exact
+//! vault generations are rechecked, so a disable, revocation or key change
+//! either precedes the check or waits for the enqueue; an enqueued command's
+//! reply alone decides its outcome. An observation is stored only if the
+//! account still resolves to the same scope. The Machine refuses a replica
+//! that is not exactly that generation and holds the account's credential
+//! guard so no apply or wipe overlaps the collector.
 //!
 //! Placement is deterministic: among connected Machines with an exact
 //! released active generation of the collector Plugin that host policy
-//! allows, prefer the Machine running most of the owner's sessions on the
-//! account (whose credential lineage a refresh would follow anyway), then the
+//! allows (for the collector and every sidecar Plugin it starts), prefer the
+//! Machine running most of the owner's live sessions on the account (whose credential lineage a refresh would follow anyway), then the
 //! lowest Machine ID. Like every additional account it never inherits the
 //! Service account's configured usage query Machine.
 use super::*;
-use crate::machine_protocol::portable_usage::PortableUsageRequest;
+use crate::machine_protocol::portable_usage::{PortableResetRequest, PortableUsageRequest};
+use crate::store::provider_accounts::portable::Use;
 use crate::usage::native::{PortableScope, Scope, Slot};
 
 pub(super) struct Target {
@@ -28,6 +32,9 @@ pub(super) struct Target {
     members: Vec<String>,
     /// The vault's current Ready generation of `plugin_id`.
     auth_generation: u64,
+    /// The vault generation of every other member whose sidecar the
+    /// collector starts; the Machine fences each replica on it.
+    scope_generations: BTreeMap<String, u64>,
 }
 
 /// `None` when the account's Provider keeps no named credential in a vault.
@@ -45,19 +52,52 @@ pub(super) fn target(
         Some(host) => host,
         None => return Some(Err("account_usage_unsupported")),
     };
-    let status = super::super::portable::scope(state, &account.id, &host.plugin_id)
-        .and_then(|vault| vault.status(&host.plugin_id));
-    Some(ready_target(
-        account,
-        host.binding,
-        host.plugin_id,
-        members,
-        status.as_ref(),
-    ))
+    let status = |plugin: &str| {
+        super::super::portable::scope(state, &account.id, plugin)
+            .and_then(|vault| vault.status(plugin))
+    };
+    let sidecars = host
+        .sidecar_plugins
+        .iter()
+        .filter(|plugin| **plugin != host.plugin_id)
+        .map(|plugin| (plugin.clone(), status(plugin)))
+        .collect::<Vec<_>>();
+    let collector = status(&host.plugin_id);
+    Some(
+        ready_target(
+            account,
+            host.binding,
+            host.plugin_id,
+            members,
+            collector.as_ref(),
+        )
+        .and_then(|mut target| {
+            for (plugin, status) in sidecars {
+                let generation = ready(status.as_ref())?;
+                target.scope_generations.insert(plugin, generation);
+            }
+            Ok(target)
+        }),
+    )
 }
 
-/// Only a Ready vault generation is collected; the observation binds the
-/// account's identity and admission revision, never its generation.
+fn ready(
+    status: Option<&crate::provider_service::ProviderAuthenticationStatus>,
+) -> Result<u64, &'static str> {
+    status
+        .filter(|status| {
+            status.authentication_state
+                == crate::provider_service::ServiceAuthenticationState::Ready
+                && status.auth_generation > 0
+        })
+        .map(|status| status.auth_generation)
+        .ok_or("portable_credentials_required")
+}
+
+/// Only a Ready vault generation is collected. A sign-in observation binds
+/// the account's identity and admission revision, so a refresh rotation keeps
+/// it; an entered key has no identity, so its observation binds the key's
+/// vault generation and a replaced key never serves its predecessor's data.
 fn ready_target(
     account: &crate::store::provider_accounts::Account,
     binding: crate::plugin_host::PluginUsageSpec,
@@ -65,24 +105,20 @@ fn ready_target(
     members: Vec<String>,
     status: Option<&crate::provider_service::ProviderAuthenticationStatus>,
 ) -> Result<Target, &'static str> {
-    let status = status
-        .filter(|status| {
-            status.authentication_state
-                == crate::provider_service::ServiceAuthenticationState::Ready
-                && status.auth_generation > 0
-        })
-        .ok_or("portable_credentials_required")?;
+    let generation = ready(status)?;
     Ok(Target {
         scope: PortableScope {
             portable_provider: account.provider_id.clone(),
             usage_provider: binding.account.clone(),
             identity_fingerprint: account.identity_fingerprint.clone(),
             admission_revision: account.admission_revision,
+            credential_generation: account.identity_fingerprint.is_none().then_some(generation),
         },
         binding,
         plugin_id,
         members,
-        auth_generation: status.auth_generation,
+        auth_generation: generation,
+        scope_generations: BTreeMap::new(),
     })
 }
 
@@ -92,10 +128,15 @@ struct Candidate {
     /// Speaks [`crate::machine_protocol::PORTABLE_USAGE_PROTOCOL_VERSION`]
     /// and holds account-scope subscription replicas.
     current: bool,
-    /// Host runtime policy admits the collector Plugin there.
+    /// Host runtime policy admits the collector Plugin and every sidecar
+    /// Plugin it starts there.
     allowed: bool,
-    /// The owner's sessions on this account running there.
+    /// The owner's live (worker-running, untrashed) sessions on this account
+    /// there.
     sessions: usize,
+    /// The collector there can never redeem a refresh token (its release
+    /// declares it, or the Provider CLI does not rotate credentials).
+    refresh_safe: bool,
 }
 
 fn choose(candidates: &[Candidate]) -> Result<&str, &'static str> {
@@ -106,9 +147,13 @@ fn choose(candidates: &[Candidate]) -> Result<&str, &'static str> {
     if allowed.is_empty() {
         return Err("runtime_not_allowed");
     }
-    allowed
+    let current: Vec<_> = allowed.into_iter().filter(|c| c.current).collect();
+    if current.is_empty() {
+        return Err("machine_usage_update_required");
+    }
+    current
         .into_iter()
-        .filter(|candidate| candidate.current)
+        .filter(|candidate| candidate.refresh_safe)
         .min_by(|left, right| {
             right
                 .sessions
@@ -116,10 +161,10 @@ fn choose(candidates: &[Candidate]) -> Result<&str, &'static str> {
                 .then(left.machine_id.cmp(&right.machine_id))
         })
         .map(|candidate| candidate.machine_id.as_str())
-        .ok_or("machine_usage_update_required")
+        .ok_or("portable_usage_refresh_unsupported")
 }
 
-fn placement(
+pub(super) fn placement(
     state: &AppState,
     owner: &str,
     id: &ProviderAccountId,
@@ -133,20 +178,36 @@ fn placement(
     let sessions = state
         .hub
         .session_list_filtered(|session_owner| session_owner == Some(owner));
+    // A Provider CLI that rotates credentials may only run a collector that
+    // never redeems a refresh token: a poll must not race a session's refresh.
+    let rotates = state
+        .provider_catalog
+        .latest_package(&target.plugin_id)
+        .is_none_or(|(_, _, package)| {
+            package.manifest.authentication.refresh
+                == cowboy_provider_sdk::RefreshOwnership::CompareAndSwap
+        });
     let candidates: Vec<_> = host
         .candidates
         .iter()
-        .map(|(machine, _)| Candidate {
+        .map(|(machine, _, refresh_free)| Candidate {
+            refresh_safe: *refresh_free || !rotates,
             machine_id: machine.clone(),
             current: state.machine_control.machine_supports(
                 machine,
                 crate::machine_protocol::PORTABLE_USAGE_PROTOCOL_VERSION,
             ) && super::super::portable::machine_ready(state, machine, &target.plugin_id),
-            allowed: state.supervisor.runtime_allowed(&target.plugin_id, machine),
+            allowed: std::iter::once(&target.plugin_id)
+                .chain(target.scope_generations.keys())
+                .all(|plugin| state.supervisor.runtime_allowed(plugin, machine)),
             sessions: sessions
                 .iter()
                 .filter(|meta| {
-                    meta.provider_account_id == *id && &meta.machine_id == machine && !meta.closing
+                    meta.provider_account_id == *id
+                        && &meta.machine_id == machine
+                        && !meta.closing
+                        && meta.trashed_at_ms.is_none()
+                        && state.supervisor.has_live_worker(&meta.id)
                 })
                 .count(),
         })
@@ -154,8 +215,8 @@ fn placement(
     let machine = choose(&candidates)?;
     host.candidates
         .iter()
-        .find(|(candidate, _)| candidate == machine)
-        .cloned()
+        .find(|(candidate, _, _)| candidate == machine)
+        .map(|(machine, plugin, _)| (machine.clone(), plugin.clone()))
         .ok_or("portable_usage_machine_unavailable")
 }
 
@@ -216,6 +277,60 @@ pub(super) async fn refresh(
     Ok(())
 }
 
+/// Run `enqueue` under the owner's account lock after rechecking that the
+/// account is available, still serves this Provider and its vault holds
+/// exactly the target's generations. What `enqueue` returned is kept even if
+/// the lock transaction then fails: an enqueued command's reply decides.
+async fn under_account_lock<T>(
+    state: &AppState,
+    owner: &str,
+    id: &ProviderAccountId,
+    target: &Target,
+    enqueue: impl FnOnce() -> Result<T, &'static str>,
+) -> (Option<T>, &'static str) {
+    let Some(store) = state.store.as_ref() else {
+        return (None, "unavailable");
+    };
+    let (mut sent, mut refused) = (None, None);
+    let current = || {
+        let generation = |plugin: &str| {
+            super::super::portable::scope(state, id, plugin)
+                .and_then(|vault| vault.status(plugin))
+                .and_then(|status| ready(Some(&status)).ok())
+        };
+        generation(&target.plugin_id) == Some(target.auth_generation)
+            && target
+                .scope_generations
+                .iter()
+                .all(|(plugin, expected)| generation(plugin) == Some(*expected))
+    };
+    let locked = store
+        .with_portable_account(
+            owner,
+            id,
+            Use::Observe,
+            |account| account.provider_id == target.scope.portable_provider,
+            || {
+                if current() {
+                    match enqueue() {
+                        Ok(pending) => sent = Some(pending),
+                        Err(code) => refused = Some(code),
+                    }
+                } else {
+                    refused = Some("account_binding_changed");
+                }
+                std::future::ready(Ok(()))
+            },
+        )
+        .await;
+    let code = refused.unwrap_or(if locked.is_ok() {
+        "portable_usage_dispatch_failed"
+    } else {
+        "account_binding_changed"
+    });
+    (sent, code)
+}
+
 async fn collect(
     state: &AppState,
     owner: &str,
@@ -237,12 +352,15 @@ async fn collect(
             "product": target.binding.product_label(),
             "activity": null,
         }),
+        scope_generations: target.scope_generations.clone(),
     };
-    let raw = crate::usage::portable::collect(&state.machine_control, &machine, &plugin, request)
-        .await
-        .inspect_err(|code| {
-            tracing::info!(account_id = id.as_str(), %machine, reason = code, "portable account usage refused");
-        })?;
+    let (pending, code) = under_account_lock(state, owner, id, target, || {
+        crate::usage::portable::begin_collect(&state.machine_control, &machine, &plugin, request)
+    })
+    .await;
+    let raw = pending.ok_or(code)?.await.inspect_err(|code| {
+        tracing::info!(account_id = id.as_str(), %machine, reason = code, "portable account usage refused");
+    })?;
     // A disabled, revoked or re-signed account never receives the result.
     match super::target(state, owner, id).await {
         Ok(Resolved::Portable(current))
@@ -252,35 +370,39 @@ async fn collect(
     observation(target, &raw)
 }
 
-/// Spend one banked reset on the Machine and account replica a quota read
-/// would use now (same placement, runtime policy and vault generation).
+/// Spend one banked reset on the Machine and exact release the reservation
+/// selected, under the same account-lock admission as a collection.
 pub(super) async fn consume_reset(
     state: &AppState,
     owner: &str,
     id: &ProviderAccountId,
-    target: &Target,
+    (target, machine, plugin): (&Target, &str, &crate::machine_protocol::PluginInventory),
     reset: crate::machine_protocol::NativeResetRequest,
 ) -> Result<Value, crate::machine_control::NativeResetFailure> {
-    let (machine, plugin) = placement(state, owner, id, target).map_err(|code| {
-        crate::machine_control::NativeResetFailure {
-            call_may_have_reached_provider: false,
-            code,
-        }
-    })?;
-    let request = crate::machine_protocol::portable_usage::PortableResetRequest {
+    let request = PortableResetRequest {
         account_id: id.clone(),
         plugin_id: plugin.plugin_id.clone(),
         plugin_version: plugin.plugin_version.clone(),
         generation_digest: plugin.generation_digest.clone(),
         auth_generation: target.auth_generation,
         reset,
+        scope_generations: target.scope_generations.clone(),
     };
-    crate::usage::portable::consume_reset(&state.machine_control, &machine, &plugin, request)
-        .await
-        .inspect_err(|failure| {
-            tracing::info!(account_id = id.as_str(), %machine, reason = failure.code,
-                reached = failure.call_may_have_reached_provider, "portable account reset failed");
-        })
+    let (pending, code) = under_account_lock(state, owner, id, target, || {
+        crate::usage::portable::begin_reset(&state.machine_control, machine, plugin, request)
+            .map_err(|failure| failure.code)
+    })
+    .await;
+    let Some(pending) = pending else {
+        return Err(crate::machine_control::NativeResetFailure {
+            call_may_have_reached_provider: false,
+            code,
+        });
+    };
+    pending.await.inspect_err(|failure| {
+        tracing::info!(account_id = id.as_str(), %machine, reason = failure.code,
+            reached = failure.call_may_have_reached_provider, "portable account reset failed");
+    })
 }
 
 /// The stored observation: the collector's account, windows and Provider
@@ -314,6 +436,7 @@ mod tests {
             current,
             allowed,
             sessions,
+            refresh_safe: true,
         }
     }
 
@@ -337,6 +460,17 @@ mod tests {
     #[test]
     fn placement_refusals_name_their_cause() {
         assert_eq!(choose(&[]), Err("portable_usage_machine_unavailable"));
+        // A collector that could redeem a refresh token never runs.
+        let mut rotating = candidate("ovh", true, true, 1);
+        rotating.refresh_safe = false;
+        assert_eq!(
+            choose(&[rotating.clone()]),
+            Err("portable_usage_refresh_unsupported")
+        );
+        assert_eq!(
+            choose(&[rotating, candidate("hawk", true, true, 0)]),
+            Ok("hawk")
+        );
         // Policy excludes a Machine even when the owner's sessions run there.
         assert_eq!(
             choose(&[candidate("ovh", true, false, 5)]),
@@ -365,12 +499,14 @@ mod tests {
                 usage_provider: "openai".into(),
                 identity_fingerprint: Some("sha256:pika".into()),
                 admission_revision: Some(3),
+                credential_generation: None,
             },
             binding: serde_json::from_value(json!({"account":"openai","product":"OpenAI"}))
                 .unwrap(),
             plugin_id: "codex".into(),
             members: vec!["codex".into()],
             auth_generation: 9,
+            scope_generations: BTreeMap::new(),
         }
     }
 
@@ -443,7 +579,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_ready_vault_generation_is_collected_and_rotation_keeps_the_scope() {
+    fn only_a_ready_generation_is_collected_and_only_a_sign_in_survives_rotation() {
         let account: crate::store::provider_accounts::Account = serde_json::from_value(json!({
             "id": "11111111-1111-4111-8111-111111111111", "provider_id": "codex-deepseek",
             "label": "Work", "enabled": true, "admission_revision": 4,
@@ -480,8 +616,27 @@ mod tests {
         assert_eq!(first.plugin_id, "claude-deepseek");
         assert_eq!(first.scope.portable_provider, "codex-deepseek");
         assert_eq!(first.scope.usage_provider, "deepseek");
+        // A replaced entered key is a new authority: its predecessor's
+        // cached balance or in-flight result is never shown for it.
         status.auth_generation = 8;
-        assert_eq!(build(Some(&status)).unwrap().scope, first.scope);
+        assert_ne!(build(Some(&status)).unwrap().scope, first.scope);
+        // A signed-in identity keeps its observation across a refresh.
+        let mut signed_in = account.clone();
+        signed_in.identity_fingerprint = Some("sha256:pika".into());
+        let scope = |status: &crate::provider_service::ProviderAuthenticationStatus| {
+            ready_target(
+                &signed_in,
+                binding.clone(),
+                "codex".into(),
+                vec![],
+                Some(status),
+            )
+            .unwrap()
+            .scope
+        };
+        let rotated = scope(&status);
+        status.auth_generation = 9;
+        assert_eq!(scope(&status), rotated);
         assert_eq!(build(None).err(), Some("portable_credentials_required"));
         for state in [
             crate::provider_service::ServiceAuthenticationState::SignedOut,

@@ -55,6 +55,7 @@ mod workspace_documents;
 pub use core_security::HandoffPoint;
 mod plugin_installations;
 mod plugin_operations;
+mod provider_resets;
 mod sqlite;
 pub mod task_notifications;
 mod telemetry_bindings;
@@ -64,6 +65,7 @@ mod usage_execution;
 use sqlite::SqliteStorage;
 
 pub use copy::postgres_to_sqlite;
+pub use provider_resets::ResetFlight;
 
 use crate::agent_model::{Event, Status};
 use crate::model::{
@@ -3038,7 +3040,7 @@ impl PostgresStorage {
              VALUES ($1, 'rate_limit_reset', $2, $3) \
              ON CONFLICT (provider) DO UPDATE SET action = EXCLUDED.action, \
              fire_at_ms = EXCLUDED.fire_at_ms, idempotency_key = EXCLUDED.idempotency_key, \
-             attempt_count = 0, next_attempt_at_ms = EXCLUDED.fire_at_ms",
+             attempt_count = 0, next_attempt_at_ms = EXCLUDED.fire_at_ms, in_flight_at_ms = NULL, authority = NULL",
         )
         .bind(provider)
         .bind(fire_at_ms)

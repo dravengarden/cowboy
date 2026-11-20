@@ -59,6 +59,9 @@ pub struct ActivatedHostPlugin {
     pub rpc_argv: Vec<String>,
     pub visual: Option<PluginVisualSpec>,
     pub native_capabilities: Vec<String>,
+    /// The signed collector declares it never redeems a refresh token when a
+    /// request says so ([`crate::machine_protocol::portable_usage::REFRESH_FREE_DECLARATION`]).
+    pub refresh_free_collector: bool,
 }
 
 /// Least-privilege projection served to Cowboy Web.
@@ -628,6 +631,10 @@ fn build_activated_host(
         rpc_argv: expand_plugin_argv(&spec.rpc_argv, generation),
         visual: spec.visual.clone(),
         native_capabilities: spec.native_capabilities.clone(),
+        refresh_free_collector: files
+            .get(crate::machine_protocol::portable_usage::REFRESH_FREE_DECLARATION)
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+            .is_some_and(|value| value["token_refresh"] == "request"),
     })
 }
 
@@ -879,6 +886,7 @@ mod tests {
             rpc_argv: Vec::new(),
             visual: None,
             native_capabilities: Vec::new(),
+            refresh_free_collector: false,
         };
         let grok = ActivatedHostPlugin {
             id: "grok".to_owned(),
@@ -894,6 +902,7 @@ mod tests {
             rpc_argv: Vec::new(),
             visual: None,
             native_capabilities: Vec::new(),
+            refresh_free_collector: false,
         };
         assert!(login.public_auth_surface());
         assert!(!grok.public_auth_surface());
@@ -990,6 +999,7 @@ mod tests {
             rpc_argv: expand_plugin_argv(&spec.rpc_argv, private_generation),
             visual: spec.visual,
             native_capabilities: spec.native_capabilities,
+            refresh_free_collector: false,
         };
 
         let public = serde_json::to_value(host.public_descriptor(true)).expect("public descriptor");

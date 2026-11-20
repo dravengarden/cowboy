@@ -6,7 +6,7 @@ use std::sync::{Arc, Weak};
 
 mod portable;
 mod sandbox;
-pub use portable::{PortableInvocation, PortableResetInvocation};
+pub use portable::{HostAdmission, PortableInvocation, PortableResetInvocation};
 
 /// Native processes share a home only within one account. They must not hold
 /// the global installation lock or serialize independent accounts.
@@ -111,7 +111,7 @@ impl MachinePluginStore {
             )
             .context("native_usage_collector_unavailable")?;
         let environment = resolved.environment;
-        native_only_environment(&environment).context("native_usage_home_unsupported")?;
+        verify_live_login(&active, profile, &environment)?;
         invocation.remaining()?;
         let (program, arguments) = resolved
             .command
@@ -213,7 +213,7 @@ impl MachinePluginStore {
                 &mut payload,
             )
             .context("native_usage_collector_unavailable")?;
-        native_only_environment(&resolved.environment).context("native_usage_home_unsupported")?;
+        verify_live_login(&active, profile, &resolved.environment)?;
         if !resolved
             .environment
             .contains_key("CLAUDE_SECURESTORAGE_CONFIG_DIR")
@@ -243,10 +243,12 @@ impl MachinePluginStore {
         })?;
         // The collector answers every reset, refused or not, on stdout. Only
         // its closed fields leave the Machine; never stderr or credentials.
-        decode_host_response(&output).map_err(|_| PluginHostInvocationFailure {
-            started: true,
-            error: anyhow::anyhow!("native_reset_outcome_unknown"),
-        })
+        decode_host_response(&output)
+            .map(|reply| crate::machine_protocol::portable_usage::project_reset_reply(&reply))
+            .map_err(|_| PluginHostInvocationFailure {
+                started: true,
+                error: anyhow::anyhow!("native_reset_outcome_unknown"),
+            })
     }
 
     pub(super) fn validate_native_usage(&self, profile: &NativeProfileReceipt) -> Result<()> {
@@ -275,6 +277,51 @@ impl MachinePluginStore {
             .lock_owned()
             .await
     }
+}
+
+/// The native home must still hold exactly the receipt's login before a
+/// collector reads its credential or spends a reset: every declared credential
+/// file present there is a regular file opened without following links (a
+/// linked credential could expose or spend another subscription), and the
+/// login's signed identity recipe reads exactly the receipt's identity from
+/// the live home (another login in the same home is refused).
+fn verify_live_login(
+    active: &ProviderPackage,
+    profile: &NativeProfileReceipt,
+    environment: &BTreeMap<String, String>,
+) -> Result<()> {
+    native_only_environment(environment).context("native_usage_home_unsupported")?;
+    let home = Path::new(
+        environment
+            .get("HOME")
+            .context("native_usage_home_unsupported")?,
+    );
+    let auth = &active.manifest.authentication;
+    for file in &auth.credential_files {
+        match native_identity::read_login_file(home, &file.relative_path, 1024 * 1024) {
+            Ok(_) => {}
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+                    || error.chain().any(|cause| {
+                        cause
+                            .downcast_ref::<std::io::Error>()
+                            .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+                    }) => {}
+            Err(_) => anyhow::bail!("native_usage_home_unsupported"),
+        }
+    }
+    let recipe = auth
+        .methods
+        .iter()
+        .find(|method| method.id == profile.method)
+        .and_then(|method| method.native_identity.as_ref())
+        .context("native_usage_profile_changed")?;
+    let live = native_identity::read(home, recipe, &profile.account_id)
+        .map_err(|_| anyhow::anyhow!("native_usage_profile_changed"))?;
+    ensure!(live == profile.identity, "native_usage_profile_changed");
+    Ok(())
 }
 
 fn native_only_environment(environment: &BTreeMap<String, String>) -> Result<()> {
@@ -359,6 +406,60 @@ mod tests {
         native_only_environment(&environment).unwrap();
         environment.remove("HOME");
         assert!(native_only_environment(&environment).is_err());
+    }
+
+    #[test]
+    fn a_linked_credential_or_another_login_in_the_home_is_refused() {
+        let source: cowboy_provider_sdk::StandardProviderSource = serde_json::from_str(
+            include_str!("../../../../plugins/claude-code/provider.json"),
+        )
+        .unwrap();
+        let package = cowboy_provider_sdk::build_package(source.compile().unwrap()).unwrap();
+        let profile: NativeProfileReceipt = serde_json::from_value(serde_json::json!({
+            "account_id":"11111111-1111-4111-8111-111111111111",
+            "provider_id":"claude-code","request_id":"login","generation":1,
+            "method":"claude-subscription","provider_version":"1","generation_digest":"digest",
+            "auth_contract_fingerprint":"contract",
+            "identity":{"authority":"claude-ai","subject":"otter","tenant":"org-a"}
+        }))
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        fs::create_dir_all(home.join(".claude")).unwrap();
+        let login = |subject: &str| {
+            fs::write(
+                home.join(".claude.json"),
+                serde_json::to_vec(&serde_json::json!({"oauthAccount":
+                    {"accountUuid": subject, "organizationUuid": "org-a"}}))
+                .unwrap(),
+            )
+            .unwrap();
+        };
+        let environment =
+            BTreeMap::from([("HOME".to_owned(), home.to_string_lossy().into_owned())]);
+        login("otter");
+        fs::write(home.join(".claude/.credentials.json"), b"{}").unwrap();
+        verify_live_login(&package, &profile, &environment).unwrap();
+        // Another login in the same home.
+        login("lynx");
+        assert_eq!(
+            verify_live_login(&package, &profile, &environment)
+                .unwrap_err()
+                .to_string(),
+            "native_usage_profile_changed"
+        );
+        login("otter");
+        // A credential linked to another subscription's file.
+        let other = dir.path().join("other-credentials.json");
+        fs::write(&other, b"{}").unwrap();
+        fs::remove_file(home.join(".claude/.credentials.json")).unwrap();
+        std::os::unix::fs::symlink(&other, home.join(".claude/.credentials.json")).unwrap();
+        assert_eq!(
+            verify_live_login(&package, &profile, &environment)
+                .unwrap_err()
+                .to_string(),
+            "native_usage_home_unsupported"
+        );
     }
 
     #[tokio::test]

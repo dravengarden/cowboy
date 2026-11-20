@@ -1256,9 +1256,8 @@ async fn response_value(response: axum::response::Response, write: bool) -> Resu
         serde_json::from_slice(&bytes).unwrap_or_else(|_| json!(String::from_utf8_lossy(&bytes)))
     };
     if write {
-        Ok(
-            json!({"status":if status.is_success(){"accepted"}else{"rejected"},"http_status":status.as_u16(),"result":value}),
-        )
+        let receipt = account_routes::receipt_status(status, &value);
+        Ok(json!({"status":receipt,"http_status":status.as_u16(),"result":value}))
     } else if status.is_success() {
         Ok(value)
     } else {
@@ -1494,6 +1493,26 @@ mod contract_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn an_unknown_reset_outcome_is_never_a_rejected_receipt() {
+        use axum::{Json, http::StatusCode, response::IntoResponse};
+        let reply = |status: StatusCode, code: &str| {
+            (status, Json(json!({"error":{"code":code,"message":"m"}}))).into_response()
+        };
+        for (response, receipt) in [
+            (
+                reply(StatusCode::CONFLICT, "reset_outcome_unknown"),
+                "unknown",
+            ),
+            (reply(StatusCode::CONFLICT, "reset_failed"), "rejected"),
+            (Json(json!({"outcome":"reset"})).into_response(), "accepted"),
+        ] {
+            let value = response_value(response, true).await.unwrap();
+            assert_eq!(value["status"], receipt);
+        }
+    }
+
     #[test]
     fn every_discovered_operation_has_an_adapter_and_reads_cannot_submit() {
         let mut names = std::collections::HashSet::new();

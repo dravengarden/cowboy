@@ -2058,7 +2058,7 @@ impl SqliteStorage {
              VALUES (?1, 'rate_limit_reset', ?2, ?3) \
              ON CONFLICT (provider) DO UPDATE SET action = excluded.action, \
              fire_at_ms = excluded.fire_at_ms, idempotency_key = excluded.idempotency_key, \
-             attempt_count = 0, next_attempt_at_ms = excluded.fire_at_ms",
+             attempt_count = 0, next_attempt_at_ms = excluded.fire_at_ms, in_flight_at_ms = NULL, authority = NULL",
         )
         .bind(provider)
         .bind(fire_at_ms)

@@ -26,6 +26,12 @@ pub struct PortableUsageRequest {
     pub auth_generation: u64,
     /// The collector's JSON request; the Machine sets its `operation`.
     pub payload: serde_json::Value,
+    /// The vault generation of every other scope member whose replica the
+    /// collector uses (the gateway sidecars). The Machine refuses unless
+    /// each account replica is exactly this generation, so one observation
+    /// never mixes two credentials.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub scope_generations: std::collections::BTreeMap<String, u64>,
 }
 
 /// One owner-confirmed or scheduled banked reset of a named portable
@@ -42,6 +48,98 @@ pub struct PortableResetRequest {
     pub auth_generation: u64,
     /// The collector's bounded `consume_reset` input.
     pub reset: super::NativeResetRequest,
+    /// As [`PortableUsageRequest::scope_generations`].
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub scope_generations: std::collections::BTreeMap<String, u64>,
+}
+
+/// The signed collector file whose presence declares that it never asks its
+/// Provider CLI to redeem a refresh token when the request carries
+/// `"token_refresh": false` (it reports authentication required instead).
+/// A Provider whose CLI rotates credentials runs named portable usage or
+/// resets only with such a collector: a usage poll must never race a
+/// session's refresh-token redemption.
+pub const REFRESH_FREE_DECLARATION: &str = "collector/portable-account.json";
+
+/// Message of a reset whose result is indeterminate.
+pub const RESET_UNKNOWN_MESSAGE: &str =
+    "The reset outcome is unknown. Refresh usage before trying again.";
+
+/// Message of a reset refused because the account must sign in again; the
+/// shared classifier recognizes it as an authentication failure.
+pub const RESET_AUTHENTICATION_MESSAGE: &str =
+    "Usage authentication required: sign in again, then refresh usage. No reset was sent.";
+
+/// One bounded display field of a collector reset reply: short printable text
+/// without structured payloads (an upstream RPC error body never survives).
+fn bounded_text(value: Option<&serde_json::Value>, max: usize) -> Option<String> {
+    value
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|text| {
+            !text.is_empty()
+                && text.len() <= max
+                && text.chars().all(|c| c.is_ascii_graphic() || c == ' ')
+                && !text.contains(['{', '}', '[', ']', '"', '\\', '<', '>'])
+        })
+        .map(str::to_owned)
+}
+
+/// A reset grant identifier: bounded and opaque.
+fn bounded_credit(value: Option<&serde_json::Value>) -> Option<String> {
+    value
+        .and_then(serde_json::Value::as_str)
+        .filter(|id| {
+            (1..=128).contains(&id.len())
+                && id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b':' | b'.'))
+        })
+        .map(str::to_owned)
+}
+
+/// Project a collector's `consume_reset` reply onto the closed reset reply:
+/// `{outcome, credit_id}` or `{error:{message, call_may_have_reached_provider,
+/// credit_id}}`, every field bounded. Only explicit evidence decides: a
+/// success without a determinate outcome, or a refusal that does not state it
+/// never reached the Provider, is unknown.
+#[must_use]
+pub fn project_reset_reply(reply: &serde_json::Value) -> serde_json::Value {
+    let unknown = |credit: Option<String>, message: Option<String>| {
+        serde_json::json!({"error": {
+            "message": message.unwrap_or_else(|| RESET_UNKNOWN_MESSAGE.to_owned()),
+            "call_may_have_reached_provider": true, "credit_id": credit}})
+    };
+    if let Some(error) = reply.get("error") {
+        let credit = bounded_credit(error.get("credit_id"));
+        if error.get("call_may_have_reached_provider") != Some(&serde_json::Value::Bool(false)) {
+            return unknown(credit, bounded_text(error.get("message"), 200));
+        }
+        let raw = error.get("message").and_then(serde_json::Value::as_str);
+        // Keep the one signal the Service acts on (authentication backoff).
+        let message = if raw
+            .is_some_and(|raw| classify_usage_failure(raw) == UsageFailureKind::Authentication)
+        {
+            Some(RESET_AUTHENTICATION_MESSAGE.to_owned())
+        } else {
+            bounded_text(error.get("message"), 200)
+        }
+        .unwrap_or_else(|| "The Provider refused this reset; no reset was sent.".to_owned());
+        return serde_json::json!({"error": {"message": message,
+            "call_may_have_reached_provider": false, "credit_id": credit}});
+    }
+    let credit = bounded_credit(reply.get("credit_id"));
+    match bounded_text(reply.get("outcome"), 120) {
+        Some(outcome)
+            if !matches!(
+                outcome.to_ascii_lowercase().as_str(),
+                "unknown" | "indeterminate" | "pending"
+            ) =>
+        {
+            serde_json::json!({"outcome": outcome, "credit_id": credit})
+        }
+        _ => unknown(credit, None),
+    }
 }
 
 /// Coarse kind of a usage collection failure, from its diagnostic text.
@@ -57,7 +155,7 @@ pub enum UsageFailureKind {
 /// credentials never leave the Machine; only one of these codes does.
 #[must_use]
 pub fn portable_usage_error_code(detail: &str) -> &'static str {
-    const CLOSED: [&str; 13] = [
+    const CLOSED: [&str; 14] = [
         "machine_usage_update_required",
         "machine_connection_changed",
         "portable_usage_account_required",
@@ -71,6 +169,7 @@ pub fn portable_usage_error_code(detail: &str) -> &'static str {
         "portable_reset_request_invalid",
         "portable_reset_unsupported",
         "portable_reset_outcome_unknown",
+        "portable_usage_refresh_unsupported",
     ];
     if let Some(code) = CLOSED.iter().find(|code| **code == detail) {
         return code;
@@ -248,6 +347,58 @@ mod tests {
         ] {
             assert_eq!(portable_usage_error_code(detail), code, "{detail}");
         }
+    }
+
+    #[test]
+    fn reset_replies_keep_only_bounded_explicit_evidence() {
+        use serde_json::json;
+        let unknown = |credit: serde_json::Value| {
+            json!({"error": {"message": RESET_UNKNOWN_MESSAGE,
+                "call_may_have_reached_provider": true, "credit_id": credit}})
+        };
+        for (reply, projected) in [
+            (
+                json!({"outcome": "reset", "credit_id": "grant:1"}),
+                json!({"outcome": "reset", "credit_id": "grant:1"}),
+            ),
+            // A literal unknown outcome is not success.
+            (
+                json!({"outcome": "unknown", "credit_id": "c1"}),
+                unknown(json!("c1")),
+            ),
+            (json!({"credit_id": "c1"}), unknown(json!("c1"))),
+            // A refusal must state it never reached the Provider.
+            (
+                json!({"error": {"message": "refused"}}),
+                json!({"error": {"message": "refused",
+                    "call_may_have_reached_provider": true, "credit_id": null}}),
+            ),
+            (
+                json!({"error": {"message": "nearest reset credit changed; refresh and confirm again",
+                    "call_may_have_reached_provider": false, "credit_id": "c2"}}),
+                json!({"error": {"message": "nearest reset credit changed; refresh and confirm again",
+                    "call_may_have_reached_provider": false, "credit_id": "c2"}}),
+            ),
+            // An upstream RPC error body never leaves; the certainty stays.
+            (
+                json!({"error": {"message": "consume: {\"code\":-32000,\"token\":\"sk\"}",
+                    "call_may_have_reached_provider": false, "credit_id": "bad id with spaces"}}),
+                json!({"error": {"message": "The Provider refused this reset; no reset was sent.",
+                    "call_may_have_reached_provider": false, "credit_id": null}}),
+            ),
+            (
+                json!({"error": {"message": "account/rateLimits/read: {\"status\":401} 401 Unauthorized",
+                    "call_may_have_reached_provider": false}}),
+                json!({"error": {"message": RESET_AUTHENTICATION_MESSAGE,
+                    "call_may_have_reached_provider": false, "credit_id": null}}),
+            ),
+        ] {
+            assert_eq!(project_reset_reply(&reply), projected, "{reply}");
+        }
+        assert_eq!(
+            classify_usage_failure(RESET_AUTHENTICATION_MESSAGE),
+            UsageFailureKind::Authentication
+        );
     }
 
     #[test]

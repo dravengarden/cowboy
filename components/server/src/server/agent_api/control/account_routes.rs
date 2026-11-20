@@ -36,3 +36,19 @@ pub(super) fn account_route(
         _ => return None,
     })
 }
+
+/// A write's receipt status. An effect that may have reached the Provider (an
+/// unknown or still-running reset) is never a rejection: its receipt stays
+/// unknown so no caller replays it as refused.
+pub(super) fn receipt_status(status: axum::http::StatusCode, value: &Value) -> &'static str {
+    if status.is_success() {
+        "accepted"
+    } else if matches!(
+        value.pointer("/error/code").and_then(Value::as_str),
+        Some("reset_outcome_unknown" | "reset_in_progress")
+    ) {
+        "unknown"
+    } else {
+        "rejected"
+    }
+}
