@@ -31,7 +31,6 @@ all-features = true
 # SQLx 0.8 and cowboy-wire depend on it. Move to jiff or time with the next
 # SQLx upgrade; review by 2027-01-31.
 ignore = [
-  { id = "RUSTSEC-2026-0381", reason = "Exact 0.26.11 re-export shim uses patched webpki-roots >=1.0.10; all other affected versions are denied below" },
   { id = "RUSTSEC-2026-0387", reason = "Upstream web-push-native 0.5.0 requires p256 0.13 / crypto-bigint 0.5; no compatible fixed release. Retain only locked 0.5.5 until Web Push supports >=0.7.6 or its backend is replaced; timing risk remains." },
   { id = "RUSTSEC-2026-0459", reason = "No SQLx release accepts libsqlite3-sys >=0.39 (SQLite 3.54); crafted -wal files require write access to Cowboy's data directory. Move to the first SQLx that does; review by 2026-12-09." },
   { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained (notice, no vulnerability); SQLx 0.8 requires it. Replace with jiff/time at the next SQLx upgrade; review by 2027-01-31." },
