@@ -190,6 +190,26 @@ fn wait_command(target: &str, prompt: &str) -> String {
     )
 }
 
+/// A human-paced parent (Antigravity) never receives a call notice as a
+/// turn, so an admitted call's receipt tells it to wait inside this turn.
+pub(super) fn call_next(hub: &crate::core::Hub, parent: &str, mut value: Value) -> Value {
+    let Some(call) = value["call_id"].as_str().map(str::to_owned) else {
+        return value;
+    };
+    if !hub.is_human_paced(parent) || !value["error"].is_null() {
+        return value;
+    }
+    value["next"] = json!(format!(
+        "Cowboy cannot start your next turn, so a notice would only reach the owner as a \
+         draft. Stay in this turn: RunCommand with wait_seconds 600 and timeout_seconds 600: \
+         cowboy call wait {call} --timeout-ms 580000 . Repeat while the state is not \
+         terminal (if it reports context_unavailable, call cowboy_read \
+         cowboy.calls.wait(\"{call}\",60000) instead), then read \
+         cowboy.calls.result(\"{call}\",{{offset:0,chars:4000}}) and continue."
+    ));
+    value
+}
+
 /// What the sender should do next. A human-paced sender cannot be woken
 /// by Cowboy, so it keeps its own turn open with the blocking wait.
 fn next_step(human_paced: bool, notify: bool, own: bool, wait: &str) -> String {
@@ -563,6 +583,20 @@ mod tests {
         assert!(next_step(false, true, false, &wait).starts_with("End your turn"));
         assert!(next_step(false, false, false, &wait).contains(&wait));
         assert!(next_step(false, false, true, &wait).contains("after you end this turn"));
+    }
+
+    #[test]
+    fn a_human_paced_parent_waits_for_its_call_inside_the_turn() {
+        let hub = hub();
+        let admitted = json!({"state":"queued","call_id":"call-1","error":null});
+        let agy = call_next(&hub, "agy", admitted.clone());
+        let next = agy["next"].as_str().unwrap();
+        assert!(next.contains("cowboy call wait call-1 --timeout-ms 580000"));
+        assert!(next.contains("timeout_seconds 600"));
+        assert!(next.contains("cowboy.calls.result(\"call-1\""));
+        assert_eq!(call_next(&hub, "me", admitted.clone()), admitted);
+        let refused = json!({"state":"error","call_id":"call-2","error":{"code":"x"}});
+        assert_eq!(call_next(&hub, "agy", refused.clone()), refused);
     }
 
     #[test]

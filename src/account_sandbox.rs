@@ -299,8 +299,8 @@ pub struct RuntimeProbe {
 }
 
 /// The daemon's validated quota report of an account (`collect_usage`):
-/// `outcome` is `available` (with `quota`, the daemon's projection) or
-/// `authentication_required`.
+/// `outcome` is `available` (with `quota`, the daemon's projection),
+/// `authentication_required` or `location_unsupported`.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct UsageReport {
     pub unit: String,
@@ -397,7 +397,7 @@ impl Client {
         ensure!(
             matches!(
                 report.outcome.as_str(),
-                "available" | "authentication_required"
+                "available" | "authentication_required" | "location_unsupported"
             ) && (report.outcome == "available") == report.quota.is_some(),
             "malformed account sandbox usage report"
         );

@@ -64,6 +64,9 @@ impl MachinePluginStore {
         if report.outcome == "authentication_required" {
             bail!("native_usage_authentication_required");
         }
+        if report.outcome == "location_unsupported" {
+            bail!("native_usage_location_unsupported");
+        }
         let quota = report.quota.context("native_usage_collector_failed")?;
         Ok(json!({"status": "available", "rate_limits": rate_limits(&quota)}))
     }

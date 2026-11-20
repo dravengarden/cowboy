@@ -38,6 +38,10 @@ export const ROUTING = [
   "below or absolute inside it. The local directory of this process is not the workspace.",
   "Web search (search_web) and reading public http(s) URLs (read_url_content) remain available.",
   "For a multi-step task, keep the owner's checklist current with mcp_cowboy_UpdatePlan.",
+  "Cowboy never starts a turn for you: a notice from a Cowboy call or another session reaches",
+  "the owner only as a draft. After calls.start, review.start or a queue.submit to another",
+  "session, stay in this turn and wait with the command in the receipt's `next`, then use the",
+  "result. Never end the turn to wait for a notice.",
 ].join("\n");
 
 /** Parse the Git probe's tab-separated lines. */

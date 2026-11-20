@@ -239,6 +239,15 @@ bounded hot window), and 404 for a deleted session. `?wait_ms=N` (at most
 installed CLI can wait with `cowboy api GET`. `cowboy session wait <session>
 <prompt>` loops over it (default 540 s) and prints one JSON line.
 
+The same holds for managed calls: an Antigravity parent's `calls.start` and
+`review.start` receipts carry a `next` that tells it to stay in the turn with
+RunCommand `cowboy call wait <call_id> --timeout-ms 580000` (or
+`cowboy.calls.wait` when the call context is unavailable) and then read
+`calls.result`, because its `notify:true` notice only parks as a draft. Its
+routing projection states the rule once per session, and the denial of native
+subagents and schedules names the same path: read-only delegation through
+calls, file-editing delegation through another session.
+
 Antigravity runs human-paced only ([requirements](requirements.md)): an Agent
 API command never dispatches into an Antigravity session (`queue.submit`,
 `queue.send`, `queue.force_send`, `drafts.activate[_all]` and `sessions.retry`

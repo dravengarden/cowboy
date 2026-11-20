@@ -735,7 +735,10 @@ async fn execute(
             }
         }
         "calls.start" | "review.start" => {
-            Ok(start_call(state, meta, ledger, action, args, operation).await)
+            let value = start_call(state, meta, ledger, action, args, operation).await;
+            Ok(super::super::peer_notices::call_next(
+                &state.hub, &meta.id, value,
+            ))
         }
         "calls.cancel" => {
             only_keys(&args, &["call_id"]).map_err(|_| "invalid_argument")?;
