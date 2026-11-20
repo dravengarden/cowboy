@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "id": "codex",
-  "version": "3.6.13",
+  "version": "3.6.14",
   "component_release": "3.124.0",
   "publisher": "cowboy-first-party",
   "kind": "agent_provider",
