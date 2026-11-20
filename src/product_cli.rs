@@ -508,8 +508,14 @@ fn find<'a>(sessions: &'a [SessionMeta], id: &str) -> Result<&'a SessionMeta> {
 }
 
 pub async fn run_session(args: SessionArgs) -> Result<()> {
+    let command = match args.command {
+        SessionCommand::Prompt(prompt) if prompt.notify => {
+            return session_prompt::prompt_notified(prompt).await;
+        }
+        command => command,
+    };
     let client = Client::new(&args.connect)?;
-    match args.command {
+    match command {
         SessionCommand::List { json, outdated } => {
             let mut sessions = client.sessions().await?;
             if outdated {
