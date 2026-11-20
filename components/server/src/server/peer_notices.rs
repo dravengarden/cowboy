@@ -333,11 +333,13 @@ fn notify(state: &AppState, watch: &Watch, outcome: &Outcome) {
 /// reason. A cancellation, a withdrawal or a deleted peer notify nobody.
 fn category(outcome: &Outcome) -> Option<crate::task_notifications::Category> {
     use crate::task_notifications::Category;
+    // Workers report ACP (`end_turn`) or SDK (`EndTurn`) spellings.
+    let stop = |reason: &str| reason.replace('_', "").to_ascii_lowercase();
     match outcome {
-        Outcome::Finished { stop_reason, .. } if stop_reason == "end_turn" => {
+        Outcome::Finished { stop_reason, .. } if stop(stop_reason) == "endturn" => {
             Some(Category::Completion)
         }
-        Outcome::Finished { stop_reason, .. } if stop_reason == "cancelled" => None,
+        Outcome::Finished { stop_reason, .. } if stop(stop_reason) == "cancelled" => None,
         Outcome::Finished { .. } | Outcome::Stopped(_) => Some(Category::Failure),
         Outcome::Ended => Some(Category::Completion),
         Outcome::Withdrawn | Outcome::Gone => None,
@@ -621,6 +623,8 @@ mod tests {
             echo_seq: 1,
         };
         assert_eq!(category(&finished("end_turn")), Some(Category::Completion));
+        assert_eq!(category(&finished("EndTurn")), Some(Category::Completion));
+        assert_eq!(category(&finished("Cancelled")), None);
         assert_eq!(category(&finished("cancelled")), None);
         assert_eq!(category(&finished("refusal")), Some(Category::Failure));
         assert_eq!(
