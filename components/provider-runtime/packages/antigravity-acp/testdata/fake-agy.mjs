@@ -47,9 +47,32 @@ for await (const line of createInterface({ input: process.stdin })) {
       logFile,
       `${stamp()}server.go:1826] Sending user message to conversation ${sessionId} (items=1, media=0)\n`,
     );
+    // agy 1.5.9 announces an MCP call (with its arguments and its own
+    // `toolSummary`) before calling the server, and reports no result.
+    const call = {
+      toolCallId: "call-read",
+      name: "mcp_cowboy_ReadFile",
+      kind: "other",
+      title: "Run mcp_cowboy_ReadFile",
+    };
+    const rawInput = { path: "hello.txt", toolSummary: "Read hello" };
+    send({
+      method: "session/update",
+      params: {
+        sessionId,
+        update: { sessionUpdate: "tool_call", ...call, status: "in_progress", rawInput },
+      },
+    });
     const result = await mcpCall("tools/call", {
       name: "ReadFile",
       arguments: { path: "hello.txt" },
+    });
+    send({
+      method: "session/update",
+      params: {
+        sessionId,
+        update: { sessionUpdate: "tool_call_update", ...call, status: "completed", rawInput },
+      },
     });
     send({
       method: "session/update",

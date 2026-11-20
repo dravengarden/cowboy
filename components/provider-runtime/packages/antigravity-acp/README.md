@@ -17,7 +17,7 @@ places its tree below `proxy/` in the account-sandbox runtime archive and adds
 | `proxy.mjs`                   | ACP relay: runtime method allow-list, session rewrite, turn settlement  |
 | `extensions.mjs`              | The worker's extension tools (Cowboy MCP, bindings, memory) in `cowboy` |
 | `memory.mjs`                  | Matrix memory over the worker's `cowboy/memory` bridge                  |
-| `presentation.mjs`            | Shows facade calls as native tool calls (kind, title, path, diff)       |
+| `presentation.mjs`            | Facade calls as native tool calls (kind, title, path, diff, result)     |
 | `facade.mjs`                  | MCP tools over the one execution `Connection`                           |
 | `facade-relay.mjs`            | stdio MCP server `agy` launches; relays to the proxy's socket           |
 | `projection.mjs`              | Target context appended to the system prompt                            |
@@ -103,12 +103,27 @@ places its tree below `proxy/` in the account-sandbox runtime archive and adds
   when the command is not read again or a reader is busy; 256 KiB head and
   tail; `wait_seconds`, validated before anything starts, returns a
   `command_id`), `StopCommand` (the handle is kept until the target confirms
-  the process closed). Paths are canonicalized on the target and confined to
+  the process closed), `UpdatePlan` (validated here, never sent to the
+  target; the proxy shows it as the session's ACP `plan`). Paths are canonicalized on the target and confined to
   the workspace root as a guardrail against mistakes, not an isolation
   boundary: `RunCommand` is a shell on the same Machine (design "Revision 5
   simplification"). Tools work
   only inside a turn; on every turn end the turn is fenced, its admitted
   mutations are awaited and its commands stopped.
+- Presentation (design "Feature inventory and Cowboy adaptation"): `agy`
+  reports no result for an MCP call, so the facade reports each answer
+  before replying and the proxy puts it on `agy`'s terminal update of the
+  call it binds to (the oldest unanswered announcement of that tool with the
+  same arguments, else of that tool); a running `RunCommand` shows its last
+  16 KiB at most every 2 s. Extension calls show as
+  `mcp__<server>__<tool>` without `toolSummary`. `UpdatePlan` becomes an ACP
+  `plan` and its tool call is not forwarded. A whole `agent_message_chunk`
+  "\n⚠ <text>\n" is `agy`'s own status line: for a worker that advertised
+  `session.notices` it becomes a `warning` `notice` and stays out of the
+  reply and memory. `/schedule`, `/browser`, `/swarm`, `/run-workflow` and
+  `/learn` are dropped from `available_commands_update`. The hook's denial
+  of a subagent, swarm, workflow, timer or browser tool names the Cowboy
+  alternative.
 - Compaction: `agy` advertises `/compact` and runs it as an ordinary
   `session/prompt` that reports nothing over ACP (1.5.9 summarizes the
   history in that turn: the next turn's input drops by the summarized

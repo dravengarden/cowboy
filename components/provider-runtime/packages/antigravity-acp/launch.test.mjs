@@ -163,6 +163,7 @@ test("the proxy relays ACP through the facade over one execution connection", as
     "EditFile",
     "RunCommand",
     "StopCommand",
+    "UpdatePlan",
   ]);
   const server = created.result.seen.params.mcpServers;
   assert.equal(server.length, 1);
@@ -179,6 +180,16 @@ test("the proxy relays ACP through the facade over one execution connection", as
   assert.equal(prompt.result.stopReason, "end_turn");
   assert.equal(prompt.result._meta.cowboy.antigravity_backend.class, "ok");
   assert.equal(notifications.at(-1).params.update.content.text, "TARGET_SENTINEL\n");
+  // The facade's answer, which agy never reports, is shown on its call.
+  const read = notifications.find(
+    (message) =>
+      message.params?.update?.toolCallId === "call-read" &&
+      message.params.update.status === "completed",
+  ).params.update;
+  assert.equal(read.title, "Read hello.txt");
+  assert.deepEqual(read.content, [
+    { type: "content", content: { type: "text", text: "TARGET_SENTINEL\n" } },
+  ]);
   const refused = await call("authenticate", { methodId: "oauth-personal" });
   assert.equal(refused.error.code, -32601);
   assert.equal(endpoint.calls.filter((entry) => entry.method === "initialize").length, 1);

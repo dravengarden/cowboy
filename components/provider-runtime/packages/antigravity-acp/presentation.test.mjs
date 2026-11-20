@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { facadeTool, presentedTool, presentToolCall } from "./presentation.mjs";
+import {
+  agyNotice,
+  availableCommands,
+  facadeTool,
+  planUpdate,
+  presentExtension,
+  presentedTool,
+  presentToolCall,
+  resultContent,
+} from "./presentation.mjs";
 
 const root = "/srv/work/repo";
 const call = (name, rawInput, extra = {}) => ({
@@ -80,7 +89,7 @@ test("commands show the command line and agy's summary as their description", ()
     { root },
   );
   assert.equal(run.kind, "execute");
-  assert.equal(run.title, "cargo test");
+  assert.equal(run.title, "cargo test …");
   assert.deepEqual(run.rawInput, { command: "cargo test\n--quiet", description: "Run the tests" });
   assert.equal(run.locations, undefined);
   const more = presentToolCall(call("mcp_cowboy_RunCommand", { command_id: "p7" }), { root });
@@ -142,4 +151,154 @@ test("agy's web built-ins show as a web search and URL reads", () => {
   );
   assert.equal(update.kind, "search");
   assert.equal(update.title, "t");
+});
+
+const answer = (text, isError = false) => ({ content: [{ type: "text", text }], isError });
+
+test("a facade call's answer becomes its content; a successful edit keeps its diff", () => {
+  assert.deepEqual(resultContent("ReadFile", { path: "a.txt" }, answer("hello\n"), root), [
+    { type: "content", content: { type: "text", text: "hello\n" } },
+  ]);
+  assert.deepEqual(
+    resultContent("RunCommand", { command: "false" }, answer("Exit code: 1\n"), root),
+    [{ type: "content", content: { type: "text", text: "Exit code: 1\n" } }],
+  );
+  const edit = { path: "a.txt", old_string: "a", new_string: "b", toolSummary: "Edit" };
+  assert.deepEqual(resultContent("EditFile", edit, answer("Edited"), root), [
+    { type: "diff", path: "/srv/work/repo/a.txt", oldText: "a", newText: "b" },
+    { type: "content", content: { type: "text", text: "Edited" } },
+  ]);
+  // A refused edit shows why, not a diff that never happened.
+  assert.deepEqual(
+    resultContent("EditFile", edit, answer("old_string was not found", true), root),
+    [{ type: "content", content: { type: "text", text: "old_string was not found" } }],
+  );
+  assert.deepEqual(resultContent("ReadFile", {}, { content: [] }, root), []);
+});
+
+test("an extension's MCP result is shown block by block, bounded", () => {
+  const image = { type: "image", data: "AAAA", mimeType: "image/png" };
+  assert.deepEqual(
+    resultContent("memory_search", {}, { content: [{ type: "text", text: "[]" }, image] }, root),
+    [
+      { type: "content", content: { type: "text", text: "[]" } },
+      { type: "content", content: image },
+    ],
+  );
+  const big = { type: "text", text: "x".repeat(700 * 1024) };
+  const shown = resultContent("suger_read", {}, { content: [big, big] }, root);
+  assert.equal(shown.length, 2);
+  assert.match(shown[1].content.text, /not shown/);
+});
+
+test("an extension call shows as its MCP call without agy's narration", () => {
+  const shown = presentExtension(
+    call("mcp_cowboy_memory_search", { query: "cache", toolSummary: "Search memory" }),
+    { server: "matrix", tool: "memory_search" },
+  );
+  assert.equal(shown.name, "mcp__matrix__memory_search");
+  assert.equal(shown.kind, "other");
+  assert.equal(shown.title, "matrix · memory_search");
+  assert.deepEqual(shown.rawInput, { query: "cache" });
+  const titled = presentExtension(
+    { ...call("mcp_cowboy_cowboy_read", undefined), title: "Cowboy read" },
+    { server: "cowboy", tool: "cowboy_read" },
+  );
+  assert.equal(titled.title, "Cowboy read");
+  assert.equal(titled.rawInput, undefined);
+});
+
+test("UpdatePlan becomes an ACP plan", () => {
+  assert.deepEqual(
+    planUpdate({
+      plan: [
+        { step: " Read ", status: "completed" },
+        { step: "Fix", status: "in_progress" },
+      ],
+    }),
+    {
+      sessionUpdate: "plan",
+      entries: [
+        { content: "Read", priority: "medium", status: "completed" },
+        { content: "Fix", priority: "medium", status: "in_progress" },
+      ],
+    },
+  );
+  for (const bad of [undefined, {}, { plan: [] }, { plan: [{ step: "", status: "pending" }] }]) {
+    assert.equal(planUpdate(bad), undefined);
+  }
+});
+
+test("agy's own status lines become notices; the model's text does not", () => {
+  const chunk = (text) => ({
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text },
+  });
+  assert.deepEqual(agyNotice(chunk("\n\u26a0 Model produced invalid output.\n")), {
+    sessionUpdate: "notice",
+    severity: "warning",
+    title: "Antigravity: Model produced invalid output.",
+  });
+  assert.deepEqual(
+    agyNotice(chunk("\n\u26a0 API error (attempt 1): UNAVAILABLE (code 503): No capacity\n")),
+    {
+      sessionUpdate: "notice",
+      severity: "warning",
+      title: "Antigravity API error (attempt 1)",
+      description: "UNAVAILABLE (code 503): No capacity",
+    },
+  );
+  assert.equal(
+    agyNotice(
+      chunk(
+        "\n\u26a0 API error (attempt 2): UNAVAILABLE (code 503)\nCreated At: 2026-11-18T07:21:59Z\nCompleted At: 2026-11-18T07:21:59Z\n",
+      ),
+    )?.title,
+    "Antigravity API error (attempt 2)",
+  );
+  for (const text of [
+    "\u26a0 note",
+    "\u26a0 note\nmore text",
+    "Done. \u26a0 careful\n",
+    "plain",
+    "\n\u26a0 \n",
+  ]) {
+    assert.equal(agyNotice(chunk(text)), undefined, text);
+  }
+  assert.equal(
+    agyNotice({ sessionUpdate: "agent_thought_chunk", content: chunk("\u26a0 x").content }),
+    undefined,
+  );
+});
+
+test("slash commands that need a denied tool are not offered", () => {
+  const update = {
+    sessionUpdate: "available_commands_update",
+    availableCommands: [
+      "goal",
+      "compact",
+      "schedule",
+      "browser",
+      "plan",
+      "learn",
+      "swarm",
+      "run-workflow",
+    ].map((name) => ({ name, description: name })),
+  };
+  assert.deepEqual(
+    availableCommands(update).availableCommands.map((command) => command.name),
+    ["goal", "compact", "plan"],
+  );
+  const kept = {
+    sessionUpdate: "available_commands_update",
+    availableCommands: [{ name: "goal" }],
+  };
+  assert.equal(availableCommands(kept), kept);
+});
+
+test("a multi-line command is titled by its first line", () => {
+  const run = presentToolCall(call("mcp_cowboy_RunCommand", { command: "\nnode -e '\nx\n'" }), {
+    root,
+  });
+  assert.equal(run.title, "node -e ' …");
 });

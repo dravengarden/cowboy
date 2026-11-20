@@ -34,6 +34,7 @@ import {
   unknownOutcome,
   url,
 } from "./facade-tools.mjs";
+import { planUpdate } from "./presentation.mjs";
 
 /** The worker endpoint's own request recording an uncertain effect the
  * facade detected (`src/worker_execution/ledger.rs`); never forwarded. */
@@ -58,12 +59,22 @@ export class Facade {
    * @param root the canonical workspace root on the target
    * @param shell the target user's shell
    * @param onUncertain called with (sessionId, method) when a turn must end
+   * @param onResult called with (call, result) once a tool call is answered,
+   *   before `agy` receives the answer (`call` is `{ sessionId, name, args }`,
+   *   one object per call, so a presentation can correlate it)
+   * @param onProgress called with (call, text) while `RunCommand` runs: the
+   *   output retained so far, at most every `LIMITS.progressMs`
    */
-  constructor(connection, { root, shell, onUncertain = () => {} }) {
+  constructor(
+    connection,
+    { root, shell, onUncertain = () => {}, onResult = () => {}, onProgress = () => {} },
+  ) {
     this.connection = connection;
     this.root = root;
     this.shell = shell;
     this.onUncertain = onUncertain;
+    this.onResult = onResult;
+    this.onProgress = onProgress;
     this.sessions = new Map();
     /** The session's extension tools (`extensions.mjs`), once started. */
     this.extensions = undefined;
@@ -138,6 +149,20 @@ export class Facade {
 
   /** One MCP `tools/call`, answered as an MCP tool result. */
   async call(sessionId, name, args) {
+    const call = { sessionId, name, args };
+    const result = await this.answer(call);
+    // Presentation only: it never changes the answer `agy` receives.
+    try {
+      this.onResult(call, result);
+    } catch {
+      // A presentation failure must not fail the tool.
+    }
+    return result;
+  }
+
+  async answer(call) {
+    const { sessionId, name } = call;
+    let { args } = call;
     const session = sessionId === undefined ? undefined : this.session(sessionId);
     const turn = session?.turn;
     const failure = (text) => ({ content: [{ type: "text", text }], isError: true });
@@ -153,8 +178,25 @@ export class Facade {
       SearchFiles: () => this.searchFiles(turn, args),
       WriteFile: () => this.writeFile(session, turn, args),
       EditFile: () => this.editFile(session, turn, args),
-      RunCommand: () => this.runCommand(session, turn, args),
+      RunCommand: () =>
+        this.runCommand(session, turn, args, (text) => {
+          try {
+            this.onProgress(call, text);
+          } catch {
+            // Presentation only.
+          }
+        }),
       StopCommand: () => this.stopCommand(session, args),
+      // Presentation only (the proxy shows it as the session's plan); it
+      // never reaches the target.
+      UpdatePlan: async () => {
+        if (!planUpdate(args)) {
+          throw new ToolError(
+            "plan must list 1 to 50 steps, each with a step text and a status of pending, in_progress or completed",
+          );
+        }
+        return "Plan updated.";
+      },
     };
     // Cowboy MCP, the folder's bindings and memory answer for themselves.
     const extension = !Object.hasOwn(handlers, name) && this.extensions?.has(name);
@@ -591,7 +633,7 @@ export class Facade {
     };
   }
 
-  async runCommand(session, turn, args) {
+  async runCommand(session, turn, args, progress = () => {}) {
     const { command, command_id: id, timeout_seconds: timeout, wait_seconds: wait } = args;
     // Validated before anything starts: a bad argument starts no process.
     if (
@@ -625,9 +667,22 @@ export class Facade {
     running.busy = true;
     try {
       const until = Math.min(running.deadline, Date.now() + (wait ?? Infinity) * 1000);
+      // Output so far is shown while the command runs: a bounded tail, at
+      // most every `progressMs` and only when it changed. No extra request
+      // reaches the target; the reads are the ones the command needs anyway.
+      let shown = Date.now();
+      let changed = false;
       while (!running.closed && Date.now() < until) {
         const waitMs = Math.max(1, Math.min(1000, until - Date.now()));
-        for (const { bytes } of await this.read(running, waitMs)) running.output.push(bytes);
+        for (const { bytes } of await this.read(running, waitMs)) {
+          running.output.push(bytes);
+          changed ||= bytes.length > 0;
+        }
+        if (changed && !running.closed && Date.now() - shown >= LIMITS.progressMs) {
+          shown = Date.now();
+          changed = false;
+          progress(running.output.peek(LIMITS.progressBytes));
+        }
       }
       let status;
       if (running.closed) status = `Exit code: ${running.exitCode ?? "unknown"}`;

@@ -54,8 +54,12 @@ async function fixture(t, options = {}) {
     { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
   );
   const uncertain = [];
+  const results = [];
+  const progress = [];
   const facade = await Facade.create(connection, {
     onUncertain: (session, method) => uncertain.push([session, method]),
+    onResult: (call, result) => results.push([call, result]),
+    onProgress: (call, text) => progress.push([call, text]),
   });
   t.after(() => {
     connection.close();
@@ -67,8 +71,44 @@ async function fixture(t, options = {}) {
     const result = await facade.call("s1", name, args);
     return { text: result.content[0].text, error: result.isError === true };
   };
-  return { base, root, facade, call, endpoint, uncertain };
+  return { base, root, facade, call, endpoint, uncertain, results, progress };
 }
+
+test("every answer is reported for presentation, a running command's output as it comes", async (t) => {
+  const { facade, call, results, progress } = await fixture(t);
+  assert.match((await call("ReadFile", { path: "hello.txt" })).text, /hello target/);
+  assert.equal(results.length, 1);
+  const [reported, result] = results[0];
+  assert.deepEqual(reported, { sessionId: "s1", name: "ReadFile", args: { path: "hello.txt" } });
+  assert.match(result.content[0].text, /hello target/);
+  // A failing presentation never fails the tool.
+  facade.onResult = () => {
+    throw new Error("presentation");
+  };
+  assert.equal((await call("ListDirectory", {})).error, false);
+  facade.onResult = (reportedCall, answer) => results.push([reportedCall, answer]);
+  const ran = await call("RunCommand", {
+    command: "printf one; sleep 2.5; printf two; sleep 0.2",
+  });
+  assert.match(ran.text, /Exit code: 0\none\s*two/);
+  assert.ok(progress.length >= 1, "the output so far was shown while it ran");
+  const [running, text] = progress[0];
+  assert.equal(running, results.at(-1)[0], "progress and result share the call");
+  assert.match(text, /one/);
+  assert.doesNotMatch(text, /two/);
+});
+
+test("UpdatePlan validates the plan and never reaches the target", async (t) => {
+  const { call } = await fixture(t);
+  const plan = [
+    { step: "Read the code", status: "completed" },
+    { step: "Fix the bug", status: "in_progress" },
+  ];
+  assert.deepEqual(await call("UpdatePlan", { plan }), { text: "Plan updated.", error: false });
+  for (const bad of [{}, { plan: [] }, { plan: [{ step: "x", status: "done" }] }]) {
+    assert.equal((await call("UpdatePlan", bad)).error, true, JSON.stringify(bad));
+  }
+});
 
 test("tools are unavailable outside a turn and after the turn ends", async (t) => {
   const { facade } = await fixture(t);
@@ -87,6 +127,7 @@ test("tools are unavailable outside a turn and after the turn ends", async (t) =
       "EditFile",
       "RunCommand",
       "StopCommand",
+      "UpdatePlan",
     ],
   );
 });

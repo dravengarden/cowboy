@@ -36,6 +36,7 @@ const EXPECTED_TOOLS = [
   "EditFile",
   "RunCommand",
   "StopCommand",
+  "UpdatePlan",
 ];
 const MAX_FRAME = 32 * 1024 * 1024;
 
@@ -205,6 +206,8 @@ export async function prepareRuntime({
   let proxy;
   const facade = await Facade.create(connection, {
     onUncertain: (sessionId, method) => proxy?.uncertain(sessionId, method),
+    onResult: (call, result) => proxy?.toolResult(call, result),
+    onProgress: (call, text) => proxy?.toolProgress(call, text),
   });
   const listed = facade.tools().map((tool) => tool.name);
   if (JSON.stringify(listed) !== JSON.stringify(EXPECTED_TOOLS)) {

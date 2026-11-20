@@ -19,6 +19,10 @@ export const LIMITS = Object.freeze({
   // invocation admits at most 7 MiB, so 3 MiB (~5.6 MB encoded) fits.
   writeBytes: 3 * 1024 * 1024,
   publishTimeoutMs: 30_000,
+  // A running command's output shown in the transcript: its last 16 KiB,
+  // at most every 2 s (each update rewrites the call's one stored row).
+  progressMs: 2_000,
+  progressBytes: 16 * 1024,
 });
 
 // Commands see the target user's whole environment, as a Claude or Codex
@@ -157,6 +161,32 @@ export const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: "UpdatePlan",
+    description:
+      "Show the owner your plan for a multi-step task as a checklist. Send the whole list each time a step starts or finishes; keep one step in_progress.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        plan: {
+          type: "array",
+          minItems: 1,
+          maxItems: 50,
+          items: {
+            type: "object",
+            properties: {
+              step: { type: "string" },
+              status: { type: "string", enum: ["pending", "in_progress", "completed"] },
+            },
+            required: ["step", "status"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["plan"],
+      additionalProperties: false,
+    },
+  },
 ];
 export const TOOL_NAMES = Object.freeze(TOOLS.map((tool) => tool.name));
 
@@ -224,6 +254,15 @@ export class Retained {
     const excess = Math.max(0, tail.length - this.half);
     this.omitted += excess;
     this.tail = tail.subarray(excess);
+  }
+
+  /** The last `limit` bytes retained so far, without resetting. */
+  peek(limit) {
+    const tail = this.tail.length >= limit ? this.tail.subarray(-limit) : undefined;
+    const bytes = tail ?? Buffer.concat([...this.head, this.tail]).subarray(-limit);
+    const cut = this.omitted > 0 || bytes.length < this.headSize + this.tail.length;
+    // A cut may split a UTF-8 sequence; the replacement character marks it.
+    return `${cut ? "[cowboy: earlier output omitted]\n" : ""}${bytes.toString("utf8")}`;
   }
 
   /** Everything retained since the last take, then reset. */

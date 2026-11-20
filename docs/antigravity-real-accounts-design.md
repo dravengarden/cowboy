@@ -240,8 +240,9 @@ pipes; install probes use the `probe` mode.
 
 **Facade identity [R1-5].** MCP server name `cowboy`; exact tool set
 `ReadFile`, `ListDirectory`, `SearchFiles`, `WriteFile`, `EditFile`,
-`RunCommand`, `StopCommand`. The hook allows exactly
-`mcp_cowboy_ReadFile` … `mcp_cowboy_StopCommand` plus `ask_question` (and,
+`RunCommand`, `StopCommand` (and, since 2026-11-20, `UpdatePlan`, which never
+reaches the target; see "Feature inventory and Cowboy adaptation"). The hook allows exactly
+`mcp_cowboy_ReadFile` … `mcp_cowboy_UpdatePlan` plus `ask_question` (and,
 since 2026-11-20, the web built-ins; see "Web search and URL reading"), and
 denies everything else, including unknown names. Startup verifies `agy`'s
 tool listing does not contain any other MCP tool. `agy`'s user and workspace
@@ -1177,6 +1178,138 @@ the card renders per model. Not implemented: it needs a daemon mode, a
 Machine command and a Controller read model, and `/usage`'s exact output on a
 signed-in account (and whether a second `agy` beside a running `acp` shares
 its state safely) is an acceptance item.
+
+## Feature inventory and Cowboy adaptation (2026-11-20)
+
+What `agy` 1.5.9 offers (its ACP `initialize`/`session/new` results, the
+`available_commands_update` it sends, the built-in tool registry
+`third_party/oneharness/internal/tools/*.go` and the tool descriptions in the
+binary, the 2026-11-17 spike trace and production session
+`sess-1795107755038`), whether it reaches a Cowboy session, and how Cowboy
+adapts it. The rule is unchanged: every workspace read, write and command
+goes through the facade to the session's execution binding; nothing built in
+touches the runtime Machine's files or starts a process there.
+
+### Tools and their presentation
+
+`agy` 1.5.9 reports an MCP call as kind `other`, titled "Run mcp_cowboy_<tool>",
+with its arguments (plus its own `toolSummary`) and **no result**: neither
+`content` nor `rawOutput` (every completed facade call of
+`sess-1795107755038`). Built-ins report their output (`run_command`:
+`rawOutput.output` and text `content`). The facade runs in the proxy, so the
+proxy attaches each answer itself: `agy` announces a call (`tool_call`, with
+its arguments) before it calls the MCP server, and the MCP request carries no
+ACP call ID (only `_meta` conversation IDs), so the facade reports each
+answered call (`onResult`) before replying, and the proxy binds it to the
+oldest unanswered announcement of the same tool with the same arguments
+(`toolSummary` ignored), else of the same tool. The answer is put on `agy`'s
+terminal update for that call; it adds no message to `agy` and no request to
+the target. Memory evidence sees the same presented update, so a tool's output
+now counts as it does for Claude and Codex.
+
+| Feature | agy native | Before | Gap | Cowboy now |
+| --- | --- | --- | --- | --- |
+| `ReadFile` | `read_file` (denied) | Read, path, location | no content | text (with the paging note) on the call |
+| `ListDirectory` | `list_dir` (denied) | List, path | no listing | the listing |
+| `SearchFiles` | `grep_search` (denied) | kind `read`, pattern title | no matches | the matches |
+| `WriteFile` | `write_file` (denied) | diff (new file) | result/error unseen | diff + result; a refused write shows only the error |
+| `EditFile` | `edit_file` (denied) | diff | a refused edit still showed its diff | diff + result on success, the error alone on failure |
+| `RunCommand` | `run_command` (denied) | command title, `toolSummary` as heading | no output, no exit code; a multi-line command titled by a fragment ("node -e '") | output so far while it runs (last 16 KiB, at most every 2 s, only when changed, from the reads the command needs anyway), then `Exit code: N` and the retained 256 KiB; title = first non-empty line + " …" |
+| `StopCommand` | `manage_task kill` (denied) | Stop title | no output | final output |
+| Extensions (Cowboy MCP, folder MCP, memory) | MCP | `mcp__<server>__<tool>`, title "Run mcp_cowboy_…", `toolSummary` among the arguments | no result | title `<server> · <tool>`, `toolSummary` dropped, result blocks (text, image, resource) as content, at most 1 MiB |
+| `search_web` | built-in, allowed | WebSearch, query title | `agy` reports no result | unchanged (the result never reaches ACP; the model's reply summarizes it) |
+| `read_url_content`, `view_content_chunk` | built-in, allowed for http(s) | WebFetch, URL title | `agy` reports no result | unchanged |
+| `ask_question` | built-in, allowed | owner permission prompt | none | unchanged |
+| Plan / task tracking | planning mode writes `task.md`/`implementation_plan.md` artifacts with `write_file` (denied); no todo tool | nothing | no checklist, no Plan panel | facade tool `UpdatePlan` (`plan: [{step, status}]`, like Codex's `update_plan`): validated by the facade without a target request, sent as ACP `plan`, its tool call hidden |
+
+Per call this adds nothing on the wire to `agy` or the target; the system
+prompt grows by one tool schema and one routing sentence (`UpdatePlan`).
+
+### Agent features
+
+| Feature | agy native | Reaches Cowboy | Adaptation |
+| --- | --- | --- | --- |
+| Thinking | `agent_thought_chunk`, `thought_level` low/medium/high | yes | rendered as thought; level is a session option and a card |
+| Models | Gemini 3.8 Flash, Claude Sonnet/Opus 4.6 (Thinking), GPT-OSS 120B | yes | `model` option; cards for Gemini levels |
+| Modes | `default`, `accept-edits`, `auto`, `plan` | yes | "Agent mode"; facade calls auto-approved except in `plan` |
+| Context meter | `usage_update` (`size` 1,048,576) | yes | context ring; plan tier on `_meta.cowboy` |
+| Images in prompts | `promptCapabilities.image` | yes | forwarded verbatim |
+| Session load/resume | `session/load`, `session/resume` | yes | fresh projection appended |
+| Session list/close | `session/list`, `session/close` | refused | Cowboy owns its session list |
+| Conversation title | `session_info_update` | dropped by the worker | Cowboy titles from the first prompt (see "Antigravity features") |
+| `agy` status lines | `agent_message_chunk` "\n⚠ <text>\n" ("Model produced invalid output.", "API error (attempt N): <status>"), `agy` then retries itself | shown as the model's words and stored in memory as them | when the worker advertises `session.notices`, a whole such chunk (optionally with its "Created At/Completed At" lines) becomes an ACP `notice` (`warning`; "Antigravity API error (attempt N)" with the status as description), which the Web shows as a muted status row; it is not part of the reply or memory. Production frequency: one in 5 turns of `sess-1795107755038` (its event log does not record the model) |
+| Compaction | `/compact` | yes | typed `compaction_update`, context restated |
+| Account plan / quota | tier in `_meta`; `/usage` in print mode only | plan yes, quota no | quota is a separate daemon `usage` unit ("Account quota") |
+
+### Slash commands (`available_commands_update`)
+
+| Command | What it does | Cowboy |
+| --- | --- | --- |
+| `/compact` | summarize history | offered (typed compaction) |
+| `/goal` | run until a goal is finished | offered |
+| `/plan`, `/grill-me` | planning prompts | offered |
+| `/agy-customizations`, `/antigravity-guide` | built-in reference skills | offered (read-only guidance) |
+| `/schedule` | timer or cron prompt | removed from the list: `schedule` is denied (below) |
+| `/browser` | browser agent | removed: no browser |
+| `/swarm`, `/run-workflow` | parallel agents, Python workflows | removed: denied (below) |
+| `/learn` | writes skills/rules into the account home | removed: needs `write_file` on the runtime Machine |
+
+The proxy drops exactly these five from `available_commands_update`; any
+other or future command is offered.
+
+### Denied built-ins and why
+
+| Tool(s) | Reason | Alternative named in the hook's denial |
+| --- | --- | --- |
+| `read_file`, `write_file`, `edit_file`, `run_command` (and `list_dir`, `grep_search`, `find_by_name`, `command_status`, …) | they act on the runtime Machine | the facade tools |
+| `invoke_subagent`, `define_subagent`, `manage_subagents`, `send_message`, `swarm` (`post_message`, `read_board`, `swarm_wait`, `claim_next`), `run_workflow` | see "Subagents" | Cowboy managed calls (`mcp_cowboy_cowboy_execute`, action `calls.start`) when listed |
+| `schedule`, `manage_task` | timers and background tasks live in the `agy` process, which Cowboy stops when the session idles; a fired timer would start a turn no client prompted | `RunCommand` with `wait_seconds`; a scheduled message in Cowboy |
+| `execute_url`, browser and computer-use tools (`bind_app`, `ax_*`, `focus_app`) | no browser or desktop in the account unit | `search_web`, `read_url_content`, a browser MCP tool of the folder |
+| `generate_image` | writes the image to the account's artifact directory on the runtime Machine, which the session cannot see | none yet |
+
+The denial reason is said only when the model tries a tool (the projection
+already names the rule), so it costs nothing otherwise.
+
+### Subagents
+
+Evidence: `invoke_subagent` "invokes one or more subagents ... Each subagent
+runs in the background with its own prompt and reports back when done"; in
+the spike the parent's tool call completed at once and its prompt ended
+(`end_turn`) while the child was still running; the child's own tool calls
+were **not** reported over ACP, but did pass the `PreToolUse` hook (the spike
+hook logged the child's `read_file` right after `invoke_subagent`). `agy`
+adds `_meta["antigravity.google/root_conversation_id"]` to MCP calls made by
+nested subagents, so children can call the `cowboy` server.
+
+So a native subagent would be gated by the same hook, but (1) it outlives the
+prompt that started it, and the facade answers only inside a turn, so its
+workspace tools would fail after `end_turn`; (2) its result wakes the parent
+outside any client prompt, a turn the worker never started (no evidence
+settlement, no fencing, no queue ownership); (3) none of its steps are
+visible over ACP, so the Web cannot show it as a subagent row and the
+proxy's detection behind the gate cannot see it; (4) Cowboy stops the idle
+process, killing it. Decision (c) with (b)'s route: native subagents, swarms
+and workflows stay denied; the denial and the installed managed-call
+guidance route delegation to Cowboy managed calls, which run a full,
+visible, cancellable child session through the same execution binding.
+Revisit if a later `agy` holds the prompt open until its children report and
+reports their steps over ACP (e.g. as ACP subagent sessions, which Cowboy's
+`initialize` already advertises).
+
+### Remaining (needs work outside this adapter)
+
+- `/schedule` as a Cowboy scheduled message: the Web can schedule a queued
+  message, but Cowboy MCP's `queue.submit` has no `scheduled_at_ms`; adding
+  it (Controller) would let the model schedule its own follow-up through the
+  extension tools.
+- Repository workflows (`.agents/workflows/*.md`) and skills are not seen by
+  `agy` (its directory is empty); projecting them as slash commands needs a
+  worker-side command source.
+- `search_web`/`read_url_content` results stay invisible until `agy` reports
+  them over ACP.
+- `generate_image`: allowing it needs the image returned over ACP or copied
+  to the target, neither of which `agy` 1.5.9 offers.
+- Quota per model: the daemon `usage` unit ("Account quota").
 
 ## Residual risks
 

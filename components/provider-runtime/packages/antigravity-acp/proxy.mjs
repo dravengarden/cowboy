@@ -6,7 +6,15 @@
 import { Compaction, compactionStatus } from "./compaction.mjs";
 import { allowedTool } from "./hook.mjs";
 import { EVIDENCE_LIMITS, promptText, recall, updateObservation } from "./memory.mjs";
-import { presentedTool, presentToolCall } from "./presentation.mjs";
+import {
+  agyNotice,
+  availableCommands,
+  planUpdate,
+  presentExtension,
+  presentedTool,
+  presentToolCall,
+  resultContent,
+} from "./presentation.mjs";
 
 /** Client requests a `runtime` unit forwards; everything else is refused. */
 export const RUNTIME_REQUESTS = Object.freeze([
@@ -72,6 +80,21 @@ export const TURN_ERROR_TEXT = Object.freeze({
 });
 /** Tool call names remembered per turn (tool_call_update omits the name). */
 const MAX_TOOL_CALLS = 1024;
+/** A tool call status after which nothing more is reported for it. */
+const TERMINAL = new Set(["completed", "failed"]);
+/** `cowboy` server calls announced and not yet answered, per session. */
+const MAX_WAITING = 64;
+
+/** A call's arguments as a comparable key (`agy`'s `toolSummary` dropped). */
+function argumentKey(input) {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) return "{}";
+  const { toolSummary: _summary, ...rest } = input;
+  return JSON.stringify(
+    Object.keys(rest)
+      .sort()
+      .map((key) => [key, rest[key]]),
+  );
+}
 
 /** A tool name safe to put in a closed error code. */
 function toolCode(name) {
@@ -209,6 +232,14 @@ export class AcpProxy {
     this.root = undefined;
     /** `/compact` turns and the context restated after them. */
     this.compaction = new Compaction();
+    /** Whether the worker renders ACP `notice` updates (its `initialize`). */
+    this.notices = false;
+    /** Announced `cowboy` server calls awaiting the facade, per session. */
+    this.waiting = new Map();
+    /** The facade's call object -> the ACP tool call it answers. */
+    this.bound = new WeakMap();
+    /** Result content of answered calls, until their terminal update. */
+    this.results = new Map();
     Promise.resolve(runtime).then(
       (ready) => {
         this.root = ready?.facade?.root;
@@ -267,19 +298,134 @@ export class AcpProxy {
     const route = name?.startsWith("mcp_cowboy_")
       ? this.facade?.extensions?.route(name.slice("mcp_cowboy_".length))
       : undefined;
-    if (route && tool === undefined) {
-      return { ...toolCall, name: `mcp__${route.server}__${route.tool}`, kind: "other" };
+    const shown =
+      route && tool === undefined
+        ? presentExtension(toolCall, route)
+        : presentToolCall(toolCall, { root: this.root, known });
+    // The facade's answer, which `agy` never reports for an MCP tool.
+    if (typeof id === "string" && TERMINAL.has(toolCall?.status) && this.results.has(id)) {
+      const content = this.results.get(id);
+      this.results.delete(id);
+      return content.length ? { ...shown, content } : shown;
     }
-    return presentToolCall(toolCall, { root: this.root, known });
+    return shown;
   }
 
-  /** A session update with its facade tool call presented. */
+  /**
+   * A session update as the worker sees it: a facade tool call presented
+   * with its result, `agy`'s own status line as a notice, a plan tool call
+   * left out (its plan is sent instead), and only runnable slash commands.
+   * `undefined` when nothing is forwarded.
+   */
   presentUpdate(message) {
     const update = message.params?.update;
+    if (update?.sessionUpdate === "available_commands_update") {
+      const shown = availableCommands(update);
+      return shown === update
+        ? message
+        : { ...message, params: { ...message.params, update: shown } };
+    }
+    if (this.notices) {
+      const notice = agyNotice(update);
+      if (notice) return { ...message, params: { ...message.params, update: notice } };
+    }
     if (!["tool_call", "tool_call_update"].includes(update?.sessionUpdate)) return message;
+    this.track(message.params.sessionId, update);
+    const id = update.toolCallId;
+    const known = typeof id === "string" ? this.calls.get(id) : undefined;
+    if ((presentedTool(update.name) ?? known) === "UpdatePlan") {
+      if (typeof id === "string" && known === undefined) this.calls.set(id, "UpdatePlan");
+      if (typeof id === "string" && TERMINAL.has(update.status)) this.results.delete(id);
+      return undefined;
+    }
     const shown = this.present(update);
     if (shown === update) return message;
     return { ...message, params: { ...message.params, update: shown } };
+  }
+
+  /**
+   * Remember an announced `cowboy` server call until it ends, so the
+   * facade's answer can be attached to it: `agy` announces every call
+   * (`tool_call`, with its arguments) before it calls the MCP server, and
+   * the MCP request carries no ACP call ID.
+   */
+  track(sessionId, update) {
+    const id = update.toolCallId;
+    if (typeof sessionId !== "string" || typeof id !== "string") return;
+    const list = this.waiting.get(sessionId) ?? [];
+    if (TERMINAL.has(update.status)) {
+      const left = list.filter((entry) => entry.id !== id);
+      if (left.length) this.waiting.set(sessionId, left);
+      else this.waiting.delete(sessionId);
+      return;
+    }
+    const name = update.name;
+    if (typeof name !== "string" || !name.startsWith("mcp_cowboy_")) return;
+    if (list.some((entry) => entry.id === id)) return;
+    if (list.length >= MAX_WAITING) list.shift();
+    list.push({ id, name, key: argumentKey(update.rawInput), call: undefined });
+    this.waiting.set(sessionId, list);
+  }
+
+  /**
+   * The ACP tool call one facade call answers: the oldest unbound
+   * announcement of the same tool with the same arguments, else of the same
+   * tool. `undefined` when none was announced.
+   */
+  bind(call) {
+    if (this.bound.has(call)) return this.bound.get(call);
+    const list = this.waiting.get(call.sessionId) ?? [];
+    const name = `mcp_cowboy_${call.name}`;
+    const key = argumentKey(call.args);
+    const entry =
+      list.find((item) => !item.call && item.name === name && item.key === key) ??
+      list.find((item) => !item.call && item.name === name);
+    if (!entry) return undefined;
+    entry.call = call;
+    this.bound.set(call, entry.id);
+    return entry.id;
+  }
+
+  /**
+   * The facade answered `call` (before `agy` sees the answer, so before its
+   * terminal update): keep the result for that update. A successful
+   * `UpdatePlan` becomes the session's ACP plan.
+   */
+  toolResult(call, result) {
+    if (call?.name === "UpdatePlan") {
+      const plan = result?.isError === true ? undefined : planUpdate(call.args);
+      if (plan && typeof call.sessionId === "string") {
+        this.client({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: call.sessionId, update: plan },
+        });
+      }
+      return;
+    }
+    const id = this.bind(call);
+    if (id === undefined) return;
+    if (this.results.size >= MAX_TOOL_CALLS) this.results.delete(this.results.keys().next().value);
+    this.results.set(id, resultContent(call.name, call.args, result, this.root));
+  }
+
+  /** A running command's output so far, shown on its tool call. */
+  toolProgress(call, text) {
+    const id = this.bind(call);
+    if (id === undefined || typeof text !== "string") return;
+    this.client({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: call.sessionId,
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: id,
+          status: "in_progress",
+          content: [{ type: "content", content: { type: "text", text } }],
+        },
+      },
+    });
   }
 
   /** Messages from the worker are handled strictly in order. */
@@ -325,6 +471,7 @@ export class AcpProxy {
     const record = { method, runtime, mode: requested };
     if (method === "initialize") {
       this.compaction.initialize(forwarded.params);
+      this.notices = Boolean(forwarded.params?.clientCapabilities?.session?.notices);
       // `agy` must never delegate file or terminal work to the worker: the
       // worker runs on the runtime Machine, not on the session's target.
       forwarded.params = { ...(forwarded.params ?? {}) };
@@ -531,10 +678,12 @@ export class AcpProxy {
           // Cowboy injected (recalled memory, restated context) are not.
           if (injectedEcho(update)) return;
           this.observe(message.params);
-          // Evidence and the worker see the same sanitized update.
-          const clean = stripTier(message);
-          this.remember(clean.params);
-          return this.client(this.presentUpdate(this.annotateUsage(clean)));
+          // Evidence and the worker see the same sanitized, presented
+          // update: a tool's result counts, `agy`'s status lines do not.
+          const shown = this.presentUpdate(this.annotateUsage(stripTier(message)));
+          if (shown === undefined) return;
+          this.remember(shown.params);
+          return this.client(shown);
         }
         if (AGENT_NOTIFICATIONS.includes(method)) this.client(stripTier(message));
         return;
@@ -569,7 +718,9 @@ export class AcpProxy {
       // bypassPermissions; plan mode still asks.
       const sessionId = message.params?.sessionId;
       const mode = this.modes.get(sessionId);
-      if (name !== "ask_question" && mode !== undefined && mode !== "plan") {
+      // `UpdatePlan` only shows a checklist, in every mode.
+      const planning = name === "mcp_cowboy_UpdatePlan";
+      if (planning || (name !== "ask_question" && mode !== undefined && mode !== "plan")) {
         const options = Array.isArray(message.params?.options) ? message.params.options : [];
         // Never a standing grant: each request is decided in its mode.
         const allow = options.find((option) => option?.kind === "allow_once");

@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { ALLOWED_TOOLS, decide, URL_DENIAL_REASON, WEB_TOOLS } from "./hook.mjs";
+import { ALLOWED_TOOLS, DENIAL_REASON, decide, URL_DENIAL_REASON, WEB_TOOLS } from "./hook.mjs";
 
 const hook = fileURLToPath(new URL("./hook.mjs", import.meta.url));
 const input = (name, args = {}) => JSON.stringify({ toolCall: { name, args } });
 
 test("only the cowboy server's tools and ask_question are allowed", () => {
   for (const name of ALLOWED_TOOLS) assert.deepEqual(decide(input(name)), { decision: "allow" });
-  assert.equal(ALLOWED_TOOLS.length, 8);
+  assert.equal(ALLOWED_TOOLS.length, 9);
   // The session's extensions are tools of the same server.
   for (const name of [
     "mcp_cowboy_cowboy_read",
@@ -41,6 +41,20 @@ test("only the cowboy server's tools and ask_question are allowed", () => {
   ]) {
     assert.equal(decide(input(name)).decision, "deny", name);
   }
+});
+
+test("a denied built-in with a Cowboy alternative names it", () => {
+  for (const name of ["invoke_subagent", "define_subagent", "swarm", "run_workflow"]) {
+    const { decision, reason } = decide(input(name));
+    assert.equal(decision, "deny", name);
+    assert.match(reason, /calls\.start/, name);
+  }
+  assert.match(decide(input("schedule", { DurationSeconds: 60 })).reason, /schedule a message/);
+  assert.match(decide(input("manage_task")).reason, /RunCommand with\s+wait_seconds/);
+  assert.match(decide(input("execute_url")).reason, /search_web/);
+  assert.equal(decide(input("read_file")).reason, DENIAL_REASON);
+  // An inherited property name is no reason.
+  assert.equal(decide(input("constructor")).reason, DENIAL_REASON);
 });
 
 test("the network-only web built-ins are allowed", () => {

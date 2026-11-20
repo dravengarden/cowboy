@@ -25,6 +25,7 @@ export const ALLOWED_TOOLS = Object.freeze([
   "mcp_cowboy_EditFile",
   "mcp_cowboy_RunCommand",
   "mcp_cowboy_StopCommand",
+  "mcp_cowboy_UpdatePlan",
   "ask_question",
 ]);
 /** `agy` built-ins that only reach the network, never the Machine's files. */
@@ -46,6 +47,46 @@ export const DENIAL_REASON =
   "MCP server (ReadFile, ListDirectory, SearchFiles, WriteFile, EditFile, RunCommand, " +
   "StopCommand, and the session's Cowboy, memory and folder tools); search_web and " +
   "read_url_content remain available for the web.";
+/**
+ * Why a denied built-in has a Cowboy alternative, said only when the model
+ * tries it (the routing projection already names the rule): native
+ * subagents, swarms and workflows run in the background past the turn,
+ * where the workspace tools are closed and Cowboy cannot show their work;
+ * timers and background tasks end with this process, which Cowboy stops
+ * when the session idles (design "Feature inventory and Cowboy adaptation").
+ */
+const DELEGATION_REASON =
+  "Antigravity subagents, swarms and workflows are disabled in Cowboy: they run in the " +
+  "background after your turn, where the workspace tools are closed and the owner cannot " +
+  "see them. To delegate, use Cowboy managed calls (mcp_cowboy_cowboy_execute with action " +
+  "calls.start) when that tool is listed; otherwise do the work yourself with the cowboy tools.";
+const SCHEDULE_REASON =
+  "Timers and background tasks are disabled in Cowboy: they end when this Antigravity " +
+  "process stops, which Cowboy does when the session idles. Use RunCommand with " +
+  "wait_seconds for a long command, and ask the owner to schedule a message in Cowboy for " +
+  "later work.";
+const BROWSER_REASON =
+  "No browser or desktop is available in a Cowboy session. Use search_web and " +
+  "read_url_content, or a browser tool of the cowboy MCP server when one is listed.";
+const REASONS = new Map([
+  ...[
+    "invoke_subagent",
+    "define_subagent",
+    "manage_subagents",
+    "send_message",
+    "swarm",
+    "post_message",
+    "read_board",
+    "swarm_wait",
+    "claim_next",
+    "run_workflow",
+  ].map((name) => [name, DELEGATION_REASON]),
+  ...["schedule", "manage_task"].map((name) => [name, SCHEDULE_REASON]),
+  ...["execute_url", "browser_subagent", "open_browser_url", "capture_browser_screenshot"].map(
+    (name) => [name, BROWSER_REASON],
+  ),
+]);
+
 export const URL_DENIAL_REASON =
   "read_url_content reads only public http:// and https:// URLs in a Cowboy session.";
 
@@ -90,7 +131,7 @@ export function decide(input) {
   if (allowedTool(name)) {
     return { decision: "allow" };
   }
-  return { decision: "deny", reason: DENIAL_REASON };
+  return { decision: "deny", reason: REASONS.get(name) ?? DENIAL_REASON };
 }
 
 async function readInput(stream) {

@@ -1037,3 +1037,50 @@ test("the standard ACP tool name wins over provider _meta names", () => {
   // The update's standard name corrects the first guess; a later _meta name does not undo it.
   assertEquals(tool.toolName, "Edit");
 });
+
+test("an Antigravity command shows its streamed output, then the result the proxy attached", () => {
+  const text = (value: string) => [{ type: "content", content: { type: "text", text: value } }];
+  const timeline: Envelope[] = [
+    {
+      session_id: "s1",
+      seq: 1,
+      kind: "update",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "c1",
+        name: "Run",
+        kind: "execute",
+        title: "make",
+        status: "in_progress",
+        rawInput: { command: "make", description: "Build" },
+      },
+    },
+    {
+      session_id: "s1",
+      seq: 2,
+      kind: "update",
+      update: { sessionUpdate: "tool_call_update", toolCallId: "c1", status: "in_progress", content: text("building") },
+    },
+  ];
+  const running = derive(timeline)[0];
+  if (running?.kind !== "tool") throw new Error("expected tool row");
+  assertEquals([running.status, running.content], ["in_progress", text("building")]);
+  // agy's own terminal update repeats the input; the proxy put the answer on it.
+  const finished: Envelope[] = [...timeline, {
+    session_id: "s1",
+    seq: 3,
+    kind: "update",
+    update: {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "c1",
+      name: "Run",
+      kind: "execute",
+      status: "failed",
+      rawInput: { command: "make", description: "Build" },
+      content: text("Exit code: 2\nbuilding\nerror"),
+    },
+  }];
+  const done = derive(finished)[0];
+  if (done?.kind !== "tool") throw new Error("expected tool row");
+  assertEquals([done.status, done.title, done.content], ["failed", "make", text("Exit code: 2\nbuilding\nerror")]);
+});

@@ -961,6 +961,19 @@ test("permissions auto-approve only in a mode agy confirmed", async () => {
   await proxy.fromAgent({ jsonrpc: "2.0", id: 4, error: { code: 1, message: "no" } });
   await ask(74);
   assert.equal(client.at(-1).id, 74);
+  // A plan checklist never needs the owner, whatever the mode.
+  await proxy.fromAgent(
+    request(75, "session/request_permission", {
+      sessionId: "s",
+      toolCall: { name: "mcp_cowboy_UpdatePlan" },
+      options,
+    }),
+  );
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    id: 75,
+    result: { outcome: { outcome: "selected", optionId: "allow" } },
+  });
 });
 
 test("an older switch's answer cannot reopen approvals while a newer one is pending", async () => {
@@ -1124,4 +1137,142 @@ test("compaction outcomes: failed, cancelled, and none for a worker without the 
     request(4, "session/prompt", { sessionId: "s", prompt: text("hi") }),
   );
   assert.equal(untyped.agent.at(-1).params.prompt.length, 2);
+});
+
+test("a facade call shows the facade's answer, and a running command its output so far", async () => {
+  const memory = fakeMemory();
+  const { proxy, client } = harness({ memory });
+  await settle();
+  await openedSession(proxy);
+  await proxy.fromClient(request(3, "session/prompt", { sessionId: "s", prompt: text("go") }));
+  const announce = (toolCallId, name, rawInput) =>
+    proxy.fromAgent(
+      updateIn("tool_call", {
+        toolCallId,
+        name,
+        rawInput,
+        status: "in_progress",
+        title: `Run ${name}`,
+      }),
+    );
+  const finish = (toolCallId, name, status = "completed") =>
+    proxy.fromAgent(updateIn("tool_call_update", { toolCallId, name, status }));
+  // Two identical reads: answers bind in announcement order.
+  await announce("r1", "mcp_cowboy_ReadFile", { path: "a.txt", toolSummary: "Read a" });
+  await announce("r2", "mcp_cowboy_ReadFile", { path: "a.txt" });
+  const read = (n) => ({ sessionId: "s", name: "ReadFile", args: { path: "a.txt" }, n });
+  const first = read(1);
+  const second = read(2);
+  proxy.toolResult(first, { content: [{ type: "text", text: "FIRST" }] });
+  proxy.toolResult(second, { content: [{ type: "text", text: "SECOND" }] });
+  await finish("r2");
+  await finish("r1");
+  const shown = (id) =>
+    client.filter((m) => m.params?.update?.toolCallId === id).at(-1).params.update;
+  assert.deepEqual(shown("r1").content, [
+    { type: "content", content: { type: "text", text: "FIRST" } },
+  ]);
+  assert.equal(shown("r2").content[0].content.text, "SECOND");
+  const announced = client.find((m) => m.params?.update?.toolCallId === "r1").params.update;
+  assert.equal(announced.title, "Read a.txt");
+  // A command shows its output while it runs, then the full answer.
+  await announce("c1", "mcp_cowboy_RunCommand", { command: "make" });
+  const make = { sessionId: "s", name: "RunCommand", args: { command: "make" } };
+  proxy.toolProgress(make, "building");
+  assert.deepEqual(client.at(-1).params.update, {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "c1",
+    status: "in_progress",
+    content: [{ type: "content", content: { type: "text", text: "building" } }],
+  });
+  proxy.toolResult(make, { content: [{ type: "text", text: "Exit code: 2\nbuilding\nerror" }] });
+  await finish("c1", "mcp_cowboy_RunCommand", "failed");
+  assert.match(shown("c1").content[0].content.text, /Exit code: 2/);
+  assert.equal(shown("c1").status, "failed");
+  // A call nobody announced (or already ended) is not shown anywhere.
+  const before = client.length;
+  proxy.toolResult({ sessionId: "s", name: "ReadFile", args: {} }, { content: [] });
+  proxy.toolProgress({ sessionId: "s", name: "RunCommand", args: {} }, "x");
+  assert.equal(client.length, before);
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 3, result: { stopReason: "end_turn" } });
+  const tools = memory.log.filter((entry) => entry[1] === "tool").map((entry) => entry[2]);
+  assert.ok(
+    tools.some((entry) => entry.includes("FIRST")),
+    "memory sees the tool's output",
+  );
+});
+
+test("UpdatePlan is shown as the session's plan, not as a tool call", async () => {
+  const { proxy, client } = harness();
+  await openedSession(proxy);
+  await proxy.fromClient(request(3, "session/prompt", { sessionId: "s", prompt: text("go") }));
+  const plan = [{ step: "Fix it", status: "in_progress" }];
+  const before = client.length;
+  await proxy.fromAgent(
+    updateIn("tool_call", {
+      toolCallId: "p1",
+      name: "mcp_cowboy_UpdatePlan",
+      rawInput: { plan },
+      status: "in_progress",
+    }),
+  );
+  proxy.toolResult({ sessionId: "s", name: "UpdatePlan", args: { plan } }, { content: [] });
+  await proxy.fromAgent(updateIn("tool_call_update", { toolCallId: "p1", status: "completed" }));
+  assert.deepEqual(
+    client.slice(before).map((message) => message.params.update),
+    [
+      {
+        sessionUpdate: "plan",
+        entries: [{ content: "Fix it", priority: "medium", status: "in_progress" }],
+      },
+    ],
+  );
+  // A refused plan shows nothing.
+  proxy.toolResult(
+    { sessionId: "s", name: "UpdatePlan", args: { plan } },
+    { content: [], isError: true },
+  );
+  assert.equal(client.length, before + 1);
+});
+
+test("agy's status lines are notices for a worker that renders them", async () => {
+  for (const typed of [true, false]) {
+    const memory = fakeMemory();
+    const { proxy, client } = harness({ memory });
+    await settle();
+    await openedSession(proxy, typed);
+    await proxy.fromClient(request(3, "session/prompt", { sessionId: "s", prompt: text("go") }));
+    const status = "\n⚠ Model produced invalid output.\n";
+    await proxy.fromAgent(
+      updateIn("agent_message_chunk", { content: { type: "text", text: status } }),
+    );
+    await proxy.fromAgent(
+      updateIn("agent_message_chunk", { content: { type: "text", text: "Hi" } }),
+    );
+    const updates = client.slice(-2).map((message) => message.params.update);
+    if (typed) {
+      assert.deepEqual(updates[0], {
+        sessionUpdate: "notice",
+        severity: "warning",
+        title: "Antigravity: Model produced invalid output.",
+      });
+    } else {
+      assert.equal(updates[0].content.text, status);
+    }
+    assert.equal(updates[1].content.text, "Hi");
+    await proxy.fromAgent({ jsonrpc: "2.0", id: 3, result: { stopReason: "end_turn" } });
+    const said = memory.log.find((entry) => entry[1] === "assistant")?.[2];
+    assert.equal(said, typed ? "Hi" : `${status}Hi`);
+  }
+});
+
+test("slash commands that need a denied tool are not offered", async () => {
+  const { proxy, client } = harness();
+  await openedSession(proxy);
+  await proxy.fromAgent(
+    updateIn("available_commands_update", {
+      availableCommands: [{ name: "compact" }, { name: "schedule" }, { name: "swarm" }],
+    }),
+  );
+  assert.deepEqual(client.at(-1).params.update.availableCommands, [{ name: "compact" }]);
 });
