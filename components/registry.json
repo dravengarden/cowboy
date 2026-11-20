@@ -20617,7 +20617,7 @@
           "sources": [
             "components/provider-sdk"
           ],
-          "digest": "sha256:c05d5f2e6fead50d355fbcb92ac87d11ac32303c2201d880ba6b311229fb8408",
+          "digest": "sha256:0b0cdb4c9b2f3224f6015af9104c04ae38914b4dc6870ce0af3fdf79adc0baff",
           "package": {
             "kind": "cargo",
             "name": "cowboy-provider-sdk",
@@ -20631,7 +20631,7 @@
           "sources": [
             "components/provider-ui"
           ],
-          "digest": "sha256:13ee787d5f8da90d177b8e03216faa0b8dc022347881541c44a661fb15aea1fe",
+          "digest": "sha256:ae034096b6b36962865aa37faad760b8eae87f11c6a7a966774bc2a277ef278e",
           "package": {
             "kind": "npm",
             "name": "@cowboy/provider-ui",
@@ -20763,7 +20763,7 @@
                 "version": "1.3.6"
               }
             ],
-            "source_digest": "sha256:39e0513edd890059c50c6153e2d81cfcd72da81026ed9ef85c290b51427335f8"
+            "source_digest": "sha256:9ceb94f72d6166ec9cacdd79529842168f2944ee3554e5304d9a66bab2b8816d"
           },
           "claude-code": {
             "component_release": "3.121.0",

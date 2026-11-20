@@ -781,6 +781,7 @@ pub struct RuntimeContract {
     pub isolation: Option<RuntimeIsolationPolicy>,
 }
 
+mod activity;
 mod runtime_policy;
 pub use runtime_policy::{RuntimeIsolationPolicy, RuntimeNetworkPolicy};
 
@@ -1647,12 +1648,7 @@ impl ProviderManifest {
                 "managed profiles require Provider SDK 3.1.13 or newer"
             );
         }
-        if self.ui.uses_levitating_activity() {
-            ensure!(
-                semver::Version::parse(&self.sdk_version)? >= semver::Version::new(3, 7, 0),
-                "levitating activity requires Provider SDK 3.7.0 or newer"
-            );
-        }
+        activity::validate_sdk_floor(&self.ui, &self.sdk_version)?;
         if self
             .runtime
             .required_capabilities
@@ -1870,20 +1866,6 @@ impl TranscriptPresentationContract {
 }
 
 impl UiContract {
-    /// Whether any surface shows the levitating activity (Provider SDK 3.7.0).
-    fn uses_levitating_activity(&self) -> bool {
-        fn walk(node: &UiNode) -> bool {
-            match node {
-                UiNode::Activity { indicator, .. } => {
-                    matches!(indicator, ActivityIndicator::AssetLevitate { .. })
-                }
-                UiNode::Stack { children, .. } => children.iter().any(walk),
-                _ => false,
-            }
-        }
-        self.surfaces.values().any(walk)
-    }
-
     fn validate(&self, logic: &LogicContract) -> Result<()> {
         ensure!(
             (UI_SCHEMA_MIN_VERSION..=UI_SCHEMA_VERSION).contains(&self.schema_version),
@@ -3246,37 +3228,7 @@ impl StandardProviderSource {
             children,
             visible_when: None,
         };
-        let activity_indicator = match &self.activity.indicator {
-            StandardActivityIndicator::ProgressRing => ActivityIndicator::ProgressRing,
-            StandardActivityIndicator::GlyphCycle {
-                frames,
-                interval_ms,
-            } => ActivityIndicator::GlyphCycle {
-                frames: frames.clone(),
-                interval_ms: *interval_ms,
-            },
-            StandardActivityIndicator::TerminalPrompt { interval_ms } => {
-                ActivityIndicator::TerminalPrompt {
-                    interval_ms: *interval_ms,
-                }
-            }
-            StandardActivityIndicator::MarkSignal { interval_ms } => {
-                ActivityIndicator::AssetSignal {
-                    asset: loading_asset.clone(),
-                    interval_ms: *interval_ms,
-                }
-            }
-            StandardActivityIndicator::MarkPulse { interval_ms } => ActivityIndicator::AssetPulse {
-                asset: loading_asset.clone(),
-                interval_ms: *interval_ms,
-            },
-            StandardActivityIndicator::MarkLevitate { interval_ms } => {
-                ActivityIndicator::AssetLevitate {
-                    asset: loading_asset.clone(),
-                    interval_ms: *interval_ms,
-                }
-            }
-        };
+        let activity_indicator = self.activity.indicator.compile(&loading_asset);
         let mut surfaces = BTreeMap::new();
         surfaces.insert(SurfaceSlot::Card, card);
         let (initial_auth_label, refresh_auth_label, clear_auth_label) =

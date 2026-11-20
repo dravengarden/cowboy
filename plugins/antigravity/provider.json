@@ -8,35 +8,31 @@
     "name": "Antigravity",
     "vendor": "Google",
     "summary": "Official Antigravity CLI with a personal Google account (not Google-supported in Cowboy)",
-    "accent": "#4285F4",
+    "accent": "#3186FF",
     "secondary_accent": "#34A853",
-    "mark_view_box": "0 0 24 24",
-    "mark_path": "M1.5 21.5C4.5 21.3 6.3 17.5 7.6 13.6L10.1 5.9C10.5 4.6 11.2 3.6 12 3.6C12.8 3.6 13.5 4.6 13.9 5.9L16.4 13.6C17.7 17.5 19.5 21.3 22.5 21.5L18.2 21.5C16.6 20.6 15.4 18.2 14.4 15.2L12.6 9.8C12.45 9.35 12.25 9.1 12 9.1C11.75 9.1 11.55 9.35 11.4 9.8L9.6 15.2C8.6 18.2 7.4 20.6 5.8 21.5Z",
+    "mark_view_box": "0 0 180 180",
+    "mark_path": "M144.248 149.062C151.748 154.688 162.998 150.938 152.685 140.625C121.748 110.625 128.31 28.125 89.8727 28.125C51.4352 28.125 57.9977 110.625 27.0602 140.625C15.8102 151.875 27.9977 154.688 35.4977 149.062C64.5602 129.375 62.6852 94.6875 89.8727 94.6875C117.06 94.6875 115.185 129.375 144.248 149.062Z",
     "mark_gradient": {
-      "x1_percent": 0,
-      "y1_percent": 0,
-      "x2_percent": 100,
-      "y2_percent": 0,
+      "x1_percent": 70,
+      "y1_percent": 12,
+      "x2_percent": 38,
+      "y2_percent": 58,
       "stops": [
         {
           "offset_percent": 0,
-          "color": "#4285F4"
+          "color": "#E9483D"
         },
         {
-          "offset_percent": 30,
-          "color": "#34A853"
+          "offset_percent": 28,
+          "color": "#DDA24B"
         },
         {
-          "offset_percent": 50,
-          "color": "#FBBC04"
+          "offset_percent": 46,
+          "color": "#7DB55E"
         },
         {
           "offset_percent": 70,
-          "color": "#EA4335"
-        },
-        {
-          "offset_percent": 100,
-          "color": "#7B61FF"
+          "color": "#3186FF"
         }
       ]
     }
