@@ -15,6 +15,7 @@ places its tree below `proxy/` in the account-sandbox runtime archive and adds
 | ----------------------------- | ---------------------------------------------------------------------- |
 | `launch.mjs`                  | Proxy entry: readiness, closed `agy` environment, wiring               |
 | `proxy.mjs`                   | ACP relay: runtime method allow-list, session rewrite, turn settlement |
+| `presentation.mjs`            | Shows facade calls as native tool calls (kind, title, path, diff)      |
 | `facade.mjs`                  | MCP tools over the one execution `Connection`                          |
 | `facade-relay.mjs`            | stdio MCP server `agy` launches; relays to the proxy's socket          |
 | `projection.mjs`              | Target context appended to the system prompt                           |
@@ -35,7 +36,12 @@ places its tree below `proxy/` in the account-sandbox runtime archive and adds
   `-32601`. `initialize` never offers client `fs` or `terminal`.
 - Agent requests: only `session/request_permission`, and only for the facade
   tools and `ask_question`; any other tool's request is rejected by the proxy
-  without reaching the worker. Agent notifications: only `session/update`.
+  without reaching the worker. A facade tool's request is approved by the
+  proxy itself (Cowboy's default, like Claude's `bypassPermissions`) unless
+  the worker selected `agy`'s `plan` mode; only then, and for
+  `ask_question`, does it reach the owner. Agent notifications: only
+  `session/update`, whose facade tool calls (and a permission request's) are
+  shown as native ones: kind, title, target path and an edit's diff.
 - Account plan: the `_meta.antigravity.tier` of a `session/new|load|resume`
   result (`agy` 1.5.9: `{name: "Antigravity Starter Quota", id: "free-tier",
   upgradeUri}`) becomes the proxy's plan `{id, name}` when `id` is a slug of

@@ -158,14 +158,40 @@ test("agent requests other than permission are refused; permission replies are r
   await proxy.fromAgent(request(74, "session/request_permission", { sessionId: "s" }));
   assert.deepEqual(agent.at(-1).result, { outcome: { outcome: "cancelled" } });
   assert.equal(client.length, 0);
+  // Cowboy's own tools are approved without asking, like a Claude session's
+  // default bypassPermissions.
   await proxy.fromAgent(
-    request(72, "session/request_permission", {
+    request(75, "session/request_permission", {
       sessionId: "s",
       toolCall: { name: "mcp_cowboy_WriteFile" },
       options,
     }),
   );
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    id: 75,
+    result: { outcome: { outcome: "selected", optionId: "allow" } },
+  });
+  assert.equal(client.length, 0);
+  // Plan mode asks the owner, with the call presented.
+  await proxy.fromClient(
+    request(9, "session/set_config_option", { sessionId: "s", configId: "mode", value: "plan" }),
+  );
+  await proxy.fromAgent(
+    request(72, "session/request_permission", {
+      sessionId: "s",
+      toolCall: {
+        toolCallId: "w1",
+        name: "mcp_cowboy_WriteFile",
+        title: "Run mcp_cowboy_WriteFile",
+        rawInput: { path: "a.txt", content: "x" },
+      },
+      options,
+    }),
+  );
   assert.equal(client.at(-1).method, "session/request_permission");
+  assert.equal(client.at(-1).params.toolCall.title, "Write a.txt");
+  assert.equal(client.at(-1).params.toolCall.kind, "edit");
   await proxy.fromClient({ jsonrpc: "2.0", id: 72, result: { outcome: { outcome: "cancelled" } } });
   assert.deepEqual(agent.at(-1), {
     jsonrpc: "2.0",
@@ -173,7 +199,7 @@ test("agent requests other than permission are refused; permission replies are r
     result: { outcome: { outcome: "cancelled" } },
   });
   await proxy.fromClient({ jsonrpc: "2.0", id: 999, result: {} });
-  assert.equal(agent.length, 5);
+  assert.equal(agent.length, 7);
   await proxy.fromAgent({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "s" } });
   await proxy.fromAgent({ jsonrpc: "2.0", method: "_antigravity/internal", params: {} });
   assert.equal(client.at(-1).method, "session/update");

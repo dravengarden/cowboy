@@ -4,6 +4,7 @@
 // MCP servers with the Cowboy facade, appends the target projection to the
 // system prompt, and settles each turn with backend refusal evidence.
 import { ALLOWED_TOOLS } from "./hook.mjs";
+import { facadeTool, presentToolCall } from "./presentation.mjs";
 
 /** Client requests a `runtime` unit forwards; everything else is refused. */
 export const RUNTIME_REQUESTS = Object.freeze([
@@ -155,7 +156,55 @@ export class AcpProxy {
     this.turns = new Map();
     /** The account plan `agy` last reported (one proxy serves one account). */
     this.plan = undefined;
+    /** The `agy` mode the worker last selected, per session. */
+    this.modes = new Map();
+    /** Facade tool per call ID, for updates and requests that omit the name. */
+    this.calls = new Map();
+    /** The canonical workspace root on the target, once the runtime is ready. */
+    this.root = undefined;
+    Promise.resolve(runtime).then(
+      (ready) => {
+        this.root = ready?.facade?.root;
+      },
+      () => {},
+    );
     this.queue = Promise.resolve();
+  }
+
+  /** Remember the mode the worker selects for a session. */
+  noteMode(method, params) {
+    const sessionId = params?.sessionId;
+    if (typeof sessionId !== "string") return;
+    if (method === "session/set_mode" && typeof params.modeId === "string") {
+      this.modes.set(sessionId, params.modeId);
+    } else if (
+      method === "session/set_config_option" &&
+      params.configId === "mode" &&
+      typeof params.value === "string"
+    ) {
+      this.modes.set(sessionId, params.value);
+    }
+  }
+
+  /** `toolCall` as Cowboy shows it (see presentation.mjs). */
+  present(toolCall) {
+    const id = toolCall?.toolCallId;
+    const tool = facadeTool(toolCall?.name);
+    if (tool !== undefined && typeof id === "string") {
+      if (this.calls.size >= MAX_TOOL_CALLS) this.calls.delete(this.calls.keys().next().value);
+      this.calls.set(id, tool);
+    }
+    const known = typeof id === "string" ? this.calls.get(id) : undefined;
+    return presentToolCall(toolCall, { root: this.root, known });
+  }
+
+  /** A session update with its facade tool call presented. */
+  presentUpdate(message) {
+    const update = message.params?.update;
+    if (!["tool_call", "tool_call_update"].includes(update?.sessionUpdate)) return message;
+    const shown = this.present(update);
+    if (shown === update) return message;
+    return { ...message, params: { ...message.params, update: shown } };
   }
 
   /** Messages from the worker are handled strictly in order. */
@@ -191,6 +240,7 @@ export class AcpProxy {
       return this.refuse(id, `cowboy_antigravity_unavailable: ${error.message}`, -32603);
     }
     const forwarded = structuredClone(message);
+    this.noteMode(method, forwarded.params);
     // The reply is handled with this runtime, without awaiting it again.
     const record = { method, runtime };
     if (method === "initialize") {
@@ -312,7 +362,7 @@ export class AcpProxy {
       if (id === undefined) {
         if (method === "session/update") {
           this.observe(message.params);
-          return this.client(this.annotateUsage(stripTier(message)));
+          return this.client(this.presentUpdate(this.annotateUsage(stripTier(message))));
         }
         if (AGENT_NOTIFICATIONS.includes(method)) this.client(stripTier(message));
         return;
@@ -343,8 +393,28 @@ export class AcpProxy {
           },
         });
       }
+      // Cowboy's own tools need no prompt, like a Claude session's default
+      // bypassPermissions; plan mode still asks.
+      const sessionId = message.params?.sessionId;
+      if (facadeTool(name) !== undefined && this.modes.get(sessionId) !== "plan") {
+        const options = Array.isArray(message.params?.options) ? message.params.options : [];
+        const allow =
+          options.find((option) => option?.kind === "allow_once") ??
+          options.find((option) => option?.kind === "allow_always");
+        if (allow) {
+          return this.agent({
+            jsonrpc: "2.0",
+            id,
+            result: { outcome: { outcome: "selected", optionId: allow.optionId } },
+          });
+        }
+      }
       this.agentRequests.add(id);
-      return this.client(stripTier(message));
+      const asked = stripTier(message);
+      return this.client({
+        ...asked,
+        params: { ...asked.params, toolCall: this.present(asked.params?.toolCall) },
+      });
     }
     const record = this.pending.get(id);
     if (!record) return;

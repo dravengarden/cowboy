@@ -1,30 +1,73 @@
 {
   "authoring_schema": 2,
   "id": "antigravity",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.6.0",
   "display": {
     "name": "Antigravity",
     "vendor": "Google",
     "summary": "Official Antigravity CLI with a personal Google account (not Google-supported in Cowboy)",
-    "accent": "#8AB4F8",
-    "secondary_accent": "#81C995",
+    "accent": "#4285F4",
+    "secondary_accent": "#34A853",
     "mark_view_box": "0 0 24 24",
-    "mark_path": "M12 2.5 22 21.5h-4.4L12 10.4 6.4 21.5H2zM12 15.2a2.1 2.1 0 1 1 0 4.2 2.1 2.1 0 0 1 0-4.2z"
+    "mark_path": "M1.5 21.5C4.5 21.3 6.3 17.5 7.6 13.6L10.1 5.9C10.5 4.6 11.2 3.6 12 3.6C12.8 3.6 13.5 4.6 13.9 5.9L16.4 13.6C17.7 17.5 19.5 21.3 22.5 21.5L18.2 21.5C16.6 20.6 15.4 18.2 14.4 15.2L12.6 9.8C12.45 9.35 12.25 9.1 12 9.1C11.75 9.1 11.55 9.35 11.4 9.8L9.6 15.2C8.6 18.2 7.4 20.6 5.8 21.5Z",
+    "mark_gradient": {
+      "x1_percent": 0,
+      "y1_percent": 0,
+      "x2_percent": 100,
+      "y2_percent": 0,
+      "stops": [
+        {
+          "offset_percent": 0,
+          "color": "#4285F4"
+        },
+        {
+          "offset_percent": 30,
+          "color": "#34A853"
+        },
+        {
+          "offset_percent": 50,
+          "color": "#FBBC04"
+        },
+        {
+          "offset_percent": 70,
+          "color": "#EA4335"
+        },
+        {
+          "offset_percent": 100,
+          "color": "#7B61FF"
+        }
+      ]
+    }
   },
   "card_layout": "mark_leading",
   "activity": {
     "indicator": {
-      "kind": "mark_pulse",
-      "interval_ms": 1650
+      "kind": "glyph_cycle",
+      "frames": [
+        "⡐",
+        "⠌",
+        "⢂",
+        "⠡"
+      ],
+      "interval_ms": 220
     },
     "label": {
-      "kind": "text",
-      "value": {
-        "source": "literal",
-        "value": "Working…"
-      },
+      "kind": "phrase_cycle",
+      "phrases": [
+        "Lifting off",
+        "Defying gravity",
+        "Floating ideas",
+        "Charting orbits",
+        "Gliding through code",
+        "Weightless thinking",
+        "Ascending",
+        "Landing softly",
+        "Working"
+      ],
+      "interval_ms": 3600,
+      "suffix": "…",
       "effect": "shimmer"
     },
     "accessible_label": "Antigravity is working"
@@ -183,9 +226,9 @@
       },
       {
         "id": "cowboy-antigravity-acp",
-        "version": "1.0.3",
+        "version": "1.0.4",
         "source": "cowboy:components/provider-runtime/packages/antigravity-acp",
-        "integrity": "sha256:deeda137d02cf388b4d3393871a7a10e0b54c2b7f978510467fa143fc7061cf4",
+        "integrity": "sha256:16c75003d0d40d9acd1dc91a8817af487ced30f5924f04003cf02519bf4e86ab",
         "private": true
       },
       {

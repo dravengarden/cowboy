@@ -180,7 +180,7 @@
     },
     "cowboy-antigravity-acp": {
       "kind": "node_npm",
-      "version": "1.0.3",
+      "version": "1.0.4",
       "package_dir": "packages/antigravity-acp",
       "script": "cowboy-launch.mjs",
       "launcher": "packages/antigravity-acp/launch.mjs",
@@ -190,6 +190,7 @@
         "facade-relay.mjs",
         "facade-tools.mjs",
         "hook.mjs",
+        "presentation.mjs",
         "projection.mjs",
         "proxy.mjs",
         "hooks.json",

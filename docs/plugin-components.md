@@ -83,6 +83,17 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.120.0 records provider-runtime 1.3.6, whose
+`cowboy-antigravity-acp` 1.0.4 shows the facade's tool calls as native ones
+(Read, List, Search, Write, Edit, Run and Stop with their ACP kind, title,
+target path and an edit's diff) and approves a facade tool's permission
+request itself unless the session is in `agy`'s `plan` mode, so Antigravity
+sessions do not prompt by default. Antigravity 0.2.5 pins it, takes a
+gradient arch mark and a rising-particle activity glyph with its own phrases.
+The other six Providers again advance one unpublished patch version
+(claude-code 3.20.51, claude-deepseek 3.1.69, codex 3.6.9, codex-deepseek
+3.1.69, deepseek-harness 1.0.27, grok 3.2.8).
+
 Component release 3.119.0 records provider-runtime 1.3.5, whose
 `cowboy-antigravity-acp` 1.0.3 opens `agy`'s session in the target's
 workspace: the worker names its runtime directory on the runtime Machine, as
