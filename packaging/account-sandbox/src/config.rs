@@ -12,13 +12,6 @@ use serde::Deserialize;
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/cowboy-account-sandbox/config.json";
 const GIB: u64 = 1024 * 1024 * 1024;
 const MAX_CONFIG_BYTES: u64 = 64 * 1024;
-/// Default runtime-class units per account: the owner runs several
-/// sessions of one account at once, like a Codex or Claude account, while
-/// every unit (about 200 MiB resident, `MemoryMax` 3G) stays bounded.
-pub const DEFAULT_MAX_RUNTIME_UNITS: usize = 8;
-/// Largest accepted `max_runtime_units`: a configuration typo must not turn
-/// the per-account bound off.
-pub const MAX_RUNTIME_UNITS_LIMIT: usize = 64;
 
 /// Address ranges always denied to account units; `ip_deny` only appends to
 /// them, so configuring a host address can never drop a private range.
@@ -59,11 +52,14 @@ pub struct Config {
     pub ip_deny: Vec<String>,
     /// `IPAddressAllow=` entries (the resolver stub).
     pub ip_allow: Vec<String>,
-    /// Runtime-class units (`runtime`, `probe`) per account, at most
-    /// [`MAX_RUNTIME_UNITS_LIMIT`]. Each session of the account runs its own
-    /// unit over the shared account home (design "Revision 6: concurrent
-    /// sessions per account"); a start beyond the bound is `limit`.
-    pub max_runtime_units: usize,
+    /// Optional per-account bound on runtime-class units (`runtime`,
+    /// `probe`). Unset by default: like a Codex or Claude account, one
+    /// account runs as many sessions as the Machine admits (design
+    /// "Revision 6: concurrent sessions per account"); every unit keeps its
+    /// own `MemoryMax`, and the host-wide `cowboy-accounts.slice` budget and
+    /// the Machine's session admission bound the total. When set, a start
+    /// beyond it is `limit`.
+    pub max_runtime_units: Option<usize>,
     /// `MemoryMax=` of each unit.
     pub unit_memory_max: String,
     /// `TasksMax=` of each unit.
@@ -106,7 +102,7 @@ impl Default for Config {
             free_space_reserve_bytes: 8 * GIB,
             ip_deny: Vec::new(),
             ip_allow: vec!["127.0.0.53/32".to_owned()],
-            max_runtime_units: DEFAULT_MAX_RUNTIME_UNITS,
+            max_runtime_units: None,
             unit_memory_max: "3G".to_owned(),
             unit_tasks_max: 512,
             unit_tmp_size: "256M".to_owned(),
@@ -176,11 +172,9 @@ impl Config {
             self.home_image_inodes >= 1024,
             "home_image_inodes is below 1024"
         );
-        // Revision 6: several sessions of one account run concurrently; the
-        // bound stays finite so one account cannot exhaust the host.
         ensure!(
-            (1..=MAX_RUNTIME_UNITS_LIMIT).contains(&self.max_runtime_units),
-            "max_runtime_units must be between 1 and {MAX_RUNTIME_UNITS_LIMIT}"
+            self.max_runtime_units != Some(0),
+            "max_runtime_units must be positive when set"
         );
         ensure!(self.max_runtimes >= 1, "max_runtimes must be positive");
         for range in self.ip_deny.iter().chain(&self.ip_allow) {
@@ -237,7 +231,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(config.ip_deny, ["40.160.141.233/32"]);
-        assert_eq!(config.max_runtime_units, DEFAULT_MAX_RUNTIME_UNITS);
+        assert_eq!(config.max_runtime_units, None);
         assert!(serde_json::from_str::<Config>(r#"{"bogus":1}"#).is_err());
         assert!(serde_json::from_str::<Config>(r#"{"tools":{"bogus":"/x"}}"#).is_err());
     }
@@ -258,19 +252,18 @@ mod tests {
     }
 
     #[test]
-    fn runtime_limit_is_bounded() {
+    fn runtime_limit_is_optional_and_positive() {
         for (limit, valid) in [
-            (0, false),
-            (1, true),
-            (DEFAULT_MAX_RUNTIME_UNITS, true),
-            (MAX_RUNTIME_UNITS_LIMIT, true),
-            (MAX_RUNTIME_UNITS_LIMIT + 1, false),
+            (None, true),
+            (Some(0), false),
+            (Some(1), true),
+            (Some(500), true),
         ] {
             let config = Config {
                 max_runtime_units: limit,
                 ..Config::default()
             };
-            assert_eq!(config.validated().is_ok(), valid, "{limit}");
+            assert_eq!(config.validated().is_ok(), valid, "{limit:?}");
         }
     }
 

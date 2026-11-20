@@ -917,7 +917,7 @@ query and force release of "Controller account controls (step 5a)" and the
   the daemon's token cleanup, which certifies an unused generation only
   with no token present, so revocation can finish.
 - **Daemon.** `max_runtime_units` other than 1 is a configuration error
-  (Revision 6: 1 to 64, default 8).
+  (Revision 6: optional and unset by default; see below).
   Loopback, link-local, multicast, RFC 1918 and `100.64.0.0/10` are always
   denied; `ip_deny` only appends (the host's public address). A unit counts
   as live while its cgroup still holds a process. A unit whose
@@ -951,8 +951,12 @@ part of the "Daemon" decision; everything else in Revision 5 holds.
 
 **What changes.**
 
-- **Daemon.** `max_runtime_units` defaults to 8 and accepts 1 to 64. Each
-  session's worker starts its own `runtime` unit; `probe` units share the
+- **Daemon.** `max_runtime_units` is optional and unset by default: like a
+  Codex or Claude account, one account runs as many sessions as the
+  Machine's session admission allows (the owner rejected a fixed per-account
+  bound of 8 on 2026-11-20). Every unit keeps its own `MemoryMax`, and the
+  host-wide `cowboy-accounts.slice` budget bounds the total. Each session's
+  worker starts its own `runtime` unit; `probe` units share an operator-set
   bound; a start beyond it is still `limit`, which the worker explains as
   "Antigravity · account <prefix> already runs its maximum number of
   sessions; hibernate one first".

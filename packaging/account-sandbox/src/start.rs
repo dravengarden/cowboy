@@ -39,7 +39,11 @@ pub struct StartRequest<'a> {
 }
 
 /// Refuse a start the account's state does not admit (R3-4, R3-8, R3-16).
-pub fn admit(meta: &AccountMeta, request: &StartRequest<'_>, max_runtime: usize) -> Outcome<()> {
+pub fn admit(
+    meta: &AccountMeta,
+    request: &StartRequest<'_>,
+    max_runtime: Option<usize>,
+) -> Outcome<()> {
     let mode = request.mode;
     if mode != Mode::Logout && meta.fenced.is_some() {
         return Err(fail(Code::Fenced, "the account is fenced"));
@@ -93,7 +97,7 @@ pub fn admit(meta: &AccountMeta, request: &StartRequest<'_>, max_runtime: usize)
         }
         Mode::Probe => {}
     }
-    if !mode.is_auth() && meta.runtime_units() >= max_runtime {
+    if !mode.is_auth() && max_runtime.is_some_and(|max| meta.runtime_units() >= max) {
         return Err(fail(
             Code::Limit,
             "the account already runs its maximum number of units",

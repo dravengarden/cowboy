@@ -59,7 +59,7 @@ Every field is optional; unknown fields are rejected.
 | `free_space_reserve_bytes` | `8589934592` (8 GiB) | Free space required on `state_root` before `ensure_account` and every start |
 | `ip_deny` | `[]` | Extra `IPAddressDeny=` entries appended to the always-denied set (loopback, link-local, multicast, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`); it can never remove one. OVH adds its public address, e.g. `40.160.141.233/32` |
 | `ip_allow` | `["127.0.0.53/32"]` | `IPAddressAllow=` (the resolver stub) |
-| `max_runtime_units` | `8` | `runtime`/`probe` units per account, 1 to 64 (plus at most one `login`/`logout` unit, fixed, which excludes every runtime unit). Each session of the account runs its own unit over the shared account home; a start beyond the bound is `limit` (design "Revision 6: concurrent sessions per account") |
+| `max_runtime_units` | unset | Optional bound on `runtime`/`probe` units per account (positive when set). Unset, an account runs as many sessions as the Machine admits, like a Codex or Claude account; at most one `login`/`logout` unit, which excludes every runtime unit, still applies. Each session of the account runs its own unit over the shared account home; a start beyond a configured bound is `limit` (design "Revision 6: concurrent sessions per account") |
 | `unit_memory_max` | `"3G"` | `MemoryMax=` per unit |
 | `unit_tasks_max` | `512` | `TasksMax=` per unit |
 | `unit_tmp_size` | `"256M"` | Size of each unit's `/tmp` and of its separate `/var/tmp` (both tmpfs) |

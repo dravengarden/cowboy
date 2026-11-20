@@ -230,18 +230,15 @@ fn runtime_needs_the_current_signed_in_generation() {
 }
 
 #[test]
-fn several_runtimes_per_account_up_to_the_bound() {
+fn an_account_runs_any_number_of_runtimes_by_default() {
     let f = fixture();
-    assert_eq!(
-        f.config.max_runtime_units,
-        crate::config::DEFAULT_MAX_RUNTIME_UNITS
-    );
+    assert_eq!(f.config.max_runtime_units, None);
     f.sign_in(1);
     // Every session of the account runs its own unit (Revision 6), each
     // with a distinct name, private run directory and execution socket over
     // the one shared home; the credential generation never moves.
     let mut units = Vec::new();
-    for _ in 1..f.config.max_runtime_units {
+    for _ in 0..20 {
         units.push(
             f.start(Mode::Runtime, 1).unwrap()["unit"]
                 .as_str()
@@ -249,7 +246,6 @@ fn several_runtimes_per_account_up_to_the_bound() {
                 .to_owned(),
         );
     }
-    // Probes share the runtime-class bound.
     units.push(
         f.start(Mode::Probe, 1).unwrap()["unit"]
             .as_str()
@@ -257,7 +253,7 @@ fn several_runtimes_per_account_up_to_the_bound() {
             .to_owned(),
     );
     let meta = f.meta();
-    assert_eq!(meta.units.len(), f.config.max_runtime_units);
+    assert_eq!(meta.units.len(), units.len());
     let nonces: std::collections::HashSet<_> = meta
         .units
         .iter()
@@ -271,13 +267,23 @@ fn several_runtimes_per_account_up_to_the_bound() {
     assert_eq!(meta.credential.generation, 1);
     assert_eq!(meta.credential.state, CredentialState::SignedIn);
     assert_eq!(std::fs::read(f.token()).unwrap(), b"token");
-    // Beyond the bound a start is `limit`; a finished unit frees its slot.
+}
+
+#[test]
+fn a_configured_bound_limits_runtime_class_units() {
+    let f = fixture_with(|config| config.max_runtime_units = Some(3));
+    f.sign_in(1);
+    let first = f.start(Mode::Runtime, 1).unwrap()["unit"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    f.start(Mode::Runtime, 1).unwrap();
+    // Probes share the runtime-class bound.
+    f.start(Mode::Probe, 1).unwrap();
     assert_eq!(code(f.start(Mode::Runtime, 1)), Code::Limit);
     assert_eq!(code(f.start(Mode::Probe, 1)), Code::Limit);
-    f.host.finish(&units[0], Some(0));
-    f.wait_for("a slot freed", |meta| {
-        meta.units.len() < f.config.max_runtime_units
-    });
+    f.host.finish(&first, Some(0));
+    f.wait_for("a slot freed", |meta| meta.units.len() < 3);
     f.start(Mode::Runtime, 1).unwrap();
 }
 
