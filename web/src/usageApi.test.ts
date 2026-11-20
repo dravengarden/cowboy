@@ -13,7 +13,10 @@ import {
   usageRefreshing,
 } from "./usageLimits.ts";
 import {
+  cancelNearestResetSchedule,
+  consumeNearestReset,
   readUsage,
+  scheduleNearestReset,
   readUsageExecutors,
   refreshSessionUsage,
   refreshUsage,
@@ -278,5 +281,34 @@ test("a started refresh returns at once and lets the Controller own progress", a
     assertEquals(usageRefreshing(null), false);
   } finally {
     globalThis.fetch = previousFetch;
+  }
+});
+
+test("reset actions address the card's own lane", async () => {
+  const original = globalThis.fetch;
+  const requests: { url: string; method: string; body: unknown }[] = [];
+  globalThis.fetch = (input, options) => {
+    requests.push({
+      url: String(input),
+      method: options?.method ?? "GET",
+      body: options?.body ? JSON.parse(String(options.body)) : null,
+    });
+    return Promise.resolve(Response.json({}));
+  };
+  try {
+    const account = { kind: "account", accountId: "11111111-1111-4111-8111-111111111111" } as const;
+    await consumeNearestReset({ kind: "service", provider: "anthropic" }, "g:1", "confirm");
+    await consumeNearestReset(account, "g:1", "confirm");
+    await scheduleNearestReset(account, 5, "confirm");
+    await cancelNearestResetSchedule(account);
+    const named = `/api/provider-accounts/${account.accountId}/usage/reset`;
+    assertEquals(requests, [
+      { url: "/api/usage/anthropic/reset", method: "POST", body: { confirm: "confirm", expected_credit_id: "g:1" } },
+      { url: named, method: "POST", body: { confirm: "confirm", expected_credit_id: "g:1" } },
+      { url: `${named}/schedule`, method: "PUT", body: { fire_at_ms: 5, confirm: "confirm" } },
+      { url: `${named}/schedule`, method: "DELETE", body: null },
+    ]);
+  } finally {
+    globalThis.fetch = original;
   }
 });

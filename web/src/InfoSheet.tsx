@@ -11,19 +11,13 @@ import {
   Button,
   ButtonBase,
   CircularProgress,
-  DialogContentText,
   Divider,
   IconButton,
   Stack,
-  TextField,
-  ToggleButton,
-  ToggleButtonGroup,
   Typography,
   Tooltip,
 } from "@mui/material";
 import { ExpandMore, OpenInNew, Refresh, Tune } from "@mui/icons-material";
-import { Kbd, useConfirmEnter } from "./Kbd";
-import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { NetworkButton, NetworkIconButton } from "./NetworkActionFeedback";
 import { PluginSlot } from "./pluginHost";
 import { ProviderUsageCredits } from "./ProviderUsageCredits";
@@ -35,8 +29,6 @@ import {
   type UsageExecutionSettings,
 } from "./usageApi";
 import {
-  acceptedScheduleTime,
-  accountManageUrl,
   fullDateTime,
   type JsonRecord,
   nearestAvailableResetCredit,
@@ -53,15 +45,8 @@ import {
   usageLimits,
   usageOmitEmptyLimits,
   usagePluginId,
-  usageResetProvider,
   usageRefreshing,
-  usageResetSchedule,
 } from "./usageLimits";
-import {
-  cancelNearestResetSchedule,
-  consumeNearestReset,
-  scheduleNearestReset,
-} from "./usageApi";
 import { loadUsageSnapshot, requestUsageRefresh, useStoreSelector } from "./store";
 import { refreshAllUsage } from "./usageRefresh";
 import { ConfirmSheet } from "./Sheet";
@@ -76,7 +61,8 @@ import { ClientStorageInfoSection, ServiceStorageInfoSection } from "./InfoRunti
 import { SessionMaintenancePanel } from "./SessionMaintenancePanel";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { AccountBrowserEntry } from "./machineBrowser/AccountBrowserEntry";
-import { displayPlan, orderUsageAccounts, registeredUsageAccounts, type UsageAccountCard } from "./usageAccounts";
+import { displayPlan, orderUsageAccounts, registeredUsageAccounts, type UsageAccountCard, usageCardManageUrl, usageCardResetSchedule, usageResetTarget } from "./usageAccounts";
+import { UsageResetActions, UsageResetFields, useUsageResetFlow } from "./UsageResetFlow";
 import { useProviderCatalog } from "./providerCatalog";
 import { useNativeAccountUsage } from "./nativeAccountUsage";
 import { formatCompactCurrency, usageBalanceForAccount } from "./usageWidget";
@@ -168,12 +154,7 @@ function ProviderUsageCardBody({ account: identity, usage, schedule, now, onUsag
   onRefresh?: (() => Promise<void>) | undefined;
   refreshing: boolean;
 }): React.JSX.Element {
-  const [resetOpen, setResetOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [resetMode, setResetMode] = useState<"schedule" | "now">("schedule");
-  const [fireAt, setFireAt] = useState("");
-  const [confirmText, setConfirmText] = useState("");
-  const [resetBusy, setResetBusy] = useState(false);
   // Only the short request is local; collection progress is the Controller's
   // and survives closing and reopening this sheet on any device.
   const [requesting, setRequesting] = useState(false);
@@ -187,7 +168,6 @@ function ProviderUsageCardBody({ account: identity, usage, schedule, now, onUsag
     return (): void => window.clearTimeout(timer);
   }, [cooldownNotice]);
   const freshness = usageFreshness(usage, now, refreshBusy);
-  const [resetError, setResetError] = useState<string | null>(null);
   const limits = useMemo(() => usageLimits(usage), [usage]);
   const usageContext = useMemo(
     () => {
@@ -223,8 +203,9 @@ function ProviderUsageCardBody({ account: identity, usage, schedule, now, onUsag
     : [];
   const nearestCredit = nearestAvailableResetCredit(usage);
   const nearestCreditId = str(nearestCredit?.id);
-  const resetProvider = identity.collector ? usageResetProvider(usage) : undefined;
-  const manageUrl = identity.collector ? accountManageUrl(usage.provider) : undefined;
+  const resetTarget = usageResetTarget(identity);
+  const manageUrl = usageCardManageUrl(identity);
+  const reset = useUsageResetFlow(resetTarget, nearestCreditId, onUsageChanged);
   const summary = record(usage.activity?.summary);
   const title = identity.title;
   const stale = usage.refresh?.stale === true;
@@ -236,68 +217,6 @@ function ProviderUsageCardBody({ account: identity, usage, schedule, now, onUsag
     : usage.status === "session-only"
     ? "SESSION"
     : refreshBusy ? "REFRESHING" : "NOT REPORTED");
-  const scheduleValid = fireAt !== "" &&
-    new Date(fireAt).getTime() > Date.now();
-  const openResetDialog = () => {
-    setResetMode("schedule");
-    setFireAt("");
-    setConfirmText("");
-    setResetError(null);
-    setResetOpen(true);
-  };
-  const closeResetDialog = () => {
-    if (resetBusy) return;
-    setResetOpen(false);
-    setResetMode("schedule");
-    setFireAt("");
-    setConfirmText("");
-    setResetError(null);
-  };
-  const cancelSchedule = async (): Promise<void> => {
-    if (resetProvider === undefined) return;
-    setResetBusy(true);
-    setResetError(null);
-    try {
-      await cancelNearestResetSchedule(resetProvider);
-      await onUsageChanged();
-    } catch (cause) {
-      setResetError(
-        cause instanceof Error ? cause.message : "Could not cancel schedule",
-      );
-    } finally {
-      setResetBusy(false);
-    }
-  };
-  const submitReset = async (): Promise<void> => {
-    if (
-      resetProvider === undefined || resetBusy || confirmText !== "confirm" ||
-      (resetMode === "schedule" && !scheduleValid)
-    ) return;
-    setResetBusy(true);
-    setResetError(null);
-    try {
-      if (resetMode === "schedule") {
-        await scheduleNearestReset(
-          resetProvider,
-          new Date(fireAt).getTime(),
-          confirmText,
-        );
-      } else {
-        await consumeNearestReset(resetProvider, nearestCreditId, confirmText);
-      }
-      setResetOpen(false);
-      setResetMode("schedule");
-      setConfirmText("");
-      await onUsageChanged();
-    } catch (cause) {
-      setResetError(
-        cause instanceof Error ? cause.message : "Could not use reset",
-      );
-    } finally {
-      setResetBusy(false);
-    }
-  };
-  useConfirmEnter(resetOpen, () => void submitReset());
   const refresh = async (): Promise<void> => {
     if (!onRefresh || refreshBusy) return;
     const wait = identity.collector ? manualRefreshWaitMinutes(usage, Date.now()) : 0;
@@ -467,7 +386,7 @@ function ProviderUsageCardBody({ account: identity, usage, schedule, now, onUsag
               <Divider />
               {credits.map((credit, index) => {
                 const expiresAt = num(credit.expiresAt);
-                const actionable = resetProvider !== undefined && str(credit.id) === nearestCreditId;
+                const actionable = resetTarget !== undefined && str(credit.id) === nearestCreditId;
                 const row = (
                   <Box sx={{ py: 1.1, width: "100%", textAlign: "left" }}>
                     <Stack
@@ -511,7 +430,7 @@ function ProviderUsageCardBody({ account: identity, usage, schedule, now, onUsag
                     {actionable && !schedule
                       ? (
                         <ButtonBase
-                          onClick={openResetDialog}
+                          onClick={reset.openDialog}
                           sx={{ width: "100%", borderRadius: 1 }}
                         >
                           {row}
@@ -544,8 +463,8 @@ function ProviderUsageCardBody({ account: identity, usage, schedule, now, onUsag
                         </Box>
                         <NetworkButton
                           size="small"
-                          disabled={resetBusy}
-                          networkAction={cancelSchedule}
+                          disabled={reset.busy}
+                          networkAction={reset.cancelSchedule}
                         >
                           Cancel
                         </NetworkButton>
@@ -554,9 +473,9 @@ function ProviderUsageCardBody({ account: identity, usage, schedule, now, onUsag
                   </Box>
                 );
               })}
-              {resetError && !resetOpen && (
+              {reset.error && !reset.open && (
                 <Typography color="error.main" variant="caption">
-                  {resetError}
+                  {reset.error}
                 </Typography>
               )}
             </AccordionDetails>
@@ -617,86 +536,12 @@ function ProviderUsageCardBody({ account: identity, usage, schedule, now, onUsag
         )}
       </Stack>
       <ConfirmSheet
-        open={resetOpen}
-        onClose={closeResetDialog}
-        title={resetMode === "schedule"
-          ? "Schedule nearest reset"
-          : "Use nearest reset now?"}
-        actions={
-          <>
-            <Button onClick={closeResetDialog} disabled={resetBusy}>
-              Cancel
-              <Kbd
-                keys="Esc"
-                availability={resetBusy ? "inactive" : "available"}
-              />
-            </Button>
-            <NetworkButton
-              variant="contained"
-              color={resetMode === "now" ? "error" : "primary"}
-              disabled={resetBusy || confirmText !== "confirm" ||
-                (resetMode === "schedule" && !scheduleValid)}
-              networkAction={submitReset}
-            >
-              {resetMode === "schedule" ? "Schedule reset" : "Reset now"}
-              <Kbd
-                keys={`${MOD_LABEL}${ENTER_LABEL}`}
-                availability={resetBusy || confirmText !== "confirm" ||
-                    (resetMode === "schedule" && !scheduleValid)
-                  ? "inactive"
-                  : "available"}
-              />
-            </NetworkButton>
-          </>
-        }
+        open={reset.open}
+        onClose={reset.close}
+        title={reset.mode === "schedule" ? "Schedule nearest reset" : "Use nearest reset now?"}
+        actions={<UsageResetActions flow={reset} />}
       >
-        <DialogContentText>
-          {resetMode === "schedule"
-            ? "At the selected time, Cowboy will use the earliest-expiring reset then available."
-            : "Cowboy will immediately use the earliest-expiring available reset. This cannot be undone."}
-        </DialogContentText>
-        <ToggleButtonGroup
-          exclusive
-          fullWidth
-          value={resetMode}
-          onChange={(_event, value: "schedule" | "now" | null) => {
-            if (!value || value === resetMode || resetBusy) return;
-            setResetMode(value);
-            setConfirmText("");
-            setResetError(null);
-          }}
-          aria-label="Reset timing"
-          sx={{ mt: 2 }}
-        >
-          <ToggleButton value="schedule">Schedule</ToggleButton>
-          <ToggleButton value="now" color="error">Now</ToggleButton>
-        </ToggleButtonGroup>
-        {resetError && (
-          <Typography color="error.main" variant="body2" sx={{ mt: 1 }}>
-            {resetError}
-          </Typography>
-        )}
-        {resetMode === "schedule" && (
-          <TextField
-            type="datetime-local"
-            fullWidth
-            label="Run at"
-            value={fireAt}
-            onChange={(event) =>
-              setFireAt(acceptedScheduleTime(event.target.value))}
-            slotProps={{ inputLabel: { shrink: true } }}
-            helperText="Choose a time at least one minute ahead"
-            sx={{ mt: 2 }}
-          />
-        )}
-        <TextField
-          autoComplete="off"
-          fullWidth
-          label="Type confirm to continue"
-          value={confirmText}
-          onChange={(event) => setConfirmText(event.target.value)}
-          sx={{ mt: 2 }}
-        />
+        <UsageResetFields flow={reset} />
       </ConfirmSheet>
     </Box>
   );
@@ -788,7 +633,7 @@ export function UsageInfoSection({ order, layoutAction, accounts }: {
           key={account.id}
           account={account}
           usage={account.usage}
-          schedule={account.collector ? usageResetSchedule(snapshot, account.usage) : undefined}
+          schedule={usageCardResetSchedule(snapshot, account)}
           now={clock}
           onUsageChanged={() => load(false)}
           onRefresh={account.collector ? () => loadProvider(account.collector!)

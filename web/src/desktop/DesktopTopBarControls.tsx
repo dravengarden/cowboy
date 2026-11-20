@@ -17,15 +17,11 @@ import {
   Dialog,
   DialogActions,
   DialogContent,
-  DialogContentText,
   DialogTitle,
   Divider,
   LinearProgress,
   Skeleton,
   Stack,
-  TextField,
-  ToggleButton,
-  ToggleButtonGroup,
   Tooltip,
   Typography,
 } from "@mui/material";
@@ -44,8 +40,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Kbd, useConfirmEnter } from "../Kbd";
-import { ENTER_LABEL, MOD_LABEL } from "../platform";
+import { Kbd } from "../Kbd";
 import { machineBrowserOwnsKeys } from "./commands/desktopShortcutScope";
 import { desktopImeOwnsKey } from "./commands/imeShortcut";
 import { workspaceCommandKey } from "./commands/workspaceCommandKey";
@@ -72,7 +67,6 @@ import { providerName } from "../providerPresentation";
 import { setProductSessionAlertHost } from "../auth/productSessionAlertHost";
 import { setProductCapacityAlertHost } from "../capacity/productCapacityAlertHost";
 import {
-  acceptedScheduleTime,
   fullResetTime,
   type JsonRecord,
   nearestAvailableResetCredit,
@@ -88,15 +82,10 @@ import {
   usageLimits,
   usagePluginId,
   usageRefreshing,
-  usageResetProvider,
-  usageResetSchedule,
 } from "../usageLimits";
 import { UsageLogs } from "../UsageLogs";
-import {
-  cancelNearestResetSchedule,
-  consumeNearestReset,
-  scheduleNearestReset,
-} from "../usageApi";
+import type { UsageResetTarget } from "../usageApi";
+import { UsageResetActions, UsageResetFields, useUsageResetFlow } from "../UsageResetFlow";
 import { PluginSlot } from "../pluginHost";
 import { useProviderCatalog } from "../providerCatalog";
 import {
@@ -109,7 +98,7 @@ import {
 } from "../usageWidget";
 import { useSubscriptionAccounts } from "../subscriptionAccounts";
 import { useNativeAccountUsage } from "../nativeAccountUsage";
-import { registeredUsageAccounts, type UsageAccountCard } from "../usageAccounts";
+import { registeredUsageAccounts, type UsageAccountCard, usageCardResetSchedule, usageResetTarget } from "../usageAccounts";
 import { AccountBrowserEntry } from "../machineBrowser/AccountBrowserEntry";
 import { DesktopModal } from "./DesktopModal";
 import { RunConfigurationDialog } from "./RunConfigurationDialog";
@@ -367,18 +356,14 @@ function UsageProviderSummary(
 }
 
 function DesktopUsageExtras(
-  { usage, schedule, onUsageChanged }: {
+  { usage, target, schedule, onUsageChanged }: {
     usage: ProviderUsage;
+    /** This card's own reset lane, if it owns reset actions. */
+    target: UsageResetTarget | undefined;
     schedule: { fire_at_ms: number } | undefined;
     onUsageChanged: () => Promise<void>;
   },
 ): React.JSX.Element {
-  const [resetOpen, setResetOpen] = useState(false);
-  const [resetMode, setResetMode] = useState<"schedule" | "now">("schedule");
-  const [fireAt, setFireAt] = useState("");
-  const [confirmText, setConfirmText] = useState("");
-  const [resetBusy, setResetBusy] = useState(false);
-  const [resetError, setResetError] = useState<string | null>(null);
   const resetCredits = record(usage.rate_limits?.rateLimitResetCredits);
   const availableCredits = num(resetCredits?.availableCount);
   const credits = Array.isArray(resetCredits?.credits)
@@ -387,7 +372,7 @@ function DesktopUsageExtras(
     )
     : [];
   const nearestCreditId = textValue(nearestAvailableResetCredit(usage)?.id);
-  const resetProvider = usageResetProvider(usage);
+  const reset = useUsageResetFlow(target, nearestCreditId, onUsageChanged);
   const summary = record(usage.activity?.summary);
   const session = record(usage.activity?.session);
   const cost = record(session?.cost);
@@ -395,72 +380,10 @@ function DesktopUsageExtras(
   const contextSize = num(session?.size);
   const lifetimeTokens = num(summary?.lifetimeTokens);
   const costAmount = num(cost?.amount);
-  const scheduleValid = fireAt !== "" &&
-    new Date(fireAt).getTime() > Date.now();
-  const openResetDialog = () => {
-    setResetMode("schedule");
-    setFireAt("");
-    setConfirmText("");
-    setResetError(null);
-    setResetOpen(true);
-  };
-  const closeResetDialog = () => {
-    if (resetBusy) return;
-    setResetOpen(false);
-    setResetMode("schedule");
-    setFireAt("");
-    setConfirmText("");
-    setResetError(null);
-  };
-  const cancelSchedule = async (): Promise<void> => {
-    if (resetProvider === undefined) return;
-    setResetBusy(true);
-    setResetError(null);
-    try {
-      await cancelNearestResetSchedule(resetProvider);
-      await onUsageChanged();
-    } catch (cause) {
-      setResetError(
-        cause instanceof Error ? cause.message : "Could not cancel schedule",
-      );
-    } finally {
-      setResetBusy(false);
-    }
-  };
-  const submitReset = async (): Promise<void> => {
-    if (
-      resetProvider === undefined || resetBusy || confirmText !== "confirm" ||
-      (resetMode === "schedule" && !scheduleValid)
-    ) return;
-    setResetBusy(true);
-    setResetError(null);
-    try {
-      if (resetMode === "schedule") {
-        await scheduleNearestReset(
-          resetProvider,
-          new Date(fireAt).getTime(),
-          confirmText,
-        );
-      } else {
-        await consumeNearestReset(resetProvider, nearestCreditId, confirmText);
-      }
-      setResetOpen(false);
-      setResetMode("schedule");
-      setConfirmText("");
-      await onUsageChanged();
-    } catch (cause) {
-      setResetError(
-        cause instanceof Error ? cause.message : "Could not use reset",
-      );
-    } finally {
-      setResetBusy(false);
-    }
-  };
-  useConfirmEnter(resetOpen, () => void submitReset());
 
   return (
     <>
-      {resetProvider !== undefined && credits.length > 0 && (
+      {target !== undefined && credits.length > 0 && (
         <Stack spacing={0.6}>
           <Stack
             direction="row"
@@ -555,7 +478,7 @@ function DesktopUsageExtras(
                       <Tooltip title="Schedule or use the nearest-expiring reset">
                         <ButtonBase
                           data-desktop-usage-schedule
-                          onClick={openResetDialog}
+                          onClick={reset.openDialog}
                           aria-label="Schedule nearest full reset"
                           sx={{
                             width: "100%",
@@ -611,16 +534,16 @@ function DesktopUsageExtras(
               </Box>
               <NetworkButton
                 size="small"
-                disabled={resetBusy}
-                networkAction={cancelSchedule}
+                disabled={reset.busy}
+                networkAction={reset.cancelSchedule}
               >
                 Cancel
               </NetworkButton>
             </Stack>
           )}
-          {resetError && !resetOpen && (
+          {reset.error && !reset.open && (
             <Typography variant="caption" color="error.main">
-              {resetError}
+              {reset.error}
             </Typography>
           )}
         </Stack>
@@ -662,89 +585,21 @@ function DesktopUsageExtras(
         </Stack>
       )}
       <Dialog
-        open={resetOpen}
-        onClose={closeResetDialog}
+        open={reset.open}
+        onClose={reset.close}
         fullWidth
         maxWidth="xs"
       >
         <DialogTitle>
-          {resetMode === "schedule"
+          {reset.mode === "schedule"
             ? "Schedule nearest reset"
             : "Use nearest reset now?"}
         </DialogTitle>
         <DialogContent>
-          <DialogContentText>
-            {resetMode === "schedule"
-              ? "At the selected time, Cowboy will use the earliest-expiring reset then available."
-              : "Cowboy will immediately use the earliest-expiring available reset. This cannot be undone."}
-          </DialogContentText>
-          <ToggleButtonGroup
-            exclusive
-            fullWidth
-            value={resetMode}
-            onChange={(_event, value: "schedule" | "now" | null) => {
-              if (!value || value === resetMode || resetBusy) return;
-              setResetMode(value);
-              setConfirmText("");
-              setResetError(null);
-            }}
-            aria-label="Reset timing"
-            sx={{ mt: 2 }}
-          >
-            <ToggleButton value="schedule">Schedule</ToggleButton>
-            <ToggleButton value="now" color="error">Now</ToggleButton>
-          </ToggleButtonGroup>
-          {resetMode === "schedule" && (
-            <TextField
-              type="datetime-local"
-              fullWidth
-              label="Run at"
-              value={fireAt}
-              onChange={(event) =>
-                setFireAt(acceptedScheduleTime(event.target.value))}
-              slotProps={{ inputLabel: { shrink: true } }}
-              helperText="Choose a time at least one minute ahead"
-              sx={{ mt: 2 }}
-            />
-          )}
-          <TextField
-            autoComplete="off"
-            fullWidth
-            label="Type confirm to continue"
-            value={confirmText}
-            onChange={(event) => setConfirmText(event.target.value)}
-            sx={{ mt: 2 }}
-          />
-          {resetError && (
-            <Typography color="error.main" variant="body2" sx={{ mt: 1 }}>
-              {resetError}
-            </Typography>
-          )}
+          <UsageResetFields flow={reset} />
         </DialogContent>
         <DialogActions>
-          <Button onClick={closeResetDialog} disabled={resetBusy}>
-            Cancel
-            <Kbd
-              keys="Esc"
-              availability={resetBusy ? "inactive" : "available"}
-            />
-          </Button>
-          <NetworkButton
-            variant="contained"
-            color={resetMode === "now" ? "error" : "primary"}
-            disabled={resetBusy || confirmText !== "confirm" ||
-              (resetMode === "schedule" && !scheduleValid)}
-            networkAction={submitReset}
-          >
-            {resetMode === "schedule" ? "Schedule reset" : "Reset now"}
-            <Kbd
-              keys={`${MOD_LABEL}${ENTER_LABEL}`}
-              availability={resetBusy || confirmText !== "confirm" ||
-                  (resetMode === "schedule" && !scheduleValid)
-                ? "inactive"
-                : "available"}
-            />
-          </NetworkButton>
+          <UsageResetActions flow={reset} />
         </DialogActions>
       </Dialog>
     </>
@@ -761,6 +616,7 @@ function DesktopProviderUsage({ account, schedule, onUsageChanged, onRefresh, re
   refreshing: boolean;
 }): React.JSX.Element {
   const usage = account.usage;
+  const resetTarget = usageResetTarget(account);
   const [details, setDetails] = useState(false);
   const limits = usageLimits(usage);
   const hasResetCredit = nearestAvailableResetCredit(usage) !== undefined;
@@ -832,8 +688,9 @@ function DesktopProviderUsage({ account, schedule, onUsageChanged, onRefresh, re
         <ProviderUsageCredits rows={usageContext.creditDetails} />
         {account.native?.message && <Typography variant="caption" color="text.secondary">{account.native.message}</Typography>}
         {account.native?.machine_id && <Typography variant="caption" color="text.secondary">Usage query Machine: {account.native.machine_id}</Typography>}
-        {account.collector && <DesktopUsageExtras
+        {(account.collector || resetTarget) && <DesktopUsageExtras
           usage={usage}
+          target={resetTarget}
           schedule={schedule}
           onUsageChanged={onUsageChanged}
         />}
@@ -1456,7 +1313,7 @@ export function DesktopTopBarControls({
                   {index > 0 && <Divider />}
                   <DesktopProviderUsage
                     account={account}
-                    schedule={account.collector ? usageResetSchedule(snapshot, account.usage) : undefined}
+                    schedule={usageCardResetSchedule(snapshot, account)}
                     refreshing={account.collector ? usageRefreshing(snapshot, account.collector) : account.native?.refreshing ?? false}
                     onRefresh={account.collector ? () => requestUsageRefresh(account.collector)
                       : account.native?.available ? () => native.refresh(account.id) : undefined}

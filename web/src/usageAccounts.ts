@@ -3,7 +3,8 @@ import type { SubscriptionSnapshot } from "./subscriptionAccounts";
 import { sessionQuota } from "./sessionQuota";
 import type { NativeAccountUsage } from "./nativeAccountUsage";
 import { accountControl, accountPlanLabel, namedOnlyProvider } from "./accountControls";
-import { accountProviderLabel, providerUsage, type ProviderUsage, record, type UsageSnapshot, usageCardProviders, usagePluginId } from "./usageLimits";
+import { accountManageUrl, accountProviderLabel, providerUsage, type ProviderUsage, record, type UsageSnapshot, usageCardProviders, usagePluginId, usageResetProvider, usageResetSchedule } from "./usageLimits";
+import type { UsageResetTarget } from "./usageApi";
 
 export interface UsageAccountCard {
   id: string;
@@ -132,4 +133,29 @@ export function displayPlan(usage: ProviderUsage, plan: string | undefined): str
   if (windows.length === 0) return plan;
   const minutes = (limit: unknown) => (limit as { primary?: { windowDurationMins?: unknown } } | null)?.primary?.windowDurationMins;
   return windows.some((limit) => minutes(limit) === 300) ? plan : "ultra";
+}
+
+/** Where a card's reset actions go. A Service card keeps its collector lane.
+ * A named card gets its own lane only when its own collected usage reports
+ * reset credits; it never borrows the Service card's lane or credits. */
+export function usageResetTarget(card: UsageAccountCard): UsageResetTarget | undefined {
+  if (card.collector) {
+    const provider = usageResetProvider(card.usage);
+    return provider ? { kind: "service", provider } : undefined;
+  }
+  const collected = card.native?.usage;
+  if (!collected || usageResetProvider(collected) === undefined) return undefined;
+  return record(collected.rate_limits?.rateLimitResetCredits) ? { kind: "account", accountId: card.id } : undefined;
+}
+
+/** The scheduled reset shown on this card, from its own lane. */
+export function usageCardResetSchedule(snapshot: UsageSnapshot | null, card: UsageAccountCard): { fire_at_ms: number } | undefined {
+  const target = usageResetTarget(card);
+  if (!target) return undefined;
+  return target.kind === "service" ? usageResetSchedule(snapshot, card.usage) : card.native?.reset_schedule;
+}
+
+/** The Provider's plan and reset page, on the cards that own reset actions. */
+export function usageCardManageUrl(card: UsageAccountCard): string | undefined {
+  return card.collector || usageResetTarget(card) ? accountManageUrl(card.usage.provider) : undefined;
 }

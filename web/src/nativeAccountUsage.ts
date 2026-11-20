@@ -17,6 +17,8 @@ export interface NativeAccountUsage {
   reason?: string;
   message?: string;
   next_refresh_at_ms?: number;
+  /** The owner's scheduled banked reset of this account. */
+  reset_schedule?: { fire_at_ms: number };
 }
 
 const empty: { accounts: NativeAccountUsage[]; error: string } = { accounts: [], error: "" };

@@ -103,17 +103,25 @@ export function refreshSessionUsage(
   return refreshUsage(accountProvider);
 }
 
-function resetEndpoint(accountProvider: string): string {
-  return `/api/usage/${encodeURIComponent(accountProvider)}/reset`;
+/** Where a card's reset actions go: a Service collector's reset lane, or one
+ * owner-scoped named account whose own sign-in Machine runs the reset. */
+export type UsageResetTarget =
+  | { kind: "service"; provider: string }
+  | { kind: "account"; accountId: string };
+
+function resetEndpoint(target: UsageResetTarget): string {
+  return target.kind === "service"
+    ? `/api/usage/${encodeURIComponent(target.provider)}/reset`
+    : `/api/provider-accounts/${encodeURIComponent(target.accountId)}/usage/reset`;
 }
 
 /** Spend the earliest-expiring available reset credit. */
 export async function consumeNearestReset(
-  accountProvider: string,
+  target: UsageResetTarget,
   expectedCreditId: string | undefined,
   confirm: string,
 ): Promise<void> {
-  const response = await fetch(resetEndpoint(accountProvider), {
+  const response = await fetch(resetEndpoint(target), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ confirm, expected_credit_id: expectedCreditId }),
@@ -122,11 +130,11 @@ export async function consumeNearestReset(
 }
 
 export async function scheduleNearestReset(
-  accountProvider: string,
+  target: UsageResetTarget,
   fireAtMs: number,
   confirm: string,
 ): Promise<void> {
-  const response = await fetch(`${resetEndpoint(accountProvider)}/schedule`, {
+  const response = await fetch(`${resetEndpoint(target)}/schedule`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ fire_at_ms: fireAtMs, confirm }),
@@ -135,9 +143,9 @@ export async function scheduleNearestReset(
 }
 
 export async function cancelNearestResetSchedule(
-  accountProvider: string,
+  target: UsageResetTarget,
 ): Promise<void> {
-  const response = await fetch(`${resetEndpoint(accountProvider)}/schedule`, {
+  const response = await fetch(`${resetEndpoint(target)}/schedule`, {
     method: "DELETE",
   });
   await expectHttpOk(response, "Could not cancel the scheduled reset");
