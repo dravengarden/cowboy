@@ -199,6 +199,11 @@ pub enum StandardActivityIndicator {
     MarkPulse {
         interval_ms: u16,
     },
+    /// The mark floats over its own shadow while particles rise past it
+    /// (Provider SDK 3.7.0).
+    MarkLevitate {
+        interval_ms: u16,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -502,6 +507,11 @@ pub enum ActivityIndicator {
         interval_ms: u16,
     },
     AssetPulse {
+        asset: String,
+        interval_ms: u16,
+    },
+    /// Provider SDK 3.7.0.
+    AssetLevitate {
         asset: String,
         interval_ms: u16,
     },
@@ -1637,6 +1647,12 @@ impl ProviderManifest {
                 "managed profiles require Provider SDK 3.1.13 or newer"
             );
         }
+        if self.ui.uses_levitating_activity() {
+            ensure!(
+                semver::Version::parse(&self.sdk_version)? >= semver::Version::new(3, 7, 0),
+                "levitating activity requires Provider SDK 3.7.0 or newer"
+            );
+        }
         if self
             .runtime
             .required_capabilities
@@ -1854,6 +1870,20 @@ impl TranscriptPresentationContract {
 }
 
 impl UiContract {
+    /// Whether any surface shows the levitating activity (Provider SDK 3.7.0).
+    fn uses_levitating_activity(&self) -> bool {
+        fn walk(node: &UiNode) -> bool {
+            match node {
+                UiNode::Activity { indicator, .. } => {
+                    matches!(indicator, ActivityIndicator::AssetLevitate { .. })
+                }
+                UiNode::Stack { children, .. } => children.iter().any(walk),
+                _ => false,
+            }
+        }
+        self.surfaces.values().any(walk)
+    }
+
     fn validate(&self, logic: &LogicContract) -> Result<()> {
         ensure!(
             (UI_SCHEMA_MIN_VERSION..=UI_SCHEMA_VERSION).contains(&self.schema_version),
@@ -3240,6 +3270,12 @@ impl StandardProviderSource {
                 asset: loading_asset.clone(),
                 interval_ms: *interval_ms,
             },
+            StandardActivityIndicator::MarkLevitate { interval_ms } => {
+                ActivityIndicator::AssetLevitate {
+                    asset: loading_asset.clone(),
+                    interval_ms: *interval_ms,
+                }
+            }
         };
         let mut surfaces = BTreeMap::new();
         surfaces.insert(SurfaceSlot::Card, card);
@@ -3707,7 +3743,8 @@ fn validate_activity(
             "invalid terminal activity interval"
         ),
         ActivityIndicator::AssetSignal { asset, interval_ms }
-        | ActivityIndicator::AssetPulse { asset, interval_ms } => {
+        | ActivityIndicator::AssetPulse { asset, interval_ms }
+        | ActivityIndicator::AssetLevitate { asset, interval_ms } => {
             ensure!(
                 (400..=10_000).contains(interval_ms),
                 "invalid asset activity interval"
@@ -4299,6 +4336,31 @@ mod tests {
                 .launch_arguments(Some(ManagedRuntimeProfile::ImageV1))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn levitating_activity_requires_sdk_3_7_and_a_known_asset() {
+        let mut source: StandardProviderSource =
+            serde_json::from_str(include_str!("../../../plugins/grok/provider.json")).unwrap();
+        source.activity.indicator = StandardActivityIndicator::MarkLevitate { interval_ms: 2600 };
+        let mut manifest = build_package(source.clone().compile().unwrap())
+            .unwrap()
+            .manifest;
+        assert!(manifest.ui.uses_levitating_activity());
+        manifest.validate().unwrap();
+        manifest.sdk_version = "3.6.0".into();
+        let error = manifest.validate().unwrap_err().to_string();
+        assert!(error.contains("Provider SDK 3.7.0"), "{error}");
+        manifest.sdk_version = PROVIDER_SDK_VERSION.into();
+        source.activity.indicator = StandardActivityIndicator::MarkLevitate { interval_ms: 200 };
+        assert!(
+            source.compile().and_then(build_package).is_err(),
+            "an interval under 400 ms is refused"
+        );
+        let pulse: StandardProviderSource =
+            serde_json::from_str(include_str!("../../../plugins/grok/provider.json")).unwrap();
+        let pulse = build_package(pulse.compile().unwrap()).unwrap().manifest;
+        assert!(!pulse.ui.uses_levitating_activity());
     }
 
     #[test]

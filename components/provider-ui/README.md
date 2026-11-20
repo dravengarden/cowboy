@@ -12,7 +12,8 @@ shell templates.
 
 UI schema v2 adds the closed `activity` node and the `glyph_cycle`,
 `terminal_prompt`, `asset_signal`, `asset_pulse`, and `progress_ring` indicator
-strategies. Labels are typed text or bounded phrase cycles with a closed
+strategies; Provider SDK 3.7.0 adds `asset_levitate` (authored as
+`mark_levitate`). Labels are typed text or bounded phrase cycles with a closed
 `none`/`fade`/`shimmer` effect. Cowboy owns animation mechanics, reduced-motion
 behavior, accessibility, theme integration, and responsive layout; a Provider
 supplies only validated parameters and referenced assets. Schema v1 remains

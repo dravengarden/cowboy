@@ -83,6 +83,16 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.121.0 records Provider SDK 3.7.0 (plugin-sdk 1.20.0,
+provider-ui 3.8.0, provider-authoring 1.0.19), which adds the levitating
+activity indicator (`mark_levitate`, normalized to `asset_levitate`); a
+package using it requires SDK 3.7.0, so older Controllers, Webs and Machines
+skip it. Antigravity 0.2.6 uses it (a 2.6 s period). Every Plugin pins the
+SDKs and advances one patch version: claude-code 3.20.52, claude-deepseek
+3.1.70, codex 3.6.10, codex-deepseek 3.1.70, deepseek-harness 1.0.28, github
+0.2.15, grok 3.2.9, machine-browser 1.0.12, matrix 1.0.13, review 1.0.16 and
+zed 1.39.10.
+
 Component release 3.120.0 records provider-runtime 1.3.6, whose
 `cowboy-antigravity-acp` 1.0.4 shows the facade's tool calls as native ones
 (Read, List, Search, Write, Edit, Run and Stop with their ACP kind, title,

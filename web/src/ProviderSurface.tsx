@@ -654,6 +654,21 @@ const assetPulseMotion = keyframes`
   0%, 100% { opacity: 0.46; }
   50% { opacity: 0.92; }
 `;
+// Levitation: the mark rises off its shadow and settles again; the shadow
+// tightens and fades while it is aloft; particles drift up past it.
+const assetLevitateMotion = keyframes`
+  0%, 100% { transform: translateY(1px) rotate(-2deg); }
+  50% { transform: translateY(-2.5px) rotate(2deg); }
+`;
+const assetLevitateShadow = keyframes`
+  0%, 100% { transform: translateX(-50%) scaleX(1); opacity: 0.32; }
+  50% { transform: translateX(-50%) scaleX(0.55); opacity: 0.12; }
+`;
+const assetLevitateParticle = keyframes`
+  0% { transform: translateY(0) scale(1); opacity: 0; }
+  20% { opacity: 0.9; }
+  100% { transform: translateY(-13px) scale(0.4); opacity: 0; }
+`;
 const ACTIVITY_MARK_SIZE = 14;
 const ACTIVITY_TERMINAL_SIZE = 17;
 
@@ -894,6 +909,86 @@ function ProviderActivity({
               size={ACTIVITY_MARK_SIZE}
               scaleWithFont={false}
             />
+          </Box>
+        );
+      }
+      case "asset_levitate": {
+        const asset = assets.get(node.indicator.asset);
+        if (!asset) {
+          return <CircularProgress size={ACTIVITY_MARK_SIZE} aria-hidden />;
+        }
+        const period = node.indicator.interval_ms;
+        const particles = [
+          { left: "12%", color: secondary, delay: 0 },
+          { left: "78%", color: primary, delay: period / 3 },
+          { left: "46%", color: secondary, delay: (period * 2) / 3 },
+        ];
+        return (
+          <Box
+            component="span"
+            aria-hidden
+            data-provider-levitate
+            sx={{
+              width: markBox,
+              height: markBox,
+              position: "relative",
+              display: "inline-block",
+              flexShrink: 0,
+              overflow: "visible",
+            }}
+          >
+            <Box
+              component="span"
+              sx={{
+                position: "absolute",
+                left: "50%",
+                bottom: "-2px",
+                width: "80%",
+                height: "2px",
+                borderRadius: "50%",
+                bgcolor: "text.primary",
+                transform: "translateX(-50%)",
+                opacity: 0.24,
+                animation: reducedMotion
+                  ? "none"
+                  : `${assetLevitateShadow} ${period}ms ease-in-out infinite`,
+              }}
+            />
+            {!reducedMotion && particles.map((particle) => (
+              <Box
+                key={particle.left}
+                component="span"
+                sx={{
+                  position: "absolute",
+                  left: particle.left,
+                  bottom: 0,
+                  width: "2px",
+                  height: "2px",
+                  borderRadius: "50%",
+                  bgcolor: particle.color,
+                  opacity: 0,
+                  animation:
+                    `${assetLevitateParticle} ${period}ms ease-out ${particle.delay}ms infinite`,
+                }}
+              />
+            ))}
+            <Box
+              component="span"
+              sx={{
+                position: "absolute",
+                inset: 0,
+                display: "inline-flex",
+                animation: reducedMotion
+                  ? "none"
+                  : `${assetLevitateMotion} ${period}ms ease-in-out infinite`,
+              }}
+            >
+              <ProviderAssetGraphic
+                asset={asset}
+                size={ACTIVITY_MARK_SIZE}
+                scaleWithFont={false}
+              />
+            </Box>
           </Box>
         );
       }

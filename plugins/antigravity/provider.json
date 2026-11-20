@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "antigravity",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.6.0",
+  "sdk_version": "3.7.0",
   "display": {
     "name": "Antigravity",
     "vendor": "Google",
@@ -44,14 +44,8 @@
   "card_layout": "mark_leading",
   "activity": {
     "indicator": {
-      "kind": "glyph_cycle",
-      "frames": [
-        "⡐",
-        "⠌",
-        "⢂",
-        "⠡"
-      ],
-      "interval_ms": 220
+      "kind": "mark_levitate",
+      "interval_ms": 2600
     },
     "label": {
       "kind": "phrase_cycle",

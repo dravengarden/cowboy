@@ -33,7 +33,7 @@ export const PROVIDER_UI_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_HOST_SCHEMA_MIN_VERSION = 1 as const;
 export const PROVIDER_HOST_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_MACHINE_CONTRACT_VERSION = 4 as const;
-export const PROVIDER_SDK_VERSION = "3.6.0" as const;
+export const PROVIDER_SDK_VERSION = "3.7.0" as const;
 export {
   type TelemetryBackendContract,
   validateTelemetryBackendContract,
@@ -127,7 +127,9 @@ export type ActivityIndicator =
   | { kind: "glyph_cycle"; frames: string[]; interval_ms: number }
   | { kind: "terminal_prompt"; interval_ms: number }
   | { kind: "asset_signal"; asset: string; interval_ms: number }
-  | { kind: "asset_pulse"; asset: string; interval_ms: number };
+  | { kind: "asset_pulse"; asset: string; interval_ms: number }
+  // Provider SDK 3.7.0: the asset floats over its shadow while particles rise.
+  | { kind: "asset_levitate"; asset: string; interval_ms: number };
 
 export type ActivityTextEffect = "none" | "fade" | "shimmer";
 
@@ -2395,6 +2397,7 @@ function validateActivityNode(
       break;
     case "asset_signal":
     case "asset_pulse":
+    case "asset_levitate":
       if (
         !hasOnlyKeys(indicator, ["kind", "asset", "interval_ms"]) ||
         typeof indicator.asset !== "string" ||

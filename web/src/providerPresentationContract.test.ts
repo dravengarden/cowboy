@@ -438,6 +438,7 @@ test("Provider activity renderer consumes only typed generic strategies", () => 
       'case "terminal_prompt"',
       'case "asset_signal"',
       'case "asset_pulse"',
+      'case "asset_levitate"',
     ]
   ) {
     assertEquals(surfaceSource.includes(strategy), true);

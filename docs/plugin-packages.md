@@ -199,15 +199,19 @@ action share a stable footer slot.
 
 The activity node separates Provider-authored identity from Cowboy-owned motion
 mechanics. Its indicator is one of `progress_ring`, `glyph_cycle`,
-`terminal_prompt`, `asset_signal`, or `asset_pulse`; its label is typed text or
+`terminal_prompt`, `asset_signal`, `asset_pulse`, or `asset_levitate`; its label is typed text or
 a bounded phrase cycle with a `none`, `fade`, or `shimmer` effect. Assets,
 intervals, frames, phrases, colors, and accessible labels are validated. Cowboy
 implements reduced motion, animation timing, layout, theme behavior, and ARIA
 semantics without a Provider-ID branch. The live-turn loading slot is a compact
 status line: Cowboy owns mark size, gap, caption weight, and pulse geometry so a
 Provider mark stays a quiet signal rather than a brand stamp. Asset pulses
-breathe opacity only and do not scale. This restores distinct Claude, Codex,
-and Grok activity language without allowing executable Provider UI.
+breathe opacity only and do not scale. Asset levitation (Provider SDK 3.7.0,
+authored as `mark_levitate`) floats the mark a few pixels above a shadow that
+tightens and fades while it is aloft, while three particles in the Provider's
+accents drift up past it; reduced motion shows the mark resting on its
+shadow. This restores distinct Claude, Codex, Grok and Antigravity activity
+language without allowing executable Provider UI.
 
 Transcript thought presentation is a sibling host contract rather than a
 Provider-authored free-form surface because its content and lifecycle come from
