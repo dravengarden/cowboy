@@ -44,6 +44,25 @@ impl RuntimeRestrictions {
             .is_none_or(|machines| machines.contains(machine))
     }
 
+    /// Whether host policy names this exact Machine for the Provider. Unlike
+    /// [`Self::allows`], an unrestricted Provider is refused: native-only
+    /// Providers (Claude) send vendor requests only from a pinned Machine,
+    /// so a missing restriction fails closed instead of allowing every Machine.
+    pub fn pinned(&self, provider: &str, machine: &str) -> bool {
+        self.0
+            .get(provider)
+            .is_some_and(|machines| machines.contains(machine))
+    }
+
+    /// [`Self::allows`], and [`Self::pinned`] for a native-only Provider.
+    pub fn allows_vendor_request(&self, provider: &str, machine: &str) -> bool {
+        if crate::provider_account::native_only(provider) {
+            self.pinned(provider, machine)
+        } else {
+            self.allows(provider, machine)
+        }
+    }
+
     pub fn check(&self, provider: &str, machine: &str) -> Result<(), String> {
         if self.allows(provider, machine) {
             Ok(())
@@ -205,6 +224,21 @@ mod tests {
         ] {
             assert!(RuntimeRestrictions::parse(&[malformed.into()]).is_err());
         }
+    }
+
+    #[test]
+    fn claude_vendor_requests_need_an_explicit_pinned_machine() {
+        let none = RuntimeRestrictions::parse(&[]).unwrap();
+        // Sessions of an unrestricted Provider may run anywhere, but Claude
+        // usage and resets never contact Anthropic without a pinned Machine.
+        assert!(none.allows("claude-code", "hawk"));
+        assert!(!none.allows_vendor_request("claude-code", "ovh"));
+        assert!(!none.allows_vendor_request("claude-code", "hawk"));
+        assert!(none.allows_vendor_request("codex", "hawk"));
+        let ovh = RuntimeRestrictions::parse(&["claude-code=ovh".into()]).unwrap();
+        assert!(ovh.allows_vendor_request("claude-code", "ovh"));
+        assert!(!ovh.allows_vendor_request("claude-code", "hawk"));
+        assert!(!ovh.allows_vendor_request("claude-code", "falcon"));
     }
 
     #[test]

@@ -103,7 +103,7 @@ async fn native_route(state: &AppState, target: Target) -> Result<Route, &'stati
     }
     if !state
         .supervisor
-        .runtime_allowed(&completion.profile.provider_id, &completion.machine_id)
+        .vendor_request_allowed(&completion.profile.provider_id, &completion.machine_id)
     {
         return Err("runtime_not_allowed");
     }
@@ -283,7 +283,7 @@ async fn dispatch_native(
         .with_native_login_binding(owner, &target.operation, completion, || {
             if !state
                 .supervisor
-                .runtime_allowed(&completion.profile.provider_id, &completion.machine_id)
+                .vendor_request_allowed(&completion.profile.provider_id, &completion.machine_id)
             {
                 return Ok(Err("runtime_not_allowed"));
             }

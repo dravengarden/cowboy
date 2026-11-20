@@ -10,7 +10,9 @@ pub(super) fn select_candidate<'a>(
     mut candidates: Vec<(&'a str, String, crate::machine_protocol::PluginInventory)>,
     restrictions: &crate::project_placement::RuntimeRestrictions,
 ) -> Option<(&'a str, String, crate::machine_protocol::PluginInventory)> {
-    candidates.retain(|candidate| restrictions.allows(&candidate.2.plugin_id, &candidate.1));
+    candidates.retain(|candidate| {
+        restrictions.allows_vendor_request(&candidate.2.plugin_id, &candidate.1)
+    });
     if let Some(machine) = preferred {
         candidates.retain(|candidate| candidate.1 == machine);
     }

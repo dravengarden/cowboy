@@ -171,6 +171,14 @@ scheduled-action table (lane `account-<id>`) and follows the same one-shot
 claim, preflight-retry and unknown-outcome rules. A reset that never reached
 the Machine's collector records no failure backoff.
 
+Claude usage reads and resets (Service card and named accounts) contact
+Anthropic only from a Machine that host policy explicitly pins for
+`claude-code` (`--provider-runtime-machine claude-code=ovh`). Unlike session
+placement, a missing restriction fails closed: no Machine is eligible, so a
+lost or mistyped host argument can never move these requests to Hawk, Falcon
+or a laptop. The check runs at selection and again inside the dispatch
+transaction.
+
 These controls bound Cowboy's collection starts; they do
 not claim a published subscription polling allowance or guarantee against an
 account restriction. Provider API rate limits are separate from this polling

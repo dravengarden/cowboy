@@ -132,7 +132,7 @@ async fn target(
                     .map(|(_, version)| version),
                 state
                     .supervisor
-                    .runtime_allowed(&account.provider_id, &machine.id),
+                    .vendor_request_allowed(&account.provider_id, &machine.id),
             ),
             machine.id.clone(),
         )
@@ -670,7 +670,7 @@ async fn collect(state: &AppState, owner: &str, target: &Target) -> Result<Value
             Ok(
                 if state
                     .supervisor
-                    .runtime_allowed(&completion.profile.provider_id, &completion.machine_id)
+                    .vendor_request_allowed(&completion.profile.provider_id, &completion.machine_id)
                 {
                     state
                         .machine_control
@@ -695,7 +695,7 @@ async fn collect(state: &AppState, owner: &str, target: &Target) -> Result<Value
     .map_err(|_| "native_usage_unavailable")?;
     store.with_native_login_binding(owner, &target.operation, completion, || {
         anyhow::ensure!(state.machine_control.is_current(&connection), "machine_connection_changed");
-        anyhow::ensure!(state.supervisor.runtime_allowed(&completion.profile.provider_id, &completion.machine_id), "runtime_not_allowed");
+        anyhow::ensure!(state.supervisor.vendor_request_allowed(&completion.profile.provider_id, &completion.machine_id), "runtime_not_allowed");
         anyhow::ensure!(
             usage_provider(state, &installed, &completion.profile).as_deref() == Ok(target.provider.as_str()),
             "native_usage_unavailable"
