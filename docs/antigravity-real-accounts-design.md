@@ -1169,15 +1169,76 @@ The account card shows the plan only. What `agy` 1.5.9 exposes:
 
 A collector must not run outside the account's custody (the Machine's
 signed Plugin collectors run as `ubuntu` with no access to the token), so the
-safe design is a daemon `usage` unit: the same confinement as `probe`, as the
-account's identity over its own home, running `agy -p "/usage" --json` with a
-bounded timeout and output, never concurrently with a login. The Machine
-parses only model ID, remaining fraction and reset time and reports them as
-the account's usage reading, which the Controller stores like the plan and
-the card renders per model. Not implemented: it needs a daemon mode, a
-Machine command and a Controller read model, and `/usage`'s exact output on a
-signed-in account (and whether a second `agy` beside a running `acp` shares
-its state safely) is an acceptance item.
+quota is a daemon `usage` unit.
+
+## Account quota (Antigravity 0.2.9)
+
+**Path.** The Controller's existing native account usage pipeline
+(`provider_accounts/usage.rs`: owner/binding admission, the shared five-minute
+budget, coalesced refresh, persisted observations, transient-error rules)
+dispatches `CollectNativeUsage` to the account's sign-in Machine, as for a
+named Claude account. Antigravity 0.2.9 declares `host.account_usage`
+(`antigravity`) and a `usage` binding without a collector command, so the
+Service-level aggregator runs nothing for it and the Web shows no Service card
+(named-only). For an `account_sandbox_v1` Provider the Machine
+(`native_usage/sandbox.rs`) runs no collector: it asks the daemon
+(`collect_usage`) for the login's exact credential generation and runtime,
+holding the account's usage guard until the daemon answers, and maps the
+daemon's projection onto the generic `rateLimitsByLimitId` document. No wire,
+SDK or worker interface changes; the account card renders the rows with the
+existing usage components.
+
+**Daemon.** `collect_usage` starts a `usage` unit:
+`bin/agy-launch -p /usage --output-format json --log-file /tmp/agy-usage.log`
+(the launcher execs `agy` unchanged in the sandbox), the account's identity
+over its own home, no descriptor or execution socket. Admission is a runtime
+unit's: the current `signed_in` generation, not fenced, no authentication unit,
+inside a configured runtime bound; a login or logout stops it. The daemon
+closes stdin, reads at most 256 KiB, waits up to 25 s, stops and confirms the
+unit, and answers only `{"groups":[{"name","buckets":[{"name","id"?,"window"?,
+"disabled"?,"remaining_fraction"?,"reset_at"?}]}]}` or
+`authentication_required`; vendor text never leaves it. `start` refuses mode
+`usage`, so no caller gets the raw output.
+
+**No model request.** In `agy` 1.5.9's print mode (`printmode.run`), a prompt
+whose leading token is a supported slash command branches to `runCommand`
+before `session.start`/`runTurn`; `/usage` (`usageReport`) only reads Cloud
+Code's quota summary ("retrieving quota summary") and prints it. This was read
+from the binary's code (the Go symbol table recovered from `.gopclntab` and
+the disassembled branch), not observed on a signed-in account. The
+`--output-format json` envelope is `{conversation_id, status, response,
+duration_seconds, num_turns, usage, command: {name, data}}` with `data` the
+report `{description, groups: [{name, description, buckets: [{id, name,
+description, window, disabled, remaining_fraction, remaining_amount,
+reset_time}]}]}` (struct tags read from the same binary). The daemon refuses a
+report whose `num_turns` is not 0 or whose command is not `usage`. `/usage`
+takes no arguments (`--json` is not a flag), and without a usable token print
+mode starts its interactive sign-in, which the closed stdin and the bound end
+(reported as authentication required).
+
+**Presentation.** Each vendor group (model family: Gemini Pro, Gemini Flash,
+...) is one row when its buckets share one quota; otherwise one row per distinct
+quota, named by its bucket. Disabled buckets and buckets without a remaining
+fraction are omitted. A parseable window (`5h`, `daily`, `weekly`) becomes the
+row's window; reset times show as on Claude and Codex cards. The plan comes from
+the account controls (the plan its sessions report); the Subscriptions card's
+`Usage ·` line summarises the rows.
+
+**Costs and residuals.**
+
+- Each report starts `agy` (its language server) for a few seconds, at most
+  once per account per five-minute budget; the CLI log goes to the unit's
+  private `/tmp`. `agy` also updates its own state in the home (installation
+  state, caches), as every runtime does; the daemon never reads or moves the
+  credential.
+- Print mode has no telemetry switch; `agy` may record a local analytics event
+  for the command.
+- Acceptance items on a signed-in OVH account: the exact report and window
+  labels, the absence of any turn in `num_turns`/the quota, and a report
+  beside running `acp` units.
+- Logins of 0.2.8 and earlier keep "This Provider does not support background
+  account usage" until the account signs in again on 0.2.9 (a Provider update
+  invalidates native logins).
 
 ## Feature inventory and Cowboy adaptation (2026-11-20)
 

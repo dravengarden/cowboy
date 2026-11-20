@@ -59,7 +59,7 @@ Every field is optional; unknown fields are rejected.
 | `free_space_reserve_bytes` | `8589934592` (8 GiB) | Free space required on `state_root` before `ensure_account` and every start |
 | `ip_deny` | `[]` | Extra `IPAddressDeny=` entries appended to the always-denied set (loopback, link-local, multicast, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`); it can never remove one. OVH adds its public address, e.g. `40.160.141.233/32` |
 | `ip_allow` | `["127.0.0.53/32"]` | `IPAddressAllow=` (the resolver stub) |
-| `max_runtime_units` | unset | Optional bound on `runtime`/`probe` units per account (positive when set). Unset, an account runs as many sessions as the Machine admits, like a Codex or Claude account; at most one `login`/`logout` unit, which excludes every runtime unit, still applies. Each session of the account runs its own unit over the shared account home; a start beyond a configured bound is `limit` (design "Revision 6: concurrent sessions per account") |
+| `max_runtime_units` | unset | Optional bound on `runtime`/`probe`/`usage` units per account (positive when set). Unset, an account runs as many sessions as the Machine admits, like a Codex or Claude account; at most one `login`/`logout` unit, which excludes every runtime unit, still applies. Each session of the account runs its own unit over the shared account home; a start beyond a configured bound is `limit` (design "Revision 6: concurrent sessions per account") |
 | `unit_memory_max` | `"3G"` | `MemoryMax=` per unit |
 | `unit_tasks_max` | `512` | `TasksMax=` per unit |
 | `unit_tmp_size` | `"256M"` | Size of each unit's `/tmp` and of its separate `/var/tmp` (both tmpfs) |
@@ -91,6 +91,7 @@ each: `{"ok":true,"result":{...}}` or
 | `register_runtime` | `sha256`, `size`, then exactly `size` raw bytes | `sha256`, `already_present` |
 | `probe_runtime` | `runtime_sha256` | `runtime_sha256`, `unit`, `exit_code`, `passed` |
 | `start` | `key`, `mode` (`runtime`/`login`/`logout`/`probe`), `credential_generation`, `runtime_sha256`, optional `session_id`, `descriptor_b64` (≤ 32 KiB decoded) | `unit`, `mode`, `invocation_id`, `boot_id`, `fds` |
+| `collect_usage` | `key`, `credential_generation`, `runtime_sha256` | `unit`, `outcome` (`available`/`authentication_required`), `quota` (when available) |
 | `stop_unit` | `unit` | `unit`, `stopped` |
 | `stop_account` | `key`, optional `revision` + `operation_id` (together) | `key`, `fence_epoch`, `fenced`, `stopped`, `revision`, `replayed`, `account_present` |
 | `admit_account` | `key`, optional `revision` + `operation_id` (together) | `key`, `fence_epoch`, `fenced`, `stopped`, `revision`, `replayed`, `account_present` |
@@ -109,6 +110,23 @@ gone before answering. It never touches a real account or credential; the
 Machine runs it once per Provider generation before that generation's first
 account unit, so no vendor code of an isolated Provider runs as the Machine
 user. `ensure_account` refuses the reserved `service_id`.
+
+`collect_usage` runs the account's quota report in a `usage` unit
+(`bin/agy-launch -p /usage --output-format json --log-file
+/tmp/agy-usage.log`, the account's identity over its own home, no
+descriptor or execution socket). Its admission is a runtime unit's: the
+current `signed_in` generation, not fenced, no authentication unit, and within
+`max_runtime_units` when it is set; a login or logout stops it. `agy`'s
+print mode answers a leading supported slash command locally from Cloud
+Code's quota summary without a conversation or model turn (the report's
+`num_turns` must be 0). The daemon closes stdin, reads at most 256 KiB of
+stdout, waits up to 25 s, stops and confirms the unit, and answers only the
+validated projection `{"groups":[{"name","buckets":[{"name","id"?,
+"window"?,"disabled"?,"remaining_fraction"?,"reset_at"?}]}]}` (`reset_at` in
+Unix seconds; at most 32 groups and 128 buckets; labels printable, cut at 80
+characters). A report that fails or is malformed is `internal` with a fixed
+message; vendor text and stderr never leave the daemon. `start` refuses mode
+`usage`.
 
 A successful `start` response carries, as `SCM_RIGHTS` on its line, the
 caller's ends of the unit's stdin (write), stdout (read) and stderr (read)
@@ -160,7 +178,8 @@ and again at every start). `hooks` and `settings` are bound read-only over
 `~/.gemini/config/hooks.json` and `~/.gemini/antigravity-cli/settings.json`.
 The per-mode commands are fixed in `src/units.rs` (`COMMANDS`):
 `runtime` → `bin/agy-proxy`, `login` → `bin/agy-launch --cowboy-login`,
-`logout` → `bin/agy-launch --cowboy-logout`, `probe` → `bin/agy-launch --version`.
+`logout` → `bin/agy-launch --cowboy-logout`, `probe` → `bin/agy-launch --version`,
+`usage` → `bin/agy-launch -p /usage --output-format json --log-file /tmp/agy-usage.log`.
 
 ## State
 

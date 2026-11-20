@@ -2,8 +2,8 @@ import type { SessionMeta } from "./protocol";
 import type { SubscriptionSnapshot } from "./subscriptionAccounts";
 import { sessionQuota } from "./sessionQuota";
 import type { NativeAccountUsage } from "./nativeAccountUsage";
-import { namedOnlyProvider } from "./accountControls";
-import { accountProviderLabel, providerUsage, type ProviderUsage, type UsageSnapshot, usageCardProviders, usagePluginId } from "./usageLimits";
+import { accountControl, accountPlanLabel, namedOnlyProvider } from "./accountControls";
+import { accountProviderLabel, providerUsage, type ProviderUsage, record, type UsageSnapshot, usageCardProviders, usagePluginId } from "./usageLimits";
 
 export interface UsageAccountCard {
   id: string;
@@ -63,11 +63,15 @@ export function registeredUsageAccounts(
       usagePluginId(item.provider) === account.provider_id
     )?.provider ?? account.provider_id;
     const defaultLabel = accounts?.registry.defaults[account.provider_id] === account.id ? " · Default" : "";
+    // A named-only (Antigravity) quota report has no plan; its sessions report one.
+    const control = collected && !record(collected.account?.account)?.planType ? accountControl(accounts, account.id) : undefined;
+    const plan = control ? accountPlanLabel(control) : undefined;
     return {
       id: account.id, group: provider, title: account.label,
       subtitle: `${accountProviderLabel(provider)}${defaultLabel}`,
       usage: usage ?? { provider, status: "unavailable", source: "", observed_at_ms: 0 },
       ...(native ? { native } : {}),
+      ...(plan ? { statusLabel: plan.toUpperCase() } : {}),
       ...(!collected ? { statusLabel: !account.enabled ? "DISABLED" : usage ? "SESSION" : native?.refreshing ? "REFRESHING" : native?.reason === "native_login_outdated" ? "SIGN IN AGAIN" : native?.reason === "native_login_pending" ? "SIGN-IN PENDING" : native?.reason === "native_login_required" ? "NOT SIGNED IN" : "NOT REPORTED" } : {}),
       emptyMessage: !account.enabled ? "This account is disabled."
         : native?.message ?? (native?.refreshing ? "Refreshing this account’s usage…" : "No quota reported for this account yet."),

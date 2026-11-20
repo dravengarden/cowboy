@@ -305,3 +305,37 @@ fn runtime_probes_name_the_probed_runtime() {
         json!({"op": "probe_runtime", "runtime_sha256": SHA})
     );
 }
+
+#[test]
+fn usage_reports_name_the_account_and_carry_only_their_projection() {
+    let quota = json!({"groups": [{"name": "Gemini Pro", "buckets": []}]});
+    let unit = format!("cga-{KEY}-usage-0123456789abcdef.service");
+    let fake = fake(vec![
+        ok(json!({"unit": unit, "outcome": "available", "quota": quota})),
+        ok(json!({"unit": unit, "outcome": "authentication_required"})),
+        ok(
+            json!({"unit": "cga-fedcba9876543210-usage-0123456789abcdef.service", "outcome": "available", "quota": quota}),
+        ),
+        ok(json!({"unit": unit, "outcome": "available"})),
+        Reply::Line(
+            json!({"ok": false, "error": {"code": "precondition", "message": "not signed in"}}),
+        ),
+    ]);
+    let mut client = Client::connect(&fake.socket).unwrap();
+    let report = client.collect_usage(KEY, 3, SHA).unwrap();
+    assert_eq!(report.quota, Some(quota));
+    assert_eq!(
+        client.collect_usage(KEY, 3, SHA).unwrap().outcome,
+        "authentication_required"
+    );
+    assert!(client.collect_usage(KEY, 3, SHA).is_err());
+    assert!(client.collect_usage(KEY, 3, SHA).is_err());
+    let refused = client.collect_usage(KEY, 3, SHA).unwrap_err();
+    assert_eq!(DaemonError::code_of(&refused), Some("precondition"));
+    drop(client);
+    let requests = fake.server.join().unwrap();
+    assert_eq!(
+        requests[0],
+        json!({"op": "collect_usage", "key": KEY, "credential_generation": 3, "runtime_sha256": SHA})
+    );
+}

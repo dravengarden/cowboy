@@ -17,7 +17,26 @@ pub const COMMANDS: &[(Mode, &[&str])] = &[
     (Mode::Login, &["bin/agy-launch", "--cowboy-login"]),
     (Mode::Logout, &["bin/agy-launch", "--cowboy-logout"]),
     (Mode::Probe, &["bin/agy-launch", "--version"]),
+    // Print mode answers a leading supported slash command locally (Cloud
+    // Code `retrieveUserQuotaSummary`) without starting a conversation or a
+    // model turn; its log goes to the unit's private `/tmp`, so repeated
+    // reports never accumulate files in the account home.
+    (
+        Mode::Usage,
+        &[
+            "bin/agy-launch",
+            "-p",
+            "/usage",
+            "--output-format",
+            "json",
+            "--log-file",
+            USAGE_LOG,
+        ],
+    ),
 ];
+
+/// The `usage` unit's CLI log, inside its private, bounded `/tmp`.
+pub const USAGE_LOG: &str = "/tmp/agy-usage.log";
 
 /// Where a `runtime` unit sees its execution bridge socket.
 pub const UNIT_EXEC_SOCKET: &str = "/run/cowboy-exec.sock";
@@ -254,10 +273,28 @@ mod tests {
 
     #[test]
     fn every_mode_has_a_fixed_command() {
-        for mode in [Mode::Runtime, Mode::Login, Mode::Logout, Mode::Probe] {
+        for mode in [
+            Mode::Runtime,
+            Mode::Login,
+            Mode::Logout,
+            Mode::Probe,
+            Mode::Usage,
+        ] {
             assert!(!command(mode).is_empty());
         }
         assert_eq!(command(Mode::Login), ["bin/agy-launch", "--cowboy-login"]);
+        assert_eq!(
+            command(Mode::Usage),
+            [
+                "bin/agy-launch",
+                "-p",
+                "/usage",
+                "--output-format",
+                "json",
+                "--log-file",
+                "/tmp/agy-usage.log"
+            ]
+        );
     }
 
     #[test]

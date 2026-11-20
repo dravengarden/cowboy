@@ -250,6 +250,11 @@ impl Daemon {
                     descriptor_b64: descriptor_b64.as_deref(),
                 },
             ),
+            Request::CollectUsage {
+                key,
+                credential_generation,
+                runtime_sha256,
+            } => self.collect_usage(conn, &key, credential_generation, &runtime_sha256),
             Request::StopUnit { unit } => self.stop_unit(&unit),
             Request::StopAccount {
                 key,
@@ -813,6 +818,7 @@ impl Daemon {
             let wanted = match mode.as_deref() {
                 Some("runtime") => filter(Mode::Runtime),
                 Some("probe") => filter(Mode::Probe),
+                Some("usage") => filter(Mode::Usage),
                 Some("login") => filter(Mode::Login),
                 Some("logout") => filter(Mode::Logout),
                 _ => true,

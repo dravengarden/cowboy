@@ -4,6 +4,8 @@ use crate::provider_account::{NativeProfileReceipt, ProviderAccountId};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Weak};
 
+mod sandbox;
+
 /// Native processes share a home only within one account. They must not hold
 /// the global installation lock or serialize independent accounts.
 #[derive(Default)]
@@ -52,7 +54,7 @@ impl Invocation {
 impl MachinePluginStore {
     pub async fn collect_native_usage(&self, invocation: Invocation) -> Result<serde_json::Value> {
         let profile = &invocation.profile;
-        let _observation = tokio::time::timeout(
+        let observation = tokio::time::timeout(
             invocation.remaining()?,
             self.native_observations
                 .account(&profile.account_id)
@@ -74,6 +76,18 @@ impl MachinePluginStore {
         let (active, active_digest) = self
             .active_package(&profile.provider_id)?
             .context("native_usage_collector_unavailable")?;
+        if account_sandbox::sandboxed(&active) {
+            // The credential lives only in the daemon's account home.
+            drop(lifecycle);
+            let usage = self.collect_sandbox_usage(&invocation, observation).await?;
+            let _lifecycle = tokio::time::timeout(invocation.remaining()?, self.lifecycle.lock())
+                .await
+                .context("native_usage_busy")?;
+            self.validate_native_usage(profile)
+                .context("native_usage_profile_changed")?;
+            return Ok(usage);
+        }
+        let _observation = observation;
         let resolved = self
             .resolve_host_invocation(
                 &profile.provider_id,

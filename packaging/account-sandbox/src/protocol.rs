@@ -28,6 +28,9 @@ pub enum Mode {
     Login,
     Logout,
     Probe,
+    /// The account's quota report (`agy -p /usage`); started only by
+    /// `collect_usage`, never by `start`.
+    Usage,
 }
 
 impl Mode {
@@ -38,6 +41,7 @@ impl Mode {
             Self::Login => "login",
             Self::Logout => "logout",
             Self::Probe => "probe",
+            Self::Usage => "usage",
         }
     }
 
@@ -73,6 +77,14 @@ pub enum Request {
         session_id: Option<String>,
         #[serde(default)]
         descriptor_b64: Option<String>,
+    },
+    /// Run the account's fixed, read-only quota report in a `usage` unit on
+    /// its current signed-in generation and answer only the validated
+    /// projection of its output (`crate::usage`).
+    CollectUsage {
+        key: String,
+        credential_generation: u64,
+        runtime_sha256: String,
     },
     StopUnit {
         unit: String,
@@ -206,11 +218,16 @@ fn validate(request: &Request) -> Result<()> {
         }
         Request::Start {
             key,
+            mode,
             runtime_sha256,
             session_id,
             descriptor_b64,
             ..
         } => {
+            anyhow::ensure!(
+                *mode != Mode::Usage,
+                "usage units start only through collect_usage"
+            );
             ids::validate_key(key)?;
             ids::validate_hex("runtime_sha256", runtime_sha256, 64)?;
             if let Some(session_id) = session_id {
@@ -259,6 +276,14 @@ fn validate(request: &Request) -> Result<()> {
             Ok(())
         }
         Request::ListUnits { key } => ids::validate_key(key),
+        Request::CollectUsage {
+            key,
+            runtime_sha256,
+            ..
+        } => {
+            ids::validate_key(key)?;
+            ids::validate_hex("runtime_sha256", runtime_sha256, 64)
+        }
     }
 }
 
@@ -272,7 +297,7 @@ pub fn validate_unit_name(unit: &str) -> Result<&str> {
         let (mode, nonce) = rest.split_once('-')?;
         ids::validate_key(key).ok()?;
         ids::validate_hex("nonce", nonce, 16).ok()?;
-        matches!(mode, "runtime" | "login" | "logout" | "probe").then_some(key)
+        matches!(mode, "runtime" | "login" | "logout" | "probe" | "usage").then_some(key)
     })();
     parsed.ok_or_else(|| anyhow::anyhow!("invalid unit name"))
 }
@@ -395,6 +420,34 @@ mod tests {
         assert!(parse_request(bad_b64.as_bytes()).is_err());
         let argv_injection = good.replace("\"s1\"", "\"s1\\u0000--x\"");
         assert!(parse_request(argv_injection.as_bytes()).is_err());
+        // A usage unit's output never reaches the caller as raw pipes.
+        let usage = good.replace("\"runtime\"", "\"usage\"");
+        assert!(
+            parse_request(usage.as_bytes())
+                .unwrap_err()
+                .message
+                .contains("collect_usage")
+        );
+    }
+
+    #[test]
+    fn collect_usage_requests_are_validated() {
+        let sha = "b".repeat(64);
+        let good = format!(
+            r#"{{"op":"collect_usage","key":"{KEY}","credential_generation":2,"runtime_sha256":"{sha}"}}"#
+        );
+        assert_eq!(
+            parse_request(good.as_bytes()).unwrap(),
+            Request::CollectUsage {
+                key: KEY.into(),
+                credential_generation: 2,
+                runtime_sha256: sha.clone(),
+            }
+        );
+        assert!(parse_request(good.replace(KEY, "../etc").as_bytes()).is_err());
+        assert!(parse_request(good.replace(&sha, "zz").as_bytes()).is_err());
+        let extra = good.replace('}', r#","argv":["sh"]}"#);
+        assert!(parse_request(extra.as_bytes()).is_err());
     }
 
     #[test]
@@ -411,6 +464,10 @@ mod tests {
     fn unit_names_are_validated() {
         assert_eq!(
             validate_unit_name("cga-0123456789abcdef-runtime-00112233aabbccdd.service").unwrap(),
+            KEY
+        );
+        assert_eq!(
+            validate_unit_name("cga-0123456789abcdef-usage-00112233aabbccdd.service").unwrap(),
             KEY
         );
         assert!(validate_unit_name("cga-0123456789abcdef-shell-00112233aabbccdd.service").is_err());

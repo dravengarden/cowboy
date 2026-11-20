@@ -195,3 +195,26 @@ test("a named-only Provider reports only its named accounts, never a Service car
   assertEquals(cards.map((card) => card.id), ["openai", "otter"]);
   assertEquals(cards.find((card) => card.id === "otter")?.collector, undefined);
 });
+
+test("a named-only account's collected quota shows the plan its sessions reported", () => {
+  setup();
+  const control = {
+    account_id: "otter", provider_id: "claude-code", admitted: true, state: "ok", revision: 1,
+    fences: [], stop_confirmed: true, uncertain_effects: [], plan: { id: "g1-pro-tier", name: "Google AI Pro" },
+  };
+  const accounts = {
+    ...registry, named_only_providers: ["claude-code"],
+    account_controls: { loaded: true, accounts: [control] },
+  } as SubscriptionSnapshot;
+  const quota = {
+    provider: "anthropic", status: "available", source: "Antigravity", observed_at_ms: 10,
+    rate_limits: { rateLimitsByLimitId: { "0000-gemini-pro": { limitName: "Gemini Pro", primary: { usedPercent: 20, resetsAt: 2000, windowDurationMins: 300 } } } },
+  };
+  const observation = { account_id: "otter", provider_id: "claude-code", refreshing: false, usage: quota };
+  const card = registeredUsageAccounts(snapshot, accounts, [], [observation]).find((item) => item.id === "otter");
+  assertEquals(card?.statusLabel, "GOOGLE AI PRO");
+  assertEquals(usageLimits(card?.usage).map((limit) => [limit.label, limit.remaining]), [["Gemini Pro · 5h", 80]]);
+  // Without a collected quota the sign-in status still wins.
+  const pending = registeredUsageAccounts(snapshot, accounts, [], [{ ...observation, usage: null, reason: "native_login_required" }]);
+  assertEquals(pending.find((item) => item.id === "otter")?.statusLabel, "NOT SIGNED IN");
+});

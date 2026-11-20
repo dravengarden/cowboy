@@ -48,6 +48,8 @@ pub enum Mode {
     Login,
     Logout,
     Probe,
+    /// The account's quota report; started only by [`Client::collect_usage`].
+    Usage,
 }
 
 /// A refusal the daemon reported, with its closed `code`.
@@ -296,6 +298,17 @@ pub struct RuntimeProbe {
     pub passed: bool,
 }
 
+/// The daemon's validated quota report of an account (`collect_usage`):
+/// `outcome` is `available` (with `quota`, the daemon's projection) or
+/// `authentication_required`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct UsageReport {
+    pub unit: String,
+    pub outcome: String,
+    #[serde(default)]
+    pub quota: Option<Value>,
+}
+
 /// One sequential connection to the daemon.
 #[derive(Debug)]
 pub struct Client {
@@ -361,6 +374,34 @@ impl Client {
             "the account sandbox probed another runtime"
         );
         Ok(probe)
+    }
+
+    /// Run the account's read-only quota report on its current signed-in
+    /// `credential_generation`; the daemon answers only its projection.
+    pub fn collect_usage(
+        &mut self,
+        key: &str,
+        credential_generation: u64,
+        runtime_sha256: &str,
+    ) -> Result<UsageReport> {
+        let report: UsageReport = self.call(&json!({
+            "op": "collect_usage",
+            "key": key,
+            "credential_generation": credential_generation,
+            "runtime_sha256": runtime_sha256,
+        }))?;
+        ensure!(
+            report.unit.starts_with(&format!("cga-{key}-usage-")),
+            "the account sandbox reported another account's unit"
+        );
+        ensure!(
+            matches!(
+                report.outcome.as_str(),
+                "available" | "authentication_required"
+            ) && (report.outcome == "available") == report.quota.is_some(),
+            "malformed account sandbox usage report"
+        );
+        Ok(report)
     }
 
     /// Start one account unit and receive its pipes.

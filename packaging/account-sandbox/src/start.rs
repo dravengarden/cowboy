@@ -61,7 +61,8 @@ pub fn admit(
     let credential = &meta.credential;
     let generation = request.credential_generation;
     match mode {
-        Mode::Runtime => {
+        // A quota report reads the same credential a runtime uses.
+        Mode::Runtime | Mode::Usage => {
             if generation < credential.generation {
                 return Err(fail(Code::Precondition, "older credential generation"));
             }
@@ -208,7 +209,7 @@ impl Daemon {
                     meta.credential.state = CredentialState::LoginRunning;
                 }
                 Mode::Logout => meta.credential.state = CredentialState::LogoutRunning,
-                Mode::Runtime | Mode::Probe => {}
+                Mode::Runtime | Mode::Probe | Mode::Usage => {}
             }
             meta.units.push(UnitRecord {
                 unit: unit.clone(),

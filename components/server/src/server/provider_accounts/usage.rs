@@ -45,9 +45,10 @@ async fn observes_binding(
         .is_ok_and(|fingerprint| account.identity_fingerprint.as_ref() == Some(&fingerprint)))
 }
 
-/// Internal: a verified native login exists, but its Provider has no usage
-/// collector (Antigravity). Public as `account_usage_unsupported`; the read
-/// model still reports the sign-in (`signed_in`).
+/// Internal: a verified native login exists, but its Provider generation
+/// declares no account usage (Antigravity before 0.2.9). Public as
+/// `account_usage_unsupported`; the read model still reports the sign-in
+/// (`signed_in`).
 const SIGNED_IN_USAGE_UNSUPPORTED: &str = "account_usage_unsupported_signed_in";
 
 fn public_code(code: &'static str) -> &'static str {

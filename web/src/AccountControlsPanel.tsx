@@ -1,7 +1,7 @@
 import { Alert, Button, FormControlLabel, Stack, Switch, Typography } from "@mui/material";
 import { useEffect, useRef, useState } from "react";
 import {
-  type AccountControl, accountPlanLabel, accountStateBadge, type ControlAction, controlActions, controlReasonText, logoutStatus,
+  type AccountControl, accountPlanLabel, accountStateBadge, accountUsageSummary, type ControlAction, controlActions, controlReasonText, logoutStatus,
   postAccountControl, sessionPlanKey, signInObservation,
 } from "./accountControls";
 import { ProviderAccountStatus } from "./ProviderAccountIdentity";
@@ -29,7 +29,7 @@ const PLAN_REFRESH_MS = 1_000;
 export function AccountControlsPanel({ control, observation, disabled, onChange }: {
   control: AccountControl;
   /** The account's cached usage/sign-in observation, if any. */
-  observation: { reason?: string | undefined; available?: boolean | undefined } | undefined;
+  observation: Parameters<typeof signInObservation>[0] & Parameters<typeof accountUsageSummary>[0];
   disabled: boolean;
   onChange: () => void;
 }): React.JSX.Element {
@@ -68,7 +68,7 @@ export function AccountControlsPanel({ control, observation, disabled, onChange 
       {...(badge.detail ? { detail: badge.detail } : {})} />
     {plan && <Typography variant="caption" color="text.secondary" data-account-plan={control.plan?.id}
       title="Reported by the Provider during a session of this account">Plan · {plan}</Typography>}
-    <Typography variant="caption" color="text.secondary">Usage · Not available</Typography>
+    <Typography variant="caption" color="text.secondary" data-account-usage>{accountUsageSummary(observation)}</Typography>
     {pendingFences.length > 0 && <Typography variant="caption" color="warning.main">
       Stop pending on {pendingFences.map((fence) => fence.machine_id).join(", ")}
     </Typography>}

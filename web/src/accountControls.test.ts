@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { assert, assertEquals, assertStringIncludes } from "../../tools/test-assert.ts";
 import {
-  type AccountControl, accountPlanLabel, accountStateBadge, acknowledgementTarget, acknowledgeUncertainEffect, controlActions, controlRequest, logoutStatus,
+  type AccountControl, accountPlanLabel, accountStateBadge, accountUsageSummary, acknowledgementTarget, acknowledgeUncertainEffect, controlActions, controlRequest, logoutStatus,
   pickerUnavailableReason, postAccountControl, sessionParkedReason, sessionPlanKey, signInObservation, validAccountControls, withoutNamedOnly,
 } from "./accountControls";
 import { AccountControlsPanel } from "./AccountControlsPanel";
@@ -257,4 +257,23 @@ test("a named-only Provider never offers a Service account card or sign-in", () 
   // Before the snapshot loads, or from a Controller that predates the field.
   assertEquals(withoutNamedOnly(entries, undefined).length, 3);
   assertEquals(withoutNamedOnly(entries, [""]).length, 3);
+});
+
+test("the account card summarises the collected quota or says why there is none", () => {
+  const limit = (name: string, used: number, window?: number) => ({
+    limitName: name, primary: { usedPercent: used, ...(window ? { windowDurationMins: window } : {}) },
+  });
+  const usage = {
+    provider: "antigravity", status: "available", source: "Antigravity", observed_at_ms: 1,
+    rate_limits: { rateLimitsByLimitId: { "0000-gemini-pro": limit("Gemini Pro", 20, 300), "0100-gemini-flash": limit("Gemini Flash", 0) } },
+  };
+  assertEquals(accountUsageSummary({ usage }), "Usage · Gemini Pro · 5h 80% left · Gemini Flash 100% left");
+  assertEquals(accountUsageSummary({ usage: null, refreshing: true }), "Usage · Refreshing…");
+  assertEquals(accountUsageSummary({ message: "Sign in on a Machine to query this account's usage." }),
+    "Usage · Sign in on a Machine to query this account's usage.");
+  assertEquals(accountUsageSummary(undefined), "Usage · Not available");
+  const markup = render(createElement(AccountControlsPanel, {
+    control: control(), observation: { available: true, signed_in: true, usage }, disabled: false, onChange: () => undefined,
+  }));
+  assertStringIncludes(markup, "Gemini Flash 100% left");
 });

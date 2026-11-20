@@ -26,6 +26,7 @@ mod tar;
 #[cfg(test)]
 mod tests;
 mod units;
+mod usage;
 
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;

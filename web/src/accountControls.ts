@@ -1,4 +1,5 @@
 import { productSessionSignal } from "./productSessionEnd";
+import { type ProviderUsage, usageLimits } from "./usageLimits";
 
 /** Account controls of named-only Providers (Antigravity):
  * `accounts.list().account_controls` (docs/antigravity-real-accounts-design.md,
@@ -300,6 +301,20 @@ export function signInObservation(observation: { reason?: string | undefined; av
   // Only the server's resolved native login is evidence of a sign-in; any
   // other refusal (disabled, unavailable, an unknown code) proves nothing.
   return observation.available === true ? "signed_in" : undefined;
+}
+
+/** One line of the account's quota for its controls card: each quota row's
+ * remaining share, or why there is none. The full bars and reset times live
+ * on the account's usage card. */
+export function accountUsageSummary(observation: {
+  usage?: ProviderUsage | null | undefined; message?: string | undefined; refreshing?: boolean | undefined;
+} | undefined): string {
+  const limits = usageLimits(observation?.usage ?? undefined);
+  if (limits.length > 0) {
+    return `Usage · ${limits.map((limit) => `${limit.label.replace(/ · Usage limit$/, "")} ${String(limit.remaining)}% left`).join(" · ")}`;
+  }
+  if (observation?.refreshing) return "Usage · Refreshing…";
+  return `Usage · ${observation?.message ?? "Not available"}`;
 }
 
 /** The uncertain effect an acknowledgement sheet was opened for. */

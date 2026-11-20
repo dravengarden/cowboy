@@ -19,6 +19,8 @@ use crate::store::tests::{AGY, runtime_archive, test_config};
 
 #[path = "tests_recovery.rs"]
 mod recovery;
+#[path = "tests_usage.rs"]
+mod usage;
 
 struct Fixture {
     _temp: tempfile::TempDir,
