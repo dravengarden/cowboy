@@ -168,6 +168,13 @@ pub fn properties(config: &Config, spec: &UnitSpec<'_>) -> Vec<String> {
             "SystemCallArchitectures=native",
             "SystemCallFilter=@system-service",
             "SystemCallFilter=~io_uring_setup io_uring_enter io_uring_register",
+            // Refuse a filtered call with ENOSYS instead of killing the
+            // process: Node's libuv probes io_uring_setup at startup and
+            // falls back to epoll on ENOSYS, but systemd's default action
+            // (SIGSYS) killed agy-proxy before it answered `initialize`.
+            // Per-call `:ENOSYS` suffixes cannot be combined with the
+            // @system-service allow-list (the unit fails with status 228).
+            "SystemCallErrorNumber=ENOSYS",
             "CapabilityBoundingSet=",
             "AmbientCapabilities=",
             "ProtectProc=invisible",
@@ -318,6 +325,7 @@ mod tests {
             "SystemCallArchitectures=native".into(),
             "SystemCallFilter=@system-service".into(),
             "SystemCallFilter=~io_uring_setup io_uring_enter io_uring_register".into(),
+            "SystemCallErrorNumber=ENOSYS".into(),
             "CapabilityBoundingSet=".into(),
             "AmbientCapabilities=".into(),
             "ProtectProc=invisible".into(),
