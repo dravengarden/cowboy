@@ -1,5 +1,15 @@
 //! Material comparison of portable credential bundles.
-use super::PortableCredentialBundle;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PortableCredentialBundle {
+    pub portable_schema: String,
+    pub method_id: String,
+    /// Opaque values encoded with standard base64. Bundle keys are declared by
+    /// the Provider authentication contract and never appear in logs.
+    pub values: std::collections::BTreeMap<String, String>,
+}
 
 impl PortableCredentialBundle {
     /// A Provider CLI may rewrite its credential file without refreshing it:

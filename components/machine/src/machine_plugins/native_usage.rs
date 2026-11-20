@@ -4,7 +4,9 @@ use crate::provider_account::{NativeProfileReceipt, ProviderAccountId};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Weak};
 
+mod portable;
 mod sandbox;
+pub use portable::PortableInvocation;
 
 /// Native processes share a home only within one account. They must not hold
 /// the global installation lock or serialize independent accounts.

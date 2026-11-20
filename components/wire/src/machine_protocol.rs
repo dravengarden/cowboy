@@ -33,11 +33,14 @@ pub mod telemetry_recovery_audit;
 mod challenge_proof;
 pub use challenge_proof::{challenge_proof_v1, challenge_proof_v2, challenge_proof_v3};
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 49;
 /// An owner-confirmed or owner-scheduled reset of a named native account's
 /// banked usage limit (`ConsumeNativeReset`), sent only by that account's
 /// signed collector inside its verified native home.
 pub const NATIVE_RESET_PROTOCOL_VERSION: u16 = 49;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 50;
+/// Named portable accounts' usage (`CollectPortableUsage`): the signed
+/// collector runs in the account's vault replica scope, never the Service's.
+pub const PORTABLE_USAGE_PROTOCOL_VERSION: u16 = 50;
 /// Controller-owned account-sandbox controls: fences (`AccountSandboxFence`,
 /// the kill switch and suspension stop an account's units through the
 /// Machine's daemon) and the revocation's removal of an account's home and
@@ -82,6 +85,8 @@ mod host_resources;
 pub use host_resources::{BrowserResources, HostResources, ObservedHostResources};
 mod native_usage;
 mod portable_bundle;
+pub use portable_bundle::PortableCredentialBundle;
+pub mod portable_usage;
 pub use native_usage::{NativeResetRequest, native_usage_error_code};
 
 pub const CURRENT_TURN_PROTOCOL_VERSION: u16 = 34;
@@ -653,16 +658,6 @@ pub enum ProviderAuthAction {
     Wipe,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PortableCredentialBundle {
-    pub portable_schema: String,
-    pub method_id: String,
-    /// Opaque values encoded with standard base64. Bundle keys are declared by
-    /// the Provider authentication contract and never appear in logs.
-    pub values: std::collections::BTreeMap<String, String>,
-}
-
 /// Service-auth bundle encrypted to one enrolled Machine. The signature binds
 /// every routing and cryptographic field; plaintext never enters this contract.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -855,6 +850,11 @@ pub enum MachineCommand {
         request_id: String,
         profile: Box<crate::provider_account::NativeProfileReceipt>,
         request: NativeResetRequest,
+    },
+    /// Answered only by `PluginHostResponse`; see [`portable_usage`].
+    CollectPortableUsage {
+        request_id: String,
+        request: Box<portable_usage::PortableUsageRequest>,
     },
     NativeLogout {
         request_id: String,

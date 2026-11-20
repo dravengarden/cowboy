@@ -313,6 +313,30 @@ active Provider generation, so no collector runs outside the account's custody
 and a Provider upgrade needs no new sign-in. Owner, account, enrollment, login
 generation and connection are checked around dispatch and publication. Machine protocol 37 is required; older
 Machines report an update requirement instead of querying the Service account.
+Portable accounts (Codex and Grok subscriptions signed in once, and the DeepSeek
+API-key account shared by `claude-deepseek`, `codex-deepseek` and
+`deepseek-harness`) keep their credential in the account's Service vault. Their
+usage runs the same released signed collector as the Service account, on one
+connected Machine, inside the account's own vault replica: the credential, home
+and sidecars a session on that account launches with, never the Machine's
+Service credential and never on the Controller. The Machine must hold exactly
+the vault's current Ready generation before and after the run, and holds the
+account's credential guard so no apply or wipe overlaps it. The Machine is
+chosen deterministically among those with an exact released active collector
+generation that host runtime policy allows: the one running most of the owner's
+sessions on the account, then the lowest Machine ID; `machine_id` reports the
+current choice. A collector's own token refresh (Codex refreshes an expired
+token once) lands in the account's runtime projection and is promoted only by
+the Service's compare-and-swap refresh, exactly like a session's. Activity
+attachments stay with the Service account because request telemetry has no
+account dimension. Machine protocol 50 is required (`machine_usage_update_required`).
+Portable reasons are `portable_credentials_required`,
+`portable_usage_machine_unavailable`, `portable_usage_replica_pending`,
+`portable_usage_authentication_required`, `portable_usage_busy`,
+`portable_usage_throttled`, `portable_usage_collector_unavailable` and
+`portable_usage_collector_failed`, each with a fixed `message`; an observation
+binds the account's sign-in identity and admission revision, so a credential
+refresh keeps it and a new key or sign-in discards it.
 Cached observations are separate from authentication authority and are discarded
 when their native binding changes. Refresh attempts coalesce and share a
 five-minute budget; failed refreshes retain the last valid quota as stale.
@@ -711,7 +735,8 @@ account vault and redistributes the winner, while a loser is re-projected. A
 refreshed credential's identity evidence must match the account's. Session
 admission uses the vault and never falls back to the default account; a session
 registered on an older native profile keeps its native binding. An account signed
-in natively before needs one new sign-in to serve every Machine.
+in natively before needs one new sign-in to serve every Machine. Their quota is
+collected from the vault replica (see [Account usage and quota](#account-usage-and-quota)).
 
 Claude named accounts stay native per Machine (`NATIVE_ONLY_PROVIDERS`): their
 credentials never enter a vault or reach another Machine, and native login,

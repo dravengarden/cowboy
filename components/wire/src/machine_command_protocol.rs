@@ -27,6 +27,7 @@ impl MachineCommand {
             Self::Browser { .. } => MACHINE_BROWSER_PROTOCOL_VERSION,
             Self::CollectNativeUsage { .. } => NATIVE_USAGE_PROTOCOL_VERSION,
             Self::ConsumeNativeReset { .. } => NATIVE_RESET_PROTOCOL_VERSION,
+            Self::CollectPortableUsage { .. } => PORTABLE_USAGE_PROTOCOL_VERSION,
             Self::AccountSandboxFence { .. } | Self::AccountSandboxRemove { .. } => {
                 ACCOUNT_FENCE_PROTOCOL_VERSION
             }

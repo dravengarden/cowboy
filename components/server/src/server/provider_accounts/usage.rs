@@ -1,7 +1,12 @@
-//! Native subscription quota. The same owner/binding admission serves UI and agents.
+//! Named account quota: native subscriptions (a login on one Machine) and
+//! portable accounts (a Service vault credential on every Machine, see
+//! [`portable`]). The same owner/binding admission serves UI and agents.
 use super::*;
 use crate::provider_account::ProviderAccountId;
 use crate::store::provider_accounts::logins::NativeCompletion;
+use crate::usage::native::Scope;
+
+mod portable;
 
 pub(in crate::server) mod reset;
 
@@ -10,6 +15,28 @@ struct Target {
     completion: NativeCompletion,
     provider: String,
     source: String,
+}
+
+/// The read model's account target: which credential an observation binds.
+enum Resolved {
+    Native(Box<Target>),
+    Portable(Box<portable::Target>),
+}
+
+impl Resolved {
+    fn scope(&self) -> Scope {
+        match self {
+            Self::Native(target) => Scope::from(target.completion.clone()),
+            Self::Portable(target) => Scope::Portable(target.scope.clone()),
+        }
+    }
+
+    fn provider(&self) -> &str {
+        match self {
+            Self::Native(target) => &target.provider,
+            Self::Portable(target) => &target.binding.account,
+        }
+    }
 }
 
 /// Advisory projection only. The dispatch/commit paths recheck this scope in
@@ -65,7 +92,7 @@ async fn target(
     state: &AppState,
     owner: &str,
     id: &ProviderAccountId,
-) -> Result<Target, &'static str> {
+) -> Result<Resolved, &'static str> {
     let store = state.store.as_ref().ok_or("unavailable")?;
     let registry = store
         .provider_accounts(owner)
@@ -78,6 +105,11 @@ async fn target(
         .ok_or("account_unavailable")?;
     if !account.available() {
         return Err("account_disabled");
+    }
+    // A vault account's sessions run from its Service replica on any
+    // Machine, whatever native login it may also have.
+    if let Some(portable) = portable::target(state, account) {
+        return portable.map(|target| Resolved::Portable(Box::new(target)));
     }
     if !state
         .provider_catalog
@@ -153,12 +185,12 @@ async fn target(
             .into_iter()
             .find(|binding| binding.account == provider)
             .ok_or(SIGNED_IN_USAGE_UNSUPPORTED)?;
-        return Ok(Target {
+        return Ok(Resolved::Native(Box::new(Target {
             operation,
             completion,
             provider,
             source: binding.product_label().into(),
-        });
+        })));
     }
     Err(if pending {
         "native_login_pending"
@@ -274,7 +306,7 @@ fn error_message(code: &str) -> &str {
             "The Provider was updated after this account signed in. Sign in again to use it and query its usage."
         }
         "machine_usage_update_required" => {
-            "The signed-in Machine needs an update to query this account's usage."
+            "The Machine that would query this account's usage needs an update."
         }
         "machine_unavailable" => {
             "The signed-in Machine is offline. Usage will refresh when it reconnects."
@@ -285,7 +317,9 @@ fn error_message(code: &str) -> &str {
         "native_usage_busy" | "machine_usage_busy" => {
             "This Machine is busy. Cowboy will retry the usage query automatically."
         }
-        "runtime_not_allowed" => "This Provider cannot currently run on the signed-in Machine.",
+        "runtime_not_allowed" => {
+            "This Provider cannot currently run on the Machine that would query its usage."
+        }
         "native_usage_collector_unavailable" | "native_usage_home_unsupported" => {
             "The installed Provider cannot query this native login. Check its Machine installation."
         }
@@ -294,6 +328,30 @@ fn error_message(code: &str) -> &str {
         }
         "native_usage_collector_failed" => {
             "The native quota query failed. Cowboy will retry automatically."
+        }
+        "portable_credentials_required" => {
+            "Sign in or enter this account's API key in Settings → Subscriptions to query its usage."
+        }
+        "portable_usage_machine_unavailable" => {
+            "No connected Machine can query this account's usage. Usage will refresh when one reconnects."
+        }
+        "portable_usage_replica_pending" => {
+            "The Machine has not received this account's current credentials yet. Cowboy will retry automatically."
+        }
+        "portable_usage_authentication_required" => {
+            "This account's sign-in needs renewal. Sign in again in Settings → Subscriptions to refresh usage."
+        }
+        "portable_usage_busy" => {
+            "This account's credentials are being updated. Cowboy will retry the usage query automatically."
+        }
+        "portable_usage_throttled" => {
+            "The Provider asked Cowboy to slow down. Usage will refresh later."
+        }
+        "portable_usage_collector_unavailable" | "portable_usage_account_required" => {
+            "The installed Provider cannot query this account's usage. Check its Machine installation."
+        }
+        "portable_usage_collector_failed" | "portable_usage_temporarily_unavailable" => {
+            "The account quota query failed. Cowboy will retry automatically."
         }
         "usage_admission_unavailable" => {
             "Usage collection is paused. The Service admission ledger needs repair and a restart."
@@ -344,16 +402,19 @@ pub(in crate::server) async fn read_one(
             return Ok(value);
         }
     };
-    value["machine_id"] = json!(target.completion.machine_id);
+    value["machine_id"] = json!(match &target {
+        Resolved::Native(native) => Some(native.completion.machine_id.clone()),
+        Resolved::Portable(portable) => portable::selected_machine(state, owner, id, portable),
+    });
     value["available"] = json!(true);
     value["signed_in"] = json!(true);
     let cache = state.usage.native.entry(owner, id.as_str());
     value["refreshing"] = json!(cache.collection.try_lock().is_err());
     // A read neither takes the database admission write lock nor binds a cache
     // generation. Delayed reads cannot erase a newer login's observation.
-    let entry = cache.data.lock().snapshot(&target.completion);
+    let entry = cache.data.lock().snapshot(&target.scope());
     let budget = state.usage.limiter.view(
-        &target.provider,
+        target.provider(),
         &crate::usage::limiter::Limiter::account_key(owner, id.as_str()),
         now_ms(),
     );
@@ -476,7 +537,13 @@ async fn refresh_owned(
     target(state, owner, id).await.map_err(public_code)?;
     let cache = state.usage.native.entry(owner, id.as_str());
     let collection = Arc::clone(&cache.collection).lock_owned().await;
-    let target = target(state, owner, id).await.map_err(public_code)?;
+    let target = match target(state, owner, id).await.map_err(public_code)? {
+        Resolved::Native(target) => *target,
+        Resolved::Portable(target) => {
+            return portable::refresh(state, owner, id, &target, &cache, collection).await;
+        }
+    };
+    let scope = Scope::from(target.completion.clone());
     let key = crate::usage::limiter::Limiter::account_key(owner, id.as_str());
     let mut permit = None;
     let due = state
@@ -485,7 +552,7 @@ async fn refresh_owned(
         .ok_or("unavailable")?
         .with_native_login_binding(owner, &target.operation, &target.completion, || {
             let mut entry = cache.data.lock();
-            entry.bind(&target.completion);
+            entry.bind(&scope);
             let due = entry.due(now_ms())
                 && match state.usage.limiter.start(&target.provider, &key, now_ms()) {
                     Ok(value) => {
@@ -516,7 +583,7 @@ async fn refresh_owned(
     let result = collect(state, owner, &target).await;
     let outcome = collection_outcome(result.as_ref().err().copied());
     let succeeded = result.is_ok();
-    cache.data.lock().finish(&target.completion, result);
+    cache.data.lock().finish(&scope, result);
     if succeeded {
         state.usage.native.persist();
     }
@@ -536,7 +603,10 @@ fn collection_outcome(error: Option<&str>) -> crate::usage::limiter::Outcome {
     use crate::usage::limiter::Outcome;
     match error {
         None => Outcome::Success,
-        Some("native_usage_authentication_required") => Outcome::Authentication,
+        Some("native_usage_authentication_required" | "portable_usage_authentication_required") => {
+            Outcome::Authentication
+        }
+        Some("portable_usage_throttled") => Outcome::Throttled,
         Some(
             "machine_unavailable"
             | "machine_usage_update_required"
@@ -548,7 +618,13 @@ fn collection_outcome(error: Option<&str>) -> crate::usage::limiter::Outcome {
             | "native_usage_collector_unavailable"
             | "native_usage_home_unsupported"
             | "runtime_not_allowed"
-            | "native_usage_dispatch_failed",
+            | "native_usage_dispatch_failed"
+            | "portable_usage_machine_unavailable"
+            | "portable_usage_replica_pending"
+            | "portable_usage_busy"
+            | "portable_usage_account_required"
+            | "portable_usage_collector_unavailable"
+            | "portable_usage_dispatch_failed",
         ) => Outcome::LocalFailure,
         Some(_) => Outcome::Failure,
     }

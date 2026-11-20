@@ -60,6 +60,7 @@ fn claimed_site(command: &MachineCommand) -> Option<ClaimedSite<'_>> {
         | MachineCommand::QueryNativeProfile { .. }
         | MachineCommand::CollectNativeUsage { .. }
         | MachineCommand::ConsumeNativeReset { .. }
+        | MachineCommand::CollectPortableUsage { .. }
         | MachineCommand::NativeLogout { .. }
         | MachineCommand::QueryLoginStop { .. }
         | MachineCommand::QueryWorkerExit { .. }

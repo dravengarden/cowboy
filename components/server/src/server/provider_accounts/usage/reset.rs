@@ -36,7 +36,12 @@ async fn reset_target(
     owner: &str,
     id: &ProviderAccountId,
 ) -> Result<(Target, bool), &'static str> {
-    let target = target(state, owner, id).await.map_err(public_code)?;
+    // Banked resets exist only for native logins (Claude); portable accounts
+    // have no reset path on the named card.
+    let target = match target(state, owner, id).await.map_err(public_code)? {
+        Resolved::Native(target) => *target,
+        Resolved::Portable(_) => return Err("account_reset_unsupported"),
+    };
     let binding = state
         .usage
         .plugin_bindings()

@@ -39,6 +39,15 @@ impl PluginExecutionScope {
     ) -> crate::machine_plugins::native_usage::Invocation {
         crate::machine_plugins::native_usage::Invocation::new(profile, Arc::clone(&self.connected))
     }
+    pub fn portable_usage(
+        &self,
+        request: crate::machine_protocol::portable_usage::PortableUsageRequest,
+    ) -> crate::machine_plugins::native_usage::PortableInvocation {
+        crate::machine_plugins::native_usage::PortableInvocation::new(
+            request,
+            Arc::clone(&self.connected),
+        )
+    }
     pub fn telemetry_export(
         &self,
         request: &crate::machine_protocol::telemetry_export::ExportAttempt,

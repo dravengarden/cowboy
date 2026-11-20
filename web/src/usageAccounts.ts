@@ -78,7 +78,7 @@ export function registeredUsageAccounts(
       usage: usage ?? { provider, status: "unavailable", source: "", observed_at_ms: 0 },
       ...(native ? { native } : {}),
       ...(plan ? { statusLabel: plan.toUpperCase() } : {}),
-      ...(!collected ? { statusLabel: !account.enabled ? "DISABLED" : usage ? "SESSION" : native?.refreshing ? "REFRESHING" : native?.reason === "native_login_outdated" ? "SIGN IN AGAIN" : native?.reason === "native_login_pending" ? "SIGN-IN PENDING" : native?.reason === "native_login_required" ? "NOT SIGNED IN" : "NOT REPORTED" } : {}),
+      ...(!collected ? { statusLabel: !account.enabled ? "DISABLED" : usage ? "SESSION" : native?.refreshing ? "REFRESHING" : native?.reason === "native_login_outdated" ? "SIGN IN AGAIN" : native?.reason === "native_login_pending" ? "SIGN-IN PENDING" : native?.reason === "native_login_required" || native?.reason === "portable_credentials_required" ? "NOT SIGNED IN" : "NOT REPORTED" } : {}),
       emptyMessage: !account.enabled ? "This account is disabled."
         : native?.message ?? (native?.refreshing ? "Refreshing this account’s usage…" : "No quota reported for this account yet."),
     };

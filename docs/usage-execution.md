@@ -20,8 +20,40 @@ bootstrap command. The preference remains editable for recovery after a host
 policy change, without granting permission to a currently denied route.
 
 The selection applies to the account's collection, activity decoration and
-supported usage-reset operations. Session-reported usage remains associated
+supported usage-reset operations. Additional (named) accounts never inherit it:
+a portable named account runs its collector in its own vault replica on a
+Machine chosen as described in [agent-api](agent-api.md#account-usage-and-quota),
+within the same host runtime restrictions. Session-reported usage remains associated
 with the session and does not become account-plan usage.
+
+## Named portable accounts
+
+A named Codex or Grok subscription signed in once, or a named DeepSeek API key,
+keeps its credential in the account's Service vault, replicated to every Machine
+at account scope (Machine protocol 47). Its usage reuses the released signed
+collector of the Service account's usage host (the first member of the
+account's credential scope that declares one: `claude-deepseek` for DeepSeek),
+dispatched as `CollectPortableUsage` (Machine protocol 50; an older Machine is
+`machine_usage_update_required`). The Machine runs it through the Service host
+path at account scope, so the collector sees exactly the credential projection,
+home and sidecars of a session on that account. It refuses unless the account
+replica is the vault's current Ready generation the Controller named, refuses an
+observation whose generation changed while the collector ran, and holds the
+account's credential guard for the run so no apply or wipe overlaps it.
+
+**Refresh-token decision.** A collector may rotate the credential: the Codex
+collector asks its CLI to refresh once after the backend reports the access
+token expired, and Grok's CLI refreshes its own sign-in. The rotation can only
+land in the account's runtime projection, where the account-scope credential
+watch proposes it to the Service exactly like a session's refresh: the Service
+compare-and-swaps it into the account vault and redistributes the winner, or
+discards a stale loser and restores the vault generation on that Machine. The
+collector persists nothing elsewhere and never sees the Service account's
+credential. Placement keeps refreshes with the lineage sessions already use:
+among Machines with an exact released active collector generation that host
+runtime policy admits, Cowboy picks the one running most of the owner's sessions
+on the account, then the lowest Machine ID, and never inherits the Service
+account's configured usage query Machine.
 
 ## Operator CLI
 
@@ -66,6 +98,9 @@ Starts are evenly spaced (one minute with these defaults), with at most one
 active collector per Provider. The oldest named account is tried first.
 Anthropic's Service account and named native accounts share the same Provider
 budget; account observations remain isolated by owner, account and native login.
+Named portable accounts (Codex, Grok, DeepSeek API key) likewise share their
+Provider's budget with its Service account, one start per account interval, and
+their observations stay isolated by owner, account and vault identity.
 OpenAI, DeepSeek and xAI have independent Provider budgets. Passive ACP usage,
 context/cost events and reads of cached observations consume no collection budget.
 
@@ -90,7 +125,7 @@ a timeout within the collector's deadline):
 | Provider | Native CLI work (opaque HTTP) | Direct HTTP sent by the signed collector |
 | --- | --- | --- |
 | Anthropic | `claude auth status`, `get_usage` control request | up to 3: `/api/oauth/usage`, `/api/oauth/profile`, prepaid credits |
-| OpenAI | Codex app-server `account/read` (no token refresh), `account/rateLimits/read`, `account/usage/read` | none |
+| OpenAI | Codex app-server `account/read` (a token refresh only after the backend reports it expired), `account/rateLimits/read`, `account/usage/read` | none |
 | DeepSeek | none | one local gateway `/provider-info` request per lane (2); the gateway owns its upstream balance request |
 | xAI | Grok `_x.ai/billing` | up to 2: `/rest/subscriptions`, `GetRemainingResets` |
 

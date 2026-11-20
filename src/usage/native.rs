@@ -1,5 +1,6 @@
 //! Owner-scoped observations; native credentials never enter the Controller.
 use crate::store::provider_accounts::logins::NativeCompletion;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -23,9 +24,39 @@ struct Persisted {
 struct PersistedEntry {
     owner: String,
     account: String,
-    scope: NativeCompletion,
+    scope: Scope,
     usage: serde_json::Value,
     last_attempt_at_ms: i64,
+}
+
+/// What one observation is bound to. Persisted untagged, so earlier native
+/// entries load unchanged; the variants' closed field sets never overlap.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Scope {
+    /// A verified native login on one Machine.
+    Native(Box<NativeCompletion>),
+    /// A named portable account's vault identity. Its credential generation
+    /// is deliberately absent: a refresh rotation keeps the observation.
+    Portable(PortableScope),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PortableScope {
+    /// The account's Provider and the usage account its collector reports.
+    pub portable_provider: String,
+    pub usage_provider: String,
+    /// The bound sign-in identity (none for an entered key).
+    pub identity_fingerprint: Option<String>,
+    /// The account's last authority change: a new key or sign-in.
+    pub admission_revision: Option<i64>,
+}
+
+impl From<NativeCompletion> for Scope {
+    fn from(completion: NativeCompletion) -> Self {
+        Self::Native(Box::new(completion))
+    }
 }
 
 #[derive(Default)]
@@ -36,7 +67,7 @@ pub struct Slot {
 
 #[derive(Default, Clone)]
 pub struct Entry {
-    pub scope: Option<NativeCompletion>,
+    pub scope: Option<Scope>,
     pub usage: Option<serde_json::Value>,
     pub last_attempt_at_ms: i64,
     pub error: Option<&'static str>,
@@ -138,18 +169,18 @@ fn save(path: &Path, persisted: &Persisted) -> std::io::Result<()> {
 
 impl Entry {
     #[must_use]
-    pub fn snapshot(&self, completion: &NativeCompletion) -> Self {
-        if self.scope.as_ref() == Some(completion) {
+    pub fn snapshot(&self, scope: &Scope) -> Self {
+        if self.scope.as_ref() == Some(scope) {
             self.clone()
         } else {
             Self::default()
         }
     }
 
-    pub fn bind(&mut self, completion: &NativeCompletion) {
-        if self.scope.as_ref() != Some(completion) {
+    pub fn bind(&mut self, scope: &Scope) {
+        if self.scope.as_ref() != Some(scope) {
             *self = Self {
-                scope: Some(completion.clone()),
+                scope: Some(scope.clone()),
                 ..Self::default()
             };
         }
@@ -159,11 +190,7 @@ impl Entry {
         now.saturating_sub(self.last_attempt_at_ms) >= 300_000
     }
 
-    pub fn finish(
-        &mut self,
-        scope: &NativeCompletion,
-        result: Result<serde_json::Value, &'static str>,
-    ) {
+    pub fn finish(&mut self, scope: &Scope, result: Result<serde_json::Value, &'static str>) {
         if self.scope.as_ref() != Some(scope) {
             return;
         }
@@ -174,9 +201,13 @@ impl Entry {
             }
             Err(code) => {
                 self.error = Some(code);
+                // Nothing reached the Provider: retry once a Machine can.
                 if matches!(
                     code,
-                    "machine_usage_update_required" | "machine_unavailable"
+                    "machine_usage_update_required"
+                        | "machine_unavailable"
+                        | "portable_usage_machine_unavailable"
+                        | "portable_usage_replica_pending"
                 ) {
                     self.last_attempt_at_ms = 0;
                 }
@@ -189,8 +220,8 @@ impl Entry {
 mod tests {
     use super::*;
 
-    fn completion(generation: u64) -> NativeCompletion {
-        serde_json::from_value(serde_json::json!({
+    fn completion(generation: u64) -> Scope {
+        serde_json::from_value::<NativeCompletion>(serde_json::json!({
             "machine_id": "ovh",
             "recipient_fingerprint": "recipient",
             "profile": {
@@ -206,6 +237,7 @@ mod tests {
             }
         }))
         .unwrap()
+        .into()
     }
 
     #[test]
@@ -284,6 +316,7 @@ mod tests {
         })).unwrap();
         let mut new = old.clone();
         new.profile.generation += 1;
+        let (old, new) = (Scope::from(old), Scope::from(new));
         let mut entry = Entry::default();
         entry.bind(&old);
         let usage = serde_json::json!({"rate_limits":{"remaining":71}});
@@ -300,5 +333,46 @@ mod tests {
         entry.finish(&old, Ok(usage));
         assert_eq!(entry.usage, Some(current));
         assert!(entry.error.is_none());
+    }
+
+    #[test]
+    fn portable_observations_persist_beside_native_ones_and_survive_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("usage-named.json");
+        let cache = Cache::persistent(path.clone());
+        let portable = |revision| {
+            Scope::Portable(PortableScope {
+                portable_provider: "grok".into(),
+                usage_provider: "xai".into(),
+                identity_fingerprint: Some("sha256:fox".into()),
+                admission_revision: Some(revision),
+            })
+        };
+        for (account, scope) in [("fox", portable(4)), ("mink", completion(4))] {
+            let slot = cache.entry("owner", account);
+            let mut entry = slot.data.lock();
+            entry.bind(&scope);
+            entry.finish(&scope, Ok(serde_json::json!({"rate_limits": {"used": 1}})));
+        }
+        cache.persist();
+        let restored = Cache::persistent(path);
+        let fox = restored.entry("owner", "fox");
+        assert!(fox.data.lock().snapshot(&portable(4)).usage.is_some());
+        // A new key or sign-in is a new authority: never its predecessor's quota.
+        assert!(fox.data.lock().snapshot(&portable(5)).usage.is_none());
+        assert!(
+            restored
+                .entry("owner", "mink")
+                .data
+                .lock()
+                .snapshot(&completion(4))
+                .usage
+                .is_some()
+        );
+        // A machine-side refusal before dispatch is retried at once.
+        let mut entry = fox.data.lock();
+        entry.last_attempt_at_ms = 1000;
+        entry.finish(&portable(4), Err("portable_usage_replica_pending"));
+        assert_eq!(entry.last_attempt_at_ms, 0);
     }
 }
