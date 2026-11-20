@@ -160,6 +160,8 @@ export async function fakeEndpoint(
         closed: entry.closed,
       };
     },
+    // The worker's own requests: a session without extensions.
+    "cowboy/extensions": () => ({ tools: [], instructions: "" }),
     "process/terminate": (params) => {
       processes.get(params.processId)?.child.kill("SIGTERM");
       return {};

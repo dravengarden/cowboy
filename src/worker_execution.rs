@@ -3,9 +3,11 @@
 //! the Unix socket the daemon bound into it. Placement and retries are not
 //! model tools.
 
+mod extension_broker;
 mod ledger;
 mod memory_bridge;
 mod relay;
+pub use extension_broker::{Broker as ExtensionBroker, Plan as ExtensionPlan, ServerPlan};
 pub use ledger::{LEDGER_ENV, Ledger, MAX_PROCESSES};
 pub use memory_bridge::MemoryBridge;
 
@@ -63,6 +65,8 @@ pub struct Client {
     ledger: OnceLock<Arc<Ledger>>,
     /// The session's memory relay, bridged for an account-sandboxed unit.
     memory: OnceLock<MemoryBridge>,
+    /// The session's extension servers, run by the worker for the unit.
+    extensions: OnceLock<Arc<ExtensionBroker>>,
 }
 
 /// Wire calls at least this slow are logged individually.
@@ -84,6 +88,7 @@ impl Client {
             event_cursor: Mutex::new(None),
             ledger: OnceLock::new(),
             memory: OnceLock::new(),
+            extensions: OnceLock::new(),
         })
     }
 

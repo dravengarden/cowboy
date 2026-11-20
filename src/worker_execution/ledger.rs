@@ -40,10 +40,9 @@ const MAX_FENCED_TURNS: usize = 64;
 /// The ledger turn the readiness probe is recorded under.
 const READINESS_TURN: &str = "cowboy-readiness";
 /// The ledger owner of the session's MCP servers on the target (Cowboy MCP
-/// and the folder's bindings): they outlive turns and end at teardown.
+/// and the folder's bindings): the worker starts them itself, they outlive
+/// turns and end at teardown. The unit can neither start nor reach them.
 const SERVER_TURN: &str = "cowboy-session-servers";
-/// Live session servers one session may hold.
-const MAX_SERVERS: usize = 16;
 /// The endpoint's own request: the agent side reports an uncertain effect
 /// it detected (`UNCERTAIN_REPORT` in the Antigravity facade). Never
 /// forwarded to the target.
@@ -117,9 +116,8 @@ struct State {
     /// readiness window admits): the only processes whose output carries no
     /// result the agent acts on. Kept after their exit.
     probes: HashSet<String>,
-    /// The exact argv of each MCP server this session may keep running on
-    /// the target, set by the worker from its own extension plan.
-    servers: Vec<Vec<String>>,
+    /// Target processes the worker started as the session's MCP servers.
+    servers: HashSet<String>,
     closed: bool,
 }
 
@@ -196,9 +194,32 @@ impl Ledger {
         self.state.lock().readiness = starting;
     }
 
-    /// The MCP servers (exact argv) the session may run outside its turns.
-    pub fn set_session_servers(&self, servers: Vec<Vec<String>>) {
-        self.state.lock().servers = servers;
+    /// Record a session MCP server the worker started: ended at teardown,
+    /// never by a turn, and out of the unit's reach.
+    pub(super) fn record_server(&self, process: &str) -> Result<(), &'static str> {
+        let mut state = self.state.lock();
+        if state.closed {
+            return Err("the session is ending");
+        }
+        if state.processes.len() >= MAX_PROCESSES {
+            return Err("session process limit reached; process start refused");
+        }
+        state.servers.insert(process.to_owned());
+        state
+            .processes
+            .insert(process.to_owned(), SERVER_TURN.to_owned());
+        Ok(())
+    }
+
+    /// Admit one extension tool call under the active turn: refused outside
+    /// a turn, drained before the turn's completion.
+    pub(super) fn admit_call(&self) -> Result<Admitted, &'static str> {
+        let mut state = self.state.lock();
+        let turn = state
+            .active_turn()
+            .ok_or("no Cowboy turn is running; the tool call was refused")?;
+        *state.admitted.entry(turn.clone()).or_default() += 1;
+        Ok(Admitted { turn })
     }
 
     pub fn begin_turn(&self, turn: &str) {
@@ -236,10 +257,14 @@ impl Ledger {
         method: &str,
         params: &Value,
     ) -> Result<Option<Admitted>, &'static str> {
+        let mut state = self.state.lock();
+        // The worker's own MCP servers are not the unit's processes.
+        if process_id(params).is_some_and(|process| state.servers.contains(&process)) {
+            return Err("that process belongs to the worker; request refused");
+        }
         if !MUTATIONS.contains(&method) {
             return Ok(None);
         }
-        let mut state = self.state.lock();
         if method != "process/start" {
             let turn = state
                 .active_turn()
@@ -250,33 +275,7 @@ impl Ledger {
         let process = process_id(params)
             .filter(|process| !process.is_empty() && process.len() <= 256)
             .ok_or("process start needs a valid processId")?;
-        let server = !state.closed
-            && params
-                .get("argv")
-                .and_then(Value::as_array)
-                .is_some_and(|argv| {
-                    state.servers.iter().any(|server| {
-                        server.len() == argv.len()
-                            && server
-                                .iter()
-                                .zip(argv)
-                                .all(|(want, got)| got.as_str() == Some(want))
-                    })
-                });
         let turn = match state.active_turn() {
-            // A session server is the worker's own declared command, never
-            // a turn's effect: it outlives turns and ends at teardown.
-            _ if server => {
-                let live = state
-                    .processes
-                    .values()
-                    .filter(|owner| *owner == SERVER_TURN)
-                    .count();
-                if live >= MAX_SERVERS {
-                    return Err("session server limit reached; process start refused");
-                }
-                SERVER_TURN.to_owned()
-            }
             Some(turn) => turn,
             None if state.readiness && !state.closed => {
                 // The readiness probe: exactly the projection's Git probe,
@@ -500,6 +499,11 @@ impl Client {
         let _ = self.memory.set(memory);
     }
 
+    /// Serve the session's extension servers to the sandboxed unit.
+    pub fn set_extensions(&self, broker: Arc<super::extension_broker::Broker>) {
+        let _ = self.extensions.set(broker);
+    }
+
     /// Relay one native request from the agent side. Without a ledger this
     /// is the plain invocation; with one, effects are admitted (and starts
     /// recorded) first and lost replies mark the session's effect uncertain.
@@ -517,6 +521,18 @@ impl Client {
             return match self.memory.get() {
                 Some(memory) => memory.forward(&params).await,
                 None => refused("memory is not available in this session"),
+            };
+        }
+        if method == super::extension_broker::EXTENSIONS_REQUEST {
+            return match self.extensions.get() {
+                Some(broker) => broker.list().await,
+                None => json!({"result": {"tools": [], "instructions": ""}}),
+            };
+        }
+        if method == super::extension_broker::EXTENSION_CALL {
+            return match self.extensions.get().cloned() {
+                Some(broker) => broker.call(self, &params).await,
+                None => refused("this session has no extensions"),
             };
         }
         if method == UNCERTAIN_REPORT {

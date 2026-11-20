@@ -1296,7 +1296,11 @@ export function validateProviderManifest(input: unknown): asserts input is Provi
   );
   const declaresGateway = runtime.sidecars.length > 0;
   if (
-    !knownCapabilities(runtime.required_capabilities, String(full.sdk_version), compareProviderVersions) ||
+    !knownCapabilities(
+      runtime.required_capabilities,
+      String(full.sdk_version),
+      compareProviderVersions,
+    ) ||
     !capabilities.has("provider.runtime.v1") ||
     usesGateway !== declaresGateway ||
     capabilities.has("provider.gateway.v1") !== declaresGateway
@@ -1617,6 +1621,12 @@ function validateProviderUiManifestContract(
     throw new Error(
       `Provider SDK ${input.sdk_version} is incompatible with Cowboy Provider SDK ${PROVIDER_SDK_VERSION}`,
     );
+  }
+  if (
+    usesLevitatingActivity(input.ui.surfaces) &&
+    compareProviderVersions(String(input.sdk_version), "3.7.0") < 0
+  ) {
+    throw new Error("Levitating activity requires Provider SDK 3.7.0");
   }
   if (
     !isRecord(input.display) ||
@@ -2346,6 +2356,18 @@ function validateUiNode(
     default:
       throw new Error(`Unknown Provider UI component ${input.component}`);
   }
+}
+
+/** Whether any surface shows the levitating activity (Provider SDK 3.7.0). */
+function usesLevitatingActivity(surfaces: Record<string, unknown>): boolean {
+  const walk = (node: unknown): boolean => {
+    if (!isRecord(node)) return false;
+    if (node.component === "activity") {
+      return isRecord(node.indicator) && node.indicator.kind === "asset_levitate";
+    }
+    return node.component === "stack" && Array.isArray(node.children) && node.children.some(walk);
+  };
+  return Object.values(surfaces).some(walk);
 }
 
 function validateActivityNode(

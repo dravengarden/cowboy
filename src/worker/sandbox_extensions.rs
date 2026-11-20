@@ -1,27 +1,30 @@
-//! The session extensions an account-sandboxed unit (Antigravity) may use.
-//! Its confined proxy cannot read the Machine's extension descriptor, so the
-//! worker derives from it, once per launch: the exact MCP servers the proxy
-//! may keep running on the target (Cowboy MCP and the folder's bindings, as
-//! a Claude or Codex session runs them there), and whether memory is
-//! bridged. Relay addresses, tokens and Machine paths stay with the worker.
+//! The session extensions of an account-sandboxed unit (Antigravity),
+//! derived once per launch from the worker's own extension descriptor (the
+//! frozen copy `mcp_launch` verified, when the session has MCP bindings).
+//! The worker runs the target MCP servers and memory's tools itself
+//! (`worker_execution::extension_broker`); the unit learns only what its
+//! proxy needs: memory's recall and learning switches, its own outbox key
+//! and the installed call guidance. Relay addresses, tokens, Machine paths
+//! and server commands stay with the worker.
 
 use serde_json::{Value, json};
 
-use crate::worker_execution::MemoryBridge;
+use crate::worker_execution::{ExtensionPlan, MemoryBridge, ServerPlan};
 
 /// What the worker holds for one sandboxed session's extensions.
 pub(super) struct SandboxExtensions {
     /// Sent to the unit inside its execution descriptor.
     pub summary: Value,
-    /// The exact argv of each target MCP server the ledger admits.
-    pub servers: Vec<Vec<String>>,
+    pub plan: ExtensionPlan,
     pub memory: Option<MemoryBridge>,
 }
 
-/// The session's extension descriptor (`COWBOY_SESSION_EXTENSIONS`), when the
-/// Machine wrote one this worker can read.
-pub(super) fn load() -> Option<Value> {
-    let path = std::env::var_os("COWBOY_SESSION_EXTENSIONS")?;
+/// The session's extension descriptor: `frozen` (the copy `mcp_launch`
+/// verified) when there is one, else the Machine's file for this worker.
+pub(super) fn load(frozen: Option<&str>) -> Option<Value> {
+    let path = frozen
+        .map(std::ffi::OsString::from)
+        .or_else(|| std::env::var_os("COWBOY_SESSION_EXTENSIONS"))?;
     let bytes = crate::logs::storage::private_read(std::path::Path::new(&path), 65536).ok()?;
     let value: Value = serde_json::from_slice(&bytes).ok()?;
     (value.get("schema") == Some(&json!(1))).then_some(value)
@@ -47,26 +50,21 @@ fn name(value: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
-pub(super) fn derive(extensions: &Value) -> SandboxExtensions {
+pub(super) fn derive(extensions: &Value, session_id: &str) -> SandboxExtensions {
     let plan = extensions.get("mcp").filter(|plan| !plan.is_null());
     // The Cowboy CLI on the target: the binding plan's verified command, else
-    // the one on the target's PATH (as Claude's runtime does).
+    // the one on the target's PATH, as Claude's and Codex's runtimes use.
     let command = plan
         .and_then(|plan| plan.get("command"))
         .and_then(absolute)
         .unwrap_or_else(|| "cowboy".to_owned());
-    let mut servers = Vec::new();
-    let mut shown = Vec::new();
-    // Cowboy MCP needs the session's call context, which the target keeper
-    // supplies when the session has calls.
-    if extensions
-        .get("calls")
-        .is_some_and(|calls| !calls.is_null())
-    {
-        let argv = vec![command.clone(), "mcp".to_owned()];
-        shown.push(json!({"name": "cowboy", "argv": argv}));
-        servers.push(argv);
-    }
+    // An ordinary bound session always has Cowboy MCP; the target keeper
+    // adds the session's call context to every process it starts.
+    let mut servers = vec![ServerPlan {
+        name: "cowboy".to_owned(),
+        argv: vec![command.clone(), "mcp".to_owned()],
+        required: false,
+    }];
     for binding in plan
         .and_then(|plan| plan.get("bindings"))
         .and_then(Value::as_array)
@@ -80,46 +78,70 @@ pub(super) fn derive(extensions: &Value) -> SandboxExtensions {
         ) else {
             continue;
         };
-        let argv = vec![
-            command.clone(),
-            "mcp".to_owned(),
-            "--binding".to_owned(),
-            descriptor,
-        ];
-        shown.push(json!({"name": binding_name, "argv": argv}));
-        servers.push(argv);
+        servers.push(ServerPlan {
+            name: binding_name,
+            argv: vec![
+                command.clone(),
+                "mcp".to_owned(),
+                "--binding".to_owned(),
+                descriptor,
+            ],
+            required: true,
+        });
     }
     let memory = MemoryBridge::from_extensions(extensions);
-    let memory_summary = extensions
-        .get("memory")
-        .filter(|_| memory.is_some())
-        .map(|memory| {
-            let flag = |key: &str| memory.get(key).and_then(Value::as_bool).unwrap_or(false);
-            json!({
-                "server": memory.get("plugin").and_then(|plugin| plugin.get("id")).and_then(name),
-                "tools": memory.get("tools").cloned().unwrap_or_else(|| json!([])),
-                "enable_tools": flag("enable_tools"),
-                "enable_recall": flag("enable_recall"),
-                "observe": flag("observe"),
-            })
-        });
-    let guidance = extensions
+    let settings = extensions.get("memory").filter(|_| memory.is_some());
+    let flag = |key: &str| {
+        settings
+            .and_then(|memory| memory.get(key))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    };
+    let memory_tools = if flag("enable_tools") {
+        settings
+            .and_then(|memory| memory.get("tools"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(name)
+            .take(32)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let memory_server = settings
+        .and_then(|memory| memory.get("plugin"))
+        .and_then(|plugin| plugin.get("id"))
+        .and_then(name)
+        .unwrap_or_else(|| "matrix".to_owned());
+    // Every installed profile's guidance; the proxy fills its placeholders.
+    let profiles: Vec<Value> = extensions
         .get("calls")
         .and_then(|calls| calls.get("profiles"))
         .and_then(Value::as_array)
-        .and_then(|profiles| profiles.first())
-        .and_then(|profile| profile.get("guidance"))
-        .and_then(Value::as_str)
+        .into_iter()
+        .flatten()
+        .take(8)
+        .filter_map(|profile| profile.get("guidance").and_then(Value::as_str))
         .filter(|text| text.len() <= 4096)
-        .map(str::to_owned);
+        .map(|text| json!({"guidance": text}))
+        .collect();
     SandboxExtensions {
         summary: json!({
-            "schema": 1,
-            "servers": shown,
-            "memory": memory_summary,
-            "call_guidance": guidance,
+            "schema": 2,
+            "session": session_id,
+            "memory": settings.map(|_| json!({
+                "enable_recall": flag("enable_recall"),
+                "observe": flag("observe"),
+                "tools": !memory_tools.is_empty(),
+            })),
+            "calls": {"profiles": profiles},
         }),
-        servers,
+        plan: ExtensionPlan {
+            servers,
+            memory_tools: memory_tools.clone(),
+            memory_server,
+        },
         memory,
     }
 }
@@ -129,7 +151,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_unit_learns_servers_and_memory_switches_but_never_the_relay() {
+    fn the_unit_learns_switches_and_guidance_but_never_the_relay_or_commands() {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let extensions = json!({
             "schema": 1,
@@ -137,43 +159,70 @@ mod tests {
                 {"name": "suger", "descriptor": "/private/suger.json"},
                 {"name": "../bad", "descriptor": "/private/bad.json"},
             ]},
-            "calls": {"profiles": [{"guidance": "Prefer Cowboy MCP."}]},
-            "memory": {"plugin": {"id": "matrix"}, "tools": ["memory_search"],
-                "enable_tools": true, "enable_recall": true, "observe": true,
+            "calls": {"profiles": [{"guidance": "Prefer Cowboy MCP."}, {"guidance": "Two."}]},
+            "memory": {"plugin": {"id": "matrix"}, "tools": ["memory_search", "Bad Name"],
+                "enable_tools": true, "enable_recall": true, "observe": false,
                 "relay": {"endpoint": "http://127.0.0.1:4100", "token": "secret-token",
                     "state_dir": "/home/ubuntu/private"}},
         });
-        let derived = derive(&extensions);
+        let derived = derive(&extensions, "sess-1");
         assert_eq!(
-            derived.servers,
+            derived.plan.servers,
             vec![
-                vec!["/nix/store/x/bin/cowboy".to_owned(), "mcp".to_owned()],
-                vec![
-                    "/nix/store/x/bin/cowboy".to_owned(),
-                    "mcp".to_owned(),
-                    "--binding".to_owned(),
-                    "/private/suger.json".to_owned()
-                ],
+                ServerPlan {
+                    name: "cowboy".into(),
+                    argv: vec!["/nix/store/x/bin/cowboy".into(), "mcp".into()],
+                    required: false,
+                },
+                ServerPlan {
+                    name: "suger".into(),
+                    argv: vec![
+                        "/nix/store/x/bin/cowboy".into(),
+                        "mcp".into(),
+                        "--binding".into(),
+                        "/private/suger.json".into()
+                    ],
+                    required: true,
+                },
             ]
         );
+        assert_eq!(derived.plan.memory_tools, vec!["memory_search".to_owned()]);
         assert!(derived.memory.is_some());
         let text = derived.summary.to_string();
-        assert!(!text.contains("secret-token") && !text.contains("4100"));
-        assert!(!text.contains("/home/ubuntu/private"));
-        assert_eq!(derived.summary["memory"]["server"], "matrix");
-        assert_eq!(derived.summary["call_guidance"], "Prefer Cowboy MCP.");
+        for secret in [
+            "secret-token",
+            "4100",
+            "/home/ubuntu/private",
+            "/nix/store",
+            "/private/",
+        ] {
+            assert!(!text.contains(secret), "{secret}");
+        }
+        assert_eq!(derived.summary["session"], "sess-1");
+        assert_eq!(derived.summary["memory"]["enable_recall"], true);
+        assert_eq!(derived.summary["memory"]["observe"], false);
+        assert_eq!(
+            derived.summary["calls"]["profiles"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[test]
-    fn without_calls_or_a_plan_nothing_runs_on_the_target() {
-        let derived = derive(&json!({"schema": 1, "mcp": null, "calls": null, "memory": null}));
-        assert!(derived.servers.is_empty());
-        assert!(derived.memory.is_none());
-        assert_eq!(derived.summary["servers"], json!([]));
-        let calls_only = derive(&json!({"schema": 1, "calls": {"profiles": []}}));
-        assert_eq!(
-            calls_only.servers,
-            vec![vec!["cowboy".to_owned(), "mcp".to_owned()]]
+    fn a_session_without_bindings_or_memory_still_has_cowboy_mcp() {
+        let derived = derive(
+            &json!({"schema": 1, "mcp": null, "calls": null, "memory": null}),
+            "s",
         );
+        assert_eq!(derived.plan.servers.len(), 1);
+        assert_eq!(
+            derived.plan.servers[0].argv,
+            vec!["cowboy".to_owned(), "mcp".to_owned()]
+        );
+        assert!(derived.plan.memory_tools.is_empty());
+        assert!(derived.memory.is_none());
+        assert!(derived.summary["memory"].is_null());
     }
 }

@@ -4,7 +4,8 @@
 // account unit reaches no host loopback service. The relay's address and
 // credential stay with the worker; the token here is a placeholder the
 // worker replaces.
-import { MatrixClient } from "@cowboy/memory-client";
+import { join } from "node:path";
+import { callGuidance as renderCallGuidance, MatrixClient } from "@cowboy/memory-client";
 
 const BRIDGE = "http://cowboy-memory.invalid/";
 
@@ -12,9 +13,11 @@ const BRIDGE = "http://cowboy-memory.invalid/";
 export function bridgedFetch(connection) {
   return async (target, init = {}) => {
     const { pathname } = new URL(target);
+    // The relay credential is the worker's; only the request's own
+    // headers travel.
     const headers = {};
     for (const [name, value] of Object.entries(init.headers ?? {})) {
-      headers[name.toLowerCase()] = String(value);
+      if (name.toLowerCase() !== "authorization") headers[name.toLowerCase()] = String(value);
     }
     let reply;
     try {
@@ -35,26 +38,28 @@ export function bridgedFetch(connection) {
 }
 
 /**
- * The session's memory client, or `null` when the worker bridges none.
- * `stateDir` is a unit-private directory for the delivery outbox.
+ * The session's memory client, or `null` when the worker bridges none. Its
+ * delivery outbox is private to this Cowboy session (`summary.session`), so
+ * evidence one session left behind is only ever delivered by that session,
+ * through its own relay.
  */
-export async function openMemory(connection, summary, { stateDir, cwd }) {
+export async function openMemory(connection, summary, { home, cwd }) {
   const memory = summary?.memory;
-  if (!memory || !(memory.enable_recall || memory.observe || memory.enable_tools)) return null;
-  const tools = Array.isArray(memory.tools)
-    ? memory.tools.filter((tool) => /^[a-z][a-z0-9_]{0,63}$/.test(tool))
-    : [];
+  const session = summary?.session;
+  if (!memory || !(memory.enable_recall || memory.observe)) return null;
+  if (typeof session !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(session)) return null;
   return await MatrixClient.open(
     {
       provider: "antigravity",
       relay: true,
       endpoint: BRIDGE,
       token: "bridged",
-      state_dir: stateDir,
+      state_dir: join(home, ".cache", "cowboy-memory", session),
       projects: [],
-      server: typeof memory.server === "string" ? memory.server : "matrix",
-      tools,
-      enableTools: memory.enable_tools === true && tools.length > 0,
+      server: "matrix",
+      // Memory's tools are the worker's; this only names them in recall.
+      tools: memory.tools === true ? ["memory_put"] : [],
+      enableTools: memory.tools === true,
       enableRecall: memory.enable_recall === true,
       observe: memory.observe === true,
       fetch: bridgedFetch(connection),
@@ -62,6 +67,15 @@ export async function openMemory(connection, summary, { stateDir, cwd }) {
     connection.descriptor,
     { cwd },
   );
+}
+
+/** The installed call guidance, with this session's peer filled in. */
+export function callGuidance(summary) {
+  return renderCallGuidance(summary ?? null, {
+    peer: "Codex",
+    peerCommand: "codex",
+    fallback: "",
+  });
 }
 
 /** The text of an ACP prompt (its text blocks). */
@@ -84,10 +98,16 @@ export function updateObservation(update) {
     ["tool_call", "tool_call_update"].includes(update?.sessionUpdate) &&
     ["completed", "failed"].includes(update.status)
   ) {
-    const output = (Array.isArray(update.content) ? update.content : [])
+    let output = (Array.isArray(update.content) ? update.content : [])
       .map((item) => (item?.content?.type === "text" ? item.content.text : ""))
       .filter(Boolean)
       .join("\n");
+    // A result carried only in `rawOutput` still counts (bounded).
+    if (!output && update.rawOutput !== undefined) {
+      output = (
+        typeof update.rawOutput === "string" ? update.rawOutput : JSON.stringify(update.rawOutput)
+      ).slice(0, 20000);
+    }
     return ["tool", JSON.stringify({ title: update.title, status: update.status, output })];
   }
   return null;

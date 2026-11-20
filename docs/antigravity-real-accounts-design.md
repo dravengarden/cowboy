@@ -724,34 +724,50 @@ independent layer.
 
 An Antigravity session gets what a Claude or Codex session on the same
 runtime gets: Cowboy MCP (with managed calls), the folder's MCP bindings
-(Suger, ...) and Matrix memory (recall, learning and its tools).
+(Suger, ...) and Matrix memory (recall, learning and its tools). The worker,
+not the confined proxy, runs and admits all of it (first review: call
+`call-a72162e8a6fca973f1a15f84`).
 
-- **One namespace.** `agy` still has exactly one MCP server, `cowboy`. The
-  facade adds every extension tool to it (a name a facade tool or an earlier
-  server holds takes its server's name as a prefix), so the PreToolUse gate
-  allows `mcp_cowboy_<tool>` and `ask_question` and nothing else; `cowboy` is
-  the only server `agy` is given, so the namespace is Cowboy's.
-- **Target servers.** Cowboy MCP (`<cowboy> mcp`) and each binding
-  (`<cowboy> mcp --binding <descriptor>`) run on the target through the
-  execution connection, stdin piped, as Claude's runtime runs them; the
-  target keeper supplies the session's call context. The worker derives
-  their exact argv from its own extension descriptor and the ledger admits
-  exactly those commands outside a turn (at most 16 live), keeps them across
-  turns and ends them at teardown. Any other start still needs a turn.
-- **Memory.** The unit reaches no host loopback service, so the worker
-  serves `cowboy/memory` on the unit's execution socket: `POST /v1/<action>`
-  and `POST|DELETE /mcp` to this session's relay only, with the relay token
-  the unit never receives. The proxy runs the shared `@cowboy/memory-client`
-  (shipped as a component module of its archive) over that transport:
-  recall before each owner prompt, the turn's words and tool results after
-  it, and the memory tools through the same bridge.
+- **Worker-run servers.** From its verified extension descriptor (the
+  frozen copy `mcp_launch` checked, read once) the worker starts Cowboy MCP
+  (`<cowboy> mcp`, always, as for any ordinary bound session) and each
+  binding (`<cowboy> mcp --binding <descriptor>`) on the target through its
+  own execution client, with its own launch template (workspace cwd, closed
+  `env`, the keeper's environment; the target keeper adds the session's
+  call context). It records them in the ledger as session servers: they
+  outlive turns, end at teardown, and every unit request naming one of
+  their process ids is refused. A required binding that fails to start
+  makes `cowboy/extensions` refuse, so the session does not start (Claude
+  and Codex refuse too); Cowboy MCP or memory failing is only noted.
+- **Two unit requests.** `cowboy/extensions` lists the discovered tools
+  (bounded wait); `cowboy/extensionCall` runs one `tools/call`, admitted by
+  the ledger only inside the active turn and counted as that turn's
+  admitted request, so the turn's completion waits for it. A reply lost
+  after the request may have reached the server is an uncertain effect,
+  exactly like a lost mutation. The worker frames each server's stdio
+  itself: one exchange at a time, whole lines only, answers matched by id
+  and kind, and lost output ends the server.
+- **One namespace.** `agy` still has exactly one MCP server, `cowboy`; the
+  facade lists every extension tool beside its own (a name a facade tool or
+  an earlier server holds takes its server's name as a prefix), so the
+  PreToolUse gate allows `mcp_cowboy_<tool>` and `ask_question` and nothing
+  else.
+- **Memory.** Recall (`POST /v1/context`) and learning (`POST /v1/observe`)
+  run in the proxy's `@cowboy/memory-client` over the worker's
+  `cowboy/memory`, which forwards only the actions the signed configuration
+  enables, to this session's relay only, with the relay token the unit never
+  receives. Memory's tools are the worker's own MCP client to the relay,
+  limited to the signed tool list. The outbox is private to the Cowboy
+  session. Evidence is collected only inside an owner turn, each tool once,
+  and a turn that ran a forbidden built-in delivers none.
 - **What the unit learns.** Its execution descriptor gains `extensions`:
-  server names and argv, memory switches and tool names, and the installed
-  call guidance. Relay addresses, tokens and Machine paths stay with the
-  worker.
-- Permission requests for these tools are approved by the proxy like the
-  facade's (except in `plan` mode); the transcript shows them as the MCP calls
-  they are (`mcp__<server>__<tool>`).
+  the session id (the outbox key), memory's recall/learning switches and
+  whether tools exist, and the installed call guidance. Server commands,
+  relay addresses, tokens and Machine paths stay with the worker.
+- **Permissions and modes.** A permission request for a `cowboy` tool is
+  approved once (`allow_once`, never a standing grant) only in a mode `agy`
+  confirmed (a session result, a mode update, or an accepted switch) other
+  than `plan`; while the mode is unknown or changing the owner decides.
 
 ## Revision 5 simplification (owner decision, 2026-11-18)
 

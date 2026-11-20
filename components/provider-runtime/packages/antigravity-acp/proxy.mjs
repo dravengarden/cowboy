@@ -174,19 +174,36 @@ export class AcpProxy {
     this.queue = Promise.resolve();
   }
 
-  /** Remember the mode the worker selects for a session. */
-  noteMode(method, params) {
+  /**
+   * The mode a request asks for, applied only once `agy` accepts it: an
+   * unknown or changing mode never auto-approves a permission.
+   */
+  requestedMode(method, params) {
     const sessionId = params?.sessionId;
-    if (typeof sessionId !== "string") return;
+    if (typeof sessionId !== "string") return undefined;
     if (method === "session/set_mode" && typeof params.modeId === "string") {
-      this.modes.set(sessionId, params.modeId);
-    } else if (
+      return { sessionId, mode: params.modeId };
+    }
+    if (
       method === "session/set_config_option" &&
       params.configId === "mode" &&
       typeof params.value === "string"
     ) {
-      this.modes.set(sessionId, params.value);
+      return { sessionId, mode: params.value };
     }
+    return undefined;
+  }
+
+  /** The current mode a session result or update reports. */
+  reportMode(sessionId, value) {
+    if (typeof sessionId !== "string") return;
+    const current =
+      value?.modes?.currentModeId ??
+      value?.currentModeId ??
+      (Array.isArray(value?.configOptions)
+        ? value.configOptions.find((option) => option?.id === "mode")?.currentValue
+        : undefined);
+    if (typeof current === "string") this.modes.set(sessionId, current);
   }
 
   /** `toolCall` as Cowboy shows it (see presentation.mjs). */
@@ -251,9 +268,13 @@ export class AcpProxy {
       return this.refuse(id, `cowboy_antigravity_unavailable: ${error.message}`, -32603);
     }
     const forwarded = structuredClone(message);
-    this.noteMode(method, forwarded.params);
+    const requested = this.requestedMode(method, forwarded.params);
+    if (requested) {
+      // Changing: unknown until `agy` answers.
+      this.modes.delete(requested.sessionId);
+    }
     // The reply is handled with this runtime, without awaiting it again.
-    const record = { method, runtime };
+    const record = { method, runtime, mode: requested };
     if (method === "initialize") {
       // `agy` must never delegate file or terminal work to the worker: the
       // worker runs on the runtime Machine, not on the session's target.
@@ -270,6 +291,7 @@ export class AcpProxy {
         runtime.checkMirror(params.cwd);
         const projection = await runtime.projection(params.cwd);
         record.channel = runtime.newChannel();
+        record.session = params.sessionId;
         if (typeof params.sessionId === "string") {
           runtime.bindChannel(record.channel, params.sessionId);
         }
@@ -305,6 +327,8 @@ export class AcpProxy {
         violation: undefined,
         tools: new Map(),
         said: "",
+        evidence: [],
+        recorded: new Set(),
       });
       runtime.facade.beginTurn(sessionId);
     }
@@ -370,17 +394,39 @@ export class AcpProxy {
     return { ...message, params: { ...message.params, update: annotated } };
   }
 
-  /** The turn's evidence for memory: the agent's words and finished tools. */
+  /**
+   * The turn's evidence for memory: the agent's words and each finished
+   * tool once. Only an owner turn collects (nothing replayed by a load or
+   * arriving after the turn), and a turn that ran a forbidden built-in
+   * delivers nothing (`settleMemory`).
+   */
   remember(params) {
     if (!this.memory) return;
-    const observation = updateObservation(params?.update);
+    const turn = this.turns.get(params?.sessionId);
+    if (!turn) return;
+    const update = params.update;
+    const observation = updateObservation(update);
     if (!observation) return;
-    const turn = this.turns.get(params.sessionId);
     if (observation[0] === "assistant") {
-      if (turn && turn.said.length < 200_000) turn.said += observation[1];
-    } else {
-      this.memory.add(...observation);
+      if (turn.said.length < 200_000) turn.said += observation[1];
+      return;
     }
+    const id = update?.toolCallId;
+    if (typeof id === "string") {
+      if (turn.recorded.has(id) || turn.recorded.size >= MAX_TOOL_CALLS) return;
+      turn.recorded.add(id);
+    }
+    if (turn.evidence.length < 200) turn.evidence.push(observation);
+  }
+
+  /** Deliver a finished turn's evidence, unless the turn broke the gate. */
+  async settleMemory(turn) {
+    if (!this.memory || !turn) return;
+    if (turn.violation === undefined) {
+      for (const observation of turn.evidence) this.memory.add(...observation);
+      if (turn.said) this.memory.add("assistant", turn.said);
+    }
+    await this.memory.finish();
   }
 
   /** A facade call's effect became unknown: end that session's turn. */
@@ -397,6 +443,12 @@ export class AcpProxy {
     if (typeof method === "string") {
       if (id === undefined) {
         if (method === "session/update") {
+          const update = message.params?.update;
+          if (update?.sessionUpdate === "current_mode_update") {
+            this.reportMode(message.params.sessionId, update);
+          } else if (update?.sessionUpdate === "config_option_update") {
+            this.reportMode(message.params.sessionId, update);
+          }
           this.observe(message.params);
           this.remember(message.params);
           return this.client(this.presentUpdate(this.annotateUsage(stripTier(message))));
@@ -433,11 +485,11 @@ export class AcpProxy {
       // Cowboy's own tools need no prompt, like a Claude session's default
       // bypassPermissions; plan mode still asks.
       const sessionId = message.params?.sessionId;
-      if (name !== "ask_question" && this.modes.get(sessionId) !== "plan") {
+      const mode = this.modes.get(sessionId);
+      if (name !== "ask_question" && mode !== undefined && mode !== "plan") {
         const options = Array.isArray(message.params?.options) ? message.params.options : [];
-        const allow =
-          options.find((option) => option?.kind === "allow_once") ??
-          options.find((option) => option?.kind === "allow_always");
+        // Never a standing grant: each request is decided in its mode.
+        const allow = options.find((option) => option?.kind === "allow_once");
         if (allow) {
           return this.agent({
             jsonrpc: "2.0",
@@ -467,6 +519,12 @@ export class AcpProxy {
     // No result or error leaves the proxy with the raw tier.
     message = stripTier(message);
     const { runtime } = record;
+    if (message.result !== undefined) {
+      if (record.mode) this.modes.set(record.mode.sessionId, record.mode.mode);
+      if (SESSION_REQUESTS.has(record.method)) {
+        this.reportMode(message.result?.sessionId ?? record.session, message.result);
+      }
+    }
     if (record.channel && typeof message.result?.sessionId === "string") {
       runtime.bindChannel(record.channel, message.result.sessionId);
     }
@@ -490,10 +548,7 @@ export class AcpProxy {
       message.result?.stopReason,
     );
     if (this.turns.get(record.sessionId) === turn) this.turns.delete(record.sessionId);
-    if (this.memory) {
-      if (turn?.said) this.memory.add("assistant", turn.said);
-      await this.memory.finish();
-    }
+    await this.settleMemory(turn);
     const violation = turn?.violation;
     const uncertain = turn?.uncertain;
     const cowboy = {};

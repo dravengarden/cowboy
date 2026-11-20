@@ -562,6 +562,25 @@ test("Provider UI schema 2 accepts bounded gradient and activity IR", () => {
   validateProviderManifest(fixture);
 });
 
+test("Provider UI accepts the levitating activity only from SDK 3.7.0", () => {
+  const fixture = manifest();
+  fixture.sdk_version = "3.6.0";
+  fixture.ui.schema_version = 2;
+  fixture.ui.surfaces.loading = {
+    component: "activity",
+    indicator: { kind: "asset_levitate", asset: "icon", interval_ms: 2_600 },
+    label: {
+      kind: "text",
+      value: { source: "literal", value: "Working…" },
+      effect: "shimmer",
+    },
+    accessible_label: "Example is working",
+  };
+  assertThrows(() => validateProviderManifest(fixture), Error, "SDK 3.7.0");
+  fixture.sdk_version = "3.7.0";
+  validateProviderManifest(fixture);
+});
+
 test("Provider UI rejects v2 nodes in v1 and unknown future interfaces", () => {
   const fixture = manifest();
   fixture.ui.surfaces.loading = {

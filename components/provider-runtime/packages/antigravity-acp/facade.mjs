@@ -156,12 +156,12 @@ export class Facade {
       RunCommand: () => this.runCommand(session, turn, args),
       StopCommand: () => this.stopCommand(session, args),
     };
-    if (!Object.hasOwn(handlers, name)) {
-      // Cowboy MCP, the folder's bindings and memory answer for themselves.
-      if (this.extensions?.has(name)) return await this.extensions.call(name, args);
+    // Cowboy MCP, the folder's bindings and memory answer for themselves.
+    const extension = !Object.hasOwn(handlers, name) && this.extensions?.has(name);
+    if (!Object.hasOwn(handlers, name) && !extension)
       return failure(`Unknown tool ${String(name)}`);
-    }
     try {
+      if (extension) return await this.extensions.call(this.connection, name, args);
       return { content: [{ type: "text", text: await handlers[name]() }] };
     } catch (error) {
       if (error instanceof UncertainEffect) {

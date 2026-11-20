@@ -1,146 +1,68 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { Extensions, httpMcpMessages } from "./extensions.mjs";
-import { bridgedFetch, openMemory, promptText, updateObservation } from "./memory.mjs";
+import { Extensions } from "./extensions.mjs";
+import { UncertainEffect } from "./facade-tools.mjs";
+import {
+  bridgedFetch,
+  callGuidance,
+  openMemory,
+  promptText,
+  updateObservation,
+} from "./memory.mjs";
 
-/** A target with stdio MCP servers behind the execution protocol. */
-function fakeTarget({ servers = {}, memory } = {}) {
-  const processes = new Map();
+const remoteError = (error) => Object.assign(new Error("remote"), { remote: error });
+
+test("the worker's tools become cowboy tools and calls go through it", async () => {
   const calls = [];
-  const reply = (process, message) => {
-    const line = Buffer.from(`${JSON.stringify(message)}\n`);
-    process.seq += 1;
-    process.output.push({ seq: process.seq, stream: "stdout", chunk: line.toString("base64") });
-  };
   const connection = {
-    descriptor: { binding: { workspace: { cwd: "/w" } } },
     async call(method, params) {
       calls.push([method, params]);
-      if (method === "process/start") {
-        const key = params.argv.join(" ");
-        if (!servers[key]) throw new Error("refused");
-        processes.set(params.processId, { key, seq: 0, output: [], closed: false });
-        return { processId: params.processId };
+      if (method === "cowboy/extensions") {
+        return {
+          tools: [
+            { name: "cowboy_read", server: "cowboy", tool: "cowboy_read" },
+            { name: "suger_query", server: "suger", tool: "query", description: "q" },
+            { name: "bad name", server: "x" },
+          ],
+          instructions: "cowboy: Prefer Cowboy MCP.",
+        };
       }
-      if (method === "process/write") {
-        const process = processes.get(params.processId);
-        const message = JSON.parse(Buffer.from(params.chunk, "base64").toString("utf8"));
-        const answer = servers[process.key](message);
-        if (answer !== undefined && message.id !== undefined) {
-          reply(process, { jsonrpc: "2.0", id: message.id, result: answer });
-        }
-        return { status: "accepted" };
-      }
-      if (method === "process/read") {
-        const process = processes.get(params.processId);
-        const chunks = process.output.filter((chunk) => chunk.seq > (params.afterSeq ?? 0));
-        return { chunks, closed: process.closed, exited: false };
-      }
-      if (method === "process/terminate") return {};
-      if (method === "cowboy/memory") return memory(params);
-      throw new Error(`unexpected ${method}`);
+      if (params.name === "lost") throw remoteError({ data: { outcome: "unknown" } });
+      if (params.name === "refused") throw remoteError({ message: "no Cowboy turn is running" });
+      return { content: [{ type: "text", text: params.name }] };
     },
   };
-  return { connection, calls, processes };
-}
-
-const mcpServer =
-  (name, tools, instructions = "") =>
-  (message) => {
-    if (message.method === "initialize") {
-      return { protocolVersion: "2025-06-18", capabilities: { tools: {} }, instructions };
-    }
-    if (message.method === "tools/list") {
-      return { tools: tools.map((tool) => ({ name: tool, inputSchema: { type: "object" } })) };
-    }
-    if (message.method === "tools/call") {
-      return { content: [{ type: "text", text: `${name}:${message.params.name}` }] };
-    }
-    return undefined;
-  };
-
-test("target servers become cowboy tools, collisions take their server's name", async () => {
-  const { connection, calls } = fakeTarget({
-    servers: {
-      "/bin/cowboy mcp": mcpServer("cowboy", ["cowboy_read", "ReadFile"], "Prefer Cowboy MCP."),
-      "/bin/cowboy mcp --binding /b/suger.json": mcpServer("suger", ["cowboy_read", "suger_query"]),
-    },
-  });
-  const extensions = await Extensions.open(
-    connection,
-    {
-      servers: [
-        { name: "cowboy", argv: ["/bin/cowboy", "mcp"] },
-        { name: "suger", argv: ["/bin/cowboy", "mcp", "--binding", "/b/suger.json"] },
-        { name: "broken", argv: ["/bin/missing"] },
-      ],
-    },
-    { root: "/w", reserved: ["ReadFile"] },
-  );
+  const extensions = await Extensions.open(connection);
   assert.deepEqual(
     extensions.tools().map((tool) => tool.name),
-    ["cowboy_read", "cowboy_ReadFile", "suger_cowboy_read", "suger_query"],
+    ["cowboy_read", "suger_query"],
   );
-  assert.deepEqual(extensions.route("suger_cowboy_read"), { server: "suger", tool: "cowboy_read" });
-  assert.deepEqual(await extensions.call("suger_query", {}), {
-    content: [{ type: "text", text: "suger:suger_query" }],
+  assert.deepEqual(extensions.route("suger_query"), { server: "suger", tool: "query" });
+  assert.equal(extensions.instructions(), "cowboy: Prefer Cowboy MCP.");
+  assert.deepEqual(await extensions.call(connection, "suger_query", { a: 1 }), {
+    content: [{ type: "text", text: "suger_query" }],
   });
-  assert.deepEqual(await extensions.call("cowboy_ReadFile", {}), {
-    content: [{ type: "text", text: "cowboy:ReadFile" }],
-  });
-  assert.match(extensions.instructions(), /cowboy: Prefer Cowboy MCP\./);
-  assert.match(extensions.instructions(), /broken is unavailable/);
-  // Each target server was started with its stdin piped, in the workspace.
-  const starts = calls.filter(([method]) => method === "process/start").map(([, params]) => params);
-  assert.ok(starts.every((params) => params.pipeStdin === true && params.cwd === "file:///w"));
-  await extensions.close();
-});
-
-test("memory tools travel over the worker's bridge as Streamable HTTP", async () => {
-  const seen = [];
-  const { connection } = fakeTarget({
-    memory(params) {
-      seen.push(params);
-      const message = JSON.parse(params.body || "null");
-      if (!message || message.id === undefined) return { status: 202, headers: {}, body: "" };
-      const result =
-        message.method === "initialize"
-          ? { protocolVersion: "2025-06-18", capabilities: {} }
-          : message.method === "tools/list"
-            ? { tools: [{ name: "memory_search", inputSchema: { type: "object" } }] }
-            : { content: [{ type: "text", text: "found" }] };
-      return {
-        status: 200,
-        headers: { "content-type": "text/event-stream", "mcp-session-id": "m1" },
-        body: `event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: message.id, result })}\n\n`,
-      };
-    },
-  });
-  const extensions = await Extensions.open(
-    connection,
-    { servers: [], memory: { server: "matrix", enable_tools: true, tools: ["memory_search"] } },
-    { root: "/w", memoryBinding: { project: "relay", machine: "relay", session: "relay" } },
-  );
-  assert.deepEqual(extensions.route("memory_search"), { server: "matrix", tool: "memory_search" });
-  assert.deepEqual(await extensions.call("memory_search", { query: "x" }), {
-    content: [{ type: "text", text: "found" }],
-  });
-  assert.ok(seen.every((params) => params.path === "/mcp"));
-  assert.equal(seen.at(-1).headers["mcp-session-id"], "m1");
-  assert.equal(seen.at(-1).headers.authorization, undefined);
-});
-
-test("Streamable HTTP answers parse as JSON or server-sent events", () => {
-  assert.deepEqual(httpMcpMessages("application/json", '{"id":1}'), [{ id: 1 }]);
-  assert.deepEqual(httpMcpMessages("text/event-stream", 'data: {"id":2}\n\ndata: [{"id":3}]\n\n'), [
-    { id: 2 },
-    { id: 3 },
+  assert.deepEqual(calls.at(-1), [
+    "cowboy/extensionCall",
+    { name: "suger_query", arguments: { a: 1 } },
   ]);
-  assert.deepEqual(httpMcpMessages("application/json", "not json"), []);
+  await assert.rejects(extensions.call(connection, "lost", {}), UncertainEffect);
+  const refused = await extensions.call(connection, "refused", {});
+  assert.equal(refused.isError, true);
+  assert.match(refused.content[0].text, /no Cowboy turn/);
 });
 
-test("the memory client's requests reach the worker, never the network", async () => {
+test("a required binding that failed refuses the session", async () => {
+  const connection = {
+    async call() {
+      throw remoteError({ message: "suger is unavailable: exited" });
+    },
+  };
+  await assert.rejects(Extensions.open(connection));
+});
+
+test("the memory client's requests reach the worker without a credential", async () => {
   const seen = [];
   const connection = {
     async call(method, params) {
@@ -159,9 +81,40 @@ test("the memory client's requests reach the worker, never the network", async (
   });
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { text: "recalled" });
-  assert.equal(seen[0][0], "cowboy/memory");
-  assert.equal(seen[0][1].path, "/v1/context");
-  assert.equal(await openMemory(connection, { memory: null }, { stateDir: "/x", cwd: "/w" }), null);
+  assert.deepEqual(seen[0], [
+    "cowboy/memory",
+    {
+      path: "/v1/context",
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    },
+  ]);
+  assert.equal(await openMemory(connection, { memory: null }, { home: "/h", cwd: "/w" }), null);
+  // An outbox needs a valid session key.
+  assert.equal(
+    await openMemory(
+      connection,
+      { session: "../x", memory: { enable_recall: true } },
+      { home: "/h", cwd: "/w" },
+    ),
+    null,
+  );
+});
+
+test("installed call guidance is rendered for this session", () => {
+  assert.equal(
+    callGuidance({
+      calls: {
+        profiles: [
+          { guidance: "Use cowboy {{peer_command}} with {{peer}}." },
+          { guidance: "Two." },
+        ],
+      },
+    }),
+    "Use cowboy codex with Codex.\n\nTwo.",
+  );
+  assert.equal(callGuidance({ calls: { profiles: [] } }), "");
 });
 
 test("prompts and updates feed the turn's memory evidence", () => {
@@ -187,5 +140,11 @@ test("prompts and updates feed the turn's memory evidence", () => {
     content: [{ type: "content", content: { type: "text", text: "body" } }],
   });
   assert.deepEqual(JSON.parse(tool[1]), { title: "Read a", status: "completed", output: "body" });
+  const raw = updateObservation({
+    sessionUpdate: "tool_call_update",
+    status: "completed",
+    rawOutput: { n: 1 },
+  });
+  assert.equal(JSON.parse(raw[1]).output, '{"n":1}');
   assert.equal(updateObservation({ sessionUpdate: "tool_call", status: "pending" }), null);
 });

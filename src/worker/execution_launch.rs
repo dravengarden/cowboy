@@ -86,17 +86,23 @@ pub(super) async fn prepare(
             path.is_some(),
             "a sandboxed execution binding requires the Machine's process ledger"
         );
-        let ledger = Ledger::open(&args.session_id, path)?;
-        let extensions = super::sandbox_extensions::load()
-            .map(|extensions| super::sandbox_extensions::derive(&extensions));
-        let summary = extensions.map(|extensions| {
-            ledger.set_session_servers(extensions.servers);
-            if let Some(memory) = extensions.memory {
-                client.set_memory(memory);
-            }
-            extensions.summary
-        });
-        client.set_ledger(ledger);
+        client.set_ledger(Ledger::open(&args.session_id, path)?);
+        // One read of the verified extension descriptor serves both what the
+        // worker runs and what the unit learns.
+        let frozen = spec.env.get("COWBOY_SESSION_EXTENSIONS").cloned();
+        let summary = super::sandbox_extensions::load(frozen.as_deref())
+            .map(|extensions| super::sandbox_extensions::derive(&extensions, &args.session_id))
+            .map(|extensions| {
+                if let Some(memory) = &extensions.memory {
+                    client.set_memory(memory.clone());
+                }
+                client.set_extensions(crate::worker_execution::ExtensionBroker::start(
+                    &client,
+                    extensions.plan,
+                    extensions.memory,
+                ));
+                extensions.summary
+            });
         let (endpoint, bridge) = Endpoint::start_unix(Arc::clone(&client), summary)?;
         spec.execution_bridge = Some(bridge);
         return Ok((Some(endpoint), managed_round));

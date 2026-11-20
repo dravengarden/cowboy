@@ -15,6 +15,9 @@
     "lock.json",
     "packages"
   ],
+  "peerDependencies": {
+    "@cowboy/memory-client": "0.2.2"
+  },
   "publishConfig": {
     "access": "public"
   }

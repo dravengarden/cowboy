@@ -5,12 +5,14 @@ import { AcpProxy, accountPlan, REFUSAL_PREFIX, stripTier, VIOLATION_PREFIX } fr
 function harness({
   ready = true,
   backend = { class: "ok", successes: 1, barrier: true, refusals: [] },
+  memory = null,
 } = {}) {
   const agent = [];
   const client = [];
   const turns = [];
   const channels = new Map();
   const runtime = {
+    memory,
     facade: {
       beginTurn: (id) => turns.push(["begin", id]),
       endTurn: async (id, options) => turns.push(["end", id, options?.cancelled === true]),
@@ -159,7 +161,11 @@ test("agent requests other than permission are refused; permission replies are r
   assert.deepEqual(agent.at(-1).result, { outcome: { outcome: "cancelled" } });
   assert.equal(client.length, 0);
   // Cowboy's own tools are approved without asking, like a Claude session's
-  // default bypassPermissions.
+  // default bypassPermissions, once agy confirmed a mode other than plan.
+  await proxy.fromClient(
+    request(8, "session/set_config_option", { sessionId: "s", configId: "mode", value: "default" }),
+  );
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 8, result: {} });
   await proxy.fromAgent(
     request(75, "session/request_permission", {
       sessionId: "s",
@@ -172,11 +178,15 @@ test("agent requests other than permission are refused; permission replies are r
     id: 75,
     result: { outcome: { outcome: "selected", optionId: "allow" } },
   });
-  assert.equal(client.length, 0);
+  assert.equal(
+    client.filter((message) => message.method === "session/request_permission").length,
+    0,
+  );
   // Plan mode asks the owner, with the call presented.
   await proxy.fromClient(
     request(9, "session/set_config_option", { sessionId: "s", configId: "mode", value: "plan" }),
   );
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 9, result: {} });
   await proxy.fromAgent(
     request(72, "session/request_permission", {
       sessionId: "s",
@@ -199,7 +209,7 @@ test("agent requests other than permission are refused; permission replies are r
     result: { outcome: { outcome: "cancelled" } },
   });
   await proxy.fromClient({ jsonrpc: "2.0", id: 999, result: {} });
-  assert.equal(agent.length, 7);
+  assert.equal(agent.length, 8);
   await proxy.fromAgent({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "s" } });
   await proxy.fromAgent({ jsonrpc: "2.0", method: "_antigravity/internal", params: {} });
   assert.equal(client.at(-1).method, "session/update");
@@ -752,4 +762,121 @@ test("image prompts reach agy unchanged", async () => {
   ];
   await proxy.fromClient(request(9, "session/prompt", { sessionId: "s", prompt }));
   assert.deepEqual(agent.at(-1), request(9, "session/prompt", { sessionId: "s", prompt }));
+});
+
+const updateIn = (sessionUpdate, fields = {}) => ({
+  jsonrpc: "2.0",
+  method: "session/update",
+  params: { sessionId: "s", update: { sessionUpdate, ...fields } },
+});
+
+function fakeMemory() {
+  const log = [];
+  return {
+    log,
+    begin: async (text) => {
+      log.push(["begin", text]);
+      return "RECALLED";
+    },
+    add: (role, text) => log.push(["add", role, text]),
+    finish: async () => log.push(["finish"]),
+  };
+}
+
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+test("memory recalls for the owner's prompt and learns only the owner turn", async () => {
+  const memory = fakeMemory();
+  const { proxy, agent } = harness({ memory });
+  await settle();
+  // An update replayed outside any turn is not evidence.
+  await proxy.fromAgent(
+    updateIn("tool_call_update", { toolCallId: "old", status: "completed", title: "old" }),
+  );
+  await proxy.fromClient(
+    request(2, "session/prompt", { sessionId: "s", prompt: [{ type: "text", text: "hello" }] }),
+  );
+  assert.deepEqual(agent.at(-1).params.prompt[0], { type: "text", text: "RECALLED" });
+  for (const message of [
+    updateIn("agent_message_chunk", { content: { type: "text", text: "hi " } }),
+    updateIn("agent_message_chunk", { content: { type: "text", text: "there" } }),
+    updateIn("tool_call_update", {
+      toolCallId: "t1",
+      name: "mcp_cowboy_ReadFile",
+      status: "completed",
+      title: "Read a",
+    }),
+    updateIn("tool_call_update", { toolCallId: "t1", status: "completed", title: "Read a" }),
+  ]) {
+    await proxy.fromAgent(message);
+  }
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 2, result: { stopReason: "end_turn" } });
+  assert.deepEqual(
+    memory.log.map((entry) => entry.slice(0, 2)),
+    [["begin", "hello"], ["add", "tool"], ["add", "assistant"], ["finish"]],
+  );
+  assert.equal(memory.log[2][2], "hi there");
+});
+
+test("a turn that ran a forbidden built-in teaches memory nothing", async () => {
+  const memory = fakeMemory();
+  const { proxy } = harness({ memory });
+  await settle();
+  await proxy.fromClient(
+    request(2, "session/prompt", { sessionId: "s", prompt: [{ type: "text", text: "go" }] }),
+  );
+  await proxy.fromAgent(
+    updateIn("tool_call", {
+      toolCallId: "x",
+      name: "read_file",
+      status: "completed",
+      title: "secret",
+    }),
+  );
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 2, result: { stopReason: "end_turn" } });
+  assert.deepEqual(
+    memory.log.map((entry) => entry[0]),
+    ["begin", "finish"],
+  );
+});
+
+test("permissions auto-approve only in a mode agy confirmed", async () => {
+  const { proxy, agent, client } = harness();
+  const options = [
+    { optionId: "allow", name: "Allow", kind: "allow_once" },
+    { optionId: "always", name: "Always", kind: "allow_always" },
+  ];
+  const ask = (id) =>
+    proxy.fromAgent(
+      request(id, "session/request_permission", {
+        sessionId: "s",
+        toolCall: { name: "mcp_cowboy_WriteFile" },
+        options,
+      }),
+    );
+  // Unknown mode: the owner decides.
+  await ask(70);
+  assert.equal(client.at(-1).id, 70);
+  // A session result reports its mode.
+  await proxy.fromClient(
+    request(3, "session/load", { sessionId: "s", cwd: "/work/repo", mcpServers: [] }),
+  );
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 3, result: { modes: { currentModeId: "default" } } });
+  await ask(71);
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    id: 71,
+    result: { outcome: { outcome: "selected", optionId: "allow" } },
+  });
+  // A switch to plan reported by agy stops the approvals.
+  await proxy.fromAgent(updateIn("current_mode_update", { currentModeId: "plan" }));
+  await ask(72);
+  assert.equal(client.at(-1).id, 72);
+  // A requested switch is unknown until agy answers it.
+  await proxy.fromClient(request(4, "session/set_mode", { sessionId: "s", modeId: "default" }));
+  await ask(73);
+  assert.equal(client.at(-1).id, 73);
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 4, error: { code: 1, message: "no" } });
+  await ask(74);
+  assert.equal(client.at(-1).id, 74);
 });

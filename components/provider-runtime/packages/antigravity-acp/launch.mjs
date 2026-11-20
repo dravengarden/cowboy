@@ -19,7 +19,7 @@ import { Connection } from "../../execution-connection.mjs";
 import { AgyLog } from "./evidence.mjs";
 import { Extensions } from "./extensions.mjs";
 import { Facade, serveMcp } from "./facade.mjs";
-import { openMemory } from "./memory.mjs";
+import { callGuidance, openMemory } from "./memory.mjs";
 import { buildProjection } from "./projection.mjs";
 import { AcpProxy } from "./proxy.mjs";
 
@@ -122,7 +122,7 @@ export async function checkPolicy(home, paths) {
  */
 export function extensionGuidance(summary, extensions) {
   const notes = extensions?.instructions() ?? "";
-  const calls = typeof summary?.call_guidance === "string" ? summary.call_guidance : "";
+  const calls = callGuidance(summary);
   if (!notes && !calls && !extensions?.tools().length) return "";
   return [
     "<cowboy_extensions>",
@@ -210,17 +210,17 @@ export async function prepareRuntime({
   if (JSON.stringify(listed) !== JSON.stringify(EXPECTED_TOOLS)) {
     throw new Error("facade tool set differs");
   }
-  // Session extensions run beside the facade; none of them gates readiness.
+  // Memory's client is local; the worker's extension servers start on
+  // their own and the first session waits for them, not `initialize`.
   const memory = await openMemory(connection, descriptor.extensions, {
-    stateDir: join(home, ".cache", "cowboy-memory"),
+    home,
     cwd: facade.root,
   });
-  facade.extensions = await Extensions.open(connection, descriptor.extensions, {
-    root: facade.root,
-    memoryBinding: memory?.binding ?? { project: "relay", machine: "relay", session: "relay" },
-    reserved: EXPECTED_TOOLS,
-    log: (line) => process.stderr.write(`cowboy: ${line}\n`),
+  const extensions = Extensions.open(connection).then((ready) => {
+    facade.extensions = ready;
+    return ready;
   });
+  extensions.catch(() => {});
   await buildProjection(facade, facade.root);
   const { server, socketPath, channels } = await listen(facade, temporary);
   return {
@@ -237,10 +237,11 @@ export async function prepareRuntime({
     // the binding's canonical workspace root and every other path is kept
     // for the projection to confine.
     sessionCwd: (cwd) => (cwd === descriptor.binding.runtime?.cwd ? facade.root : cwd),
+    // A session starts with its extensions, or not at all.
     projection: async (cwd) =>
       [
         await buildProjection(facade, cwd),
-        extensionGuidance(descriptor.extensions, facade.extensions),
+        extensionGuidance(descriptor.extensions, await extensions),
       ]
         .filter(Boolean)
         .join("\n\n"),

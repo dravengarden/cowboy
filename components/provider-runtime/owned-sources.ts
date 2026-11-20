@@ -59,7 +59,8 @@ export function ownedNodeInputs(recipe: OwnedNodeRecipe): string[] {
     throw new Error(`owned node package ${recipe.package_dir} has unsafe files`);
   }
   const modules = componentModules(recipe);
-  if (modules.some(([, , file]) => names.includes(file))) {
+  // Every archive destination is unique, the launcher's included.
+  if (modules.some(([, , file]) => names.includes(file) || file === "cowboy-launch.mjs")) {
     throw new Error(`owned node package ${recipe.package_dir} has unsafe files`);
   }
   return [

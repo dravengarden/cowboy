@@ -790,43 +790,39 @@ async fn an_uncertain_effect_reported_by_the_agent_side_is_recorded_unforwarded(
 }
 
 #[tokio::test]
-async fn declared_session_servers_start_outside_turns_and_outlive_them() {
+async fn worker_servers_outlive_turns_and_stay_out_of_the_units_reach() {
     let target = Target::new(processes());
     let ledger = ledger(&target.client, None);
     ledger.set_readiness(false);
-    ledger.set_session_servers(vec![vec!["/bin/cowboy".into(), "mcp".into()]]);
-    // Only the exact declared argv starts outside a turn.
-    let other = target
-        .client
-        .relay(
-            "process/start".into(),
-            json!({"processId": "x", "argv": ["/bin/cowboy", "mcp", "--extra"]}),
-        )
-        .await;
-    assert!(other.get("error").is_some());
-    let server = target
-        .client
-        .relay(
-            "process/start".into(),
-            json!({"processId": "s1", "argv": ["/bin/cowboy", "mcp"]}),
-        )
-        .await;
-    assert_eq!(server["result"]["processId"], "s1");
-    // A turn's end terminates its own processes, never the session server.
+    ledger.record_server("server-1").unwrap();
+    // The unit can neither write to, read from nor stop the worker's server.
+    for method in ["process/write", "process/read", "process/terminate"] {
+        let reply = target
+            .client
+            .relay(method.into(), json!({"processId": "server-1"}))
+            .await;
+        assert!(
+            reply["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("belongs to the worker"),
+            "{method}"
+        );
+    }
+    // An extension call needs the active turn.
+    assert!(ledger.admit_call().is_err());
     ledger.begin_turn("turn-1");
-    let reply = target
-        .client
-        .relay("process/start".into(), start("p1"))
-        .await;
-    assert_eq!(reply["result"]["processId"], "p1");
-    target.client.finish_turn("turn-1").unwrap().await;
-    assert_eq!(ledger.live(), ["s1"]);
-    assert!(
-        !target
-            .log()
-            .iter()
-            .any(|line| line == "process/terminate s1")
-    );
+    let admitted = ledger.admit_call().unwrap();
+    let settled = tokio::spawn(target.client.finish_turn("turn-1").unwrap());
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!settled.is_finished(), "the turn drains its extension call");
+    ledger.settled(&admitted, None);
+    tokio::time::timeout(Duration::from_secs(10), settled)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(ledger.live(), ["server-1"]);
+    assert!(target.log().is_empty());
     // Teardown ends it.
     tokio::time::timeout(Duration::from_secs(10), target.client.settle_all())
         .await
@@ -835,7 +831,7 @@ async fn declared_session_servers_start_outside_turns_and_outlive_them() {
         target
             .log()
             .iter()
-            .any(|line| line == "process/terminate s1")
+            .any(|line| line == "process/terminate server-1")
     );
 }
 
@@ -847,6 +843,14 @@ async fn memory_requests_need_the_sessions_bridge() {
         .client
         .relay("cowboy/memory".into(), json!({"path": "/v1/context"}))
         .await;
+    let call = target
+        .client
+        .relay(
+            "cowboy/extensionCall".into(),
+            json!({"name": "cowboy_read"}),
+        )
+        .await;
+    assert!(call.get("error").is_some());
     assert!(
         reply["error"]["message"]
             .as_str()
@@ -854,4 +858,140 @@ async fn memory_requests_need_the_sessions_bridge() {
             .contains("memory is not available")
     );
     assert!(target.log().is_empty());
+}
+
+/// A target running one stdio MCP server per started process: it answers
+/// `initialize`, `tools/list` and `tools/call` on its stdout.
+fn mcp_target() -> Handler {
+    use base64::Engine as _;
+    let output = Arc::new(Mutex::new(BTreeMap::<String, Vec<Value>>::new()));
+    Arc::new(move |invocation| {
+        let id = invocation.params["processId"]
+            .as_str()
+            .unwrap_or("")
+            .to_owned();
+        match invocation.method.as_str() {
+            "process/start" => {
+                assert_eq!(invocation.params["pipeStdin"], true);
+                output.lock().insert(id.clone(), Vec::new());
+                completed(json!({"result": {"processId": id}}))
+            }
+            "process/write" => {
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(invocation.params["chunk"].as_str().unwrap())
+                    .unwrap();
+                let message: Value = serde_json::from_slice(&bytes).unwrap();
+                let result = match message["method"].as_str().unwrap_or("") {
+                    "initialize" => Some(json!({"instructions": "Prefer Cowboy MCP."})),
+                    "tools/list" => Some(json!({"tools": [
+                        {"name": "cowboy_read", "inputSchema": {"type": "object"}},
+                        {"name": "ReadFile"},
+                    ]})),
+                    "tools/call" => Some(json!({"content": [{"type": "text",
+                        "text": message["params"]["name"]}]})),
+                    _ => None,
+                };
+                if let (Some(result), Some(rpc)) = (result, message.get("id")) {
+                    // A server-initiated request with the same id comes first.
+                    let mut lines = format!(
+                        "{}\n{}\n",
+                        json!({"jsonrpc": "2.0", "id": rpc, "method": "ping"}),
+                        json!({"jsonrpc": "2.0", "id": rpc, "result": result})
+                    )
+                    .into_bytes();
+                    let mut chunks = output.lock();
+                    let list = chunks.get_mut(&id).unwrap();
+                    // Split inside the reply to exercise reassembly.
+                    let tail = lines.split_off(lines.len() / 2);
+                    for part in [lines, tail] {
+                        let seq = list.len() as u64 + 1;
+                        list.push(json!({"seq": seq, "stream": "stdout",
+                            "chunk": base64::engine::general_purpose::STANDARD.encode(part)}));
+                    }
+                }
+                completed(json!({"result": {"status": "accepted"}}))
+            }
+            "process/read" => {
+                let after = invocation.params["afterSeq"].as_u64().unwrap_or(0);
+                let chunks: Vec<Value> = output
+                    .lock()
+                    .get(&id)
+                    .map(|list| {
+                        list.iter()
+                            .filter(|chunk| chunk["seq"].as_u64().unwrap() > after)
+                            .cloned()
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                completed(json!({"result": {"chunks": chunks, "exited": false, "closed": false}}))
+            }
+            _ => completed(json!({"result": {}})),
+        }
+    })
+}
+
+#[tokio::test]
+async fn the_broker_runs_target_servers_for_the_unit_inside_turns() {
+    let target = Target::new(mcp_target());
+    let ledger = ledger(&target.client, None);
+    ledger.set_readiness(false);
+    let broker = super::ExtensionBroker::start(
+        &target.client,
+        super::ExtensionPlan {
+            servers: vec![super::ServerPlan {
+                name: "cowboy".into(),
+                argv: vec!["cowboy".into(), "mcp".into()],
+                required: false,
+            }],
+            memory_tools: Vec::new(),
+            memory_server: "matrix".into(),
+        },
+        None,
+    );
+    target.client.set_extensions(broker);
+    let listed = target
+        .client
+        .relay("cowboy/extensions".into(), json!({}))
+        .await;
+    let names: Vec<&str> = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    // A facade name takes its server's prefix.
+    assert_eq!(names, ["cowboy_read", "cowboy_ReadFile"]);
+    assert!(
+        listed["result"]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("Prefer Cowboy MCP.")
+    );
+    let outside = target
+        .client
+        .relay(
+            "cowboy/extensionCall".into(),
+            json!({"name": "cowboy_read", "arguments": {}}),
+        )
+        .await;
+    assert!(
+        outside["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("no Cowboy turn")
+    );
+    ledger.begin_turn("turn-1");
+    let called = target
+        .client
+        .relay(
+            "cowboy/extensionCall".into(),
+            json!({"name": "cowboy_ReadFile", "arguments": {}}),
+        )
+        .await;
+    assert_eq!(called["result"]["content"][0]["text"], "ReadFile");
+    let unknown = target
+        .client
+        .relay("cowboy/extensionCall".into(), json!({"name": "nope"}))
+        .await;
+    assert!(unknown.get("error").is_some());
 }
