@@ -19,6 +19,9 @@ export interface NativeAccountUsage {
   next_refresh_at_ms?: number;
   /** The owner's scheduled banked reset of this account. */
   reset_schedule?: { fire_at_ms: number };
+  /** The Service can spend this account's banked resets (native Claude,
+   * portable Codex/Grok); never a DeepSeek balance account. */
+  resets_supported?: boolean;
 }
 
 const empty: { accounts: NativeAccountUsage[]; error: string } = { accounts: [], error: "" };

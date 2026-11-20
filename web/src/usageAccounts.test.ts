@@ -238,7 +238,7 @@ test("a named card owns its reset lane only when its own usage reports reset cre
   ]);
   const credits = { availableCount: 1, credits: [{ id: "grant:1", status: "available", title: "5h reset (1 left)" }] };
   const observed = { account_id: "otter", provider_id: "claude-code", available: true, refreshing: false,
-    reset_schedule: { fire_at_ms: 900 },
+    resets_supported: true, reset_schedule: { fire_at_ms: 900 },
     usage: { provider: "anthropic", status: "available", source: "Anthropic", observed_at_ms: 300,
       rate_limits: { rateLimitResetCredits: credits } } };
   const service = { ...snapshot, reset_schedules: { anthropic: { fire_at_ms: 500 } } };
@@ -258,4 +258,32 @@ test("a named card owns its reset lane only when its own usage reports reset cre
   // A session-reported quota is never a reset lane.
   const [, reported] = registeredUsageAccounts(service, registry, [session], []);
   assertEquals(usageResetTarget(reported!), undefined);
+});
+test("named resets appear only where the Service can spend them", () => {
+  applyUsageHostPlugins([
+    { id: "codex", usage: { account: "openai", product: "OpenAI", order: 1, reset: "codex" } },
+    { id: "claude-deepseek", usage: { account: "deepseek", product: "DeepSeek", order: 3 } },
+  ]);
+  const accounts: SubscriptionSnapshot = { ...registry, registry: { revision: 1, defaults: {}, accounts: [
+    { id: "pika", provider_id: "codex", label: "OpenAI · Pika", enabled: true },
+    { id: "whale", provider_id: "codex-deepseek", label: "DeepSeek · Whale", enabled: true },
+  ] } };
+  const credits = { rateLimitResetCredits: { availableCount: 1, credits: [{ id: "credit-1", status: "available" }] } };
+  const observation = (account_id: string, provider_id: string, provider: string, resets_supported: boolean) => ({
+    account_id, provider_id, available: true, refreshing: false, resets_supported,
+    usage: { provider, status: "available", source: provider, observed_at_ms: 300, rate_limits: credits },
+  });
+  const cards = registeredUsageAccounts(snapshot, accounts, [], [
+    observation("pika", "codex", "openai", true),
+    observation("whale", "codex-deepseek", "deepseek", false),
+  ]);
+  // A portable Codex account spends its own credits on its own lane.
+  assertEquals(usageResetTarget(cards.find((card) => card.id === "pika")!), { kind: "account", accountId: "pika" });
+  // DeepSeek declares no reset, whatever its report contains.
+  assertEquals(usageResetTarget(cards.find((card) => card.id === "whale")!), undefined);
+  // A Service that cannot spend the account's resets never shows the action.
+  const older = registeredUsageAccounts(snapshot, accounts, [], [
+    { ...observation("pika", "codex", "openai", true), resets_supported: undefined },
+  ]);
+  assertEquals(usageResetTarget(older.find((card) => card.id === "pika")!), undefined);
 });

@@ -136,15 +136,16 @@ export function displayPlan(usage: ProviderUsage, plan: string | undefined): str
 }
 
 /** Where a card's reset actions go. A Service card keeps its collector lane.
- * A named card gets its own lane only when its own collected usage reports
- * reset credits; it never borrows the Service card's lane or credits. */
+ * A named card gets its own lane only when the Service can spend its resets
+ * and its own collected usage reports reset credits; it never borrows the
+ * Service card's lane or credits. */
 export function usageResetTarget(card: UsageAccountCard): UsageResetTarget | undefined {
   if (card.collector) {
     const provider = usageResetProvider(card.usage);
     return provider ? { kind: "service", provider } : undefined;
   }
   const collected = card.native?.usage;
-  if (!collected || usageResetProvider(collected) === undefined) return undefined;
+  if (!collected || card.native?.resets_supported !== true || usageResetProvider(collected) === undefined) return undefined;
   return record(collected.rate_limits?.rateLimitResetCredits) ? { kind: "account", accountId: card.id } : undefined;
 }
 

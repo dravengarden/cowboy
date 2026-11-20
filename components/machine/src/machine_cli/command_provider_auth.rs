@@ -256,6 +256,9 @@ pub(super) fn portable_usage(
     context: MachineCommandContext,
     execution: &PluginExecutionScope,
 ) {
+    if matches!(command, MachineCommand::ConsumePortableReset { .. }) {
+        return portable_reset(command, context, execution);
+    }
     let MachineCommand::CollectPortableUsage {
         request_id,
         request,
@@ -292,6 +295,63 @@ pub(super) fn portable_usage(
             payload: result.ok(),
             detail,
         });
+    });
+}
+
+/// Banked reset of a named portable account (protocol 50): the collector's
+/// own reply, or a closed code with `started` kept so the Controller never
+/// retries an outcome that may have reached the Provider.
+fn portable_reset(
+    command: MachineCommand,
+    context: MachineCommandContext,
+    execution: &PluginExecutionScope,
+) {
+    let MachineCommand::ConsumePortableReset {
+        request_id,
+        request,
+    } = command
+    else {
+        return;
+    };
+    let MachineCommandContext {
+        protocol,
+        events,
+        providers,
+        ..
+    } = context;
+    let account = request.account_id.clone();
+    let provider = request.plugin_id.clone();
+    let invocation = execution.portable_reset(*request);
+    tokio::spawn(async move {
+        let result = if protocol >= crate::machine_protocol::PORTABLE_USAGE_PROTOCOL_VERSION {
+            providers.consume_portable_reset(invocation).await
+        } else {
+            Err(anyhow::anyhow!("machine_usage_update_required").into())
+        };
+        let event = match result {
+            Ok(payload) => MachineEvent::PluginHostResponse {
+                request_id,
+                accepted: true,
+                started: true,
+                payload: Some(payload),
+                detail: None,
+            },
+            Err(failure) => {
+                let code = crate::machine_protocol::portable_usage::portable_usage_error_code(
+                    &failure.error.to_string(),
+                );
+                tracing::warn!(account = account.as_str(), %provider, started = failure.started,
+                    reason = code, "Portable account reset failed");
+                MachineEvent::PluginHostResponse {
+                    request_id,
+                    accepted: false,
+                    started: failure.started,
+                    payload: None,
+                    detail: Some(code.to_owned()),
+                }
+            }
+        };
+        let _ = events.send(event);
     });
 }
 

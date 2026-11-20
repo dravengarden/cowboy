@@ -55,6 +55,12 @@ runtime policy admits, Cowboy picks the one running most of the owner's sessions
 on the account, then the lowest Machine ID, and never inherits the Service
 account's configured usage query Machine.
 
+Banked resets of a portable Codex or Grok account (`ConsumePortableReset`, also
+protocol 50) run the collector's `consume_reset` under the same admission and on
+the same Machine and replica as its quota read, holding the installation
+lifecycle until the collector ends as Service resets do. A failure after the
+collector started keeps `started`, so its outcome is unknown and never retried.
+
 ## Operator CLI
 
 Use a CLI matching the Controller release through its authorized local Operator

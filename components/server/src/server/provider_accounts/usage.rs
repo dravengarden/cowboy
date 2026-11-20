@@ -356,13 +356,13 @@ fn error_message(code: &str) -> &str {
         "usage_admission_unavailable" => {
             "Usage collection is paused. The Service admission ledger needs repair and a restart."
         }
-        "account_reset_unsupported" | "native_reset_unsupported" => {
+        "account_reset_unsupported" | "native_reset_unsupported" | "portable_reset_unsupported" => {
             "This account's Provider does not offer usage resets."
         }
         "usage_reset_paced" => {
             "Usage requests to this Provider are paced; no reset was sent. Try again in a minute."
         }
-        "native_reset_outcome_unknown" => {
+        "native_reset_outcome_unknown" | "portable_reset_outcome_unknown" => {
             "The reset outcome is unknown. Refresh usage before trying again."
         }
         "reset_confirmation_required" => "Type confirm to use a reset.",
@@ -408,6 +408,8 @@ pub(in crate::server) async fn read_one(
     });
     value["available"] = json!(true);
     value["signed_in"] = json!(true);
+    // Whether this account's reset endpoints can spend a banked reset.
+    value["resets_supported"] = json!(reset::binding(state, &target).is_some());
     let cache = state.usage.native.entry(owner, id.as_str());
     value["refreshing"] = json!(cache.collection.try_lock().is_err());
     // A read neither takes the database admission write lock nor binds a cache

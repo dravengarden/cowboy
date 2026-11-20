@@ -25,19 +25,19 @@ impl MachineCommand {
                 ..
             } => MACHINE_BROWSER_NETWORK_PROTOCOL_VERSION,
             Self::Browser { .. } => MACHINE_BROWSER_PROTOCOL_VERSION,
-            Self::CollectNativeUsage { .. } => NATIVE_USAGE_PROTOCOL_VERSION,
-            Self::ConsumeNativeReset { .. } => NATIVE_RESET_PROTOCOL_VERSION,
-            Self::CollectPortableUsage { .. } => PORTABLE_USAGE_PROTOCOL_VERSION,
-            Self::AccountSandboxFence { .. } | Self::AccountSandboxRemove { .. } => {
-                ACCOUNT_FENCE_PROTOCOL_VERSION
-            }
-            Self::BeginNativeLogin { .. }
+            Self::CollectNativeUsage { .. }
+            | Self::ConsumeNativeReset { .. }
+            | Self::CollectPortableUsage { .. }
+            | Self::ConsumePortableReset { .. }
+            | Self::AccountSandboxFence { .. }
+            | Self::AccountSandboxRemove { .. }
+            | Self::BeginNativeLogin { .. }
             | Self::QueryNativeProfile { .. }
             | Self::NativeLogout { .. }
             | Self::QueryLoginStop { .. }
             | Self::QueryWorkerExit { .. }
             | Self::PrepareNativeBinding { .. }
-            | Self::CancelLoginRequest { .. } => PROVIDER_ACCOUNT_PROTOCOL_VERSION,
+            | Self::CancelLoginRequest { .. } => self.named_account_protocol(),
             Self::ApplyProviderAuth { envelope, .. }
                 if envelope.envelope_schema >= 2 || !envelope.account_id.is_default() =>
             {
@@ -156,6 +156,23 @@ impl MachineCommand {
             | Self::RefreshInventory { .. }
             | Self::AdapterRequest { .. }
             | Self::ProviderUsageAck { .. } => 1,
+        }
+    }
+
+    /// Named account commands: native logins, their usage and resets,
+    /// account-sandbox controls and portable account usage and resets.
+    fn named_account_protocol(&self) -> u16 {
+        match self {
+            Self::CollectNativeUsage { .. } => NATIVE_USAGE_PROTOCOL_VERSION,
+            Self::ConsumeNativeReset { .. } => NATIVE_RESET_PROTOCOL_VERSION,
+            Self::CollectPortableUsage { .. } | Self::ConsumePortableReset { .. } => {
+                PORTABLE_USAGE_PROTOCOL_VERSION
+            }
+            Self::AccountSandboxFence { .. } | Self::AccountSandboxRemove { .. } => {
+                ACCOUNT_FENCE_PROTOCOL_VERSION
+            }
+            // Native login lifecycle (the caller routes nothing else here).
+            _ => PROVIDER_ACCOUNT_PROTOCOL_VERSION,
         }
     }
 }

@@ -28,6 +28,22 @@ pub struct PortableUsageRequest {
     pub payload: serde_json::Value,
 }
 
+/// One owner-confirmed or scheduled banked reset of a named portable
+/// account, run by the same signed collector (`consume_reset`) in the same
+/// account replica scope and generation as [`PortableUsageRequest`]. Answered
+/// only by `MachineEvent::PluginHostResponse`; a failure keeps `started`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PortableResetRequest {
+    pub account_id: crate::provider_account::ProviderAccountId,
+    pub plugin_id: String,
+    pub plugin_version: String,
+    pub generation_digest: String,
+    pub auth_generation: u64,
+    /// The collector's bounded `consume_reset` input.
+    pub reset: super::NativeResetRequest,
+}
+
 /// Coarse kind of a usage collection failure, from its diagnostic text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UsageFailureKind {
@@ -41,7 +57,7 @@ pub enum UsageFailureKind {
 /// credentials never leave the Machine; only one of these codes does.
 #[must_use]
 pub fn portable_usage_error_code(detail: &str) -> &'static str {
-    const CLOSED: [&str; 10] = [
+    const CLOSED: [&str; 13] = [
         "machine_usage_update_required",
         "machine_connection_changed",
         "portable_usage_account_required",
@@ -52,6 +68,9 @@ pub fn portable_usage_error_code(detail: &str) -> &'static str {
         "portable_usage_collector_failed",
         "portable_usage_temporarily_unavailable",
         "portable_usage_throttled",
+        "portable_reset_request_invalid",
+        "portable_reset_unsupported",
+        "portable_reset_outcome_unknown",
     ];
     if let Some(code) = CLOSED.iter().find(|code| **code == detail) {
         return code;

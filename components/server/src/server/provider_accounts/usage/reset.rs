@@ -1,10 +1,12 @@
-//! Banked usage resets of a named native account (Claude). The Machine that
-//! holds the account's native login runs the same signed collector, CLI
-//! identity and token as the account's quota reads; the Controller never
-//! talks to the Provider. Resets reuse the Service collector's contract:
+//! Banked usage resets of a named account: a native login (Claude) on the
+//! Machine that holds it, or a portable vault account (Codex, Grok) on the
+//! Machine and account replica its quota reads use. Either way the same signed
+//! collector, CLI identity and token as the account's quota reads run the
+//! reset; the Controller never talks to the Provider. Resets reuse the Service collector's contract:
 //! typed owner confirmation, the shared Provider pacing, persisted one-shot
 //! schedules ([`fire_due_reset`]) and unknown outcomes that are never retried.
 use super::*;
+use crate::machine_control::NativeResetFailure;
 use crate::usage::{ResetError, ResetReservation, ResetResult};
 
 /// The account's lane in the shared scheduled-action and action-log tables.
@@ -30,29 +32,36 @@ async fn owned(
         .ok_or("account_unavailable")
 }
 
+fn declares_reset(binding: &crate::plugin_host::PluginUsageSpec) -> bool {
+    binding.reset.is_some() && !binding.reset_argv.is_empty()
+}
+
 /// The owner's admitted target whose signed usage binding declares resets.
+/// A portable account uses its collector Plugin's own binding (Codex, Grok;
+/// never the DeepSeek balance collector, which declares none).
 async fn reset_target(
     state: &AppState,
     owner: &str,
     id: &ProviderAccountId,
-) -> Result<(Target, bool), &'static str> {
-    // Banked resets exist only for native logins (Claude); portable accounts
-    // have no reset path on the named card.
-    let target = match target(state, owner, id).await.map_err(public_code)? {
-        Resolved::Native(target) => *target,
-        Resolved::Portable(_) => return Err("account_reset_unsupported"),
-    };
-    let binding = state
-        .usage
-        .plugin_bindings()
-        .into_iter()
-        .find(|binding| {
-            binding.account == target.provider
-                && binding.reset.is_some()
-                && !binding.reset_argv.is_empty()
-        })
-        .ok_or("account_reset_unsupported")?;
-    Ok((target, binding.claims_reset_before_attempt()))
+) -> Result<(Resolved, bool), &'static str> {
+    let resolved = target(state, owner, id).await.map_err(public_code)?;
+    let binding = binding(state, &resolved).ok_or("account_reset_unsupported")?;
+    Ok((resolved, binding.claims_reset_before_attempt()))
+}
+
+/// The signed usage binding that spends this target's resets, if any.
+pub(super) fn binding(
+    state: &AppState,
+    resolved: &Resolved,
+) -> Option<crate::plugin_host::PluginUsageSpec> {
+    match resolved {
+        Resolved::Native(target) => state
+            .usage
+            .plugin_bindings()
+            .into_iter()
+            .find(|binding| binding.account == target.provider && declares_reset(binding)),
+        Resolved::Portable(target) => Some(target.binding.clone()).filter(declares_reset),
+    }
 }
 
 /// Reserve a paced reset start for this account. It holds the account's
@@ -69,7 +78,7 @@ async fn reserve(
     let permit = state
         .usage
         .limiter
-        .start_action(&target.provider, &key, now_ms())
+        .start_action(target.provider(), &key, now_ms())
         .map_err(|_| "usage_reset_paced")?;
     Ok((ResetReservation::new(key, permit, serial), claims_before))
 }
@@ -117,52 +126,27 @@ async fn dispatch(
     crate::usage::limiter::Outcome,
 ) {
     use crate::usage::limiter::Outcome;
-    let unsent = |code| (Err(local(code)), Outcome::Unused);
-    let target = match reset_target(state, owner, id).await {
-        Ok((target, _)) => target,
-        Err(code) => return unsent(code),
+    let failure = |code| NativeResetFailure {
+        call_may_have_reached_provider: false,
+        code,
     };
-    let Some(store) = state.store.as_ref() else {
-        return unsent("unavailable");
-    };
-    let completion = &target.completion;
-    let Some((connection, version)) = state
-        .machine_control
-        .connection_protocol(&completion.machine_id)
-    else {
-        return unsent("machine_unavailable");
-    };
-    if version < crate::machine_protocol::NATIVE_RESET_PROTOCOL_VERSION {
-        return unsent("machine_usage_update_required");
-    }
-    let request = crate::machine_protocol::NativeResetRequest {
-        provider: target.provider.clone(),
+    let request = |provider: &str| crate::machine_protocol::NativeResetRequest {
+        provider: provider.to_owned(),
         idempotency_key: idempotency_key.to_owned(),
         expected_credit_id: expected_credit_id.map(str::to_owned),
     };
-    let pending = store
-        .with_native_login_binding(owner, &target.operation, completion, || {
-            Ok(
-                if state
-                    .supervisor
-                    .runtime_allowed(&completion.profile.provider_id, &completion.machine_id)
-                {
-                    state
-                        .machine_control
-                        .begin_native_reset(&connection, &completion.profile, request)
-                        .map_err(|code| dispatch_error(&code))
-                } else {
-                    Err("runtime_not_allowed")
-                },
-            )
-        })
-        .await;
-    let pending = match pending {
-        Ok(Ok(pending)) => pending,
-        Ok(Err(code)) => return unsent(code),
-        Err(_) => return unsent("account_binding_changed"),
+    let reply = match reset_target(state, owner, id).await {
+        Err(code) => Err(failure(code)),
+        Ok((Resolved::Native(target), _)) => {
+            let request = request(&target.provider);
+            dispatch_native(state, owner, &target, request).await
+        }
+        Ok((Resolved::Portable(target), _)) => {
+            let request = request(&target.binding.account);
+            portable::consume_reset(state, owner, id, &target, request).await
+        }
     };
-    match pending.await {
+    match reply {
         Ok(reply) => {
             let result = crate::usage::parse_reset_response(reply);
             // A refused or changed reset is an answer, not an outage. Only
@@ -189,6 +173,52 @@ async fn dispatch(
             },
         ),
     }
+}
+
+/// The native login's Machine runs the reset under the login binding and the
+/// host's runtime policy (`--provider-runtime-machine`), checked again here.
+async fn dispatch_native(
+    state: &AppState,
+    owner: &str,
+    target: &Target,
+    request: crate::machine_protocol::NativeResetRequest,
+) -> Result<Value, NativeResetFailure> {
+    let unsent = |code| NativeResetFailure {
+        call_may_have_reached_provider: false,
+        code,
+    };
+    let store = state.store.as_ref().ok_or(unsent("unavailable"))?;
+    let completion = &target.completion;
+    let (connection, version) = state
+        .machine_control
+        .connection_protocol(&completion.machine_id)
+        .ok_or(unsent("machine_unavailable"))?;
+    if version < crate::machine_protocol::NATIVE_RESET_PROTOCOL_VERSION {
+        return Err(unsent("machine_usage_update_required"));
+    }
+    let pending = store
+        .with_native_login_binding(owner, &target.operation, completion, || {
+            Ok(
+                if state
+                    .supervisor
+                    .runtime_allowed(&completion.profile.provider_id, &completion.machine_id)
+                {
+                    state
+                        .machine_control
+                        .begin_native_reset(&connection, &completion.profile, request)
+                        .map_err(|code| dispatch_error(&code))
+                } else {
+                    Err("runtime_not_allowed")
+                },
+            )
+        })
+        .await;
+    let pending = match pending {
+        Ok(Ok(pending)) => pending,
+        Ok(Err(code)) => return Err(unsent(code)),
+        Err(_) => return Err(unsent("account_binding_changed")),
+    };
+    pending.await
 }
 
 /// A named account's persisted schedule, as the timer sees it.
@@ -528,5 +558,28 @@ mod tests {
             assert!(!error.call_may_have_reached_provider, "{code}");
             assert_eq!(error.to_string(), error_message(code));
         }
+    }
+
+    #[test]
+    fn portable_resets_follow_their_collector_plugin_binding() {
+        let usage = |host: &str| -> crate::plugin_host::PluginUsageSpec {
+            let host: Value = serde_json::from_str(host).unwrap();
+            serde_json::from_value(host["usage"].clone()).unwrap()
+        };
+        // Codex and Grok collectors spend banked resets; the DeepSeek
+        // balance collector serving the shared API-key scope declares none.
+        assert!(declares_reset(&usage(include_str!(
+            "../../../../../../plugins/codex/host.json"
+        ))));
+        assert!(declares_reset(&usage(include_str!(
+            "../../../../../../plugins/grok/host.json"
+        ))));
+        assert!(!declares_reset(&usage(include_str!(
+            "../../../../../../plugins/claude-deepseek/host.json"
+        ))));
+        assert_eq!(
+            error_message("portable_reset_outcome_unknown"),
+            error_message("native_reset_outcome_unknown")
+        );
     }
 }

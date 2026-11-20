@@ -2597,7 +2597,8 @@ fn handle_machine_command(
         | MachineCommand::CancelLoginRequest { .. }
         | MachineCommand::SubmitLoginCode { .. }) => command_login::handle(command, context),
         command @ MachineCommand::Browser { .. } => command_browser::handle(command, context),
-        command @ MachineCommand::CollectPortableUsage { .. } => {
+        command @ (MachineCommand::CollectPortableUsage { .. }
+        | MachineCommand::ConsumePortableReset { .. }) => {
             command_provider_auth::portable_usage(command, context, execution);
         }
         MachineCommand::ProviderUsageAck { .. }

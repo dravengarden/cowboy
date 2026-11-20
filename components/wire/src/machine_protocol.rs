@@ -856,6 +856,11 @@ pub enum MachineCommand {
         request_id: String,
         request: Box<portable_usage::PortableUsageRequest>,
     },
+    /// Answered only by `PluginHostResponse`; see [`portable_usage`].
+    ConsumePortableReset {
+        request_id: String,
+        request: Box<portable_usage::PortableResetRequest>,
+    },
     NativeLogout {
         request_id: String,
         logout: crate::provider_account::NativeLogoutRequest,

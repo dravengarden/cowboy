@@ -367,6 +367,17 @@ own lane, never an extra poll. `409 reset_failed` sent nothing;
 schedule persists as lane `account-<id>`, fires the Provider's next grant once
 and shows as `reset_schedule` in the account's usage read.
 
+Named portable Codex and Grok accounts use the same endpoints, pacing, claims,
+lanes and schedules. Their reset runs the account's signed collector
+`consume_reset` on the Machine and account replica its quota read would use now
+(same placement, host runtime policy, current vault generation and account
+credential guard; `ConsumePortableReset`, Machine protocol 50). A failure after
+the collector started is `portable_reset_outcome_unknown` and never retried. The
+DeepSeek balance collector declares no reset, so a DeepSeek account answers
+`account_reset_unsupported`. The usage read's `resets_supported` says whether
+the Service can spend this account's resets; Web shows reset actions on a named
+card only when it is true and the card's own usage reports reset credits.
+
 `cowboy.accounts.usage(account_id)` reads the same owner-scoped observation as
 `GET /api/provider-accounts/{account_id}/usage`. Explicit
 `control.apply("usage.refresh",{account:account_id})` or `POST` to that URL

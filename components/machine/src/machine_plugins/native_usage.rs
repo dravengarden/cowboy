@@ -6,7 +6,7 @@ use std::sync::{Arc, Weak};
 
 mod portable;
 mod sandbox;
-pub use portable::PortableInvocation;
+pub use portable::{PortableInvocation, PortableResetInvocation};
 
 /// Native processes share a home only within one account. They must not hold
 /// the global installation lock or serialize independent accounts.

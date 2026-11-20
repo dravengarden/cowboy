@@ -252,6 +252,37 @@ async fn collect(
     observation(target, &raw)
 }
 
+/// Spend one banked reset on the Machine and account replica a quota read
+/// would use now (same placement, runtime policy and vault generation).
+pub(super) async fn consume_reset(
+    state: &AppState,
+    owner: &str,
+    id: &ProviderAccountId,
+    target: &Target,
+    reset: crate::machine_protocol::NativeResetRequest,
+) -> Result<Value, crate::machine_control::NativeResetFailure> {
+    let (machine, plugin) = placement(state, owner, id, target).map_err(|code| {
+        crate::machine_control::NativeResetFailure {
+            call_may_have_reached_provider: false,
+            code,
+        }
+    })?;
+    let request = crate::machine_protocol::portable_usage::PortableResetRequest {
+        account_id: id.clone(),
+        plugin_id: plugin.plugin_id.clone(),
+        plugin_version: plugin.plugin_version.clone(),
+        generation_digest: plugin.generation_digest.clone(),
+        auth_generation: target.auth_generation,
+        reset,
+    };
+    crate::usage::portable::consume_reset(&state.machine_control, &machine, &plugin, request)
+        .await
+        .inspect_err(|failure| {
+            tracing::info!(account_id = id.as_str(), %machine, reason = failure.code,
+                reached = failure.call_may_have_reached_provider, "portable account reset failed");
+        })
+}
+
 /// The stored observation: the collector's account, windows and Provider
 /// activity, under the Service's own clock and labels.
 fn observation(target: &Target, raw: &Value) -> Result<Value, &'static str> {
