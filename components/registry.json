@@ -19603,7 +19603,7 @@
           "sources": [
             "components/provider-runtime"
           ],
-          "digest": "sha256:3ca7d197ab8de81357aa9621d42c3b1f51029c61d8fde07134cb1f056cb847b9",
+          "digest": "sha256:3e78aac86c6eb3d075f7a3cc62852e8ec65f792ca4b784cd391e6a343c4aa38d",
           "package": {
             "kind": "npm",
             "name": "@cowboy/provider-runtime",
