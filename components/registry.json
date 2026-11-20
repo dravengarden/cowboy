@@ -20631,7 +20631,7 @@
           "sources": [
             "components/provider-ui"
           ],
-          "digest": "sha256:b3cab60e40f57102d641d25cd3b54fab27a7ecaf3ad2fd5861f87d6a71e0f83b",
+          "digest": "sha256:964c123a71d9d4240783829ede2fc4f5cfe852442098038d1f1c56b8a6e86e1a",
           "package": {
             "kind": "npm",
             "name": "@cowboy/provider-ui",

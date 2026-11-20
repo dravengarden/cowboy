@@ -4,6 +4,7 @@ import {
   machinePluginKinds,
   pluginKinds,
 } from "./pluginKinds.ts";
+import { levitationBelowFloor, validDisplay } from "./displayContract.ts";
 import {
   NATIVE_IDENTITY_KEYS,
   nativeIdentityPath,
@@ -1622,29 +1623,10 @@ function validateProviderUiManifestContract(
       `Provider SDK ${input.sdk_version} is incompatible with Cowboy Provider SDK ${PROVIDER_SDK_VERSION}`,
     );
   }
-  if (
-    usesLevitatingActivity(input.ui.surfaces) &&
-    compareProviderVersions(String(input.sdk_version), "3.7.0") < 0
-  ) {
+  if (levitationBelowFloor(input.ui.surfaces, String(input.sdk_version), compareProviderVersions)) {
     throw new Error("Levitating activity requires Provider SDK 3.7.0");
   }
-  if (
-    !isRecord(input.display) ||
-    typeof input.display.name !== "string" ||
-    !input.display.name.trim() ||
-    typeof input.display.vendor !== "string" ||
-    !input.display.vendor.trim() ||
-    typeof input.display.summary !== "string" ||
-    !input.display.summary.trim() ||
-    typeof input.display.accent !== "string" ||
-    !isColor(input.display.accent) ||
-    typeof input.display.secondary_accent !== "string" ||
-    !isColor(input.display.secondary_accent) ||
-    typeof input.display.logo_asset !== "string" ||
-    !isIdentifier(input.display.logo_asset) ||
-    typeof input.display.icon_asset !== "string" ||
-    !isIdentifier(input.display.icon_asset)
-  ) {
+  if (!validDisplay(input.display, { isColor, isIdentifier })) {
     throw new Error("Invalid Provider display contract");
   }
   if (
@@ -2356,18 +2338,6 @@ function validateUiNode(
     default:
       throw new Error(`Unknown Provider UI component ${input.component}`);
   }
-}
-
-/** Whether any surface shows the levitating activity (Provider SDK 3.7.0). */
-function usesLevitatingActivity(surfaces: Record<string, unknown>): boolean {
-  const walk = (node: unknown): boolean => {
-    if (!isRecord(node)) return false;
-    if (node.component === "activity") {
-      return isRecord(node.indicator) && node.indicator.kind === "asset_levitate";
-    }
-    return node.component === "stack" && Array.isArray(node.children) && node.children.some(walk);
-  };
-  return Object.values(surfaces).some(walk);
 }
 
 function validateActivityNode(
