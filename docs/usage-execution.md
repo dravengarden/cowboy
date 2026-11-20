@@ -113,6 +113,16 @@ the invocation ends, so the charged time is the actual call time. A scheduled
 reset reserves its start before any one-shot claim, so pacing only delays it. A refused or changed reset records no failure backoff; an
 authentication failure does.
 
+A named native Claude account's confirmed or scheduled reset runs on the
+Machine holding its native login, through the same signed collector, CLI
+identity and token as its quota read (Machine protocol 49). It takes its start
+from the same Anthropic Provider window and spacing, on the account's own lane,
+and holds the account's collection lock, so a quota read and a reset of one
+account never overlap. Its schedule lives in the same persisted
+scheduled-action table (lane `account-<id>`) and follows the same one-shot
+claim, preflight-retry and unknown-outcome rules. A reset that never reached
+the Machine's collector records no failure backoff.
+
 These controls bound Cowboy's collection starts; they do
 not claim a published subscription polling allowance or guarantee against an
 account restriction. Provider API rate limits are separate from this polling

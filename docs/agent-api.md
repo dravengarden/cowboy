@@ -304,8 +304,10 @@ Additional accounts never inherit the Service account's quota, activity, refresh
 operation, reset credits or query Machine. Native Claude subscriptions have
 their own bounded background collector on a Machine with a current login. It
 uses the exact signed collector and native CLI in that account's private home,
-without a model prompt, credential export, sidecars or private-API credits
-enrichment. Antigravity accounts (0.2.10+) use the same path: their Machine asks
+without a model prompt, credential export or sidecars. Its read-only reset
+credit, prepaid balance and plan-tier (Ultra) enrichment reads only that
+account's own `$HOME/.claude` credential, after the native CLI had its chance
+to refresh it; any other credential layout refuses the query. Antigravity accounts (0.2.10+) use the same path: their Machine asks
 the account-sandbox daemon for the account's own read-only quota report on its
 active Provider generation, so no collector runs outside the account's custody
 and a Provider upgrade needs no new sign-in. Owner, account, enrollment, login
@@ -322,6 +324,24 @@ refreshes the caller's named accounts once, serially; a global refresh arriving
 while one runs joins it, and results reach every surface through the same
 broadcasts. Collection is serial and independent of session workers, including
 while all sessions are asleep.
+
+A named Claude card whose own usage reports reset credits also has the Service
+card's reset actions, on its own lane: `POST
+/api/provider-accounts/{account_id}/usage/reset` (typed `confirm` and the
+confirmed `expected_credit_id`) and `PUT|DELETE .../usage/reset/schedule`, or
+`control.apply("usage.account_reset" | "usage.account_reset_schedule" |
+"usage.account_reset_cancel", {account:account_id,...})`. Admission is the quota
+read's (owner, binding, identity, enabled account, sign-in Machine and the
+host's `--provider-runtime-machine` policy, rechecked at dispatch); another
+owner's account is `404 account_unavailable`. The Machine holding the native
+login runs the signed collector's `consume_reset` with the same CLI identity,
+token, guard and deadline as the quota read (`ConsumeNativeReset`, Machine
+protocol 49; older Machines report `machine_usage_update_required`). Pacing is
+the Service reset's: a start from the shared Provider window and the account's
+own lane, never an extra poll. `409 reset_failed` sent nothing;
+`409 reset_outcome_unknown` may have spent the grant and is never retried. A
+schedule persists as lane `account-<id>`, fires the Provider's next grant once
+and shows as `reset_schedule` in the account's usage read.
 
 `cowboy.accounts.usage(account_id)` reads the same owner-scoped observation as
 `GET /api/provider-accounts/{account_id}/usage`. Explicit
