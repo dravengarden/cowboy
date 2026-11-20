@@ -21,6 +21,7 @@ places its tree below `proxy/` in the account-sandbox runtime archive and adds
 | `facade.mjs`                  | MCP tools over the one execution `Connection`                           |
 | `facade-relay.mjs`            | stdio MCP server `agy` launches; relays to the proxy's socket           |
 | `projection.mjs`              | Target context appended to the system prompt                            |
+| `compaction.mjs`              | `/compact` as a typed compaction; context restated after it             |
 | `evidence.mjs`                | Backend refusal classification from the unit's `agy` log                |
 | `hook.mjs`                    | `PreToolUse` allow-list (`agy-hook`)                                    |
 | `hooks.json`, `settings.json` | Policy the daemon binds read-only over the home                         |
@@ -106,6 +107,22 @@ places its tree below `proxy/` in the account-sandbox runtime archive and adds
   simplification"). Tools work
   only inside a turn; on every turn end the turn is fenced, its admitted
   mutations are awaited and its commands stopped.
+- Compaction: `agy` advertises `/compact` and runs it as an ordinary
+  `session/prompt` that reports nothing over ACP (1.5.9 summarizes the
+  history in that turn: the next turn's input drops by the summarized
+  part). The Web's compact action sends exactly that command. A prompt whose
+  text blocks read `/compact` (optionally with instructions) reaches `agy`
+  unchanged and, when the worker's `initialize` advertised
+  `clientCapabilities.session.compaction`, is shown as ACP's typed
+  `compaction_update` (`in_progress` before the prompt, then `completed`,
+  `cancelled` or `failed` with the turn error, sent before the turn's
+  reply). After a completed compaction the first owner prompt that is not a
+  slash command is prefixed with `<cowboy_context_restated>`, the projection
+  the session was opened with (routing, environment, repository and
+  extension guidance), so it stays in effect even if a summary drops it;
+  `agy` keeps the appended system prompt as its own section, so this is a
+  redundancy, not a replacement. A failed restating turn restates again; a
+  `session/load|resume` appends a fresh projection and needs none.
 - A lost reply after a mutation (`fs/writeFile`, `fs/createDirectory`,
   `process/start`, a command read or terminate), or the worker's typed
   `error.data.outcome: "unknown"`, may have been applied: the turn is fenced

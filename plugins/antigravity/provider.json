@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "antigravity",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.7.0",
   "display": {
@@ -10,7 +10,7 @@
     "summary": "Official Antigravity CLI with a personal Google account (not Google-supported in Cowboy)",
     "accent": "#3186FF",
     "secondary_accent": "#34A853",
-    "mark_view_box": "0 0 180 180",
+    "mark_view_box": "19.67 20 140 140",
     "mark_path": "M144.248 149.062C151.748 154.688 162.998 150.938 152.685 140.625C121.748 110.625 128.31 28.125 89.8727 28.125C51.4352 28.125 57.9977 110.625 27.0602 140.625C15.8102 151.875 27.9977 154.688 35.4977 149.062C64.5602 129.375 62.6852 94.6875 89.8727 94.6875C117.06 94.6875 115.185 129.375 144.248 149.062Z",
     "mark_gradient": {
       "x1_percent": 70,
@@ -216,9 +216,9 @@
       },
       {
         "id": "cowboy-antigravity-acp",
-        "version": "1.0.5",
+        "version": "1.0.6",
         "source": "cowboy:components/provider-runtime/packages/antigravity-acp",
-        "integrity": "sha256:4f14baf2cc5afe2ba73bbf7d7b0dbe8a2b0e1826e7b9085ae329447a72a83175",
+        "integrity": "sha256:629a4ebc43564e942360ce985b52c03b97d4677d762e1331ed8f0dbfad3f624b",
         "private": true
       },
       {

@@ -3,6 +3,7 @@
 // R2-16). It admits only the runtime mode's methods, replaces every session's
 // MCP servers with the Cowboy facade, appends the target projection to the
 // system prompt, and settles each turn with backend refusal evidence.
+import { Compaction, compactionStatus } from "./compaction.mjs";
 import { allowedTool } from "./hook.mjs";
 import { EVIDENCE_LIMITS, promptText, recall, updateObservation } from "./memory.mjs";
 import { facadeTool, presentToolCall } from "./presentation.mjs";
@@ -165,6 +166,8 @@ export class AcpProxy {
     this.calls = new Map();
     /** The canonical workspace root on the target, once the runtime is ready. */
     this.root = undefined;
+    /** `/compact` turns and the context restated after them. */
+    this.compaction = new Compaction();
     Promise.resolve(runtime).then(
       (ready) => {
         this.root = ready?.facade?.root;
@@ -280,6 +283,7 @@ export class AcpProxy {
     // The reply is handled with this runtime, without awaiting it again.
     const record = { method, runtime, mode: requested };
     if (method === "initialize") {
+      this.compaction.initialize(forwarded.params);
       // `agy` must never delegate file or terminal work to the worker: the
       // worker runs on the runtime Machine, not on the session's target.
       forwarded.params = { ...(forwarded.params ?? {}) };
@@ -294,6 +298,7 @@ export class AcpProxy {
         params.cwd = runtime.sessionCwd(params.cwd);
         runtime.checkMirror(params.cwd);
         const projection = await runtime.projection(params.cwd);
+        record.projection = projection;
         record.channel = runtime.newChannel();
         record.session = params.sessionId;
         if (typeof params.sessionId === "string") {
@@ -314,8 +319,9 @@ export class AcpProxy {
       }
       record.sessionId = sessionId;
       record.cursor = await runtime.evidence.mark();
+      const prompt = forwarded.params?.prompt;
       // Memory recalls for the owner's words, as for Claude and Codex.
-      const text = promptText(forwarded.params?.prompt);
+      const text = promptText(prompt);
       if (runtime.memory) {
         const context = await recall(runtime.memory, text);
         if (context) {
@@ -324,6 +330,15 @@ export class AcpProxy {
             ...(Array.isArray(forwarded.params.prompt) ? forwarded.params.prompt : []),
           ];
         }
+      }
+      record.compaction = this.compaction.begin(prompt);
+      const restated =
+        record.compaction || !Array.isArray(prompt)
+          ? undefined
+          : this.compaction.take(sessionId, prompt);
+      if (restated !== undefined) {
+        record.restated = true;
+        forwarded.params.prompt = [{ type: "text", text: restated }, ...forwarded.params.prompt];
       }
       this.turns.set(sessionId, {
         id,
@@ -337,6 +352,10 @@ export class AcpProxy {
         recorded: new Set(),
       });
       runtime.facade.beginTurn(sessionId);
+      if (record.compaction) {
+        const started = this.compaction.update(sessionId, record.compaction, "in_progress");
+        if (started) this.client(started);
+      }
     }
     this.pending.set(id, record);
     this.agent(forwarded);
@@ -546,7 +565,9 @@ export class AcpProxy {
     }
     if (message.result !== undefined) {
       if (SESSION_REQUESTS.has(record.method)) {
-        this.reportMode(message.result?.sessionId ?? record.session, message.result);
+        const sessionId = message.result?.sessionId ?? record.session;
+        this.reportMode(sessionId, message.result);
+        this.compaction.opened(sessionId, record.projection);
       }
     }
     if (record.channel && typeof message.result?.sessionId === "string") {
@@ -581,7 +602,7 @@ export class AcpProxy {
     if (uncertain !== undefined) cowboy.uncertain_effect = uncertain;
     if (violation !== undefined) cowboy.policy_violation = violation;
     if (violation !== undefined || cowboy.antigravity_backend.class !== "ok") {
-      return this.client({
+      return this.endPrompt(record, {
         jsonrpc: "2.0",
         id,
         error: {
@@ -596,6 +617,23 @@ export class AcpProxy {
     }
     const result = structuredClone(message.result);
     result._meta = { ...(result._meta ?? {}), cowboy };
-    this.client({ ...message, result });
+    this.endPrompt(record, { ...message, result });
+  }
+
+  /**
+   * Forward a prompt's final reply. A `/compact` turn first settles its
+   * typed compaction; a restating turn that failed restates again next time.
+   */
+  endPrompt(record, reply) {
+    const { sessionId } = record;
+    if (record.compaction) {
+      const { status, error } = compactionStatus(reply);
+      this.compaction.settled(sessionId, status);
+      const settled = this.compaction.update(sessionId, record.compaction, status, error);
+      if (settled) this.client(settled);
+    } else if (record.restated && reply.error !== undefined) {
+      this.compaction.retry(sessionId);
+    }
+    this.client(reply);
   }
 }

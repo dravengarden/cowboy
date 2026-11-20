@@ -906,3 +906,144 @@ test("an older switch's answer cannot reopen approvals while a newer one is pend
   await ask(81);
   assert.equal(client.at(-1).id, 81);
 });
+
+const text = (value) => [{ type: "text", text: value }];
+const compactionUpdates = (client) =>
+  client
+    .filter((message) => message.params?.update?.sessionUpdate === "compaction_update")
+    .map((message) => message.params.update);
+
+async function openedSession(proxy, typed = true) {
+  const session = typed ? { compaction: {}, notices: {} } : {};
+  await proxy.fromClient(
+    request(1, "initialize", { protocolVersion: 1, clientCapabilities: { session } }),
+  );
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 1, result: { protocolVersion: 1 } });
+  await proxy.fromClient(request(2, "session/new", { cwd: "/work/repo", mcpServers: [] }));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 2, result: { sessionId: "s" } });
+}
+
+test("/compact reaches agy unchanged and settles as a typed compaction", async () => {
+  const { proxy, agent, client } = harness();
+  await openedSession(proxy);
+  // agy never sees the worker's session capabilities.
+  assert.equal(agent[0].params.clientCapabilities.session, undefined);
+  await proxy.fromClient(
+    request(3, "session/prompt", { sessionId: "s", prompt: text("/compact") }),
+  );
+  assert.deepEqual(agent.at(-1).params.prompt, text("/compact"));
+  const [started] = compactionUpdates(client);
+  assert.equal(started.status, "in_progress");
+  assert.match(started.compactionId, /^agy-compact-/);
+  // The start is visible before agy answers the prompt.
+  assert.equal(client.at(-1).params.update, started);
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 3, result: { stopReason: "end_turn" } });
+  const settled = compactionUpdates(client);
+  assert.deepEqual(settled.at(-1), {
+    sessionUpdate: "compaction_update",
+    compactionId: started.compactionId,
+    status: "completed",
+  });
+  // The completion precedes the turn's reply.
+  assert.equal(client.at(-1).id, 3);
+  assert.equal(client.at(-2).params.update, settled.at(-1));
+  assert.equal(client.at(-1).result._meta.cowboy.antigravity_backend.class, "ok");
+});
+
+test("the first owner prompt after a compaction restates the session context", async () => {
+  const { proxy, agent } = harness();
+  await openedSession(proxy);
+  await proxy.fromClient(
+    request(3, "session/prompt", { sessionId: "s", prompt: text("/compact") }),
+  );
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 3, result: { stopReason: "end_turn" } });
+  // Another slash command keeps its place as the first block and waits.
+  await proxy.fromClient(request(4, "session/prompt", { sessionId: "s", prompt: text("/plan x") }));
+  assert.deepEqual(agent.at(-1).params.prompt, text("/plan x"));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 4, result: { stopReason: "end_turn" } });
+  await proxy.fromClient(request(5, "session/prompt", { sessionId: "s", prompt: text("hi") }));
+  const [restated, owner] = agent.at(-1).params.prompt;
+  assert.deepEqual(owner, { type: "text", text: "hi" });
+  assert.match(restated.text, /^<cowboy_context_restated>\n/);
+  assert.match(restated.text, /\nPROJECTION \/work\/repo\n<\/cowboy_context_restated>$/);
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 5, result: { stopReason: "end_turn" } });
+  // Only once.
+  await proxy.fromClient(request(6, "session/prompt", { sessionId: "s", prompt: text("again") }));
+  assert.deepEqual(agent.at(-1).params.prompt, text("again"));
+});
+
+test("a restating turn that fails restates again; a reload needs none", async () => {
+  const { proxy, agent } = harness({
+    backend: { class: "rate_limited", successes: 0, barrier: true, refusals: [] },
+  });
+  await openedSession(proxy);
+  await proxy.fromClient(
+    request(3, "session/prompt", { sessionId: "s", prompt: text("/compact") }),
+  );
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 3, result: { stopReason: "end_turn" } });
+  // A refused compaction is not completed: nothing is restated.
+  await proxy.fromClient(request(4, "session/prompt", { sessionId: "s", prompt: text("hi") }));
+  assert.deepEqual(agent.at(-1).params.prompt, text("hi"));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 4, result: { stopReason: "end_turn" } });
+
+  const ok = harness();
+  await openedSession(ok.proxy);
+  ok.proxy.compaction.settled("s", "completed");
+  await ok.proxy.fromClient(request(3, "session/prompt", { sessionId: "s", prompt: text("a") }));
+  assert.equal(ok.agent.at(-1).params.prompt.length, 2);
+  await ok.proxy.fromAgent({ jsonrpc: "2.0", id: 3, error: { code: -32000, message: "boom" } });
+  await ok.proxy.fromClient(request(4, "session/prompt", { sessionId: "s", prompt: text("b") }));
+  assert.equal(ok.agent.at(-1).params.prompt.length, 2);
+  await ok.proxy.fromAgent({ jsonrpc: "2.0", id: 4, result: { stopReason: "end_turn" } });
+  ok.proxy.compaction.settled("s", "completed");
+  // A load appends a fresh projection to the system prompt.
+  await ok.proxy.fromClient(
+    request(5, "session/load", { sessionId: "s", cwd: "/work/repo", mcpServers: [] }),
+  );
+  await ok.proxy.fromAgent({ jsonrpc: "2.0", id: 5, result: {} });
+  await ok.proxy.fromClient(request(6, "session/prompt", { sessionId: "s", prompt: text("c") }));
+  assert.deepEqual(ok.agent.at(-1).params.prompt, text("c"));
+});
+
+test("compaction outcomes: failed, cancelled, and none for a worker without the capability", async () => {
+  const refused = harness({
+    backend: { class: "rate_limited", successes: 0, barrier: true, refusals: [] },
+  });
+  await openedSession(refused.proxy);
+  await refused.proxy.fromClient(
+    request(3, "session/prompt", { sessionId: "s", prompt: text(" /COMPACT keep the plan ") }),
+  );
+  await refused.proxy.fromAgent({ jsonrpc: "2.0", id: 3, result: { stopReason: "end_turn" } });
+  assert.deepEqual(
+    compactionUpdates(refused.client).map(({ status, error }) => [status, error]),
+    [
+      ["in_progress", undefined],
+      ["failed", `${REFUSAL_PREFIX}rate_limited`],
+    ],
+  );
+
+  const cancelled = harness();
+  await openedSession(cancelled.proxy);
+  await cancelled.proxy.fromClient(
+    request(3, "session/prompt", { sessionId: "s", prompt: text("/compact") }),
+  );
+  await cancelled.proxy.fromAgent({ jsonrpc: "2.0", id: 3, result: { stopReason: "cancelled" } });
+  assert.equal(compactionUpdates(cancelled.client).at(-1).status, "cancelled");
+  await cancelled.proxy.fromClient(
+    request(4, "session/prompt", { sessionId: "s", prompt: text("hi") }),
+  );
+  assert.deepEqual(cancelled.agent.at(-1).params.prompt, text("hi"));
+
+  const untyped = harness();
+  await openedSession(untyped.proxy, false);
+  await untyped.proxy.fromClient(
+    request(3, "session/prompt", { sessionId: "s", prompt: text("/compact") }),
+  );
+  await untyped.proxy.fromAgent({ jsonrpc: "2.0", id: 3, result: { stopReason: "end_turn" } });
+  assert.deepEqual(compactionUpdates(untyped.client), []);
+  // The context is still restated.
+  await untyped.proxy.fromClient(
+    request(4, "session/prompt", { sessionId: "s", prompt: text("hi") }),
+  );
+  assert.equal(untyped.agent.at(-1).params.prompt.length, 2);
+});

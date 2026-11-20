@@ -180,11 +180,12 @@
     },
     "cowboy-antigravity-acp": {
       "kind": "node_npm",
-      "version": "1.0.5",
+      "version": "1.0.6",
       "package_dir": "packages/antigravity-acp",
       "script": "cowboy-launch.mjs",
       "launcher": "packages/antigravity-acp/launch.mjs",
       "files": [
+        "compaction.mjs",
         "evidence.mjs",
         "extensions.mjs",
         "facade.mjs",

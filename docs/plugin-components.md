@@ -83,6 +83,17 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.122.0 records provider-runtime 1.3.8, whose
+`cowboy-antigravity-acp` 1.0.6 makes `agy`'s native `/compact` (the Web's
+compact action) visible: the proxy reports it as ACP's typed
+`compaction_update` and restates the session's Cowboy context (routing,
+environment, repository and extension guidance) on the first owner prompt
+after a completed compaction. Antigravity 0.2.7 pins it and tightens its mark
+view box to `19.67 20 140 140`, matching the optical size of the Claude and
+Codex marks. The other six Providers advance one unpublished patch version
+(claude-code 3.20.53, claude-deepseek 3.1.71, codex 3.6.11, codex-deepseek
+3.1.71, deepseek-harness 1.0.29, grok 3.2.10).
+
 Component release 3.121.0 records Provider SDK 3.7.0 (plugin-sdk 1.20.0,
 provider-ui 3.8.0, provider-authoring 1.0.19), which adds the levitating
 activity indicator (`mark_levitate`, normalized to `asset_levitate`); a
