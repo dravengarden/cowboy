@@ -169,7 +169,7 @@ test("a login made before a Provider update asks to sign in again", () => {
 });
 test("sign-in states name the action instead of an unreported status", () => {
   setup();
-  for (const [reason, label] of [["native_login_pending", "SIGN-IN PENDING"], ["native_login_required", "NOT SIGNED IN"]]) {
+  for (const [reason, label] of [["native_login_pending", "SIGN-IN PENDING"], ["native_login_required", "NOT SIGNED IN"], ["portable_credentials_required", "NOT SIGNED IN"]]) {
     const observation = { account_id: "otter", provider_id: "claude-code", refreshing: false, usage: null, reason, message: "m" };
     assertEquals(registeredUsageAccounts(snapshot, registry, [], [observation])[1].statusLabel, label);
   }

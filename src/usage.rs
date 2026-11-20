@@ -22,6 +22,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
+use crate::machine_protocol::portable_usage::{
+    UsageFailureKind, classify_usage_failure, provider_throttled,
+};
 use crate::machine_protocol::{PluginHostOperation, PluginInstallationState, PluginInventory};
 use crate::model::SessionMeta;
 use crate::plugin_host::PluginUsageSpec;
@@ -30,6 +33,7 @@ use crate::plugin_process::run_plugin_command;
 mod execution;
 pub mod limiter;
 pub mod native;
+pub mod portable;
 
 pub const AUTO_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_mins(5);
 // All collection entry points share the same budget, including failed attempts.
@@ -1059,14 +1063,6 @@ enum RefreshPolicy {
     Background,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum UsageFailureKind {
-    Transient,
-    Authentication,
-    Configuration,
-    Other,
-}
-
 fn duration_ms(duration: std::time::Duration) -> i64 {
     i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
 }
@@ -1084,17 +1080,6 @@ fn never_dispatched(detail: &str) -> bool {
     let detail = detail.to_ascii_lowercase();
     detail.contains("changed before host invocation")
         || detail.contains("has no matching active plugin generation")
-}
-
-/// The Provider itself asked us to slow down: never retry quickly.
-fn provider_throttled(detail: &str) -> bool {
-    // Not "rate limit": collectors read the "rate limits" endpoints, so their
-    // ordinary failures name them.
-    let detail = detail.to_ascii_lowercase();
-    contains_http_status(&detail, 429)
-        || ["too many requests", "rate limited", "rate_limit_exceeded"]
-            .iter()
-            .any(|needle| detail.contains(needle))
 }
 
 fn provider_refresh_due(
@@ -1126,102 +1111,6 @@ fn provider_refresh_due(
 fn provider_has_cached_value(usage: &ProviderUsage) -> bool {
     matches!(usage.status, "available" | "exhausted")
         && (usage.account.is_some() || usage.rate_limits.is_some() || usage.activity.is_some())
-}
-
-fn contains_http_status(detail: &str, status: u16) -> bool {
-    let status = status.to_string();
-    [
-        format!(" {status} "),
-        format!("http {status}"),
-        format!("status {status}"),
-        format!("status={status}"),
-        format!("status: {status}"),
-        format!("\"status\":{status}"),
-        format!("\"status\": {status}"),
-        format!("error ({status} "),
-    ]
-    .iter()
-    .any(|needle| detail.contains(needle))
-}
-
-fn classify_usage_failure(detail: &str) -> UsageFailureKind {
-    let detail = detail.to_ascii_lowercase();
-    if [
-        "authentication required",
-        "authorization required",
-        "unauthorized",
-        "forbidden",
-        "not signed in",
-        "login required",
-        "sign in required",
-        "refresh token was already used",
-        "http 401",
-        "http 403",
-        "status 401",
-        "status 403",
-        "401 unauthorized",
-        "403 forbidden",
-    ]
-    .iter()
-    .any(|needle| detail.contains(needle))
-    {
-        return UsageFailureKind::Authentication;
-    }
-    if [
-        "not configured",
-        "unsupported",
-        "does not expose",
-        "method not found",
-        "invalid request",
-        "has no plugin command",
-        "collector argv is empty",
-        "spawn plugin command",
-    ]
-    .iter()
-    .any(|needle| detail.contains(needle))
-    {
-        return UsageFailureKind::Configuration;
-    }
-    if [
-        "timed out",
-        "timeout",
-        "temporarily unavailable",
-        // The Plugin host fence refuses an observation that straddled an
-        // installation or authentication change, including the credential
-        // refresh a collector performs itself; the next attempt observes the
-        // settled generation.
-        "changed during host observation",
-        "changed before host invocation",
-        // A Plugin installation or its reconciliation briefly fences host
-        // observations; the account itself is unaffected, so keep its usage.
-        "requires install attempt reconciliation",
-        "requires machine operation reconciliation",
-        "installation requires reconciliation",
-        "lifecycle is changing",
-        "service unavailable",
-        "connection refused",
-        "connection reset",
-        "connection closed",
-        "network error",
-        "dns error",
-        "failed to connect",
-        "http 408",
-        "http 409",
-        "http 429",
-        "status 408",
-        "status 409",
-        "status 429",
-        "408 request timeout",
-        "409 conflict",
-        "429 too many requests",
-    ]
-    .iter()
-    .any(|needle| detail.contains(needle))
-        || (500..=599).any(|status| contains_http_status(&detail, status))
-    {
-        return UsageFailureKind::Transient;
-    }
-    UsageFailureKind::Other
 }
 
 fn public_usage_error(
