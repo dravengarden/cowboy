@@ -26,6 +26,7 @@ impl MachineCommand {
             } => MACHINE_BROWSER_NETWORK_PROTOCOL_VERSION,
             Self::Browser { .. } => MACHINE_BROWSER_PROTOCOL_VERSION,
             Self::CollectNativeUsage { .. } => NATIVE_USAGE_PROTOCOL_VERSION,
+            Self::CollectPortableUsage { .. } => PORTABLE_USAGE_PROTOCOL_VERSION,
             Self::AccountSandboxFence { .. } | Self::AccountSandboxRemove { .. } => {
                 ACCOUNT_FENCE_PROTOCOL_VERSION
             }
@@ -110,13 +111,10 @@ impl MachineCommand {
                 TELEMETRY_BINDING_RECOVERY_PROTOCOL_VERSION
             }
             Self::CommitTelemetryBinding { .. } => TELEMETRY_BINDING_COMMIT_PROTOCOL_VERSION,
-            Self::QueryTelemetryBinding { step, .. } => {
-                if step.schema == 1 {
-                    TELEMETRY_BINDING_OBSERVATION_PROTOCOL_VERSION
-                } else {
-                    TELEMETRY_BINDING_COMMIT_PROTOCOL_VERSION
-                }
+            Self::QueryTelemetryBinding { step, .. } if step.schema == 1 => {
+                TELEMETRY_BINDING_OBSERVATION_PROTOCOL_VERSION
             }
+            Self::QueryTelemetryBinding { .. } => TELEMETRY_BINDING_COMMIT_PROTOCOL_VERSION,
             Self::ObservePluginInstallation { .. }
             | Self::InstallPluginStep { .. }
             | Self::QueryPluginInstallStep { .. } => PLUGIN_INSTALL_ATTEMPT_PROTOCOL_VERSION,

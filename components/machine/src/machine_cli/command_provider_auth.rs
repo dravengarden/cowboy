@@ -187,6 +187,52 @@ pub(super) fn handle(
     }
 }
 
+/// Named portable account usage (protocol 50). Only a closed reason code
+/// leaves the Machine; see `machine_plugins::native_usage::portable`.
+pub(super) fn portable_usage(
+    command: MachineCommand,
+    context: MachineCommandContext,
+    execution: &PluginExecutionScope,
+) {
+    let MachineCommand::CollectPortableUsage {
+        request_id,
+        request,
+    } = command
+    else {
+        return;
+    };
+    let MachineCommandContext {
+        protocol,
+        events,
+        providers,
+        ..
+    } = context;
+    let account = request.account_id.clone();
+    let provider = request.plugin_id.clone();
+    let invocation = execution.portable_usage(*request);
+    tokio::spawn(async move {
+        let result = if protocol >= crate::machine_protocol::PORTABLE_USAGE_PROTOCOL_VERSION {
+            providers.collect_portable_usage(invocation).await
+        } else {
+            Err(anyhow::anyhow!("machine_usage_update_required"))
+        };
+        let detail = result.as_ref().err().map(|error| {
+            let code = crate::machine_protocol::portable_usage::portable_usage_error_code(
+                &error.to_string(),
+            );
+            tracing::warn!(account = account.as_str(), %provider, reason = code, "Portable account usage failed");
+            code.to_owned()
+        });
+        let _ = events.send(MachineEvent::PluginHostResponse {
+            request_id,
+            accepted: result.is_ok(),
+            started: true,
+            payload: result.ok(),
+            detail,
+        });
+    });
+}
+
 /// A named envelope carries an account vault's Service-held credential (an
 /// entered key or a subscription sign-in), applied into that account's own
 /// scope. Named credentials of a native-only Provider (Claude) live solely in
