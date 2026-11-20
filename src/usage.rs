@@ -292,7 +292,10 @@ impl UsageService {
                     host.usage
                         .as_ref()
                         .is_some_and(|usage| usage.account == account)
-                        && !self.runtime_restrictions.allows(&host.id, "local")
+                        // Controller-local bootstrap is a vendor request too:
+                        // Claude must never reach Anthropic from here unless
+                        // host policy pins `local` explicitly.
+                        && !self.runtime_restrictions.allows_vendor_request(&host.id, "local")
                 })
             {
                 return PluginCommandRoute::Unavailable(

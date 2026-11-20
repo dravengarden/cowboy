@@ -105,9 +105,8 @@ export function refreshSessionUsage(
 
 /** Where a card's reset actions go: a Service collector's reset lane, or one
  * owner-scoped named account whose own sign-in Machine runs the reset. */
-export type UsageResetTarget =
-  | { kind: "service"; provider: string }
-  | { kind: "account"; accountId: string };
+export type ServiceResetTarget = { kind: "service"; provider: string };
+export type UsageResetTarget = ServiceResetTarget | { kind: "account"; accountId: string };
 
 function resetEndpoint(target: UsageResetTarget): string {
   return target.kind === "service"
@@ -118,32 +117,45 @@ function resetEndpoint(target: UsageResetTarget): string {
 /** The reset may have been spent: never retried without a fresh look. */
 export class ResetOutcomeUnknown extends Error {}
 
-/** Spend the earliest-expiring available reset credit. */
+const UNKNOWN_OUTCOME = "Outcome unknown — check credits before trying again.";
+
+/** Spend the earliest-expiring available reset credit. Only an explicit
+ * refusal is an ordinary error: a lost response, a gateway or server
+ * failure, or an unreadable conflict may follow a spent reset, so it is
+ * [`ResetOutcomeUnknown`] and must never be resent without a fresh look. */
 export async function consumeNearestReset(
   target: UsageResetTarget,
   expectedCreditId: string | undefined,
   confirm: string,
 ): Promise<void> {
-  const response = await fetch(resetEndpoint(target), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ confirm, expected_credit_id: expectedCreditId }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(resetEndpoint(target), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ confirm, expected_credit_id: expectedCreditId }),
+    });
+  } catch (cause) {
+    if (cause instanceof Error && cause.name === "AbortError") throw cause;
+    throw new ResetOutcomeUnknown(UNKNOWN_OUTCOME);
+  }
+  if (response.status === 408 || response.status >= 500) {
+    throw new ResetOutcomeUnknown(UNKNOWN_OUTCOME);
+  }
   if (response.status === 409) {
     const code = await response
       .clone()
       .json()
       .then((body: { error?: { code?: unknown } }) => body.error?.code)
       .catch(() => undefined);
-    if (code === "reset_outcome_unknown") {
-      throw new ResetOutcomeUnknown("Outcome unknown — check credits before trying again.");
-    }
+    // Only a readable `reset_failed` says nothing was sent.
+    if (code !== "reset_failed") throw new ResetOutcomeUnknown(UNKNOWN_OUTCOME);
   }
   await expectHttpOk(response, "Could not use the nearest reset");
 }
 
 export async function scheduleNearestReset(
-  target: UsageResetTarget,
+  target: ServiceResetTarget,
   fireAtMs: number,
   confirm: string,
 ): Promise<void> {
@@ -156,7 +168,7 @@ export async function scheduleNearestReset(
 }
 
 export async function cancelNearestResetSchedule(
-  target: UsageResetTarget,
+  target: ServiceResetTarget,
 ): Promise<void> {
   const response = await fetch(`${resetEndpoint(target)}/schedule`, {
     method: "DELETE",

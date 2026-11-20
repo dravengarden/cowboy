@@ -98,7 +98,7 @@ import {
 } from "../usageWidget";
 import { useSubscriptionAccounts } from "../subscriptionAccounts";
 import { useNativeAccountUsage } from "../nativeAccountUsage";
-import { registeredUsageAccounts, type UsageAccountCard, usageCardResetSchedule, usageResetTarget } from "../usageAccounts";
+import { registeredUsageAccounts, type UsageAccountCard, usageCardManageUrl, usageCardResetSchedule, usageResetTarget } from "../usageAccounts";
 import { AccountBrowserEntry } from "../machineBrowser/AccountBrowserEntry";
 import { DesktopModal } from "./DesktopModal";
 import { RunConfigurationDialog } from "./RunConfigurationDialog";
@@ -617,6 +617,7 @@ function DesktopProviderUsage({ account, schedule, onUsageChanged, onRefresh, re
 }): React.JSX.Element {
   const usage = account.usage;
   const resetTarget = usageResetTarget(account);
+  const manageUrl = usageCardManageUrl(account);
   const [details, setDetails] = useState(false);
   const limits = usageLimits(usage);
   const hasResetCredit = nearestAvailableResetCredit(usage) !== undefined;
@@ -688,6 +689,8 @@ function DesktopProviderUsage({ account, schedule, onUsageChanged, onRefresh, re
         <ProviderUsageCredits rows={usageContext.creditDetails} />
         {account.native?.message && <Typography variant="caption" color="text.secondary">{account.native.message}</Typography>}
         {account.native?.machine_id && <Typography variant="caption" color="text.secondary">Usage query Machine: {account.native.machine_id}</Typography>}
+        {manageUrl !== undefined && <Button size="small" component="a" href={manageUrl} target="_blank" rel="noopener noreferrer"
+          sx={{ alignSelf: "flex-start", textTransform: "none" }}>Plan &amp; limit resets</Button>}
         {(account.collector || resetTarget) && <DesktopUsageExtras
           usage={usage}
           target={resetTarget}

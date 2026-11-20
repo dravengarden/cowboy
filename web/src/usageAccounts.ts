@@ -158,5 +158,7 @@ export function usageCardResetSchedule(snapshot: UsageSnapshot | null, card: Usa
 
 /** The Provider's plan and reset page, on the cards that own reset actions. */
 export function usageCardManageUrl(card: UsageAccountCard): string | undefined {
-  return card.collector || usageResetTarget(card) ? accountManageUrl(card.usage.provider) : undefined;
+  // The Provider identity decides (named Claude cards included), never
+  // whether reset credits happen to be reported right now.
+  return accountManageUrl(card.usage.provider);
 }

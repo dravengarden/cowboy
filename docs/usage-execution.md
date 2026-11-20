@@ -163,7 +163,10 @@ after its dispatch expiry. It takes its start from the same Anthropic Provider
 window and spacing, on the account's own lane, and holds the account's
 collection lock, so a quota read and a reset of one account never overlap. A
 reset that never reached the Machine's collector records no failure backoff;
-an authentication failure backs off even after the call was sent.
+an authentication failure backs off even after the call was sent. A named reset
+runs two collector invocations (the identity read immediately before the spend,
+then the spend with its own preflight), so it charges two starts to the Provider
+window and is admitted only when both fit.
 
 Claude usage reads and resets (Service card and named accounts) contact
 Anthropic only from a Machine that host policy explicitly pins for

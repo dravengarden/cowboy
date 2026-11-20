@@ -132,8 +132,9 @@ impl<'de> serde::Deserialize<'de> for UniqueJson {
 /// Shared by identity and credential export: enforce the bound before reading
 /// and on the opened descriptor, including files that grow after fstat.
 /// Check a credential file of a native home from descriptor metadata only,
-/// never reading its bytes into this process: every component is opened
-/// without following links (`O_PATH` for the file), and the file must be a
+/// never reading its bytes into this process: every parent is opened without
+/// following links and the file is `stat`ed relative to its parent without
+/// following a final link, and it must be a
 /// regular file with exactly one link, owned by this Machine's user. `false`
 /// when it does not exist; any other shape is an error.
 pub(super) fn credential_file_safe(home: &Path, relative_path: &str) -> Result<bool> {
@@ -159,17 +160,17 @@ pub(super) fn credential_file_safe(home: &Path, relative_path: &str) -> Result<b
             }
         };
     }
-    let file = match openat(
+    // `statat` without following the final link, relative to the verified
+    // parent descriptor (portable to every Machine platform, unlike O_PATH).
+    let metadata = match rustix::fs::statat(
         &directory,
         parts.last().unwrap().as_os_str(),
-        OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
+        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
     ) {
-        Ok(file) => file,
+        Ok(metadata) => metadata,
         Err(error) if absent(error) => return Ok(false),
         Err(error) => return Err(std::io::Error::from(error)).context("native credential file"),
     };
-    let metadata = fstat(&file)?;
     ensure!(
         FileType::from_raw_mode(metadata.st_mode) == FileType::RegularFile
             && metadata.st_nlink == 1
@@ -180,6 +181,20 @@ pub(super) fn credential_file_safe(home: &Path, relative_path: &str) -> Result<b
 }
 
 pub(super) fn read_login_file(home: &Path, relative_path: &str, limit: usize) -> Result<Vec<u8>> {
+    let file = open_login_file(home, relative_path, limit)?;
+    let mut bytes = Vec::new();
+    file.take(limit.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)?;
+    ensure!(
+        bytes.len() <= limit,
+        "native login output exceeds size limit"
+    );
+    Ok(bytes)
+}
+
+/// Open a regular login file of `home` without following links, bounded by
+/// `limit` bytes at open time.
+fn open_login_file(home: &Path, relative_path: &str, limit: usize) -> Result<std::fs::File> {
     let parts: Vec<_> = Path::new(relative_path).components().collect();
     ensure!(
         !parts.is_empty()
@@ -214,15 +229,108 @@ pub(super) fn read_login_file(home: &Path, relative_path: &str, limit: usize) ->
         usize::try_from(metadata.st_size).is_ok_and(|size| size <= limit),
         "native login output exceeds size limit"
     );
-    let mut bytes = Vec::new();
-    std::fs::File::from(file)
-        .take(limit.saturating_add(1) as u64)
-        .read_to_end(&mut bytes)?;
+    Ok(std::fs::File::from(file))
+}
+
+/// The most a live native login file is scanned: config files that grow with
+/// projects and MCP servers stay readable, but nothing beyond this is read.
+const LIVE_SCAN_LIMIT: usize = 64 * 1024 * 1024;
+/// The most one selected top-level member may hold in memory.
+const LIVE_MEMBER_LIMIT: usize = 64 * 1024;
+
+/// Stream a live login file and keep only the top-level members named in
+/// `keys`, each re-serialized within [`LIVE_MEMBER_LIMIT`]; every other member
+/// is skipped without being kept, so memory stays bounded however large the
+/// file grows. A selected member appearing twice is refused.
+pub(super) fn read_live_members(
+    home: &Path,
+    relative_path: &str,
+    keys: &[&str],
+) -> Result<serde_json::Map<String, serde_json::Value>> {
+    struct Select<'a>(&'a [&'a str]);
+    impl<'de> serde::de::DeserializeSeed<'de> for Select<'_> {
+        type Value = serde_json::Map<String, serde_json::Value>;
+        fn deserialize<D: serde::Deserializer<'de>>(
+            self,
+            deserializer: D,
+        ) -> Result<Self::Value, D::Error> {
+            deserializer.deserialize_map(self)
+        }
+    }
+    impl<'de> serde::de::Visitor<'de> for Select<'_> {
+        type Value = serde_json::Map<String, serde_json::Value>;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a native login JSON object")
+        }
+        fn visit_map<M: serde::de::MapAccess<'de>>(
+            self,
+            mut map: M,
+        ) -> Result<Self::Value, M::Error> {
+            let mut selected = serde_json::Map::new();
+            while let Some(key) = map.next_key::<String>()? {
+                if !self.0.contains(&key.as_str()) {
+                    map.next_value::<serde::de::IgnoredAny>()?;
+                    continue;
+                }
+                if selected.contains_key(&key) {
+                    return Err(serde::de::Error::custom("duplicate native identity member"));
+                }
+                let value = map.next_value::<UniqueJson>()?.0;
+                if serde_json::to_vec(&value).map_or(true, |bytes| bytes.len() > LIVE_MEMBER_LIMIT)
+                {
+                    return Err(serde::de::Error::custom("native identity member too large"));
+                }
+                selected.insert(key, value);
+            }
+            Ok(selected)
+        }
+    }
+    let file = open_login_file(home, relative_path, LIVE_SCAN_LIMIT)?;
+    let reader = std::io::BufReader::new(file.take(LIVE_SCAN_LIMIT as u64));
+    let mut deserializer = serde_json::Deserializer::from_reader(reader);
+    let selected = serde::de::DeserializeSeed::deserialize(Select(keys), &mut deserializer)
+        .map_err(|_| anyhow::anyhow!("invalid native identity JSON"))?;
+    deserializer
+        .end()
+        .map_err(|_| anyhow::anyhow!("invalid native identity JSON"))?;
+    Ok(selected)
+}
+
+/// [`read`] on a live native home: a fresh-login recipe reads its fields by
+/// streaming only their top-level members, with bounded memory.
+pub(super) fn read_live(
+    home: &Path,
+    recipe: &NativeIdentityRecipe,
+    account: &crate::provider_account::ProviderAccountId,
+) -> Result<crate::provider_account::NativeIdentity> {
+    let NativeIdentityRecipe::FreshLoginJsonV1 {
+        authority,
+        relative_path,
+        subject_path,
+        tenant_path,
+        subject_claim: None,
+    } = recipe
+    else {
+        return read(home, recipe, account);
+    };
+    let roots: Vec<&str> = std::iter::once(subject_path)
+        .chain(tenant_path)
+        .filter_map(|path| path.first().map(String::as_str))
+        .filter(|root| *root != cowboy_provider_sdk::NATIVE_IDENTITY_SOLE_MEMBER)
+        .collect();
     ensure!(
-        bytes.len() <= limit,
-        "native login output exceeds size limit"
+        roots.len() == 1 + usize::from(tenant_path.is_some()),
+        "native identity recipe needs named members"
     );
-    Ok(bytes)
+    let document = serde_json::Value::Object(read_live_members(home, relative_path, &roots)?);
+    Ok(crate::provider_account::NativeIdentity {
+        authority: authority.clone(),
+        subject: field(&document, subject_path)?,
+        tenant: tenant_path
+            .as_ref()
+            .map(|path| field(&document, path))
+            .transpose()?,
+    })
 }
 
 /// Decode the payload of a compact JWT without trusting it: the token comes
@@ -466,6 +574,39 @@ mod tests {
             missing.downcast_ref::<std::io::Error>().unwrap().kind(),
             std::io::ErrorKind::NotFound
         );
+    }
+
+    #[test]
+    fn a_large_live_login_file_still_yields_its_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let projects: serde_json::Map<String, serde_json::Value> = (0..20_000)
+            .map(|index| {
+                (
+                    format!("/p/{index}"),
+                    serde_json::json!({"history": "x".repeat(40)}),
+                )
+            })
+            .collect();
+        let document = serde_json::json!({"projects": projects, "oauthAccount":
+            {"accountUuid": "otter", "organizationUuid": "org-a", "emailAddress": "o@x"}});
+        let bytes = serde_json::to_vec(&document).unwrap();
+        assert!(bytes.len() > LIMIT, "larger than the fresh-login bound");
+        std::fs::write(home.join(".claude.json"), bytes).unwrap();
+        let claude = NativeIdentityRecipe::FreshLoginJsonV1 {
+            authority: "claude-ai".into(),
+            relative_path: ".claude.json".into(),
+            subject_path: vec!["oauthAccount".into(), "accountUuid".into()],
+            tenant_path: Some(vec!["oauthAccount".into(), "organizationUuid".into()]),
+            subject_claim: None,
+        };
+        let identity = read_live(&home, &claude, &named()).unwrap();
+        assert_eq!(identity.subject, "otter");
+        assert_eq!(identity.tenant.as_deref(), Some("org-a"));
+        let members = read_live_members(&home, ".claude.json", &["oauthAccount"]).unwrap();
+        assert_eq!(members["oauthAccount"]["emailAddress"], "o@x");
+        assert!(!members.contains_key("projects"));
     }
 
     #[test]

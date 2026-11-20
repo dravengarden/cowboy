@@ -53,7 +53,9 @@ export function useUsageResetFlow(
   nearestCreditId: string | undefined,
   onUsageChanged: () => Promise<void>,
 ): UsageResetFlow {
-  const scheduling = target?.kind !== "account";
+  // Only a Service target schedules; a missing or named target never flips
+  // a named reset into a schedule.
+  const scheduling = target?.kind === "service";
   const initialMode: UsageResetMode = scheduling ? "schedule" : "now";
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<UsageResetMode>(initialMode);
@@ -96,6 +98,7 @@ export function useUsageResetFlow(
     if (target === undefined || pinned === null || !ready) return;
     await run(async () => {
       if (mode === "schedule") {
+        if (target.kind !== "service") throw new Error("Only Service resets can be scheduled.");
         await scheduleNearestReset(target, new Date(fireAt).getTime(), confirmText);
       } else {
         // Exactly the grant confirmed when the dialog opened.
@@ -136,7 +139,7 @@ export function useUsageResetFlow(
       setError(null);
     },
     cancelSchedule: async () => {
-      if (target === undefined) return;
+      if (target?.kind !== "service") return;
       await run(() => cancelNearestResetSchedule(target), "Could not cancel schedule");
     },
     submit,

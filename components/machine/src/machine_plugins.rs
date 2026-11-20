@@ -1234,12 +1234,9 @@ impl MachinePluginStore {
             .map_err(PluginHostInvocationFailure::from)?;
         let mut environment = resolved.environment;
         let mut prepared_sidecars = if operation == PluginHostOperation::CollectUsage {
-            self.prepare_usage_sidecars(
-                &resolved.collector_sidecars,
-                admission.and_then(native_usage::HostAdmission::sidecars),
-            )
-            .await
-            .map_err(PluginHostInvocationFailure::from)?
+            self.prepare_usage_sidecars(&resolved.collector_sidecars, admission)
+                .await
+                .map_err(PluginHostInvocationFailure::from)?
         } else {
             PreparedUsageSidecars {
                 children: Vec::new(),
@@ -1499,13 +1496,16 @@ impl MachinePluginStore {
         Ok(())
     }
 
-    /// `allowed` (plugin ID to exact generation digest), when given, is the
-    /// only set of sidecar Plugins that may start; anything else is skipped.
+    /// Under an `admission`, only its checked sidecar Plugin generations may
+    /// start, none after its deadline or connection loss, and each readiness
+    /// wait is bounded by the time remaining.
+    #[allow(clippy::too_many_lines)] // One bounded pass from targets to started sidecars.
     async fn prepare_usage_sidecars(
         &self,
         targets: &[PluginUsageSidecar],
-        allowed: Option<&BTreeMap<String, String>>,
+        admission: Option<&native_usage::HostAdmission>,
     ) -> Result<PreparedUsageSidecars> {
+        let allowed = admission.and_then(native_usage::HostAdmission::sidecars);
         let mut prepared = PreparedUsageSidecars {
             children: Vec::new(),
             targets: Vec::new(),
@@ -1579,12 +1579,15 @@ impl MachinePluginStore {
                     continue;
                 }
             };
+            let limit = admission
+                .map(native_usage::HostAdmission::remaining)
+                .transpose()?;
             match start_usage_sidecar(
                 &package,
                 &sidecar,
                 &launch,
-                &self.platform,
-                &self.architecture,
+                (&self.platform, &self.architecture),
+                limit,
             )
             .await
             {
@@ -4562,8 +4565,8 @@ async fn start_usage_sidecar(
     package: &ProviderPackage,
     sidecar: &RuntimeSidecar,
     context: &ProviderLaunchContext,
-    platform: &Platform,
-    architecture: &str,
+    (platform, architecture): (&Platform, &str),
+    limit: Option<Duration>,
 ) -> Result<(tokio::process::Child, String)> {
     ensure!(
         sidecar.component.kind == PrivateComponentKind::ProviderGateway,
@@ -4610,7 +4613,8 @@ async fn start_usage_sidecar(
     let mut child = command
         .spawn()
         .with_context(|| format!("spawning usage sidecar {}", executable.display()))?;
-    let deadline = Instant::now() + Duration::from_millis(*timeout_ms);
+    let wait = Duration::from_millis(*timeout_ms);
+    let deadline = Instant::now() + limit.map_or(wait, |limit| limit.min(wait));
     let client = reqwest::Client::builder()
         .timeout(Duration::from_millis(250))
         .build()?;

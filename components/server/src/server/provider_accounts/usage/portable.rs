@@ -35,6 +35,9 @@ pub(super) struct Target {
     /// Other scope members whose sidecar the collector starts. They share
     /// `auth_generation`; the Machine fences each replica on it.
     sidecar_plugins: Vec<String>,
+    /// The collector Plugin owns one of its own sidecars (the Claude
+    /// gateway of `claude-deepseek`): it is allowed at its verified digest.
+    collector_sidecar: bool,
 }
 
 /// `None` when the account's Provider keeps no named credential in a vault.
@@ -63,6 +66,7 @@ pub(super) fn target(
         .map(|plugin| (plugin.clone(), status(plugin)))
         .collect::<Vec<_>>();
     let collector = status(&host.plugin_id);
+    let collector_sidecar = host.sidecar_plugins.contains(&host.plugin_id);
     Some(
         ready_target(
             account,
@@ -81,6 +85,7 @@ pub(super) fn target(
                 }
                 target.sidecar_plugins.push(plugin);
             }
+            target.collector_sidecar = collector_sidecar;
             Ok(target)
         }),
     )
@@ -124,6 +129,7 @@ fn ready_target(
         members,
         auth_generation: generation,
         sidecar_plugins: Vec::new(),
+        collector_sidecar: false,
     })
 }
 
@@ -270,6 +276,19 @@ pub(super) async fn refresh(
 ) -> Result<(), &'static str> {
     let scope = Scope::Portable(target.scope.clone());
     let key = crate::usage::limiter::Limiter::account_key(owner, id.as_str());
+    // Permanent ineligibility (no Machine, policy, an unsafe collector such
+    // as Grok's) is resolved before the shared Provider window is charged:
+    // it never displaces the Service account's queries, and the card keeps
+    // its reason.
+    let placed = match placement(state, owner, id, target) {
+        Ok(placed) => placed,
+        Err(code) => {
+            let mut entry = cache.data.lock();
+            entry.bind(&scope);
+            entry.finish(&scope, Err(code));
+            return Ok(());
+        }
+    };
     let permit = {
         let mut entry = cache.data.lock();
         entry.bind(&scope);
@@ -287,7 +306,7 @@ pub(super) async fn refresh(
         permit
     };
     state.hub.broadcast_account_usage_changed(owner);
-    let result = collect(state, owner, id, target).await;
+    let result = collect(state, owner, id, target, placed).await;
     let outcome = collection_outcome(result.as_ref().err().copied());
     let succeeded = result.is_ok();
     cache.data.lock().finish(&scope, result);
@@ -367,8 +386,15 @@ async fn collect(
     owner: &str,
     id: &ProviderAccountId,
     target: &Target,
+    placed: Placement,
 ) -> Result<Value, &'static str> {
-    let (machine, plugin, sidecars) = placement(state, owner, id, target)?;
+    let (machine, plugin, mut sidecars) = placed;
+    if target.collector_sidecar {
+        sidecars.push(crate::machine_protocol::portable_usage::PortableSidecar {
+            plugin_id: plugin.plugin_id.clone(),
+            generation_digest: plugin.generation_digest.clone(),
+        });
+    }
     // Activity attachments are Provider-wide request telemetry with no
     // account dimension; attaching them would show other accounts' spend.
     let request = PortableUsageRequest {
@@ -517,6 +543,7 @@ mod tests {
             members: vec!["codex".into()],
             auth_generation: 9,
             sidecar_plugins: Vec::new(),
+            collector_sidecar: false,
         }
     }
 

@@ -335,7 +335,18 @@ async fn run_unstarted(
     )
     .await
     .map_err(|_| anyhow::anyhow!("native_usage_collector_failed"))?;
-    decode_host_response(&output).map_err(|_| anyhow::anyhow!("native_usage_profile_changed"))
+    // An authentication failure keeps its category so the Service backs off.
+    decode_host_response(&output).map_err(|failure| {
+        if failure
+            .error
+            .to_string()
+            .contains("Claude Code usage authentication required.")
+        {
+            anyhow::anyhow!("native_usage_authentication_required")
+        } else {
+            anyhow::anyhow!("native_usage_collector_failed")
+        }
+    })
 }
 
 fn text(value: &serde_json::Value) -> Option<&str> {
@@ -360,11 +371,11 @@ fn verify_reported_identity(
             .get("HOME")
             .context("native_usage_home_unsupported")?,
     );
-    let login: serde_json::Value = serde_json::from_slice(
-        &native_identity::read_login_file(home, ".claude.json", 256 * 1024)
+    // Streamed with bounded memory: the config grows with projects and MCP.
+    let login = serde_json::Value::Object(
+        native_identity::read_live_members(home, ".claude.json", &["oauthAccount"])
             .map_err(|_| anyhow::anyhow!("native_usage_profile_changed"))?,
-    )
-    .map_err(|_| anyhow::anyhow!("native_usage_profile_changed"))?;
+    );
     let reported = &report["account"]["account"];
     let email = text(&login["oauthAccount"]["emailAddress"]);
     ensure!(
@@ -410,7 +421,7 @@ fn verify_live_login(
         .find(|method| method.id == profile.method)
         .and_then(|method| method.native_identity.as_ref())
         .context("native_usage_profile_changed")?;
-    let live = native_identity::read(home, recipe, &profile.account_id)
+    let live = native_identity::read_live(home, recipe, &profile.account_id)
         .map_err(|_| anyhow::anyhow!("native_usage_profile_changed"))?;
     ensure!(live == profile.identity, "native_usage_profile_changed");
     Ok(())

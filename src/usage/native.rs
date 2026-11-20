@@ -144,6 +144,19 @@ impl Cache {
         )
     }
 
+    /// Drop one account's observation, including a collection in flight
+    /// (its detached slot is never published), and persist that.
+    pub fn forget(&self, owner: &str, account: &str) {
+        let removed = self
+            .0
+            .lock()
+            .remove(&(owner.to_owned(), account.to_owned()))
+            .is_some();
+        if removed {
+            self.persist();
+        }
+    }
+
     pub fn retain(&self, owner: &str, ids: &[&str]) {
         self.0.lock().retain(|(entry_owner, account), _| {
             entry_owner != owner || ids.contains(&account.as_str())
@@ -379,5 +392,39 @@ mod tests {
         entry.last_attempt_at_ms = 1000;
         entry.finish(&portable(4), Err("portable_usage_replica_pending"));
         assert_eq!(entry.last_attempt_at_ms, 0);
+    }
+
+    #[test]
+    fn a_new_sign_in_drops_cached_and_in_flight_usage() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("usage-named.json");
+        let cache = Cache::persistent(path.clone());
+        let scope = completion(4);
+        let in_flight = cache.entry("owner", "pika");
+        in_flight
+            .data
+            .lock()
+            .finish(&scope, Ok(serde_json::json!({"rate_limits": {}})));
+        in_flight.data.lock().bind(&scope);
+        in_flight
+            .data
+            .lock()
+            .finish(&scope, Ok(serde_json::json!({"rate_limits": {}})));
+        cache.persist();
+        cache.forget("owner", "pika");
+        // A collection still holding the old slot publishes nowhere.
+        in_flight
+            .data
+            .lock()
+            .finish(&scope, Ok(serde_json::json!({"rate_limits": {"late": 1}})));
+        assert!(cache.entry("owner", "pika").data.lock().usage.is_none());
+        assert!(
+            Cache::persistent(path)
+                .entry("owner", "pika")
+                .data
+                .lock()
+                .usage
+                .is_none()
+        );
     }
 }

@@ -221,7 +221,7 @@ impl Limiter {
 
     /// Charges failed and cancelled attempts too. Persist before dispatch.
     pub fn start(&self, provider: &str, account: &str, now: i64) -> Result<Permit, Budget> {
-        self.start_with(provider, account, now, true)
+        self.start_with(provider, account, now, true, 1)
     }
 
     /// A confirmed usage action (a reset) is a user write, not a poll. It
@@ -229,7 +229,20 @@ impl Limiter {
     /// collector, but not the account polling interval a preceding refresh
     /// just started. It still delays that account's next poll.
     pub fn start_action(&self, provider: &str, account: &str, now: i64) -> Result<Permit, Budget> {
-        self.start_with(provider, account, now, false)
+        self.start_with(provider, account, now, false, 1)
+    }
+
+    /// [`Self::start_action`] for an action that runs `starts` collector
+    /// invocations (a named reset reads the account's identity, then spends):
+    /// the Provider window must hold all of them, and all are charged.
+    pub fn start_action_counted(
+        &self,
+        provider: &str,
+        account: &str,
+        now: i64,
+        starts: usize,
+    ) -> Result<Permit, Budget> {
+        self.start_with(provider, account, now, false, starts.max(1))
     }
 
     fn start_with(
@@ -238,17 +251,33 @@ impl Limiter {
         account: &str,
         now: i64,
         polling: bool,
+        charged: usize,
     ) -> Result<Permit, Budget> {
         let mut state = self.inner.lock();
         let budget = self.budget(&state, provider, account, now, polling);
         if now < budget.next_allowed_ms {
             return Err(budget);
         }
+        let window = super::duration_ms(self.config.get(&schema::USAGE_PROVIDER_WINDOW));
+        let capacity =
+            usize::try_from(self.config.get(&schema::USAGE_REQUESTS_PER_WINDOW)).unwrap_or(1);
+        let recent = state.durable.providers.get(provider).map_or(0, |starts| {
+            starts
+                .iter()
+                .filter(|time| time.saturating_add(window) > now)
+                .count()
+        });
+        if recent + charged > capacity {
+            return Err(Budget {
+                next_allowed_ms: now.saturating_add(window),
+                ..budget
+            });
+        }
         let mut next = state.durable.clone();
         let starts = next.providers.entry(provider.into()).or_default();
         // Retain the maximum configurable window, including across live edits.
         starts.retain(|time| time.saturating_add(3_600_000) > now);
-        starts.push(now);
+        starts.extend(std::iter::repeat_n(now, charged));
         let slot = next.accounts.entry(account.into()).or_default();
         slot.last_attempt_ms = now;
         slot.next_allowed_ms = slot
@@ -440,6 +469,38 @@ impl Drop for Permit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_counted_action_charges_every_collector_start() {
+        let limiter = Limiter::new(None);
+        // Both starts of a named reset fit only in an empty window.
+        limiter
+            .start("anthropic", "service", 1_000)
+            .unwrap_or_else(|_| panic!("first start"))
+            .finish(Outcome::Success, 1_000);
+        assert!(
+            limiter
+                .start_action_counted("anthropic", "named", 400_000, 2)
+                .is_ok()
+        );
+        let limiter = Limiter::new(None);
+        limiter
+            .start("anthropic", "service", 1_000)
+            .unwrap_or_else(|_| panic!("first start"))
+            .finish(Outcome::Success, 1_000);
+        assert!(
+            limiter
+                .start_action_counted("anthropic", "named", 70_000, 2)
+                .is_err(),
+            "a second and third start do not fit a two-start window"
+        );
+        let counted = Limiter::new(None);
+        counted
+            .start_action_counted("anthropic", "named", 1_000, 2)
+            .unwrap_or_else(|_| panic!("counted"))
+            .finish(Outcome::Success, 1_000);
+        assert!(counted.start("anthropic", "service", 70_000).is_err());
+    }
 
     #[test]
     fn disabled_plugin_configuration_requires_exact_unique_identifiers() {

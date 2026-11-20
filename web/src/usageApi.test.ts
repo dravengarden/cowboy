@@ -13,10 +13,8 @@ import {
   usageRefreshing,
 } from "./usageLimits.ts";
 import {
-  cancelNearestResetSchedule,
   consumeNearestReset,
   readUsage,
-  scheduleNearestReset,
   readUsageExecutors,
   ResetOutcomeUnknown,
   refreshSessionUsage,
@@ -314,9 +312,16 @@ test("an unknown reset outcome is distinguishable from a refusal", async () => {
   const original = globalThis.fetch;
   const account = { kind: "account", accountId: "11111111-1111-4111-8111-111111111111" } as const;
   try {
-    for (const [code, unknown] of [["reset_outcome_unknown", true], ["reset_failed", false]] as const) {
-      globalThis.fetch = () =>
-        Promise.resolve(Response.json({ error: { code, message: "m" } }, { status: 409 }));
+    const replies: [string, () => Promise<Response>, boolean][] = [
+      ["unknown", () => Promise.resolve(Response.json({ error: { code: "reset_outcome_unknown" } }, { status: 409 })), true],
+      ["refused", () => Promise.resolve(Response.json({ error: { code: "reset_failed" } }, { status: 409 })), false],
+      ["unreadable conflict", () => Promise.resolve(new Response("<html>", { status: 409 })), true],
+      ["gateway timeout", () => Promise.resolve(new Response("", { status: 504 })), true],
+      ["lost response", () => Promise.reject(new TypeError("Failed to fetch")), true],
+      ["preflight refusal", () => Promise.resolve(Response.json({ error: { code: "usage_reset_paced" } }, { status: 429 })), false],
+    ];
+    for (const [code, reply, unknown] of replies) {
+      globalThis.fetch = reply;
       let caught: unknown;
       await consumeNearestReset(account, "g:1", "confirm").catch((error: unknown) => {
         caught = error;

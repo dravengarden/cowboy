@@ -12,6 +12,10 @@ use std::{
 #[derive(Debug, Default)]
 pub struct RuntimeRestrictions(BTreeMap<String, BTreeSet<String>>);
 
+/// Providers whose usage reads and resets contact the vendor only from a
+/// Machine host policy names explicitly (fail closed without a pin).
+pub const PINNED_VENDOR_PROVIDERS: &[&str] = &["claude-code"];
+
 impl RuntimeRestrictions {
     pub fn parse(bindings: &[String]) -> anyhow::Result<Self> {
         let mut providers: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -54,9 +58,11 @@ impl RuntimeRestrictions {
             .is_some_and(|machines| machines.contains(machine))
     }
 
-    /// [`Self::allows`], and [`Self::pinned`] for a native-only Provider.
+    /// [`Self::allows`], and [`Self::pinned`] for a Provider whose vendor
+    /// requests must come from an explicitly pinned Machine (Claude). Other
+    /// native-only Providers (Antigravity) keep their runtime restrictions.
     pub fn allows_vendor_request(&self, provider: &str, machine: &str) -> bool {
-        if crate::provider_account::native_only(provider) {
+        if PINNED_VENDOR_PROVIDERS.contains(&provider) {
             self.pinned(provider, machine)
         } else {
             self.allows(provider, machine)
@@ -239,6 +245,14 @@ mod tests {
         assert!(ovh.allows_vendor_request("claude-code", "ovh"));
         assert!(!ovh.allows_vendor_request("claude-code", "hawk"));
         assert!(!ovh.allows_vendor_request("claude-code", "falcon"));
+        // Controller-local bootstrap is never pinned unless named.
+        assert!(!none.allows_vendor_request("claude-code", "local"));
+        assert!(!ovh.allows_vendor_request("claude-code", "local"));
+        // Antigravity keeps its ordinary runtime restrictions.
+        assert!(none.allows_vendor_request("antigravity", "hawk"));
+        let pinned = RuntimeRestrictions::parse(&["antigravity=ovh".into()]).unwrap();
+        assert!(pinned.allows_vendor_request("antigravity", "ovh"));
+        assert!(!pinned.allows_vendor_request("antigravity", "hawk"));
     }
 
     #[test]

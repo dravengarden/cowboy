@@ -327,8 +327,14 @@ collector and each sidecar, such as the DeepSeek gateways) must hold one
 committed shared generation; otherwise no observation is taken. The Machine
 must hold exactly that generation for each, holds the account's credential
 guard so no apply or wipe overlaps the collector, starts only the exact sidecar
-Plugin generations the Controller checked for that Machine, and never starts a
-request after its deadline or Controller connection ended. The Machine is
+Plugin generations the Controller checked for that Machine (including the
+collector's own gateway at its verified digest), and starts neither the
+collector nor a sidecar after its deadline or Controller connection ended;
+sidecar readiness waits are bounded by the time remaining. Permanent
+ineligibility (no eligible Machine, an unsafe collector such as Grok's) is
+resolved before the shared Provider window is charged and stays on the card.
+An explicit sign-in drops the account's cached and in-flight observation, even
+for the same identity; token refreshes keep it. The Machine is
 chosen deterministically among those with an exact released active collector
 generation that host runtime policy allows for the collector and every sidecar
 Plugin: the one running most of the owner's live sessions on the account, then
@@ -378,8 +384,14 @@ Machine. The Machine holding the native login runs the signed collector's
 under the Machine lifecycle lock) and never after the Controller's dispatch
 expiry. Immediately before the spend, in the same invocation, the collector's
 own report of the credential's account must match the login. Pacing is the
-Service reset's: a start from the shared Provider window and the account's own
-lane. The request is synchronous: `409 reset_failed` sent nothing;
+Service reset's, but a named reset charges two starts (that identity read and
+the spend) to the shared Provider window and is refused unless both fit. The
+`expected_credit_id` is validated (64 bytes of `[A-Za-z0-9_:-]`) before
+admission, and the attempt is logged only once an eligible, paced reset is
+admitted. The admitted spend runs in a Service-owned task that holds the
+pacing permit and account lock until it settles and writes its terminal log
+row, so a caller disconnect never abandons it. The request is synchronous for
+the caller: `409 reset_failed` sent nothing;
 `409 reset_outcome_unknown` may have spent the grant, is never retried, and in
 `control.apply` is an `unknown` receipt, never `rejected`. Only closed success
 outcomes (`reset`, `already_used`) are successes, and only fixed codes with
@@ -391,8 +403,15 @@ Machine checks the credential file from descriptor metadata only (regular,
 single link, owned by the Machine user, inside the verified home, never read
 into the Machine), and the live home's login metadata must name the receipt's
 identity. Web pins the account and grant when the dialog opens and asks for a
-fresh confirmation if either changes; after an unknown outcome it shows
-"Outcome unknown — check credits before trying again" and requires reopening.
+fresh confirmation if either changes; after an unknown outcome, a lost
+response, a gateway or server error or an unreadable conflict it shows
+"Outcome unknown — check credits before trying again" and requires reopening
+and a new confirmation. Named Claude cards show the plan and manage link on
+both layouts whether or not reset credits are reported. Only `claude-code`
+requires an explicit host pin for usage and resets, including the Controller's
+bundled bootstrap collector, which never contacts Anthropic from the
+Controller unless `local` is pinned; Antigravity keeps its normal runtime
+restrictions.
 
 `cowboy.accounts.usage(account_id)` reads the same owner-scoped observation as
 `GET /api/provider-accounts/{account_id}/usage`. Explicit

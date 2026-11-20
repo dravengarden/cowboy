@@ -31,9 +31,22 @@ struct Route {
     installed: Box<crate::machine_protocol::PluginInventory>,
 }
 
-/// The reset route of exactly this resolved native login, or why none is
-/// eligible (protocol, host policy, exact release support).
-async fn native_route(state: &AppState, target: Target) -> Result<Route, &'static str> {
+/// The reset binding of exactly this installed release, if it declares
+/// resets for `provider`.
+pub(super) fn exact_reset_binding(
+    state: &AppState,
+    installed: &crate::machine_protocol::PluginInventory,
+    provider: &str,
+) -> Option<crate::plugin_host::PluginUsageSpec> {
+    state
+        .usage
+        .exact_usage_binding(installed)
+        .filter(|binding| declares_reset(binding) && binding.account == provider)
+}
+
+/// The reset route of exactly this resolved native login and its verified
+/// release, or why none is eligible (protocol, host policy, support).
+fn native_route(state: &AppState, target: Target) -> Result<Route, &'static str> {
     let completion = &target.completion;
     let (_, version) = state
         .machine_control
@@ -48,23 +61,8 @@ async fn native_route(state: &AppState, target: Target) -> Result<Route, &'stati
     {
         return Err("runtime_not_allowed");
     }
-    let machines = state
-        .store
-        .as_ref()
-        .ok_or("unavailable")?
-        .list_machines()
-        .await
-        .map_err(|_| "unavailable")?;
-    let installed = active_machine_plugin(
-        &machines,
-        &completion.machine_id,
-        &completion.profile.provider_id,
-    )
-    .map_err(|_| "machine_unavailable")?;
-    let binding = state
-        .usage
-        .exact_usage_binding(&installed)
-        .filter(|binding| declares_reset(binding) && binding.account == target.provider)
+    let installed = target.installed.clone();
+    let binding = exact_reset_binding(state, &installed, &target.provider)
         .ok_or("account_reset_unsupported")?;
     Ok(Route {
         target,
@@ -84,15 +82,15 @@ async fn route(
         .await
         .map_err(public_code)?
     {
-        Resolved::Native(target) => native_route(state, *target).await,
+        Resolved::Native(target) => native_route(state, *target),
         Resolved::Portable(_) => Err("account_reset_unsupported"),
     }
 }
 
 /// Whether the binding the read model resolved can spend a reset now.
-pub(super) async fn supported_for(state: &AppState, resolved: &Resolved) -> bool {
+pub(super) fn supported_for(state: &AppState, resolved: &Resolved) -> bool {
     match resolved {
-        Resolved::Native(target) => native_route(state, (**target).clone()).await.is_ok(),
+        Resolved::Native(target) => native_route(state, (**target).clone()).is_ok(),
         Resolved::Portable(_) => false,
     }
 }
@@ -104,26 +102,61 @@ fn unsent(code: &'static str) -> NativeResetFailure {
     }
 }
 
-/// Spend one confirmed grant. It holds the account's collection lock, so a
-/// quota read and a reset of one account never overlap, and charges a start
-/// from the shared Provider pacing.
-async fn consume(
-    state: &Arc<AppState>,
+/// One admitted reset: its route, the account's collection lock (a quota read
+/// and a reset of one account never overlap) and its Provider pacing permit.
+struct Admitted {
+    route: Route,
+    permit: crate::usage::limiter::Permit,
+    _serial: tokio::sync::OwnedMutexGuard<()>,
+}
+
+/// Collector starts one named reset makes: the identity read the Machine runs
+/// immediately before the spend, and the spend itself (whose own preflight
+/// re-reads availability inside the same invocation).
+const RESET_COLLECTOR_STARTS: usize = 2;
+
+/// Admit a reset on an eligible route, charging every collector start it
+/// will make to the shared Provider window. Nothing is sent yet.
+async fn admit(
+    state: &AppState,
     owner: &str,
     id: &ProviderAccountId,
-    idempotency_key: &str,
-    expected_credit_id: &str,
-) -> Result<ResetResult, ResetError> {
-    let local = |code| ResetError::new(false, None, error_message(code));
-    let route = route(state, owner, id).await.map_err(local)?;
+) -> Result<Admitted, &'static str> {
+    let route = route(state, owner, id).await?;
     let slot = state.usage.native.entry(owner, id.as_str());
     let serial = Arc::clone(&slot.collection).lock_owned().await;
     let key = crate::usage::limiter::Limiter::account_key(owner, id.as_str());
     let permit = state
         .usage
         .limiter
-        .start_action(&route.binding.account, &key, now_ms())
-        .map_err(|_| local("usage_reset_paced"))?;
+        .start_action_counted(
+            &route.binding.account,
+            &key,
+            now_ms(),
+            RESET_COLLECTOR_STARTS,
+        )
+        .map_err(|_| "usage_reset_paced")?;
+    Ok(Admitted {
+        route,
+        permit,
+        _serial: serial,
+    })
+}
+
+/// Spend the admitted reset and settle its permit.
+async fn consume(
+    state: &Arc<AppState>,
+    owner: &str,
+    id: &ProviderAccountId,
+    admitted: Admitted,
+    idempotency_key: &str,
+    expected_credit_id: &str,
+) -> Result<ResetResult, ResetError> {
+    let Admitted {
+        route,
+        permit,
+        _serial,
+    } = admitted;
     let request = crate::machine_protocol::NativeResetRequest {
         provider: route.binding.account.clone(),
         idempotency_key: idempotency_key.to_owned(),
@@ -131,7 +164,7 @@ async fn consume(
     };
     let (result, outcome) = settle(dispatch(state, owner, &route, request).await);
     permit.finish(outcome, now_ms());
-    drop(serial);
+    drop(_serial);
     // Publish through the existing budgeted path; a reset just charged this
     // account's start, so this normally waits for its next due collection.
     let (state, owner_id, account) = (Arc::clone(state), owner.to_owned(), id.clone());
@@ -159,8 +192,11 @@ fn settle(
                 None,
                 error_message(failure.code),
             );
-            // Nothing reached the Provider: keep the charge, add no backoff.
-            let outcome = if failure.call_may_have_reached_provider {
+            // An authentication failure backs off whether or not it was sent;
+            // otherwise nothing reached the Provider: keep the charge only.
+            let outcome = if failure.code == "native_usage_authentication_required" {
+                Outcome::Authentication
+            } else if failure.call_may_have_reached_provider {
                 Outcome::Success
             } else {
                 Outcome::Unused
@@ -327,9 +363,20 @@ fn refusal(code: &'static str) -> Response {
         .into_response()
 }
 
+/// A confirmed grant ID: bounded and opaque, like the collector's own.
+fn valid_credit_id(id: &str) -> bool {
+    (1..=64).contains(&id.len())
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b':'))
+}
+
 /// `POST /api/provider-accounts/{account_id}/usage/reset`: spend the
 /// confirmed grant now. Requires the typed `confirm` confirmation and the
-/// confirmed `expected_credit_id`. Synchronous; an unknown outcome is
+/// confirmed `expected_credit_id`. Synchronous for the caller; the admitted
+/// spend runs in a Service-owned task that holds the permit and the account
+/// lock, awaits settlement and writes the terminal log row, so a caller
+/// disconnect never abandons it. An unknown outcome is
 /// `409 reset_outcome_unknown` and is never retried by the Service.
 pub(in crate::server) async fn http_reset(
     State(state): State<Arc<AppState>>,
@@ -337,61 +384,79 @@ pub(in crate::server) async fn http_reset(
     Path(id): Path<ProviderAccountId>,
     Json(request): Json<ResetRequest>,
 ) -> Response {
-    let owner = &auth.principal.user_id;
+    let owner = auth.principal.user_id.clone();
     if request.confirm != "confirm" {
         return refusal("reset_confirmation_required");
     }
-    let Some(store) = state.store.as_ref() else {
+    if !valid_credit_id(&request.expected_credit_id) {
+        return refusal("reset_credit_invalid");
+    }
+    let Some(store) = state.store.clone() else {
         return refusal("unavailable");
     };
-    if let Err(code) = owned(store, owner, &id).await {
+    if let Err(code) = owned(&store, &owner, &id).await {
         return refusal(code);
     }
-    let (lane, key) = (lane(&id), new_reset_idempotency_key());
-    let expected = request.expected_credit_id.as_str();
-    let row = (lane.as_str(), key.as_str());
-    log(
-        store,
-        row,
-        ("started", "preflight"),
-        "Manual reset attempt started",
-        Some(expected),
-    )
-    .await;
-    match consume(&state, owner, &id, &key, expected).await {
-        Ok(result) => {
-            let phase = ("succeeded", "provider_response");
-            log(
-                store,
-                row,
-                phase,
-                &result.outcome,
-                result.credit_id.as_deref(),
-            )
-            .await;
-            Json(result).into_response()
-        }
-        Err(error) => {
-            let (status, phase, code) = if error.call_may_have_reached_provider {
-                ("unknown", "consume", "reset_outcome_unknown")
-            } else {
-                ("failed", "preflight", "reset_failed")
-            };
-            let message = error.to_string();
-            log(
-                store,
-                row,
-                (status, phase),
-                &message,
-                error.credit_id.as_deref(),
-            )
-            .await;
-            (
-                StatusCode::CONFLICT,
-                Json(json!({"error":{"code":code,"message":message,"credit_id":error.credit_id}})),
-            )
-                .into_response()
-        }
+    let task = tokio::spawn(async move {
+        // Only an eligible, paced reset is started and logged.
+        let admitted = admit(&state, &owner, &id).await?;
+        let (lane, key) = (lane(&id), new_reset_idempotency_key());
+        let expected = request.expected_credit_id;
+        let row = (lane.as_str(), key.as_str());
+        let started = ("started", "preflight");
+        log(
+            &store,
+            row,
+            started,
+            "Manual reset attempt started",
+            Some(&expected),
+        )
+        .await;
+        let result = consume(&state, &owner, &id, admitted, &key, &expected).await;
+        Ok::<_, &'static str>(match result {
+            Ok(result) => {
+                let phase = ("succeeded", "provider_response");
+                log(
+                    &store,
+                    row,
+                    phase,
+                    &result.outcome,
+                    result.credit_id.as_deref(),
+                )
+                .await;
+                Json(result).into_response()
+            }
+            Err(error) => {
+                let (status, phase, code) = if error.call_may_have_reached_provider {
+                    ("unknown", "consume", "reset_outcome_unknown")
+                } else {
+                    ("failed", "preflight", "reset_failed")
+                };
+                let message = error.to_string();
+                log(
+                    &store,
+                    row,
+                    (status, phase),
+                    &message,
+                    error.credit_id.as_deref(),
+                )
+                .await;
+                let body =
+                    json!({"error":{"code":code,"message":message,"credit_id":error.credit_id}});
+                (StatusCode::CONFLICT, Json(body)).into_response()
+            }
+        })
+    });
+    match task.await {
+        Ok(Ok(response)) => response,
+        Ok(Err(code)) => refusal(code),
+        // The spend task itself failed: its outcome is unknown.
+        Err(_) => (
+            StatusCode::CONFLICT,
+            Json(json!({"error":{"code":"reset_outcome_unknown",
+                "message":error_message("reset_outcome_unknown")}})),
+        )
+            .into_response(),
     }
 }
 
@@ -446,6 +511,25 @@ mod tests {
         let (result, outcome) = settle(Err(unsent("machine_unavailable")));
         assert!(!result.unwrap_err().call_may_have_reached_provider);
         assert_eq!(outcome, Outcome::Unused);
+    }
+
+    #[test]
+    fn confirmed_credit_ids_are_bounded_before_admission() {
+        assert!(valid_credit_id("grant_1:2"));
+        for invalid in ["", "grant 1", "../x", &"x".repeat(65)] {
+            assert!(!valid_credit_id(invalid), "{invalid}");
+        }
+        assert_eq!(
+            refusal("reset_credit_invalid").status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[test]
+    fn an_authentication_refusal_backs_off_even_before_dispatch() {
+        let (result, outcome) = settle(Err(unsent("native_usage_authentication_required")));
+        assert!(!result.unwrap_err().call_may_have_reached_provider);
+        assert_eq!(outcome, crate::usage::limiter::Outcome::Authentication);
     }
 
     #[test]

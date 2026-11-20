@@ -16,6 +16,9 @@ struct Target {
     completion: NativeCompletion,
     provider: String,
     source: String,
+    /// The exact installed release verified for this login; a reset is
+    /// decided from it, never from a later second lookup.
+    installed: crate::machine_protocol::PluginInventory,
 }
 
 /// The read model's account target: which credential an observation binds.
@@ -224,11 +227,19 @@ async fn target_for(
             .into_iter()
             .find(|binding| binding.account == provider)
             .ok_or(SIGNED_IN_USAGE_UNSUPPORTED)?;
+        // A reset considers only a login whose exact installed release
+        // declares resets for this account, before any later login.
+        if purpose == Purpose::Reset
+            && reset::exact_reset_binding(state, &installed, &provider).is_none()
+        {
+            continue;
+        }
         return Ok(Resolved::Native(Box::new(Target {
             operation,
             completion,
             provider,
             source: binding.product_label().into(),
+            installed,
         })));
     }
     Err(if pending {
@@ -422,6 +433,9 @@ fn error_message(code: &str) -> &str {
         }
         "native_reset_expired" => "The reset was not started in time; no reset was sent.",
         "reset_confirmation_required" => "Type confirm to use a reset.",
+        "reset_credit_invalid" => {
+            "The confirmed reset is invalid. Refresh usage and confirm again."
+        }
         "reset_authentication_required" => {
             "This account's sign-in needs renewal before a reset can be used."
         }
@@ -467,7 +481,7 @@ pub(in crate::server) async fn read_one(
     value["available"] = json!(true);
     value["signed_in"] = json!(true);
     // Whether a reset of exactly this resolved binding can be spent now.
-    value["resets_supported"] = json!(reset::supported_for(state, &target).await);
+    value["resets_supported"] = json!(reset::supported_for(state, &target));
     let cache = state.usage.native.entry(owner, id.as_str());
     value["refreshing"] = json!(cache.collection.try_lock().is_err());
     // A read neither takes the database admission write lock nor binds a cache
