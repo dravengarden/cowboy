@@ -264,9 +264,7 @@ impl Supervisor {
         self.runtime_restrictions.allows(provider, machine)
     }
 
-    /// Where a usage read or banked reset may contact the vendor: as
-    /// [`Self::runtime_allowed`], but a native-only Provider (Claude) must be
-    /// explicitly pinned to this Machine by host policy (fail closed).
+    /// See `RuntimeRestrictions::allows_vendor_request` (fail closed for Claude).
     pub fn vendor_request_allowed(&self, provider: &str, machine: &str) -> bool {
         self.runtime_restrictions
             .allows_vendor_request(provider, machine)
