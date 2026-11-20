@@ -83,6 +83,16 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.119.0 records provider-runtime 1.3.5, whose
+`cowboy-antigravity-acp` 1.0.3 opens `agy`'s session in the target's
+workspace: the worker names its runtime directory on the runtime Machine, as
+for every Provider with an execution binding, and the proxy rewrites exactly
+that path (`binding.runtime.cwd`) to the binding's canonical workspace root;
+1.0.2 refused it as outside the workspace. Antigravity 0.2.4 pins it; the other
+six Providers again advance one unpublished patch version (claude-code
+3.20.50, claude-deepseek 3.1.68, codex 3.6.8, codex-deepseek 3.1.68,
+deepseek-harness 1.0.26, grok 3.2.7).
+
 Component release 3.118.0 records provider-runtime 1.3.4, whose
 `cowboy-antigravity-acp` 1.0.2 accepts the execution descriptor with
 systemd's `LoadCredential` mode (root 0440 plus an ACL for the unit's user):

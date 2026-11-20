@@ -198,6 +198,12 @@ export async function prepareRuntime({
       proxy = value;
     },
     checkMirror,
+    // The worker opens every session at its runtime directory on this
+    // Machine, as for any Provider with an execution binding; `agy` works
+    // in the target's workspace instead, so that one path is rewritten to
+    // the binding's canonical workspace root and every other path is kept
+    // for the projection to confine.
+    sessionCwd: (cwd) => (cwd === descriptor.binding.runtime?.cwd ? facade.root : cwd),
     projection: (cwd) => buildProjection(facade, cwd),
     newChannel: () => {
       const channel = randomUUID();

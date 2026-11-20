@@ -141,7 +141,7 @@ export function stripTier(message) {
  * @param send.agent write one message to `agy`
  * @param send.client write one message to the worker
  * @param runtime a promise of the ready runtime: `{ facade, mcpServer(channel),
- *   projection(cwd), checkMirror(cwd), bindChannel(channel, sessionId),
+ *   sessionCwd(cwd), projection(cwd), checkMirror(cwd), bindChannel(channel, sessionId),
  *   newChannel(), evidence: { mark(), settle(cursor, sessionId, stopReason) } }`
  */
 export class AcpProxy {
@@ -205,6 +205,7 @@ export class AcpProxy {
       const params = forwarded.params ?? {};
       try {
         if (typeof params.cwd !== "string") throw new Error("session cwd is required");
+        params.cwd = runtime.sessionCwd(params.cwd);
         runtime.checkMirror(params.cwd);
         const projection = await runtime.projection(params.cwd);
         record.channel = runtime.newChannel();

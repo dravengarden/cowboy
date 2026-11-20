@@ -60,7 +60,9 @@ places its tree below `proxy/` in the account-sandbox runtime archive and adds
   deeply nested. One iterative post-order walk copies each changed object
   once. Nothing is requested for it: the plan is only what `agy`
   reports while the owner runs a session.
-- `session/new|load|resume`: `mcpServers` becomes exactly
+- `session/new|load|resume`: the worker's runtime directory
+  (`binding.runtime.cwd`) becomes the binding's canonical workspace root, the
+  `cwd` `agy` works in; `mcpServers` becomes exactly
   `cowboy` = bundled Node + `facade-relay.mjs <socket> <channel>`;
   `_meta` becomes `{antigravity: {systemPrompt: {append: <projection>}}}`;
   `additionalDirectories` is dropped. A session path that exists and is not

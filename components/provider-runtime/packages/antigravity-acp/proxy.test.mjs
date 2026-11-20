@@ -15,6 +15,7 @@ function harness({
       beginTurn: (id) => turns.push(["begin", id]),
       endTurn: async (id, options) => turns.push(["end", id, options?.cancelled === true]),
     },
+    sessionCwd: (cwd) => (cwd === "/runtime/session" ? "/work/repo" : cwd),
     checkMirror: (cwd) => {
       if (cwd === "/occupied")
         throw new Error("the runtime directory at the session path is not empty");
@@ -121,6 +122,10 @@ test("sessions get exactly the facade server and the projection", async () => {
   assert.match(client.at(-1).error.message, /not empty/);
   await proxy.fromClient(request(5, "session/new", {}));
   assert.match(client.at(-1).error.message, /cwd is required/);
+  // The worker's runtime directory becomes the target workspace.
+  await proxy.fromClient(request(6, "session/new", { cwd: "/runtime/session", mcpServers: [] }));
+  assert.equal(agent[2].params.cwd, "/work/repo");
+  assert.equal(agent[2].params._meta.antigravity.systemPrompt.append, "PROJECTION /work/repo");
 });
 
 test("agent requests other than permission are refused; permission replies are routed", async () => {

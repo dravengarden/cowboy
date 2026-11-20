@@ -55,6 +55,8 @@ function layout(t, { writablePolicy = false } = {}) {
   const target = join(base, "target");
   // The session path the worker names; on the runtime side it does not exist.
   const virtual = join(base, "remote", "target");
+  // The worker's own directory on the runtime Machine, where it opens sessions.
+  const runtimeCwd = join(base, "runtime", "session");
   mkdirSync(target);
   writeFileSync(join(target, "hello.txt"), "TARGET_SENTINEL\n");
   const credentials = join(base, "credentials");
@@ -66,7 +68,12 @@ function layout(t, { writablePolicy = false } = {}) {
       schema: 1,
       endpoint: `unix:${socket}`,
       bearer_token: "b".repeat(64),
-      binding: { schema: 1, environment: { id: "env-1" }, workspace: { cwd: virtual } },
+      binding: {
+        schema: 1,
+        runtime: { machine_id: "ovh", cwd: runtimeCwd },
+        environment: { id: "env-1" },
+        workspace: { cwd: virtual },
+      },
     }),
     { mode: 0o600 },
   );
@@ -80,7 +87,7 @@ function layout(t, { writablePolicy = false } = {}) {
   };
   const tmp = join(base, "tmp");
   mkdirSync(tmp);
-  return { base, archive, home, target, virtual, credentials, socket, paths, tmp };
+  return { base, archive, home, target, virtual, runtimeCwd, credentials, socket, paths, tmp };
 }
 
 function session(t, setup, environment = {}) {
@@ -143,8 +150,11 @@ test("the proxy relays ACP through the facade over one execution connection", as
     fs: { readTextFile: false, writeTextFile: false },
     terminal: false,
   });
-  const created = await call("session/new", { cwd: setup.virtual, mcpServers: [] });
+  // The worker opens the session at its runtime directory; agy works in the
+  // target's workspace.
+  const created = await call("session/new", { cwd: setup.runtimeCwd, mcpServers: [] });
   assert.equal(created.result.sessionId, "fake-session");
+  assert.equal(created.result.seen.params.cwd, setup.virtual);
   assert.deepEqual(created.result.seen.tools, [
     "ReadFile",
     "ListDirectory",
