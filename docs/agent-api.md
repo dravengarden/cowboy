@@ -205,6 +205,38 @@ as `--notify` on `cowboy review` (which then returns right after admission) and
 on `cowboy codex`/`cowboy claude`; Review 1.0.6 guidance starts reviews this way
 because a shell command cannot outlive its tool timeout.
 
+### Session completion notices
+
+A session that hands work to another of its owner's sessions (not a managed
+call: the peer edits, tests and commits in its own worktree and context) uses
+`control.apply` `queue.submit` with `notify:true`, or `cowboy session prompt
+--notify` from inside a session (it calls the same action through the session's
+Agent API grant, so the Controller knows the sender). Only a next-turn prompt
+to another session is accepted (`notify_requires_next_turn`,
+`notify_requires_another_session`). The receipt names the queued `prompt` id and
+a `next` step.
+
+When that prompt's turn ends, the Controller queues one `[Cowboy] Session …
+finished the turn for your message …` prompt into the sender through the
+ordinary next-turn queue (`session-notice:<target>:<prompt>`, deduplicated,
+Cowboy origin `session_notice`). It carries the stop reason and the last
+1,200 characters of the peer's reply. A crashed or stopped peer, a prompt
+removed from the queue, and a closed peer each produce their own notice. The
+watch polls Hub state every 2 s for at most 24 h and is Controller-process
+state: a restart loses it, so `GET /api/sessions/{id}/prompts/{prompt}` remains
+the authority.
+
+`cowboy session wait <session> <prompt>` blocks (default 540 s, at most 3,600 s)
+until that turn ends and prints one JSON line (`state`: `settled`, `withdrawn`,
+`gone`, or the still-running observation with a `next` command to repeat).
+`cowboy session prompt` prints the matching wait command.
+
+Antigravity runs human-paced only ([requirements](requirements.md)), so Cowboy
+never starts its turn: its notice parks as a draft with a task notification,
+and a person sends it. Its receipt therefore tells it to stay in the human's
+turn instead: RunCommand `cowboy session wait …` with `wait_seconds` 600,
+repeating while the state is `running`, then continue with the result.
+
 Selection `path` values are JSON pointers; a missing leading slash (`"plugins"`,
 `"0"`) is read as the same pointer. Each broker operation rechecks the live
 parent and, for owned sessions, the active product account. A long-running read

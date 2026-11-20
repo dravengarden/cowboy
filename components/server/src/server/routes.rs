@@ -7,6 +7,7 @@ use super::*;
 pub(super) fn platform_routes() -> Router<Arc<AppState>> {
     Router::new()
         .merge(cardea_authorization::routes())
+        .merge(peer_notices::routes())
         .merge(telemetry_binding::resolution::surface::routes())
         .merge(telemetry_binding::recovery::surface::routes())
         .merge(telemetry_binding::surface::routes())

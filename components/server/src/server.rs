@@ -105,6 +105,7 @@ mod managed_calls;
 mod native_configuration;
 mod notifications;
 mod operator_approval;
+mod peer_notices;
 #[cfg(test)]
 mod persistence_tests;
 mod plugin_install;

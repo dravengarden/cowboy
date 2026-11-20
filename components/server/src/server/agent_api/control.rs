@@ -1075,6 +1075,7 @@ async fn dispatch(
             crate::send_delivery::DeliveryMode::NextTurn => "next_turn",
         });
     }
+    let notify = web::peer_notices::take_notify(name, &mut input, &parent.id)?;
     if matches!(name, "sessions.trash" | "sessions.purge")
         && input["session_ids"]
             .as_array()
@@ -1189,7 +1190,12 @@ async fn dispatch(
         return Ok(json!({"status":"accepted","refreshing":snapshot.refreshing}));
     }
     if command(name).is_some() {
-        return run_command(state, auth, name, &input, operation.ok_or("read_only")?);
+        let operation = operation.ok_or("read_only")?;
+        let receipt = run_command(state, auth, name, &input, operation)?;
+        let call = (parent.id.as_str(), name, &input);
+        return Ok(web::peer_notices::after_command(
+            state, notify, call, operation, receipt,
+        ));
     }
     if name == "sessions.create" {
         let body = input
