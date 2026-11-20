@@ -11,19 +11,19 @@ places its tree below `proxy/` in the account-sandbox runtime archive and adds
 `bin/agy-proxy` and `bin/agy-hook` entry scripts; `policy/hooks.json` and
 `policy/settings.json` come from this package.
 
-| File                          | Role                                                                   |
-| ----------------------------- | ---------------------------------------------------------------------- |
-| `launch.mjs`                  | Proxy entry: readiness, closed `agy` environment, wiring               |
-| `proxy.mjs`                   | ACP relay: runtime method allow-list, session rewrite, turn settlement |
+| File                          | Role                                                                    |
+| ----------------------------- | ----------------------------------------------------------------------- |
+| `launch.mjs`                  | Proxy entry: readiness, closed `agy` environment, wiring                |
+| `proxy.mjs`                   | ACP relay: runtime method allow-list, session rewrite, turn settlement  |
 | `extensions.mjs`              | The worker's extension tools (Cowboy MCP, bindings, memory) in `cowboy` |
-| `memory.mjs`                  | Matrix memory over the worker's `cowboy/memory` bridge                 |
-| `presentation.mjs`            | Shows facade calls as native tool calls (kind, title, path, diff)      |
-| `facade.mjs`                  | MCP tools over the one execution `Connection`                          |
-| `facade-relay.mjs`            | stdio MCP server `agy` launches; relays to the proxy's socket          |
-| `projection.mjs`              | Target context appended to the system prompt                           |
-| `evidence.mjs`                | Backend refusal classification from the unit's `agy` log               |
-| `hook.mjs`                    | `PreToolUse` allow-list (`agy-hook`)                                   |
-| `hooks.json`, `settings.json` | Policy the daemon binds read-only over the home                        |
+| `memory.mjs`                  | Matrix memory over the worker's `cowboy/memory` bridge                  |
+| `presentation.mjs`            | Shows facade calls as native tool calls (kind, title, path, diff)       |
+| `facade.mjs`                  | MCP tools over the one execution `Connection`                           |
+| `facade-relay.mjs`            | stdio MCP server `agy` launches; relays to the proxy's socket           |
+| `projection.mjs`              | Target context appended to the system prompt                            |
+| `evidence.mjs`                | Backend refusal classification from the unit's `agy` log                |
+| `hook.mjs`                    | `PreToolUse` allow-list (`agy-hook`)                                    |
+| `hooks.json`, `settings.json` | Policy the daemon binds read-only over the home                         |
 
 ## Behavior
 

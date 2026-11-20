@@ -129,9 +129,7 @@ impl MemoryBridge {
         }})
     }
 
-    /// One MCP request of the worker's own to the relay's `/mcp`; the
-    /// answer's `result`, else its error text.
-    pub async fn mcp(&self, message: &Value) -> Result<Value, String> {
+    async fn post_mcp(&self, message: &Value) -> Result<(u16, bool, Vec<u8>), String> {
         let url = self
             .endpoint
             .join("/mcp")
@@ -142,11 +140,12 @@ impl MemoryBridge {
             .bearer_auth(&self.token)
             .header("content-type", "application/json")
             .header("accept", "application/json, text/event-stream")
+            .header("mcp-protocol-version", "2025-06-18")
             .body(message.to_string())
             .send()
             .await
             .map_err(|_| "memory relay unavailable".to_owned())?;
-        let status = response.status();
+        let status = response.status().as_u16();
         let event_stream = response
             .headers()
             .get("content-type")
@@ -155,8 +154,19 @@ impl MemoryBridge {
         let bytes = read_bounded(response)
             .await
             .map_err(|()| "memory response exceeds its size limit".to_owned())?;
-        if !status.is_success() {
-            return Err(format!("memory answered {}", status.as_u16()));
+        Ok((status, event_stream, bytes))
+    }
+
+    /// One MCP request of the worker's own to the relay's `/mcp`: the
+    /// answer's `result`, else `(refused, text)`, where `refused` means the
+    /// backend definitively declined it (an error answer or a client-error
+    /// status) and not that its outcome is unknown.
+    pub async fn mcp(&self, message: &Value) -> Result<Value, (bool, String)> {
+        let (status, event_stream, bytes) =
+            self.post_mcp(message).await.map_err(|text| (false, text))?;
+        if !(200..300).contains(&status) {
+            let definitive = (400..500).contains(&status) && ![408, 429].contains(&status);
+            return Err((definitive, format!("memory answered {status}")));
         }
         answer(
             &String::from_utf8_lossy(&bytes),
@@ -164,10 +174,21 @@ impl MemoryBridge {
             message.get("id"),
         )
     }
+
+    /// One MCP notification (no answer is read).
+    pub async fn notify(&self, message: &Value) -> Result<(), String> {
+        let (status, _, _) = self.post_mcp(message).await?;
+        if (200..300).contains(&status) {
+            Ok(())
+        } else {
+            Err(format!("memory answered {status}"))
+        }
+    }
 }
 
-/// The answer to request `id` in a JSON or server-sent-events body.
-fn answer(text: &str, event_stream: bool, id: Option<&Value>) -> Result<Value, String> {
+/// The answer to request `id` in a JSON or server-sent-events body; an error
+/// answer is a definitive refusal (`true`), no answer is not.
+fn answer(text: &str, event_stream: bool, id: Option<&Value>) -> Result<Value, (bool, String)> {
     let payloads: Vec<String> = if event_stream {
         text.split("\n\n")
             .map(|event| {
@@ -193,9 +214,12 @@ fn answer(text: &str, event_stream: bool, id: Option<&Value>) -> Result<Value, S
             return Ok(result.clone());
         }
         let error = value.pointer("/error/message").and_then(Value::as_str);
-        return Err(error.unwrap_or("memory error").chars().take(500).collect());
+        return Err((
+            true,
+            error.unwrap_or("memory error").chars().take(500).collect(),
+        ));
     }
-    Err("memory gave no answer".into())
+    Err((false, "memory gave no answer".into()))
 }
 
 async fn read_bounded(mut response: reqwest::Response) -> Result<Vec<u8>, ()> {
@@ -279,6 +303,17 @@ mod tests {
             answer(stream, true, Some(&json!(1))),
             Ok(json!({"ok": true}))
         );
-        assert!(answer("nope", false, Some(&json!(1))).is_err());
+        assert_eq!(
+            answer("nope", false, Some(&json!(1))),
+            Err((false, "memory gave no answer".into()))
+        );
+        assert_eq!(
+            answer(
+                r#"{"id":1,"error":{"message":"bad"}}"#,
+                false,
+                Some(&json!(1))
+            ),
+            Err((true, "bad".into()))
+        );
     }
 }

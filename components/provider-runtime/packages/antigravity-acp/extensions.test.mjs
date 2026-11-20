@@ -104,17 +104,11 @@ test("the memory client's requests reach the worker without a credential", async
 
 test("installed call guidance is rendered for this session", () => {
   assert.equal(
-    callGuidance({
-      calls: {
-        profiles: [
-          { guidance: "Use cowboy {{peer_command}} with {{peer}}." },
-          { guidance: "Two." },
-        ],
-      },
-    }),
+    callGuidance(["Use cowboy {{peer_command}} with {{peer}}.", "Two."]),
     "Use cowboy codex with Codex.\n\nTwo.",
   );
-  assert.equal(callGuidance({ calls: { profiles: [] } }), "");
+  assert.equal(callGuidance([]), "");
+  assert.equal(callGuidance(undefined), "");
 });
 
 test("prompts and updates feed the turn's memory evidence", () => {

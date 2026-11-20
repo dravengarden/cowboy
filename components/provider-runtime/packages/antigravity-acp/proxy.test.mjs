@@ -774,9 +774,11 @@ function fakeMemory() {
   const log = [];
   return {
     log,
-    begin: async (text) => {
-      log.push(["begin", text]);
-      return "RECALLED";
+    recall: true,
+    observe: true,
+    request: async (action, payload) => {
+      log.push(["request", action, payload.query]);
+      return { text: "RECALLED" };
     },
     add: (role, text) => log.push(["add", role, text]),
     finish: async () => log.push(["finish"]),
@@ -813,9 +815,10 @@ test("memory recalls for the owner's prompt and learns only the owner turn", asy
   await proxy.fromAgent({ jsonrpc: "2.0", id: 2, result: { stopReason: "end_turn" } });
   assert.deepEqual(
     memory.log.map((entry) => entry.slice(0, 2)),
-    [["begin", "hello"], ["add", "tool"], ["add", "assistant"], ["finish"]],
+    [["request", "context"], ["add", "user"], ["add", "tool"], ["add", "assistant"], ["finish"]],
   );
-  assert.equal(memory.log[2][2], "hi there");
+  assert.equal(memory.log[1][2], "hello");
+  assert.equal(memory.log[3][2], "hi there");
 });
 
 test("a turn that ran a forbidden built-in teaches memory nothing", async () => {
@@ -836,7 +839,8 @@ test("a turn that ran a forbidden built-in teaches memory nothing", async () => 
   await proxy.fromAgent({ jsonrpc: "2.0", id: 2, result: { stopReason: "end_turn" } });
   assert.deepEqual(
     memory.log.map((entry) => entry[0]),
-    ["begin", "finish"],
+    // Recall ran; nothing of the turn, its prompt included, was delivered.
+    ["request"],
   );
 });
 
@@ -879,4 +883,26 @@ test("permissions auto-approve only in a mode agy confirmed", async () => {
   await proxy.fromAgent({ jsonrpc: "2.0", id: 4, error: { code: 1, message: "no" } });
   await ask(74);
   assert.equal(client.at(-1).id, 74);
+});
+
+test("an older switch's answer cannot reopen approvals while a newer one is pending", async () => {
+  const { proxy, client } = harness();
+  const ask = (id) =>
+    proxy.fromAgent(
+      request(id, "session/request_permission", {
+        sessionId: "s",
+        toolCall: { name: "mcp_cowboy_WriteFile" },
+        options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
+      }),
+    );
+  await proxy.fromClient(request(5, "session/set_mode", { sessionId: "s", modeId: "default" }));
+  await proxy.fromClient(request(6, "session/set_mode", { sessionId: "s", modeId: "plan" }));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 5, result: {} });
+  // A mode update during the pending switch is not trusted either.
+  await proxy.fromAgent(updateIn("current_mode_update", { currentModeId: "default" }));
+  await ask(80);
+  assert.equal(client.at(-1).id, 80);
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 6, result: {} });
+  await ask(81);
+  assert.equal(client.at(-1).id, 81);
 });

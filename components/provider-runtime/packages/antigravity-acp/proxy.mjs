@@ -4,7 +4,7 @@
 // MCP servers with the Cowboy facade, appends the target projection to the
 // system prompt, and settles each turn with backend refusal evidence.
 import { allowedTool } from "./hook.mjs";
-import { promptText, updateObservation } from "./memory.mjs";
+import { EVIDENCE_LIMITS, promptText, recall, updateObservation } from "./memory.mjs";
 import { facadeTool, presentToolCall } from "./presentation.mjs";
 
 /** Client requests a `runtime` unit forwards; everything else is refused. */
@@ -157,8 +157,10 @@ export class AcpProxy {
     this.turns = new Map();
     /** The account plan `agy` last reported (one proxy serves one account). */
     this.plan = undefined;
-    /** The `agy` mode the worker last selected, per session. */
+    /** The mode `agy` confirmed, per session (absent: unknown). */
     this.modes = new Map();
+    /** Mode switches still waiting for `agy`'s answer, per session. */
+    this.switches = new Map();
     /** Facade tool per call ID, for updates and requests that omit the name. */
     this.calls = new Map();
     /** The canonical workspace root on the target, once the runtime is ready. */
@@ -194,9 +196,10 @@ export class AcpProxy {
     return undefined;
   }
 
-  /** The current mode a session result or update reports. */
+  /** The current mode a session result or update reports; ignored while a
+   * switch is outstanding (that switch's answer decides). */
   reportMode(sessionId, value) {
-    if (typeof sessionId !== "string") return;
+    if (typeof sessionId !== "string" || (this.switches.get(sessionId) ?? 0) > 0) return;
     const current =
       value?.modes?.currentModeId ??
       value?.currentModeId ??
@@ -270,8 +273,9 @@ export class AcpProxy {
     const forwarded = structuredClone(message);
     const requested = this.requestedMode(method, forwarded.params);
     if (requested) {
-      // Changing: unknown until `agy` answers.
+      // Changing: unknown until `agy` answers every outstanding switch.
       this.modes.delete(requested.sessionId);
+      this.switches.set(requested.sessionId, (this.switches.get(requested.sessionId) ?? 0) + 1);
     }
     // The reply is handled with this runtime, without awaiting it again.
     const record = { method, runtime, mode: requested };
@@ -312,8 +316,8 @@ export class AcpProxy {
       record.cursor = await runtime.evidence.mark();
       // Memory recalls for the owner's words, as for Claude and Codex.
       const text = promptText(forwarded.params?.prompt);
-      if (runtime.memory && text.trim() && !text.trimStart().startsWith("/")) {
-        const context = await runtime.memory.begin(text);
+      if (runtime.memory) {
+        const context = await recall(runtime.memory, text);
         if (context) {
           forwarded.params.prompt = [
             { type: "text", text: context },
@@ -326,8 +330,10 @@ export class AcpProxy {
         uncertain: undefined,
         violation: undefined,
         tools: new Map(),
+        prompt: text,
         said: "",
         evidence: [],
+        bytes: 0,
         recorded: new Set(),
       });
       runtime.facade.beginTurn(sessionId);
@@ -401,14 +407,14 @@ export class AcpProxy {
    * delivers nothing (`settleMemory`).
    */
   remember(params) {
-    if (!this.memory) return;
+    if (!this.memory?.observe) return;
     const turn = this.turns.get(params?.sessionId);
     if (!turn) return;
     const update = params.update;
     const observation = updateObservation(update);
     if (!observation) return;
     if (observation[0] === "assistant") {
-      if (turn.said.length < 200_000) turn.said += observation[1];
+      if (turn.said.length < EVIDENCE_LIMITS.turn) turn.said += observation[1];
       return;
     }
     const id = update?.toolCallId;
@@ -416,16 +422,21 @@ export class AcpProxy {
       if (turn.recorded.has(id) || turn.recorded.size >= MAX_TOOL_CALLS) return;
       turn.recorded.add(id);
     }
-    if (turn.evidence.length < 200) turn.evidence.push(observation);
+    const text = observation[1].slice(0, EVIDENCE_LIMITS.event);
+    if (turn.evidence.length >= 200 || turn.bytes + text.length > EVIDENCE_LIMITS.turn) return;
+    turn.bytes += text.length;
+    turn.evidence.push([observation[0], text]);
   }
 
   /** Deliver a finished turn's evidence, unless the turn broke the gate. */
   async settleMemory(turn) {
     if (!this.memory || !turn) return;
-    if (turn.violation === undefined) {
-      for (const observation of turn.evidence) this.memory.add(...observation);
-      if (turn.said) this.memory.add("assistant", turn.said);
+    if (turn.violation !== undefined) return;
+    if (turn.prompt?.trim() && !turn.prompt.trimStart().startsWith("/")) {
+      this.memory.add("user", turn.prompt);
     }
+    for (const observation of turn.evidence) this.memory.add(...observation);
+    if (turn.said) this.memory.add("assistant", turn.said);
     await this.memory.finish();
   }
 
@@ -450,8 +461,10 @@ export class AcpProxy {
             this.reportMode(message.params.sessionId, update);
           }
           this.observe(message.params);
-          this.remember(message.params);
-          return this.client(this.presentUpdate(this.annotateUsage(stripTier(message))));
+          // Evidence and the worker see the same sanitized update.
+          const clean = stripTier(message);
+          this.remember(clean.params);
+          return this.client(this.presentUpdate(this.annotateUsage(clean)));
         }
         if (AGENT_NOTIFICATIONS.includes(method)) this.client(stripTier(message));
         return;
@@ -519,8 +532,19 @@ export class AcpProxy {
     // No result or error leaves the proxy with the raw tier.
     message = stripTier(message);
     const { runtime } = record;
+    if (record.mode) {
+      const { sessionId, mode } = record.mode;
+      const left = (this.switches.get(sessionId) ?? 1) - 1;
+      if (left > 0) this.switches.set(sessionId, left);
+      else this.switches.delete(sessionId);
+      // Only the last outstanding switch, and only an accepted one, sets
+      // the mode; a reported current mode wins over the requested one.
+      if (left === 0 && message.result !== undefined) {
+        this.modes.set(sessionId, mode);
+        this.reportMode(sessionId, message.result);
+      }
+    }
     if (message.result !== undefined) {
-      if (record.mode) this.modes.set(record.mode.sessionId, record.mode.mode);
       if (SESSION_REQUESTS.has(record.method)) {
         this.reportMode(message.result?.sessionId ?? record.session, message.result);
       }

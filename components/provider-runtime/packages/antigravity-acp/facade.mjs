@@ -161,7 +161,16 @@ export class Facade {
     if (!Object.hasOwn(handlers, name) && !extension)
       return failure(`Unknown tool ${String(name)}`);
     try {
-      if (extension) return await this.extensions.call(this.connection, name, args);
+      if (extension) {
+        // Tracked like a mutation: the turn's end waits for it.
+        const call = this.extensions.call(this.connection, name, args);
+        turn.inflight?.add(call);
+        try {
+          return await call;
+        } finally {
+          turn.inflight?.delete(call);
+        }
+      }
       return { content: [{ type: "text", text: await handlers[name]() }] };
     } catch (error) {
       if (error instanceof UncertainEffect) {

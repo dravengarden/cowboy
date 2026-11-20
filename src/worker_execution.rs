@@ -707,6 +707,10 @@ where
                     Response::Events { events: batch, through } => {
                         for event in batch {
                             client.observe_event(&event.message);
+                            // The worker's own servers' output never reaches the unit.
+                            if ledger::worker_event(&event.message) {
+                                continue;
+                            }
                             writer.send(Message::Text(event.message.to_string().into())).await?;
                         }
                         cursor = through;

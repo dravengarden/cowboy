@@ -10,7 +10,7 @@ import { remoteMessage, UncertainEffect, unknownOutcome } from "./facade-tools.m
 const TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 
 export class Extensions {
-  constructor({ tools = [], instructions = "" } = {}) {
+  constructor({ tools = [], instructions = "", guidance = [] } = {}) {
     this.listed = [];
     this.routes = new Map();
     for (const tool of Array.isArray(tools) ? tools : []) {
@@ -26,6 +26,10 @@ export class Extensions {
       });
     }
     this.notes = typeof instructions === "string" ? instructions : "";
+    /** The installed managed-call guidance, unrendered. */
+    this.guidance = Array.isArray(guidance)
+      ? guidance.filter((text) => typeof text === "string")
+      : [];
   }
 
   /**

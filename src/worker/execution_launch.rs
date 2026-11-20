@@ -89,20 +89,26 @@ pub(super) async fn prepare(
         client.set_ledger(Ledger::open(&args.session_id, path)?);
         // One read of the verified extension descriptor serves both what the
         // worker runs and what the unit learns.
-        let frozen = spec.env.get("COWBOY_SESSION_EXTENSIONS").cloned();
-        let summary = super::sandbox_extensions::load(frozen.as_deref())
-            .map(|extensions| super::sandbox_extensions::derive(&extensions, &args.session_id))
-            .map(|extensions| {
-                if let Some(memory) = &extensions.memory {
-                    client.set_memory(memory.clone());
-                }
-                client.set_extensions(crate::worker_execution::ExtensionBroker::start(
-                    &client,
-                    extensions.plan,
-                    extensions.memory,
-                ));
-                extensions.summary
-            });
+        // The frozen copy exists only when the launch carried an MCP plan.
+        let frozen = args
+            .mcp_plan
+            .as_ref()
+            .and_then(|_| spec.env.get("COWBOY_SESSION_EXTENSIONS").cloned());
+        let descriptor = super::sandbox_extensions::load(frozen.as_deref());
+        let extensions = super::sandbox_extensions::derive(
+            descriptor.as_ref(),
+            frozen.is_some(),
+            &args.session_id,
+        );
+        if let Some(memory) = &extensions.memory {
+            client.set_memory(memory.clone());
+        }
+        client.set_extensions(crate::worker_execution::ExtensionBroker::start(
+            &client,
+            extensions.plan,
+            extensions.memory,
+        ));
+        let summary = Some(extensions.summary);
         let (endpoint, bridge) = Endpoint::start_unix(Arc::clone(&client), summary)?;
         spec.execution_bridge = Some(bridge);
         return Ok((Some(endpoint), managed_round));

@@ -43,6 +43,23 @@ const READINESS_TURN: &str = "cowboy-readiness";
 /// and the folder's bindings): the worker starts them itself, they outlive
 /// turns and end at teardown. The unit can neither start nor reach them.
 const SERVER_TURN: &str = "cowboy-session-servers";
+/// Process ids of worker-run servers (and their probes), in every worker of
+/// the session: the unit may never name one, also one a previous worker
+/// left running.
+pub(super) const SERVER_PREFIX: &str = "cowboy-worker-mcp-";
+/// Whether an execution event concerns a worker-run server or probe.
+pub(super) fn worker_event(message: &Value) -> bool {
+    message
+        .pointer("/params/processId")
+        .and_then(Value::as_str)
+        .is_some_and(|process| process.starts_with(SERVER_PREFIX))
+}
+
+/// Extension calls one session may have admitted at once.
+const MAX_CALLS: usize = 8;
+/// How long after a turn ends memory may still receive its evidence (the
+/// memory client delivers in the background).
+const OBSERVATION_GRACE: Duration = Duration::from_secs(120);
 /// The endpoint's own request: the agent side reports an uncertain effect
 /// it detected (`UNCERTAIN_REPORT` in the Antigravity facade). Never
 /// forwarded to the target.
@@ -65,11 +82,24 @@ fn readiness_probe(params: &Value) -> bool {
         return false;
     };
     let argv: Vec<&str> = argv.iter().filter_map(Value::as_str).collect();
-    matches!(
-        argv.as_slice(),
-        ["/bin/sh", "-c", script, "sh", cwd]
-            if *script == READINESS_SCRIPT && cwd.starts_with('/')
-    ) && params.get("argv").and_then(Value::as_array).map(Vec::len) == Some(5)
+    // The unit names no environment, search path or interpreter of its own:
+    // the probe runs with the keeper's environment, as the projection sends.
+    let closed = params.get("env").is_none_or(|env| env == &json!({}))
+        && params.get("arg0").is_none_or(Value::is_null)
+        && params.get("tty").is_none_or(|tty| tty == &json!(false))
+        && params.get("envPolicy").is_none_or(|policy| {
+            policy.get("set").is_none_or(|set| set == &json!({}))
+                && policy
+                    .get("includeOnly")
+                    .is_none_or(|only| only == &json!([]))
+        });
+    closed
+        && matches!(
+            argv.as_slice(),
+            ["/bin/sh", "-c", script, "sh", cwd]
+                if *script == READINESS_SCRIPT && cwd.starts_with('/')
+        )
+        && params.get("argv").and_then(Value::as_array).map(Vec::len) == Some(5)
 }
 
 /// Bound of one process's best-effort termination.
@@ -118,6 +148,10 @@ struct State {
     probes: HashSet<String>,
     /// Target processes the worker started as the session's MCP servers.
     servers: HashSet<String>,
+    /// Extension calls admitted and not yet settled.
+    calls: usize,
+    /// When the last turn was fenced (its evidence may still be delivered).
+    turn_ended: Option<std::time::Instant>,
     closed: bool,
 }
 
@@ -208,7 +242,47 @@ impl Ledger {
         state
             .processes
             .insert(process.to_owned(), SERVER_TURN.to_owned());
+        // Starting until the target answers, so teardown waits for it.
+        state.starting.insert(process.to_owned());
         Ok(())
+    }
+
+    /// The target answered a server's start (`started`: it runs).
+    pub(super) fn server_started(&self, process: &str, started: bool) {
+        let mut state = self.state.lock();
+        state.starting.remove(process);
+        if !started {
+            state.processes.remove(process);
+        }
+        drop(state);
+        self.changed.send_modify(|value| *value += 1);
+    }
+
+    /// The worker's servers and probes (teardown ends them first).
+    fn server_processes(&self) -> Vec<String> {
+        let state = self.state.lock();
+        state
+            .processes
+            .iter()
+            .filter(|(_, owner)| *owner == SERVER_TURN)
+            .map(|(process, _)| process.clone())
+            .collect()
+    }
+
+    /// Whether `turn` is still the active turn (an admitted call queued
+    /// behind another may not reach the target once it ended).
+    pub(super) fn turn_open(&self, turn: &str) -> bool {
+        self.state.lock().active_turn().as_deref() == Some(turn)
+    }
+
+    /// Memory may receive evidence during a turn and shortly after it.
+    pub(super) fn observation_open(&self) -> bool {
+        let state = self.state.lock();
+        !state.closed
+            && (state.active_turn().is_some()
+                || state
+                    .turn_ended
+                    .is_some_and(|ended| ended.elapsed() < OBSERVATION_GRACE))
     }
 
     /// Admit one extension tool call under the active turn: refused outside
@@ -218,8 +292,22 @@ impl Ledger {
         let turn = state
             .active_turn()
             .ok_or("no Cowboy turn is running; the tool call was refused")?;
+        if state.calls >= MAX_CALLS {
+            return Err("too many extension calls are running; the tool call was refused");
+        }
+        state.calls += 1;
         *state.admitted.entry(turn.clone()).or_default() += 1;
         Ok(Admitted { turn })
+    }
+
+    /// An admitted extension call finished.
+    pub(super) fn settle_call(&self, admitted: &Admitted) {
+        self.state.lock().calls -= 1;
+        self.settled(admitted, None);
+    }
+
+    pub(super) fn admitted_turn(admitted: &Admitted) -> &str {
+        &admitted.turn
     }
 
     pub fn begin_turn(&self, turn: &str) {
@@ -258,8 +346,11 @@ impl Ledger {
         params: &Value,
     ) -> Result<Option<Admitted>, &'static str> {
         let mut state = self.state.lock();
-        // The worker's own MCP servers are not the unit's processes.
-        if process_id(params).is_some_and(|process| state.servers.contains(&process)) {
+        // The worker's own MCP servers are not the unit's processes, also
+        // those an earlier worker of the session started.
+        if process_id(params).is_some_and(|process| {
+            state.servers.contains(&process) || process.starts_with(SERVER_PREFIX)
+        }) {
             return Err("that process belongs to the worker; request refused");
         }
         if !MUTATIONS.contains(&method) {
@@ -362,6 +453,7 @@ impl Ledger {
         let mut state = self.state.lock();
         match turn {
             Some(turn) => {
+                state.turn_ended = Some(std::time::Instant::now());
                 if !state.fenced.iter().any(|fenced| fenced == turn) {
                     if state.fenced.len() >= MAX_FENCED_TURNS {
                         state.fenced.pop_front();
@@ -518,6 +610,11 @@ impl Client {
                 .unwrap_or_else(|_| unavailable());
         };
         if method == super::memory_bridge::MEMORY_REQUEST {
+            if params.get("path").and_then(Value::as_str) == Some("/v1/observe")
+                && !ledger.observation_open()
+            {
+                return refused("memory evidence is accepted only for a turn");
+            }
             return match self.memory.get() {
                 Some(memory) => memory.forward(&params).await,
                 None => refused("memory is not available in this session"),
@@ -619,6 +716,11 @@ impl Client {
         if (MUTATIONS.contains(&method) || carries_result) && answered {
             ledger.mark_uncertain(method);
         }
+        // An extension call that ran but whose result never reached the
+        // unit (an unknown outcome was already recorded by the broker).
+        if method == super::extension_broker::EXTENSION_CALL && reply.get("result").is_some() {
+            ledger.mark_uncertain("tools/call");
+        }
     }
 
     /// Exit notifications the agent side receives are evidence too.
@@ -678,6 +780,19 @@ impl Client {
     pub async fn settle_all(self: &Arc<Self>) {
         if let Some(ledger) = self.ledger().cloned() {
             ledger.fence(None);
+            // The worker's servers end first: a call still running on one
+            // then ends too (its outcome is unknown) instead of holding the
+            // shutdown past its deadline. A start in flight is waited for.
+            ledger
+                .wait_until(|ledger| {
+                    let state = ledger.state.lock();
+                    !state
+                        .starting
+                        .iter()
+                        .any(|process| state.servers.contains(process))
+                })
+                .await;
+            self.terminate_all(ledger.server_processes()).await;
             ledger.wait_until(|ledger| ledger.drained(None)).await;
             let processes = ledger.fence(None);
             self.terminate_all(processes).await;

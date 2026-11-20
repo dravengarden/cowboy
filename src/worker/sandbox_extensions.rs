@@ -50,8 +50,19 @@ fn name(value: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
-pub(super) fn derive(extensions: &Value, session_id: &str) -> SandboxExtensions {
-    let plan = extensions.get("mcp").filter(|plan| !plan.is_null());
+/// `bindings_admitted`: the launch carried an MCP plan `mcp_launch` froze
+/// and verified; only then do the descriptor's bindings run. A missing
+/// descriptor still leaves the session Cowboy MCP.
+pub(super) fn derive(
+    extensions: Option<&Value>,
+    bindings_admitted: bool,
+    session_id: &str,
+) -> SandboxExtensions {
+    let empty = json!({});
+    let extensions = extensions.unwrap_or(&empty);
+    let plan = extensions
+        .get("mcp")
+        .filter(|plan| bindings_admitted && !plan.is_null());
     // The Cowboy CLI on the target: the binding plan's verified command, else
     // the one on the target's PATH, as Claude's and Codex's runtimes use.
     let command = plan
@@ -114,8 +125,9 @@ pub(super) fn derive(extensions: &Value, session_id: &str) -> SandboxExtensions 
         .and_then(|plugin| plugin.get("id"))
         .and_then(name)
         .unwrap_or_else(|| "matrix".to_owned());
-    // Every installed profile's guidance; the proxy fills its placeholders.
-    let profiles: Vec<Value> = extensions
+    // Every installed profile's guidance (sent with the tool list, never in
+    // the size-bounded descriptor); the proxy fills its placeholders.
+    let guidance: Vec<String> = extensions
         .get("calls")
         .and_then(|calls| calls.get("profiles"))
         .and_then(Value::as_array)
@@ -124,7 +136,7 @@ pub(super) fn derive(extensions: &Value, session_id: &str) -> SandboxExtensions 
         .take(8)
         .filter_map(|profile| profile.get("guidance").and_then(Value::as_str))
         .filter(|text| text.len() <= 4096)
-        .map(|text| json!({"guidance": text}))
+        .map(str::to_owned)
         .collect();
     SandboxExtensions {
         summary: json!({
@@ -135,12 +147,12 @@ pub(super) fn derive(extensions: &Value, session_id: &str) -> SandboxExtensions 
                 "observe": flag("observe"),
                 "tools": !memory_tools.is_empty(),
             })),
-            "calls": {"profiles": profiles},
         }),
         plan: ExtensionPlan {
             servers,
             memory_tools: memory_tools.clone(),
             memory_server,
+            guidance,
         },
         memory,
     }
@@ -165,7 +177,7 @@ mod tests {
                 "relay": {"endpoint": "http://127.0.0.1:4100", "token": "secret-token",
                     "state_dir": "/home/ubuntu/private"}},
         });
-        let derived = derive(&extensions, "sess-1");
+        let derived = derive(Some(&extensions), true, "sess-1");
         assert_eq!(
             derived.plan.servers,
             vec![
@@ -201,21 +213,20 @@ mod tests {
         assert_eq!(derived.summary["session"], "sess-1");
         assert_eq!(derived.summary["memory"]["enable_recall"], true);
         assert_eq!(derived.summary["memory"]["observe"], false);
+        assert_eq!(derived.plan.guidance.len(), 2);
+        assert!(derived.summary.get("calls").is_none());
+        // Without an admitted plan the descriptor's bindings never run.
+        let unplanned = derive(Some(&extensions), false, "sess-1");
+        assert_eq!(unplanned.plan.servers.len(), 1);
         assert_eq!(
-            derived.summary["calls"]["profiles"]
-                .as_array()
-                .unwrap()
-                .len(),
-            2
+            unplanned.plan.servers[0].argv,
+            vec!["cowboy".to_owned(), "mcp".to_owned()]
         );
     }
 
     #[test]
     fn a_session_without_bindings_or_memory_still_has_cowboy_mcp() {
-        let derived = derive(
-            &json!({"schema": 1, "mcp": null, "calls": null, "memory": null}),
-            "s",
-        );
+        let derived = derive(None, false, "s");
         assert_eq!(derived.plan.servers.len(), 1);
         assert_eq!(
             derived.plan.servers[0].argv,

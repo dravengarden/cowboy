@@ -795,6 +795,7 @@ async fn worker_servers_outlive_turns_and_stay_out_of_the_units_reach() {
     let ledger = ledger(&target.client, None);
     ledger.set_readiness(false);
     ledger.record_server("server-1").unwrap();
+    ledger.server_started("server-1", true);
     // The unit can neither write to, read from nor stop the worker's server.
     for method in ["process/write", "process/read", "process/terminate"] {
         let reply = target
@@ -816,7 +817,7 @@ async fn worker_servers_outlive_turns_and_stay_out_of_the_units_reach() {
     let settled = tokio::spawn(target.client.finish_turn("turn-1").unwrap());
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(!settled.is_finished(), "the turn drains its extension call");
-    ledger.settled(&admitted, None);
+    ledger.settle_call(&admitted);
     tokio::time::timeout(Duration::from_secs(10), settled)
         .await
         .unwrap()
@@ -945,6 +946,7 @@ async fn the_broker_runs_target_servers_for_the_unit_inside_turns() {
             }],
             memory_tools: Vec::new(),
             memory_server: "matrix".into(),
+            guidance: vec!["Prefer {{peer}}.".into()],
         },
         None,
     );
@@ -961,6 +963,7 @@ async fn the_broker_runs_target_servers_for_the_unit_inside_turns() {
         .collect();
     // A facade name takes its server's prefix.
     assert_eq!(names, ["cowboy_read", "cowboy_ReadFile"]);
+    assert_eq!(listed["result"]["guidance"], json!(["Prefer {{peer}}."]));
     assert!(
         listed["result"]["instructions"]
             .as_str()

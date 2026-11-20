@@ -5,7 +5,15 @@
 // credential stay with the worker; the token here is a placeholder the
 // worker replaces.
 import { join } from "node:path";
-import { callGuidance as renderCallGuidance, MatrixClient } from "@cowboy/memory-client";
+import {
+  callGuidance as renderCallGuidance,
+  MatrixClient,
+  publicText,
+} from "@cowboy/memory-client";
+
+const RECALL_BUDGET_MS = 5000;
+/** Per tool observation and per turn, before the client's own budget. */
+export const EVIDENCE_LIMITS = Object.freeze({ event: 20_000, turn: 200_000 });
 
 const BRIDGE = "http://cowboy-memory.invalid/";
 
@@ -70,12 +78,35 @@ export async function openMemory(connection, summary, { home, cwd }) {
 }
 
 /** The installed call guidance, with this session's peer filled in. */
-export function callGuidance(summary) {
-  return renderCallGuidance(summary ?? null, {
-    peer: "Codex",
-    peerCommand: "codex",
-    fallback: "",
-  });
+export function callGuidance(guidance) {
+  const profiles = (Array.isArray(guidance) ? guidance : []).map((text) => ({ guidance: text }));
+  return renderCallGuidance(
+    { calls: { profiles } },
+    { peer: "Codex", peerCommand: "codex", fallback: "" },
+  );
+}
+
+/**
+ * Recall for the owner's prompt, without recording anything: the turn's
+ * evidence, the prompt included, is delivered only once the turn passed
+ * the gate (`AcpProxy.settleMemory`). Bounded; a failure recalls nothing.
+ */
+export async function recall(memory, text) {
+  if (!memory?.recall || !text.trim() || text.trimStart().startsWith("/")) return "";
+  let timer;
+  try {
+    const found = await Promise.race([
+      memory.request("context", { query: publicText(text), budget: 6000 }),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(null), RECALL_BUDGET_MS);
+      }),
+    ]);
+    return typeof found?.text === "string" ? found.text : "";
+  } catch {
+    return "";
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** The text of an ACP prompt (its text blocks). */

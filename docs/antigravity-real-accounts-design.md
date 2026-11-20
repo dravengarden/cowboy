@@ -766,8 +766,29 @@ not the confined proxy, runs and admits all of it (first review: call
   relay addresses, tokens and Machine paths stay with the worker.
 - **Permissions and modes.** A permission request for a `cowboy` tool is
   approved once (`allow_once`, never a standing grant) only in a mode `agy`
-  confirmed (a session result, a mode update, or an accepted switch) other
-  than `plan`; while the mode is unknown or changing the owner decides.
+  confirmed (a session result, a mode update, or the answer to the last
+  outstanding switch) other than `plan`; while the mode is unknown or any
+  switch is outstanding the owner decides.
+- **Second review (call `call-0b56f87a42e322bfe461ab3f`).** Tools route by
+  server handle, memory's signed list is checked again at dispatch; worker
+  server ids carry a reserved prefix no unit request may name (also one an
+  earlier worker left) and their execution events never reach the unit;
+  the readiness probe must name no environment of its own; a call queued
+  behind another rechecks its turn before it is written; at most 8 calls
+  run at once; teardown ends the servers first so a running call ends with
+  an unknown outcome inside the shutdown deadline; a definitive MCP error
+  is a tool error, not an unknown outcome; lost or undecodable server
+  output ends the server; required bindings must report the binding
+  contract (`mcp --binding-capabilities`); learning is accepted only during
+  a turn and for two minutes after it; recall no longer records the prompt,
+  which is delivered with the turn's evidence only if the turn passed the
+  gate; guidance travels with the tool list, not in the bounded descriptor.
+- **Accepted residuals.** The outbox lives in the account's own home, so a
+  later session of the same account can read or drop an earlier session's
+  undelivered evidence: same owner, same account, never another account.
+  An extension call in flight when its worker dies leaves no durable
+  dispatch record; the keeper's reap ends its server and the next turn
+  starts without it.
 
 ## Revision 5 simplification (owner decision, 2026-11-18)
 

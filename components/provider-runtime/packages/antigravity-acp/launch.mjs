@@ -120,9 +120,9 @@ export async function checkPolicy(home, paths) {
  * of the `cowboy` server, with each server's own instructions and the
  * installed call guidance.
  */
-export function extensionGuidance(summary, extensions) {
+export function extensionGuidance(extensions) {
   const notes = extensions?.instructions() ?? "";
-  const calls = callGuidance(summary);
+  const calls = callGuidance(extensions?.guidance);
   if (!notes && !calls && !extensions?.tools().length) return "";
   return [
     "<cowboy_extensions>",
@@ -239,10 +239,7 @@ export async function prepareRuntime({
     sessionCwd: (cwd) => (cwd === descriptor.binding.runtime?.cwd ? facade.root : cwd),
     // A session starts with its extensions, or not at all.
     projection: async (cwd) =>
-      [
-        await buildProjection(facade, cwd),
-        extensionGuidance(descriptor.extensions, await extensions),
-      ]
+      [await buildProjection(facade, cwd), extensionGuidance(await extensions)]
         .filter(Boolean)
         .join("\n\n"),
     memory,
