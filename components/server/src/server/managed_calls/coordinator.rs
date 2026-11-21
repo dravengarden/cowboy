@@ -48,7 +48,7 @@ mod observation;
 mod readiness;
 pub(in crate::server) use observation::touch as touch_code_observation;
 pub(in crate::server) use observation::{changes as code_changes, head as code_observation_head};
-pub(super) use readiness::{child_runtime, runtime_readiness};
+pub(super) use readiness::{child_runtime, child_runtime_pinned, runtime_readiness};
 
 impl GrantEntry {
     fn accepts_installation(
@@ -736,7 +736,7 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
         // The session's policy decides first; readiness explains the rest.
         let targeted = target.is_some();
         let reason = context_only::policy_reason(&policy, &meta.provider, provider, targeted)
-            .or(context_only::history_reason(provider, history_capable).or(readiness.reason));
+            .or(readiness.reason);
         let available = reason.is_none() && readiness.available;
         let native_capabilities: Vec<&str> = readiness
             .generation
@@ -756,7 +756,7 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             })
             .unwrap_or_default();
         let context = agent_tools::context_only(provider);
-        if available && !context {
+        if available {
             read_only_providers.push(provider);
         }
         if readiness.available
@@ -794,13 +794,14 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             "output": if readiness.structured_output { json!(["text","json_schema"]) } else { json!(["text"]) },
             "conversation": ["fresh","continue"],
         });
-        if context {
-            context_only::restrict(&mut entry);
-        } else if let (Value::Object(fields), Value::Object(review)) = (
+        if let (Value::Object(fields), Value::Object(review)) = (
             &mut entry,
             review_fields(state, meta, provider, &runnable_presets, &policy, available),
         ) {
             fields.extend(review);
+        }
+        if context {
+            context_only::restrict(&mut entry, &meta.provider, history_capable);
         }
         providers.push(entry);
     }
@@ -874,7 +875,7 @@ async fn first_ready(
     meta: &crate::core::SessionMeta,
     ledger: &Ledger,
     targets: Vec<agent_tools::CallTarget>,
-    profile: cowboy_provider_sdk::ManagedRuntimeProfile,
+    request: &Request,
 ) -> Result<(agent_tools::CallTarget, Option<(String, String)>), &'static str> {
     let mut refusal = None;
     for target in targets {
@@ -884,9 +885,14 @@ async fn first_ready(
             &ledger.placement().machine_id,
             Some(ledger.runtime_machine_id()),
             &target.agent,
-            profile,
+            request.purpose.profile(),
         )
         .await;
+        // A structured round needs a generation that can enforce its schema.
+        if readiness.available && !request.output.is_text() && !readiness.structured_output {
+            refusal.get_or_insert("unsupported_capability");
+            continue;
+        }
         if readiness.available {
             let generation = readiness
                 .generation
@@ -950,7 +956,7 @@ async fn start(
         Some(_) => return error("conversation_unavailable", "not_submitted"),
         None => requested,
     };
-    let choice = context_only::resolve(state, ledger, &policy, requested, &request, &continued);
+    let choice = context_only::resolve(state, ledger, &policy, &meta.provider, requested, &request);
     let (mut targets, selection) = match choice
         .unwrap_or_else(|| agent_tools::choose(&policy, &meta.provider, requested, own_family))
     {
@@ -997,11 +1003,10 @@ async fn start(
         },
         None => return error("capacity", "not_submitted"),
     }
-    let (mut target, generation) =
-        match first_ready(state, meta, ledger, targets, request.purpose.profile()).await {
-            Ok(ready) => ready,
-            Err(reason) => return error(reason, "not_submitted"),
-        };
+    let (mut target, generation) = match first_ready(state, meta, ledger, targets, &request).await {
+        Ok(ready) => ready,
+        Err(reason) => return error(reason, "not_submitted"),
+    };
     // Discovery and admission use the generation the claim will pin, not the
     // latest Catalog: an id may be absent or name another model on it.
     let runnable = agent_tools::presets_on(

@@ -83,6 +83,17 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.131.0 records provider-runtime 1.3.15, whose
+`cowboy-antigravity-acp` 1.0.13 answers Cowboy's review schema through a
+stated contract, an exact check and at most two nonce-bound corrections,
+sending only a validated reply ([managed calls](managed-agent-calls.md)).
+Antigravity 0.2.15 pins it and declares `--cowboy-output-contract=v1`; the
+Controller admits explicit fresh Antigravity reviews and design reviews (with
+that schema) and text analyses besides context asks. The other six Providers
+pinning provider-runtime advance one patch version (claude-code 3.20.60,
+claude-deepseek 3.1.78, codex 3.6.19, codex-deepseek 3.1.78,
+deepseek-harness 1.0.36, grok 3.2.18).
+
 Component release 3.129.0 records provider-runtime 1.3.14 with
 `cowboy-antigravity-acp` 1.0.12 and `cowboy-antigravity-launch` 1.1.2: the
 read-only managed profile for context asks. Antigravity 0.2.14 pins them and
@@ -352,6 +363,10 @@ tests' external assertion imports with Node built-ins. It versions those package
 state-store's dependent packages and the plugin-api consumers without changing
 native pins. It removes the temporary root `@std/assert` dependency; package
 closure validation remains strict and historical release records stay unchanged.
+
+Scoped release 3.130.0 records app-shell 1.1.42 for the already-committed
+reader top-edge change in `ab64737d0`, which 3.129.0 did not cover. No Plugin
+closure or native pin changes; the worker registry input stays at 3.129.0.
 
 Scoped release 3.101.0 records app-shell 1.1.41 for the already-committed
 tool detail control change in `278c013ba`, which 3.100.0 did not cover. No

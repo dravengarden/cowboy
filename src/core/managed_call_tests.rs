@@ -370,3 +370,50 @@ async fn a_managed_prompt_is_never_an_owner_send() {
     let req = rx.try_recv().expect("an idle child dispatches at once");
     assert!(!req.explicit);
 }
+
+#[test]
+fn managed_turn_keeps_its_final_message_across_a_marked_late_tool_event() {
+    for (provider, version, marked, kept) in [
+        ("antigravity", "0.2.15", true, true),
+        ("antigravity", "0.2.15", false, false),
+        // 0.2.14 forwards native metadata unstripped: no marker is trusted.
+        ("antigravity", "0.2.14", true, false),
+        // Only Antigravity's proxy may mark an event.
+        ("codex", "3.6.19", true, false),
+    ] {
+        let mut late = serde_json::json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "late",
+            "status": "completed",
+        });
+        if marked {
+            late["_meta"] = serde_json::json!({"cowboy.dev/afterAnswer": true});
+        }
+        let hub = Hub::new();
+        let mut registration = child("child");
+        registration.provider = provider.to_owned();
+        registration.provider_version = version.to_owned();
+        hub.create_session(registration);
+        hub.push("child", update("user_message_chunk", "review"));
+        hub.push(
+            "child",
+            update("agent_message_chunk", "{\"verdict\":\"approve\"}"),
+        );
+        hub.push("child", Event::Update { update: late });
+        hub.push(
+            "child",
+            Event::TurnEnd {
+                usage: None,
+                stop_reason: "end_turn".into(),
+            },
+        );
+        let turn = hub.managed_turn("child", 0).unwrap();
+        // Unmarked, a tool event still ends the answer before it.
+        let expected = if kept {
+            "{\"verdict\":\"approve\"}"
+        } else {
+            ""
+        };
+        assert_eq!(turn.final_text, expected, "{provider} marked={marked}");
+    }
+}

@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "grok",
-  "version": "3.2.18",
+  "version": "3.2.19",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.7.0",
   "display": {

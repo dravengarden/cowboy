@@ -289,10 +289,10 @@ pub const ACTION_SDK: &str = r#"// cowboy_execute({action,arguments,operation});
 //   (no worktree, no tools beyond reading it) and answer with [session#seq] "quote" citations;
 //   calls.result adds citations:{checked,verified,unverified}. Worth it for large, cache-cold history;
 //   for a small one read sessions.search/history yourself. Verify paths, commands and numbers in source.
-//   "antigravity" serves only these asks; it can read host files.
+//   "antigravity" (named only, fresh): these asks, analyses, reviews; it can read host files.
 // Images: discover calls.capabilities({capability:"image.generate"}); send only task + input paths.
 // calls.result returns verified artifact paths on the execution machine, never image bytes.
-// review.start: {focus?:string,design?:boolean,provider?:"auto"|"codex"|"claude-code",files?:string[],root?:string,preset?:string,title?:string,reason?:string,task?:string,base?:string,fresh?:boolean,notify?:boolean,risk?:"routine"|"high"}
+// review.start: {focus?:string,design?:boolean,provider?:"auto"|"codex"|"claude-code"|"antigravity",files?:string[],root?:string,preset?:string,title?:string,reason?:string,task?:string,base?:string,fresh?:boolean,notify?:boolean,risk?:"routine"|"high"}
 // risk:"high" (needs reason) gets the strongest reviewer; routine refuses a stronger preset. Omit preset.
 // notify:true queues one Cowboy notice into this session when the call ends (idle: new turn;
 // busy: next turn). End your turn instead of polling calls.wait; then read calls.result.

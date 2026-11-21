@@ -46,6 +46,21 @@ test("only the exact read-only profile flag is recognised", () => {
   ]) {
     assert.throws(() => managedArguments([flag]), /Unsupported/, flag);
   }
+  // The output contract declaration is the Controller's; agy never sees it.
+  assert.deepEqual(
+    managedArguments([
+      "acp",
+      "--cowboy-managed-profile=read-only-v1",
+      "--cowboy-output-contract=v1",
+    ]),
+    { managed: true, args: ["acp"] },
+  );
+  assert.throws(() => managedArguments(["acp", "--cowboy-output-contract=v1"]), /managed/);
+  assert.throws(
+    () =>
+      managedArguments(["--cowboy-managed-profile=read-only-v1", "--cowboy-output-contract=v2"]),
+    /Unsupported/,
+  );
 });
 
 test("managed mode needs the binding and the target to name the same profile", () => {
@@ -87,12 +102,20 @@ test("a managed turn needs its round, text output and no slash command", () => {
     managedPrompt({ prompt, _meta: { [MANAGED_META_KEY]: { callId: "" } } }).error,
     /managed-call round/,
   );
-  assert.match(
+  // A structured round is answered through the output contract.
+  assert.deepEqual(
     managedPrompt({
       prompt,
       _meta: { [MANAGED_META_KEY]: { ...round, outputSchema: { type: "object" } } },
+    }).schema,
+    { type: "object" },
+  );
+  assert.match(
+    managedPrompt({
+      prompt,
+      _meta: { [MANAGED_META_KEY]: { ...round, outputSchema: "object" } },
     }).error,
-    /text only/,
+    /JSON Schema object/,
   );
   for (const text of ["/compact", "  /schedule 5m"]) {
     assert.match(
