@@ -82,7 +82,7 @@ Controller release, **W** ordinary Web release.
 | Registry schema 2 | `src/plugin.rs` accepts 2 and 3 | Historical releases | Slice 7.3 (archive) | Every referenced release at schema 3 or archived | M |
 | Code-intelligence schema 1 | `components/plugin-sdk/src/lib.rs` | Published legacy adapters | Stated: "already published legacy adapters" | No schema-1 adapter in `components/registry.json` | M (signed component) |
 | Catalog reader conformance | `tools/catalog_reader_conformance.py` | Legacy bytes in both readers | Reader floor | `catalog-reader-bridge.md` (floor 2026-10-02) | C |
-| Legacy `default` account | `components/wire/src/provider_account.rs`, `portable_contract.rs`, `src/agent_api.rs`, `src/product_cli.rs`, `src/provider_service.rs` | Account `default` | No legacy default credentials | Account registry scan | M |
+| Legacy `default` account | `components/wire/src/provider_account.rs`, `portable_contract.rs`, `components/server/src/agent_api.rs`, `src/product_cli.rs`, `src/provider_service.rs` | Account `default` | No legacy default credentials | Account registry scan | M |
 
 ## Web client
 

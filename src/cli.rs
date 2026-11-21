@@ -48,7 +48,7 @@ pub enum Command {
     /// Serve this session's Cowboy tools to its agent as a stdio MCP server.
     /// Outside a Cowboy session it advertises no tools.
     #[cfg(unix)]
-    Mcp(crate::agent_api::mcp::McpArgs),
+    Mcp(crate::agent_mcp::McpArgs),
     /// Query, aggregate and analyze `OTel` evidence where it is stored.
     Logs(Box<crate::logs::cli::LogsArgs>),
     /// Inspect, validate and safely change the Service or Device configuration
@@ -290,7 +290,7 @@ impl Cli {
             #[cfg(unix)]
             Command::Call(args) => crate::managed_calls::cli::call(args).await,
             #[cfg(unix)]
-            Command::Mcp(args) => crate::agent_api::mcp::serve(args).await,
+            Command::Mcp(args) => crate::agent_mcp::serve(args).await,
             Command::Config(args) => args.run(),
             #[cfg(feature = "full")]
             Command::Serve(args) => crate::controller_hooks::serve(*args).await,

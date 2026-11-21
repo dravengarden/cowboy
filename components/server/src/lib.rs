@@ -10,7 +10,7 @@ pub use cowboy::local_operator;
 #[cfg(test)]
 pub use cowboy::test_fifo;
 pub use cowboy::{
-    account_controls, acp, admin, agent_api, agent_model, auth_plugins, browser_device, cli,
+    account_controls, acp, admin, agent_model, artifacts, auth_plugins, browser_device, cli,
     client_auth, code_adapter, code_buffer_read, code_cache, code_review, composition, config,
     context_rollover, core, core_passkeys, core_security, deepseek_cache, diff_snapshot,
     durable_state, execution_environment, execution_protocol, files, generation_retention, logs,
@@ -23,11 +23,13 @@ pub use cowboy::{
     provider_service, remote_runtime, review_directory, runtime, runtime_router, runtime_trace,
     runtime_wire, scheduler, send_delivery, service_identity, session_context, session_folders,
     store, subagent_transcripts, superagent, supervisor, task_notifications, telemetry_binding,
-    telemetry_file, telemetry_plugin, transcript_anchors, usage, web_push, widgets, workspace,
+    telemetry_file, telemetry_plugin, transcript_anchors, usage, web_push, workspace,
     workspace_extensions,
 };
 
+pub mod agent_api;
 mod server;
+pub mod widgets;
 
 #[cfg(test)]
 pub use cowboy_machine::{

@@ -474,6 +474,44 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
     document.querySelector<HTMLElement>("[data-sheet-context-dock] [aria-label='Details']")!.click();
     await waitFor(() => document.querySelector("[data-mobile-task-level='detail']"), "call details open separately");
     {
+      // The details reader owns its scroller: it bleeds under the status area,
+      // blurs what scrolls there, and keeps the state pill whole at any text scale.
+      const reader = document.querySelector<HTMLElement>("[data-task-reader-scroll]")!;
+      const dialog = reader.closest<HTMLElement>('[role="dialog"]')!;
+      const frame = document.querySelector<HTMLElement>("[data-task-reader]")!;
+      dialog.style.setProperty("--cowboy-system-top-clearance", "47px");
+      check(Math.abs(reader.getBoundingClientRect().top - dialog.getBoundingClientRect().top) < 1, "T16 call details reach the top behind the system status area");
+      check(parseFloat(getComputedStyle(reader).paddingTop) === 63, "T16 the first detail row clears the status area and its frost at rest");
+      const frost = getComputedStyle(frame, "::after");
+      check(
+        /blur\(/.test(frost.backdropFilter || frost.getPropertyValue("-webkit-backdrop-filter")) && frost.pointerEvents === "none" &&
+          parseFloat(frost.height) === 63,
+        "T16 the status area frosts scrolled details without intercepting gestures",
+      );
+      const spacer = document.createElement("div");
+      spacer.style.height = "3000px";
+      reader.append(spacer);
+      reader.scrollTop = 200;
+      await settle(3);
+      check(!reader.dataset["scrollEdges"]?.includes("top"), "T16 the frost replaces the reader's top fade");
+      spacer.remove();
+      reader.scrollTop = 0;
+      dialog.style.removeProperty("--cowboy-system-top-clearance");
+      const rootSize = document.documentElement.style.fontSize;
+      for (const scale of ["70%", "100%", "200%"]) {
+        document.documentElement.style.fontSize = scale;
+        await settle(2);
+        const pills = [...document.querySelectorAll<HTMLElement>("[data-task-detail] .MuiChip-root")];
+        const [working, running] = pills.map((pill) => pill.getBoundingClientRect());
+        const readerBox = reader.getBoundingClientRect();
+        check(working !== undefined && running !== undefined && pills.length === 2, `T16 details show the task and call state pills at ${scale}`);
+        check(working!.top >= readerBox.top && working!.height >= 24, `T16 the task pill is not clipped at the scroll boundary at ${scale}`);
+        check(Math.abs(working!.height - running!.height) < 1, `T16 the task and call state pills share one height at ${scale}`);
+      }
+      document.documentElement.style.fontSize = rootSize;
+      await settle(2);
+    }
+    {
       const coarse = document.documentElement.classList.contains(COARSE_POINTER_ROOT_CLASS);
       document.documentElement.classList.add(COARSE_POINTER_ROOT_CLASS);
       const summary = document.querySelector<HTMLElement>("[data-sheet-context-summary]")!;

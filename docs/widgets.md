@@ -681,7 +681,7 @@ returns the stored result, a different request under a reused id is
 
 Controller touch points follow the pattern for adding a domain:
 `READ_OPERATIONS` / `INVOKE_OPERATIONS`, the `sdk!` block, `HELP_TOPICS` and
-`revision()` in `src/agent_api.rs`; the read namespace table in
+`revision()` in `components/server/src/agent_api.rs`; the read namespace table in
 `components/server/src/server/agent_api/runner.js` and `SessionHost::call`;
 `execute` and receipt arms in `agent_api/actions.rs`;
 `contracts/agent-api-coverage.json` for the new HTTP/WebSocket surfaces; and

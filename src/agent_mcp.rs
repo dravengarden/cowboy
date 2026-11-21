@@ -11,11 +11,22 @@ use tokio::io::{
 };
 use tokio::sync::Mutex;
 
-use super::{
-    EXECUTE_DESCRIPTION, INSTRUCTIONS, READ_DESCRIPTION, RECEIPT_DESCRIPTION, STATUS_DESCRIPTION,
-};
 use crate::managed_calls::cli::{exchange, wiring};
 use crate::managed_calls::protocol::{Action, MAX_WAIT_MS};
+
+// The resident tool surface. The on-demand SDK catalog behind it is served
+// by the Controller (`cowboy_server::agent_api`), so catalog edits do not
+// recompile this crate.
+pub const EXECUTE_DESCRIPTION: &str = "Perform one scoped Cowboy action; discover arguments with cowboy_read(help). action + arguments, and a stable operation ID for writes. Reuse identical input/ID after uncertainty; query cowboy_receipt. Actions have individual receipts, never a cross-action transaction. Calls obey the session's Tools policy.";
+
+pub const RECEIPT_DESCRIPTION: &str = "Resolve an uncertain action without running code. Supply its original operation and domain from live help. unknown does not prove failure; never retry under a new ID blindly.";
+
+pub const STATUS_DESCRIPTION: &str = "This Cowboy session in one call: status, queue/draft counts, placement, and whether managed agent calls are enabled. No arguments.";
+
+pub const READ_DESCRIPTION: &str = "Read Cowboy state and preferences. Pass help:'index' for on-demand APIs, or code: the body of async ({cowboy}) => { CODE }. Await calls, return selected JSON. TS/JS; no network/files; 16 calls, result16KiB, timeout_ms<=60000. Full SDK: cowboy://sdk/v1. Errors have .code.";
+
+/// Short server instructions, sent once at MCP initialization.
+pub const INSTRUCTIONS: &str = "Prefer Cowboy MCP for Cowboy state/control; CLI is a fallback. Compose reads in one cowboy_read; discover domain help only when needed and reuse its revision. cowboy_status needs no program.";
 
 const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const SDK_URI: &str = "cowboy://sdk/v1";
@@ -151,10 +162,7 @@ fn action(name: &str, arguments: &Value) -> Result<Action, String> {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.')
             || topic.len() > 64
         {
-            return Err(format!(
-                "invalid help topic; topics: index, {}",
-                crate::agent_api::HELP_TOPICS.join(", ")
-            ));
+            return Err("invalid help topic; help:'index' lists the topics".into());
         }
         return Ok(Action::AgentRead {
             code: format!(

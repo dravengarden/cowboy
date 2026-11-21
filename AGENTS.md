@@ -14,8 +14,9 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
 - Run Rust, Bun, build, lint, and test commands from the repository root in
   the pinned shell, for example `nix develop -c just check-compact`. Ordinary
   interactive Cargo commands retain incremental state; the complete gate avoids
-  growing another incremental generation. Keep sccache opt-in until its
-  cross-worktree Rust hit rate is proven on the active host. Do not use host
+  growing another incremental generation. `check-compact` shares one sccache
+  across worktrees (2026-11-21 on Hawk: a fresh worktree's cold gate hit 56%,
+  996s to 893s); interactive Cargo commands keep incremental state instead. Do not use host
   `cargo` or `bun` as a preliminary check; a missing tool or stale Rustup linker
   wrapper is an environment failure, not a product-code failure.
 - Keep the gate cheap to rerun. A rerun without source changes must not
@@ -64,6 +65,10 @@ require the exact successful build receipt and published SideStore version.
   unpublished successful revision until the task pushes it or deploys a
   descendant revert. `/etc/nixos` and Columbus stable checkouts are never
   deployment sources.
+- Release outputs do not rerun the Rust suite (`checks.cowboy-tests` keeps it
+  hermetic). Build a release only from the exact commit whose complete gate
+  passed; after merging or rebasing onto newer `main`, rerun the gate on the
+  merged commit before building it.
 - Resident Machine fixes use `.#cowboy-machine-host-release` to retain the
   separately accepted worker/Code/Zed bundle pinned by the `cowboy-workers`
   flake input. Its source and exact generation remain in the artifact's

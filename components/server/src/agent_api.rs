@@ -4,17 +4,23 @@
 //! The agent reaches it through the parent-scoped managed-call gateway that
 //! every ordinary session already has (`COWBOY_CALL_CONTEXT`), so it adds no
 //! credential: the Controller re-derives authority from the live parent worker
-//! for every action. `cowboy mcp` (see [`mcp`]) is a stdio MCP server with no
+//! for every action. `cowboy mcp` (see [`cowboy::agent_mcp`]) is a stdio MCP server with no
 //! background traffic; one `cowboy_read` program composes many reads inside a
 //! contained runtime beside the Controller's state and returns only its result.
+//!
+//! The catalog lives in the server crate because only the Controller serves
+//! it; the base crate keeps just the stable resident tool descriptions that
+//! `cowboy mcp` advertises ([`cowboy::agent_mcp`]).
 
 pub mod control;
-#[cfg(unix)]
-pub mod mcp;
+
+pub use cowboy::agent_mcp::{
+    EXECUTE_DESCRIPTION, INSTRUCTIONS, READ_DESCRIPTION, RECEIPT_DESCRIPTION, STATUS_DESCRIPTION,
+};
 
 /// Model-facing API identity; bumped on any incompatible SDK change.
 pub const API_VERSION: &str = "cowboy-ts-v1";
-pub use cowboy_wire::agent_api::{DEFAULT_TIMEOUT_MS, MAX_SOURCE_BYTES, STARTUP_MARGIN_MS};
+pub use cowboy::agent_api_limits::{DEFAULT_TIMEOUT_MS, MAX_SOURCE_BYTES, STARTUP_MARGIN_MS};
 /// The JSON a program returns to the model, and its console log.
 pub const MAX_RESULT_BYTES: usize = 16 * 1024;
 pub const MAX_LOG_BYTES: usize = 4 * 1024;
@@ -114,9 +120,6 @@ pub const INVOKE_OPERATIONS: &[&str] = &[
     "accounts.transition_reconcile",
     "receipts.get",
 ];
-
-pub const EXECUTE_DESCRIPTION: &str = "Perform one scoped Cowboy action; discover arguments with cowboy_read(help). action + arguments, and a stable operation ID for writes. Reuse identical input/ID after uncertainty; query cowboy_receipt. Actions have individual receipts, never a cross-action transaction. Calls obey the session's Tools policy.";
-pub const RECEIPT_DESCRIPTION: &str = "Resolve an uncertain action without running code. Supply its original operation and domain from live help. unknown does not prove failure; never retry under a new ID blindly.";
 
 const SUPERAGENT_SDK: &str = r#"
 // Setup: preferences.get('superagent'), then preferences.update with scope:'superagent',
@@ -803,13 +806,6 @@ type Node = {id?:Id;fallback?:string} & (
 // the person taps Run, on admitted desktop browsers only. Imports: react, react-dom/client, three, @cowboy/dom
 // ({useSend, images}: images[key] is a local URL). Prefer `app` unless you need canvas/WebGL or custom DOM.
 "##;
-
-pub const STATUS_DESCRIPTION: &str = "This Cowboy session in one call: status, queue/draft counts, placement, and whether managed agent calls are enabled. No arguments.";
-
-pub const READ_DESCRIPTION: &str = "Read Cowboy state and preferences. Pass help:'index' for on-demand APIs, or code: the body of async ({cowboy}) => { CODE }. Await calls, return selected JSON. TS/JS; no network/files; 16 calls, result16KiB, timeout_ms<=60000. Full SDK: cowboy://sdk/v1. Errors have .code.";
-
-/// Short server instructions, sent once at MCP initialization.
-pub const INSTRUCTIONS: &str = "Prefer Cowboy MCP for Cowboy state/control; CLI is a fallback. Compose reads in one cowboy_read; discover domain help only when needed and reuse its revision. cowboy_status needs no program.";
 
 #[cfg(test)]
 mod tests {
