@@ -114,7 +114,6 @@ pub const INVOKE_OPERATIONS: &[&str] = &[
     "accounts.login_start",
     "accounts.login_cancel",
     "accounts.login_cancel_request",
-    "accounts.adopt_legacy",
     "accounts.reconcile",
     "accounts.transition_plan",
     "accounts.transition_reconcile",
@@ -198,12 +197,6 @@ pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login.
 // Codex/Grok subscription sign-in runs on ONE chosen Machine but lands in the account's Service vault:
 // every Machine runs the account's sessions; refreshes are Service compare-and-swap. Claude named
 // accounts stay native per Machine and run only where the host runtime policy admits Claude (OVH).
-// Upgrade a legacy card to a named account without signing in again (Service-only copy, then the
-// legacy credential is wiped everywhere): cowboy_execute({action:"accounts.adopt_legacy",operation,
-// arguments:{card}}); card openai|xai|deepseek (anthropic: legacy_credential_expired). Account id = the
-// card's browser key; label, browser and share move; it becomes the default of its scope.
-// list().legacy_adoption is {card:{provider_id,state:available|resumable|completed,account_id}}.
-// Replay the SAME operation to resume. Receipt: cowboy_receipt({domain:"adoptions",operation}).
 // Antigravity (named-only) accounts: list().account_controls.accounts[] is {account_id,provider_id,admitted,
 // state:ok|verification_required|location_unsupported|rate_limited|suspended|blocked|unknown_refusal|needs_attention,
 // reason,until_ms,revision,turn:{session_id,turn_id,state:reserved|may_have_dispatched}|null,

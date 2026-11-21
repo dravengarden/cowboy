@@ -8,6 +8,11 @@
 //! before the wipe reached it is still promoted, into the account: each move
 //! is recorded beside the vault and a refresh of exactly that generation is
 //! redirected to the account's compare-and-swap (`legacy_move`).
+//!
+//! Adoption retired with the legacy cards (`docs/legacy-card-retirement.md`).
+//! The journals it wrote and their fence and rotation route remain: a Machine
+//! that was offline during an adoption may still propose a rotation of a
+//! moved generation. The writer stays only to produce journals in tests.
 use super::*;
 
 const MOVES: &str = "legacy-moves";
@@ -28,6 +33,7 @@ pub struct LegacyMove {
 
 /// The account entries the move committed (empty when the account already
 /// held a Ready credential) and the root wipes to distribute.
+#[cfg(test)]
 #[derive(Debug, Default)]
 pub struct LegacyMoveOutcome {
     pub account: Vec<ProviderAuthenticationStatus>,
@@ -74,6 +80,7 @@ impl ProviderAuthService {
         Ok(())
     }
 
+    #[cfg(test)]
     fn write_move(&self, providers: &[String], moved: &LegacyMove) -> Result<()> {
         crate::provider_account::prepare_private_directory(&self.root.join(MOVES))?;
         let bytes = serde_json::to_vec(moved)?;
@@ -86,6 +93,7 @@ impl ProviderAuthService {
     /// Move the root vault's Ready credential of `packages`' scope into the
     /// named `account` vault (unless that already holds a Ready credential:
     /// a replay never overwrites it) and wipe every root entry of the scope.
+    #[cfg(test)]
     pub fn move_root_scope_into(
         &self,
         account: &Self,

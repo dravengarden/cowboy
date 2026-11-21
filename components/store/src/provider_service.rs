@@ -45,7 +45,7 @@ static ATOMIC_WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub mod grants;
 mod legacy_moves;
-pub use legacy_moves::{LegacyMove, LegacyMoveOutcome};
+pub use legacy_moves::LegacyMove;
 mod portable_accounts;
 mod scope_adoption;
 

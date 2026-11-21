@@ -5,7 +5,6 @@ use serde_json::{Value, json};
 
 pub(super) mod browser;
 pub(super) mod controls;
-pub(super) mod legacy_adoption;
 pub(super) mod lifecycle;
 pub(super) mod login;
 pub(super) mod native_generation;
@@ -177,8 +176,6 @@ pub(super) async fn read_value(state: &Arc<AppState>, owner: &str) -> Result<Val
         "portable_providers":state.provider_catalog.portable_account_providers(),
         // Subscriptions sign in once on any Machine; the account vault serves every Machine.
         "subscription_providers":state.provider_catalog.subscription_account_providers(),
-        // Legacy default cards that move into a named account without a new sign-in.
-        "legacy_adoption":legacy_adoption::cards_value(state, owner, &registry),
         "portable_scopes":portable_scopes(state),"portable_credentials":portable_credentials(state, &registry),
         // The Service gate of the optional Machine browser (`accounts.machine_browser`).
         "machine_browser":if browser::gate_open(state) {"enabled"} else {"not_enabled"},

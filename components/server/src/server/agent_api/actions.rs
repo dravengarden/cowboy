@@ -651,9 +651,6 @@ async fn execute(
         "accounts.login_cancel_request" => {
             super::account_actions::cancel_request(state, meta, args).await
         }
-        "accounts.adopt_legacy" => {
-            super::account_actions::adopt_legacy(state, meta, args, operation).await
-        }
         "accounts.login_cancel" => {
             if args.as_object().is_none_or(|args| !args.is_empty()) {
                 return Err("invalid_argument");
@@ -860,9 +857,6 @@ async fn receipt(
         "control" => Ok(success(
             super::control::receipt(state, meta, &input.operation).await?,
         )),
-        "adoptions" => {
-            super::account_actions::adoption_receipt(state, meta, &input.operation).await
-        }
         "logins" => {
             let owner = account_owner(state, meta).await?;
             Ok(success(
