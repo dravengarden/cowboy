@@ -569,8 +569,10 @@ are compiled under the store crate's `test-support` feature (the base crate's
 dev-dependency enables it). The 8-module store cycle, the 6-module Plugin
 cycle and the 4-module Hub cycle are unchanged, `tools/check-module-layers.ts`
 now covers `cowboy_store`, and `migrations/` stay byte-identical. The split
-changes `Cargo.toml`, `Cargo.lock`, `build.rs` and worker-input paths, so it
-shipped as one worker-generation maintenance.
+changes `Cargo.toml`, `Cargo.lock`, the build script and worker-input paths,
+so it lands with a `cowboy-workers` pin advance as one worker-generation
+maintenance (pending when this was written; the activation receipt records
+completion).
 
 7.3 landed on 2026-11-06 with one deviation: the 98 unreferenced releases
 moved to a single `components/registry-archive.json` rather than one file per

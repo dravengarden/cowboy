@@ -126,6 +126,12 @@
         (pkgs.lib.fileset.fileFilter (file:
           file.name == "host.json" || file.hasExt "js" || file.hasExt "css"
         ) ./plugins)
+        # components/store/build.rs bundles collector JSON (for example
+        # portable-account.json) with the host, so the Nix source must too.
+        (pkgs.lib.fileset.unions (map
+          (id: pkgs.lib.fileset.fileFilter (file: file.hasExt "json") (./plugins + "/${id}/collector"))
+          (builtins.filter (id: builtins.pathExists (./plugins + "/${id}/collector"))
+            (builtins.attrNames (builtins.readDir ./plugins)))))
       ];
 
       # Backend and frontend are independent deployment artifacts. Keep this
@@ -283,12 +289,14 @@
         ./components/store/src/lib.rs
         ./worker-generation.txt
         ./src/acp.rs
+        ./src/acp_model_usage.rs
+        ./src/acp_subagent_routing.rs
         ./src/acp_process.rs
         ./src/acp_subagents.rs
         ./components/store/src/agent_model.rs
         # The worker's prompt-origin tags and echoed-image references.
         ./components/store/src/prompt_origin.rs
-        ./components/store/src/artifacts.rs
+        ./components/store/src/artifacts/echo.rs
         ./src/agent_sink.rs
         ./src/native_configuration.rs
         ./src/bin/cowboy-codex-app-server.rs
@@ -920,6 +928,8 @@
         test -e ${cowboy-src}/components/store/build.rs
         test -e ${cowboy-src}/plugins/grok/host.json
         test -e ${cowboy-src}/plugins/grok/collector/index.js
+        test -e ${cowboy-src}/plugins/grok/collector/portable-account.json
+        test -e ${cowboy-src}/plugins/codex/collector/portable-account.json
         test ! -e ${cowboy-src}/plugins/grok/ui/index.js
         test -e ${cowboy-src}/examples/authentication/password/host.json
         test -e ${cowboy-src}/examples/authentication/password/plugin.json
