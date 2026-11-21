@@ -10,9 +10,10 @@ import {
 import type { ConfigOption } from "./protocol";
 import {
   activeRunConfigPreset,
+  type RunConfigDraft,
   runConfigCurrentTitle,
   runConfigDraftChanges,
-  runConfigDraftValue,
+  runConfigDraftEdit,
   runConfigPresetChanges,
   runConfigPresets,
   runConfigSummary,
@@ -367,12 +368,14 @@ test("a resumed Fable 5.2 session keeps its preset under the Provider's exact eq
 
   // Staging another model then choosing the card keeps the live alias, so
   // Apply never asks for a spelling the resumed session does not offer.
-  const staged = withRunConfigDraft(resumed, { model: "opus" });
-  const draft: Record<string, string | boolean> = { model: "opus" };
+  let draft: RunConfigDraft = { model: "opus" };
+  const staged = withRunConfigDraft(resumed, draft);
   for (const change of runConfigPresetChanges(presets[0]!, staged)) {
-    draft[change.configId] = runConfigDraftValue(resumed, change.configId, change.value);
+    draft = runConfigDraftEdit(draft, resumed, change.configId, change.value);
   }
-  assertEquals(draft.model, "fable");
-  assertEquals(runConfigDraftChanges(resumed, draft), []);
-  assertEquals(runConfigDraftValue(resumed, "model", "opus"), "opus");
+  assertEquals(draft, {});
+  // A later live change is not overwritten by a stored alias.
+  const changedLive = [{ ...resumed[0]!, currentValue: "opus", _meta: undefined }, resumed[1]!];
+  assertEquals(runConfigDraftChanges(changedLive, draft), []);
+  assertEquals(runConfigDraftEdit({}, resumed, "model", "opus"), { model: "opus" });
 });
