@@ -135,20 +135,29 @@ export function usageResetSchedule(
   return provider ? snapshot?.reset_schedules?.[provider] : undefined;
 }
 
+/** The grant a reset would spend: the collector's canonical nearest ID when
+ * it reports one among the available credits, otherwise the collector's own
+ * order (expiry, then grant time, then ID). */
 export function nearestAvailableResetCredit(
   usage: ProviderUsage,
 ): JsonRecord | undefined {
   const root = record(usage.rate_limits?.rateLimitResetCredits);
   if (!Array.isArray(root?.credits)) return undefined;
-  return root.credits
+  const available = root.credits
     .map(record)
     .filter((credit): credit is JsonRecord =>
       credit?.status === "available" && typeof credit.id === "string"
-    )
-    .sort((left, right) =>
-      (num(left.expiresAt) ?? Number.MAX_SAFE_INTEGER) -
-      (num(right.expiresAt) ?? Number.MAX_SAFE_INTEGER)
-    )[0];
+    );
+  const canonical = typeof root.nearestCreditId === "string"
+    ? available.find((credit) => credit.id === root.nearestCreditId)
+    : undefined;
+  if (canonical) return canonical;
+  const order = (value: unknown) => num(value) ?? Number.MAX_SAFE_INTEGER;
+  return available.sort((left, right) =>
+    order(left.expiresAt) - order(right.expiresAt) ||
+    order(left.grantedAt) - order(right.grantedAt) ||
+    String(left.id).localeCompare(String(right.id))
+  )[0];
 }
 
 export interface UsageLimit {

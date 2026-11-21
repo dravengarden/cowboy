@@ -157,6 +157,23 @@ export async function consumeNearestReset(
     if (code !== "reset_failed") throw new ResetOutcomeUnknown(UNKNOWN_OUTCOME);
   }
   await expectHttpOk(response, "Could not use the nearest reset");
+  if (target.kind === "account") await expectNamedResetSpent(response, expectedCreditId);
+}
+
+/** A named reset succeeded only if its body names a closed outcome for the
+ * confirmed grant; an unreadable or different success may have spent
+ * another credit, so it is unknown and locks the dialog. */
+async function expectNamedResetSpent(
+  response: Response,
+  expectedCreditId: string | undefined,
+): Promise<void> {
+  const body = await response
+    .json()
+    .catch(() => undefined) as { outcome?: unknown; credit_id?: unknown } | undefined;
+  const closed = body?.outcome === "reset" || body?.outcome === "already_used";
+  if (!closed || expectedCreditId === undefined || body?.credit_id !== expectedCreditId) {
+    throw new ResetOutcomeUnknown(UNKNOWN_OUTCOME);
+  }
 }
 
 export async function scheduleNearestReset(
