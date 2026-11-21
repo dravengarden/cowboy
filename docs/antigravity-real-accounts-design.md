@@ -1263,6 +1263,22 @@ Machine folds buckets sharing one quota into a single "Gemini models" row.
 The catalogue states no window, so the row has a reset time but no window
 label. Without the catalogue the report is the summary alone, as before.
 
+**Client identity decides the summary (2026-11-21).** The summary's groups
+depend on the request's `User-Agent`, not on the account: a capture of
+`agy` 1.5.9's own request (body `{"project":"aicode-consumers"}`, user agent
+`antigravity/cli/1.5.9 (aidev_client; os_type=linux; arch=amd64; cl=…;
+auth_method=consumer)`) returned "Gemini Models" for a free account, and for
+Husky the same token answers three groups as soon as the user agent starts
+with `antigravity/cli/<version>`: "Gemini Models" (`gemini-weekly`,
+`gemini-5h`), "Claude and GPT models" (`3p-weekly`, `3p-5h`) and "Gemini 4
+Argon" (`gemini-argon-wtu-weekly`, Pro's separate Argon quota). `antigravity`,
+`antigravity/cli`, `antigravity/1.5.9` and `antigravity/ide/1.5.9` get only
+the third-party group. The helper therefore asks the pinned `agy` for its
+version (`agy --version`, beside print mode, at most 3 s) and sends
+`antigravity/cli/<version>` with both requests, the identity prefix `agy`
+itself sends (owner-approved); without a version it sends `antigravity` as
+before. With the summary's Gemini groups the catalogue group is not added.
+
 **Egress decides location (2026-11-21).** Gemini models answer
 `FAILED_PRECONDITION` "User location is not supported for the API use" when
 `agy` reaches Google over the host's IPv6 address, while the same account,
