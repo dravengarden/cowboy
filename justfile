@@ -821,8 +821,15 @@ check: toolchain-check fmt structure-check docs-index-check protocol-contract-ch
 # Real diagnostic CLI, typed OTel fixture, query/metrics/tail/watch/RPC contracts.
 # An optional explicit --ssh in the standalone tool adds same-host SSH acceptance.
 logs-conformance:
+    #!/usr/bin/env bash
+    set -euo pipefail
     cargo build --locked --bin cowboy
-    python3 tools/logs_conformance.py --cowboy target/debug/cowboy --receipt target/logs-conformance.json
+    # Reuse the shared test graph's library executable; the tool's own
+    # root-only `cargo test --lib` selection would recompile the workspace.
+    fixture="$(env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test {{rust_test_args}} --no-run --message-format=json-render-diagnostics |
+      jq -r 'select(.reason == "compiler-artifact" and .target.name == "cowboy" and .profile.test and (.target.kind | index("lib"))) | .executable // empty')"
+    test -x "$fixture"
+    python3 tools/logs_conformance.py --cowboy target/debug/cowboy --test-executable "$fixture" --receipt target/logs-conformance.json
 
 # Run the complete quality gate without growing workspace incremental caches.
 # sccache stays opt-in until cross-worktree Rust cache hits are proven locally.
