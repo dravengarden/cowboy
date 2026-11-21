@@ -1,4 +1,5 @@
 {
   "schema": 1,
-  "token_refresh": "request"
+  "token_refresh": "request",
+  "reset_token_refresh": "request"
 }

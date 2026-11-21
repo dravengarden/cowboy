@@ -4,7 +4,10 @@ import claudeCodeHost from "./claude-code/host.json" with { type: "json" };
 import { accountView, KNOWN_PLANS } from "./claude-code/collector/index.js";
 import { collectorTargets, group } from "./claude-deepseek/collector/index.js";
 import {
+  appServerOptions as codexAppServerOptions,
   collect as collectCodex,
+  REFRESH_REFUSED_URL as CODEX_REFRESH_REFUSED_URL,
+  reset as resetCodex,
   isTokenExpired as codexTokenExpired,
   nearestCredit as nearestCodexCredit,
   readLines as codexLines,
@@ -451,4 +454,53 @@ test("Grok declares refresh-free usage and reaches only its read endpoints", () 
     1_800_000,
     "token expiry",
   );
+});
+
+/* The app-server refreshes an expired access token on its own
+ * (`proactive_expiry`, verified offline against 0.169.1), so a refresh-free
+ * request's app-server points its refresh endpoint at a port nothing listens
+ * on, and a rejected token is authentication required. */
+test("A refresh-free Codex request can reach no refresh endpoint", () => {
+  equal(codexAppServerOptions(true), {}, "Service account unchanged");
+  equal(
+    codexAppServerOptions(false),
+    { env: { CODEX_REFRESH_TOKEN_URL_OVERRIDE: CODEX_REFRESH_REFUSED_URL } },
+    "refresh refused",
+  );
+  equal(new URL(CODEX_REFRESH_REFUSED_URL).port, "0", "no listener");
+});
+
+test("A refresh-free Codex read and reset report authentication required", async () => {
+  const unauthorized = new Error(
+    'account/read: {"code":-32603,"message":"workspace routing discovery unauthorized (401)"}',
+  );
+  let message;
+  await collectCodex(fakeCodex({ "account/read": [unauthorized] }), {
+    token_refresh: false,
+  }).catch((error) => {
+    message = error.message;
+  });
+  equal(message.includes("authentication required"), true, "collect");
+  const reset = fakeCodex({ "account/rateLimits/read": [expired] });
+  let failure;
+  await resetCodex(reset, {
+    token_refresh: false,
+    idempotency_key: "cowboy-reset-1",
+    expected_credit_id: "credit-1",
+  }).catch((error) => {
+    failure = error;
+  });
+  equal(failure.message.includes("authentication required"), true, "reset");
+  equal(failure.callMayHaveReachedProvider, false, "nothing was spent");
+  equal(
+    reset.calls.map(([method]) => method),
+    ["account/rateLimits/read"],
+    "no consume, no refresh",
+  );
+  // A Service account's reset keeps its error.
+  let other;
+  await resetCodex(fakeCodex({ "account/rateLimits/read": [expired] }), {}).catch((error) => {
+    other = error;
+  });
+  equal(other === expired, true, "unchanged without token_refresh");
 });
