@@ -588,8 +588,16 @@ pub(super) fn inherited_settings(
 /// Whether a call may run in the caller's own agent family: an image call
 /// with `self_images` on, or a context ask, which reads recorded history for
 /// the caller rather than giving it a second opinion.
+/// Whether a request may run on the caller's own Provider family. Images
+/// follow `self_images`; every other call may, after other vendors (`choose`
+/// orders them first), and a review never runs the caller's own model
+/// (`selection::exclude_caller_model`).
 pub(super) fn own_family(policy: &CallsPolicy, request: &crate::managed_calls::Request) -> bool {
-    (request.purpose.is_image() && policy.self_images) || !request.context.sessions.is_empty()
+    if request.purpose.is_image() {
+        policy.self_images
+    } else {
+        true
+    }
 }
 
 /// A refusal no approval can answer, checked before any is asked for.

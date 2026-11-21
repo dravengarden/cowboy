@@ -176,6 +176,34 @@ The ledger already records preset, risk and usage. After release, compare
 weekly tokens by tier and re-run a blind pilot on a sample of routine reviews
 before tightening further.
 
+## Same vendor, never the same model
+
+A caller may use its own vendor after the others (Auto tries other vendors
+first). A review excludes the reviewer family of the caller's current model
+(from its live configuration); an unknown caller model offers no same-vendor
+reviewer, and an empty choice is refused `same_model`. Capabilities mark such a
+Provider `same_vendor: true` and publish its routing without the caller's
+model.
+
+## Logs and metrics
+
+Every routing decision and every finished review leaves a journal record
+(Controller stderr → journald → VictoriaLogs), counts and identifiers only:
+
+| Event | When | Fields |
+| --- | --- | --- |
+| `cowboy.review.routed` | admission picked or refused a reviewer preset | `request_id`, `purpose`, `provider`, `same_vendor`, `risk`, `explicit_preset`, `preset`, `outcome` (`automatic`, `explicit`, or the refusal code) |
+| `cowboy.review.finished` | a review or design review reached a terminal state | `call_id`, `parent_session_id`, `provider`, `purpose`, `state`, `error`, `preset`, `model`, `effort`, `risk`, `reused`, token counts (total, input, cached, uncached, output, reasoning), `duration_ms`, `verdict`, `review_complete`, `findings` and per-severity counts |
+
+The ledger keeps the full record; `models/field/` aggregates it with
+`.agents/skills/model-intel/scripts/field.ts`. VictoriaLogs
+(`http://192.168.0.96:6302`) stores the raw line; unpack it with logfmt:
+
+```text
+_time:7d _stream:{_SYSTEMD_UNIT="cowboy.service"} "cowboy.review.routed" | unpack_logfmt | stats by (provider, risk, outcome) count() calls
+_time:7d _stream:{_SYSTEMD_UNIT="cowboy.service"} "cowboy.review.finished" | unpack_logfmt | stats by (model, effort, risk) count() reviews, median(total_tokens) tokens, median(duration_ms) ms, avg(findings) findings
+```
+
 ## Native coverage and residual gap
 
 Codex and Claude choose their own model only for their own turns; neither

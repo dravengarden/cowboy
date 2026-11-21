@@ -105,10 +105,6 @@ pub(super) fn order(
         Level::Routine => &tiers.routine,
         Level::Economy => tiers.economy.as_ref().unwrap_or(&tiers.routine),
     };
-    let automatic = tier
-        .auto
-        .iter()
-        .find_map(|row| pool.iter().find(|preset| row.matches(preset)))?;
     let bounds = if level == Level::High {
         None
     } else {
@@ -124,6 +120,29 @@ pub(super) fn order(
                     .chain(tier.auto.iter())
                     .any(|row| row.matches(preset))
         })
+    };
+    let rows = || {
+        [&tiers.high, &tiers.routine]
+            .into_iter()
+            .chain(tiers.economy.as_ref())
+            .flat_map(|tier| tier.auto.iter().chain(&tier.allow))
+    };
+    // Rows naming an exact model bind the table to known generations; an
+    // unknown generation keeps the legacy order.
+    let known = !rows().any(|row| row.model.is_some())
+        || rows().any(|row| row.model.is_some() && pool.iter().any(|preset| row.matches(preset)));
+    if !known {
+        return None;
+    }
+    // The tier's automatic row, else (for example when the caller's own model
+    // was excluded) the strongest preset the tier still admits.
+    let Some(automatic) = tier
+        .auto
+        .iter()
+        .find_map(|row| pool.iter().find(|preset| row.matches(preset)))
+        .or_else(|| pool.iter().find(|preset| admitted(preset)))
+    else {
+        return Some(Vec::new());
     };
     let mut ordered = vec![automatic.clone()];
     ordered.extend(

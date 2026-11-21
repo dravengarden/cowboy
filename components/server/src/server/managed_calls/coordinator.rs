@@ -674,11 +674,12 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
         )
         .await;
         // The session's policy decides first; readiness explains the rest.
-        let reason = if agent_tools::same_family(provider, &meta.provider) {
-            Some("same_agent")
-        } else if !policy.enabled {
+        // The caller's own family is callable after other vendors; reviews
+        // exclude its own model below.
+        let own = agent_tools::same_family(provider, &meta.provider);
+        let reason = if !policy.enabled {
             Some("calls_disabled")
-        } else if target.is_none() {
+        } else if target.is_none() && !own {
             Some("policy_denied")
         } else {
             readiness.reason
@@ -724,6 +725,13 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
         }
         // What admission ranks: the generation this runtime would launch.
         let runnable_presets = readiness.presets(state, provider);
+        let reviewer_presets = super::selection::exclude_caller_model(
+            &runnable_presets,
+            own,
+            super::selection::caller_family(
+                state.supervisor.observed_configuration(&meta.id).as_ref(),
+            ),
+        );
         providers.push(json!({
             "id": provider,
             "alias": if provider == "codex" { "codex" } else { "claude" },
@@ -738,8 +746,9 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             "quota_account": if readiness.account.is_default() { readiness.generation.as_ref().and_then(|generation| state.provider_catalog.account_usage_provider(provider, &generation.version, &generation.digest)) } else { named.push(readiness.account.clone()); Some(readiness.account.as_str().to_owned()) },
             // `--preset` choices; the session's Tools choose otherwise.
             "presets": runnable_presets,
-            "review_candidates": super::selection::candidates(&runnable_presets, provider, &policy.review, false).iter().filter_map(|p| p["id"].as_str()).collect::<Vec<_>>(),
-            "review_routing": super::selection::routing_view(&runnable_presets, provider, &policy.review),
+            "review_candidates": super::selection::candidates(&reviewer_presets, provider, &policy.review, false).iter().filter_map(|p| p["id"].as_str()).collect::<Vec<_>>(),
+            "review_routing": super::selection::routing_view(&reviewer_presets, provider, &policy.review),
+            "same_vendor": own,
             "access": ["read-only"],
             "output": if readiness.structured_output { json!(["text","json_schema"]) } else { json!(["text"]) },
             "conversation": ["fresh","continue"],
@@ -962,12 +971,21 @@ async fn start(
     {
         // Generic Tools pins apply to ordinary calls. Review uses its tier's
         // ordered list; an explicit signed preset must be one the tier admits.
+        let own = agent_tools::same_family(&target.agent, &meta.provider);
+        let reviewers = super::selection::exclude_caller_model(
+            &runnable,
+            own,
+            super::selection::caller_family(
+                state.supervisor.observed_configuration(&meta.id).as_ref(),
+            ),
+        );
         target.preset = match super::selection::admit(
             &request,
-            &runnable,
+            &reviewers,
             &target.agent,
             &policy.review,
             preset,
+            own,
         ) {
             Ok(selected) => Some(selected),
             Err(refused) => return refused,

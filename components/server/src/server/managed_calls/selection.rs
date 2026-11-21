@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 mod routing;
 
-pub(super) const GUIDANCE: &str = "For Review/Design Review, the Controller picks the reviewer from providers[].review_routing by declared risk; cost matters. Declare risk from the review root's own guidance (its AGENTS.md/CLAUDE.md Review risk section) and the affected paths: risk:'high' (security, permissions, concurrency, persistence, deletion, money, large refactors, or a risk area that guidance names) needs a reason and gets the strongest reviewer (Astra Max; Claude starts at Opus, Fable only by explicit preset with high risk). Everything else is routine (Sol Max; Claude Opus). Omit preset unless the user named one; a routine review refuses a stronger preset (preset_outside_tier), and a user-named stronger preset is sent with risk:'high' and that request as its reason. Confirm named fixes with a cheaper preset from review_routing.cheaper, or continue the same review child, instead of a fresh full review. Evidence and test-run audits are analysis calls, not reviews; design and contract checks stay design reviews. Costs are measured tokens, not quota; inspect quota windows and reset times before choosing a Provider. review_candidates is the routine order for older callers. No silent fallback after a failed call: diagnose before retrying. usedPercent is USED; resetsAt is epoch seconds. Large quota payloads: use cowboy.usage.read.";
+pub(super) const GUIDANCE: &str = "For Review/Design Review, the Controller picks the reviewer from providers[].review_routing by declared risk; cost matters. Declare risk from the review root's own guidance (its AGENTS.md/CLAUDE.md Review risk section) and the affected paths: risk:'high' (security, permissions, concurrency, persistence, deletion, money, large refactors, or a risk area that guidance names) needs a reason and gets the strongest reviewer (Astra Max; Claude starts at Opus, Fable only by explicit preset with high risk). Everything else is routine (Sol Max; Claude Opus). Prefer another vendor's reviewer (an Auto call tries other vendors first); the caller's own vendor is allowed, but a review never runs the caller's own model (same_model). Omit preset unless the user named one; a routine review refuses a stronger preset (preset_outside_tier), and a user-named stronger preset is sent with risk:'high' and that request as its reason. Confirm named fixes with a cheaper preset from review_routing.cheaper, or continue the same review child, instead of a fresh full review. Evidence and test-run audits are analysis calls, not reviews; design and contract checks stay design reviews. Costs are measured tokens, not quota; inspect quota windows and reset times before choosing a Provider. review_candidates is the routine order for older callers. No silent fallback after a failed call: diagnose before retrying. usedPercent is USED; resetsAt is epoch seconds. Large quota payloads: use cowboy.usage.read.";
 
 pub(super) fn family(model: &str) -> Option<&'static str> {
     // Signed presets may carry a context suffix such as `opus[1m]`.
@@ -80,6 +80,43 @@ pub(super) fn candidates(
         .unwrap_or_else(|| legacy(presets, provider, preference, high_risk))
 }
 
+/// The reviewer family of the model a session currently runs, if known.
+pub(super) fn caller_family(configuration: Option<&Value>) -> Option<&'static str> {
+    configuration?
+        .as_array()?
+        .iter()
+        .find(|option| option["id"] == "model")?
+        .get("currentValue")?
+        .as_str()
+        .and_then(family)
+}
+
+/// Runnable presets without the caller's own model. A review by the same
+/// model shares its blind spots, so a same-Provider reviewer must be another
+/// family; when the caller's model is unknown, no same-Provider reviewer is
+/// offered.
+pub(super) fn exclude_caller_model(
+    presets: &Value,
+    same_provider: bool,
+    caller: Option<&str>,
+) -> Value {
+    if !same_provider {
+        return presets.clone();
+    }
+    Value::Array(
+        presets
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|preset| {
+                let own = preset["values"]["model"].as_str().and_then(family);
+                caller.is_some() && own.is_some() && own != caller
+            })
+            .cloned()
+            .collect(),
+    )
+}
+
 /// A fresh review's preset at admission, or the refusal to return. A high
 /// tier needs a reason the caller wrote; the CLI fills an omitted reason
 /// with its own default, which is no reason.
@@ -89,18 +126,37 @@ pub(super) fn admit(
     provider: &str,
     preference: &super::super::agent_tools::ReviewPreferences,
     explicit: Option<&str>,
+    same_vendor: bool,
 ) -> Result<String, Value> {
+    let risk = request
+        .labels
+        .get(crate::managed_calls::review::RISK)
+        .map_or("undeclared", String::as_str);
+    let high_risk = risk == "high";
+    let decided = |outcome: &str, preset: Option<&str>| {
+        // Journal-retained (not evidence-only): routing is low volume and its
+        // refusals leave no ledger row, so this is their only record.
+        tracing::info!(
+            event_name = "cowboy.review.routed",
+            request_id = %request.request_id,
+            purpose = ?request.purpose,
+            provider,
+            same_vendor,
+            risk,
+            explicit_preset = explicit.unwrap_or(""),
+            preset = preset.unwrap_or(""),
+            outcome,
+            "review routed"
+        );
+    };
     let refuse = |code: &str, hint: String| {
+        decided(code, None);
         let mut refused = super::coordinator::error(code, "not_submitted");
         if !hint.is_empty() {
             refused["error"]["hint"] = json!(hint);
         }
         refused
     };
-    let high_risk = request
-        .labels
-        .get(crate::managed_calls::review::RISK)
-        .is_some_and(|risk| risk == "high");
     if high_risk
         && request
             .labels
@@ -114,17 +170,39 @@ pub(super) fn admit(
     }
     let choices = candidates(presets, provider, preference, high_risk);
     let all = reviewers(presets, provider, preference);
-    review_preset(&choices, &all, explicit).map_err(|code| {
-        let hint = if code == "preset_outside_tier" {
-            format!(
-                "this preset is stronger than a routine review needs; omit preset (automatic: {}), name a cheaper one, or declare risk:'high' with a reason",
-                choices.first().and_then(|choice| choice["id"].as_str()).unwrap_or("none")
-            )
-        } else {
-            String::new()
-        };
-        refuse(code, hint)
-    })
+    if same_vendor && (all.is_empty() || choices.is_empty()) {
+        return Err(refuse(
+            "same_model",
+            "a review never runs the caller's own model and this tier has no other model of this vendor; use another vendor's reviewer, or declare risk:'high' with a reason to name a stronger model of this vendor".into(),
+        ));
+    }
+    match review_preset(&choices, &all, explicit) {
+        Ok(preset) => {
+            decided(
+                if explicit.is_some() {
+                    "explicit"
+                } else {
+                    "automatic"
+                },
+                Some(&preset),
+            );
+            Ok(preset)
+        }
+        Err(code) => {
+            let hint = if code == "preset_outside_tier" {
+                format!(
+                    "this preset is stronger than a routine review needs; omit preset (automatic: {}), name a cheaper one, or declare risk:'high' with a reason",
+                    choices
+                        .first()
+                        .and_then(|choice| choice["id"].as_str())
+                        .unwrap_or("none")
+                )
+            } else {
+                String::new()
+            };
+            Err(refuse(code, hint))
+        }
+    }
 }
 
 /// Every reviewer preset the session's family lists admit, strongest first.
@@ -366,6 +444,82 @@ mod tests {
         assert_eq!(view["routine"]["preset"], "sol-max");
         assert_eq!(view["routine"]["cost"]["pilot"]["n"], 4);
         assert_eq!(view["high"]["preset"], "astra-max");
+    }
+
+    #[test]
+    fn a_same_vendor_review_excludes_the_callers_own_model() {
+        let options =
+            json!([{"id":"model","currentValue":"opus[1m]"},{"id":"effort","currentValue":"high"}]);
+        assert_eq!(caller_family(Some(&options)), Some("opus"));
+        assert_eq!(
+            caller_family(Some(&json!([{"id":"model","currentValue":"sonnet"}]))),
+            None
+        );
+        assert_eq!(caller_family(None), None);
+        let claude = json!([
+            {"id":"fable-max","values":{"model":"claude-fable-5-1[1m]","effort":"max"}},
+            {"id":"opus-high","values":{"model":"opus","effort":"high"}}
+        ]);
+        let ids = |v: Value| {
+            v.as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p["id"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ids(exclude_caller_model(&claude, true, Some("opus"))),
+            ["fable-max"]
+        );
+        assert_eq!(
+            ids(exclude_caller_model(&claude, false, Some("opus"))),
+            ["fable-max", "opus-high"]
+        );
+        // An unknown caller model offers no same-vendor reviewer.
+        assert!(ids(exclude_caller_model(&claude, true, None)).is_empty());
+        let preference = super::super::super::agent_tools::ReviewPreferences::default();
+        // An Opus caller's routine Claude review has no Opus reviewer left.
+        let request: crate::managed_calls::Request = serde_json::from_value(json!({
+            "schema":1,"request_id":"r","purpose":"review","instruction":"i",
+            "context":{"scope":"current-worktree"},"access":"read-only","conversation":{"mode":"fresh"}
+        })).unwrap();
+        let none = exclude_caller_model(&json!([claude[1].clone()]), true, Some("opus"));
+        let refused = admit(&request, &none, "claude-code", &preference, None, true).unwrap_err();
+        assert_eq!(refused["error"]["code"], "same_model");
+        let fable_only = exclude_caller_model(&claude, true, Some("opus"));
+        // Fable is not a routine Claude reviewer, so routine refuses it...
+        assert_eq!(
+            admit(
+                &request,
+                &fable_only,
+                "claude-code",
+                &preference,
+                Some("fable-max"),
+                true
+            )
+            .unwrap_err()["error"]["code"],
+            "same_model"
+        );
+        // ...while a high-risk review with a reason falls back to it.
+        let mut high = request.clone();
+        high.labels.insert("review_risk".into(), "high".into());
+        high.labels
+            .insert("selection_reason".into(), "persistence".into());
+        assert_eq!(
+            admit(&high, &fable_only, "claude-code", &preference, None, true).unwrap(),
+            "fable-max"
+        );
+        // A Sol caller's routine GPT review falls to the cheaper Astra preset.
+        let gpt = json!([
+            {"id":"astra-max","values":{"model":"gpt-6.2-astra","reasoning_effort":"max"}},
+            {"id":"astra-medium","values":{"model":"gpt-6.2-astra","reasoning_effort":"medium"}},
+            {"id":"sol-6-2-max","values":{"model":"gpt-6.2-sol","reasoning_effort":"max"}}
+        ]);
+        let without_sol = exclude_caller_model(&gpt, true, Some("sol"));
+        assert_eq!(
+            admit(&request, &without_sol, "codex", &preference, None, true).unwrap(),
+            "astra-medium"
+        );
     }
 
     #[test]

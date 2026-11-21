@@ -232,10 +232,13 @@ kind (`codex`, `claude-code`):
   It stores only the fields that differ; an empty override is removed, so the
   session follows later changes to its agent kind's defaults.
 
-An agent never calls its own family (`claude-code`/`claude-deepseek`;
-`codex`/`codex-deepseek`) for a second opinion: built-in defaults list only other
-families, stored settings are cleaned of the caller's family, and such a request
-is refused with `same_agent` (not a policy question, so no approval prompt). Image
+Since 2026-11-21 an agent may call its own family (`claude-code`/`claude-deepseek`;
+`codex`/`codex-deepseek`), but only after other vendors: settings still list
+only other families, and an Auto call tries them first, because another
+vendor's model shares fewer blind spots. A review never runs the caller's own
+model: a same-vendor review admits only another reviewer family (an Opus
+caller may be reviewed by Fable, never Opus), and is refused `same_model` when
+none is left or the caller's current model is unknown. Image
 calls are the exception, under the `images` and `self_images` switches of
 [call capabilities](call-capabilities.md). The Tools editor
 shows one card per callable agent with its switch and its presets as choices;

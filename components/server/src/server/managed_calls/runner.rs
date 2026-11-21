@@ -19,6 +19,7 @@ use crate::managed_calls::{Conversation, OutputFormat, Request};
 use crate::store::Store;
 
 mod configuration;
+mod outcome;
 
 const POLL: Duration = Duration::from_millis(500);
 /// A launch whose target never answers fails instead of waiting forever.
@@ -175,6 +176,7 @@ async fn advance(
     match store.advance_managed_call(previous, &next).await {
         Ok(advanced) => {
             if advanced {
+                outcome::record(&next);
                 state.managed_calls.notify();
             }
             advanced
@@ -1370,6 +1372,9 @@ async fn withdraw_unstarted(state: &AppState, store: &Store, record: &Record) ->
         .await
         .unwrap_or(false)
     {
+        if let Some(cancelled) = steps.last() {
+            outcome::record(cancelled);
+        }
         state.managed_calls.notify();
     }
     Some(Step::Again)
