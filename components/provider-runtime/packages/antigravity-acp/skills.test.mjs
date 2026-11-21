@@ -167,3 +167,20 @@ test("a skill slash command becomes the instruction to read and follow it", () =
   const offered = [{ type: "text", text: "/deploy now" }];
   assert.equal(expandSkillCommand(offered, skills, ["deploy"]), offered, "agy's command wins");
 });
+
+test("a managed projection lists no repository skills", async (t) => {
+  const { root, facade } = await fixture(t);
+  skill(join(root, ".agents", "skills"), "deploy", "---\nname: deploy\ndescription: Ship\n---");
+  let reported;
+  const projection = await buildProjection(facade, root, {
+    routing: "MANAGED ROUTING",
+    skills: false,
+    onSkills: (value) => {
+      reported = value;
+    },
+  });
+  assert.deepEqual(reported, []);
+  assert.match(projection, /<cowboy_routing>\nMANAGED ROUTING\n<\/cowboy_routing>/);
+  assert.ok(!projection.includes("<repository_skills>"));
+  assert.ok(!projection.includes("deploy"));
+});

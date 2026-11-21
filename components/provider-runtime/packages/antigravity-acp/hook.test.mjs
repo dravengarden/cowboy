@@ -115,7 +115,11 @@ test("malformed input is denied", () => {
 
 test("the hook process prints one decision and fails closed", () => {
   const run = (stdin) => {
-    const result = spawnSync(process.execPath, [hook], { input: stdin, encoding: "utf8" });
+    const result = spawnSync(process.execPath, [hook], {
+      input: stdin,
+      env: { ...process.env, COWBOY_HOOK_PROFILE: "ordinary" },
+      encoding: "utf8",
+    });
     assert.equal(result.status, 0);
     return JSON.parse(result.stdout).decision;
   };

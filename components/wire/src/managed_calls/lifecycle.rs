@@ -295,7 +295,10 @@ impl Record {
             && super::valid_id(&self.request_id)
             && super::valid_id(&self.child_session_id)
             && self.placement.validate()
-            && matches!(self.provider.as_str(), "codex" | "claude-code")
+            && matches!(
+                self.provider.as_str(),
+                "codex" | "claude-code" | "antigravity"
+            )
             && super::valid_labels(&self.labels)
             && valid_digest(&self.request_digest)
             && self.revision > 0

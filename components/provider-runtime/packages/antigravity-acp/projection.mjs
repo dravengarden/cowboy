@@ -124,9 +124,14 @@ async function readGuidance(facade, file, room, root) {
 
 /**
  * Build the projection for a session whose target directory is `cwd`;
- * `onSkills` receives the repository skills it lists.
+ * `onSkills` receives the repository skills it lists. A managed call passes
+ * its own `routing` and `skills: false`: it lists no repository skills.
  */
-export async function buildProjection(facade, cwd, { onSkills } = {}) {
+export async function buildProjection(
+  facade,
+  cwd,
+  { routing = ROUTING, onSkills, skills: listSkills = true } = {},
+) {
   const info = facade.connection.info ?? {};
   if (info.platformOs !== "linux") throw new Error("The target OS differs from the runtime OS");
   if (!posix.isAbsolute(cwd) || !inside(facade.root, cwd)) {
@@ -176,11 +181,13 @@ export async function buildProjection(facade, cwd, { onSkills } = {}) {
       guidance.push(`--- ${file} ---\n${text}${read.cut ? "\n[truncated]" : ""}`);
     }
   }
-  const skills = await discoverSkills(facade, guidanceDirectories(git.top, cwd), git.top ?? cwd);
+  const skills = listSkills
+    ? await discoverSkills(facade, guidanceDirectories(git.top, cwd), git.top ?? cwd)
+    : [];
   onSkills?.(skills);
   const sections = [
     "<cowboy_routing>",
-    ROUTING,
+    routing,
     "</cowboy_routing>",
     "<cowboy_environment>",
     ...environment,

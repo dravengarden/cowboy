@@ -356,3 +356,17 @@ fn managed_turn_usage_is_scoped_to_the_first_end_after_its_cursor() {
         Some(usage)
     );
 }
+
+#[tokio::test]
+async fn a_managed_prompt_is_never_an_owner_send() {
+    // An explicit dispatch clears an account's ended rate limit for every
+    // session; only an owner's send may do that.
+    let hub = Hub::new();
+    hub.create_session(child("child"));
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    hub.set_dispatch_tx(tx);
+    hub.set_status("child", Status::Running, None);
+    hub.submit_managed_prompt("child", "call-1", "question".into());
+    let req = rx.try_recv().expect("an idle child dispatches at once");
+    assert!(!req.explicit);
+}

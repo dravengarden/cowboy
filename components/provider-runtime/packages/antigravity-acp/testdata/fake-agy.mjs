@@ -38,7 +38,11 @@ for await (const line of createInterface({ input: process.stdin })) {
       id: message.id,
       result: {
         sessionId: "fake-session",
-        seen: { params: message.params, tools: tools.result.tools.map((tool) => tool.name) },
+        seen: {
+          params: message.params,
+          tools: tools.result.tools.map((tool) => tool.name),
+          hookProfile: process.env.COWBOY_HOOK_PROFILE ?? null,
+        },
       },
     });
   } else if (message.method === "session/prompt") {
@@ -97,7 +101,11 @@ for await (const line of createInterface({ input: process.stdin })) {
       logFile,
       `${stamp()}server.go:1323] Stream goroutine exited for ${sessionId}, sending completion signal\n`,
     );
-    send({ id: message.id, result: { stopReason: "end_turn" } });
+    // What agy saw of the prompt's `_meta` (Cowboy's managed round never).
+    send({
+      id: message.id,
+      result: { stopReason: "end_turn", seenMeta: message.params._meta ?? null },
+    });
   }
 }
 mcp?.kill();

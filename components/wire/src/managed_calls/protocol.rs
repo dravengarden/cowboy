@@ -80,8 +80,10 @@ impl Action {
                 wait_ms,
                 preset,
             } => {
-                if !matches!(provider.as_str(), "codex" | "claude-code" | "auto")
-                    || *wait_ms > MAX_WAIT_MS
+                if !matches!(
+                    provider.as_str(),
+                    "codex" | "claude-code" | "antigravity" | "auto"
+                ) || *wait_ms > MAX_WAIT_MS
                     || preset.as_ref().is_some_and(|preset| {
                         provider == "auto"
                             || preset.is_empty()

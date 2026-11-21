@@ -192,6 +192,7 @@
         "facade-relay.mjs",
         "facade-tools.mjs",
         "hook.mjs",
+        "managed.mjs",
         "memory.mjs",
         "presentation.mjs",
         "projection.mjs",

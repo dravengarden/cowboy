@@ -876,10 +876,16 @@ These boundaries are mandatory and fail closed:
   value `1` is ignored).
 - One person's own account per Cowboy account: no sharing, proxying, automatic
   rotation or quota-driven fallback to another account.
-- Human-paced use only. Antigravity is not offered to managed calls, scheduled
-  or background jobs, auto-continue loops or automatic rollover turns. Each
-  account defaults to one placement and one active turn; 429/quota responses
-  back off without retry storms.
+- Human-paced use, with one owner-approved exception (2026-11-21). Antigravity
+  is not offered to scheduled or background jobs, auto-continue loops,
+  automatic rollover turns, reviews, Auto selection or Tools call targets. The
+  single managed-call use is an explicitly requested context ask: a fresh,
+  text-only `analysis` over recorded session history, run in the read-only
+  managed profile (no writes, network tools, Cowboy Agent API or subagents; its
+  read tools can read what the execution user can), on the owner's admitted
+  named default account under that account's controls. The
+  owner accepted the account risk of these agent-initiated turns. 429/quota
+  responses back off without retry storms.
 - A suspension signal (for example "disabled in this account for violation of
   Terms of Service") marks the account suspended, stops its workers and halts
   retries until the owner acts.

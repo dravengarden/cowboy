@@ -216,6 +216,15 @@
       "acp",
       "--disable-telemetry"
     ],
+    "managed_profiles": {
+      "read_only_v1": {
+        "arguments": [
+          "acp",
+          "--disable-telemetry",
+          "--cowboy-managed-profile=read-only-v1"
+        ]
+      }
+    },
     "environment": {},
     "remove_environment": [
       "DBUS_SESSION_BUS_ADDRESS",
@@ -284,7 +293,8 @@
       "provider.runtime.v1",
       "provider.execution-jsonrpc.v1",
       "provider.mcp-bindings.v1",
-      "provider.native-custody.v1"
+      "provider.native-custody.v1",
+      "provider.managed-profiles.v1"
     ],
     "network": "ipv4_only_v1",
     "isolation": "account_sandbox_v1"

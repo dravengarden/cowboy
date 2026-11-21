@@ -147,19 +147,25 @@ async fn advance(
             .supervisor
             .observed_configuration(&next.child_session_id)
             .map(|options| {
-                ["model", "reasoning_effort", "effort"]
-                    .into_iter()
-                    .filter_map(|key| {
-                        let observed = options
-                            .as_array()
-                            .and_then(|options| options.iter().find(|option| option["id"] == key))
-                            .and_then(|option| option.get("currentValue"));
-                        observed
-                            .and_then(serde_json::Value::as_str)
-                            .filter(|value| value.len() <= 256)
-                            .map(|value| (key.to_owned(), value.to_owned()))
-                    })
-                    .collect()
+                // Antigravity reports its reasoning level as `thought_level`.
+                [
+                    ("model", "model"),
+                    ("reasoning_effort", "reasoning_effort"),
+                    ("effort", "effort"),
+                    ("thought_level", "reasoning_effort"),
+                ]
+                .into_iter()
+                .filter_map(|(key, recorded)| {
+                    let observed = options
+                        .as_array()
+                        .and_then(|options| options.iter().find(|option| option["id"] == key))
+                        .and_then(|option| option.get("currentValue"));
+                    observed
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|value| value.len() <= 256)
+                        .map(|value| (recorded.to_owned(), value.to_owned()))
+                })
+                .collect()
             });
     }
     if next.state.terminal() {

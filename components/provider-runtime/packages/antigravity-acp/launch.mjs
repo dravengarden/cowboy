@@ -19,6 +19,14 @@ import { Connection } from "../../execution-connection.mjs";
 import { AgyLog } from "./evidence.mjs";
 import { Extensions } from "./extensions.mjs";
 import { Facade, serveMcp } from "./facade.mjs";
+import {
+  MANAGED_FACADE_TOOLS,
+  hookEnvironment,
+  MANAGED_ROUTING,
+  launchManagedMode,
+  managedArguments,
+  managedMode,
+} from "./managed.mjs";
 import { callGuidance, openMemory } from "./memory.mjs";
 import { buildProjection } from "./projection.mjs";
 import { AcpProxy } from "./proxy.mjs";
@@ -189,7 +197,10 @@ async function listen(facade, temporary) {
 
 /**
  * Prepare everything `initialize` waits for. `connect` opens the execution
- * connection (tests inject one).
+ * connection (tests inject one). `hookManaged` is whether `agy` was started
+ * with the managed hook policy, `launchManaged` whether this process was
+ * launched with the managed profile flag; both must match the binding and
+ * its target.
  */
 export async function prepareRuntime({
   paths,
@@ -199,36 +210,90 @@ export async function prepareRuntime({
   connect,
   agyPid,
   node,
+  hookManaged = false,
+  launchManaged = false,
+  descriptor: validated,
 }) {
   await checkPolicy(home, paths);
-  const descriptor = await readDescriptor(credentials);
+  // `runProxy` validates the descriptor before it starts `agy`; the same
+  // bytes then decide the hook policy and this runtime.
+  const descriptor = validated ?? (await readDescriptor(credentials));
   const connection = await connect(descriptor);
+  // A refused runtime never keeps its execution connection open.
+  try {
+    return await connectedRuntime({
+      paths,
+      home,
+      temporary,
+      agyPid,
+      node,
+      hookManaged,
+      launchManaged,
+      descriptor,
+      connection,
+    });
+  } catch (error) {
+    connection.close();
+    throw error;
+  }
+}
+
+/** The rest of `prepareRuntime`, once its execution connection is open. */
+async function connectedRuntime({
+  paths,
+  home,
+  temporary,
+  agyPid,
+  node,
+  hookManaged,
+  launchManaged,
+  descriptor,
+  connection,
+}) {
+  // The binding, the target's keeper and `agy`'s hook policy must agree.
+  const managed = managedMode(descriptor.binding, connection.managed);
+  if (launchManaged && !managed) {
+    throw new Error("A managed Antigravity profile requires a managed execution binding");
+  }
+  if (managed !== hookManaged) {
+    throw new Error("Antigravity's tool gate differs from its managed execution binding");
+  }
   let proxy;
   const facade = await Facade.create(connection, {
     onUncertain: (sessionId, method) => proxy?.uncertain(sessionId, method),
     onResult: (call, result) => proxy?.toolResult(call, result),
     onProgress: (call, text) => proxy?.toolProgress(call, text),
+    managed,
   });
   const listed = facade.tools().map((tool) => tool.name);
-  if (JSON.stringify(listed) !== JSON.stringify(EXPECTED_TOOLS)) {
+  if (JSON.stringify(listed) !== JSON.stringify(managed ? MANAGED_FACADE_TOOLS : EXPECTED_TOOLS)) {
     throw new Error("facade tool set differs");
   }
   // Memory's client is local; the worker's extension servers start on
-  // their own and the first session waits for them, not `initialize`.
-  const memory = await openMemory(connection, descriptor.extensions, {
-    home,
-    cwd: facade.root,
-  });
-  const extensions = Extensions.open(connection).then((ready) => {
-    facade.extensions = ready;
-    return ready;
-  });
+  // their own and the first session waits for them, not `initialize`. A
+  // managed child has neither: no memory, Cowboy MCP or folder server.
+  const memory = managed
+    ? null
+    : await openMemory(connection, descriptor.extensions, {
+        home,
+        cwd: facade.root,
+      });
+  const extensions = managed
+    ? Promise.resolve(undefined)
+    : Extensions.open(connection).then((ready) => {
+        facade.extensions = ready;
+        return ready;
+      });
   extensions.catch(() => {});
-  await buildProjection(facade, facade.root);
+  // A managed call gets its own routing and no repository skills (it runs
+  // no slash command and reads only what its request names).
+  const projecting = managed ? { routing: MANAGED_ROUTING, skills: false } : {};
+  await buildProjection(facade, facade.root, projecting);
   const { server, socketPath, channels } = await listen(facade, temporary);
   const runtime = {
     facade,
     connection,
+    managed,
     server,
     attach(value) {
       proxy = value;
@@ -244,6 +309,7 @@ export async function prepareRuntime({
     projection: async (cwd) =>
       [
         await buildProjection(facade, cwd, {
+          ...projecting,
           onSkills: (skills) => {
             runtime.skills = skills;
           },
@@ -295,8 +361,11 @@ function frames(stream, onMessage, onEnd) {
   stream.on("end", onEnd);
 }
 
-/** The closed environment `agy` runs with: nothing else is inherited. */
-export function agyEnvironment(environment, archive) {
+/**
+ * The closed environment `agy` runs with: nothing else is inherited. A
+ * managed child's carries the marker its `PreToolUse` hook reads.
+ */
+export function agyEnvironment(environment, archive, { managed = false } = {}) {
   const closed = {
     HOME: environment.HOME,
     PATH: `${join(archive, "bin")}:/usr/bin:/bin`,
@@ -307,7 +376,27 @@ export function agyEnvironment(environment, archive) {
     DBUS_SESSION_BUS_ADDRESS: "unix:path=/nonexistent",
   };
   if (!closed.HOME || !isAbsolute(closed.HOME)) throw new Error("HOME is required");
+  Object.assign(closed, hookEnvironment(managed));
   return closed;
+}
+
+/**
+ * Answer the worker without `agy`: every request is refused with `error`
+ * (the proxy's unavailable runtime) until its input ends. Exits 1.
+ */
+async function refuseAll({ input, output, error }) {
+  process.stderr.write(`cowboy: Antigravity unavailable: ${error.message}\n`);
+  const runtime = Promise.reject(error);
+  runtime.catch(() => {});
+  const proxy = new AcpProxy({
+    agent: () => {},
+    client: (message) => output.write(`${JSON.stringify(message)}\n`),
+    runtime,
+    log: (line) => process.stderr.write(`cowboy: ${line}\n`),
+  });
+  await new Promise((done) => frames(input, (message) => proxy.fromClient(message), done));
+  await proxy.queue;
+  return 1;
 }
 
 /** Run the proxy on this process's stdio. */
@@ -317,8 +406,27 @@ export async function runProxy({
   input = process.stdin,
   output = process.stdout,
   connect = (descriptor) => Connection.open(descriptor, { clientName: "cowboy-antigravity" }),
+  args = [],
 } = {}) {
-  const env = agyEnvironment(environment, paths.archive);
+  // `agy` starts before the runtime is ready, so its hook policy comes from
+  // the validated binding; `prepareRuntime` refuses if the binding and its
+  // target then disagree. Everything checkable before that is checked
+  // first, and any failure starts no `agy` at all: the worker's requests
+  // are refused with its error.
+  let descriptor;
+  let launchManaged;
+  let hookManaged;
+  try {
+    // The daemon fixes a runtime unit's command line, so the profile flag
+    // is normally absent; when present it must name the one supported
+    // profile and agree with the binding.
+    launchManaged = managedArguments(args).managed;
+    descriptor = await readDescriptor(environment.CREDENTIALS_DIRECTORY);
+    hookManaged = launchManagedMode(descriptor.binding, launchManaged);
+  } catch (error) {
+    return await refuseAll({ input, output, error });
+  }
+  const env = agyEnvironment(environment, paths.archive, { managed: hookManaged });
   const temporary = await mkdtemp(join(env.TMPDIR, "cowboy-agy-"));
   const agy = spawn(paths.agy, AGY_ARGUMENTS, {
     cwd: temporary,
@@ -333,6 +441,9 @@ export async function runProxy({
     connect,
     agyPid: agy.pid,
     node: process.execPath,
+    hookManaged,
+    launchManaged,
+    descriptor,
   });
   runtime.catch((error) =>
     process.stderr.write(`cowboy: Antigravity unavailable: ${error.message}\n`),
@@ -377,5 +488,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const appDirectory = dirname(fileURLToPath(import.meta.url));
     process.exit(await runUsage({ agy: runtimePaths(appDirectory).agy }));
   }
-  process.exit(await runProxy());
+  try {
+    process.exit(await runProxy({ args: process.argv.slice(2) }));
+  } catch (error) {
+    process.stderr.write(`cowboy: Antigravity unavailable: ${error.message}\n`);
+    process.exit(2);
+  }
 }

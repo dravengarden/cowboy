@@ -15,7 +15,13 @@
 // `cowboy` is the only MCP server `agy` is given (the proxy replaces
 // `mcpServers` and `agy` loads no customizations), so its namespace is ours. Any failure to read or understand the input also
 // denies: the hook never answers `allow` unless it parsed an exact name.
+// The proxy marks every session's policy in `agy`'s environment
+// (HOOK_PROFILE_ENV, from its execution binding). Only the exact ordinary
+// marker gets the policy above; a managed child, and a hook that sees no
+// or an unknown marker, allows only the facade's read tools and RunCommand
+// (`managed.mjs`).
 import { pathToFileURL } from "node:url";
+import { hookManaged, MANAGED_DENIAL_REASON, managedAllowedTool } from "./managed.mjs";
 
 export const ALLOWED_TOOLS = Object.freeze([
   "mcp_cowboy_ReadFile",
@@ -116,8 +122,11 @@ export function webUrlArguments(args) {
   });
 }
 
-/** The decision for one hook input (a string as read from stdin). */
-export function decide(input) {
+/**
+ * The decision for one hook input (a string as read from stdin); `managed`
+ * applies a managed child's read-only allow-list instead.
+ */
+export function decide(input, { managed = false } = {}) {
   let name;
   let args;
   try {
@@ -127,6 +136,11 @@ export function decide(input) {
     args = parsed?.toolCall?.args;
   } catch {
     name = undefined;
+  }
+  if (managed) {
+    return managedAllowedTool(name)
+      ? { decision: "allow" }
+      : { decision: "deny", reason: MANAGED_DENIAL_REASON };
   }
   if (name === "read_url_content" && !webUrlArguments(args)) {
     return { decision: "deny", reason: URL_DENIAL_REASON };
@@ -158,7 +172,9 @@ async function readInput(stream) {
 async function main() {
   let decision = { decision: "deny", reason: DENIAL_REASON };
   try {
-    decision = decide(await readInput(process.stdin));
+    decision = decide(await readInput(process.stdin), {
+      managed: hookManaged(process.env),
+    });
   } catch {
     // Already a denial.
   }

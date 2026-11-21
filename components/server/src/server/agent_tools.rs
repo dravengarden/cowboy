@@ -23,6 +23,36 @@ pub(super) const SCHEMA: u16 = 1;
 /// Agents a managed call can start. Each must declare the read-only profile.
 pub(super) const CALL_TARGETS: [&str; 2] = ["codex", "claude-code"];
 pub(super) const AUTO: &str = "auto";
+/// Agents a managed call may start only to answer an explicit context ask (a
+/// fresh `analysis` over recorded history). They are never Tools policy
+/// targets, Auto choices, approvals or reviewers: Antigravity accounts are
+/// personal, so agent-initiated work stays limited to reading history.
+pub(super) const CONTEXT_ONLY_TARGETS: [&str; 1] = ["antigravity"];
+
+pub(super) fn context_only(agent: &str) -> bool {
+    CONTEXT_ONLY_TARGETS.contains(&agent)
+}
+
+/// The single candidate for an explicit context-only request, or why the
+/// request cannot use that agent.
+pub(super) fn choose_context_only(
+    policy: &CallsPolicy,
+    requested: &str,
+    request: &crate::managed_calls::Request,
+    continued: bool,
+) -> Result<CallTarget, &'static str> {
+    let context_ask = !request.context.sessions.is_empty()
+        && request.purpose == crate::managed_calls::Purpose::Analysis
+        && !continued
+        && request.output.is_text();
+    if !context_ask {
+        return Err("unsupported_capability");
+    }
+    if !policy.enabled {
+        return Err("calls_disabled");
+    }
+    Ok(own_target(requested))
+}
 
 /// Agents of one family (`claude-code`, `claude-deepseek`; `codex`,
 /// `codex-deepseek`) review alike, so an agent never calls its own family.
@@ -1247,6 +1277,53 @@ mod tests {
         match choice {
             Choice::Candidates { targets, .. } => targets.into_iter().map(|t| t.agent).collect(),
             Choice::Refused(code) | Choice::Closed(code) => vec![code.to_owned()],
+        }
+    }
+
+    fn ask(document: &str) -> crate::managed_calls::Request {
+        crate::managed_calls::Request::parse(document.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn antigravity_serves_only_an_explicit_fresh_text_context_ask() {
+        let context = ask(
+            r#"{"schema":1,"request_id":"a","purpose":"analysis","instruction":"what did we decide?","context":{"scope":"current-worktree","sessions":[{"session_id":"sess-1","before":9}]},"access":"read-only","conversation":{"mode":"fresh"}}"#,
+        );
+        let plain = ask(
+            r#"{"schema":1,"request_id":"b","purpose":"analysis","instruction":"Summarize","context":{"scope":"current-worktree"},"access":"read-only","conversation":{"mode":"fresh"}}"#,
+        );
+        let review = ask(
+            r#"{"schema":1,"request_id":"c","purpose":"review","instruction":"Review","context":{"scope":"current-worktree"},"access":"read-only","conversation":{"mode":"fresh"}}"#,
+        );
+        let on = policy(true, false);
+        assert_eq!(
+            choose_context_only(&on, "antigravity", &context, false)
+                .unwrap()
+                .agent,
+            "antigravity"
+        );
+        for (request, continued) in [(&plain, false), (&review, false), (&context, true)] {
+            assert_eq!(
+                choose_context_only(&on, "antigravity", request, continued).err(),
+                Some("unsupported_capability")
+            );
+        }
+        let mut off = on.clone();
+        off.enabled = false;
+        assert_eq!(
+            choose_context_only(&off, "antigravity", &context, false).err(),
+            Some("calls_disabled")
+        );
+        // Never a policy target, approval widening or Auto candidate.
+        for caller in ["codex", "claude-code", "antigravity"] {
+            assert!(callable(caller).all(|agent| !context_only(agent)));
+            assert!(
+                AgentTools::builtin(caller)
+                    .calls
+                    .targets
+                    .iter()
+                    .all(|target| !context_only(&target.agent))
+            );
         }
     }
 
