@@ -841,7 +841,8 @@ source mismatch detection, not watcher frontiers or automatic baselines.
 ### L1 pull: `cowboy.code.*`
 
 A read-only namespace answered by **direct gateway reads**, not by waiting
-inside CodeAct programs (two concurrent programs per host, 20 s;
+inside CodeAct programs (six concurrent programs per Controller, two per
+session, 20 s;
 `docs/agent-api.md`, "Contained runtime"). Programs may compose these reads but
 never wait for analysis: a read returns the current observation with its state
 immediately.
