@@ -1408,14 +1408,18 @@ async fn reconfirm(
             {
                 Ok(())
             }
+            Err(_) => Err(Step::Wait(POLL)),
             _ => Err(Step::Again),
         };
     };
     if error.code == RETRY {
         return Err(Step::Wait(POLL));
     }
-    release_refused_child(state, record, request);
-    advance(state, store, record, fail(error.code, error.detail)).await;
+    // Release the child only once this failure won: a cancellation committed
+    // meanwhile owns the call's ending.
+    if advance(state, store, record, fail(error.code, error.detail)).await {
+        release_refused_child(state, record, request);
+    }
     Err(Step::Again)
 }
 

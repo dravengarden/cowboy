@@ -1129,39 +1129,16 @@ pub(super) async fn cancel_call(state: &Arc<AppState>, parent: &str, call: &str)
             next.finished_at_ms = Some(next.updated_at_ms);
         }
         if store.advance_managed_call(&record, &next).await.ok()? {
-            // Withdraw a still-queued prompt at once, so no drain can start it
-            // before the runner's next poll. Withdrawing it proves no native
-            // turn started, so the stop completes now (Running may only end
-            // through Stopping); a lost write leaves the runner's ordinary stop.
-            if next.state == State::Running
-                && state
-                    .hub
-                    .discard_managed_prompt(&record.child_session_id, call)
-            {
-                next = finish_unstarted(store, next).await;
-            }
+            // The runner alone withdraws a running call's queued prompt and
+            // decides between the immediate and the native stop: a second
+            // actor here could lose the Stopping race after removing the
+            // prompt, leaving the native stop to delete a retained child.
             super::runner::ensure_runner(state, &next);
             state.managed_calls.notify();
             return Some(next);
         }
     }
     None
-}
-
-/// Running → Stopping → Cancelled for a call whose prompt was withdrawn
-/// before any worker saw it, committed in one transaction. Returns the latest
-/// record written.
-async fn finish_unstarted(store: &crate::store::Store, running: Record) -> Record {
-    let steps = unstarted_cancellation(&running);
-    if store
-        .advance_managed_call_through(&running, &steps)
-        .await
-        .unwrap_or(false)
-    {
-        steps.into_iter().last().unwrap_or(running)
-    } else {
-        running
-    }
 }
 
 /// The Stopping and Cancelled records of a running call whose prompt was
