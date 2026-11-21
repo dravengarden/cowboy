@@ -3143,6 +3143,46 @@ fn relaunched_worker_seed_keeps_the_resumed_context_usage() {
 }
 
 #[test]
+fn counter_only_snapshot_keeps_the_stored_raw_reading() {
+    let health = std::sync::Arc::new(PersistenceHealth::default());
+    let (sink, mut rx) = StoreSink::channel(64, health);
+    let hub = Hub::with_store(Some(sink));
+    hub.create_local_session(
+        "usage-raw".to_owned(),
+        "antigravity".to_owned(),
+        "/tmp".to_owned(),
+        "usage".to_owned(),
+        SessionOrigin::Api,
+        false,
+    );
+    let usage = crate::agent_model::SessionUsage {
+        used: 492_536,
+        size: 1_048_576,
+        raw: serde_json::json!({"_meta": {"cowboy": {"sanitizer": 1}}}),
+        observed_at_ms: 7,
+    };
+    hub.set_session_usage("usage-raw", usage.clone());
+    while rx.try_recv().is_ok() {}
+
+    let counters = |used| crate::agent_model::SessionUsage {
+        used,
+        size: 1_048_576,
+        raw: serde_json::Value::Null,
+        observed_at_ms: 0,
+    };
+    // A reconnect snapshot with the same counters is not a newer reading.
+    hub.set_session_usage("usage-raw", counters(492_536));
+    assert_eq!(hub.session_info("usage-raw").expect("session").meta.usage, Some(usage));
+    assert!(rx.try_recv().is_err(), "an unchanged reading must not be persisted");
+
+    // Moved counters replace it: the stored raw fields are stale.
+    hub.set_session_usage("usage-raw", counters(500_000));
+    let meta = hub.session_info("usage-raw").expect("session").meta;
+    assert_eq!(meta.usage, Some(counters(500_000)));
+    assert_eq!(meta.context_used, 500_000);
+}
+
+#[test]
 fn context_usage_is_persisted_once_per_change_and_cleared_by_reset() {
     let health = std::sync::Arc::new(PersistenceHealth::default());
     let (sink, mut rx) = StoreSink::channel(64, health);

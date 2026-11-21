@@ -1039,16 +1039,17 @@ Built on what `agy` 1.5.9 returns over ACP during owner-driven sessions; no
 request is added for any of it.
 
 - **Recommended cards.** `configuration_presets` follow the `configOptions`
-  of `session/new`: Gemini 3.8 Flash High (default), Medium and Low set
-  `model` and `thought_level` of the one Gemini model, so every card is
-  judged by the options that model advertises and the generic preset rules
-  apply unchanged. Values reach `agy` through the generic serial
-  `session/set_config_option` queue, which the proxy forwards. `agy`'s other
-  models (Claude Sonnet 4.6 and Opus 4.6 Thinking, GPT-OSS 120B) stay
-  selectable through its own `model` option in the session settings; they
-  get no card, because a card for a model without a reasoning level would
-  need model-scoped reasoning previews, replay and drafts that no other
-  Provider needs.
+  of `session/new` (`agy` 1.5.9, 2026-11-21): Gemini 4 Neon High, Gemini 4
+  Hydrogen Extra and High (default), then Claude Opus 5.5 High and Claude
+  Sonnet 5.5 High, which `agy` serves on the same Google account's quota.
+  Each card sets `model` and `thought_level`. The reasoning list is
+  model-scoped (Gemini 4 offers `low`…`xhigh`, the Claude models
+  `low`/`medium`/`high`), which the generic preset rules already handle: a
+  card that changes the model is applied model first and its reasoning is
+  judged against the new model's options. Values reach `agy` through the
+  generic serial `session/set_config_option` queue, which the proxy
+  forwards. GPT-OSS 120B and the Orchestrator models stay selectable
+  through the session's own `model` option without a card.
 - **No Plan card.** Recommended cards are (model, reasoning) configurations:
   the picker labels them so, each binds one `models/targets.toml` evaluation
   target, and a card is current when all its values match. A card setting
@@ -1226,8 +1227,7 @@ it runs a command, and `agy` 1.5.9 refuses an account whose `loadCodeAssist`
 lists an ineligible free tier (`UNSUPPORTED_LOCATION`) even when a paid tier
 (`g1-pro-tier`, Google AI Pro) serves it: "Eligibility check failed: ... not
 currently available in your location". Such an account's ACP sessions still
-run its Claude and GPT-OSS models (its Gemini models answer
-`FAILED_PRECONDITION` "User location is not supported"), and Cloud Code's
+run every model, and Cloud Code's
 `retrieveUserQuotaSummary` answers the same token normally. In the sandbox the
 launcher therefore hands this exact usage command to the proxy component's
 helper (`bin/agy-proxy --cowboy-usage`, `proxy/app/usage.mjs`). The helper
@@ -1244,6 +1244,16 @@ exhausted). The helper runs as the account's identity like `agy`; it never
 refreshes, writes or prints the token, and without a token or a valid summary
 `agy`'s own refusal stands (`location_unsupported`). The daemon still
 validates and projects the result; its command and wire are unchanged.
+
+**Egress decides location (2026-11-21).** Gemini models answer
+`FAILED_PRECONDITION` "User location is not supported for the API use" when
+`agy` reaches Google over the host's IPv6 address, while the same account,
+model and prompt succeed over IPv4 (Husky, Gemini 4 Hydrogen; the
+Claude models succeed either way). The account units are IPv4-only
+(`network: ipv4_only_v1`), so production sessions are unaffected; a
+diagnostic `agy` run outside a unit must also be restricted to IPv4
+(`RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK`), or it reports a
+location refusal production never sees.
 
 **Presentation.** Each vendor group (model family: Gemini Pro, Gemini Flash,
 ...) is one row when its buckets share one quota; otherwise one row per distinct

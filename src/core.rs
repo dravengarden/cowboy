@@ -3437,6 +3437,17 @@ impl Hub {
         let changed = {
             let mut sessions = self.inner.sessions.lock();
             match sessions.get_mut(session_id) {
+                // A counter-only snapshot repeating the stored counters is no
+                // newer observation; replacing the reading would drop its raw
+                // Provider fields (an Antigravity account plan, for one).
+                Some(s)
+                    if usage.raw.is_null()
+                        && s.meta.usage.as_ref().is_some_and(|stored| {
+                            (stored.used, stored.size) == (usage.used, usage.size)
+                        }) =>
+                {
+                    false
+                }
                 Some(s) if s.meta.usage.as_ref() != Some(&usage) => {
                     s.meta.context_used = usage.used;
                     s.meta.context_size = usage.size;
