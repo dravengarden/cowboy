@@ -1,0 +1,329 @@
+# Portable refresh custody lease — design
+
+Status: design, revision 1, 2026-11-21. Not implemented. Approved for design
+by the owner ("续期许可"); every implementation step below still needs its own
+review and acceptance.
+
+Scope: named portable **subscription** accounts whose Provider declares
+`refresh: compare_and_swap` and a sign-in method with a portable twin —
+today Codex (ChatGPT) and Grok (xAI). Entered API keys (DeepSeek, OpenAI and
+xAI keys) have no refresh token and are out of scope. Native-only accounts
+(Claude, Antigravity) never enter the vault and are out of scope.
+
+## Goal
+
+1. A named account's single-use refresh token is never redeemed by two
+   writers at once, across Machines and across processes on one Machine.
+2. An idle account (no session renewing it) still shows quota: a budgeted
+   usage read may renew the token, safely, at most once per read.
+
+The requirement this implements is [Named Provider accounts: isolation
+acceptance](requirements.md#named-provider-accounts-isolation-acceptance),
+`docs/requirements.md:200-204`:
+"A Service CAS after refresh is insufficient to serialize upstream
+refresh-token use: the implementation must coordinate before a refresh can
+reach the vendor, including across Machines. Copying a refresh token to several
+independent writers is not an isolation design."
+
+## Current state
+
+### Who redeems today (verified)
+
+- **The Provider CLI, on its own.** A session's worker runs the native CLI
+  with the account's replica home. The CLI refreshes whenever it decides to:
+  - Grok CLI 1.0.77 refreshes at startup/`initialize` when the access token is
+    expired or within `GROK_AUTH_EARLY_INVALIDATION_SECS` (default 300 s),
+    proactively in the background, and after any 401 (including billing side
+    calls); no setting disables it. Its strings name the OIDC refresher, a
+    per-file lock (`auth: file lock timed out, waiting for sibling to finish`,
+    `auth: refresh adopted sibling token after lock timeout`,
+    `auth: returning transient to avoid refresh token reuse`) and the
+    "no token with refresh_token available" outcome.
+  - Codex 0.169.1 (app-server) refreshes on demand and after 401, holds
+    `auth.lock` beside `auth.json` (`Credentials changed before refresh
+    commit.`, `Account credentials changed during refresh.`), and reports
+    reuse as permanent: "Your access token could not be refreshed because your
+    refresh token was already used. Please log out and sign in again."
+    (strings of the pinned binary; `refresh token has expired` and `was
+    revoked` are separate permanent outcomes).
+  - Both CLIs serialize only processes sharing **one** credential file. Neither
+    Plugin uses the SDK's `CredentialDirectory` binding
+    (`components/provider-sdk/src/lib.rs:845-849`, "Without it each generation
+    locks its own private home and concurrent refreshes race a single-use
+    refresh token"); `plugins/codex/provider.json:397-401` and
+    `plugins/grok/provider.json:234-237` project `auth.json` per runtime home.
+- **The Machine proposes, after the fact.** `machine_cli/auth_watch.rs:92-125`
+  watches credential files and `machine_cli.rs:1845`
+  (`publish_provider_auth_observations`) sends
+  `MachineEvent::ProviderAuthRefreshCandidate` with `expected_generation`.
+- **The Service compare-and-swaps, after the fact.**
+  `server/machine_connection/frames.rs:188-215` accepts the candidate;
+  `server/provider_accounts/portable/refresh.rs:139-211` runs
+  `compare_and_swap_refresh` (`src/provider_service.rs:738-767`) under the
+  owner's account lock: the first candidate at the expected generation wins and
+  `distribute_and_mark_scope` (`server/provider_auth_flow.rs:358`) seals it to
+  **every** enrolled Machine; a loser is re-projected (`Stale`).
+- **Every Machine therefore holds the refresh token.** Distribution seals the
+  full portable bundle (the whole `auth.json`) to each Machine.
+- **Usage never redeems.** Since Codex 3.6.16 and Grok 3.2.16 the collector
+  run for `token_refresh: false` (`native_usage/portable.rs:7-15`, enforced by
+  `require_refresh_free` at `:121-141`) reports authentication required instead
+  of refreshing (`plugins/codex/collector/index.js:140`,
+  `plugins/grok/collector/index.js:557-624`).
+
+### The race
+
+Two writers holding refresh token `RT_n` — two Machines, or two auth-generation
+homes on one Machine — can both send `RT_n` to the vendor before either
+candidate reaches the Service. The CAS then keeps one result, but the vendor has
+already seen `RT_n` twice. It can also happen after a successful rotation: a
+busy worker that started on generation `n` keeps `RT_n` in memory after the
+vault moved to `n+1`, and its next refresh presents a spent token.
+
+Consequences per Provider:
+
+| | Codex (ChatGPT) | Grok (xAI) |
+| --- | --- | --- |
+| Reuse handling | Verified: the CLI names "refresh token was already used" as a permanent failure that needs a new sign-in. | Verified: the CLI avoids reuse locally ("returning transient to avoid refresh token reuse"). Inferred, unverified: xAI's IdP rejects or revokes on reuse. |
+| Access token lifetime | Unknown; inferred to be days. | Unknown; inferred to be hours (300 s early-refresh default). Observed 2026-11-21: Fox's token had expired while the account was idle. |
+| Blast radius | The losing writer, and if the vendor revokes the token family, every Machine: the account needs a new sign-in. | Same if xAI revokes the family. |
+
+What is **not** a defence: the Service CAS (after the vendor effect), the
+Controller's `has_live_worker` (`src/supervisor.rs:1005`, only workers this
+Controller currently sees; detached workers survive Controller restarts, see
+`architecture/03-supervisor.md`), and the Machine-local CLI lock (one file only).
+
+## Design: refresh custody
+
+The refresh token is a capability. Instead of asking every holder to behave,
+**only one Machine ever holds it**: the custodian named by a Service lease. All
+other Machines receive an access-token-only projection, which cannot redeem.
+
+### Projections
+
+- **Full**: the vault bundle as today, including the refresh token. Sealed only
+  to the current custodian.
+- **Access-only**: the same bundle with the refresh token removed by a signed,
+  Plugin-declared transform (new `authentication.refresh_custody` block naming
+  the JSON paths to clear, e.g. `tokens.refresh_token` for Codex and
+  `*.refresh_token` for Grok). The Service applies it before sealing, so a
+  non-custodian Machine — including an old one — never receives the bytes.
+
+An access-only worker can run until its access token expires; then its CLI
+fails authentication (Grok: "no token with refresh_token available"; Codex:
+`not_refreshable_auth`). Both outcomes must be confirmed by the conformance
+tests below before a Provider is enabled.
+
+### Lease
+
+One row per account in the Service database:
+
+```text
+account_id, holder_machine_id, epoch (u64, strictly increasing), granted_at_ms,
+expires_at_ms, state: held | releasing | free
+```
+
+- **Grant** (Service): only when the state is `free` or the previous lease has
+  expired by more than a margin (`expires_at_ms + 30 s`). Epoch increments.
+  The grant and the full projection are delivered together on the Machine
+  connection; the Machine acknowledges.
+- **Renew** (Machine → Service, on the existing connection, every TTL/3 while
+  held). TTL 10 minutes. The Machine computes its own deadline as
+  `request_sent_at (monotonic) + TTL − 30 s`, so it can only expire earlier than
+  the Service believes, never later.
+- **Release** (Machine): after it has rewritten its credential homes to
+  access-only and its full-projection worker count (below) is zero, it reports
+  `released{epoch}`; the Service marks `free`.
+- **Expiry** (Machine, local, enforced without the Service): at its deadline a
+  Machine still holding the lease stops every worker of that account that
+  holds the full projection (sessions stay resumable; they restart access-only)
+  and rewrites its homes to access-only, then reports release when it
+  reconnects. This is what makes a disconnected custodian safe: the Service
+  never regrants before the custodian's deadline plus margin has passed.
+- **Durability**: the lease row survives Controller restart; a restarted
+  Controller treats a `held` row as held until `expires_at_ms + margin`, never
+  as free. The Machine persists `{account, epoch, deadline_wall, boot_id}`; a
+  restarted Machine agent with detached workers re-reads it and enforces the
+  same deadline (a changed `boot_id` means the processes are gone anyway).
+- **Fencing**: every `ProviderAuthRefreshCandidate` for a lease-managed account
+  carries the epoch. `refresh.rs::refresh` accepts it only from the current
+  holder at the current epoch, then runs the unchanged generation CAS. A stale
+  holder's late candidate is refused and the vault generation is re-projected.
+  Epoch fencing protects the vault; the vendor effect itself is prevented by
+  custody plus local expiry, not by fencing.
+
+### Who may redeem
+
+Only processes on the custodian, against the custodian's single shared
+credential file:
+
+- **Session workers on the custodian.** They run the CLI with the full
+  projection, through a shared per-account credential path so every auth
+  generation's workers use one file and therefore one CLI lock (Grok:
+  `GROK_AUTH_PATH`, which the CLI reads, seen in its `AuthManager::new` log;
+  Codex: needs a supported way to place `auth.json` outside `CODEX_HOME` —
+  open question 2). The CLIs' own background and 401 refresh then remains
+  allowed and serialized by the CLI lock; it cannot be disabled and need not be.
+- **Usage renewal on the custodian** (below).
+- **Nobody else.** Workers elsewhere are access-only. When their access token
+  nears expiry they cannot refresh; the custodian's renewal reaches them as a
+  new vault generation, which drains idle workers onto it as today
+  (`provider-auth-sync-coordination.md:18-20`).
+
+Choosing the custodian: custody follows sessions. A Machine starting or waking
+a worker on a lease-managed account requests the lease if it is `free`; if
+another Machine holds it, the worker starts access-only. Custody moves only via
+release (custodian has no full-projection workers) or expiry — never by
+preemption while the custodian runs workers.
+
+Residual risk, stated honestly: a custodian whose expiry enforcement fails
+(agent hung while its CLIs keep running, wall-clock and monotonic both broken,
+a worker escaping process accounting) could still redeem after the Service
+regranted. Margins reduce, but do not eliminate, this risk.
+
+### Live-worker accounting
+
+Each lease-capable Machine reports, per account, the number of live workers
+holding the full projection and the number holding access-only, stamped with
+its connection incarnation and a monotonically increasing report sequence. It
+reports on every change and in its Hello. Detached workers are the Machine's
+own processes, so they are counted whether or not a Controller is connected.
+
+The Service never infers "no workers" from absence: a disconnected Machine, a
+Machine that has not reported since the Controller restarted, or a report from
+an older incarnation counts as "unknown", which only lease expiry resolves.
+
+Hibernated sessions have no process and hold nothing. Waking one is a worker
+start and follows the custody rule above.
+
+### Usage flow
+
+Within one budgeted collection (`usage/portable.rs:298`, `refresh`), at most
+once:
+
+1. Placement prefers the custodian when it qualifies (it already runs most of
+   the account's sessions).
+2. If the account has a custodian and it is the placed Machine, the command is
+   `CollectPortableUsage { lease_epoch }`. The Machine runs the collector in
+   refresh-allowed mode (the CLI path) only if it holds that epoch and its
+   local deadline is at least the command deadline (30 s) away; otherwise it
+   refuses with `portable_usage_lease_lost`.
+3. If the lease is `free`, the Service grants it to the placed Machine first
+   (step 2 then applies). Granting is safe without worker accounting because a
+   free lease means no Machine holds the refresh token.
+4. If another Machine holds the lease (it runs sessions, which renew the
+   token), the collection runs refresh-free as today and an expired token
+   reports `portable_usage_authentication_required`.
+5. After a refresh-allowed run the Machine exports the credential if it changed
+   and includes the candidate (with epoch) in the command reply. The Service
+   runs the fenced CAS and distributes the new generation (full to the
+   custodian, access-only elsewhere) before storing the observation. The
+   observation is the same collector run; there is no second collection.
+6. Failure modes: lease lost, CAS stale or rejected, vendor refusal (reuse,
+   revoked, expired refresh token) and timeout all store
+   `portable_usage_authentication_required` (or the closed code they map to),
+   charge the same budget permit, and respect the existing auth-failure
+   backoff. Nothing is retried in the read. A usage-only lease is released
+   after the run when the Machine has no full-projection workers.
+
+No polling is added: renewal happens only inside a collection the shared
+budget already admitted.
+
+### Protocol and rollout
+
+- **Machine protocol 51**: lease grant/renew/release/expiry messages, the
+  per-account worker report, `lease_epoch` on `CollectPortableUsage`, epoch on
+  refresh candidates, and access-only projections in replica delivery. Older
+  Machines never become custodians.
+- **Older Machines** (today Falcon and MacBook Air): once an account is
+  lease-managed, the Service seals only access-only projections to them, so
+  they can never redeem. Their pre-existing full replicas and running workers
+  still hold the refresh token, which is why enabling an account needs the
+  quiescence step below.
+- **Enabling an account** (per account, owner-triggered or automatic when
+  safe): the Service marks the account lease-managed only when every enrolled
+  Machine is either lease-capable and reports zero full-projection workers of
+  it after rewriting its homes, or is older and reports no live worker of the
+  account through the existing session state. Until then the account stays on
+  today's behaviour.
+- **Order**: Plugin releases declaring `refresh_custody` → Machines on protocol
+  51 → Controller. A Controller that speaks 51 with no lease-managed account
+  behaves exactly as today.
+- **Rollback**: a Controller rollback to a release without leases would again
+  seal full projections to every Machine. To keep that safe the newer
+  Controller writes the lease table in a form the older Controller ignores, and
+  the operator must first run `cowboy operator lease-release --all`, which
+  waits for every custodian to release. Machine rollback below 51 forces the
+  account back to non-managed via the same release.
+- **Web/MCP**: the account card adds two reasons: `portable_usage_lease_busy`
+  ("Another Machine is renewing this account; usage will refresh after it does")
+  and `portable_usage_lease_lost`. `accounts.usage` reports
+  `custody: {machine_id, managed}`; no credentials, epochs or deadlines are
+  exposed to agents beyond that.
+
+## Test plan
+
+Deterministic, no real accounts:
+
+- Fake vendor token endpoint that issues single-use refresh tokens and records
+  every presentation; any reuse fails the test and revokes the family.
+- Lease state machine: grant only when free/expired+margin, epoch monotonic,
+  renew/release/expiry transitions, Controller restart with a held row, Machine
+  restart with detached workers and a persisted deadline, clock skew in both
+  directions, a custodian disconnected past its deadline.
+- Two Machines and the real Machine binary with fake CLIs that refresh at
+  startup, in the background and on 401, plus a usage read racing a session
+  start: the fake vendor sees each refresh token at most once.
+- Access-only projection conformance against the pinned real CLIs in a network
+  namespace with a fake IdP (as done for Grok billing): the CLI never contacts
+  the token endpoint without a refresh token, and reports authentication
+  required.
+- Shared credential path conformance: two auth generations on the custodian
+  share one file and the CLI lock serializes their refreshes.
+- Fenced CAS: stale-epoch candidates refused; generation CAS unchanged.
+- Old Machine fixture (protocol 50) only ever receives access-only bytes for a
+  managed account.
+
+Real Machines, without risking the owner's accounts: a dedicated throwaway
+Codex and Grok account (open question 1), enabled on Hawk and OVH only, with
+the fake-vendor suite as the gate before it. The owner's accounts are enabled
+only after the throwaway accounts survived a week of sessions on two Machines,
+idle usage reads and a forced custodian disconnect.
+
+## Alternatives considered
+
+- **Usage renewal through today's path.** Rejected: redemption precedes
+  coordination; it races any session refresh on another Machine.
+- **Renew only when the Controller sees no live worker.** Rejected: the
+  Controller's view misses detached workers during reconnects and restarts and
+  cannot stop a later session start.
+- **Service-side refresh** (the Service calls the vendor's token endpoint
+  itself). Smallest and strongest serialization, but makes Cowboy an OAuth
+  client of OpenAI and xAI with their CLIs' client IDs; this needs the
+  Providers' terms checked as was done for Anthropic
+  (`requirements.md:213-226`) and an exact token-endpoint contract per CLI
+  version. Kept as open question 3.
+- **Separate native sign-in per Machine** (requirements' preferred design).
+  Removes sharing entirely but needs the owner to sign in on every Machine and
+  separate vault lineages; not verified to be independent lineages for Codex
+  or Grok (`requirements.md:205-210`).
+- **Pin each account to one Machine.** Violates "neither the account record
+  nor its default may pin execution to one Machine" (`requirements.md:190-192`).
+
+## Open questions for the owner
+
+1. May we create a throwaway Codex and Grok subscription account for real
+   acceptance, or should acceptance use only the fake vendor plus the owner's
+   accounts with explicit approval?
+2. Codex: is a supported way to share one `auth.json` across auth generations
+   on a Machine acceptable (for example a shared `CODEX_HOME` only for the
+   credential, if the pinned CLI allows it), or should a custodian run at most
+   one auth generation of the account at a time?
+3. Would you rather Cowboy redeem refresh tokens itself on the Service
+   (alternative 3), subject to a terms review?
+4. When an account is enabled while Falcon or MacBook Air still run its
+   sessions, should enabling wait for those sessions to end, or should those
+   Machines be excluded from the account until they are upgraded?
+5. Should usage renewal be allowed to make an idle Machine the custodian
+   (it holds the refresh token afterwards until release), or only when the
+   custodian already exists?

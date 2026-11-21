@@ -513,6 +513,7 @@ primary phone/desktop product path.
 - [`releases/matrix-workspaces-2026-10-01.md`](releases/matrix-workspaces-2026-10-01.md) — Hierarchical picker, mapped remote tasks, latency samples and accepted releases
 
 - [`usage-execution.md`](usage-execution.md) — Shared quota budgets, per-account cache and loading, durable Machine selection, and Provider retirement
+- [`portable-refresh-lease.md`](portable-refresh-lease.md) — Portable refresh custody lease — design (one refresh-token holder per named account, safe idle usage renewal)
 
 - [`releases/message-retry-retention-2026-10-01.md`](releases/message-retry-retention-2026-10-01.md) — Premature delivery confirmation repair, retry retention and OVH Provider diagnostics
 - [`releases/ovh-trusted-ssh-2026-10-01.md`](releases/ovh-trusted-ssh-2026-10-01.md) — Normal-account OVH SSH authority, Luna development tasks and Grok quota blocker
