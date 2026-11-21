@@ -81,13 +81,59 @@ pub(in crate::server) struct Coordinator {
     pub(super) retiring: Mutex<HashSet<String>>,
 }
 
+/// Whether `provider`'s image profile can run for this caller's placement.
+async fn images_run(
+    state: &AppState,
+    meta: &crate::core::SessionMeta,
+    machine_id: &str,
+    provider: &str,
+) -> bool {
+    child_runtime(
+        state,
+        meta.owner_user_id.as_deref(),
+        machine_id,
+        Some(meta.machine_id.as_str()),
+        provider,
+        cowboy_provider_sdk::ManagedRuntimeProfile::ImageV1,
+    )
+    .await
+    .1
+    .available
+}
+
+/// A Provider's review view for capabilities: routine order, routing and
+/// whether any reviewer is eligible once the caller's own model is excluded.
+fn review_fields(
+    state: &AppState,
+    meta: &crate::core::SessionMeta,
+    provider: &str,
+    runnable: &Value,
+    review: &agent_tools::ReviewPreferences,
+    own: bool,
+    available: bool,
+) -> Value {
+    let presets = super::selection::exclude_caller_model(
+        runnable,
+        own,
+        caller_model(state, meta, provider).1,
+    );
+    let routine = super::selection::candidates(&presets, provider, review, false);
+    json!({
+        "review_candidates": routine.iter().filter_map(|p| p["id"].as_str()).collect::<Vec<_>>(),
+        "review_routing": super::selection::routing_view(&presets, provider, review),
+        "same_vendor": own,
+        // Analysis may run where no reviewer is eligible.
+        "review_available": available && !routine.is_empty(),
+    })
+}
+
 /// Whether `agent` is the caller's own vendor, and the reviewer family of the
 /// model the caller currently runs.
 fn caller_model(
     state: &AppState,
     meta: &crate::core::SessionMeta,
     agent: &str,
-) -> (bool, Option<&'static str>) {
+) -> (bool, Option<Option<&'static str>>) {
     (
         agent_tools::same_family(agent, &meta.provider),
         super::selection::caller_family(state.supervisor.observed_configuration(&meta.id).as_ref()),
@@ -722,29 +768,12 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
         // Machine can run read-only work and still refuse images.
         if native_capabilities.contains(&"image.generate")
             && agent_tools::image_refusal(&policy, &meta.provider, provider).is_none()
-            && child_runtime(
-                state,
-                meta.owner_user_id.as_deref(),
-                &placement.machine_id,
-                Some(meta.machine_id.as_str()),
-                provider,
-                cowboy_provider_sdk::ManagedRuntimeProfile::ImageV1,
-            )
-            .await
-            .1
-            .available
+            && images_run(state, meta, &placement.machine_id, provider).await
         {
             image_providers.push(provider);
         }
         // What admission ranks: the generation this runtime would launch.
         let runnable_presets = readiness.presets(state, provider);
-        let reviewer_presets = super::selection::exclude_caller_model(
-            &runnable_presets,
-            own,
-            super::selection::caller_family(
-                state.supervisor.observed_configuration(&meta.id).as_ref(),
-            ),
-        );
         providers.push(json!({
             "id": provider,
             "alias": if provider == "codex" { "codex" } else { "claude" },
@@ -759,13 +788,24 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             "quota_account": if readiness.account.is_default() { readiness.generation.as_ref().and_then(|generation| state.provider_catalog.account_usage_provider(provider, &generation.version, &generation.digest)) } else { named.push(readiness.account.clone()); Some(readiness.account.as_str().to_owned()) },
             // `--preset` choices; the session's Tools choose otherwise.
             "presets": runnable_presets,
-            "review_candidates": super::selection::candidates(&reviewer_presets, provider, &policy.review, false).iter().filter_map(|p| p["id"].as_str()).collect::<Vec<_>>(),
-            "review_routing": super::selection::routing_view(&reviewer_presets, provider, &policy.review),
-            "same_vendor": own,
             "access": ["read-only"],
             "output": if readiness.structured_output { json!(["text","json_schema"]) } else { json!(["text"]) },
             "conversation": ["fresh","continue"],
         }));
+        if let (Some(Value::Object(entry)), Value::Object(review)) = (
+            providers.last_mut(),
+            review_fields(
+                state,
+                meta,
+                provider,
+                &runnable_presets,
+                &policy.review,
+                own,
+                available,
+            ),
+        ) {
+            entry.extend(review);
+        }
     }
     let accounts: Vec<String> = providers
         .iter()
@@ -1099,7 +1139,12 @@ fn await_approval(
         }
         super::approval::Gate::Approved => {
             let once = agent_tools::allow_once(policy.clone(), &meta.provider, requested);
-            match agent_tools::choose(&once, &meta.provider, requested, false) {
+            match agent_tools::choose(
+                &once,
+                &meta.provider,
+                requested,
+                agent_tools::own_family(&once, request),
+            ) {
                 agent_tools::Choice::Candidates { targets, selection } => Ok((targets, selection)),
                 agent_tools::Choice::Refused(code) | agent_tools::Choice::Closed(code) => {
                     Err(error(code, "not_submitted"))
@@ -1162,6 +1207,7 @@ pub(super) async fn cancel_call(state: &Arc<AppState>, parent: &str, call: &str)
             next.finished_at_ms = Some(next.updated_at_ms);
         }
         if store.advance_managed_call(&record, &next).await.ok()? {
+            super::runner::outcome::record(&next);
             // The runner alone withdraws a running call's queued prompt and
             // decides between the immediate and the native stop: a second
             // actor here could lose the Stopping race after removing the

@@ -596,7 +596,9 @@ pub(super) fn own_family(policy: &CallsPolicy, request: &crate::managed_calls::R
     if request.purpose.is_image() {
         policy.self_images
     } else {
-        true
+        // Context asks always could; other calls follow the session's
+        // targets, so switching every target off still calls nothing.
+        !request.context.sessions.is_empty() || !policy.targets.is_empty()
     }
 }
 

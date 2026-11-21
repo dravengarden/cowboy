@@ -24,20 +24,20 @@ Summary: `models/pilots/2026-11-21-sol-max-arm.json`.
 
 **Field costs (Cowboy's own feedback).** `scripts/field.ts` aggregated the
 Hawk ledger's completed reviews for 14 days to 2026-11-21
-(`models/field/2026-11-21.json`, aggregates only):
+(`models/field/2026-11-21.json`, aggregates only; reused receipts excluded; the Sol Max row includes the four pilot runs):
 
 | Review target | n | Median tokens | Median uncached | Median minutes |
 | --- | --- | --- | --- | --- |
 | GPT-6 Astra Max | 326 | 1.88M | 150k | 9 |
-| GPT-6.2 Astra Max | 99 | 6.74M | 259k | 20 |
-| GPT-6.2 Sol Max | 6 | 2.41M | 172k | 7 |
+| GPT-6.2 Astra Max | 101 | 6.68M | 257k | 20 |
+| GPT-6.2 Sol Max | 9 | 3.87M | 238k | 9 |
 | GPT-6.2 Sol Medium | 5 | 0.80M | 76k | 3 |
 | GPT-6.2 Astra Medium | 10 | 0.27M | 43k | 3 |
 | Claude Fable 5.1 Max | 3 | 1.29M | 155k | 10 |
 
 The signed `astra-max` preset moved from GPT-6 Astra to GPT-6.2 Astra during
 the window (codex 0.169, first GPT-6.2 reviews on 2026-11-18). On the field mix each GPT-6.2 Astra Max review costs
-about 3.6× the GPT-6 one in tokens and twice the time: 2026-11-19 used
+about 3.5× the GPT-6 one in tokens and twice the time: 2026-11-19 used
 416M review tokens for 60 reviews, against 256M for 91 on 2026-11-17.
 Field rows compare cost only: inputs differ between groups.
 

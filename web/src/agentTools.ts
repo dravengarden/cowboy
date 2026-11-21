@@ -89,9 +89,12 @@ export interface RoutingTier {
   auto: RoutingRow[];
   allow?: RoutingRow[];
 }
+/** Pilot medians at the top level (null when unmeasured), field medians apart. */
 export interface RoutingCost {
-  pilot?: { median_tokens: number; n: number; serious_recall?: string } | "unknown";
-  field?: { median_tokens: number; median_minutes: number; n: number };
+  median_tokens: number | null;
+  n?: number;
+  serious_recall?: string;
+  field?: { purpose: string; median_tokens: number; median_minutes: number; n: number };
 }
 /** docs/review-routing.md; read-only. Absent from older Controllers. */
 export interface ReviewRouting {

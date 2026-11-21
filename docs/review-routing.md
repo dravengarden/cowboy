@@ -179,11 +179,23 @@ before tightening further.
 ## Same vendor, never the same model
 
 A caller may use its own vendor after the others (Auto tries other vendors
-first). A review excludes the reviewer family of the caller's current model
-(from its live configuration); an unknown caller model offers no same-vendor
-reviewer, and an empty choice is refused `same_model`. Capabilities mark such a
-Provider `same_vendor: true` and publish its routing without the caller's
-model.
+first; a session whose targets are all off still calls nothing — the own
+vendor is never a way around the switch). A review excludes the reviewer
+family of the caller's current model, read from its live configuration, on
+**every** Provider, because another vendor's package can run the same model.
+A known non-reviewer caller model (Sonnet) excludes nothing; an unknown one
+offers no same-vendor reviewer. When the routine tier's own row is excluded
+the strongest preset the tier still admits is chosen (a Sol caller gets Astra
+Medium); the high tier never falls back automatically, so Fable still has to
+be named. Nothing left is refused `same_model`. The claim rechecks the parent's
+live model for fresh reviews and continuations (a hibernated parent keeps
+admission's check). Capabilities mark the Provider `same_vendor: true`, report
+`review_available` apart from analysis availability, and publish its routing
+without the caller's model.
+
+Known limit: Auto commits to the first ready Provider before tier
+eligibility, so a ready Provider with no eligible reviewer refuses instead of
+trying the next one; pass the provider explicitly in that case.
 
 ## Logs and metrics
 
@@ -194,6 +206,12 @@ Every routing decision and every finished review leaves a journal record
 | --- | --- | --- |
 | `cowboy.review.routed` | admission picked or refused a reviewer preset | `request_id`, `purpose`, `provider`, `same_vendor`, `risk`, `explicit_preset`, `preset`, `outcome` (`automatic`, `explicit`, or the refusal code) |
 | `cowboy.review.finished` | a review or design review reached a terminal state | `call_id`, `parent_session_id`, `provider`, `purpose`, `state`, `error`, `preset`, `model`, `effort`, `risk`, `reused`, token counts (total, input, cached, uncached, output, reasoning), `duration_ms`, `verdict`, `review_complete`, `findings` and per-severity counts |
+
+Measurements a worker did not report are omitted, not zero; verdicts other
+than the three standard ones are logged as `other`. `cowboy.review.routed` is
+a decision record: a duplicate submission of one request can log twice, and a
+named preset absent from the generation is refused earlier
+(`preset_unavailable`) without this event.
 
 The ledger keeps the full record; `models/field/` aggregates it with
 `.agents/skills/model-intel/scripts/field.ts`. VictoriaLogs

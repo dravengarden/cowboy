@@ -29,21 +29,21 @@
       "provider": "codex",
       "purpose": "review",
       "target": "gpt-6.2-astra:max",
-      "n": 99,
-      "with_usage": 99,
-      "median_tokens": 6742914,
-      "p75_tokens": 10039214,
-      "median_uncached_tokens": 258956,
+      "n": 101,
+      "with_usage": 101,
+      "median_tokens": 6677901,
+      "p75_tokens": 10035618,
+      "median_uncached_tokens": 257010,
       "median_minutes": 20,
-      "mean_findings": 9.4,
+      "mean_findings": 9.6,
       "verdicts": {
-        "needs-attention": 85,
+        "needs-attention": 87,
         "none": 12,
         "approve": 2
       },
       "risk": {
         "undeclared": 69,
-        "high": 25,
+        "high": 27,
         "routine": 5
       }
     },
@@ -109,6 +109,25 @@
     {
       "provider": "codex",
       "purpose": "review",
+      "target": "gpt-6.2-sol:max",
+      "n": 9,
+      "with_usage": 9,
+      "median_tokens": 3870987,
+      "p75_tokens": 8097708,
+      "median_uncached_tokens": 238357,
+      "median_minutes": 9,
+      "mean_findings": 5.7,
+      "verdicts": {
+        "needs-attention": 9
+      },
+      "risk": {
+        "undeclared": 8,
+        "routine": 1
+      }
+    },
+    {
+      "provider": "codex",
+      "purpose": "review",
       "target": "gpt-6-astra:medium",
       "n": 8,
       "with_usage": 8,
@@ -122,25 +141,6 @@
       },
       "risk": {
         "undeclared": 8
-      }
-    },
-    {
-      "provider": "codex",
-      "purpose": "review",
-      "target": "gpt-6.2-sol:max",
-      "n": 6,
-      "with_usage": 6,
-      "median_tokens": 2406303,
-      "p75_tokens": 3544350,
-      "median_uncached_tokens": 171944,
-      "median_minutes": 7,
-      "mean_findings": 7,
-      "verdicts": {
-        "needs-attention": 6
-      },
-      "risk": {
-        "undeclared": 5,
-        "routine": 1
       }
     },
     {

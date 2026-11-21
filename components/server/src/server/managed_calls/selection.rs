@@ -60,6 +60,15 @@ pub(super) fn candidates(
     preference: &super::super::agent_tools::ReviewPreferences,
     high_risk: bool,
 ) -> Vec<Value> {
+    ranked(presets, provider, preference, high_risk).list
+}
+
+fn ranked(
+    presets: &Value,
+    provider: &str,
+    preference: &super::super::agent_tools::ReviewPreferences,
+    high_risk: bool,
+) -> routing::Ranked {
     use super::super::agent_tools::ReviewEffort;
     let policy = if provider == "codex" {
         preference.gpt_effort
@@ -77,32 +86,57 @@ pub(super) fn candidates(
     routing::TABLE
         .as_ref()
         .and_then(|table| routing::order(table, provider, level, &pool))
-        .unwrap_or_else(|| legacy(presets, provider, preference, high_risk))
+        .unwrap_or_else(|| {
+            let list = legacy(presets, provider, preference, high_risk);
+            routing::Ranked {
+                automatic: !list.is_empty(),
+                list,
+            }
+        })
 }
 
-/// The reviewer family of the model a session currently runs, if known.
-pub(super) fn caller_family(configuration: Option<&Value>) -> Option<&'static str> {
+/// What a session's current model is, for excluding it from its reviews:
+/// `None` when unknown, `Some(None)` for a known model that is no reviewer
+/// family (for example Sonnet), `Some(Some(family))` otherwise.
+pub(super) fn caller_family(configuration: Option<&Value>) -> Option<Option<&'static str>> {
     configuration?
         .as_array()?
         .iter()
         .find(|option| option["id"] == "model")?
         .get("currentValue")?
         .as_str()
-        .and_then(family)
+        .filter(|model| !model.is_empty() && *model != "default")
+        .map(family)
 }
 
-/// Runnable presets without the caller's own model. A review by the same
-/// model shares its blind spots, so a same-Provider reviewer must be another
-/// family; when the caller's model is unknown, no same-Provider reviewer is
-/// offered.
+/// Whether a reviewer of `reviewer` family would review the caller with its
+/// own model. Any Provider counts (another vendor's package can run the same
+/// model); an unknown caller model conflicts with every same-vendor reviewer.
+pub(super) fn same_model(
+    same_vendor: bool,
+    caller: Option<Option<&str>>,
+    reviewer: Option<&str>,
+) -> bool {
+    match caller {
+        Some(Some(caller)) => reviewer == Some(caller),
+        Some(None) => false,
+        None => same_vendor,
+    }
+}
+
+/// Whether a parent's live configuration shows it now runs `reviewer`'s
+/// model. Unknown (a hibernated parent) is no evidence either way.
+pub(super) fn runs_now(configuration: Option<&Value>, reviewer: Option<&str>) -> bool {
+    caller_family(configuration).is_some_and(|caller| same_model(false, Some(caller), reviewer))
+}
+
+/// Runnable presets without the caller's own model: a review by the same
+/// model shares its blind spots.
 pub(super) fn exclude_caller_model(
     presets: &Value,
-    same_provider: bool,
-    caller: Option<&str>,
+    same_vendor: bool,
+    caller: Option<Option<&str>>,
 ) -> Value {
-    if !same_provider {
-        return presets.clone();
-    }
     Value::Array(
         presets
             .as_array()
@@ -110,7 +144,7 @@ pub(super) fn exclude_caller_model(
             .flatten()
             .filter(|preset| {
                 let own = preset["values"]["model"].as_str().and_then(family);
-                caller.is_some() && own.is_some() && own != caller
+                !same_model(same_vendor, caller, own)
             })
             .cloned()
             .collect(),
@@ -126,7 +160,7 @@ pub(super) fn admit(
     provider: &str,
     preference: &super::super::agent_tools::ReviewPreferences,
     explicit: Option<&str>,
-    (same_vendor, caller): (bool, Option<&str>),
+    (same_vendor, caller): (bool, Option<Option<&str>>),
 ) -> Result<String, Value> {
     let presets = &exclude_caller_model(presets, same_vendor, caller);
     let risk = request
@@ -169,13 +203,18 @@ pub(super) fn admit(
             "risk:'high' needs a reason naming the risk (for example persistence, permissions or a risk area in the review root's guidance)".into(),
         ));
     }
-    let choices = candidates(presets, provider, preference, high_risk);
+    let tier = ranked(presets, provider, preference, high_risk);
+    let choices = tier.list;
     let all = reviewers(presets, provider, preference);
-    if same_vendor && (all.is_empty() || choices.is_empty()) {
+    let unnamed = explicit.is_none() && !tier.automatic;
+    if same_vendor && (all.is_empty() || choices.is_empty() || unnamed) {
         return Err(refuse(
             "same_model",
             "a review never runs the caller's own model and this tier has no other model of this vendor; use another vendor's reviewer, or declare risk:'high' with a reason to name a stronger model of this vendor".into(),
         ));
+    }
+    if unnamed {
+        return Err(refuse("preset_unavailable", String::new()));
     }
     match review_preset(&choices, &all, explicit) {
         Ok(preset) => {
@@ -227,8 +266,18 @@ pub(super) fn routing_view(
     };
     let entry =
         |preset: &Value| json!({"preset": preset["id"], "cost": routing::cost(table, preset)});
-    let high = candidates(presets, provider, preference, true);
-    let routine = candidates(presets, provider, preference, false);
+    let high = ranked(presets, provider, preference, true);
+    let high = if high.automatic {
+        high.list
+    } else {
+        Vec::new()
+    };
+    let routine = ranked(presets, provider, preference, false);
+    let routine = if routine.automatic {
+        routine.list
+    } else {
+        Vec::new()
+    };
     json!({
         "evidence": table.evidence,
         "high": high.first().map(entry),
@@ -443,7 +492,7 @@ mod tests {
         assert_eq!(family("gpt-6-luna"), None);
         let view = routing_view(&gpt, "codex", &preference);
         assert_eq!(view["routine"]["preset"], "sol-max");
-        assert_eq!(view["routine"]["cost"]["pilot"]["n"], 4);
+        assert_eq!(view["routine"]["cost"]["n"], 4);
         assert_eq!(view["high"]["preset"], "astra-max");
     }
 
@@ -451,10 +500,10 @@ mod tests {
     fn a_same_vendor_review_excludes_the_callers_own_model() {
         let options =
             json!([{"id":"model","currentValue":"opus[1m]"},{"id":"effort","currentValue":"high"}]);
-        assert_eq!(caller_family(Some(&options)), Some("opus"));
+        assert_eq!(caller_family(Some(&options)), Some(Some("opus")));
         assert_eq!(
             caller_family(Some(&json!([{"id":"model","currentValue":"sonnet"}]))),
-            None
+            Some(None)
         );
         assert_eq!(caller_family(None), None);
         let claude = json!([
@@ -469,33 +518,40 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(
-            ids(exclude_caller_model(&claude, true, Some("opus"))),
+            ids(exclude_caller_model(&claude, true, Some(Some("opus")))),
             ["fable-max"]
         );
+        // Another vendor's package can run the same model: still excluded.
         assert_eq!(
-            ids(exclude_caller_model(&claude, false, Some("opus"))),
+            ids(exclude_caller_model(&claude, false, Some(Some("opus")))),
+            ["fable-max"]
+        );
+        // A known non-reviewer caller (Sonnet) keeps every reviewer.
+        assert_eq!(
+            ids(exclude_caller_model(&claude, true, Some(None))),
             ["fable-max", "opus-high"]
         );
         // An unknown caller model offers no same-vendor reviewer.
         assert!(ids(exclude_caller_model(&claude, true, None)).is_empty());
+        assert_eq!(ids(exclude_caller_model(&claude, false, None)).len(), 2);
         let preference = super::super::super::agent_tools::ReviewPreferences::default();
         // An Opus caller's routine Claude review has no Opus reviewer left.
         let request: crate::managed_calls::Request = serde_json::from_value(json!({
             "schema":1,"request_id":"r","purpose":"review","instruction":"i",
             "context":{"scope":"current-worktree"},"access":"read-only","conversation":{"mode":"fresh"}
         })).unwrap();
-        let none = exclude_caller_model(&json!([claude[1].clone()]), true, Some("opus"));
+        let none = exclude_caller_model(&json!([claude[1].clone()]), true, Some(Some("opus")));
         let refused = admit(
             &request,
             &none,
             "claude-code",
             &preference,
             None,
-            (true, Some("opus")),
+            (true, Some(Some("opus"))),
         )
         .unwrap_err();
         assert_eq!(refused["error"]["code"], "same_model");
-        let fable_only = exclude_caller_model(&claude, true, Some("opus"));
+        let fable_only = exclude_caller_model(&claude, true, Some(Some("opus")));
         // Fable is not a routine Claude reviewer, so routine refuses it...
         assert_eq!(
             admit(
@@ -504,24 +560,30 @@ mod tests {
                 "claude-code",
                 &preference,
                 Some("fable-max"),
-                (true, Some("opus"))
+                (true, Some(Some("opus")))
             )
             .unwrap_err()["error"]["code"],
             "same_model"
         );
-        // ...while a high-risk review with a reason falls back to it.
+        // ...and a high-risk review never falls back to Fable unnamed, but
+        // may name it with a reason.
         let mut high = request.clone();
         high.labels.insert("review_risk".into(), "high".into());
         high.labels
             .insert("selection_reason".into(), "persistence".into());
+        let caller = (true, Some(Some("opus")));
+        assert_eq!(
+            admit(&high, &claude, "claude-code", &preference, None, caller).unwrap_err()["error"]["code"],
+            "same_model"
+        );
         assert_eq!(
             admit(
                 &high,
-                &fable_only,
+                &claude,
                 "claude-code",
                 &preference,
-                None,
-                (true, Some("opus"))
+                Some("fable-max"),
+                caller
             )
             .unwrap(),
             "fable-max"
@@ -532,7 +594,7 @@ mod tests {
             {"id":"astra-medium","values":{"model":"gpt-6.2-astra","reasoning_effort":"medium"}},
             {"id":"sol-6-2-max","values":{"model":"gpt-6.2-sol","reasoning_effort":"max"}}
         ]);
-        let without_sol = exclude_caller_model(&gpt, true, Some("sol"));
+        let without_sol = exclude_caller_model(&gpt, true, Some(Some("sol")));
         assert_eq!(
             admit(
                 &request,
@@ -540,7 +602,7 @@ mod tests {
                 "codex",
                 &preference,
                 None,
-                (true, Some("sol"))
+                (true, Some(Some("sol")))
             )
             .unwrap(),
             "astra-medium"

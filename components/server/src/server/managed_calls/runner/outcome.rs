@@ -5,7 +5,7 @@
 
 use crate::managed_calls::lifecycle::{Record, State};
 
-pub(super) fn record(record: &Record) {
+pub(in crate::server::managed_calls) fn record(record: &Record) {
     if !record.purpose.is_review() || !record.state.terminal() {
         return;
     }
@@ -17,11 +17,17 @@ pub(super) fn record(record: &Record) {
             .unwrap_or_default()
     };
     let structured = result.map(|result| &result["structured"]);
-    let findings = structured
-        .and_then(|structured| structured["findings"].as_array())
-        .map(Vec::as_slice)
-        .unwrap_or_default();
-    let severity = |level: &str| findings.iter().filter(|f| f["severity"] == level).count() as u64;
+    let findings = structured.and_then(|structured| structured["findings"].as_array());
+    let severity = |level: &str| {
+        findings.map(|all| all.iter().filter(|f| f["severity"] == level).count() as u64)
+    };
+    // Only the standard verdicts: a custom schema may put prose there.
+    let verdict = structured
+        .and_then(|s| s["verdict"].as_str())
+        .map(|verdict| match verdict {
+            "approve" | "needs-attention" | "incomplete" => verdict,
+            _ => "other",
+        });
     let configuration = record.configuration.as_ref();
     let option = |key: &str| {
         configuration
@@ -55,9 +61,9 @@ pub(super) fn record(record: &Record) {
         output_tokens = tokens("output_tokens"),
         reasoning_tokens = tokens("reasoning_tokens"),
         duration_ms,
-        verdict = structured.and_then(|s| s["verdict"].as_str()).unwrap_or(""),
-        review_complete = structured.and_then(|s| s["review_complete"].as_bool()).unwrap_or(false),
-        findings = findings.len() as u64,
+        verdict,
+        review_complete = structured.and_then(|s| s["review_complete"].as_bool()),
+        findings = findings.map(|all| all.len() as u64),
         critical = severity("critical"),
         high = severity("high"),
         medium = severity("medium"),

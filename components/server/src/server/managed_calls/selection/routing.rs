@@ -91,14 +91,8 @@ pub(super) enum Level {
 
 /// The automatic preset first, then every other preset the tier admits, in
 /// `pool` (strongest-first) order. `None` when the table has no row for this
-/// Provider or none of its automatic rows matches a runnable preset; the
-/// caller then keeps the legacy order.
-pub(super) fn order(
-    table: &Table,
-    provider: &str,
-    level: Level,
-    pool: &[Value],
-) -> Option<Vec<Value>> {
+/// Provider or generation; the caller then keeps the legacy order.
+pub(super) fn order(table: &Table, provider: &str, level: Level, pool: &[Value]) -> Option<Ranked> {
     let tiers = table.providers.get(provider)?;
     let tier = match level {
         Level::High => &tiers.high,
@@ -129,29 +123,48 @@ pub(super) fn order(
     };
     // Rows naming an exact model bind the table to known generations; an
     // unknown generation keeps the legacy order.
+    // Coverage is by model identity alone, so excluding the caller's model
+    // or an effort never turns a known generation into an unknown one.
     let known = !rows().any(|row| row.model.is_some())
-        || rows().any(|row| row.model.is_some() && pool.iter().any(|preset| row.matches(preset)));
+        || rows().any(|row| {
+            row.model
+                .as_deref()
+                .is_some_and(|expected| pool.iter().any(|preset| model(preset) == Some(expected)))
+        });
     if !known {
         return None;
     }
     // The tier's automatic row, else (for example when the caller's own model
     // was excluded) the strongest preset the tier still admits.
-    let Some(automatic) = tier
+    let automatic = tier
         .auto
         .iter()
         .find_map(|row| pool.iter().find(|preset| row.matches(preset)))
-        .or_else(|| pool.iter().find(|preset| admitted(preset)))
-    else {
-        return Some(Vec::new());
-    };
-    let mut ordered = vec![automatic.clone()];
+        // Never for the high tier: its explicit-only reviewers (Fable) need
+        // the caller to name them.
+        .or_else(|| {
+            (level != Level::High)
+                .then(|| pool.iter().find(|preset| admitted(preset)))
+                .flatten()
+        });
+    let mut ordered: Vec<Value> = automatic.into_iter().cloned().collect();
     ordered.extend(
         pool.iter()
             .filter(admitted)
-            .filter(|preset| preset["id"] != automatic["id"])
+            .filter(|preset| automatic.is_none_or(|chosen| preset["id"] != chosen["id"]))
             .cloned(),
     );
-    Some(ordered)
+    Some(Ranked {
+        list: ordered,
+        automatic: automatic.is_some(),
+    })
+}
+
+/// A tier's presets, the automatic choice first when one exists. Without
+/// one, `list` holds only what a caller may name explicitly.
+pub(super) struct Ranked {
+    pub list: Vec<Value>,
+    pub automatic: bool,
 }
 
 /// Measured cost of a preset's resolved model and effort, or `unknown`.

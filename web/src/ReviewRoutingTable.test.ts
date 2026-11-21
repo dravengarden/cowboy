@@ -12,9 +12,9 @@ const table: ReviewRouting = {
       routine: { auto: [{ family: "opus", efforts: ["high"] }] } },
   },
   costs: {
-    "gpt-6.2-sol:max": { pilot: { median_tokens: 3220000, n: 4, serious_recall: "12/14" },
-      field: { median_tokens: 2406303, median_minutes: 7, n: 6 } },
-    "opus:high": { pilot: "unknown" },
+    "gpt-6.2-sol:max": { median_tokens: 3220000, n: 4, serious_recall: "12/14",
+      field: { purpose: "review", median_tokens: 2406303, median_minutes: 7, n: 6 } },
+    "opus:high": { median_tokens: null },
   },
 };
 

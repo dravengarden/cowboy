@@ -19,7 +19,7 @@ use crate::managed_calls::{Conversation, OutputFormat, Request};
 use crate::store::Store;
 
 mod configuration;
-mod outcome;
+pub(super) mod outcome;
 
 const POLL: Duration = Duration::from_millis(500);
 /// A launch whose target never answers fails instead of waiting forever.
@@ -339,6 +339,11 @@ async fn claim(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
     // if the admitted preset is no reviewer on the generation pinned now.
     if record.purpose.is_review()
         && let Err(code) = review_preset_on(state, record, &version, &digest).and_then(|family| {
+            // The parent may have switched model since admission.
+            let live = state.supervisor.observed_configuration(&parent.meta.id);
+            if super::selection::runs_now(live.as_ref(), family) {
+                return Err("same_model");
+            }
             // Still queued, so still admission: a fresh review's family must
             // be one the session prefers, not merely any reviewer. A
             // continuation keeps its child's preset, as admission does.

@@ -10,8 +10,8 @@
 // workload, not a paired quality comparison; `score.ts` never scores them.
 
 import { Database } from "bun:sqlite";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 
 export type Call = {
   provider: string;
@@ -74,6 +74,7 @@ export function aggregate(calls: Call[]): Group[] {
         target,
         n: members.length,
         with_usage: numbers((call) => call.tokens).length,
+        // Token statistics count only calls that reported usage (`with_usage`).
         median_tokens: quantile(numbers((call) => call.tokens), 0.5),
         p75_tokens: quantile(numbers((call) => call.tokens), 0.75),
         median_uncached_tokens: quantile(numbers((call) => call.uncached), 0.5),
@@ -102,12 +103,20 @@ function read(database: string, since: number): Call[] {
                 json_extract(document,'$.result.usage.total_tokens') AS tokens,
                 json_extract(document,'$.result.usage.uncached_input_tokens') AS uncached,
                 (json_extract(document,'$.finished_at_ms') - json_extract(document,'$.started_at_ms')) / 60000.0 AS minutes,
-                json_extract(document,'$.result.structured.verdict') AS verdict,
-                json_array_length(json_extract(document,'$.result.structured.findings')) AS findings
+                CASE
+                  WHEN json_extract(document,'$.result.structured.verdict') IS NULL THEN NULL
+                  WHEN json_extract(document,'$.result.structured.verdict')
+                    IN ('approve','needs-attention','incomplete')
+                    THEN json_extract(document,'$.result.structured.verdict')
+                  ELSE 'other' END AS verdict,
+                CASE WHEN json_type(document,'$.result.structured.findings') = 'array'
+                  THEN json_array_length(document,'$.result.structured.findings') END AS findings
          FROM managed_agent_calls
          WHERE state = 'completed'
            AND json_extract(document,'$.purpose') IN ('review','design_review')
            AND json_extract(document,'$.configuration.model') IS NOT NULL
+           -- A reused receipt copies another run's outcome without running.
+           AND json_extract(document,'$.result.reused_from') IS NULL
            AND json_extract(document,'$.created_at_ms') >= ?`,
       )
       .all(since) as Call[];
@@ -141,8 +150,23 @@ if (import.meta.main) {
   };
   const text = `${JSON.stringify(report, null, 2)}\n`;
   if (out) {
-    mkdirSync(dirname(out), { recursive: true });
-    writeFileSync(out, text);
+    const target = resolve(out);
+    mkdirSync(dirname(target), { recursive: true });
+    // Never overwrite the ledger (or its WAL/SHM files) through a typo or link.
+    const ledger = realpathSync(database);
+    const real = (() => {
+      try {
+        return realpathSync(target);
+      } catch {
+        return join(realpathSync(dirname(target)), basename(target));
+      }
+    })();
+    if ([ledger, `${ledger}-wal`, `${ledger}-shm`, `${ledger}-journal`].includes(real)) {
+      throw new Error("--out must not name the ledger database");
+    }
+    const staged = `${target}.tmp-${process.pid}`;
+    writeFileSync(staged, text);
+    renameSync(staged, target);
   } else {
     process.stdout.write(text);
   }

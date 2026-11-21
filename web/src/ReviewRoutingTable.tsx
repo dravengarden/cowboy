@@ -22,7 +22,7 @@ export function costLabel(row: RoutingRow, costs: Record<string, RoutingCost>): 
   if (!cost) return "cost unknown";
   const parts: string[] = [];
   if (cost.field) parts.push(`${tokens(cost.field.median_tokens)} tokens, ${cost.field.median_minutes} min (n=${cost.field.n})`);
-  if (cost.pilot && cost.pilot !== "unknown" && cost.pilot.serious_recall) parts.push(`pilot ${cost.pilot.serious_recall}`);
+  if (cost.serious_recall) parts.push(`pilot ${cost.serious_recall}`);
   return parts.length ? parts.join(" · ") : "cost unknown";
 }
 
@@ -33,7 +33,8 @@ export function ReviewRoutingTable({ routing }: { routing: ReviewRouting }): Rea
     <Box data-review-routing sx={{ py: 0.75 }}>
       <Typography variant="body2">Review routing</Typography>
       <Typography variant="caption" color="text.secondary" component="p">
-        Chosen by declared risk; evidence {routing.evidence}. Tokens are field medians, not quota.
+        The table's first choice per tier, before your family lists; a session never reviews with its own model.
+        Evidence {routing.evidence}; tokens are code-review field medians, not quota.
       </Typography>
       {Object.entries(routing.providers).map(([provider, table]) => (
         <Box key={provider} sx={{ mt: 0.75 }}>
