@@ -582,7 +582,7 @@ pub(in crate::server) async fn dispatch_calls_from(
         },
         Action::Result { call_id } => match ledger.inspect(&call_id).await {
             Ok(Some(record)) if record.state.terminal() => {
-                withdraw_read_notice(&state.hub, &meta.id, &record);
+                super::runner::outcome::withdraw_read_notice(&state.hub, &meta.id, &record);
                 let mut value = envelope(&record);
                 value["result"] = record.result.clone().unwrap_or(Value::Null);
                 value
@@ -603,22 +603,6 @@ pub(in crate::server) async fn dispatch_calls_from(
         | Action::AgentRead { .. }
         | Action::AgentInvoke { .. } => error("invalid_contract", "not_submitted"),
     }
-}
-
-/// A human-paced parent (Antigravity) waits for its call inside the turn, so
-/// the finished-call notice parked as a draft is stale once that parent has
-/// read the result itself. Withdraw it only while it is still the untouched,
-/// unscheduled notice: an owner edit or schedule keeps the draft.
-fn withdraw_read_notice(hub: &crate::core::Hub, caller: &str, record: &Record) {
-    if record.placement.parent_session_id != caller {
-        return;
-    }
-    let cmid = format!(
-        "{}{}",
-        crate::agent_model::CALL_NOTICE_PREFIX,
-        record.call_id
-    );
-    let _ = hub.remove_draft_if_unchanged(caller, &cmid, &super::runner::call_notice(record), &[]);
 }
 
 async fn wait(state: &AppState, ledger: &Ledger, call: &str, timeout_ms: u64) -> Option<Record> {
@@ -1525,40 +1509,6 @@ mod tests {
             "finished_at_ms": finished_at_ms
         }))
         .unwrap()
-    }
-
-    #[test]
-    fn reading_a_result_withdraws_only_the_untouched_parked_notice() {
-        let hub = crate::core::Hub::new();
-        for id in ["parent-1", "other"] {
-            hub.create_local_session(
-                id.to_owned(),
-                "antigravity".to_owned(),
-                "/tmp".to_owned(),
-                "t".to_owned(),
-                crate::core::SessionOrigin::Web,
-                false,
-            );
-        }
-        let drafts = |id: &str| hub.queue_and_drafts(id, |_| true).unwrap().1;
-        let done = record("completed", Some(1), 1);
-        hub.submit_call_notice(
-            "parent-1",
-            "call-1",
-            super::super::runner::call_notice(&done),
-        );
-        assert_eq!(drafts("parent-1").len(), 1);
-        // Another session reading the call never touches the parent's drafts.
-        withdraw_read_notice(&hub, "other", &done);
-        assert_eq!(drafts("parent-1").len(), 1);
-        withdraw_read_notice(&hub, "parent-1", &done);
-        assert!(drafts("parent-1").is_empty());
-        // An owner-edited notice stays.
-        let mut edited = record("completed", Some(1), 1);
-        edited.call_id = "call-2".into();
-        hub.submit_call_notice("parent-1", "call-2", "owner wrote this".into());
-        withdraw_read_notice(&hub, "parent-1", &edited);
-        assert_eq!(drafts("parent-1").len(), 1);
     }
 
     #[test]
