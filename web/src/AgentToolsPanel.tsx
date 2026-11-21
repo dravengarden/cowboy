@@ -129,13 +129,15 @@ function ReviewPreferenceRows(
         const key = family === "claude" ? "claude_effort" : "gpt_effort";
         const name = family === "claude" ? "Claude" : "GPT";
         return (
-          <Row key={key} label={`${name} routine effort`}
-            description="Reviews declared high risk always start at Max">
+          <Row key={key} label={`${name} review cost`}
+            description={family === "gpt"
+              ? "Balanced: routine reviews use Sol Max, high-risk reviews Astra Max. Economy: routine reviews start at Medium."
+              : "Balanced: reviews use Opus; Fable only when a high-risk review names it. Economy: routine reviews use Opus default."}>
             <Select size="small" value={review[key] ?? "max"} disabled={disabled}
-              inputProps={{ "aria-label": `${name} routine review effort` }}
+              inputProps={{ "aria-label": `${name} review cost` }}
               onChange={(event) => onChange({ ...review, [key]: event.target.value as ReviewEffort })}>
-              <MenuItem value="max">Max first</MenuItem>
-              <MenuItem value="standard">Standard first</MenuItem>
+              <MenuItem value="max">Balanced</MenuItem>
+              <MenuItem value="standard">Economy</MenuItem>
             </Select>
           </Row>
         );

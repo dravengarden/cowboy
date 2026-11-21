@@ -3,7 +3,9 @@
 use crate::usage::UsageSnapshot;
 use serde_json::{Value, json};
 
-pub(super) const GUIDANCE: &str = "For Review/Design Review, use providers[].review_candidates in order: session preferences override Settings defaults. Only Opus, Fable, Astra and SOL participate. review_candidates is the routine order: review_preferences.*_effort (max or standard) orders effort inside a family. Declare risk:'high' (security, permissions, concurrency, persistence, deletion, money, large refactors) so an omitted preset starts at Max in the first family; an explicit preset still wins. Preset trade-off evidence: cowboy_read({help:'models'}). Choose the first preferred family with fresh sufficient account AND model quota. Do not skip a preferred family merely because another is stronger. Unknown/stale quota is not ample; inspect windows and reset times before choosing. Explicit user choice takes precedence within the allowed list. Pass --agent, --preset and --reason; explain any skipped preference. No silent fallback after a failed call: diagnose before retrying. Analysis/image calls are unaffected. usedPercent is USED; resetsAt is epoch seconds. Large quota payloads: use cowboy.usage.read.";
+mod routing;
+
+pub(super) const GUIDANCE: &str = "For Review/Design Review, the Controller picks the reviewer from providers[].review_routing by declared risk; cost matters. Declare risk from the review root's own guidance (its AGENTS.md/CLAUDE.md Review risk section) and the affected paths: risk:'high' (security, permissions, concurrency, persistence, deletion, money, large refactors, or a risk area that guidance names) needs a reason and gets the strongest reviewer (Astra Max; Claude starts at Opus, Fable only by explicit preset with high risk). Everything else is routine (Sol Max; Claude Opus). Omit preset unless the user named one; a routine review refuses a stronger preset (preset_outside_tier), and a user-named stronger preset is sent with risk:'high' and that request as its reason. Confirm named fixes with a cheaper preset from review_routing.cheaper, or continue the same review child, instead of a fresh full review. Evidence and test-run audits are analysis calls, not reviews; design and contract checks stay design reviews. Costs are measured tokens, not quota; inspect quota windows and reset times before choosing a Provider. review_candidates is the routine order for older callers. No silent fallback after a failed call: diagnose before retrying. usedPercent is USED; resetsAt is epoch seconds. Large quota payloads: use cowboy.usage.read.";
 
 pub(super) fn family(model: &str) -> Option<&'static str> {
     // Signed presets may carry a context suffix such as `opus[1m]`.
@@ -21,16 +23,26 @@ pub(super) fn family(model: &str) -> Option<&'static str> {
     }
 }
 
+/// The preset a fresh review runs: the explicit one if its tier admits it,
+/// otherwise the tier's automatic choice. `reviewers` is every preset the
+/// session's family lists admit, so a known reviewer outside the tier gets
+/// its own refusal.
 pub(super) fn review_preset(
     choices: &[Value],
+    reviewers: &[Value],
     explicit: Option<&str>,
 ) -> Result<String, &'static str> {
+    let named =
+        |list: &[Value], id: &str| list.iter().any(|choice| choice["id"].as_str() == Some(id));
     if let Some(id) = explicit {
-        return choices
-            .iter()
-            .any(|choice| choice["id"].as_str() == Some(id))
-            .then(|| id.to_owned())
-            .ok_or("review_model_not_allowed");
+        if named(choices, id) {
+            return Ok(id.to_owned());
+        }
+        return Err(if named(reviewers, id) {
+            "preset_outside_tier"
+        } else {
+            "review_model_not_allowed"
+        });
     }
     choices
         .first()
@@ -39,7 +51,68 @@ pub(super) fn review_preset(
         .ok_or("preset_unavailable")
 }
 
+/// Fresh-review presets for a declared risk: the automatic choice first, then
+/// the other presets the tier admits (docs/review-routing.md). A Provider or
+/// generation the routing table does not cover keeps the legacy order.
 pub(super) fn candidates(
+    presets: &Value,
+    provider: &str,
+    preference: &super::super::agent_tools::ReviewPreferences,
+    high_risk: bool,
+) -> Vec<Value> {
+    use super::super::agent_tools::ReviewEffort;
+    let policy = if provider == "codex" {
+        preference.gpt_effort
+    } else {
+        preference.claude_effort
+    };
+    let level = if high_risk {
+        routing::Level::High
+    } else if policy == ReviewEffort::Standard {
+        routing::Level::Economy
+    } else {
+        routing::Level::Routine
+    };
+    let pool = legacy(presets, provider, preference, true);
+    routing::TABLE
+        .as_ref()
+        .and_then(|table| routing::order(table, provider, level, &pool))
+        .unwrap_or_else(|| legacy(presets, provider, preference, high_risk))
+}
+
+/// Every reviewer preset the session's family lists admit, strongest first.
+pub(super) fn reviewers(
+    presets: &Value,
+    provider: &str,
+    preference: &super::super::agent_tools::ReviewPreferences,
+) -> Vec<Value> {
+    legacy(presets, provider, preference, true)
+}
+
+/// What the caller sees of the tiers: each tier's automatic preset and the
+/// cheaper presets a routine review may name, with measured costs.
+pub(super) fn routing_view(
+    presets: &Value,
+    provider: &str,
+    preference: &super::super::agent_tools::ReviewPreferences,
+) -> Value {
+    let Some(table) = routing::TABLE.as_ref() else {
+        return Value::Null;
+    };
+    let entry =
+        |preset: &Value| json!({"preset": preset["id"], "cost": routing::cost(table, preset)});
+    let high = candidates(presets, provider, preference, true);
+    let routine = candidates(presets, provider, preference, false);
+    json!({
+        "evidence": table.evidence,
+        "high": high.first().map(entry),
+        "routine": routine.first().map(entry),
+        "cheaper": routine.iter().skip(1).map(entry).collect::<Vec<_>>(),
+    })
+}
+
+/// The family/effort order that predates the routing table.
+fn legacy(
     presets: &Value,
     provider: &str,
     preference: &super::super::agent_tools::ReviewPreferences,
@@ -134,68 +207,118 @@ mod tests {
     use crate::usage::{ProviderRefreshState, ProviderUsage};
 
     #[test]
-    fn review_order_precedes_strength_and_excludes_weak_or_removed_models() {
-        let presets = json!([
+    fn routing_tiers_choose_and_bound_reviewers_within_the_family_lists() {
+        use super::super::super::agent_tools::{ReviewEffort, ReviewPreferences};
+        let ids = |list: Vec<Value>| {
+            list.iter()
+                .map(|v| v["id"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+        let claude = json!([
             {"id":"fable-max","values":{"model":"claude-fable-5-1[1m]","effort":"max"}},
             {"id":"sonnet-high","values":{"model":"sonnet","effort":"high"}},
             {"id":"opus-default","values":{"model":"opus","effort":"default"}},
             {"id":"opus-high","values":{"model":"opus","effort":"high"}}
         ]);
-        let mut preference = super::super::super::agent_tools::ReviewPreferences::default();
-        let ids = |p: &super::super::super::agent_tools::ReviewPreferences| {
-            candidates(&presets, "claude-code", p, false)
-                .iter()
-                .map(|v| v["id"].as_str().unwrap().to_owned())
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(ids(&preference), ["opus-high", "opus-default", "fable-max"]);
-        let choices = candidates(&presets, "claude-code", &preference, false);
-        assert_eq!(review_preset(&choices, None).unwrap(), "opus-high");
+        let mut preference = ReviewPreferences::default();
+        let routine = candidates(&claude, "claude-code", &preference, false);
+        let all = reviewers(&claude, "claude-code", &preference);
+        // Opus is the automatic Claude reviewer; Fable needs a high-risk call.
+        assert_eq!(ids(routine.clone()), ["opus-high", "opus-default"]);
+        assert_eq!(review_preset(&routine, &all, None).unwrap(), "opus-high");
         assert_eq!(
-            review_preset(&choices, Some("fable-max")).unwrap(),
+            review_preset(&routine, &all, Some("fable-max")),
+            Err("preset_outside_tier")
+        );
+        let high = candidates(&claude, "claude-code", &preference, true);
+        assert_eq!(ids(high.clone())[0], "opus-high");
+        assert_eq!(
+            review_preset(&high, &all, Some("fable-max")).unwrap(),
             "fable-max"
         );
         assert_eq!(
-            review_preset(&choices, Some("sonnet-high")),
+            review_preset(&high, &all, Some("sonnet-high")),
             Err("review_model_not_allowed")
         );
-        assert_eq!(review_preset(&[], None), Err("preset_unavailable"));
-        preference.claude = vec!["fable".into(), "opus".into()];
-        assert_eq!(ids(&preference)[0], "fable-max");
+        assert_eq!(review_preset(&[], &[], None), Err("preset_unavailable"));
+        // Family lists still filter: Fable only, or Opus only.
+        preference.claude = vec!["fable".into()];
+        assert!(
+            candidates(&claude, "claude-code", &preference, false)
+                .iter()
+                .all(|v| v["id"] == "fable-max")
+        );
         preference.claude = vec!["opus".into()];
-        assert!(!ids(&preference).iter().any(|v| v.contains("fable")));
+        assert!(
+            !ids(candidates(&claude, "claude-code", &preference, true))
+                .iter()
+                .any(|v| v.contains("fable"))
+        );
         assert_eq!(family("gpt-6.1-sol"), Some("sol"));
         assert_eq!(family("opus[1m]"), Some("opus"));
         assert_eq!(family("claude-fable-5-1[1m]"), Some("fable"));
+
         let gpt = json!([
             {"id":"astra-max","values":{"model":"gpt-6.2-astra","reasoning_effort":"max"}},
             {"id":"astra-medium","values":{"model":"gpt-6.2-astra","reasoning_effort":"medium"}},
             {"id":"sol-max","values":{"model":"gpt-6.2-sol","reasoning_effort":"max"}},
             {"id":"sol-medium","values":{"model":"gpt-6.2-sol","reasoning_effort":"medium"}}
         ]);
-        let order = |p: &super::super::super::agent_tools::ReviewPreferences, high: bool| {
-            candidates(&gpt, "codex", p, high)
-                .iter()
-                .map(|v| v["id"].as_str().unwrap().to_owned())
-                .collect::<Vec<_>>()
-        };
-        let mut gpt_preference = super::super::super::agent_tools::ReviewPreferences::default();
+        let mut preference = ReviewPreferences::default();
+        let all = reviewers(&gpt, "codex", &preference);
+        let routine = candidates(&gpt, "codex", &preference, false);
         assert_eq!(
-            order(&gpt_preference, false),
-            ["astra-max", "astra-medium", "sol-max", "sol-medium"]
-        );
-        gpt_preference.gpt_effort = super::super::super::agent_tools::ReviewEffort::Standard;
-        // Family order still wins; only the effort order within it changes.
-        assert_eq!(
-            order(&gpt_preference, false),
-            ["astra-medium", "astra-max", "sol-medium", "sol-max"]
+            ids(routine.clone()),
+            ["sol-max", "astra-medium", "sol-medium"]
         );
         assert_eq!(
-            order(&gpt_preference, true),
+            review_preset(&routine, &all, Some("astra-max")),
+            Err("preset_outside_tier")
+        );
+        assert_eq!(
+            review_preset(&routine, &all, Some("astra-medium")).unwrap(),
+            "astra-medium"
+        );
+        assert_eq!(
+            ids(candidates(&gpt, "codex", &preference, true)),
             ["astra-max", "astra-medium", "sol-max", "sol-medium"]
+        );
+        preference.gpt_effort = ReviewEffort::Standard;
+        assert_eq!(
+            ids(candidates(&gpt, "codex", &preference, false)),
+            ["sol-medium", "astra-medium", "sol-max"]
+        );
+        assert_eq!(
+            ids(candidates(&gpt, "codex", &preference, true))[0],
+            "astra-max"
+        );
+        // SOL only: the routine tier stays inside the list.
+        preference.gpt = vec!["sol".into()];
+        preference.gpt_effort = ReviewEffort::Max;
+        assert_eq!(
+            ids(candidates(&gpt, "codex", &preference, false)),
+            ["sol-max", "sol-medium"]
+        );
+        assert_eq!(
+            ids(candidates(&gpt, "codex", &preference, true))[0],
+            "sol-max"
+        );
+        // A generation the table does not know keeps the legacy order.
+        let older = json!([
+            {"id":"astra-max","values":{"model":"gpt-6-astra","reasoning_effort":"max"}},
+            {"id":"sol-max","values":{"model":"gpt-6.1-sol","reasoning_effort":"max"}}
+        ]);
+        let preference = ReviewPreferences::default();
+        assert_eq!(
+            ids(candidates(&older, "codex", &preference, false)),
+            ["astra-max", "sol-max"]
         );
         assert_eq!(family("gpt-6-astra"), Some("astra"));
         assert_eq!(family("gpt-6-luna"), None);
+        let view = routing_view(&gpt, "codex", &preference);
+        assert_eq!(view["routine"]["preset"], "sol-max");
+        assert_eq!(view["routine"]["cost"]["n"], 4);
+        assert_eq!(view["high"]["preset"], "astra-max");
     }
 
     #[test]

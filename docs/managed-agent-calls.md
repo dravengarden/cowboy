@@ -318,6 +318,14 @@ preset is still limited to the allowed families. The stored request keeps
 the declared risk beside the resolved preset. The defaults keep the previous
 behavior until a person opts a kind into `standard`.
 
+Since 2026-11-21 the routing table in [`review-routing.md`](review-routing.md)
+supersedes the effort ordering above for Providers and generations it covers:
+`high` gets the strongest reviewer, routine gets the routine tier and refuses a
+stronger explicit preset (`preset_outside_tier`), `high` needs a caller-written
+reason (`risk_reason_required`), and `standard` selects the economy tier. The
+family lists still filter eligibility. Capabilities add `review_routing` with
+each tier's automatic preset and measured cost.
+
 Capabilities exposes effective `review_preferences` and each Provider's ordered
 signed preset IDs in `review_candidates` in routine order (metadata stays in
 `presets`); a high-risk review reorders effort Max first within each family. The calling model chooses the first preferred family

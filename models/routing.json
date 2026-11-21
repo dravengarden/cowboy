@@ -1,0 +1,126 @@
+{
+  "schema": 1,
+  "evidence": "2026-11-21",
+  "note": "Review and design review tiers (docs/review-routing.md). `auto` rows choose the automatic preset in order; `allow` rows bound the explicit presets a routine review may name (a high-risk review may name any reviewer preset). A row matches a runnable preset by reviewer family, optional exact model and optional efforts. Costs are pilot totals, not billing or subscription quota.",
+  "providers": {
+    "codex": {
+      "high": {
+        "auto": [
+          {
+            "family": "astra",
+            "model": "gpt-6.2-astra",
+            "efforts": [
+              "max"
+            ]
+          }
+        ]
+      },
+      "routine": {
+        "auto": [
+          {
+            "family": "sol",
+            "model": "gpt-6.2-sol",
+            "efforts": [
+              "max"
+            ]
+          }
+        ],
+        "allow": [
+          {
+            "family": "sol"
+          },
+          {
+            "family": "astra",
+            "efforts": [
+              "high",
+              "medium",
+              "low",
+              "default"
+            ]
+          }
+        ]
+      },
+      "economy": {
+        "auto": [
+          {
+            "family": "sol",
+            "model": "gpt-6.2-sol",
+            "efforts": [
+              "medium"
+            ]
+          },
+          {
+            "family": "astra",
+            "model": "gpt-6.2-astra",
+            "efforts": [
+              "medium"
+            ]
+          }
+        ]
+      }
+    },
+    "claude-code": {
+      "high": {
+        "auto": [
+          {
+            "family": "opus",
+            "efforts": [
+              "high"
+            ]
+          }
+        ]
+      },
+      "routine": {
+        "auto": [
+          {
+            "family": "opus",
+            "efforts": [
+              "high"
+            ]
+          }
+        ],
+        "allow": [
+          {
+            "family": "opus"
+          }
+        ]
+      },
+      "economy": {
+        "auto": [
+          {
+            "family": "opus",
+            "efforts": [
+              "default"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "costs": {
+    "gpt-6.2-astra:max": {
+      "median_tokens": 6070000,
+      "n": 4,
+      "serious_recall": "14/14",
+      "source": "models/pilots/2026-11-18-review-pilot.json"
+    },
+    "gpt-6.2-sol:max": {
+      "median_tokens": 3220000,
+      "n": 4,
+      "serious_recall": "12/14 (unblinded match)",
+      "source": "models/pilots/2026-11-21-sol-max-arm.json"
+    },
+    "gpt-6.2-astra:medium": {
+      "median_tokens": 580000,
+      "n": 4,
+      "serious_recall": "9/14",
+      "source": "models/pilots/2026-11-18-review-pilot.json"
+    },
+    "gpt-6.2-sol:medium": {
+      "median_tokens": 880000,
+      "n": 4,
+      "serious_recall": "9/14",
+      "source": "models/pilots/2026-11-18-review-pilot.json"
+    }
+  }
+}

@@ -739,6 +739,7 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             // `--preset` choices; the session's Tools choose otherwise.
             "presets": runnable_presets,
             "review_candidates": super::selection::candidates(&runnable_presets, provider, &policy.review, false).iter().filter_map(|p| p["id"].as_str()).collect::<Vec<_>>(),
+            "review_routing": super::selection::routing_view(&runnable_presets, provider, &policy.review),
             "access": ["read-only"],
             "output": if readiness.structured_output { json!(["text","json_schema"]) } else { json!(["text"]) },
             "conversation": ["fresh","continue"],
@@ -963,13 +964,39 @@ async fn start(
             .labels
             .get(crate::managed_calls::review::RISK)
             .is_some_and(|risk| risk == "high");
+        // A stronger tier needs a reason the caller wrote; the CLI fills an
+        // omitted reason with its own default, which is no reason.
+        if high_risk
+            && request.labels.get("selection_reason").is_none_or(|reason| {
+                reason.trim().is_empty() || reason == "Session Tools selection"
+            })
+        {
+            let mut refused = error("risk_reason_required", "not_submitted");
+            refused["error"]["hint"] = json!(
+                "risk:'high' needs a reason naming the risk (for example persistence, permissions or a risk area in the review root's guidance)"
+            );
+            return refused;
+        }
         let choices =
             super::selection::candidates(&runnable, &target.agent, &policy.review, high_risk);
-        // Generic Tools pins apply to ordinary calls. Review uses its own
-        // ordered list unless this invocation explicitly names a signed preset.
-        target.preset = match super::selection::review_preset(&choices, preset) {
+        let reviewers = super::selection::reviewers(&runnable, &target.agent, &policy.review);
+        // Generic Tools pins apply to ordinary calls. Review uses its tier's
+        // ordered list; an explicit signed preset must be one the tier admits.
+        target.preset = match super::selection::review_preset(&choices, &reviewers, preset) {
             Ok(selected) => Some(selected),
-            Err(code) => return error(code, "not_submitted"),
+            Err(code) => {
+                let mut refused = error(code, "not_submitted");
+                if code == "preset_outside_tier" {
+                    refused["error"]["hint"] = json!(format!(
+                        "this preset is stronger than a routine review needs; omit preset (automatic: {}), name a cheaper one, or declare risk:'high' with a reason",
+                        choices
+                            .first()
+                            .and_then(|choice| choice["id"].as_str())
+                            .unwrap_or("none")
+                    ));
+                }
+                return refused;
+            }
         };
         target.options = None;
     }
