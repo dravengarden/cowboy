@@ -83,6 +83,17 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.128.0 records provider-runtime 1.3.13, whose
+`cowboy-antigravity-acp` 1.0.11 lists a repository's skills
+(`.agents/skills`, `.claude/skills`) in an Antigravity session's projection
+and offers each as a slash command, as Claude and Codex discover them
+natively ([Repository skills](antigravity-real-accounts-design.md#slash-commands-available_commands_update)).
+Antigravity 0.2.13 pins it and adds the Claude Opus 5.5 High and Claude
+Sonnet 5.5 High cards that `agy` serves on the Google account. The other six
+Providers pinning provider-runtime advance one patch version (claude-code
+3.20.58, claude-deepseek 3.1.76, codex 3.6.17, codex-deepseek 3.1.76,
+deepseek-harness 1.0.34, grok 3.2.15).
+
 Component release 3.122.0 records provider-runtime 1.3.8, whose
 `cowboy-antigravity-acp` 1.0.6 makes `agy`'s native `/compact` (the Web's
 compact action) visible: the proxy reports it as ACP's typed

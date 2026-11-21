@@ -1358,6 +1358,24 @@ prompt grows by one tool schema and one routing sentence (`UpdatePlan`).
 The proxy drops exactly these five from `available_commands_update`; any
 other or future command is offered.
 
+**Repository skills (Antigravity 0.2.13).** Claude and Codex discover a
+repository's skills natively; `agy` sees only its own empty directory. When
+the proxy builds a session's projection it also reads, through the execution
+connection, each `<dir>/.agents/skills/*/SKILL.md` and
+`<dir>/.claude/skills/*/SKILL.md` from the repository root down to the
+working directory, with the guidance files' path rules (canonical paths
+inside the repository, no symlinked directory or file, so a `.claude/skills`
+link to `.agents/skills` is read once). Only the frontmatter `name` and
+`description` are read (at most 64 skills, 600 characters per description,
+a 24 KiB section); the deepest definition of a name wins. The projection
+lists them, fenced as repository content, with each `SKILL.md` path and the
+rule to read the file with `mcp_cowboy_ReadFile` before using a skill. Each
+skill is also offered as a slash command after `agy`'s own (a skill never
+shadows an `agy` command): a prompt whose first text block is `/<skill>
+[request]` reaches `agy` as the instruction to read that `SKILL.md` and
+follow it for the request, while the transcript and memory keep the owner's
+words. Workflows (`.agents/workflows/*.md`) are not projected.
+
 ### Denied built-ins and why
 
 | Tool(s) | Reason | Alternative named in the hook's denial |
@@ -1403,9 +1421,8 @@ reports their steps over ACP (e.g. as ACP subagent sessions, which Cowboy's
   message, but Cowboy MCP's `queue.submit` has no `scheduled_at_ms`; adding
   it (Controller) would let the model schedule its own follow-up through the
   extension tools.
-- Repository workflows (`.agents/workflows/*.md`) and skills are not seen by
-  `agy` (its directory is empty); projecting them as slash commands needs a
-  worker-side command source.
+- Repository workflows (`.agents/workflows/*.md`) are not seen by `agy`
+  (skills are, since 0.2.13: "Repository skills").
 - `search_web`/`read_url_content` results stay invisible until `agy` reports
   them over ACP.
 - `generate_image`: allowing it needs the image returned over ACP or copied

@@ -858,6 +858,14 @@ These boundaries are mandatory and fail closed:
   authorization URL and pasted code, and never reads, parses, exports, copies,
   injects, refreshes or forwards Google OAuth credentials, nor calls Google
   backends directly. Usage is shown only from a documented `agy`/ACP surface.
+  One owner-approved exception (2026-11-20): when `agy` 1.5.9 print mode
+  refuses `/usage` at its eligibility check (an ineligible free tier listed
+  beside the paid tier that serves the account, observed over IPv4 too), the
+  account-sandbox usage unit, as the account's own identity, reads the access
+  token `agy` just refreshed and asks Cloud Code's quota summary itself. It
+  never refreshes, writes, prints or forwards the token, the root daemon
+  never sees it, and every other path keeps the rule above. See
+  [Antigravity account quota](antigravity-real-accounts-design.md#account-quota-antigravity-0210).
 - Every Antigravity account uses Machine-local native-owned custody; its
   credentials never enter the Controller candidate, vault or replica pipeline
   (same fence as named Claude subscriptions). Antigravity therefore has no

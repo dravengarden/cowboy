@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { posix } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { inside } from "./facade.mjs";
+import { discoverSkills, skillsSection } from "./skills.mjs";
 
 export const PROJECTION_LIMITS = Object.freeze({
   statusLines: 200,
@@ -121,8 +122,11 @@ async function readGuidance(facade, file, room, root) {
   }
 }
 
-/** Build the projection for a session whose target directory is `cwd`. */
-export async function buildProjection(facade, cwd) {
+/**
+ * Build the projection for a session whose target directory is `cwd`;
+ * `onSkills` receives the repository skills it lists.
+ */
+export async function buildProjection(facade, cwd, { onSkills } = {}) {
   const info = facade.connection.info ?? {};
   if (info.platformOs !== "linux") throw new Error("The target OS differs from the runtime OS");
   if (!posix.isAbsolute(cwd) || !inside(facade.root, cwd)) {
@@ -172,6 +176,8 @@ export async function buildProjection(facade, cwd) {
       guidance.push(`--- ${file} ---\n${text}${read.cut ? "\n[truncated]" : ""}`);
     }
   }
+  const skills = await discoverSkills(facade, guidanceDirectories(git.top, cwd), git.top ?? cwd);
+  onSkills?.(skills);
   const sections = [
     "<cowboy_routing>",
     ROUTING,
@@ -190,5 +196,7 @@ export async function buildProjection(facade, cwd) {
       "</repository_guidance>",
     );
   }
+  const listed = skillsSection(skills, fence);
+  if (listed) sections.push(listed);
   return sections.join("\n");
 }

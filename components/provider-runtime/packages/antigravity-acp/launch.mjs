@@ -226,7 +226,7 @@ export async function prepareRuntime({
   extensions.catch(() => {});
   await buildProjection(facade, facade.root);
   const { server, socketPath, channels } = await listen(facade, temporary);
-  return {
+  const runtime = {
     facade,
     connection,
     server,
@@ -242,9 +242,18 @@ export async function prepareRuntime({
     sessionCwd: (cwd) => (cwd === descriptor.binding.runtime?.cwd ? facade.root : cwd),
     // A session starts with its extensions, or not at all.
     projection: async (cwd) =>
-      [await buildProjection(facade, cwd), extensionGuidance(await extensions)]
+      [
+        await buildProjection(facade, cwd, {
+          onSkills: (skills) => {
+            runtime.skills = skills;
+          },
+        }),
+        extensionGuidance(await extensions),
+      ]
         .filter(Boolean)
         .join("\n\n"),
+    /** The repository skills the latest projection listed. */
+    skills: [],
     memory,
     newChannel: () => {
       const channel = randomUUID();
@@ -260,6 +269,7 @@ export async function prepareRuntime({
     }),
     evidence: new AgyLog(join(home, ".gemini", "antigravity-cli", "log"), agyPid),
   };
+  return runtime;
 }
 
 function frames(stream, onMessage, onEnd) {

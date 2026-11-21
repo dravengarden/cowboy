@@ -3172,8 +3172,14 @@ fn counter_only_snapshot_keeps_the_stored_raw_reading() {
     };
     // A reconnect snapshot with the same counters is not a newer reading.
     hub.set_session_usage("usage-raw", counters(492_536));
-    assert_eq!(hub.session_info("usage-raw").expect("session").meta.usage, Some(usage));
-    assert!(rx.try_recv().is_err(), "an unchanged reading must not be persisted");
+    assert_eq!(
+        hub.session_info("usage-raw").expect("session").meta.usage,
+        Some(usage)
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "an unchanged reading must not be persisted"
+    );
 
     // Moved counters replace it: the stored raw fields are stale.
     hub.set_session_usage("usage-raw", counters(500_000));

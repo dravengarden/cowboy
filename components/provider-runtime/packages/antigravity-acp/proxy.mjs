@@ -15,6 +15,7 @@ import {
   presentToolCall,
   resultContent,
 } from "./presentation.mjs";
+import { expandSkillCommand, skillCommands } from "./skills.mjs";
 
 /** Client requests a `runtime` unit forwards; everything else is refused. */
 export const RUNTIME_REQUESTS = Object.freeze([
@@ -240,6 +241,10 @@ export class AcpProxy {
     this.bound = new WeakMap();
     /** Result content of answered calls, until their terminal update. */
     this.results = new Map();
+    /** Repository skills of the latest session projection. */
+    this.skills = [];
+    /** The slash commands `agy` itself offers (after the denied ones). */
+    this.agyCommands = [];
     Promise.resolve(runtime).then(
       (ready) => {
         this.root = ready?.facade?.root;
@@ -320,7 +325,11 @@ export class AcpProxy {
   presentUpdate(message) {
     const update = message.params?.update;
     if (update?.sessionUpdate === "available_commands_update") {
-      const shown = availableCommands(update);
+      const kept = availableCommands(update);
+      const offered = Array.isArray(kept.availableCommands) ? kept.availableCommands : [];
+      this.agyCommands = offered.map((command) => command?.name);
+      const skills = skillCommands(this.skills, offered);
+      const shown = skills.length ? { ...kept, availableCommands: [...offered, ...skills] } : kept;
       return shown === update
         ? message
         : { ...message, params: { ...message.params, update: shown } };
@@ -487,6 +496,7 @@ export class AcpProxy {
         runtime.checkMirror(params.cwd);
         const projection = await runtime.projection(params.cwd);
         record.projection = projection;
+        this.skills = runtime.skills ?? [];
         record.channel = runtime.newChannel();
         record.session = params.sessionId;
         if (typeof params.sessionId === "string") {
@@ -510,6 +520,8 @@ export class AcpProxy {
       const prompt = forwarded.params?.prompt;
       // Memory recalls for the owner's words, as for Claude and Codex.
       const text = promptText(prompt);
+      // A repository skill's slash command becomes the instruction to use it.
+      forwarded.params.prompt = expandSkillCommand(prompt, this.skills, this.agyCommands);
       if (runtime.memory) {
         const context = await recall(runtime.memory, text);
         if (context) {
