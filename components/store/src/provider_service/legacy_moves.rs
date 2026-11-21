@@ -12,10 +12,12 @@
 //! Adoption retired with the legacy cards (`docs/legacy-card-retirement.md`).
 //! The journals it wrote and their fence and rotation route remain: a Machine
 //! that was offline during an adoption may still propose a rotation of a
-//! moved generation. The writer stays only to produce journals in tests.
+//! moved generation. The move itself stays only to produce journals in
+//! tests; `recover_legacy_moves` finishes a journal an interrupted adoption
+//! left behind.
 use super::*;
 
-const MOVES: &str = "legacy-moves";
+pub(super) const LEGACY_MOVES: &str = "legacy-moves";
 
 /// Where one Provider's root credential moved.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,10 +52,10 @@ impl ProviderAuthService {
                     .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'),
             "invalid Provider id"
         );
-        Ok(self.root.join(MOVES).join(format!("{provider_id}.json")))
+        Ok(self.root.join(LEGACY_MOVES).join(format!("{provider_id}.json")))
     }
 
-    fn read_move(&self, provider_id: &str) -> Option<LegacyMove> {
+    pub(super) fn read_move(&self, provider_id: &str) -> Option<LegacyMove> {
         if !self.account_id.is_default() || self.recipient_key.is_some() {
             return None;
         }
@@ -80,9 +82,8 @@ impl ProviderAuthService {
         Ok(())
     }
 
-    #[cfg(test)]
-    fn write_move(&self, providers: &[String], moved: &LegacyMove) -> Result<()> {
-        crate::provider_account::prepare_private_directory(&self.root.join(MOVES))?;
+    pub(super) fn write_move(&self, providers: &[String], moved: &LegacyMove) -> Result<()> {
+        crate::provider_account::prepare_private_directory(&self.root.join(LEGACY_MOVES))?;
         let bytes = serde_json::to_vec(moved)?;
         for provider_id in providers {
             atomic_write(&self.move_path(provider_id)?, &bytes, 0o600)?;

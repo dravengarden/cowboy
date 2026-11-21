@@ -46,6 +46,9 @@ static ATOMIC_WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 pub mod grants;
 mod legacy_moves;
 pub use legacy_moves::LegacyMove;
+use legacy_moves::LEGACY_MOVES;
+mod root_retirement;
+pub use root_retirement::ROOT_RETIRED;
 mod portable_accounts;
 mod scope_adoption;
 
@@ -177,6 +180,7 @@ pub struct ProviderAuthService {
     signer: MachineIdentity,
     providers: RwLock<BTreeMap<String, StoredProviderAuthentication>>,
     transient: RwLock<BTreeMap<String, TransientAuthenticationStatus>>,
+    retired_root: std::sync::OnceLock<fn(&str) -> bool>,
     // Drop scoped owners before releasing the outer vault's ownership.
     _owner: VaultOwner,
 }
@@ -251,6 +255,7 @@ impl ProviderAuthService {
             signer,
             providers: RwLock::new(providers),
             transient: RwLock::new(BTreeMap::new()),
+            retired_root: std::sync::OnceLock::new(),
         };
         for stored in service.providers.read().values() {
             validate_vault_plaintext(stored, &service.open_vault(stored)?)?;
@@ -652,6 +657,8 @@ impl ProviderAuthService {
         requested_provider_id: &str,
         (expected_generation, floor): (Option<u64>, u64),
     ) -> Result<Vec<ProviderAuthenticationStatus>> {
+        let scope = self.root_write_scope(packages, Some(requested_provider_id))?;
+        let packages = &*scope;
         ensure!(
             !packages.is_empty(),
             "authentication scope has no Providers"
@@ -742,6 +749,11 @@ impl ProviderAuthService {
         requested_provider_id: &str,
         expected_generation: u64,
     ) -> Result<ProviderAuthRefreshResult> {
+        if let Some(stale) = self.retired_refresh(packages, requested_provider_id) {
+            return Ok(stale);
+        }
+        let scope = self.root_write_scope(packages, None)?;
+        let packages = &*scope;
         self.require_portable_packages(packages)?;
         let (requested_package, plaintext) =
             validate_refresh_request(packages, bundle, requested_provider_id)?;

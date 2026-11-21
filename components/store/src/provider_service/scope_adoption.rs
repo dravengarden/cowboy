@@ -17,6 +17,8 @@ impl ProviderAuthService {
         &self,
         packages: &[ProviderPackage],
     ) -> Result<Vec<ProviderAuthenticationStatus>> {
+        let scope = self.root_write_scope(packages, None)?;
+        let packages = &*scope;
         if self.recipient_key.is_some() || packages.len() < 2 {
             return Ok(Vec::new());
         }
