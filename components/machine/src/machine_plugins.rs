@@ -398,6 +398,9 @@ impl MachinePluginStore {
         };
         // The journal owner is held and no login task has been admitted yet.
         store.recover_completed_auth_candidates()?;
+        // Private credential copies an interrupted read or reset left behind
+        // go before the Machine accepts any work.
+        store.remove_private_homes()?;
         Ok(store)
     }
 
@@ -2043,7 +2046,7 @@ impl MachinePluginStore {
             PreparedProviderAuth::Wipe => {
                 self.revoke_native_profiles(&envelope.provider_id)?;
                 let provider_auth_root = self.auth_provider_root(&envelope.provider_id);
-                for directory in ["materialized", "runtime"] {
+                for directory in ["materialized", "runtime", native_usage::PRIVATE_HOMES] {
                     let path = provider_auth_root.join(directory);
                     remove_projection::remove(&path)?;
                 }
@@ -6369,15 +6372,28 @@ mod tests {
         // session home; another generation is refused, and the copy is
         // removed with its guard.
         let (private, environment) = store.private_credential_home("grok", 1).unwrap().unwrap();
-        let private_root = private.0.clone();
+        let private_root = private.path().to_path_buf();
         assert!(PathBuf::from(&environment["HOME"]).starts_with(&private_root));
+        // Account-owned, beside the account's replicas; never the session's
+        // runtime home or the shared temporary directory.
+        let homes = root.join("machine/provider-auth/providers/grok/private-homes");
         assert!(
-            !PathBuf::from(&environment["HOME"]).starts_with(root.join("machine")),
-            "never the session home"
+            private_root.starts_with(&homes),
+            "{}",
+            private_root.display()
         );
+        assert!(!private_root.starts_with(std::env::temp_dir().join("cowboy-portable-home")));
         assert!(store.private_credential_home("grok", 2).is_err());
-        drop(private);
+        private.remove().unwrap();
         assert!(!private_root.exists());
+        // A copy an interrupted run left behind is removed at Machine start,
+        // and with the account's credentials.
+        let (left, _) = store.private_credential_home("grok", 1).unwrap().unwrap();
+        let left_root = left.path().to_path_buf();
+        std::mem::forget(left);
+        assert!(left_root.exists());
+        store.remove_private_homes().unwrap();
+        assert!(!left_root.exists());
         let verifications = store.runtime_verifications.load(Ordering::Relaxed);
         let collected = store
             .invoke_host_for_test(

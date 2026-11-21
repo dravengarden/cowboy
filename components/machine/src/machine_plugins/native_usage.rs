@@ -6,6 +6,7 @@ use std::sync::{Arc, Weak};
 
 mod portable;
 mod sandbox;
+pub(in crate::machine_plugins) use portable::PRIVATE_HOMES;
 pub use portable::{HostAdmission, PortableInvocation, PortableResetInvocation};
 
 /// Native processes share a home only within one account. They must not hold
@@ -229,15 +230,15 @@ impl MachinePluginStore {
             return refuse("native_reset_unsupported");
         }
         before_expiry(&invocation, dispatch)?;
+        let identity_started_ms = unix_ms();
         let report = run_unstarted(&checked, &check).await?;
         verify_reported_identity(&checked.environment, &report)?;
-        // The spend is the reset's second paced start: wait for its slot,
-        // within the Controller's expiry.
-        let wait = dispatch.spend_not_before_ms.saturating_sub(unix_ms());
+        // The spend is the reset's second paced start: wait for its slot and,
+        // with protocol 51, a full spacing after the identity read actually
+        // started, within the Controller's expiry.
+        let spend_at = spend_start(dispatch, identity_started_ms)?;
+        let wait = spend_at.saturating_sub(unix_ms());
         if wait > 0 {
-            if dispatch.spend_not_before_ms >= dispatch.expires_at_ms {
-                return refuse("native_reset_expired");
-            }
             // Never hold the installation lifecycle across the paced wait;
             // after it, the exact selected release must still be active.
             drop(lifecycle.take());
@@ -335,6 +336,23 @@ impl MachinePluginStore {
     }
 }
 
+/// When the spend may start: the Controller's paced slot and, when it sent the
+/// spacing, a full spacing after the identity read actually started. A spend
+/// that could then not start before the expiry is refused unsent.
+fn spend_start(
+    dispatch: &crate::machine_protocol::NativeResetDispatch,
+    identity_started_ms: i64,
+) -> Result<i64> {
+    let spend_at =
+        dispatch
+            .spend_not_before_ms
+            .max(dispatch.min_spacing_ms.map_or(i64::MIN, |spacing| {
+                identity_started_ms.saturating_add(spacing)
+            }));
+    ensure!(spend_at < dispatch.expires_at_ms, "native_reset_expired");
+    Ok(spend_at)
+}
+
 /// Refuse to start anything once the invocation or the Controller's dispatch
 /// expiry has passed.
 fn before_expiry(
@@ -377,7 +395,7 @@ async fn run_unstarted(
         || {},
     )
     .await
-    .map_err(|_| anyhow::anyhow!("native_usage_collector_failed"))?;
+    .map_err(|_| anyhow::anyhow!("native_reset_preflight_failed"))?;
     // An authentication failure keeps its category so the Service backs off.
     decode_host_response(&output).map_err(|failure| {
         if failure
@@ -387,7 +405,8 @@ async fn run_unstarted(
         {
             anyhow::anyhow!("native_usage_authentication_required")
         } else {
-            anyhow::anyhow!("native_usage_collector_failed")
+            // The identity read failed before any spend: unsent.
+            anyhow::anyhow!("native_reset_preflight_failed")
         }
     })
 }
@@ -660,6 +679,7 @@ mod tests {
             generation_digest: "digest".into(),
             expires_at_ms: i64::MAX,
             spend_not_before_ms: 0,
+            min_spacing_ms: None,
         };
         for (request, code) in [
             (invalid, "native_reset_request_invalid"),
@@ -674,6 +694,33 @@ mod tests {
             assert!(!failure.started, "{code}");
             assert_eq!(failure.error.to_string(), code);
         }
+    }
+
+    /// The spend keeps a full spacing from the identity read's actual start
+    /// and is refused (unsent) if it could then not start before expiry.
+    #[test]
+    fn the_spend_keeps_the_spacing_from_the_actual_identity_read() {
+        let dispatch =
+            |expires_at_ms, min_spacing_ms| crate::machine_protocol::NativeResetDispatch {
+                plugin_version: "1".into(),
+                generation_digest: "digest".into(),
+                expires_at_ms,
+                spend_not_before_ms: 1_000,
+                min_spacing_ms,
+            };
+        let now = unix_ms();
+        // An identity read that started late moves the spend.
+        assert_eq!(
+            spend_start(&dispatch(i64::MAX, Some(60_000)), now).unwrap(),
+            now + 60_000
+        );
+        assert_eq!(spend_start(&dispatch(i64::MAX, None), now).unwrap(), 1_000);
+        assert_eq!(
+            spend_start(&dispatch(now + 30_000, Some(60_000)), now)
+                .unwrap_err()
+                .to_string(),
+            "native_reset_expired"
+        );
     }
 
     #[test]
@@ -691,6 +738,7 @@ mod tests {
             generation_digest: "digest".into(),
             expires_at_ms,
             spend_not_before_ms: 0,
+            min_spacing_ms: None,
         };
         before_expiry(&invocation, &dispatch(i64::MAX)).unwrap();
         assert_eq!(
