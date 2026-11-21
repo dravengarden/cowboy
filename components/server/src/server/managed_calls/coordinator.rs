@@ -1022,8 +1022,7 @@ async fn start(
             crate::managed_calls::Purpose::Review | crate::managed_calls::Purpose::DesignReview
         )
     {
-        // Generic Tools pins apply to ordinary calls. Review uses its tier's
-        // ordered list; an explicit signed preset must be one the tier admits.
+        // Review uses its tier's list (docs/review-routing.md), not Tools pins.
         target.preset = match super::selection::admit(
             &request,
             &runnable,

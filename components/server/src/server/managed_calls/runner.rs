@@ -235,7 +235,7 @@ async fn drive(state: &Arc<AppState>, parent: &str, call: &str) {
         };
         if record.state.terminal() {
             settle(state, &record);
-            notify_parent(state, &record);
+            outcome::notify_parent(state, &record);
             return;
         }
         // A deleted or closing parent stops its owned active calls.
@@ -1438,30 +1438,6 @@ async fn reconfirm(
         release_refused_child(state, record, request);
     }
     Err(Step::Again)
-}
-
-/// Release a finished child's worker; its transcript and workspace stay.
-/// Queue the parent's opted-in completion notice. A parent that is gone or
-/// closing gets none; the Hub's call-scoped id absorbs a repeated notice.
-fn notify_parent(state: &AppState, record: &Record) {
-    if record
-        .labels
-        .get(crate::managed_calls::review::NOTIFY)
-        .is_none_or(|value| value != "parent")
-    {
-        return;
-    }
-    let parent = &record.placement.parent_session_id;
-    if state
-        .hub
-        .session_info(parent)
-        .is_none_or(|info| info.meta.closing)
-    {
-        return;
-    }
-    state
-        .hub
-        .submit_call_notice(parent, &record.call_id, call_notice(record));
 }
 
 fn call_notice(record: &Record) -> String {
