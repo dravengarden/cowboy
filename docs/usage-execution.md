@@ -54,10 +54,9 @@ allowed to redeem is the sessions' existing refresh path. The Controller puts
 again. For a Provider whose CLI rotates credentials (`compare_and_swap`) only a
 collector whose exact signed release declares (`collector/portable-account.json`,
 `token_refresh: "request"`) that it then reports authentication required runs;
-otherwise `portable_usage_refresh_unsupported`. No released Codex collector
-declares it yet (a refresh-free Codex release is pending), so named Codex usage
-also stays off until it ships;
-Grok's CLI may renew its sign-in on start, so named Grok usage stays off. No
+otherwise `portable_usage_refresh_unsupported`. Codex declares it from 3.6.16,
+so named Codex usage needs that release (or later) installed on the chosen
+Machine; Grok's CLI may renew its sign-in on start, so named Grok usage stays off. No
 Machine speaking protocol 50 was released before this, so no other capability
 negotiation is needed. An entered DeepSeek key is never refreshed.
 
