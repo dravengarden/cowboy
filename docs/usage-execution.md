@@ -56,7 +56,12 @@ collector whose exact signed release declares (`collector/portable-account.json`
 `token_refresh: "request"`) that it then reports authentication required runs;
 otherwise `portable_usage_refresh_unsupported`. Codex declares it from 3.6.16,
 so named Codex usage needs that release (or later) installed on the chosen
-Machine; Grok's CLI may renew its sign-in on start, so named Grok usage stays off. No
+Machine. Grok's CLI renews an expiring sign-in on start and after any 401, so
+from Grok 3.2.16 its collector never starts the CLI for such a request: it reads
+the current token, reports authentication required when it has (nearly)
+expired or xAI rejects it, and otherwise reads billing
+(`cli-chat-proxy.grok.com/v1/billing?format=credits`, projected exactly as the
+pinned CLI's `_x.ai/billing`), plan and resets directly. No
 Machine speaking protocol 50 was released before this, so no other capability
 negotiation is needed. An entered DeepSeek key is never refreshed.
 

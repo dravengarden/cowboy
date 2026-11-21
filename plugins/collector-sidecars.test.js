@@ -1,4 +1,5 @@
 import { test } from "bun:test";
+import assert from "node:assert/strict";
 import claudeCodeHost from "./claude-code/host.json" with { type: "json" };
 import { accountView, KNOWN_PLANS } from "./claude-code/collector/index.js";
 import { collectorTargets, group } from "./claude-deepseek/collector/index.js";
@@ -8,13 +9,21 @@ import {
   nearestCredit as nearestCodexCredit,
   readLines as codexLines,
 } from "./codex/collector/index.js";
+import billingCapture from "./grok-billing-cli.fixture.json" with { type: "json" };
 import {
+  AuthenticationRequired,
   activePlan,
+  billingProjection,
   credentialFromJson,
   encodeStringField,
+  GROK_CLI_VERSION,
+  handle as handleGrok,
   nearestCredit as nearestGrokCredit,
   readLines as grokLines,
 } from "./grok/collector/index.js";
+import grokDeclaration from "./grok/collector/portable-account.json" with { type: "json" };
+import grokHost from "./grok/host.json" with { type: "json" };
+import grokProvider from "./grok/provider.json" with { type: "json" };
 
 function equal(actual, expected, message) {
   const left = JSON.stringify(actual);
@@ -282,4 +291,164 @@ test("Codex collector never refreshes on other failures or a second expiry", asy
   });
   equal([failed, twice.calls.length], [true, 4], "single refresh");
   equal(codexTokenExpired(new Error("plain")), false, "plain error");
+});
+
+const grokCredential = { key: "fixture-token", userId: "user-fixture" };
+
+/** Billing answers `body`; plan and resets fail as they do without an account. */
+function fakeGrokFetch(billing) {
+  const calls = [];
+  const fetch = async (url, init) => {
+    calls.push({ url, headers: init?.headers });
+    if (url.startsWith("https://cli-chat-proxy.grok.com/")) {
+      return typeof billing === "number"
+        ? new Response("{}", { status: billing })
+        : Response.json(billing);
+    }
+    return new Response("", { status: 404 });
+  };
+  return { calls, fetch };
+}
+
+test("Grok direct billing reproduces the pinned CLI's _x.ai/billing projection", () => {
+  equal(billingCapture.cli_version, GROK_CLI_VERSION, "captured CLI");
+  for (const capture of billingCapture.cases) {
+    if (capture.cli.result && capture.direct !== "error") {
+      equal(billingProjection(capture.body), capture.cli.result, capture.name);
+    } else {
+      let refused = false;
+      try {
+        billingProjection(capture.body);
+      } catch {
+        refused = true;
+      }
+      equal(refused, true, `${capture.name} is refused like the CLI`);
+    }
+  }
+});
+
+test("Grok direct billing sends the CLI's request and pins its version", async () => {
+  const pinned = grokProvider.runtime.dependencies.find((entry) => entry.id === "xai-grok");
+  equal(pinned.version, GROK_CLI_VERSION, "header version follows the runtime pin");
+  const { calls, fetch } = fakeGrokFetch(billingCapture.cases[0].body);
+  await handleGrok(
+    { operation: "collect", token_refresh: false },
+    { credential: async () => grokCredential, fetch, startRpc: () => assert.fail("spawned") },
+  );
+  const captured = billingCapture.request;
+  equal(calls[0].url, `${captured.base_url}/billing?format=credits`, "billing URL");
+  for (const name of [
+    "x-xai-token-auth",
+    "x-userid",
+    "x-grok-client-version",
+    "x-grok-client-mode",
+  ]) {
+    equal(calls[0].headers[name], captured.headers[name], name);
+  }
+  equal(calls[0].headers.authorization, "Bearer fixture-token", "bearer");
+});
+
+test("Grok refresh-free usage never starts the CLI and matches the CLI path", async () => {
+  for (const capture of billingCapture.cases.filter((value) => value.cli.result)) {
+    if (capture.direct === "error") continue;
+    const direct = fakeGrokFetch(capture.body);
+    const withoutCli = await handleGrok(
+      { operation: "collect", token_refresh: false },
+      {
+        credential: async () => grokCredential,
+        fetch: direct.fetch,
+        startRpc: () => assert.fail("token_refresh:false started the Grok CLI"),
+      },
+    );
+    let closed = false;
+    const viaCli = await handleGrok(
+      { operation: "collect" },
+      {
+        credential: async () => grokCredential,
+        fetch: fakeGrokFetch(capture.body).fetch,
+        startRpc: async () => ({
+          request: async (method) => {
+            equal(method, "_x.ai/billing", "CLI method");
+            return structuredClone(capture.cli.result);
+          },
+          close: () => {
+            closed = true;
+          },
+        }),
+      },
+    );
+    equal(closed, true, "CLI path closes its process");
+    equal(
+      { ...withoutCli, observed_at_ms: 0 },
+      { ...viaCli, observed_at_ms: 0 },
+      `${capture.name} renders the same usage`,
+    );
+  }
+});
+
+test("Grok refresh-free usage reports authentication required and never retries", async () => {
+  const refuse = () => assert.fail("token_refresh:false started the Grok CLI");
+  const outcome = async (credential, billing, now = () => 1_000_000) => {
+    const { calls, fetch } = fakeGrokFetch(billing);
+    try {
+      await handleGrok(
+        { operation: "collect", token_refresh: false },
+        { credential: async () => credential, fetch, now, startRpc: refuse },
+      );
+      return { calls: calls.length, error: undefined };
+    } catch (error) {
+      return { calls: calls.length, error };
+    }
+  };
+  for (const [label, credential, billing, fetches] of [
+    ["expired", { ...grokCredential, expiresAt: 1_000_000 + 30_000 }, {}, 0],
+    ["long expired", { ...grokCredential, expiresAt: 1 }, {}, 0],
+    ["signed out", undefined, {}, 0],
+    ["401", grokCredential, 401, 1],
+    ["403", { ...grokCredential, expiresAt: 1_000_000 + 3_600_000 }, 403, 1],
+  ]) {
+    const result = await outcome(credential, billing);
+    equal(result.error instanceof AuthenticationRequired, true, `${label} is authentication`);
+    equal(
+      result.error.message.includes("authentication required"),
+      true,
+      `${label} message classifies as authentication`,
+    );
+    equal(result.calls, fetches, `${label} makes no further request`);
+  }
+  const failed = await outcome(grokCredential, 503);
+  equal(failed.error instanceof AuthenticationRequired, false, "503 is a fetch failure");
+  equal(failed.calls, 1, "503 is not retried");
+});
+
+test("Grok declares refresh-free usage and reaches only its read endpoints", () => {
+  equal(grokDeclaration, { schema: 1, token_refresh: "request" }, "declaration");
+  for (const argv of [grokHost.usage.collector_argv, grokHost.usage.reset_argv]) {
+    const net = argv.find((value) => value.startsWith("--allow-net="));
+    equal(net, "--allow-net=grok.com:443,cli-chat-proxy.grok.com:443", "network grant");
+    equal(
+      argv.some((value) => value.startsWith("--allow-write")),
+      false,
+      "no write grant",
+    );
+  }
+  const jwt = (claims) => `e30.${btoa(JSON.stringify(claims)).replace(/=+$/, "")}.c2ln`;
+  equal(
+    credentialFromJson({
+      scope: {
+        auth_mode: "oidc",
+        key: jwt({ exp: 1 }),
+        user_id: "user",
+        expires_at: "2026-11-21T03:00:00Z",
+      },
+    }).expiresAt,
+    Date.parse("2026-11-21T03:00:00Z"),
+    "stored expiry",
+  );
+  equal(
+    credentialFromJson({ scope: { auth_mode: "oidc", key: jwt({ exp: 1800 }), user_id: "u" } })
+      .expiresAt,
+    1_800_000,
+    "token expiry",
+  );
 });
