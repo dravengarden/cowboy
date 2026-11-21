@@ -1246,6 +1246,9 @@ impl MachinePluginStore {
         prepared_sidecars
             .configure_environment(&mut environment)
             .map_err(PluginHostInvocationFailure::from)?;
+        if let Some(extra) = admission.and_then(native_usage::HostAdmission::environment) {
+            environment.extend(extra.clone());
+        }
         let (program, command_args) = resolved
             .command
             .split_first()

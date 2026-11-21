@@ -27,15 +27,18 @@ const DEADLINE: Duration = Duration::from_secs(30);
 pub struct HostAdmission {
     connected: Arc<AtomicBool>,
     deadline: Instant,
-    sidecars: Option<BTreeMap<String, String>>,
+    pub(super) sidecars: Option<BTreeMap<String, String>>,
+    /// Variables a refresh-custody renewal adds to the collector.
+    pub(super) environment: Option<BTreeMap<String, String>>,
 }
 
 impl HostAdmission {
-    fn new(connected: Arc<AtomicBool>) -> Self {
+    pub(super) fn new(connected: Arc<AtomicBool>) -> Self {
         Self {
             connected,
             deadline: Instant::now() + DEADLINE,
             sidecars: None,
+            environment: None,
         }
     }
 
@@ -52,6 +55,11 @@ impl HostAdmission {
     /// The absolute instant after which nothing of this invocation starts.
     pub(in crate::machine_plugins) fn deadline(&self) -> Instant {
         self.deadline
+    }
+
+    /// Variables added to the collector's environment (renewals only).
+    pub(in crate::machine_plugins) fn environment(&self) -> Option<&BTreeMap<String, String>> {
+        self.environment.as_ref()
     }
 
     /// The only sidecar Plugin generations this invocation may start.
@@ -80,7 +88,7 @@ impl MachinePluginStore {
     /// generation of the collector and of every checked sidecar (one shared
     /// generation), and a refresh-free collector where the Provider CLI
     /// rotates tokens.
-    async fn admit_portable(
+    pub(super) async fn admit_portable(
         &self,
         request: &PortableUsageRequest,
         admission: &HostAdmission,
@@ -245,6 +253,7 @@ mod tests {
             connected: Arc::clone(&connected),
             deadline: Instant::now(),
             sidecars: None,
+            environment: None,
         };
         assert_eq!(
             expired.remaining().unwrap_err().to_string(),
