@@ -26,6 +26,15 @@ fn live(statuses: &[ProviderAuthenticationStatus]) -> Vec<String> {
         .collect()
 }
 
+/// Open the Service root vault behind the startup gate.
+pub(in crate::server) fn open_provider_auth(
+    data_dir: &std::path::Path,
+) -> anyhow::Result<Arc<ProviderAuthService>> {
+    let auth = Arc::new(ProviderAuthService::open(data_dir)?);
+    admit_startup(&auth)?;
+    Ok(auth)
+}
+
 /// Startup gate: refuse to run while a legacy card still holds a Service
 /// credential. The deleted code can neither adopt nor serve it; the previous
 /// Controller still can, and the component activator restores it.

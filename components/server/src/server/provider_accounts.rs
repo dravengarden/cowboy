@@ -1,6 +1,6 @@
 //! Shared account metadata writer for HTTP, CLI and MCP. Never accepts secrets.
 use super::*;
-use crate::store::provider_accounts::{Change, Mutation, MutationResult};
+use crate::store::provider_accounts::{Mutation, MutationResult};
 use serde_json::{Value, json};
 
 pub(super) mod browser;
@@ -153,13 +153,6 @@ pub(super) async fn read_value(state: &Arc<AppState>, owner: &str) -> Result<Val
         .provider_accounts(owner)
         .await
         .map_err(|_| "unavailable")?;
-    // Display aliases have their own preference revision. A rename must not
-    // invalidate native bindings or change the serialized authority registry.
-    let display = store
-        .preferences(owner, "subscriptions")
-        .await
-        .map_err(|_| "unavailable")?
-        .ok_or("unavailable")?;
     let enabled = state
         .service_config
         .get(&crate::config::schema::ACCOUNT_NATIVE_CLAUDE_SESSIONS);
@@ -169,7 +162,7 @@ pub(super) async fn read_value(state: &Arc<AppState>, owner: &str) -> Result<Val
         .map_err(|_| "unavailable")?;
     let (shares, families) = browser::shares::list_value(state, owner).await?;
     Ok(
-        json!({"registry":registry,"display_preferences":display,"revoked_accounts":revoked,"session_admission":if enabled {"enabled"} else {"not_enabled"},
+        json!({"registry":registry,"revoked_accounts":revoked,"session_admission":if enabled {"enabled"} else {"not_enabled"},
         "session_providers":if enabled {session_providers(state).into_iter().collect()} else {Vec::<String>::new()},
         // Accounts of these Providers take an API key instead of a sign-in;
         // each inner list is one credential scope an account serves whole.
@@ -179,8 +172,6 @@ pub(super) async fn read_value(state: &Arc<AppState>, owner: &str) -> Result<Val
         "portable_scopes":portable_scopes(state),"portable_credentials":portable_credentials(state, &registry),
         // The Service gate of the optional Machine browser (`accounts.machine_browser`).
         "machine_browser":if browser::gate_open(state) {"enabled"} else {"not_enabled"},
-        // Each legacy default usage card's own browser key and enablement.
-        "legacy_browsers":browser::legacy::list_value(state, owner).await?,
         // Owner-defined shared browser profiles and the family of each
         // Provider (a share holds at most one member per family).
         "browser_shares":shares,"browser_share_families":families,
@@ -188,6 +179,9 @@ pub(super) async fn read_value(state: &Arc<AppState>, owner: &str) -> Result<Val
         // reason, the active turn, Machine fences, uncertain effects and the
         // kill switch's logout. Their Providers have no default account.
         "named_only_providers":crate::provider_account::NAMED_ONLY_PROVIDERS,
+        // The retired legacy default cards: these Providers have no Service
+        // (`default`) account either (`docs/legacy-card-retirement.md`).
+        "retired_default_providers":crate::store::provider_accounts::legacy_cards::retired_providers(),
         "account_controls":controls::read_value(state, &registry)}),
     )
 }
@@ -224,21 +218,6 @@ pub(super) async fn update_value(
     input: &Mutation,
 ) -> Result<Value, &'static str> {
     let store = state.store.as_ref().ok_or("unavailable")?;
-    // A legacy card's browser is enabled only for a card the Service collects;
-    // disabling is always accepted.
-    if let Change::SetLegacyBrowserEnabled {
-        card,
-        enabled: true,
-    } = &input.change
-        && !browser::legacy::bound_cards(state).contains_key(card)
-        && store
-            .provider_account_receipt(owner, operation)
-            .await
-            .map_err(|_| "unavailable")?
-            .is_none()
-    {
-        return Err("account_unavailable");
-    }
     // Metadata writes share one authority and receipt; no native login, usage
     // probe, credential access or worker activation happens here. Share
     // changes use the same writer, with families from the static table. Membership
@@ -278,7 +257,7 @@ pub(super) async fn update_value(
                 state,
                 owner,
                 &input.change,
-                browser::shares::fresh_effects(owner, &input.change, &receipt, replay || noop),
+                browser::shares::fresh_effects(owner, &input.change, replay || noop),
             );
             Ok(receipt_value(&receipt))
         }

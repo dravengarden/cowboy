@@ -198,13 +198,11 @@ pub(in crate::server) fn admission(
 }
 
 fn account<'a>(registry: &'a Registry, member: &Member) -> Option<&'a Account> {
-    match member {
-        Member::Account(member) => registry
-            .accounts
-            .iter()
-            .find(|account| account.id == member.account_id),
-        Member::Card(_) => None,
-    }
+    let Member::Account(member) = member;
+    registry
+        .accounts
+        .iter()
+        .find(|account| account.id == member.account_id)
 }
 
 /// The identity of `member` as a share's browser serves it; `current`:

@@ -430,10 +430,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         &args.data_dir,
         Arc::clone(&plugin_catalog),
     )?);
-    let provider_auth = Arc::new(crate::provider_service::ProviderAuthService::open(
-        &args.data_dir,
-    )?);
-    provider_accounts::retirement::admit_startup(&provider_auth)?;
+    let provider_auth = provider_accounts::retirement::open_provider_auth(&args.data_dir)?;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     // Persistence closes only after dispatcher/runtime quiescence. Using the
     // HTTP shutdown signal directly would race a last-millisecond prompt

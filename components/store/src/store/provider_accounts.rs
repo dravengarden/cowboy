@@ -9,7 +9,6 @@ pub mod browser_families;
 pub mod browser_placements;
 pub mod browser_shares;
 pub mod grants;
-pub mod legacy_browsers;
 pub mod legacy_cards;
 pub mod logins;
 pub mod portable;
@@ -111,13 +110,6 @@ pub enum Change {
     /// disabling is always accepted and hibernates any running browser.
     SetBrowserEnabled {
         id: ProviderAccountId,
-        enabled: bool,
-    },
-    /// Machine browser enablement of a legacy default usage card (`card` is
-    /// its account-usage provider id). Off by default; stored per owner
-    /// outside the registry value, so no registry account changes.
-    SetLegacyBrowserEnabled {
-        card: String,
         enabled: bool,
     },
     SetDefault {
@@ -387,8 +379,7 @@ impl Registry {
                 id.clone()
             }
             // Written by the store beside the registry value.
-            Change::SetLegacyBrowserEnabled { .. }
-            | Change::CreateBrowserShare { .. }
+            Change::CreateBrowserShare { .. }
             | Change::RenameBrowserShare { .. }
             | Change::DeleteBrowserShare { .. }
             | Change::SetBrowserShare { .. } => return Err("invalid_change"),
@@ -511,17 +502,7 @@ impl Store {
                 && registry.accounts.iter().any(|account| &account.id == id && account.revoking) {
                 return Ok(MutationResult::Invalid("account_revoking"));
             }
-            let applied = if let Change::SetLegacyBrowserEnabled { card, enabled } = &input.change {
-                if !legacy_browsers::card_valid(card) { return Ok(MutationResult::Invalid("invalid_provider")); }
-                let toggle = if *enabled { "INSERT INTO provider_legacy_browsers (owner_user_id,card_id) VALUES ($1,$2) ON CONFLICT (owner_user_id,card_id) DO NOTHING" }
-                    else { "DELETE FROM provider_legacy_browsers WHERE owner_user_id=$1 AND card_id=$2" };
-                sqlx::query(toggle).bind(owner).bind(card).execute(&mut *tx).await?;
-                registry.revision.checked_add(1).ok_or("revision_exhausted").map(|revision| {
-                    registry.revision = revision;
-                    legacy_browsers::account(owner, card)
-                })
-            } else { registry.apply(&input.change) };
-            let account_id = match applied {
+            let account_id = match registry.apply(&input.change) {
                 Ok(id) => id, Err(code) => return Ok(MutationResult::Invalid(code)),
             };
             let revocation = if matches!(input.change, Change::BeginRevocation { .. }) {

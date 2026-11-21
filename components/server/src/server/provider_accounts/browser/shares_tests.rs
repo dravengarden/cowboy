@@ -1,12 +1,11 @@
 use super::super::{
     Authority, Resolved, authorize_account, authorize_shared, expected_identity, instance_id,
-    legacy,
 };
 use super::*;
 use crate::machine_protocol::machine_browser::{InstanceRef, StateEvent};
 use crate::store::provider_accounts::Account;
 use crate::store::provider_accounts::browser_shares::{Share, ShareMember, share_key};
-use crate::store::provider_accounts::legacy_browsers;
+use crate::store::provider_accounts::legacy_cards;
 
 const OWNER: &str = "owner";
 
@@ -24,13 +23,46 @@ fn named(provider: &str, label: &str, browser_enabled: bool) -> Account {
     }
 }
 
-/// Lynx, Pika and Fox (the legacy anthropic, openai and xai cards) share
+/// The adopted account of a former legacy card (Lynx, Pika, Fox, Mole): a
+/// named account whose id is the card's browser key.
+fn adopted(card: &str, browser_enabled: bool) -> Account {
+    let provider = match card {
+        "anthropic" => "claude-code",
+        "openai" => "codex",
+        "xai" => "grok",
+        _ => "claude-deepseek",
+    };
+    Account {
+        id: legacy_cards::browser_key(OWNER, card),
+        ..named(provider, card, browser_enabled)
+    }
+}
+
+/// The share member of [`adopted`]`(card)`.
+fn card(card: &str) -> Member {
+    Member::account(legacy_cards::browser_key(OWNER, card))
+}
+
+/// `accounts` and every adopted card account (browsers enabled).
+fn with_cards(mut accounts: Vec<Account>) -> Vec<Account> {
+    accounts.extend(legacy_cards::CARDS.iter().map(|card| adopted(card, true)));
+    accounts
+}
+
+fn cards_registry() -> Registry {
+    Registry {
+        accounts: with_cards(Vec::new()),
+        ..Registry::default()
+    }
+}
+
+/// Lynx, Pika and Fox (the adopted anthropic, openai and xai cards) share
 /// "Google"; Lark (a named Claude account) and Mole keep their own.
 fn google(share_id: &str) -> Shares {
-    let row = |card: &str| ShareMember {
-        member: Member::card(card),
+    let row = |family: &str| ShareMember {
+        member: card(family),
         share_id: share_id.to_owned(),
-        family: card.to_owned(),
+        family: family.to_owned(),
     };
     Shares {
         shares: vec![Share {
@@ -50,12 +82,12 @@ fn google(share_id: &str) -> Shares {
 
 fn resolve_card(
     shares: &Shares,
-    card: &str,
+    family: &str,
     registry: &Registry,
 ) -> Result<(ProviderAccountId, Option<ShareView>), &'static str> {
     resolve_key(
-        Some(&Member::card(card)),
-        &legacy_browsers::account(OWNER, card),
+        Some(&card(family)),
+        &legacy_cards::browser_key(OWNER, family),
         shares,
         |member| family_now(member, registry),
     )
@@ -68,7 +100,7 @@ fn families_never_come_from_the_provider_catalog() {
     let lark = named("claude-code", "Lark", true);
     let registry = Registry {
         revision: 1,
-        accounts: vec![lark.clone()],
+        accounts: with_cards(vec![lark.clone()]),
         defaults: BTreeMap::new(),
     };
     assert_eq!(
@@ -89,7 +121,7 @@ fn families_never_come_from_the_provider_catalog() {
     // A Provider outside the table has no family at all.
     let stranger = named("future-provider", "?", true);
     let with_stranger = Registry {
-        accounts: vec![stranger.clone()],
+        accounts: with_cards(vec![stranger.clone()]),
         ..registry
     };
     assert_eq!(
@@ -105,7 +137,7 @@ fn every_member_resolves_to_the_share_key_and_non_members_keep_theirs() {
     let lark = named("claude-code", "Lark", true);
     let registry = Registry {
         revision: 1,
-        accounts: vec![lark.clone()],
+        accounts: with_cards(vec![lark.clone()]),
         defaults: BTreeMap::new(),
     };
     let key = share_key(OWNER, &share_id);
@@ -123,7 +155,7 @@ fn every_member_resolves_to_the_share_key_and_non_members_keep_theirs() {
     }
     // Mole and Lark are no members: their own keys, no share.
     let (mole, view) = resolve_card(&shares, "deepseek", &registry).unwrap();
-    assert_eq!(mole, legacy_browsers::account(OWNER, "deepseek"));
+    assert_eq!(mole, legacy_cards::browser_key(OWNER, "deepseek"));
     assert!(view.is_none());
     let (own, view) = resolve_key(
         Some(&Member::account(lark.id.clone())),
@@ -134,7 +166,7 @@ fn every_member_resolves_to_the_share_key_and_non_members_keep_theirs() {
     .unwrap();
     assert_eq!((own, view), (lark.id.clone(), None));
     // A key known only from a retained placement has no member identity.
-    let retained = legacy_browsers::account(OWNER, "gone");
+    let retained = legacy_cards::browser_key(OWNER, "gone");
     assert_eq!(
         resolve_key(None, &retained, &shares, |_| None).unwrap().0,
         retained
@@ -142,10 +174,10 @@ fn every_member_resolves_to_the_share_key_and_non_members_keep_theirs() {
     // The share key is none of the account or card keys.
     for other in [
         lark.id.clone(),
-        legacy_browsers::account(OWNER, "anthropic"),
-        legacy_browsers::account(OWNER, "openai"),
-        legacy_browsers::account(OWNER, "xai"),
-        legacy_browsers::account(OWNER, "deepseek"),
+        legacy_cards::browser_key(OWNER, "anthropic"),
+        legacy_cards::browser_key(OWNER, "openai"),
+        legacy_cards::browser_key(OWNER, "xai"),
+        legacy_cards::browser_key(OWNER, "deepseek"),
     ] {
         assert_ne!(key, other);
         assert_ne!(
@@ -169,7 +201,7 @@ fn resolution_blocks_a_share_that_would_mix_one_family() {
     let lark = named("claude-code", "Lark", true);
     let registry = Registry {
         revision: 1,
-        accounts: vec![lark.clone()],
+        accounts: with_cards(vec![lark.clone()]),
         defaults: BTreeMap::new(),
     };
     assert_eq!(blocked(&google(&share_id), "openai", &registry), Ok(None));
@@ -206,7 +238,7 @@ fn resolution_blocks_a_share_that_would_mix_one_family() {
         family: "mystery".into(),
     });
     let with_stranger = Registry {
-        accounts: vec![stranger],
+        accounts: with_cards(vec![stranger]),
         ..registry.clone()
     };
     assert_eq!(
@@ -217,7 +249,7 @@ fn resolution_blocks_a_share_that_would_mix_one_family() {
     let mut deleting = google(&share_id);
     deleting.shares[0].deleting_ms = Some(9);
     assert_eq!(
-        resolve_card(&deleting, "openai", &Registry::default()).err(),
+        resolve_card(&deleting, "openai", &cards_registry()).err(),
         Some("browser_share_changed")
     );
 }
@@ -228,14 +260,12 @@ fn a_bound_identitys_family_drift_blocks_every_member() {
     let lark = named("claude-code", "Lark", true);
     let registry = Registry {
         revision: 1,
-        accounts: vec![lark.clone()],
+        accounts: with_cards(vec![lark.clone()]),
         defaults: BTreeMap::new(),
     };
     // Lark left (or was revoked) after using the profile: still bound.
     let mut shares = google(&share_id);
-    shares
-        .members
-        .retain(|row| row.member != Member::card("anthropic"));
+    shares.members.retain(|row| row.member != card("anthropic"));
     shares.bindings.push(browser_shares::Binding {
         share_id: share_id.clone(),
         family: "anthropic".into(),
@@ -247,8 +277,8 @@ fn a_bound_identitys_family_drift_blocks_every_member() {
     // for everybody until a confirmed reset.
     shares.bindings[0].family = "claude".into();
     let (key, view) = resolve_key(
-        Some(&Member::card("openai")),
-        &legacy_browsers::account(OWNER, "openai"),
+        Some(&card("openai")),
+        &legacy_cards::browser_key(OWNER, "openai"),
         &shares,
         |member| family_now(member, &registry),
     )
@@ -257,7 +287,7 @@ fn a_bound_identitys_family_drift_blocks_every_member() {
     assert_eq!(view.blocked, Some("browser_share_family_drift"));
     let pika = Resolved {
         owner: OWNER.into(),
-        id: legacy_browsers::account(OWNER, "openai"),
+        id: legacy_cards::browser_key(OWNER, "openai"),
         account: card_account("openai", true),
         key,
         share: Some(view),
@@ -279,19 +309,15 @@ fn a_bound_identitys_family_drift_blocks_every_member() {
 }
 
 fn card_account(card: &str, enabled: bool) -> BrowserAccount {
-    BrowserAccount::Legacy(legacy::LegacyCard {
-        card: Some(card.to_owned()),
-        bound: true,
-        enabled,
-    })
+    BrowserAccount::Named(adopted(card, enabled))
 }
 
 fn resolved(card: &str, enabled: bool, share_id: &str) -> Resolved {
     let shares = google(share_id);
-    let (key, share) = resolve_card(&shares, card, &Registry::default()).unwrap();
+    let (key, share) = resolve_card(&shares, card, &cards_registry()).unwrap();
     Resolved {
         owner: OWNER.into(),
-        id: legacy_browsers::account(OWNER, card),
+        id: legacy_cards::browser_key(OWNER, card),
         account: card_account(card, enabled),
         key,
         share,
@@ -314,10 +340,7 @@ fn a_member_opens_the_share_only_with_its_own_browser_enabled() {
         authorize_account(Authority::Launch, true, &fox.account),
         Err("browser_not_enabled")
     );
-    assert_eq!(
-        member_of(&pika.id, &pika.account),
-        Some(Member::card("openai"))
-    );
+    assert_eq!(member_of(&pika.id, &pika.account), Some(card("openai")));
     // Resetting the share's profile also takes the member's own access;
     // stopping it stays possible.
     assert_eq!(
@@ -373,19 +396,12 @@ fn a_member_sees_and_names_the_share_instance_as_its_own_card() {
     assert_eq!(value["state"]["instance"]["account_id"], json!(pika.id));
 }
 
-fn receipt(account_id: ProviderAccountId) -> Receipt {
-    Receipt {
-        account_id,
-        ..Receipt::default()
-    }
-}
-
 #[test]
 fn only_deleting_a_share_revokes_its_browser() {
     let share_id = uuid::Uuid::new_v4().to_string();
     let key = share_key(OWNER, &share_id);
     let lark = named("claude-code", "Lark", true);
-    let lynx = Member::card("anthropic");
+    let lynx = card("anthropic");
     let lynx_key = lynx.own_key(OWNER);
     let member_changes = [
         (
@@ -399,13 +415,6 @@ fn only_deleting_a_share_revokes_its_browser() {
             Change::SetBrowserShare {
                 member: lynx.clone(),
                 share_id: Some(share_id.clone()),
-            },
-            lynx_key.clone(),
-        ),
-        (
-            Change::SetLegacyBrowserEnabled {
-                card: "anthropic".into(),
-                enabled: false,
             },
             lynx_key.clone(),
         ),
@@ -431,7 +440,7 @@ fn only_deleting_a_share_revokes_its_browser() {
         ),
     ];
     for (change, own) in member_changes {
-        let effects = change_effects(OWNER, &change, &receipt(own.clone()));
+        let effects = change_effects(OWNER, &change);
         assert!(!effects.is_empty(), "{change:?}");
         for effect in &effects {
             match effect {
@@ -456,7 +465,6 @@ fn only_deleting_a_share_revokes_its_browser() {
                 member: Member::account(husky.id.clone()),
                 share_id: Some(share_id.clone()),
             },
-            &receipt(husky.id.clone())
         ),
         vec![
             Effect::EndMemberViewers(husky.id.clone()),
@@ -470,7 +478,6 @@ fn only_deleting_a_share_revokes_its_browser() {
             &Change::DeleteBrowserShare {
                 share_id: share_id.clone()
             },
-            &receipt(key.clone())
         ),
         vec![
             Effect::EndKeyViewers(key),
@@ -487,7 +494,7 @@ fn only_deleting_a_share_revokes_its_browser() {
             label: "G".into(),
         },
     ] {
-        assert!(change_effects(OWNER, &change, &Receipt::default()).is_empty());
+        assert!(change_effects(OWNER, &change).is_empty());
     }
     // The Machine operation of a deletion is stable across retries.
     assert_eq!(
@@ -508,11 +515,9 @@ fn a_reset_names_the_browser_identity_its_caller_observed() {
     // A membership change moves the identity: a reset captured before it
     // no longer matches and is refused.
     let mut moved = google(&share_id);
-    moved
-        .members
-        .retain(|row| row.member != Member::card("xai"));
+    moved.members.retain(|row| row.member != card("xai"));
     moved.shares[0].revision = 5;
-    let (key, share) = resolve_card(&moved, "openai", &Registry::default()).unwrap();
+    let (key, share) = resolve_card(&moved, "openai", &cards_registry()).unwrap();
     let after = Resolved {
         key,
         share,
@@ -520,7 +525,7 @@ fn a_reset_names_the_browser_identity_its_caller_observed() {
     };
     assert_ne!(after.identity(), pika.identity());
     // Outside any share the identity is the card's own browser.
-    let (own, none) = resolve_card(&moved, "deepseek", &Registry::default()).unwrap();
+    let (own, none) = resolve_card(&moved, "deepseek", &cards_registry()).unwrap();
     let mole = Resolved {
         owner: OWNER.into(),
         id: own.clone(),
@@ -560,36 +565,24 @@ fn event_of(resolved: &Resolved) -> StateEvent {
 #[test]
 fn replayed_or_outdated_changes_touch_no_browser() {
     let share_id = uuid::Uuid::new_v4().to_string();
-    let lynx = Member::card("anthropic");
+    let lynx = card("anthropic");
     let join = Change::SetBrowserShare {
         member: lynx.clone(),
         share_id: Some(share_id.clone()),
     };
-    let own = receipt(lynx.own_key(OWNER));
-    assert!(!fresh_effects(OWNER, &join, &own, false).is_empty());
+    assert!(!fresh_effects(OWNER, &join, false).is_empty());
     // A replay of the committed join never cancels or hibernates anything.
-    assert!(fresh_effects(OWNER, &join, &own, true).is_empty());
+    assert!(fresh_effects(OWNER, &join, true).is_empty());
     // A deferred effect acts only while the change still holds.
     let shares = google(&share_id);
-    assert!(change_holds_in(&join, &Registry::default(), &[], &shares));
+    assert!(change_holds_in(&join, &cards_registry(), &shares));
     let mut left = shares.clone();
     left.members.retain(|row| row.member != lynx);
-    assert!(!change_holds_in(&join, &Registry::default(), &[], &left));
-    let off = Change::SetLegacyBrowserEnabled {
-        card: "anthropic".into(),
-        enabled: false,
-    };
-    assert!(change_holds_in(&off, &Registry::default(), &[], &shares));
-    assert!(!change_holds_in(
-        &off,
-        &Registry::default(),
-        &["anthropic".to_owned()],
-        &shares
-    ));
+    assert!(!change_holds_in(&join, &cards_registry(), &left));
     let lark = named("claude-code", "Lark", true);
     let registry = Registry {
         revision: 1,
-        accounts: vec![lark.clone()],
+        accounts: with_cards(vec![lark.clone()]),
         defaults: BTreeMap::new(),
     };
     let disable = Change::SetBrowserEnabled {
@@ -597,7 +590,7 @@ fn replayed_or_outdated_changes_touch_no_browser() {
         enabled: false,
     };
     // Re-enabled since: the old disable's hibernate does not run.
-    assert!(!change_holds_in(&disable, &registry, &[], &shares));
+    assert!(!change_holds_in(&disable, &registry, &shares));
 }
 
 #[test]

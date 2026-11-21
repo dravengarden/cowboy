@@ -1,6 +1,5 @@
 //! Owner-defined shared Machine browser profiles. A share lets several
-//! browser identities (named accounts and legacy default usage cards) use
-//! one browser profile, so an owner signs in to a common identity provider
+//! browser identities (named accounts) use one browser profile, so an owner signs in to a common identity provider
 //! once. Isolation stays per browser identity: a share holds at most one
 //! member per account-usage family (`anthropic`, `openai`, `xai`, ...), so
 //! two accounts of the same kind can never share a profile. That rule is a
@@ -15,7 +14,7 @@
 //! registry writer (owner lock, registry revision, operation receipt).
 use super::super::{StorageBackend, Store};
 use super::browser_placements::Refusal;
-use super::{Change, Mutation, MutationResult, Receipt, Registry, label_valid, legacy_browsers};
+use super::{Change, Mutation, MutationResult, Receipt, Registry, label_valid};
 use crate::provider_account::ProviderAccountId;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -54,19 +53,14 @@ pub struct AccountMember {
     pub account_id: ProviderAccountId,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CardMember {
-    pub card: String,
-}
-
-/// A browser identity that may join a share: `{account_id}` for a named
-/// account, `{card}` for a legacy default usage card.
+/// A browser identity that may join a share: `{account_id}` of a named
+/// account. The retired legacy cards' `{card}` members were removed by
+/// migration; a binding a card left stays unreadable and blocks its family
+/// until a confirmed reset (`docs/legacy-card-retirement.md`).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Member {
     Account(AccountMember),
-    Card(CardMember),
 }
 
 impl Member {
@@ -74,45 +68,31 @@ impl Member {
         Self::Account(AccountMember { account_id })
     }
 
-    pub fn card(card: &str) -> Self {
-        Self::Card(CardMember {
-            card: card.to_owned(),
-        })
-    }
-
-    /// The stored form: `account:<id>` or `card:<card>`.
+    /// The stored form: `account:<id>`.
     pub fn encode(&self) -> String {
         match self {
             Self::Account(member) => format!("account:{}", member.account_id.as_str()),
-            Self::Card(member) => format!("card:{}", member.card),
         }
     }
 
+    /// `None` for anything else, including a retired `card:<card>`.
     pub fn decode(value: &str) -> Option<Self> {
-        if let Some(id) = value.strip_prefix("account:") {
-            return ProviderAccountId::try_from(id.to_owned())
-                .ok()
-                .filter(|id| !id.is_default())
-                .map(Self::account);
-        }
-        value
-            .strip_prefix("card:")
-            .filter(|card| legacy_browsers::card_valid(card))
-            .map(Self::card)
+        ProviderAccountId::try_from(value.strip_prefix("account:")?.to_owned())
+            .ok()
+            .filter(|id| !id.is_default())
+            .map(Self::account)
     }
 
     pub fn valid(&self) -> bool {
         match self {
             Self::Account(member) => !member.account_id.is_default(),
-            Self::Card(member) => legacy_browsers::card_valid(&member.card),
         }
     }
 
     /// The member's own browser key, used whenever it is in no share.
-    pub fn own_key(&self, owner: &str) -> ProviderAccountId {
+    pub fn own_key(&self, _owner: &str) -> ProviderAccountId {
         match self {
             Self::Account(member) => member.account_id.clone(),
-            Self::Card(member) => legacy_browsers::account(owner, &member.card),
         }
     }
 }
@@ -307,18 +287,17 @@ pub struct Applied {
 }
 
 /// The family of a member that may join a share, from the static table
-/// (`browser_families`): a legacy card by its id, a named account by its
-/// Provider. A member without one, or a revoking account, never joins.
+/// (`browser_families`): a named account by its Provider. A member without
+/// one, or a revoking account, never joins.
 pub fn member_family(member: &Member, registry: &Registry) -> Result<String, &'static str> {
-    if let Member::Account(member) = member {
-        let account = registry
-            .accounts
-            .iter()
-            .find(|account| account.id == member.account_id)
-            .ok_or("account_not_found")?;
-        if account.revoking {
-            return Err("account_revoking");
-        }
+    let Member::Account(account) = member;
+    let account = registry
+        .accounts
+        .iter()
+        .find(|candidate| candidate.id == account.account_id)
+        .ok_or("account_not_found")?;
+    if account.revoking {
+        return Err("account_revoking");
     }
     family_of(member, registry).ok_or("browser_share_family_unknown")
 }
@@ -327,7 +306,6 @@ pub fn member_family(member: &Member, registry: &Registry) -> Result<String, &'s
 /// revoked account still has one). `None` outside the table.
 pub fn family_of(member: &Member, registry: &Registry) -> Option<String> {
     match member {
-        Member::Card(card) => super::browser_families::card(&card.card),
         Member::Account(member) => registry
             .accounts
             .iter()
@@ -807,13 +785,6 @@ impl Store {
                         Some(entry) if !entry.browser_enabled => return Ok(Err(Refusal::BrowserNotEnabled)),
                         Some(_) => {}
                         None => return Ok(Err(Refusal::AccountUnavailable)),
-                    }
-                }
-                Member::Card(member) => {
-                    let enabled: Option<String> = sqlx::query_scalar("SELECT card_id FROM provider_legacy_browsers WHERE owner_user_id=$1 AND card_id=$2")
-                        .bind(owner).bind(&member.card).fetch_optional(&mut *tx).await?;
-                    if enabled.is_none() {
-                        return Ok(Err(Refusal::BrowserNotEnabled));
                     }
                 }
             }
