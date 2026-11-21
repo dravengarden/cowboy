@@ -180,7 +180,7 @@ transcript_anchors(session_id REFERENCES sessions ON DELETE CASCADE,
 - Written in the same transaction as the event batch
   (`Store::upsert_event_batch_with_anchors`); the first anchor wins and never
   moves. Clearing a transcript deletes its anchors and writes the sentinel.
-- `src/transcript_anchors.rs` `AnchorIndex`: a bounded LRU (16,384 keys) used
+- `components/store/src/transcript_anchors.rs` `AnchorIndex`: a bounded LRU (16,384 keys) used
   by both reducers. Eviction forgets one key; the clear-all is gone.
 - The Hub adopts the newest 16,384 anchors from the table at start, then the
   restored hot log. The store writer resolves a key it does not know through

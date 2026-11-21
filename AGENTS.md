@@ -115,7 +115,7 @@ list and the affected paths, and give a reason for `high`.
   credentials or isolation, or touch money:
   - Machine durable namespaces and their writers
     (`components/machine/src/machine_broker/{deletions,incarnations,cleanups,namespace}.rs`),
-    store migrations and ledger CAS (`migrations/`, `src/store/`), and
+    store migrations and ledger CAS (`migrations/`, `components/store/src/store/`), and
     deletion paths;
   - authentication, permissions, Operator delegation and account isolation
     (provider accounts, account sandboxes, credentials, browser profiles);

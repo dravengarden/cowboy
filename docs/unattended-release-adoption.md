@@ -173,7 +173,7 @@ creates a replacement grant. `not_before` / `not_after` bound replay.
 
 ## Attribution
 
-`Actor` in `src/plugin_operation.rs` is a closed enum serialized into
+`Actor` in `components/store/src/plugin_operation.rs` is a closed enum serialized into
 installation and uninstall intents and into the operation journal. Layers 2 and
 3 each need a variant, or the audit chain breaks:
 

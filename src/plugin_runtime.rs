@@ -27,17 +27,7 @@ use crate::plugin_host::{
 };
 use crate::plugin_storage::{PluginNamespace, PluginStorage};
 
-struct BundledHostFile {
-    path: &'static str,
-    content: &'static str,
-}
-
-struct BundledHost {
-    id: &'static str,
-    files: &'static [BundledHostFile],
-}
-
-const BUNDLED_HOSTS: &[BundledHost] = include!(concat!(env!("OUT_DIR"), "/bundled_hosts.rs"));
+use crate::first_party_sources::{BUNDLED_HOSTS, BundledHost};
 
 #[derive(Debug, Clone)]
 pub struct ActivatedHostPlugin {

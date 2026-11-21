@@ -171,3 +171,18 @@ test("a new edge between two members of the same cycle fails", () => {
     "new edge inside a dependency cycle: cowboy::a -> cowboy::c; depend on a narrower module or a shared contract instead",
   ]);
 });
+
+test("module depth counts from the crate source directory, not a same-named directory above it", () => {
+  const crates = new Map([
+    [
+      "cowboy_store",
+      crate("cowboy_store", "pub mod store;\npub mod digest;", {
+        store: { "components/store/src/store.rs": "use super::digest::hex;" },
+        digest: { "components/store/src/digest.rs": "pub fn hex() {}" },
+      }),
+    ],
+  ]);
+  expect([...(buildGraph(crates).get("cowboy_store::store") ?? [])]).toEqual([
+    "cowboy_store::digest",
+  ]);
+});

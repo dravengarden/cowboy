@@ -4,7 +4,7 @@
 # `test-postgres` share it, so each gate run compiles it once; a different
 # package or feature selection unifies dependency features differently and
 # recompiles the workspace.
-rust_test_args := "-p cowboy -p cowboy-server -p cowboy-machine --all-targets --all-features --locked"
+rust_test_args := "-p cowboy -p cowboy-store -p cowboy-server -p cowboy-machine --all-targets --all-features --locked"
 
 default:
     @just --list
@@ -782,7 +782,7 @@ test:
     env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked -p cowboy-wire --features full,machine-host --all-targets
     # The standalone Machine ships without Controller modules. Compile and run
     # its test slice too; cargo check alone does not cover cfg(test) boundaries.
-    env -u COWBOY_PROVIDER_PACKAGE_PATH cargo nextest run --locked --no-default-features --features machine-host -p cowboy -p cowboy-machine --lib
+    env -u COWBOY_PROVIDER_PACKAGE_PATH cargo nextest run --locked --no-default-features --features machine-host -p cowboy -p cowboy-store -p cowboy-machine --lib
     env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked --no-default-features --features code-adapter --lib
     cd plugins/zed/adapter && cargo test --all-targets --locked
     cd web && bun run test
@@ -879,7 +879,7 @@ plugin-local-operator-conformance MATRIX RECEIPT:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_LOCAL_OPERATOR_MATRIX="$1" COWBOY_TEST_LOCAL_OPERATOR_RECEIPT="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib immutable_local_operator_installation -- --ignored --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
 
 test-fast:
-    cargo nextest run --all-features --locked
+    cargo nextest run -p cowboy -p cowboy-store --all-features --locked
 
 # Compact-control-plane memory fixture against a local SQLite Durable Object.
 do-memory-mock:

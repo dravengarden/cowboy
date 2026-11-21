@@ -60,15 +60,15 @@ Controller release, **W** ordinary Web release.
 
 | Path | Site | Keeps working | Exit condition | Proof | Boundary |
 |---|---|---|---|---|---|
-| `migration_compat` (+ `migration_policy` test) | `src/migration_compat.rs`, `src/store.rs`, `src/store/sqlite.rs` | Pre-squash databases get the baseline marker (PostgreSQL 34, SQLite 8) | Every database carries the marker and no rollback below the squash release | `_sqlx_migrations` query on every deployment; release floor | C |
+| `migration_compat` (+ `migration_policy` test) | `components/store/src/migration_compat.rs`, `components/store/src/store.rs`, `components/store/src/store/sqlite.rs` | Pre-squash databases get the baseline marker (PostgreSQL 34, SQLite 8) | Every database carries the marker and no rollback below the squash release | `_sqlx_migrations` query on every deployment; release floor | C |
 | Inbound Hub tombstones | `src/core.rs` `SetSessionAutoResume`, `ResumeTurn`, `SetSetting`; `web/src/protocol.ts` | Stale installed PWAs | Stated: accepted and ignored "before it updates" | No such inbound type in client telemetry over a window; service-worker `VERSION` past the retiring release | C+W |
 | Outbound `Settings` tombstone | `src/core.rs`, `server.rs`, `web/src/protocol.ts`, `web/src/store.ts` | Cached clients read an empty snapshot as auto-resume off | As above | As above | C+W |
-| Retired synthetic continuation purge | `src/core.rs`, `src/agent_model.rs` | Rows from older Controllers | No such rows | Store query returns zero | C |
+| Retired synthetic continuation purge | `src/core.rs`, `components/store/src/agent_model.rs` | Rows from older Controllers | No such rows | Store query returns zero | C |
 | `COWBOY_POSTGRES_URL` flag | `src/cli.rs` | Deployed callers | Stated: "while the backend-neutral flag becomes canonical" | No NixOS module or tool sets it (true for Columbus on 2026-11-05). Removal must refuse startup when the variable is set: silently ignoring it would start an external deployment in memory | C |
-| Passkey storage bridge | `src/core_passkeys.rs` | One-time import | Import done everywhere | Reader floor in `core-security-storage-bridge.md` | C |
+| Passkey storage bridge | `components/store/src/core_passkeys.rs` | One-time import | Import done everywhere | Reader floor in `core-security-storage-bridge.md` | C |
 | Hostless OIDC | `src/auth_plugins.rs` | Bootstrap migration | Stated: "only during bootstrap migration" | Every host policy is Catalog-only | C |
-| Telemetry legacy admission | `src/telemetry_binding.rs`, `telemetry_binding/background.rs` | Schema-one byte compatibility | Stated: "until the first explicit resolution" | Every deployment's journal has its first row | C |
-| Legacy Draft directory import | `src/store/workspace_documents.rs` | One-time import | No legacy Draft directory remains | Host scan | C |
+| Telemetry legacy admission | `components/store/src/telemetry_binding.rs`, `telemetry_binding/background.rs` | Schema-one byte compatibility | Stated: "until the first explicit resolution" | Every deployment's journal has its first row | C |
+| Legacy Draft directory import | `components/store/src/store/workspace_documents.rs` | One-time import | No legacy Draft directory remains | Host scan | C |
 | Legacy JSONL log reader | `src/logs/cli.rs` | Retained JSONL logs | Retained directories aged out | Host scan | C |
 | Machine native-profile and runtime-state migration | `components/machine/src/machine_plugins.rs`, `native_profile.rs`, `extensions.rs`, `operations/installations.rs`, `account_stop/worker_exit.rs` | Legacy on-disk Machine state | No legacy slot or home remains | Machine-side scan | M |
 
@@ -77,12 +77,12 @@ Controller release, **W** ordinary Web release.
 | Path | Site | Keeps working | Exit condition | Proof | Boundary |
 |---|---|---|---|---|---|
 | `LegacyProviderRelease` | `src/legacy_provider_release.rs`; `components/wire/src/machine_auth.rs`; readers in `provider_catalog.rs`, `machine_plugins.rs`, `auth_refresh.rs`, `installation.rs`, `provider_api.rs`; listed in `flake.nix` machine sources | Already installed Provider generations | Stated: "during the Plugin rollout"; no installed legacy envelope | Machine inventory shows none; retained worker is post-Plugin | M |
-| Identity-based Provider fallback | `src/provider_behavior.rs`, `src/provider/mod.rs` | Sessions created before signed behavior contracts persisted | No session with a null generation or behavior contract | Store query (`SessionMeta`: `None` is reserved for package-less legacy sessions) | M |
+| Identity-based Provider fallback | `components/store/src/provider_behavior.rs`, `src/provider/mod.rs` | Sessions created before signed behavior contracts persisted | No session with a null generation or behavior contract | Store query (`SessionMeta`: `None` is reserved for package-less legacy sessions) | M |
 | Pre-Catalog source storage | `src/plugin_catalog.rs`, `retention.rs`, `watch.rs` | Legacy root | Stated: once every ID has a release authority | Catalog listing | C |
 | Registry schema 2 | `src/plugin.rs` accepts 2 and 3 | Historical releases | Slice 7.3 (archive) | Every referenced release at schema 3 or archived | M |
 | Code-intelligence schema 1 | `components/plugin-sdk/src/lib.rs` | Published legacy adapters | Stated: "already published legacy adapters" | No schema-1 adapter in `components/registry.json` | M (signed component) |
 | Catalog reader conformance | `tools/catalog_reader_conformance.py` | Legacy bytes in both readers | Reader floor | `catalog-reader-bridge.md` (floor 2026-10-02) | C |
-| Legacy `default` account | `components/wire/src/provider_account.rs`, `portable_contract.rs`, `components/server/src/agent_api.rs`, `src/product_cli.rs`, `src/provider_service.rs` | Account `default` | No legacy default credentials | Account registry scan | M |
+| Legacy `default` account | `components/wire/src/provider_account.rs`, `portable_contract.rs`, `components/server/src/agent_api.rs`, `src/product_cli.rs`, `components/store/src/provider_service.rs` | Account `default` | No legacy default credentials | Account registry scan | M |
 
 ## Web client
 

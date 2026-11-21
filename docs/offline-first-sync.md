@@ -112,7 +112,7 @@ Server (`src`):
 
 - `Submit` is deduplicated by `cmid` only while the row is still in the queue
   or drafts. Once dispatched, a replayed `Submit` runs the turn again. `cmid`
-  is never persisted on events (`src/store.rs`, "live-only reconcile tag").
+  is never persisted on events (`components/store/src/store.rs`, "live-only reconcile tag").
 - `Sync` mutation ids are deduplicated by an in-memory `SyncArbiter.seen`
   set that resets on controller restart and is never pruned. A duplicate is
   acknowledged with `Ok(())` and no patch.
@@ -891,7 +891,7 @@ Phase 2 shipped as a Controller and Web release (service worker
 
 - Submission ledger: the Hub keeps a bounded window of client `cmid`s it
   handed to a worker, and the user echo persists its `cmid` beside the event
-  (`src/persistence.rs`, read back by both stores). `submit` and
+  (`components/store/src/persistence.rs`, read back by both stores). `submit` and
   `force_submit` dedupe against the queue, that window and the restored log,
   and answer a replay with a queue patch confirming the id; `add_draft`
   confirms a replayed draft the same way. `requeue_prompt` releases the id

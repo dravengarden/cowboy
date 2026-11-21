@@ -9,7 +9,7 @@ CoreSecurity ownership cutover or completion of P1.
 
 ## Core port, retained physical location
 
-`src/core_passkeys.rs` owns credential and ceremony SQL. `PasskeyStorage` is not
+`components/store/src/core_passkeys.rs` owns credential and ceremony SQL. `PasskeyStorage` is not
 a generic `PluginNamespace`: only the checked startup bridge constructs it,
 after verifying the existing migration ledger and completing first import. Its
 interface cannot execute arbitrary Plugin SQL or dispatch native operations.

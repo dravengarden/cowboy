@@ -48,6 +48,25 @@
         ./components/wire/Cargo.toml
         ./components/wire/src
       ];
+      # The store crate and the base modules below it. Its build script
+      # discovers the first-party Plugin trees for every crate.
+      store-files = [
+        ./components/store/Cargo.toml
+        ./components/store/build.rs
+        ./components/store/src
+      ];
+      # Slices that never compile the store modules still need the crate's
+      # manifest, build script and module list for Cargo to load the workspace.
+      store-stub-files = [
+        ./components/store/Cargo.toml
+        ./components/store/build.rs
+        ./components/store/src/lib.rs
+      ];
+      # The code-adapter slice compiles no store module and runs no build script.
+      store-lib-stub-files = [
+        ./components/store/Cargo.toml
+        ./components/store/src/lib.rs
+      ];
       machine-files = [
         ./components/machine/Cargo.toml
         ./components/machine/src
@@ -96,7 +115,7 @@
       ];
       plugin-contract-files = plugin-sdk-files ++ provider-sdk-files ++ provider-manifest-files;
       # Bootstrap hosts and signed authentication fixtures are discovered by
-      # build.rs and the Controller tests. Keep package payloads in the filtered
+      # components/store/build.rs and the Controller tests. Keep package payloads in the filtered
       # source so the hermetic check phase exercises the same Catalog cutover.
       plugin-host-files = [
         (pkgs.lib.fileset.fileFilter (file: file.hasExt "json") ./examples/telemetry)
@@ -119,7 +138,6 @@
         fileset = pkgs.lib.fileset.unions ([
           ./Cargo.toml
           ./Cargo.lock
-          ./build.rs
           ./src
           # Generated configuration templates; a unit test proves they match
           # the schema in src/config/schema.rs.
@@ -144,7 +162,7 @@
           ./tests/fixtures/telemetry-recovery-surface.json
           ./tests/fixtures/telemetry-binding-surface.json
           ./tests/fixtures/plugin-lifecycle-history.json
-        ] ++ plugin-contract-files ++ wire-files ++ server-files ++ machine-files ++ plugin-host-files);
+        ] ++ plugin-contract-files ++ wire-files ++ store-files ++ server-files ++ machine-files ++ plugin-host-files);
       };
 
       # Machine has a deliberately tiny source closure and is packaged
@@ -155,7 +173,6 @@
         fileset = pkgs.lib.fileset.unions ([
           ./Cargo.toml
           ./Cargo.lock
-          ./build.rs
           ./src/lib.rs
           ./src/main.rs
           ./src/cli.rs
@@ -170,24 +187,24 @@
           ./src/claude_shell.rs
           ./src/cgroup.rs
           ./src/cgroup
-          ./src/execution_target_environment.rs
+          ./components/store/src/execution_target_environment.rs
           ./src/durable_state.rs
           ./src/code_buffer_read.rs
           ./src/code_buffer_read
           ./plugins/zed/adapter/fixtures/content.json
           ./plugins/zed/adapter/fixtures/text.json
-          ./src/first_party_sources.rs
-          ./src/plugin_auth_probe.rs
-          ./src/plugin_host.rs
-          ./src/plugin_host_bundle.rs
+          ./components/store/src/first_party_sources.rs
+          ./components/store/src/plugin_auth_probe.rs
+          ./components/store/src/plugin_host.rs
+          ./components/store/src/plugin_host_bundle.rs
           ./src/plugin_process.rs
           ./src/plugin_process
-          ./src/plugin_runtime_args.rs
+          ./components/store/src/plugin_runtime_args.rs
           ./src/legacy_provider_release.rs
           ./src/agent_mcp.rs
           ./src/agent_mcp
-          ./src/managed_calls.rs
-          ./src/managed_calls
+          ./components/store/src/managed_calls.rs
+          ./components/store/src/managed_calls
           ./src/component_proof.rs
           ./src/machine_components.rs
           ./src/machine_components
@@ -200,7 +217,7 @@
           ./src/machine_transport.rs
           ./src/machine_transport
           ./src/generation_retention.rs
-          ./src/operation_budget.rs
+          ./components/store/src/operation_budget.rs
           ./src/owned_json.rs
           ./src/telemetry_plugin.rs
           ./src/telemetry_plugin/writer_admission.rs
@@ -208,16 +225,16 @@
           ./src/otlp.rs
           ./src/provider/deepseek_cache.rs
           ./src/provider/deepseek_context.rs
-          ./src/provider_behavior.rs
+          ./components/store/src/provider_behavior.rs
           ./src/provider_usage_spool.rs
           ./src/provider_catalog.rs
           ./src/runtime_trace.rs
-          ./src/session_workspace.rs
-          ./src/session_workspace
+          ./components/store/src/session_workspace.rs
+          ./components/store/src/session_workspace
           ./src/workspace_extensions.rs
           ./src/workspace_extensions
           ./src/workspace_roots.rs
-        ] ++ plugin-contract-files ++ wire-files ++ machine-files ++ server-stub-files ++ [
+        ] ++ plugin-contract-files ++ wire-files ++ store-stub-files ++ machine-files ++ server-stub-files ++ [
           (pkgs.lib.fileset.fileFilter (file: file.name == "host.json") ./plugins)
         ]);
       };
@@ -246,7 +263,7 @@
           # compiles the wire modules.
           ./components/wire/Cargo.toml
           ./components/wire/src/lib.rs
-        ] ++ server-stub-files ++ machine-stub-files);
+        ] ++ store-lib-stub-files ++ server-stub-files ++ machine-stub-files);
       };
 
 
@@ -261,25 +278,30 @@
         (pkgs.lib.fileset.toList (pkgs.lib.fileset.unions ([
         ./Cargo.toml
         ./Cargo.lock
-        ./build.rs
+        ./components/store/Cargo.toml
+        ./components/store/build.rs
+        ./components/store/src/lib.rs
         ./worker-generation.txt
         ./src/acp.rs
         ./src/acp_process.rs
         ./src/acp_subagents.rs
-        ./src/agent_model.rs
+        ./components/store/src/agent_model.rs
+        # The worker's prompt-origin tags and echoed-image references.
+        ./components/store/src/prompt_origin.rs
+        ./components/store/src/artifacts.rs
         ./src/agent_sink.rs
         ./src/native_configuration.rs
         ./src/bin/cowboy-codex-app-server.rs
         ./src/cgroup.rs
         # src/cgroup/containment is gated by machine-host and is not worker code.
         ./src/claude_shell.rs
-        ./src/first_party_sources.rs
-        ./src/plugin_runtime_args.rs
+        ./components/store/src/first_party_sources.rs
+        ./components/store/src/plugin_runtime_args.rs
         ./src/provider/deepseek_cache.rs
         ./src/provider/deepseek_context.rs
         ./src/provider/managed_config.rs
         ./src/provider/mod.rs
-        ./src/provider_behavior.rs
+        ./components/store/src/provider_behavior.rs
         ./src/provider_catalog.rs
         # Only the worker-relevant modules of the shared wire crate decide the
         # pool generation; Machine protocol edits must not drain live sessions.
@@ -294,7 +316,7 @@
         ./src/runtime_trace.rs
         ./src/logs.rs
         ./src/logs
-        ./src/managed_calls/round.rs
+        ./components/store/src/managed_calls/round.rs
         ./src/worker.rs
         ./src/worker
         ./src/worker_execution.rs
@@ -423,7 +445,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-Dj9+k26hqoCgIARL8OPCKjGhtvU+qaCaejLm7Kev10k=";
+        hash = "sha256-N/epDo3LNduRzTqUJH63ZexeJEGkmn61aNiKD/VVk0U=";
         preBuild = staticCratesVendorPatch + ''
           export PATH="${cardeaVendorGit}/bin:$PATH"
         '';
@@ -471,7 +493,7 @@
         # phase doubled the release build (about 8 of 12 minutes). The hermetic
         # suite stays available as `checks.cowboy-tests` below.
         doCheck = false;
-        cargoTestFlags = [ "-p" "cowboy" "-p" "cowboy-server" "-p" "cowboy-wire" ];
+        cargoTestFlags = [ "-p" "cowboy" "-p" "cowboy-store" "-p" "cowboy-server" "-p" "cowboy-wire" ];
         # cowboy-server dev-depends on cowboy-machine, which enables the
         # machine-host tests of the base crate in this build. This one runs a
         # real nested cargo build, which the sandbox (no writable toolchain
@@ -769,6 +791,8 @@
       retained-worker-interface-files = pkgs.lib.fileset.toList (pkgs.lib.fileset.unions ([
         ./Cargo.toml
         ./Cargo.lock
+        # Its dependency features are part of the shared native build.
+        ./components/store/Cargo.toml
         ./components/wire/Cargo.toml
         ./components/wire/src
       ] ++ plugin-sdk-files ++ provider-sdk-files));
@@ -893,7 +917,7 @@
         test -e ${cowboy-src}/plugins/zed/adapter/fixtures/content.json
         test -e ${cowboy-src}/plugins/zed/adapter/fixtures/text.json
         test ! -e ${cowboy-src}/plugins/zed/adapter/src/main.rs
-        test -e ${cowboy-src}/build.rs
+        test -e ${cowboy-src}/components/store/build.rs
         test -e ${cowboy-src}/plugins/grok/host.json
         test -e ${cowboy-src}/plugins/grok/collector/index.js
         test ! -e ${cowboy-src}/plugins/grok/ui/index.js
@@ -909,8 +933,8 @@
         test -e ${machine-src}/components/provider-sdk/Cargo.toml
         test -e ${machine-src}/components/plugin-sdk/Cargo.toml
         test -e ${machine-src}/components/wire/Cargo.toml
-        test -e ${machine-src}/build.rs
-        test -e ${machine-src}/src/first_party_sources.rs
+        test -e ${machine-src}/components/store/build.rs
+        test -e ${machine-src}/components/store/src/first_party_sources.rs
         test -e ${machine-src}/src/plugin_process.rs
         test -e ${machine-src}/components/wire/src/provider_account.rs
         test -e ${machine-src}/components/wire/src/provider_account/portable_contract.rs
@@ -931,23 +955,23 @@
         test ! -e ${code-adapter-src}/components/wire/src/provider_account.rs
         test ! -e ${code-adapter-src}/providers
         test -e ${machine-src}/src/provider/deepseek_cache.rs
-        test -e ${machine-src}/src/plugin_runtime_args.rs
+        test -e ${machine-src}/components/store/src/plugin_runtime_args.rs
         test -e ${machine-src}/plugins/grok/host.json
         test -e ${machine-src}/src/provider/deepseek_context.rs
         test -e ${machine-src}/components/machine/src/machine_plugins.rs
         test -e ${machine-src}/components/machine/src/machine_plugins/operations.rs
         test -e ${machine-src}/components/machine/src/machine_plugins/operations/installations.rs
         test -e ${machine-src}/components/machine/src/machine_plugins/operations/lease.rs
-        test -e ${machine-src}/src/operation_budget.rs
+        test -e ${machine-src}/components/store/src/operation_budget.rs
         test -e ${machine-src}/src/owned_json.rs
         test -e ${machine-src}/components/wire/src/machine_protocol/plugin_step.rs
         test -e ${machine-src}/components/wire/src/machine_protocol/plugin_recovery.rs
         test -e ${machine-src}/components/wire/src/machine_protocol/installation_revision.rs
-        test -e ${machine-src}/src/provider_behavior.rs
+        test -e ${machine-src}/components/store/src/provider_behavior.rs
         test -e ${machine-src}/src/provider_catalog.rs
         test -e ${machine-src}/src/provider_usage_spool.rs
-        test -e ${machine-src}/src/session_workspace.rs
-        test -e ${machine-src}/src/session_workspace/storage.rs
+        test -e ${machine-src}/components/store/src/session_workspace.rs
+        test -e ${machine-src}/components/store/src/session_workspace/storage.rs
         test -e ${machine-src}/src/durable_state.rs
         test -e ${machine-src}/components/machine/src/machine_broker/deletions.rs
         test -e ${machine-src}/src/session_deletion_admission.rs

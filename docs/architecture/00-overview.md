@@ -61,15 +61,24 @@ does not change the current Hub/Machine/worker topology.
 | Layer | Modules | Role |
 |---|---|---|
 | CLI / controller | `src/main.rs`, `src/cli.rs`, `components/server/src/server.rs` | Commands, authenticated REST/WebSocket, and runtime-served SPA |
-| Hub | `src/core.rs`, `src/persistence.rs` | Session state, `seq`, fan-out, queueing, and write-behind intents |
+| Hub | `src/core.rs`, `components/store/src/persistence.rs` | Session state, `seq`, fan-out, queueing, and write-behind intents |
 | Runtime routing | `src/supervisor.rs`, `src/remote_runtime.rs`, `src/runtime_router.rs` | Machine selection, fencing, replay, and idempotent commands |
 | Machine host | `src/machine_*.rs`, `components/machine/src/*`, `components/machine/src/bin/cowboy-machine.rs` | Enrollment, workspace preparation, component lifecycle, and detached-worker supervision |
 | ACP worker | `src/acp.rs`, `src/worker.rs`, `src/bin/cowboy-acp-worker.rs` | Provider handshake, prompts, permissions, streaming updates, and resume |
 | Plugins and components | `src/plugin.rs`, `plugins/*`, `components/*` | Versioned integration manifests, shared contracts, and coordinated release validation |
 | Agent Providers | `src/provider/*`, `plugins/*/provider.json` | Signed package contracts, launch generations, Service auth, and usage adapters |
-| Storage | `src/store.rs`, `src/store/sqlite.rs`, `migrations/*` | PostgreSQL/SQLite durability, restore, pagination, and retention |
+| Storage | `components/store/src/store.rs`, `components/store/src/store/sqlite.rs`, `migrations/*` | PostgreSQL/SQLite durability, restore, pagination, and retention |
 | Code plane | `src/code_review.rs`, `src/code_adapter.rs`, `src/code_cache.rs` | Worktree tree/diff/file/LSP data behind a stable Cowboy API |
 | Frontend | `web/src/*` | Desktop, mobile, transcript, composer, Machine, Provider, and code-review surfaces |
+
+The Rust workspace layers these modules into crates. `cowboy-store`
+(`components/store`) holds the store, persistence and every base module the
+store reaches; `cowboy` (the root package) holds the Hub, runtime routing, ACP,
+workers, the CLI and the rest of the base, and re-exports each store-crate module
+at its old `cowboy::` path; `cowboy-server` and `cowboy-machine` sit on top. A
+change above the store therefore recompiles neither the store crate nor its
+tests. Tests that need the Hub and a real store live in the base crate's
+`store_hub_tests` and reach the store through its `test-support` surface.
 
 The axum process serves both APIs and the files under `--web-root`. Web releases
 can therefore atomically switch `/run/cowboy-web` without rebuilding or

@@ -102,8 +102,7 @@ enum ComponentPackageKind {
     Npm,
 }
 
-const FIRST_PARTY_PLUGIN_SOURCES: &[&str] =
-    include!(concat!(env!("OUT_DIR"), "/first_party_plugins.rs"));
+const FIRST_PARTY_PLUGIN_SOURCES: &[&str] = crate::first_party_sources::PLUGIN_SOURCES;
 const COMPONENT_REGISTRY_SOURCE: &str = include_str!("../components/registry.json");
 const COMPONENT_REGISTRY_ARCHIVE_SOURCE: &str = include_str!("../components/registry-archive.json");
 

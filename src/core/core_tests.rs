@@ -2218,7 +2218,7 @@ fn managed_images_survive_live_compaction_and_tool_update_merge() {
     use crate::managed_calls::media;
     let root = tempfile::tempdir().unwrap();
     let store = crate::artifacts::ArtifactStore::new(root.path().to_owned()).unwrap();
-    let png = media::tests::png();
+    let png = media::fixtures::png();
     let hub = hub_with_session("generated-image");
     hub.set_artifacts(store.clone());
     let mut success = serde_json::json!({"sessionUpdate":"tool_call_update","toolCallId":"image",

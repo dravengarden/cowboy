@@ -318,7 +318,18 @@ pub struct NamedReleaseCarry {
     pub digest: String,
 }
 
-impl SessionMeta {
+/// The release-transition guard needs the Hub-owned [`NamedReleaseCarry`],
+/// so it stays beside the Hub rather than on the session record in `model`.
+pub(crate) trait ProviderReleaseTransition {
+    fn require_provider_release_transition(
+        &self,
+        version: &str,
+        digest: &str,
+        carry: Option<&NamedReleaseCarry>,
+    ) -> Result<(), String>;
+}
+
+impl ProviderReleaseTransition for SessionMeta {
     fn require_provider_release_transition(
         &self,
         version: &str,
@@ -335,117 +346,6 @@ impl SessionMeta {
             })
         {
             return Err("named account release change requires a verified login transition".into());
-        }
-        Ok(())
-    }
-
-    /// Web creation registers a remote session against the stable source root
-    /// and only later publishes the Machine-prepared session worktree as its
-    /// `cwd`. A non-Git root legitimately stays shared, so this structural
-    /// check alone does not prove the workspace is unprepared.
-    #[must_use]
-    pub fn on_workspace_source_root(&self) -> bool {
-        self.origin == SessionOrigin::Web
-            && self.machine_id != "local"
-            && self.execution_binding.is_none()
-            && self.workspace_source_path.as_deref() == Some(self.cwd.as_str())
-    }
-
-    /// A session whose Machine workspace preparation is still pending, was
-    /// interrupted (Controller restart, dropped Machine connection) or failed
-    /// (for example a Git timeout): it is on its source root and no native
-    /// agent thread ever started. Callers that can observe a live worker must
-    /// also exclude one, which covers the first launch on a shared non-Git
-    /// root. Its source checkout is never a valid worker cwd for a Git root,
-    /// and re-running preparation is idempotent for both kinds.
-    #[must_use]
-    pub fn awaits_workspace_preparation(&self) -> bool {
-        self.on_workspace_source_root()
-            && self.agent_session_id.is_none()
-            && matches!(
-                self.status,
-                crate::agent_model::Status::Starting | crate::agent_model::Status::Crashed
-            )
-    }
-
-    /// Binding identity alone cannot authorize execution. The selected exact
-    /// signed Provider must also accept this executor contract. This is a
-    /// structural check only: named dispatch and projection require the fresh
-    /// admission enforced by RemoteRuntime (a native login binding or a
-    /// portable account's Service vault), never this cached metadata.
-    pub fn require_runtime_launch(&self) -> Result<(), String> {
-        if !self.provider_account_id.is_default()
-            && (self.closing
-                || self.machine_id.is_empty()
-                || self.machine_id == "local"
-                || self.owner_user_id.as_ref().is_none_or(String::is_empty)
-                || self.provider_version.is_empty()
-                || self.provider_generation_digest.is_empty()
-                || self
-                    .provider_auth_generation
-                    .is_none_or(|generation| generation == 0)
-                || self.provider_behavior.is_none())
-        {
-            return Err("Named account requires a complete enrolled native binding".into());
-        }
-        self.require_runtime_environment()
-    }
-
-    /// Structural check only. The caller must separately hold current native
-    /// account/session admission before dispatching this dormant declaration.
-    pub fn require_native_readmission(
-        &self,
-        target: &crate::provider_account::NativeProfileReceipt,
-    ) -> Result<(), String> {
-        if self.provider_account_id.is_default()
-            || self.closing
-            || self.status != Status::Exited
-            || self.owner_user_id.is_none()
-            || self.discards_conversation_on_readmission()
-            || self.provider_account_id != target.account_id
-            || self.provider != target.provider_id
-            || self.provider_version != target.provider_version
-            || self.provider_generation_digest != target.generation_digest
-            || self.provider_auth_generation != Some(target.generation)
-            || target.generation == 0
-        {
-            return Err("native readmission does not match the dormant session".into());
-        }
-        self.require_runtime_environment()
-    }
-
-    fn require_runtime_environment(&self) -> Result<(), String> {
-        if let Some(binding) = &self.execution_binding {
-            if let Some(child) = binding.managed_child() {
-                return if child.accepts(&self.id, &self.machine_id, &self.cwd)
-                    && !self.provider_version.is_empty()
-                    && !self.provider_generation_digest.is_empty()
-                {
-                    Ok(())
-                } else {
-                    Err("managed child does not match its pinned session".into())
-                };
-            }
-            let binding = binding
-                .for_runtime(&self.machine_id, &self.cwd)
-                .map_err(str::to_owned)?;
-            if self.provider_version.is_empty()
-                || self.provider_generation_digest.is_empty()
-                || !self
-                    .provider_behavior
-                    .as_ref()
-                    .and_then(|value| value.execution.as_ref())
-                    .is_some_and(|contract| {
-                        contract.accepts(
-                            binding.environment.protocol,
-                            &binding.environment.executor_digest,
-                        )
-                    })
-            {
-                return Err(
-                    "this Provider release does not support the bound execution environment".into(),
-                );
-            }
         }
         Ok(())
     }

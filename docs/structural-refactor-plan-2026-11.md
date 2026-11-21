@@ -550,6 +550,28 @@ generation, so it merges at the next worker-generation maintenance rather
 than on its own. Revisit the crate split only if compile time or ownership
 problems return that the in-crate boundaries do not address.
 
+### Phase 5 status (2026-11-21)
+
+The crate split was revisited because base-crate recompiles still dominate the
+gate: since the 2026-10-23 split, 357 of 748 Rust commits touched the base
+crate, and each recompiles it in every gate configuration. The 11-07 sizing
+assumed the store's *callers* had to leave the base crate. Splitting the other
+way avoids that: `cowboy-store` (`components/store`) takes `store` and the
+modules it reaches, 38 modules and about 63k production lines, and the base
+crate depends on it and re-exports every moved module at its old path, so no
+caller changed. In the same history, 243 of 357 base-crate commits (68%)
+touched only modules above the store and stop recompiling it.
+
+Only test code crossed the boundary in the wrong direction. Tests that drive a
+real store through the Hub, the CLI, the Plugin runtime or the subagent writer
+moved to the base crate's `store_hub_tests`; the store contracts they extend
+are compiled under the store crate's `test-support` feature (the base crate's
+dev-dependency enables it). The 8-module store cycle, the 6-module Plugin
+cycle and the 4-module Hub cycle are unchanged, `tools/check-module-layers.ts`
+now covers `cowboy_store`, and `migrations/` stay byte-identical. The split
+changes `Cargo.toml`, `Cargo.lock`, `build.rs` and worker-input paths, so it
+shipped as one worker-generation maintenance.
+
 7.3 landed on 2026-11-06 with one deviation: the 98 unreferenced releases
 moved to a single `components/registry-archive.json` rather than one file per
 version, so the Rust reader needs one `include_str!` and `build.rs` (a hashed

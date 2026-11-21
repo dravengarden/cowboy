@@ -1,0 +1,8772 @@
+//! Backend-neutral persistence for Cowboy state.
+//!
+//! [`Store`] is the stable storage API consumed by the rest of the controller.
+//! `PostgreSQL` and `SQLite` are private implementations selected from the
+//! connection URL; callers never branch on the database kind.
+//!
+//! - load all sessions + their recent event tails on daemon startup;
+//! - append a new session;
+//! - UPSERT reduced event batches under their sessions;
+//! - update a session's status;
+//! - delete a session (cascades events).
+//!
+//! Writes from the hot path (`Hub::push`) go through an mpsc channel into the
+//! bounded background writer task, so a slow DB never blocks WS fan-out or grows
+//! memory indefinitely. The writer retries, reports degraded health on loss,
+//! and drains on graceful shutdown. A hard crash can still lose the current
+//! batch; the alternative couples broadcast latency to DB round-trips.
+//!
+//! Backend-specific embedded migrations live next to `Cargo.toml` under
+//! `./migrations/`. Run [`Store::migrate`] once on startup.
+
+#![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
+
+use std::collections::{HashMap, HashSet};
+use std::io::Read as _;
+use std::time::Duration;
+
+use anyhow::{Context as _, Result};
+use base64::Engine as _;
+use chrono::{DateTime, Utc};
+use futures::TryStreamExt as _;
+use sqlx::Row as _;
+use sqlx::postgres::{PgPool, PgPoolOptions};
+
+pub mod account_controls;
+pub mod agent_api_operations;
+mod browser_devices;
+mod cardea_operations;
+mod context_start;
+mod copy;
+mod core_security;
+pub mod draft_documents;
+mod managed_calls;
+pub mod preferences;
+pub mod provider_accounts;
+mod session_metadata;
+pub mod session_widgets;
+pub mod subagent_events;
+mod workspace_documents;
+pub use core_security::HandoffPoint;
+mod plugin_installations;
+mod plugin_operations;
+mod provider_action_reads;
+mod sqlite;
+pub mod task_notifications;
+mod telemetry_bindings;
+pub mod transcript_anchors;
+mod usage_execution;
+
+use sqlite::SqliteStorage;
+
+pub use copy::postgres_to_sqlite;
+
+use crate::agent_model::{Event, Status};
+use crate::model::{
+    Envelope, QuestionPageSummary, QueuedMessage, SessionMeta, SessionOrigin, bound_history_page,
+    question_summary_title,
+};
+use crate::session_folders::SessionFolder;
+
+fn valid_machine_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+/// Allocate a new Machine id. Callers that omit `machine_id` from enrollment
+/// mint one of these instead of asking a person to invent a slug.
+pub fn generate_machine_id() -> Result<String> {
+    let mut random = [0_u8; 8];
+    std::fs::File::open("/dev/urandom")
+        .context("opening OS randomness")?
+        .read_exact(&mut random)
+        .context("reading OS randomness")?;
+    Ok(format!(
+        "m-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        random[0], random[1], random[2], random[3], random[4], random[5], random[6], random[7]
+    ))
+}
+
+fn valid_product_user_id(value: &str) -> bool {
+    value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn normalized_product_username(username: &str) -> Result<String> {
+    crate::credentials::normalize_username(username)
+}
+
+fn unique_constraint_error(
+    error: sqlx::Error,
+    unique_message: &str,
+    context: &str,
+) -> anyhow::Error {
+    if error
+        .as_database_error()
+        .is_some_and(sqlx::error::DatabaseError::is_unique_violation)
+    {
+        anyhow::anyhow!("{unique_message}")
+    } else {
+        anyhow::Error::from(error).context(context.to_owned())
+    }
+}
+
+fn truncate_user_agent(user_agent: Option<&str>) -> Option<String> {
+    let value = user_agent?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if value.chars().count() <= 512 {
+        Some(value.to_owned())
+    } else {
+        Some(value.chars().take(512).collect())
+    }
+}
+
+fn validate_product_user_session(session: &ProductUserSession) -> Result<()> {
+    anyhow::ensure!(!session.token_hash.is_empty(), "token hash cannot be empty");
+    anyhow::ensure!(
+        (16..=128).contains(&session.session_id.len()),
+        "session id must be between 16 and 128 characters"
+    );
+    anyhow::ensure!(
+        matches!(session.client_kind.as_str(), "browser" | "native_shell"),
+        "invalid product session client kind"
+    );
+    anyhow::ensure!(
+        matches!(
+            session.principal_class.as_str(),
+            "human" | "automation" | "system"
+        ),
+        "invalid product session principal class"
+    );
+    anyhow::ensure!(
+        session
+            .revoke_reason
+            .as_ref()
+            .is_none_or(|value| (1..=128).contains(&value.len())),
+        "session revoke reason must be between 1 and 128 characters"
+    );
+    Ok(())
+}
+
+fn validate_active_client_claim(claim: &ActiveClientClaim) -> Result<()> {
+    anyhow::ensure!(
+        (16..=128).contains(&claim.client_id.len())
+            && claim.client_id.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+            }),
+        "client id must be 16-128 URL-safe characters"
+    );
+    anyhow::ensure!(
+        matches!(
+            claim.principal_class.as_str(),
+            "human" | "automation" | "system"
+        ),
+        "invalid active-client principal class"
+    );
+    anyhow::ensure!(
+        matches!(
+            claim.client_kind.as_str(),
+            "browser" | "native_shell" | "cli" | "acp" | "automation"
+        ),
+        "invalid active-client kind"
+    );
+    anyhow::ensure!(
+        claim.principal_class != "human" || claim.user_id.is_some(),
+        "human active clients require a user"
+    );
+    anyhow::ensure!(claim.lease_ms >= 10_000, "active-client lease is too short");
+    anyhow::ensure!(
+        claim.reservation_ms >= 1_000 && claim.reservation_ms <= claim.lease_ms,
+        "active-client reservation must fit within its lease"
+    );
+    anyhow::ensure!(
+        claim.per_user_limit > 0 && claim.service_limit > 0 && claim.automation_limit > 0,
+        "active-client limits must be positive"
+    );
+    Ok(())
+}
+
+fn active_client_capacity(
+    counts: (i64, i64, i64),
+    claim: &ActiveClientClaim,
+) -> ActiveClientCapacity {
+    ActiveClientCapacity {
+        active_for_user: u32::try_from(counts.0.max(0)).unwrap_or(u32::MAX),
+        active_for_service: u32::try_from(counts.1.max(0)).unwrap_or(u32::MAX),
+        active_automation: u32::try_from(counts.2.max(0)).unwrap_or(u32::MAX),
+        per_user_limit: claim.per_user_limit,
+        service_limit: claim.service_limit,
+        automation_limit: claim.automation_limit,
+    }
+}
+
+fn active_client_has_capacity(capacity: &ActiveClientCapacity, principal_class: &str) -> bool {
+    match principal_class {
+        "human" => {
+            capacity.active_for_user < capacity.per_user_limit
+                && capacity.active_for_service < capacity.service_limit
+        }
+        "automation" => capacity.active_automation < capacity.automation_limit,
+        "system" => true,
+        _ => false,
+    }
+}
+
+fn validate_device_refresh(refresh: &ProductDeviceRefreshToken) -> Result<()> {
+    anyhow::ensure!(
+        crate::client_auth::valid_device_id(&refresh.device_id),
+        "device id must be 32 hex characters"
+    );
+    anyhow::ensure!(
+        crate::client_auth::valid_device_id(&refresh.family_id),
+        "device refresh family id must be 32 hex characters"
+    );
+    anyhow::ensure!(
+        !refresh.token_hash.is_empty(),
+        "device refresh hash cannot be empty"
+    );
+    anyhow::ensure!(
+        refresh.expires_at_ms > refresh.created_at_ms,
+        "device refresh expiry must follow creation"
+    );
+    Ok(())
+}
+
+fn validate_user_device(device: &ProductDevice, refresh: &ProductDeviceRefreshToken) -> Result<()> {
+    anyhow::ensure!(
+        crate::client_auth::valid_device_id(&device.id),
+        "device id must be 32 hex characters"
+    );
+    anyhow::ensure!(
+        device.id == refresh.device_id,
+        "device refresh owner is inconsistent"
+    );
+    anyhow::ensure!(
+        !device.public_key.is_empty(),
+        "device public key cannot be empty"
+    );
+    crate::client_auth::decode_public_key(&device.public_key)?;
+    validate_device_refresh(refresh)
+}
+
+async fn insert_pg_device_refresh(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    refresh: &ProductDeviceRefreshToken,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO user_device_refresh_tokens (token_hash, device_id, family_id, created_at, \
+         expires_at, used_at, revoked_at) VALUES ($1, $2, $3, \
+         to_timestamp($4::double precision / 1000), \
+         to_timestamp($5::double precision / 1000), \
+         to_timestamp($6::double precision / 1000), \
+         to_timestamp($7::double precision / 1000))",
+    )
+    .bind(&refresh.token_hash)
+    .bind(&refresh.device_id)
+    .bind(&refresh.family_id)
+    .bind(refresh.created_at_ms)
+    .bind(refresh.expires_at_ms)
+    .bind(refresh.used_at_ms)
+    .bind(refresh.revoked_at_ms)
+    .execute(&mut **transaction)
+    .await
+    .context("INSERT user device refresh token")?;
+    Ok(())
+}
+
+async fn revoke_active_client_session_pg(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    session_id: &str,
+    reason: &str,
+    revoked_at_ms: Option<i64>,
+) -> Result<()> {
+    match revoked_at_ms {
+        Some(revoked_at_ms) => {
+            sqlx::query(
+                "UPDATE active_client_leases SET revoked_at = \
+                 to_timestamp($3::double precision / 1000), revoke_reason = $2 \
+                 WHERE session_id = $1 AND revoked_at IS NULL",
+            )
+            .bind(session_id)
+            .bind(reason)
+            .bind(revoked_at_ms)
+            .execute(&mut **transaction)
+            .await
+            .context("REVOKE active-client leases for session")?;
+        }
+        None => {
+            sqlx::query(
+                "UPDATE active_client_leases SET revoked_at = now(), revoke_reason = $2 \
+                 WHERE session_id = $1 AND revoked_at IS NULL",
+            )
+            .bind(session_id)
+            .bind(reason)
+            .execute(&mut **transaction)
+            .await
+            .context("REVOKE active-client leases for session")?;
+        }
+    }
+    sqlx::query("DELETE FROM capacity_waiters WHERE session_id = $1")
+        .bind(session_id)
+        .execute(&mut **transaction)
+        .await
+        .context("DELETE capacity waiter for session")?;
+    Ok(())
+}
+
+fn validate_encryption_public_key(value: &str) -> Result<()> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(value)
+        .context("decoding Machine encryption public key")?;
+    anyhow::ensure!(
+        bytes.len() == 32,
+        "Machine encryption public key must be 32 bytes"
+    );
+    anyhow::ensure!(
+        base64::engine::general_purpose::STANDARD.encode(&bytes) == value,
+        "Machine encryption public key must use canonical base64"
+    );
+    let mut public_key = [0_u8; 32];
+    public_key.copy_from_slice(&bytes);
+    let probe = x25519_dalek::StaticSecret::from([0x42_u8; 32]);
+    let shared = probe.diffie_hellman(&x25519_dalek::PublicKey::from(public_key));
+    anyhow::ensure!(
+        shared.as_bytes().iter().any(|byte| *byte != 0),
+        "Machine encryption public key is non-contributory"
+    );
+    Ok(())
+}
+
+fn ensure_reset_provider(provider: &str) -> Result<()> {
+    anyhow::ensure!(
+        (1..=64).contains(&provider.len())
+            && provider
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+            && !provider.starts_with('-')
+            && !provider.ends_with('-')
+            && !provider.contains("--"),
+        "invalid reset provider id"
+    );
+    Ok(())
+}
+
+use crate::digest::hex_sha256;
+
+/// Strip NUL (`U+0000`) code points from every string (and object key) inside a
+/// JSON value, in place.
+///
+/// Postgres `jsonb` cannot represent `U+0000`: an INSERT/UPDATE carrying one
+/// fails with `ERROR: unsupported Unicode escape sequence`, and our write-behind
+/// writer then drops the whole intent (the event or queue mutation is lost,
+/// logged as "store writer failed an intent"). Agent stdout and pasted prompts
+/// occasionally carry stray NUL bytes (terminal control noise); they carry no
+/// meaning in our stored text, so we drop them rather than lose the row. Call
+/// this on any value bound to a `jsonb` column.
+fn strip_nul(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(s) if s.contains('\0') => s.retain(|c| c != '\0'),
+        serde_json::Value::Array(arr) => arr.iter_mut().for_each(strip_nul),
+        serde_json::Value::Object(map) => {
+            // Object keys can also carry NUL; rebuild the map only if needed so
+            // the common (clean) path stays allocation-free.
+            if map.keys().any(|k| k.contains('\0')) {
+                let cleaned: serde_json::Map<String, serde_json::Value> = std::mem::take(map)
+                    .into_iter()
+                    .map(|(k, mut v)| {
+                        strip_nul(&mut v);
+                        (k.replace('\0', ""), v)
+                    })
+                    .collect();
+                *map = cleaned;
+            } else {
+                map.values_mut().for_each(strip_nul);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Same as [`strip_nul`] but for a plain `text` column — Postgres `text`/`varchar`
+/// reject NUL just like `jsonb`. Allocates only when a NUL is actually present.
+fn strip_nul_str(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.contains('\0') {
+        std::borrow::Cow::Owned(s.replace('\0', ""))
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    }
+}
+
+/// All persistent state needed to rehydrate a single session after restart.
+pub struct LoadedSession {
+    pub meta: SessionMeta,
+    pub events: Vec<Envelope>,
+    /// Total durable rows, including history older than `events`.
+    pub event_count: u64,
+    /// Whether the loaded tail reaches the first durable row.
+    pub reached_start: bool,
+    /// Highest `seq + 1` for this session — what Hub uses to stamp the next
+    /// event in line.
+    pub next_seq: u64,
+    /// Persisted send-queue + drafts (cross-terminal sync survives restart).
+    pub queue: Vec<QueuedMessage>,
+    pub drafts: Vec<QueuedMessage>,
+    /// Latest agent-advertised config options, retained for a fresh device.
+    pub config_options: Option<serde_json::Value>,
+    /// User-selected config values that must survive worker recreation.
+    pub config_preferences: serde_json::Value,
+    /// Mobile-only code-review workspace state, shared across iPhone/iPad clients.
+    pub mobile_review_state: serde_json::Value,
+    /// Explicit sidebar folder placement (`sessions.folder_id`), if any.
+    pub folder_id: Option<String>,
+    /// Epoch ms of the newest durable event that counts as activity, if any.
+    pub last_event_at_ms: Option<i64>,
+}
+
+#[derive(Clone)]
+pub struct Store {
+    backend: StorageBackend,
+    passkey_storage: std::sync::Arc<crate::core_passkeys::PasskeyBinding>,
+    observed_storage_metrics: std::sync::Arc<tokio::sync::Mutex<Option<ObservedStorageMetrics>>>,
+}
+
+/// How long a storage gauge observation is reused. Counting every event row
+/// takes about a second on a large SQLite database; the 15-second metrics
+/// scrape must not repeat that full scan and contend for the pool each time.
+const STORAGE_METRICS_MAX_AGE: Duration = Duration::from_secs(60);
+
+#[derive(Clone, Copy)]
+struct ObservedStorageMetrics {
+    at: std::time::Instant,
+    metrics: (i64, i64, i64),
+}
+
+pub struct PasskeySnapshot {
+    pub user: Vec<crate::passkey::UserPasskey>,
+    pub admin: Vec<crate::passkey::UserPasskey>,
+    pub ceremonies: Vec<crate::passkey::ExternalPasskeyCeremonyRecord>,
+}
+
+#[derive(Clone)]
+enum StorageBackend {
+    Postgres(PostgresStorage),
+    Sqlite(SqliteStorage),
+}
+
+/// Clearing a transcript removes its anchors and records that nothing older
+/// remains to backfill.
+#[derive(Clone)]
+struct PostgresStorage {
+    pool: PgPool,
+    artifacts: crate::artifacts::ArtifactStore,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ScheduledProviderAction {
+    pub fire_at_ms: i64,
+    pub idempotency_key: String,
+    pub attempt_count: i32,
+    pub next_attempt_at_ms: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProviderActionLog {
+    pub id: i64,
+    pub provider: String,
+    pub action: String,
+    pub trigger: String,
+    pub status: String,
+    pub phase: String,
+    pub message: String,
+    pub credit_id: Option<String>,
+    pub idempotency_suffix: Option<String>,
+    pub created_at_ms: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeIncidentWrite {
+    pub id: String,
+    pub occurred_at_ms: i64,
+    pub source: String,
+    pub classification: String,
+    pub severity: String,
+    pub state: String,
+    pub summary: String,
+    pub fingerprint: String,
+    pub session_id: Option<String>,
+    pub client_id: Option<String>,
+    pub machine_id: Option<String>,
+    pub trace_id: Option<String>,
+    pub build: Option<String>,
+    pub evidence_start_ms: i64,
+    pub evidence_end_ms: i64,
+    pub detail: serde_json::Value,
+}
+
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct RuntimeIncident {
+    pub id: String,
+    pub occurred_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub source: String,
+    pub classification: String,
+    pub severity: String,
+    pub state: String,
+    pub summary: String,
+    pub fingerprint: String,
+    pub session_id: Option<String>,
+    pub client_id: Option<String>,
+    pub machine_id: Option<String>,
+    pub trace_id: Option<String>,
+    pub build: Option<String>,
+    pub evidence_start_ms: i64,
+    pub evidence_end_ms: i64,
+    pub detail: serde_json::Value,
+    pub recovered_at_ms: Option<i64>,
+    pub recovery_outcome: Option<String>,
+}
+
+/// Closed, bounded query accepted by the unified diagnostic log read model.
+#[derive(Debug, Clone)]
+pub struct DiagnosticLogFilter {
+    pub since_ms: i64,
+    pub until_ms: i64,
+    pub kinds: Vec<String>,
+    pub severities: Vec<String>,
+    pub states: Vec<String>,
+    pub agents: Vec<String>,
+    pub session_ref: Option<String>,
+    pub cursor_ms: Option<i64>,
+    pub cursor_id: Option<String>,
+    pub limit: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct DiagnosticLogSummary {
+    pub id: String,
+    pub occurred_at_ms: i64,
+    pub kind: String,
+    pub severity: String,
+    pub state: String,
+    pub title: String,
+    pub summary: String,
+    pub session_ref: Option<String>,
+    pub provider: Option<String>,
+    pub agent: Option<String>,
+    pub model: Option<String>,
+    pub classification: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DiagnosticLogDetail {
+    pub id: String,
+    pub kind: String,
+    pub occurred_at_ms: i64,
+    pub title: String,
+    pub summary: String,
+    pub sections: Vec<DiagnosticLogSection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DiagnosticLogSection {
+    pub title: String,
+    pub fields: Vec<DiagnosticLogField>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DiagnosticLogField {
+    pub label: String,
+    pub value: String,
+    pub copyable: bool,
+}
+
+fn diagnostic_field(
+    label: impl Into<String>,
+    value: impl Into<String>,
+    copyable: bool,
+) -> DiagnosticLogField {
+    DiagnosticLogField {
+        label: label.into(),
+        value: value.into(),
+        copyable,
+    }
+}
+
+fn optional_diagnostic_field(
+    fields: &mut Vec<DiagnosticLogField>,
+    label: &str,
+    value: Option<impl Into<String>>,
+    copyable: bool,
+) {
+    if let Some(value) = value {
+        let value = value.into();
+        if !value.is_empty() {
+            fields.push(diagnostic_field(label, value, copyable));
+        }
+    }
+}
+
+fn diagnostic_title(value: &str) -> String {
+    if let Some(product) = crate::plugin_runtime_args::usage_product_label(value) {
+        return product.to_owned();
+    }
+    let mut words = value.split('_').filter(|word| !word.is_empty());
+    let Some(first) = words.next() else {
+        return "Diagnostic event".to_owned();
+    };
+    let mut title = first.to_owned();
+    if let Some(initial) = title.get_mut(0..1) {
+        initial.make_ascii_uppercase();
+    }
+    for word in words {
+        title.push(' ');
+        title.push_str(word);
+    }
+    title
+}
+
+fn parse_provider_diagnostic_id<'a>(id: &'a str, prefix: &str) -> Option<(&'a str, &'a str, i64)> {
+    let rest = id.strip_prefix(prefix)?;
+    let (identity, sequence) = rest.rsplit_once(':')?;
+    let (machine_id, producer_id) = identity.split_once(':')?;
+    let sequence = sequence.parse().ok()?;
+    (!machine_id.is_empty() && !producer_id.is_empty()).then_some((
+        machine_id,
+        producer_id,
+        sequence,
+    ))
+}
+
+fn json_scalar(value: &serde_json::Value, key: &str) -> Option<String> {
+    match value.get(key)? {
+        serde_json::Value::String(value) => Some(value.clone()),
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        serde_json::Value::Bool(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn json_i64(value: &serde_json::Value, key: &str) -> Option<i64> {
+    value.get(key)?.as_i64()
+}
+
+fn cache_transition_cause(
+    current: &serde_json::Value,
+    previous: &serde_json::Value,
+    intervening_provider_error: bool,
+) -> &'static str {
+    let changed = |key: &str| current.get(key) != previous.get(key);
+    if json_scalar(current, "operation").as_deref() == Some("compact") {
+        "client_compaction"
+    } else if changed("gateway_build") {
+        "gateway_build_changed"
+    } else if changed("gateway_boot_id") {
+        "post_gateway_restart"
+    } else if changed("model_family") {
+        "model_changed"
+    } else if changed("model_revision") {
+        "model_revision_changed"
+    } else if changed("request_role") {
+        "request_role_changed"
+    } else if changed("upstream_protocol") {
+        "protocol_changed"
+    } else if changed("translation_mode") {
+        "translation_changed"
+    } else if changed("thinking_mode") || changed("reasoning_effort") {
+        "reasoning_configuration_changed"
+    } else if json_i64(current, "compatibility_fixes").is_some_and(|value| value > 0) {
+        "compatibility_rewrite"
+    } else if changed("static_prefix_fingerprint") {
+        "static_prefix_changed"
+    } else if current
+        .get("has_previous_response_id")
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
+        && json_i64(current, "input_item_count")
+            .zip(json_i64(previous, "input_item_count"))
+            .is_some_and(|(current, previous)| current < previous)
+    {
+        "history_rewrite"
+    } else if intervening_provider_error {
+        "post_provider_error"
+    } else if json_scalar(current, "request_prefix_fingerprint").is_some()
+        && current.get("request_prefix_fingerprint") == previous.get("request_prefix_fingerprint")
+    {
+        "unexpected_exact_prefix_miss"
+    } else {
+        "unexpected_active_cache_drop"
+    }
+}
+
+fn diagnostic_http_title(status: impl std::fmt::Display) -> String {
+    format!("HTTP {status}")
+}
+
+fn diagnostic_keepalive_title(outcome: &str) -> &'static str {
+    match outcome {
+        "hit" => "Cache protected",
+        "miss" => "Keepalive cache miss",
+        "partial" => "Keepalive partial hit",
+        "retryable_error" => "Keepalive will retry",
+        "terminal_error" => "Keepalive stopped",
+        "preempted" => "Keepalive preempted",
+        _ => "Keepalive observation",
+    }
+}
+
+fn cache_transition_title(cause: &str) -> &'static str {
+    match cause {
+        "static_prefix_changed" => "Cache prefix changed",
+        "unexpected_exact_prefix_miss" => "Exact-prefix cache miss",
+        "history_rewrite" => "Cached history rewritten",
+        "post_gateway_restart" => "Cache lost after gateway restart",
+        "gateway_build_changed" => "Cache lost after gateway update",
+        "client_compaction" => "Cache changed after compaction",
+        "model_changed" => "Cache lost after model change",
+        "model_revision_changed" => "Cache lost after model revision",
+        "request_role_changed" => "Cache lost after role change",
+        "protocol_changed" => "Cache lost after protocol change",
+        "translation_changed" => "Cache lost after translation change",
+        "reasoning_configuration_changed" => "Cache lost after reasoning change",
+        "compatibility_rewrite" => "Cache lost after compatibility rewrite",
+        "post_provider_error" => "Cache lost after provider error",
+        _ => "Unexplained active-session cache drop",
+    }
+}
+
+fn provider_status_impact(status: i64) -> (&'static str, bool) {
+    if matches!(status, 401..=403) {
+        ("Critical blocker", true)
+    } else if (400..=499).contains(&status) && !matches!(status, 408 | 425 | 429 | 499) {
+        ("Blocking request failure", true)
+    } else {
+        ("Retryable provider attempt", false)
+    }
+}
+
+fn cache_rate_label(value: &serde_json::Value) -> Option<String> {
+    let hit = json_i64(value, "cache_hit_tokens")?;
+    let miss = json_i64(value, "cache_miss_tokens")?;
+    let total = hit.checked_add(miss)?;
+    if total <= 0 {
+        return None;
+    }
+    let tenths = hit.checked_mul(1_000)?.checked_div(total)?;
+    Some(format!("{}.{:01}", tenths / 10, tenths % 10))
+}
+
+fn provider_detail_matches_kind(
+    kind: &str,
+    current: &serde_json::Value,
+    previous: &serde_json::Value,
+    gap_ms: Option<i64>,
+) -> bool {
+    if kind == "provider_error" {
+        return json_i64(current, "status").is_some_and(|status| status >= 400);
+    }
+    if kind != "cache_anomaly"
+        || json_i64(current, "schema_version").is_none_or(|version| version < 3)
+        || json_scalar(current, "session_fingerprint").is_none()
+        || !matches!(
+            json_scalar(current, "session_attribution").as_deref(),
+            Some("response_lineage" | "explicit")
+        )
+        || !matches!(
+            json_scalar(current, "cache_observation").as_deref(),
+            Some("explicit" | "derived")
+        )
+        || json_scalar(current, "static_prefix_fingerprint").is_none()
+        || json_scalar(previous, "static_prefix_fingerprint").is_none()
+        || !gap_ms.is_some_and(|gap| (0..=30 * 60 * 1_000).contains(&gap))
+        || json_i64(current, "status").is_none_or(|status| status >= 400)
+        || json_i64(previous, "status").is_none_or(|status| status >= 400)
+        || json_i64(current, "input_tokens").is_none_or(|tokens| tokens < 8_000)
+        || json_i64(previous, "input_tokens").is_none_or(|tokens| tokens < 8_000)
+    {
+        return false;
+    }
+    let Some((current_hit, current_miss, previous_hit, previous_miss)) =
+        json_i64(current, "cache_hit_tokens")
+            .zip(json_i64(current, "cache_miss_tokens"))
+            .zip(
+                json_i64(previous, "cache_hit_tokens").zip(json_i64(previous, "cache_miss_tokens")),
+            )
+            .map(
+                |((current_hit, current_miss), (previous_hit, previous_miss))| {
+                    (current_hit, current_miss, previous_hit, previous_miss)
+                },
+            )
+    else {
+        return false;
+    };
+    let current_total = i128::from(current_hit) + i128::from(current_miss);
+    let previous_total = i128::from(previous_hit) + i128::from(previous_miss);
+    current_total > 0
+        && previous_total > 0
+        && i128::from(current_hit) * 10 < current_total
+        && i128::from(previous_hit) * 10 >= previous_total * 9
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MachineRecord {
+    pub id: String,
+    pub display_name: String,
+    pub connection_mode: String,
+    pub platform: String,
+    pub architecture: String,
+    pub status: String,
+    pub inventory: serde_json::Value,
+    pub last_seen_at_ms: Option<i64>,
+    pub revoked: bool,
+    pub fingerprint: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnrolledMachine {
+    pub id: String,
+    pub display_name: String,
+    pub fingerprint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductUser {
+    pub id: String,
+    pub username: String,
+    pub password_algo: String,
+    pub password_hash: String,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub disabled_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductUserSession {
+    pub token_hash: String,
+    pub session_id: String,
+    pub user_id: String,
+    pub client_kind: String,
+    pub principal_class: String,
+    pub created_at_ms: i64,
+    pub expires_at_ms: i64,
+    pub last_seen_at_ms: i64,
+    pub user_agent: Option<String>,
+    pub passkey_verified_at_ms: Option<i64>,
+    pub primary_authenticated_at_ms: i64,
+    pub primary_auth_method: Option<String>,
+    pub revoked_at_ms: Option<i64>,
+    pub revoke_reason: Option<String>,
+    pub auth_provider_id: Option<String>,
+    pub auth_issuer: Option<String>,
+    pub auth_subject: Option<String>,
+    pub auth_sid: Option<String>,
+    pub id_token_ciphertext: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProductSessionAdmission {
+    Admitted {
+        active_sessions: u32,
+        limit: u32,
+        observed_overflow: bool,
+        revoked_session_ids: Vec<String>,
+    },
+    CapacityFull {
+        active_sessions: u32,
+        limit: u32,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProductDeviceAdmission {
+    Admitted {
+        active_clients: u32,
+        limit: u32,
+        observed_overflow: bool,
+    },
+    CapacityFull {
+        active_clients: u32,
+        limit: u32,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OidcBackchannelLogout {
+    Applied { revoked_sessions: u64 },
+    Replay,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveClientClaim {
+    pub client_id: String,
+    pub user_id: Option<String>,
+    pub principal_class: String,
+    pub session_id: Option<String>,
+    pub client_kind: String,
+    pub now_ms: i64,
+    pub lease_ms: i64,
+    pub reservation_ms: i64,
+    pub per_user_limit: u32,
+    pub service_limit: u32,
+    pub automation_limit: u32,
+    pub enforce: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActiveClientRelease<'a> {
+    pub client_id: &'a str,
+    pub fencing_token: i64,
+    pub reason: &'a str,
+    pub now_ms: i64,
+    pub reservation_ms: i64,
+    pub per_user_limit: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ActiveClientCapacity {
+    pub active_for_user: u32,
+    pub active_for_service: u32,
+    pub active_automation: u32,
+    pub per_user_limit: u32,
+    pub service_limit: u32,
+    pub automation_limit: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ActiveClientLease {
+    pub client_id: String,
+    pub user_id: Option<String>,
+    pub principal_class: String,
+    pub session_id: Option<String>,
+    pub client_kind: String,
+    pub fencing_token: i64,
+    pub acquired_at_ms: i64,
+    pub heartbeat_at_ms: i64,
+    pub expires_at_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActiveClientAdmission {
+    Granted {
+        lease: ActiveClientLease,
+        capacity: ActiveClientCapacity,
+        observed_overflow: bool,
+    },
+    Waiting {
+        position: u32,
+        retry_after_ms: i64,
+        capacity: ActiveClientCapacity,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductApiToken {
+    pub id: String,
+    pub user_id: String,
+    pub name: String,
+    pub token_prefix: String,
+    pub token_hash: String,
+    pub created_at_ms: i64,
+    pub expires_at_ms: Option<i64>,
+    pub last_used_at_ms: Option<i64>,
+    pub revoked_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductDevice {
+    pub id: String,
+    pub user_id: String,
+    pub name: String,
+    pub public_key: String,
+    pub created_at_ms: i64,
+    pub last_used_at_ms: Option<i64>,
+    pub revoked_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductDeviceRefreshToken {
+    pub token_hash: String,
+    pub device_id: String,
+    pub family_id: String,
+    pub created_at_ms: i64,
+    pub expires_at_ms: i64,
+    pub used_at_ms: Option<i64>,
+    pub revoked_at_ms: Option<i64>,
+}
+
+#[derive(sqlx::FromRow)]
+struct ProductUserRow {
+    id: String,
+    username: String,
+    password_algo: String,
+    password_hash: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    disabled_at: Option<DateTime<Utc>>,
+}
+
+#[derive(sqlx::FromRow)]
+struct ProductUserSessionRow {
+    token_hash: String,
+    session_id: String,
+    user_id: String,
+    client_kind: String,
+    principal_class: String,
+    created_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    last_seen_at: DateTime<Utc>,
+    user_agent: Option<String>,
+    passkey_verified_at: Option<DateTime<Utc>>,
+    primary_authenticated_at: DateTime<Utc>,
+    primary_auth_method: Option<String>,
+    revoked_at: Option<DateTime<Utc>>,
+    revoke_reason: Option<String>,
+    auth_provider_id: Option<String>,
+    auth_issuer: Option<String>,
+    auth_subject: Option<String>,
+    auth_sid: Option<String>,
+    id_token_ciphertext: Option<String>,
+}
+
+#[derive(sqlx::FromRow)]
+struct ActiveClientLeaseRow {
+    client_id: String,
+    user_id: Option<String>,
+    principal_class: String,
+    session_id: Option<String>,
+    client_kind: String,
+    fencing_token: i64,
+    acquired_at: DateTime<Utc>,
+    heartbeat_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+}
+
+impl ActiveClientLeaseRow {
+    fn into_lease(self) -> ActiveClientLease {
+        ActiveClientLease {
+            client_id: self.client_id,
+            user_id: self.user_id,
+            principal_class: self.principal_class,
+            session_id: self.session_id,
+            client_kind: self.client_kind,
+            fencing_token: self.fencing_token,
+            acquired_at_ms: self.acquired_at.timestamp_millis(),
+            heartbeat_at_ms: self.heartbeat_at.timestamp_millis(),
+            expires_at_ms: self.expires_at.timestamp_millis(),
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct ProductApiTokenRow {
+    id: String,
+    user_id: String,
+    name: String,
+    token_prefix: String,
+    token_hash: String,
+    created_at: DateTime<Utc>,
+    expires_at: Option<DateTime<Utc>>,
+    last_used_at: Option<DateTime<Utc>>,
+    revoked_at: Option<DateTime<Utc>>,
+}
+
+#[derive(sqlx::FromRow)]
+struct ProductDeviceRow {
+    id: String,
+    user_id: String,
+    name: String,
+    public_key: String,
+    created_at: DateTime<Utc>,
+    last_used_at: Option<DateTime<Utc>>,
+    revoked_at: Option<DateTime<Utc>>,
+}
+
+#[derive(sqlx::FromRow)]
+struct ProductDeviceRefreshTokenRow {
+    token_hash: String,
+    device_id: String,
+    family_id: String,
+    created_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    used_at: Option<DateTime<Utc>>,
+    revoked_at: Option<DateTime<Utc>>,
+}
+
+#[derive(sqlx::FromRow)]
+struct ProductPasskeyRow {
+    id: String,
+    user_id: String,
+    credential_id: String,
+    nickname: String,
+    passkey_json: String,
+    created_at: DateTime<Utc>,
+    last_used_at: Option<DateTime<Utc>>,
+}
+
+impl ProductPasskeyRow {
+    fn into_passkey(self) -> crate::passkey::UserPasskey {
+        crate::passkey::UserPasskey {
+            id: self.id,
+            user_id: self.user_id,
+            credential_id: self.credential_id,
+            nickname: self.nickname,
+            passkey_json: self.passkey_json,
+            created_at_ms: self.created_at.timestamp_millis(),
+            last_used_at_ms: self.last_used_at.map(|value| value.timestamp_millis()),
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct ProductPasskeyPolicyRow {
+    passkey_reauth_enabled: bool,
+    passkey_reauth_interval_ms: i64,
+    last_step_up_at: Option<DateTime<Utc>>,
+    passkey_count: i64,
+}
+
+impl ProductPasskeyPolicyRow {
+    fn into_policy(self) -> crate::passkey::PasskeyPolicy {
+        crate::passkey::PasskeyPolicy {
+            enabled: self.passkey_reauth_enabled,
+            reauth_after_ms: self.passkey_reauth_interval_ms,
+            last_step_up_at_ms: self.last_step_up_at.map(|value| value.timestamp_millis()),
+            passkey_count: u32::try_from(self.passkey_count.max(0)).unwrap_or(0),
+        }
+    }
+}
+
+impl ProductUser {
+    fn from_pg(row: ProductUserRow) -> Self {
+        Self {
+            id: row.id,
+            username: row.username,
+            password_algo: row.password_algo,
+            password_hash: row.password_hash,
+            created_at_ms: row.created_at.timestamp_millis(),
+            updated_at_ms: row.updated_at.timestamp_millis(),
+            disabled_at_ms: row.disabled_at.map(|value| value.timestamp_millis()),
+        }
+    }
+}
+
+impl ProductUserSession {
+    fn from_pg(row: ProductUserSessionRow) -> Self {
+        Self {
+            token_hash: row.token_hash,
+            session_id: row.session_id,
+            user_id: row.user_id,
+            client_kind: row.client_kind,
+            principal_class: row.principal_class,
+            created_at_ms: row.created_at.timestamp_millis(),
+            expires_at_ms: row.expires_at.timestamp_millis(),
+            last_seen_at_ms: row.last_seen_at.timestamp_millis(),
+            user_agent: row.user_agent,
+            passkey_verified_at_ms: row
+                .passkey_verified_at
+                .map(|value| value.timestamp_millis()),
+            primary_authenticated_at_ms: row.primary_authenticated_at.timestamp_millis(),
+            primary_auth_method: row.primary_auth_method,
+            revoked_at_ms: row.revoked_at.map(|value| value.timestamp_millis()),
+            revoke_reason: row.revoke_reason,
+            auth_provider_id: row.auth_provider_id,
+            auth_issuer: row.auth_issuer,
+            auth_subject: row.auth_subject,
+            auth_sid: row.auth_sid,
+            id_token_ciphertext: row.id_token_ciphertext,
+        }
+    }
+}
+
+impl ProductApiToken {
+    fn from_pg(row: ProductApiTokenRow) -> Self {
+        Self {
+            id: row.id,
+            user_id: row.user_id,
+            name: row.name,
+            token_prefix: row.token_prefix,
+            token_hash: row.token_hash,
+            created_at_ms: row.created_at.timestamp_millis(),
+            expires_at_ms: row.expires_at.map(|value| value.timestamp_millis()),
+            last_used_at_ms: row.last_used_at.map(|value| value.timestamp_millis()),
+            revoked_at_ms: row.revoked_at.map(|value| value.timestamp_millis()),
+        }
+    }
+}
+
+impl ProductDevice {
+    fn from_pg(row: ProductDeviceRow) -> Self {
+        Self {
+            id: row.id,
+            user_id: row.user_id,
+            name: row.name,
+            public_key: row.public_key,
+            created_at_ms: row.created_at.timestamp_millis(),
+            last_used_at_ms: row.last_used_at.map(|value| value.timestamp_millis()),
+            revoked_at_ms: row.revoked_at.map(|value| value.timestamp_millis()),
+        }
+    }
+}
+
+impl ProductDeviceRefreshToken {
+    fn from_pg(row: ProductDeviceRefreshTokenRow) -> Self {
+        Self {
+            token_hash: row.token_hash,
+            device_id: row.device_id,
+            family_id: row.family_id,
+            created_at_ms: row.created_at.timestamp_millis(),
+            expires_at_ms: row.expires_at.timestamp_millis(),
+            used_at_ms: row.used_at.map(|value| value.timestamp_millis()),
+            revoked_at_ms: row.revoked_at.map(|value| value.timestamp_millis()),
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct MachineRow {
+    id: String,
+    display_name: String,
+    connection_mode: String,
+    platform: String,
+    architecture: String,
+    status: String,
+    inventory: serde_json::Value,
+    last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
+    revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+    public_key: Option<String>,
+}
+
+macro_rules! dispatch_storage {
+    ($store:expr, $method:ident($($argument:expr),* $(,)?)) => {
+        match &$store.backend {
+            StorageBackend::Postgres(backend) => backend.$method($($argument),*).await,
+            StorageBackend::Sqlite(backend) => backend.$method($($argument),*).await,
+        }
+    };
+}
+
+impl Store {
+    /// Connect to the durable store selected by the URL scheme.
+    ///
+    /// # Errors
+    /// Returns when the URL scheme is unsupported or the selected database
+    /// cannot be opened.
+    pub async fn connect(url: &str, artifact_dir: std::path::PathBuf) -> Result<Self> {
+        let backend = if url.starts_with("postgres://") || url.starts_with("postgresql://") {
+            StorageBackend::Postgres(PostgresStorage::connect(url, artifact_dir).await?)
+        } else if url.starts_with("sqlite:") {
+            StorageBackend::Sqlite(SqliteStorage::connect(url, artifact_dir).await?)
+        } else {
+            anyhow::bail!("unsupported database URL scheme")
+        };
+        Ok(Self {
+            backend,
+            passkey_storage: std::sync::Arc::default(),
+            observed_storage_metrics: std::sync::Arc::default(),
+        })
+    }
+
+    pub async fn attach_passkey_storage(
+        &mut self,
+        namespace: &crate::plugin_storage::PluginNamespace,
+    ) -> Result<()> {
+        self.passkey_storage.attach(namespace, self).await
+    }
+
+    pub fn artifacts(&self) -> crate::artifacts::ArtifactStore {
+        match &self.backend {
+            StorageBackend::Postgres(storage) => storage.artifacts.clone(),
+            StorageBackend::Sqlite(storage) => storage.artifacts.clone(),
+        }
+    }
+
+    pub async fn migrate(&self) -> Result<()> {
+        dispatch_storage!(self, migrate())
+    }
+
+    #[must_use]
+    pub fn plugin_storage(
+        &self,
+        plugin_dir: crate::plugin_dir::PluginDir,
+    ) -> crate::plugin_storage::PluginStorage {
+        match &self.backend {
+            StorageBackend::Postgres(storage) => {
+                crate::plugin_storage::PluginStorage::postgres(storage.pool.clone(), plugin_dir)
+            }
+            StorageBackend::Sqlite(_) => {
+                crate::plugin_storage::PluginStorage::sqlite_files(plugin_dir)
+            }
+        }
+        .with_core_store(self.clone())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn postgres_pool(&self) -> Option<&PgPool> {
+        match &self.backend {
+            StorageBackend::Postgres(storage) => Some(&storage.pool),
+            StorageBackend::Sqlite(_) => None,
+        }
+    }
+
+    pub async fn create_machine_enrollment(
+        &self,
+        machine_id: &str,
+        display_name: &str,
+        ttl_seconds: i64,
+    ) -> Result<String> {
+        dispatch_storage!(
+            self,
+            create_machine_enrollment(machine_id, display_name, ttl_seconds)
+        )
+    }
+
+    pub async fn consume_machine_enrollment(
+        &self,
+        token: &str,
+        public_key: &str,
+        encryption_public_key: &str,
+    ) -> Result<EnrolledMachine> {
+        dispatch_storage!(
+            self,
+            consume_machine_enrollment(token, public_key, encryption_public_key)
+        )
+    }
+
+    pub async fn cancel_machine_enrollment(&self, token: &str) -> Result<()> {
+        dispatch_storage!(self, cancel_machine_enrollment(token))
+    }
+
+    pub async fn machine_public_key(&self, machine_id: &str) -> Result<Option<String>> {
+        dispatch_storage!(self, machine_public_key(machine_id))
+    }
+
+    pub async fn machine_encryption_public_key(&self, machine_id: &str) -> Result<Option<String>> {
+        dispatch_storage!(self, machine_encryption_public_key(machine_id))
+    }
+
+    /// Bind the first challenge-proven X25519 key for an already enrolled
+    /// signing identity, or assert that a previously bound key is unchanged.
+    pub async fn bind_machine_encryption_public_key(
+        &self,
+        machine_id: &str,
+        encryption_public_key: &str,
+    ) -> Result<()> {
+        dispatch_storage!(
+            self,
+            bind_machine_encryption_public_key(machine_id, encryption_public_key)
+        )
+    }
+
+    pub async fn list_machines(&self) -> Result<Vec<MachineRecord>> {
+        dispatch_storage!(self, list_machines())
+    }
+
+    pub async fn revoke_machine(&self, machine_id: &str) -> Result<()> {
+        dispatch_storage!(self, revoke_machine(machine_id))
+    }
+
+    pub async fn machine_connection_is_current(
+        &self,
+        machine_id: &str,
+        connection_epoch: &str,
+    ) -> Result<bool> {
+        dispatch_storage!(
+            self,
+            machine_connection_is_current(machine_id, connection_epoch)
+        )
+    }
+
+    pub async fn machine_connected(
+        &self,
+        machine_id: &str,
+        connection_epoch: &str,
+        platform: &str,
+        architecture: &str,
+        connection_mode: &str,
+        inventory: &serde_json::Value,
+    ) -> Result<()> {
+        dispatch_storage!(
+            self,
+            machine_connected(
+                machine_id,
+                connection_epoch,
+                platform,
+                architecture,
+                connection_mode,
+                inventory
+            )
+        )
+    }
+
+    pub async fn machine_seen(
+        &self,
+        machine_id: &str,
+        connection_epoch: &str,
+        inventory: Option<&serde_json::Value>,
+    ) -> Result<()> {
+        dispatch_storage!(self, machine_seen(machine_id, connection_epoch, inventory))
+    }
+
+    pub async fn machine_disconnected(
+        &self,
+        machine_id: &str,
+        connection_epoch: &str,
+        grace_seconds: i32,
+    ) -> Result<()> {
+        dispatch_storage!(
+            self,
+            machine_disconnected(machine_id, connection_epoch, grace_seconds)
+        )
+    }
+
+    pub async fn expire_machine_reconnects(&self) -> Result<u64> {
+        dispatch_storage!(self, expire_machine_reconnects())
+    }
+
+    pub async fn upsert_provider_reset(
+        &self,
+        provider: &str,
+        fire_at_ms: i64,
+        idempotency_key: &str,
+    ) -> Result<()> {
+        ensure_reset_provider(provider)?;
+        dispatch_storage!(
+            self,
+            upsert_provider_reset(provider, fire_at_ms, idempotency_key)
+        )
+    }
+
+    pub async fn load_provider_reset(
+        &self,
+        provider: &str,
+    ) -> Result<Option<ScheduledProviderAction>> {
+        ensure_reset_provider(provider)?;
+        dispatch_storage!(self, load_provider_reset(provider))
+    }
+
+    pub async fn defer_provider_reset(
+        &self,
+        provider: &str,
+        idempotency_key: &str,
+        next_attempt_at_ms: i64,
+    ) -> Result<()> {
+        ensure_reset_provider(provider)?;
+        dispatch_storage!(
+            self,
+            defer_provider_reset(provider, idempotency_key, next_attempt_at_ms)
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn append_provider_action_log(
+        &self,
+        provider: &str,
+        trigger: &str,
+        status: &str,
+        phase: &str,
+        message: &str,
+        credit_id: Option<&str>,
+        idempotency_key: Option<&str>,
+        created_at_ms: i64,
+    ) -> Result<()> {
+        ensure_reset_provider(provider)?;
+        dispatch_storage!(
+            self,
+            append_provider_action_log(
+                provider,
+                trigger,
+                status,
+                phase,
+                message,
+                credit_id,
+                idempotency_key,
+                created_at_ms
+            )
+        )
+    }
+
+    pub async fn provider_action_logs(&self, limit: i64) -> Result<Vec<ProviderActionLog>> {
+        dispatch_storage!(self, provider_action_logs(limit))
+    }
+
+    pub async fn delete_provider_reset(&self, provider: &str) -> Result<()> {
+        ensure_reset_provider(provider)?;
+        dispatch_storage!(self, delete_provider_reset(provider))
+    }
+
+    pub async fn claim_provider_reset(
+        &self,
+        provider: &str,
+        idempotency_key: &str,
+    ) -> Result<bool> {
+        ensure_reset_provider(provider)?;
+        dispatch_storage!(self, claim_provider_reset(provider, idempotency_key))
+    }
+
+    pub async fn next_session_number(&self) -> Result<u64> {
+        dispatch_storage!(self, next_session_number())
+    }
+
+    pub async fn load_all(&self) -> Result<Vec<LoadedSession>> {
+        dispatch_storage!(self, load_all())
+    }
+
+    pub async fn history_page(
+        &self,
+        session_id: &str,
+        before_seq: u64,
+        page_size: usize,
+    ) -> Result<(Vec<Envelope>, Option<u64>, bool)> {
+        dispatch_storage!(self, history_page(session_id, before_seq, page_size))
+    }
+
+    pub async fn question_page_before(
+        &self,
+        session_id: &str,
+        before_seq: u64,
+    ) -> Result<(Vec<Envelope>, Option<u64>, bool)> {
+        dispatch_storage!(self, question_page_before(session_id, before_seq))
+    }
+
+    pub async fn question_page_summaries(
+        &self,
+        session_id: &str,
+        before_seq: Option<u64>,
+        limit: usize,
+    ) -> Result<(Vec<QuestionPageSummary>, Option<u64>, u64)> {
+        dispatch_storage!(self, question_page_summaries(session_id, before_seq, limit))
+    }
+
+    pub async fn question_page_at(
+        &self,
+        session_id: &str,
+        root_seq: u64,
+    ) -> Result<Option<Vec<Envelope>>> {
+        dispatch_storage!(self, question_page_at(session_id, root_seq))
+    }
+
+    pub async fn insert_session(&self, meta: &SessionMeta) -> Result<()> {
+        dispatch_storage!(self, insert_session(meta))
+    }
+
+    pub async fn load_settings(&self) -> Result<Vec<(String, serde_json::Value)>> {
+        dispatch_storage!(self, load_settings())
+    }
+
+    pub async fn put_setting(&self, key: &str, value: &serde_json::Value) -> Result<()> {
+        dispatch_storage!(self, put_setting(key, value))
+    }
+
+    pub async fn compare_and_put_setting(
+        &self,
+        key: &str,
+        expected: Option<&serde_json::Value>,
+        value: &serde_json::Value,
+    ) -> Result<bool> {
+        dispatch_storage!(self, compare_and_put_setting(key, expected, value))
+    }
+
+    pub async fn update_status(&self, session_id: &str, status: Status) -> Result<()> {
+        dispatch_storage!(self, update_status(session_id, status))
+    }
+
+    pub async fn update_agent_session_id(
+        &self,
+        session_id: &str,
+        agent_session_id: Option<&str>,
+    ) -> Result<()> {
+        dispatch_storage!(self, update_agent_session_id(session_id, agent_session_id))
+    }
+
+    pub async fn update_config_options(
+        &self,
+        session_id: &str,
+        options: &serde_json::Value,
+    ) -> Result<()> {
+        dispatch_storage!(self, update_config_options(session_id, options))
+    }
+
+    pub async fn update_config_preferences(
+        &self,
+        session_id: &str,
+        preferences: &serde_json::Value,
+    ) -> Result<()> {
+        dispatch_storage!(self, update_config_preferences(session_id, preferences))
+    }
+
+    pub async fn update_title(&self, session_id: &str, title: &str) -> Result<()> {
+        dispatch_storage!(self, update_title(session_id, title))
+    }
+
+    pub async fn update_cwd(&self, session_id: &str, cwd: &str, title: Option<&str>) -> Result<()> {
+        dispatch_storage!(self, update_cwd(session_id, cwd, title))
+    }
+
+    pub async fn reload_provider(&self, meta: &SessionMeta) -> Result<()> {
+        dispatch_storage!(self, reload_provider(meta))
+    }
+
+    pub async fn execution_binding_matches(
+        &self,
+        session_id: &str,
+        record: &serde_json::Value,
+    ) -> Result<bool> {
+        dispatch_storage!(self, execution_binding_matches(session_id, record))
+    }
+
+    pub async fn commit_execution_binding(
+        &self,
+        session_id: &str,
+        expected: &serde_json::Value,
+        prepared: &serde_json::Value,
+    ) -> Result<bool> {
+        dispatch_storage!(
+            self,
+            commit_execution_binding(session_id, expected, prepared)
+        )
+    }
+
+    pub async fn update_mobile_review_state(
+        &self,
+        session_id: &str,
+        value: &serde_json::Value,
+    ) -> Result<()> {
+        dispatch_storage!(self, update_mobile_review_state(session_id, value))
+    }
+
+    pub async fn load_session_folders(&self) -> Result<Vec<SessionFolder>> {
+        dispatch_storage!(self, load_session_folders())
+    }
+
+    pub async fn replace_session_folders(
+        &self,
+        owner_user_id: Option<&str>,
+        folders: &[SessionFolder],
+    ) -> Result<()> {
+        dispatch_storage!(self, replace_session_folders(owner_user_id, folders))
+    }
+
+    pub async fn update_session_placement(
+        &self,
+        placements: &[(String, Option<String>)],
+    ) -> Result<()> {
+        dispatch_storage!(self, update_session_placement(placements))
+    }
+
+    /// Move sessions into Trash (`Some(ms)`) or restore them (`None`).
+    pub async fn set_sessions_trashed(
+        &self,
+        session_ids: &[String],
+        trashed_at_ms: Option<i64>,
+    ) -> Result<()> {
+        dispatch_storage!(self, set_sessions_trashed(session_ids, trashed_at_ms))
+    }
+
+    pub async fn upsert_event_batch(
+        &self,
+        events: &[Envelope],
+        highwaters: &HashMap<String, u64>,
+    ) -> Result<()> {
+        dispatch_storage!(self, upsert_event_batch(events, highwaters, &[], &[]))
+    }
+
+    /// [`Self::upsert_event_batch`] plus the durable anchors of new subagent and
+    /// Call rows, in the same transaction (docs/background-tasks.md).
+    pub async fn upsert_event_batch_with_anchors(
+        &self,
+        events: &[Envelope],
+        highwaters: &HashMap<String, u64>,
+        anchors: &[crate::transcript_anchors::AnchorWrite],
+        occurrences: &[crate::task_notifications::Occurrence],
+    ) -> Result<()> {
+        dispatch_storage!(
+            self,
+            upsert_event_batch(events, highwaters, anchors, occurrences)
+        )
+    }
+
+    pub async fn clear_events(&self, session_id: &str, calls_before_ms: i64) -> Result<()> {
+        dispatch_storage!(self, clear_events(session_id, calls_before_ms))
+    }
+
+    pub fn artifact_path(&self, name: &str) -> Option<std::path::PathBuf> {
+        match &self.backend {
+            StorageBackend::Postgres(backend) => backend.artifact_path(name),
+            StorageBackend::Sqlite(backend) => backend.artifact_path(name),
+        }
+    }
+
+    pub async fn update_pending(
+        &self,
+        session_id: &str,
+        queue: &[QueuedMessage],
+        drafts: &[QueuedMessage],
+    ) -> Result<()> {
+        dispatch_storage!(self, update_pending(session_id, queue, drafts))
+    }
+
+    pub async fn upsert_wakeup(
+        &self,
+        session_id: &str,
+        fire_at_ms: i64,
+        prompt: &str,
+    ) -> Result<()> {
+        dispatch_storage!(self, upsert_wakeup(session_id, fire_at_ms, prompt))
+    }
+
+    pub async fn delete_wakeup(&self, session_id: &str) -> Result<()> {
+        dispatch_storage!(self, delete_wakeup(session_id))
+    }
+
+    pub async fn load_wakeups(&self) -> Result<Vec<(String, i64, String)>> {
+        dispatch_storage!(self, load_wakeups())
+    }
+
+    pub async fn update_session_order(&self, order: &[String]) -> Result<()> {
+        dispatch_storage!(self, update_session_order(order))
+    }
+
+    pub async fn delete_session(&self, session_id: &str) -> Result<()> {
+        dispatch_storage!(self, delete_session(session_id))
+    }
+
+    pub async fn purge_deleted(&self, retention_days: i64) -> Result<u64> {
+        dispatch_storage!(self, purge_deleted(retention_days))
+    }
+
+    /// Hand free database pages back to the filesystem after a purge. Only
+    /// SQLite owns its file; PostgreSQL reclaims through its own autovacuum.
+    pub async fn reclaim_free_pages(&self) -> Result<u64> {
+        dispatch_storage!(self, reclaim_free_pages())
+    }
+
+    /// `(machine_id, provider, generation)` pinned by soft-deleted sessions
+    /// that remain recoverable until the purge sweeper removes them.
+    pub async fn deleted_session_generations(&self) -> Result<Vec<(String, String, String)>> {
+        dispatch_storage!(self, deleted_session_generations())
+    }
+
+    /// `(machine_id, provider, auth_generation)` that every unpurged session
+    /// row pins, live or soft-deleted. Reading all rows rather than only
+    /// deleted ones covers a session the Hub already removed while its
+    /// asynchronous deletion write is still pending.
+    pub async fn session_auth_generations(&self) -> Result<Vec<(String, String, i64)>> {
+        dispatch_storage!(self, session_auth_generations())
+    }
+
+    /// `(machine_id, plugin_id)` whose uninstall saga has not finished; its
+    /// compensation may still reactivate the removed generation.
+    pub async fn unfinished_plugin_uninstalls(&self) -> Result<Vec<(String, String)>> {
+        dispatch_storage!(self, unfinished_plugin_uninstalls())
+    }
+
+    /// Generation digests Devices still target: every open install operation
+    /// and the newest operation of each (Machine, Plugin), whatever its phase,
+    /// so Catalog retention keeps what an installed Device resolves.
+    pub async fn plugin_install_generation_digests(&self) -> Result<Vec<String>> {
+        dispatch_storage!(self, plugin_install_generation_digests())
+    }
+
+    pub async fn native_login_generation_digests(&self) -> Result<Vec<String>> {
+        dispatch_storage!(self, native_login_generation_digests())
+    }
+
+    pub async fn upsert_runtime_incident(&self, incident: &RuntimeIncidentWrite) -> Result<()> {
+        dispatch_storage!(self, upsert_runtime_incident(incident))
+    }
+
+    pub async fn recover_runtime_incident(
+        &self,
+        session_id: &str,
+        recovered_at_ms: i64,
+        outcome: &str,
+    ) -> Result<u64> {
+        dispatch_storage!(
+            self,
+            recover_runtime_incident(session_id, recovered_at_ms, outcome)
+        )
+    }
+
+    pub async fn runtime_incidents(&self, limit: i64) -> Result<Vec<RuntimeIncident>> {
+        dispatch_storage!(self, runtime_incidents(limit))
+    }
+
+    pub async fn diagnostic_logs(
+        &self,
+        filter: &DiagnosticLogFilter,
+    ) -> Result<Vec<DiagnosticLogSummary>> {
+        dispatch_storage!(self, diagnostic_logs(filter))
+    }
+
+    pub async fn diagnostic_log_detail(&self, id: &str) -> Result<Option<DiagnosticLogDetail>> {
+        dispatch_storage!(self, diagnostic_log_detail(id))
+    }
+
+    pub async fn storage_metrics(&self) -> Result<(i64, i64, i64)> {
+        dispatch_storage!(self, storage_metrics())
+    }
+
+    /// `storage_metrics` for monitoring gauges: concurrent callers share one
+    /// observation that is at most `STORAGE_METRICS_MAX_AGE` old.
+    pub async fn observed_storage_metrics(&self) -> Result<(i64, i64, i64)> {
+        let mut observed = self.observed_storage_metrics.lock().await;
+        if let Some(cached) = *observed
+            && cached.at.elapsed() < STORAGE_METRICS_MAX_AGE
+        {
+            return Ok(cached.metrics);
+        }
+        let metrics = self.storage_metrics().await?;
+        *observed = Some(ObservedStorageMetrics {
+            at: std::time::Instant::now(),
+            metrics,
+        });
+        Ok(metrics)
+    }
+
+    pub async fn ingest_provider_usage(
+        &self,
+        machine_id: &str,
+        producer_id: &str,
+        events: &[crate::machine_protocol::ProviderUsageEvent],
+    ) -> Result<u64> {
+        dispatch_storage!(self, ingest_provider_usage(machine_id, producer_id, events))
+    }
+
+    pub async fn provider_usage_summary(
+        &self,
+        provider: &str,
+        days: i32,
+        retention_days: i32,
+    ) -> Result<serde_json::Value> {
+        dispatch_storage!(self, provider_usage_summary(provider, days, retention_days))
+    }
+
+    pub async fn provider_usage_activity(
+        &self,
+        provider: &str,
+        from_ms: i64,
+        to_ms: i64,
+        agents: &[String],
+        model_families: &[String],
+    ) -> Result<serde_json::Value> {
+        dispatch_storage!(
+            self,
+            provider_usage_activity(provider, from_ms, to_ms, agents, model_families)
+        )
+    }
+
+    pub async fn purge_provider_usage(&self, retention_days: i32) -> Result<u64> {
+        dispatch_storage!(self, purge_provider_usage(retention_days))
+    }
+}
+
+impl Store {
+    /// Persist a product user. The username is normalized before insert.
+    ///
+    /// # Errors
+    /// Returns when the id is not 32-hex, the username is taken, or the insert fails.
+    pub async fn insert_user(&self, user: &ProductUser) -> Result<()> {
+        dispatch_storage!(self, insert_user(user))
+    }
+
+    /// Load a product user by id.
+    ///
+    /// # Errors
+    /// Returns when the query fails.
+    pub async fn user_by_id(&self, id: &str) -> Result<Option<ProductUser>> {
+        dispatch_storage!(self, user_by_id(id))
+    }
+
+    /// Load a product user by normalized username.
+    ///
+    /// # Errors
+    /// Returns when the query fails.
+    pub async fn user_by_username(&self, username: &str) -> Result<Option<ProductUser>> {
+        dispatch_storage!(self, user_by_username(username))
+    }
+
+    /// List product users ordered by username.
+    ///
+    /// # Errors
+    /// Returns when the query fails.
+    pub async fn list_users(&self) -> Result<Vec<ProductUser>> {
+        dispatch_storage!(self, list_users())
+    }
+
+    /// Replace the stored password hash and revoke every existing login,
+    /// compatibility token, and browser-authorized device in one transaction.
+    ///
+    /// # Errors
+    /// Returns when the user is missing or the update fails.
+    pub async fn update_user_password(
+        &self,
+        id: &str,
+        password_algo: &str,
+        password_hash: &str,
+    ) -> Result<()> {
+        dispatch_storage!(self, update_user_password(id, password_algo, password_hash))
+    }
+
+    /// Revoke every API token for a product user.
+    ///
+    /// # Errors
+    /// Returns when the update fails.
+    pub async fn revoke_user_api_tokens_for_user(&self, user_id: &str) -> Result<u64> {
+        dispatch_storage!(self, revoke_user_api_tokens_for_user(user_id))
+    }
+
+    /// Set or clear `disabled_at` and bump `updated_at`.
+    ///
+    /// # Errors
+    /// Returns when the user is missing or the update fails.
+    pub async fn set_user_disabled_at(&self, id: &str, disabled_at_ms: Option<i64>) -> Result<()> {
+        dispatch_storage!(self, set_user_disabled_at(id, disabled_at_ms))
+    }
+
+    /// Delete a product user. Login sessions and API tokens cascade.
+    ///
+    /// # Errors
+    /// Returns when the delete fails.
+    pub async fn delete_user(&self, id: &str) -> Result<()> {
+        dispatch_storage!(self, delete_user(id))
+    }
+
+    /// Persist a hashed login session.
+    ///
+    /// # Errors
+    /// Returns when the user is missing or the insert fails.
+    pub async fn insert_user_session(&self, session: &ProductUserSession) -> Result<()> {
+        dispatch_storage!(self, insert_user_session(session))
+    }
+
+    /// Atomically admit a new browser/native session under the configured
+    /// per-user limit. Existing sessions above a reduced limit drain naturally;
+    /// a normal exact-cap admission may replace the least recently active row.
+    #[allow(clippy::too_many_lines)] // one backend-neutral admission contract dispatch
+    pub async fn admit_user_session(
+        &self,
+        session: &ProductUserSession,
+        limit: u32,
+        enforce: bool,
+        newest_wins: bool,
+    ) -> Result<ProductSessionAdmission> {
+        dispatch_storage!(
+            self,
+            admit_user_session(session, limit, enforce, newest_wins)
+        )
+    }
+
+    /// Load a login session by stored token hash.
+    ///
+    /// # Errors
+    /// Returns when the query fails.
+    pub async fn user_session_by_token_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<ProductUserSession>> {
+        dispatch_storage!(self, user_session_by_token_hash(token_hash))
+    }
+
+    /// Delete one login session.
+    ///
+    /// # Errors
+    /// Returns when the delete fails.
+    pub async fn delete_user_session(&self, token_hash: &str) -> Result<()> {
+        dispatch_storage!(self, delete_user_session(token_hash))
+    }
+
+    /// Delete every login session for a product user.
+    ///
+    /// # Errors
+    /// Returns when the delete fails.
+    pub async fn delete_user_sessions_for_user(&self, user_id: &str) -> Result<u64> {
+        dispatch_storage!(self, delete_user_sessions_for_user(user_id))
+    }
+
+    /// List live login sessions for one product user, newest activity first.
+    pub async fn list_user_sessions_for_user(
+        &self,
+        user_id: &str,
+        now_ms: i64,
+    ) -> Result<Vec<ProductUserSession>> {
+        dispatch_storage!(self, list_user_sessions_for_user(user_id, now_ms))
+    }
+
+    /// Revoke one stable login-session identity owned by the caller.
+    pub async fn revoke_user_session_for_user(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        reason: &str,
+        now_ms: i64,
+    ) -> Result<u64> {
+        dispatch_storage!(
+            self,
+            revoke_user_session_for_user(user_id, session_id, reason, now_ms)
+        )
+    }
+
+    /// Revoke every live Cowboy session for one user and one configured
+    /// external identity provider. Password sessions and other providers stay
+    /// independent.
+    pub async fn revoke_user_sessions_for_provider(
+        &self,
+        user_id: &str,
+        provider_id: &str,
+        reason: &str,
+        now_ms: i64,
+    ) -> Result<u64> {
+        dispatch_storage!(
+            self,
+            revoke_user_sessions_for_provider(user_id, provider_id, reason, now_ms)
+        )
+    }
+
+    /// Atomically consume a provider Logout Token jti and revoke only sessions
+    /// bound to that provider identity. Replays never repeat logout effects.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // one replay-safe provider logout transaction
+    pub async fn apply_oidc_backchannel_logout(
+        &self,
+        provider_id: &str,
+        issuer: &str,
+        subject: Option<&str>,
+        provider_session_id: Option<&str>,
+        token_id: &str,
+        token_expires_at_ms: i64,
+        now_ms: i64,
+    ) -> Result<OidcBackchannelLogout> {
+        dispatch_storage!(
+            self,
+            apply_oidc_backchannel_logout(
+                provider_id,
+                issuer,
+                subject,
+                provider_session_id,
+                token_id,
+                token_expires_at_ms,
+                now_ms
+            )
+        )
+    }
+
+    /// Persist the security audit record for one short-lived, sender-bound
+    /// automation credential. No token or public key is written to storage.
+    pub async fn record_automation_credential_issued(
+        &self,
+        user_id: &str,
+        credential_id: &str,
+        name: &str,
+        scopes: &[String],
+        expires_at_ms: i64,
+        now_ms: i64,
+    ) -> Result<()> {
+        dispatch_storage!(
+            self,
+            record_automation_credential_issued(
+                user_id,
+                credential_id,
+                name,
+                scopes,
+                expires_at_ms,
+                now_ms
+            )
+        )
+    }
+
+    /// Claim or renew one logical interactive-client lease. Admission is
+    /// serialized by the storage backend so every Controller process observes
+    /// the same service and per-user limits.
+    #[allow(clippy::too_many_lines)] // one serialized fairness, reservation, and lease transaction
+    pub async fn claim_active_client(
+        &self,
+        claim: &ActiveClientClaim,
+    ) -> Result<ActiveClientAdmission> {
+        dispatch_storage!(self, claim_active_client(claim))
+    }
+
+    /// Extend a live lease only when its fencing token still matches.
+    pub async fn heartbeat_active_client(
+        &self,
+        client_id: &str,
+        fencing_token: i64,
+        now_ms: i64,
+        lease_ms: i64,
+    ) -> Result<bool> {
+        dispatch_storage!(
+            self,
+            heartbeat_active_client(client_id, fencing_token, now_ms, lease_ms)
+        )
+    }
+
+    /// Release a live lease using fencing, then reserve the freed slot for the
+    /// next fair waiter. Returns whether this caller owned the lease.
+    pub async fn release_active_client(&self, release: &ActiveClientRelease<'_>) -> Result<bool> {
+        dispatch_storage!(self, release_active_client(release))
+    }
+
+    /// Release one of this account's live logical clients. The user predicate
+    /// and fencing token are checked in the same database update so a stale UI
+    /// cannot disconnect a replacement lease or another account's client.
+    pub async fn release_active_client_for_user(
+        &self,
+        user_id: &str,
+        release: &ActiveClientRelease<'_>,
+    ) -> Result<bool> {
+        dispatch_storage!(self, release_active_client_for_user(user_id, release))
+    }
+
+    /// List this account's live logical clients for account/security UI.
+    pub async fn list_active_clients_for_user(
+        &self,
+        user_id: &str,
+        now_ms: i64,
+    ) -> Result<Vec<ActiveClientLease>> {
+        dispatch_storage!(self, list_active_clients_for_user(user_id, now_ms))
+    }
+
+    /// Atomically replace one cookie session after primary authentication.
+    pub async fn replace_user_session(
+        &self,
+        previous_token_hash: &str,
+        session: &ProductUserSession,
+    ) -> Result<()> {
+        dispatch_storage!(self, replace_user_session(previous_token_hash, session))
+    }
+
+    /// Replace one cookie session atomically after a successful Passkey assertion.
+    pub async fn rotate_user_session(
+        &self,
+        previous_token_hash: &str,
+        session: &ProductUserSession,
+    ) -> Result<()> {
+        dispatch_storage!(self, rotate_user_session(previous_token_hash, session))
+    }
+
+    /// Coarsely record real browser activity without writing on every input event.
+    pub async fn touch_user_session_activity(&self, token_hash: &str, now_ms: i64) -> Result<u64> {
+        dispatch_storage!(self, touch_user_session_activity(token_hash, now_ms))
+    }
+
+    /// Shorten any extended sessions when Passkey refresh is disabled or removed.
+    pub async fn cap_user_session_expiry(&self, user_id: &str, expires_at_ms: i64) -> Result<u64> {
+        dispatch_storage!(self, cap_user_session_expiry(user_id, expires_at_ms))
+    }
+
+    /// Persist a hashed personal access token. The plaintext secret is never stored.
+    ///
+    /// # Errors
+    /// Returns when the user is missing, the hash is taken, or the insert fails.
+    pub async fn insert_user_api_token(&self, token: &ProductApiToken) -> Result<()> {
+        dispatch_storage!(self, insert_user_api_token(token))
+    }
+
+    /// Load a personal access token by stored token hash.
+    ///
+    /// # Errors
+    /// Returns when the query fails.
+    pub async fn user_api_token_by_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<ProductApiToken>> {
+        dispatch_storage!(self, user_api_token_by_hash(token_hash))
+    }
+
+    /// List a user's own unrevoked personal access tokens.
+    ///
+    /// # Errors
+    /// Returns when the query fails.
+    pub async fn list_user_api_tokens_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<ProductApiToken>> {
+        dispatch_storage!(self, list_user_api_tokens_for_user(user_id))
+    }
+
+    /// Revoke one of a user's own tokens. Other users' ids are a no-op.
+    ///
+    /// # Errors
+    /// Returns when the update fails.
+    pub async fn revoke_user_api_token_for_user(
+        &self,
+        user_id: &str,
+        token_id: &str,
+    ) -> Result<u64> {
+        dispatch_storage!(self, revoke_user_api_token_for_user(user_id, token_id))
+    }
+
+    /// Stamp `last_used_at` at most once per ten minutes.
+    ///
+    /// # Errors
+    /// Returns when the update fails.
+    pub async fn touch_user_api_token_last_used(&self, token_id: &str, now_ms: i64) -> Result<u64> {
+        dispatch_storage!(self, touch_user_api_token_last_used(token_id, now_ms))
+    }
+
+    /// Atomically persist a browser-approved device and its first refresh token.
+    pub async fn insert_user_device(
+        &self,
+        device: &ProductDevice,
+        refresh: &ProductDeviceRefreshToken,
+    ) -> Result<()> {
+        dispatch_storage!(self, insert_user_device(device, refresh))
+    }
+
+    /// Atomically admit a new authorized CLI/ACP client. Existing clients are
+    /// never evicted implicitly: when a configured limit is reached the user
+    /// must revoke a client they recognize before enrolling another one.
+    pub async fn admit_user_device(
+        &self,
+        device: &ProductDevice,
+        refresh: &ProductDeviceRefreshToken,
+        limit: u32,
+        enforce: bool,
+    ) -> Result<ProductDeviceAdmission> {
+        dispatch_storage!(self, admit_user_device(device, refresh, limit, enforce))
+    }
+
+    /// List a user's active device sessions without returning credential hashes.
+    pub async fn list_user_devices_for_user(&self, user_id: &str) -> Result<Vec<ProductDevice>> {
+        dispatch_storage!(self, list_user_devices_for_user(user_id))
+    }
+
+    /// Resolve a refresh token to its device and rotation record.
+    pub async fn user_device_refresh_by_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<(ProductDevice, ProductDeviceRefreshToken)>> {
+        dispatch_storage!(self, user_device_refresh_by_hash(token_hash))
+    }
+
+    /// Consume one refresh token and insert its replacement in one transaction.
+    pub async fn rotate_user_device_refresh(
+        &self,
+        previous_token_hash: &str,
+        refresh: &ProductDeviceRefreshToken,
+        now_ms: i64,
+    ) -> Result<bool> {
+        dispatch_storage!(
+            self,
+            rotate_user_device_refresh(previous_token_hash, refresh, now_ms)
+        )
+    }
+
+    /// Revoke one device owned by a product user.
+    pub async fn revoke_user_device_for_user(
+        &self,
+        user_id: &str,
+        device_id: &str,
+        now_ms: i64,
+    ) -> Result<u64> {
+        dispatch_storage!(
+            self,
+            revoke_user_device_for_user(user_id, device_id, now_ms)
+        )
+    }
+
+    /// Revoke a device after refresh-token replay is detected.
+    pub async fn revoke_user_device(&self, device_id: &str, now_ms: i64) -> Result<u64> {
+        dispatch_storage!(self, revoke_user_device(device_id, now_ms))
+    }
+
+    /// Revoke every device session for a disabled product user.
+    pub async fn revoke_user_devices_for_user(&self, user_id: &str, now_ms: i64) -> Result<u64> {
+        dispatch_storage!(self, revoke_user_devices_for_user(user_id, now_ms))
+    }
+
+    /// Coarsely update device activity without writing on every API request.
+    pub async fn touch_user_device_last_used(&self, device_id: &str, now_ms: i64) -> Result<u64> {
+        dispatch_storage!(self, touch_user_device_last_used(device_id, now_ms))
+    }
+
+    pub async fn list_user_passkeys(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<crate::passkey::UserPasskey>> {
+        if let Some(namespace) = self.passkey_storage.get() {
+            return crate::core_passkeys::list_user(namespace, user_id).await;
+        }
+        dispatch_storage!(self, list_user_passkeys(user_id))
+    }
+
+    pub async fn insert_user_passkey(&self, passkey: &crate::passkey::UserPasskey) -> Result<()> {
+        if let Some(namespace) = self.passkey_storage.get() {
+            return crate::core_passkeys::insert_user(namespace, passkey).await;
+        }
+        dispatch_storage!(self, insert_user_passkey(passkey))
+    }
+
+    pub async fn delete_user_passkey(&self, user_id: &str, passkey_id: &str) -> Result<u64> {
+        if let Some(namespace) = self.passkey_storage.get() {
+            let affected =
+                crate::core_passkeys::delete_user(namespace, user_id, passkey_id).await?;
+            if affected == 1 && crate::core_passkeys::count_user(namespace, user_id).await? == 0 {
+                dispatch_storage!(self, clear_user_passkey_reauth(user_id))?;
+            }
+            return Ok(affected);
+        }
+        dispatch_storage!(self, delete_user_passkey(user_id, passkey_id))
+    }
+
+    pub async fn update_user_passkey(
+        &self,
+        user_id: &str,
+        passkey_id: &str,
+        passkey_json: &str,
+        now_ms: i64,
+    ) -> Result<()> {
+        if let Some(namespace) = self.passkey_storage.get() {
+            return crate::core_passkeys::update_user(
+                namespace,
+                user_id,
+                passkey_id,
+                passkey_json,
+                now_ms,
+            )
+            .await;
+        }
+        dispatch_storage!(
+            self,
+            update_user_passkey(user_id, passkey_id, passkey_json, now_ms)
+        )
+    }
+
+    pub async fn user_passkey_policy(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<crate::passkey::PasskeyPolicy>> {
+        let mut policy = dispatch_storage!(self, user_passkey_policy(user_id))?;
+        if let (Some(namespace), Some(policy)) = (self.passkey_storage.get(), policy.as_mut()) {
+            policy.passkey_count = crate::core_passkeys::count_user(namespace, user_id).await?;
+        }
+        Ok(policy)
+    }
+
+    pub async fn set_user_passkey_reauth(
+        &self,
+        user_id: &str,
+        enabled: bool,
+        reauth_after_ms: i64,
+    ) -> Result<()> {
+        if let Some(namespace) = self.passkey_storage.get() {
+            anyhow::ensure!(
+                crate::passkey::valid_reauth_interval(reauth_after_ms),
+                "Passkey refresh interval is unsupported"
+            );
+            if enabled {
+                anyhow::ensure!(
+                    crate::core_passkeys::count_user(namespace, user_id).await? > 0,
+                    "user not found or no Passkey is registered"
+                );
+            }
+            return dispatch_storage!(
+                self,
+                set_user_passkey_reauth_flags(user_id, enabled, reauth_after_ms)
+            );
+        }
+        dispatch_storage!(
+            self,
+            set_user_passkey_reauth(user_id, enabled, reauth_after_ms)
+        )
+    }
+
+    pub async fn upsert_external_passkey_ceremony(
+        &self,
+        ceremony: &crate::passkey::ExternalPasskeyCeremonyRecord,
+    ) -> Result<()> {
+        if let Some(namespace) = self.passkey_storage.get() {
+            return crate::core_passkeys::upsert_ceremony(namespace, ceremony).await;
+        }
+        dispatch_storage!(self, upsert_external_passkey_ceremony(ceremony))
+    }
+
+    pub async fn external_passkey_ceremony(
+        &self,
+        transaction_hash: &str,
+        now_ms: i64,
+    ) -> Result<Option<crate::passkey::ExternalPasskeyCeremonyRecord>> {
+        if let Some(namespace) = self.passkey_storage.get() {
+            return crate::core_passkeys::ceremony(namespace, transaction_hash, now_ms).await;
+        }
+        dispatch_storage!(self, external_passkey_ceremony(transaction_hash, now_ms))
+    }
+
+    pub async fn export_passkey_snapshot(&self) -> Result<PasskeySnapshot> {
+        dispatch_storage!(self, export_passkey_snapshot())
+    }
+
+    pub async fn touch_user_last_step_up(&self, user_id: &str, now_ms: i64) -> Result<()> {
+        dispatch_storage!(self, touch_user_last_step_up(user_id, now_ms))
+    }
+
+    pub async fn list_admin_passkeys(
+        &self,
+        account: &str,
+    ) -> Result<Vec<crate::passkey::UserPasskey>> {
+        if let Some(namespace) = self.passkey_storage.get() {
+            return crate::core_passkeys::list_admin(namespace, account).await;
+        }
+        dispatch_storage!(self, list_admin_passkeys(account))
+    }
+
+    pub async fn insert_admin_passkey(&self, passkey: &crate::passkey::UserPasskey) -> Result<()> {
+        if let Some(namespace) = self.passkey_storage.get() {
+            return crate::core_passkeys::insert_admin(namespace, passkey).await;
+        }
+        dispatch_storage!(self, insert_admin_passkey(passkey))
+    }
+
+    pub async fn delete_admin_passkey(&self, account: &str, passkey_id: &str) -> Result<u64> {
+        if let Some(namespace) = self.passkey_storage.get() {
+            return crate::core_passkeys::delete_admin(namespace, account, passkey_id).await;
+        }
+        dispatch_storage!(self, delete_admin_passkey(account, passkey_id))
+    }
+
+    pub async fn update_admin_passkey(
+        &self,
+        account: &str,
+        passkey_id: &str,
+        passkey_json: &str,
+        now_ms: i64,
+    ) -> Result<()> {
+        if let Some(namespace) = self.passkey_storage.get() {
+            return crate::core_passkeys::update_admin(
+                namespace,
+                account,
+                passkey_id,
+                passkey_json,
+                now_ms,
+            )
+            .await;
+        }
+        dispatch_storage!(
+            self,
+            update_admin_passkey(account, passkey_id, passkey_json, now_ms)
+        )
+    }
+
+    pub async fn count_admin_passkeys(&self, account: &str) -> Result<u32> {
+        if let Some(namespace) = self.passkey_storage.get() {
+            return crate::core_passkeys::count_admin(namespace, account).await;
+        }
+        dispatch_storage!(self, count_admin_passkeys(account))
+    }
+}
+
+impl PostgresStorage {
+    pub async fn execution_binding_matches(
+        &self,
+        session_id: &str,
+        record: &serde_json::Value,
+    ) -> Result<bool> {
+        Ok(sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM sessions WHERE id = $1 AND execution_binding = $2)",
+        )
+        .bind(session_id)
+        .bind(record)
+        .fetch_one(&self.pool)
+        .await?)
+    }
+
+    pub async fn commit_execution_binding(
+        &self,
+        session_id: &str,
+        expected: &serde_json::Value,
+        prepared: &serde_json::Value,
+    ) -> Result<bool> {
+        let result = sqlx::query("UPDATE sessions SET execution_binding = $3, updated_at = now() WHERE id = $1 AND execution_binding = $2")
+            .bind(session_id).bind(expected).bind(prepared).execute(&self.pool).await?;
+        if result.rows_affected() == 1 {
+            return Ok(true);
+        }
+        self.execution_binding_matches(session_id, prepared).await
+    }
+
+    /// Create a short-lived, single-use Machine enrollment secret. Only its
+    /// SHA-256 digest is persisted.
+    ///
+    /// # Errors
+    /// Returns when secure randomness cannot be read or the database rejects
+    /// the requested machine identity.
+    pub async fn create_machine_enrollment(
+        &self,
+        machine_id: &str,
+        display_name: &str,
+        ttl_seconds: i64,
+    ) -> Result<String> {
+        anyhow::ensure!(
+            valid_machine_id(machine_id),
+            "machine id must use 1-64 lowercase ASCII letters, digits, or hyphens"
+        );
+        anyhow::ensure!(machine_id != "local", "the local Machine id is reserved");
+        anyhow::ensure!(
+            !display_name.trim().is_empty(),
+            "display name cannot be empty"
+        );
+        anyhow::ensure!(
+            (60..=3600).contains(&ttl_seconds),
+            "enrollment TTL must be 60-3600s"
+        );
+        let active_key_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM machines WHERE id = $1 AND public_key IS NOT NULL AND revoked_at IS NULL)",
+        )
+        .bind(machine_id)
+        .fetch_one(&self.pool)
+        .await
+        .context("checking existing Machine identity")?;
+        anyhow::ensure!(
+            !active_key_exists,
+            "Machine already has an active identity; revoke it before re-enrollment"
+        );
+        let mut random = [0_u8; 32];
+        std::fs::File::open("/dev/urandom")
+            .context("opening OS randomness")?
+            .read_exact(&mut random)
+            .context("reading OS randomness")?;
+        let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random);
+        let token_hash = hex_sha256(token.as_bytes());
+        sqlx::query(
+            "INSERT INTO machine_enrollment_tokens \
+             (token_hash, machine_id, display_name, expires_at) \
+             VALUES ($1, $2, $3, now() + make_interval(secs => $4::double precision)) \
+             ON CONFLICT (machine_id) DO UPDATE SET token_hash = EXCLUDED.token_hash, \
+             display_name = EXCLUDED.display_name, expires_at = EXCLUDED.expires_at, \
+             used_at = NULL, created_at = now()",
+        )
+        .bind(token_hash)
+        .bind(machine_id)
+        .bind(display_name.trim())
+        .bind(ttl_seconds)
+        .execute(&self.pool)
+        .await
+        .context("creating Machine enrollment")?;
+        Ok(token)
+    }
+
+    /// Atomically consume an enrollment token and bind a public key to the
+    /// requested stable machine id.
+    ///
+    /// # Errors
+    /// Returns when the token is invalid/expired/used or persistence fails.
+    pub async fn consume_machine_enrollment(
+        &self,
+        token: &str,
+        public_key: &str,
+        encryption_public_key: &str,
+    ) -> Result<EnrolledMachine> {
+        validate_encryption_public_key(encryption_public_key)?;
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("starting enrollment transaction")?;
+        let token_hash = hex_sha256(token.as_bytes());
+        let row: Option<(String, String)> = sqlx::query_as(
+            "UPDATE machine_enrollment_tokens SET used_at = now() \
+             WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now() \
+             RETURNING machine_id, display_name",
+        )
+        .bind(token_hash)
+        .fetch_optional(&mut *transaction)
+        .await
+        .context("consuming Machine enrollment")?;
+        let (id, display_name) =
+            row.context("invalid, expired, or already used enrollment token")?;
+        let result = sqlx::query(
+            "INSERT INTO machines \
+             (id, display_name, connection_mode, platform, architecture, status, public_key, \
+              encryption_public_key, enrolled_at) \
+             VALUES ($1, $2, 'outbound_wss', 'unknown', 'unknown', 'offline', $3, $4, now()) \
+             ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, \
+             connection_mode = 'outbound_wss', public_key = EXCLUDED.public_key, \
+             encryption_public_key = EXCLUDED.encryption_public_key, \
+             enrolled_at = now(), revoked_at = NULL, status = 'offline', \
+             connection_epoch = NULL, reconnect_deadline_at = NULL, updated_at = now() \
+             WHERE machines.public_key IS NULL OR \
+             (machines.revoked_at IS NOT NULL AND machines.public_key IS DISTINCT FROM EXCLUDED.public_key)",
+        )
+        .bind(&id)
+        .bind(&display_name)
+        .bind(public_key)
+        .bind(encryption_public_key)
+        .execute(&mut *transaction)
+        .await
+        .context("binding enrolled Machine public key")?;
+        anyhow::ensure!(
+            result.rows_affected() == 1,
+            "Machine already has this identity or an active identity"
+        );
+        transaction
+            .commit()
+            .await
+            .context("committing Machine enrollment")?;
+        let fingerprint = crate::machine_auth::fingerprint(public_key)?;
+        Ok(EnrolledMachine {
+            id,
+            display_name,
+            fingerprint,
+        })
+    }
+
+    pub async fn cancel_machine_enrollment(&self, token: &str) -> Result<()> {
+        anyhow::ensure!(!token.trim().is_empty(), "enrollment token is required");
+        sqlx::query(
+            "DELETE FROM machine_enrollment_tokens \
+             WHERE token_hash = $1 AND used_at IS NULL",
+        )
+        .bind(hex_sha256(token.trim().as_bytes()))
+        .execute(&self.pool)
+        .await
+        .context("cancelling Machine enrollment")?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_lines)] // one atomic PostgreSQL admission, eviction, fencing, and insert transaction
+    pub async fn admit_user_session(
+        &self,
+        session: &ProductUserSession,
+        limit: u32,
+        enforce: bool,
+        newest_wins: bool,
+    ) -> Result<ProductSessionAdmission> {
+        validate_product_user_session(session)?;
+        anyhow::ensure!(limit > 0, "signed-in session limit must be positive");
+        let user_agent = truncate_user_agent(session.user_agent.as_deref());
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN user session admission")?;
+        let locked =
+            sqlx::query_scalar::<_, String>("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+                .bind(&session.user_id)
+                .fetch_optional(&mut *transaction)
+                .await
+                .context("LOCK user for session admission")?;
+        anyhow::ensure!(locked.is_some(), "user is unavailable");
+        let expired_session_ids = sqlx::query_scalar::<_, String>(
+            "UPDATE user_sessions SET revoked_at = now(), revoke_reason = 'expired' \
+             WHERE user_id = $1 AND revoked_at IS NULL AND expires_at <= now() \
+             RETURNING session_id",
+        )
+        .bind(&session.user_id)
+        .fetch_all(&mut *transaction)
+        .await
+        .context("REVOKE expired sessions before admission")?;
+        for expired_session_id in expired_session_ids {
+            revoke_active_client_session_pg(&mut transaction, &expired_session_id, "expired", None)
+                .await?;
+        }
+
+        let mut revoked_session_ids = Vec::new();
+        if newest_wins {
+            revoked_session_ids = sqlx::query_scalar::<_, String>(
+                "UPDATE user_sessions SET revoked_at = now(), \
+                 revoke_reason = 'single_session_replaced' WHERE user_id = $1 \
+                 AND revoked_at IS NULL RETURNING session_id",
+            )
+            .bind(&session.user_id)
+            .fetch_all(&mut *transaction)
+            .await
+            .context("REVOKE sessions for newest-wins admission")?;
+            for revoked_session_id in &revoked_session_ids {
+                revoke_active_client_session_pg(
+                    &mut transaction,
+                    revoked_session_id,
+                    "single_session_replaced",
+                    None,
+                )
+                .await?;
+            }
+        }
+        let mut active = sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM user_sessions WHERE user_id = $1 \
+             AND revoked_at IS NULL AND expires_at > now()",
+        )
+        .bind(&session.user_id)
+        .fetch_one(&mut *transaction)
+        .await
+        .context("COUNT active user sessions")?;
+        let limit_i64 = i64::from(limit);
+        if enforce && active > limit_i64 {
+            transaction
+                .commit()
+                .await
+                .context("COMMIT over-limit session drain")?;
+            return Ok(ProductSessionAdmission::CapacityFull {
+                active_sessions: u32::try_from(active).unwrap_or(u32::MAX),
+                limit,
+            });
+        }
+        let observed_overflow = active >= limit_i64;
+        if enforce && active == limit_i64 {
+            let revoked = sqlx::query_scalar::<_, String>(
+                "UPDATE user_sessions SET revoked_at = now(), \
+                 revoke_reason = 'session_capacity_replaced' WHERE session_id = ( \
+                   SELECT session_id FROM user_sessions WHERE user_id = $1 \
+                   AND revoked_at IS NULL AND expires_at > now() \
+                   ORDER BY last_seen_at ASC, created_at ASC, session_id ASC LIMIT 1 \
+                   FOR UPDATE \
+                 ) RETURNING session_id",
+            )
+            .bind(&session.user_id)
+            .fetch_optional(&mut *transaction)
+            .await
+            .context("REVOKE least-active user session")?;
+            let Some(revoked) = revoked else {
+                anyhow::bail!("session capacity changed during admission");
+            };
+            revoke_active_client_session_pg(
+                &mut transaction,
+                &revoked,
+                "session_capacity_replaced",
+                None,
+            )
+            .await?;
+            revoked_session_ids.push(revoked);
+            active -= 1;
+        }
+        sqlx::query(
+            "INSERT INTO user_sessions (token_hash, session_id, user_id, client_kind, \
+             principal_class, created_at, expires_at, last_seen_at, user_agent, \
+             passkey_verified_at, primary_authenticated_at, primary_auth_method, revoked_at, \
+             revoke_reason, auth_provider_id, auth_issuer, auth_subject, auth_sid, \
+             id_token_ciphertext) VALUES ($1, $2, $3, $4, $5, \
+             to_timestamp($6::double precision / 1000), \
+             to_timestamp($7::double precision / 1000), \
+             to_timestamp($8::double precision / 1000), $9, \
+             to_timestamp($10::double precision / 1000), \
+             to_timestamp($11::double precision / 1000), $12, \
+             to_timestamp($13::double precision / 1000), $14, $15, $16, $17, $18, $19)",
+        )
+        .bind(&session.token_hash)
+        .bind(&session.session_id)
+        .bind(&session.user_id)
+        .bind(&session.client_kind)
+        .bind(&session.principal_class)
+        .bind(session.created_at_ms)
+        .bind(session.expires_at_ms)
+        .bind(session.last_seen_at_ms)
+        .bind(user_agent.as_deref())
+        .bind(session.passkey_verified_at_ms)
+        .bind(session.primary_authenticated_at_ms)
+        .bind(session.primary_auth_method.as_deref())
+        .bind(session.revoked_at_ms)
+        .bind(session.revoke_reason.as_deref())
+        .bind(session.auth_provider_id.as_deref())
+        .bind(session.auth_issuer.as_deref())
+        .bind(session.auth_subject.as_deref())
+        .bind(session.auth_sid.as_deref())
+        .bind(session.id_token_ciphertext.as_deref())
+        .execute(&mut *transaction)
+        .await
+        .context("INSERT admitted user session")?;
+        active += 1;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT user session admission")?;
+        Ok(ProductSessionAdmission::Admitted {
+            active_sessions: u32::try_from(active).unwrap_or(u32::MAX),
+            limit,
+            observed_overflow,
+            revoked_session_ids,
+        })
+    }
+
+    /// Load the active public key for a Machine.
+    ///
+    /// # Errors
+    /// Returns when the database query fails.
+    pub async fn machine_public_key(&self, machine_id: &str) -> Result<Option<String>> {
+        let value: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT public_key FROM machines WHERE id = $1 AND revoked_at IS NULL",
+        )
+        .bind(machine_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("loading Machine public key")?;
+        Ok(value.flatten())
+    }
+
+    pub async fn machine_encryption_public_key(&self, machine_id: &str) -> Result<Option<String>> {
+        let value: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT encryption_public_key FROM machines WHERE id = $1 AND revoked_at IS NULL",
+        )
+        .bind(machine_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("loading Machine encryption public key")?;
+        Ok(value.flatten())
+    }
+
+    pub async fn bind_machine_encryption_public_key(
+        &self,
+        machine_id: &str,
+        encryption_public_key: &str,
+    ) -> Result<()> {
+        validate_encryption_public_key(encryption_public_key)?;
+        let result = sqlx::query(
+            "UPDATE machines SET encryption_public_key = $2, updated_at = now() \
+             WHERE id = $1 AND revoked_at IS NULL \
+             AND (encryption_public_key IS NULL OR encryption_public_key = $2)",
+        )
+        .bind(machine_id)
+        .bind(encryption_public_key)
+        .execute(&self.pool)
+        .await
+        .context("binding Machine encryption public key")?;
+        anyhow::ensure!(
+            result.rows_affected() == 1,
+            "Machine encryption public key changed; revoke and re-enroll the Machine"
+        );
+        Ok(())
+    }
+
+    /// List enrolled Machines, including revoked records for administrative UI.
+    ///
+    /// # Errors
+    /// Returns when the database query fails.
+    pub async fn list_machines(&self) -> Result<Vec<MachineRecord>> {
+        let rows: Vec<MachineRow> = sqlx::query_as(
+            "SELECT id, display_name, connection_mode, platform, architecture, status, \
+             inventory, last_seen_at, revoked_at, public_key FROM machines ORDER BY id = 'local' DESC, display_name",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("listing Machines")?;
+        Ok(rows
+            .into_iter()
+            .map(|row| MachineRecord {
+                id: row.id,
+                display_name: row.display_name,
+                connection_mode: row.connection_mode,
+                platform: row.platform,
+                architecture: row.architecture,
+                status: row.status,
+                inventory: row.inventory,
+                last_seen_at_ms: row.last_seen_at.map(|value| value.timestamp_millis()),
+                revoked: row.revoked_at.is_some(),
+                fingerprint: row
+                    .public_key
+                    .as_deref()
+                    .and_then(|key| crate::machine_auth::fingerprint(key).ok()),
+            })
+            .collect())
+    }
+
+    /// Revoke a remote Machine identity and fence its current connection.
+    /// The active controller observes the cleared epoch on its next bounded
+    /// revocation check and closes the socket.
+    ///
+    /// # Errors
+    /// Returns when the id is reserved, unknown, or persistence fails.
+    pub async fn revoke_machine(&self, machine_id: &str) -> Result<()> {
+        anyhow::ensure!(machine_id != "local", "the local Machine cannot be revoked");
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("starting Machine revocation")?;
+        let result = sqlx::query(
+            "UPDATE machines SET revoked_at = now(), status = 'offline', \
+             connection_epoch = NULL, reconnect_deadline_at = NULL, updated_at = now() \
+             WHERE id = $1 AND public_key IS NOT NULL AND revoked_at IS NULL",
+        )
+        .bind(machine_id)
+        .execute(&mut *transaction)
+        .await
+        .context("revoking Machine identity")?;
+        anyhow::ensure!(
+            result.rows_affected() == 1,
+            "unknown or already revoked Machine"
+        );
+        sqlx::query("DELETE FROM machine_enrollment_tokens WHERE machine_id = $1")
+            .bind(machine_id)
+            .execute(&mut *transaction)
+            .await
+            .context("discarding Machine enrollment tokens")?;
+        transaction
+            .commit()
+            .await
+            .context("committing Machine revocation")?;
+        Ok(())
+    }
+
+    /// Test whether a connection epoch still owns an active Machine identity.
+    ///
+    /// # Errors
+    /// Returns when persistence cannot be queried.
+    pub async fn machine_connection_is_current(
+        &self,
+        machine_id: &str,
+        connection_epoch: &str,
+    ) -> Result<bool> {
+        sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM machines WHERE id = $1 \
+             AND connection_epoch = $2 AND revoked_at IS NULL)",
+        )
+        .bind(machine_id)
+        .bind(connection_epoch)
+        .fetch_one(&self.pool)
+        .await
+        .context("checking Machine connection epoch")
+    }
+
+    /// Record an authenticated Machine connection and its current inventory.
+    ///
+    /// # Errors
+    /// Returns when the database update fails.
+    pub async fn machine_connected(
+        &self,
+        machine_id: &str,
+        connection_epoch: &str,
+        platform: &str,
+        architecture: &str,
+        connection_mode: &str,
+        inventory: &serde_json::Value,
+    ) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE machines SET connection_epoch = $2, platform = $3, architecture = $4, \
+             connection_mode = $5, status = 'online', inventory = $6, last_seen_at = now(), \
+             reconnect_deadline_at = NULL, updated_at = now() \
+             WHERE id = $1 AND revoked_at IS NULL",
+        )
+        .bind(machine_id)
+        .bind(connection_epoch)
+        .bind(platform)
+        .bind(architecture)
+        .bind(connection_mode)
+        .bind(inventory)
+        .execute(&self.pool)
+        .await
+        .context("recording Machine connection")?;
+        anyhow::ensure!(
+            result.rows_affected() == 1,
+            "Machine was revoked during authentication"
+        );
+        Ok(())
+    }
+
+    /// Refresh the liveness timestamp and optional inventory of a Machine.
+    ///
+    /// # Errors
+    /// Returns when the database update fails.
+    pub async fn machine_seen(
+        &self,
+        machine_id: &str,
+        connection_epoch: &str,
+        inventory: Option<&serde_json::Value>,
+    ) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE machines SET status = 'online', last_seen_at = now(), \
+             inventory = COALESCE($3, inventory), reconnect_deadline_at = NULL, updated_at = now() \
+             WHERE id = $1 AND connection_epoch = $2 AND revoked_at IS NULL",
+        )
+        .bind(machine_id)
+        .bind(connection_epoch)
+        .bind(inventory)
+        .execute(&self.pool)
+        .await
+        .context("refreshing Machine liveness")?;
+        anyhow::ensure!(
+            result.rows_affected() == 1,
+            "Machine connection is no longer current"
+        );
+        Ok(())
+    }
+
+    /// Mark a disconnected Machine as reconnecting for a bounded grace period.
+    ///
+    /// # Errors
+    /// Returns when the database update fails.
+    pub async fn machine_disconnected(
+        &self,
+        machine_id: &str,
+        connection_epoch: &str,
+        grace_seconds: i32,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE machines SET status = 'reconnecting', connection_epoch = NULL, \
+             reconnect_deadline_at = now() + $3::integer * interval '1 second', updated_at = now() \
+             WHERE id = $1 AND connection_epoch = $2 AND revoked_at IS NULL",
+        )
+        .bind(machine_id)
+        .bind(connection_epoch)
+        .bind(grace_seconds)
+        .execute(&self.pool)
+        .await
+        .context("recording Machine disconnect")?;
+        Ok(())
+    }
+
+    /// Expire reconnect grace windows that were not superseded by a new epoch.
+    ///
+    /// Returns the number of Machines that became offline.
+    ///
+    /// # Errors
+    /// Returns when the database update fails.
+    pub async fn expire_machine_reconnects(&self) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE machines SET status = 'offline', reconnect_deadline_at = NULL, updated_at = now() \
+             WHERE status = 'reconnecting' AND reconnect_deadline_at <= now() \
+             AND connection_epoch IS NULL AND revoked_at IS NULL",
+        )
+        .execute(&self.pool)
+        .await
+        .context("expiring Machine reconnect grace")?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn upsert_provider_reset(
+        &self,
+        provider: &str,
+        fire_at_ms: i64,
+        idempotency_key: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO scheduled_provider_actions (provider, action, fire_at_ms, idempotency_key) \
+             VALUES ($1, 'rate_limit_reset', $2, $3) \
+             ON CONFLICT (provider) DO UPDATE SET action = EXCLUDED.action, \
+             fire_at_ms = EXCLUDED.fire_at_ms, idempotency_key = EXCLUDED.idempotency_key, \
+             attempt_count = 0, next_attempt_at_ms = EXCLUDED.fire_at_ms",
+        )
+        .bind(provider)
+        .bind(fire_at_ms)
+        .bind(idempotency_key)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPSERT scheduled {provider} reset"))?;
+        Ok(())
+    }
+
+    pub async fn load_provider_reset(
+        &self,
+        provider: &str,
+    ) -> Result<Option<ScheduledProviderAction>> {
+        let row: Option<(i64, String, i32, Option<i64>)> = sqlx::query_as(
+            "SELECT fire_at_ms, idempotency_key, attempt_count, next_attempt_at_ms FROM scheduled_provider_actions \
+             WHERE provider = $1 AND action = 'rate_limit_reset'",
+        )
+        .bind(provider)
+        .fetch_optional(&self.pool)
+        .await
+        .with_context(|| format!("SELECT scheduled {provider} reset"))?;
+        Ok(row.map(
+            |(fire_at_ms, idempotency_key, attempt_count, next_attempt_at_ms)| {
+                ScheduledProviderAction {
+                    fire_at_ms,
+                    idempotency_key,
+                    attempt_count,
+                    next_attempt_at_ms: next_attempt_at_ms.unwrap_or(fire_at_ms),
+                }
+            },
+        ))
+    }
+
+    pub async fn defer_provider_reset(
+        &self,
+        provider: &str,
+        idempotency_key: &str,
+        next_attempt_at_ms: i64,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE scheduled_provider_actions SET attempt_count = attempt_count + 1, \
+             next_attempt_at_ms = $3 WHERE provider = $1 AND action = 'rate_limit_reset' \
+             AND idempotency_key = $2",
+        )
+        .bind(provider)
+        .bind(idempotency_key)
+        .bind(next_attempt_at_ms)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("defer scheduled {provider} reset"))?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn append_provider_action_log(
+        &self,
+        provider: &str,
+        trigger: &str,
+        status: &str,
+        phase: &str,
+        message: &str,
+        credit_id: Option<&str>,
+        idempotency_key: Option<&str>,
+        created_at_ms: i64,
+    ) -> Result<()> {
+        let suffix = idempotency_key.map(|key| {
+            key.chars()
+                .rev()
+                .take(8)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect::<String>()
+        });
+        sqlx::query(
+            "INSERT INTO provider_action_logs \
+             (provider, action, trigger, status, phase, message, credit_id, idempotency_suffix, created_at_ms) \
+             VALUES ($1, 'rate_limit_reset', $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind(provider)
+        .bind(trigger)
+        .bind(status)
+        .bind(phase)
+        .bind(message)
+        .bind(credit_id)
+        .bind(suffix)
+        .bind(created_at_ms)
+        .execute(&self.pool)
+        .await
+        .context("append provider action log")?;
+        Ok(())
+    }
+
+    pub async fn provider_action_logs(&self, limit: i64) -> Result<Vec<ProviderActionLog>> {
+        sqlx::query_as::<
+            _,
+            (
+                i64,
+                String,
+                String,
+                String,
+                String,
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+                i64,
+            ),
+        >(
+            "SELECT id, provider, action, trigger, status, phase, message, credit_id, \
+             idempotency_suffix, created_at_ms FROM provider_action_logs \
+             ORDER BY created_at_ms DESC, id DESC LIMIT $1",
+        )
+        .bind(limit.clamp(1, 200))
+        .fetch_all(&self.pool)
+        .await
+        .context("list provider action logs")
+        .map(|rows| {
+            rows.into_iter()
+                .map(|row| ProviderActionLog {
+                    id: row.0,
+                    provider: row.1,
+                    action: row.2,
+                    trigger: row.3,
+                    status: row.4,
+                    phase: row.5,
+                    message: row.6,
+                    credit_id: row.7,
+                    idempotency_suffix: row.8,
+                    created_at_ms: row.9,
+                })
+                .collect()
+        })
+    }
+
+    pub async fn delete_provider_reset(&self, provider: &str) -> Result<()> {
+        sqlx::query("DELETE FROM scheduled_provider_actions WHERE provider = $1")
+            .bind(provider)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("DELETE scheduled {provider} reset"))?;
+        Ok(())
+    }
+
+    pub async fn claim_provider_reset(
+        &self,
+        provider: &str,
+        idempotency_key: &str,
+    ) -> Result<bool> {
+        let result = sqlx::query(
+            "DELETE FROM scheduled_provider_actions \
+             WHERE provider = $1 AND idempotency_key = $2",
+        )
+        .bind(provider)
+        .bind(idempotency_key)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("claim scheduled {provider} reset"))?;
+        Ok(result.rows_affected() == 1)
+    }
+    /// Open a pool against `url`.
+    ///
+    /// # Errors
+    /// If the URL is malformed or the DB is unreachable within the connect
+    /// timeout.
+    pub async fn connect(url: &str, artifact_dir: std::path::PathBuf) -> Result<Self> {
+        let pool = PgPoolOptions::new()
+            .max_connections(8)
+            .acquire_timeout(Duration::from_secs(5))
+            .connect(url)
+            .await
+            .with_context(|| format!("connecting to postgres {url}"))?;
+        Ok(Self {
+            pool,
+            artifacts: crate::artifacts::ArtifactStore::new(artifact_dir)?,
+        })
+    }
+
+    /// Run embedded migrations under `./migrations/`. Idempotent.
+    ///
+    /// # Errors
+    /// If a migration fails to apply.
+    pub async fn migrate(&self) -> Result<()> {
+        let mut migrator = sqlx::migrate!("../../migrations");
+        // Component rollback restores the previous controller binary but does
+        // not roll back PostgreSQL. A predecessor must therefore tolerate an
+        // already-applied additive migration from a failed candidate release.
+        // Known migration checksums are still verified by SQLx.
+        migrator.set_ignore_missing(true);
+        let has_ledger: bool =
+            sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
+                .fetch_one(&self.pool)
+                .await
+                .context("checking PostgreSQL migration ledger")?;
+        if has_ledger {
+            let applied = sqlx::query_as::<_, (i64, bool, Vec<u8>)>(
+                "SELECT version, success, checksum FROM _sqlx_migrations ORDER BY version",
+            )
+            .fetch_all(&self.pool)
+            .await
+            .context("reading PostgreSQL migration ledger")?;
+            if crate::migration_compat::needs_baseline_marker(
+                &applied,
+                crate::migration_compat::POSTGRES_BASELINE_VERSION,
+                crate::migration_compat::LEGACY_POSTGRES_MIGRATIONS,
+            )? {
+                let baseline = migrator
+                    .iter()
+                    .find(|migration| {
+                        migration.version == crate::migration_compat::POSTGRES_BASELINE_VERSION
+                    })
+                    .context("embedded PostgreSQL baseline is missing")?;
+                sqlx::query(
+                    r"INSERT INTO _sqlx_migrations
+                       (version, description, success, checksum, execution_time)
+                       VALUES ($1, $2, TRUE, $3, 0)
+                       ON CONFLICT (version) DO NOTHING",
+                )
+                .bind(baseline.version)
+                .bind(baseline.description.as_ref())
+                .bind(baseline.checksum.as_ref())
+                .execute(&self.pool)
+                .await
+                .context("marking consolidated PostgreSQL baseline")?;
+            }
+        }
+        migrator
+            .run(&self.pool)
+            .await
+            .context("running migrations")?;
+        Ok(())
+    }
+
+    /// Return the first numeric `sess-N` id not yet used by any durable row,
+    /// including soft-deleted rows that [`Self::load_all`] intentionally hides.
+    ///
+    /// Seeding only from live/restored sessions can reuse a tombstoned id after
+    /// restart. The in-memory Hub then clobbers the new session while Postgres
+    /// rejects its INSERT, and later metadata updates corrupt the tombstone.
+    pub async fn next_session_number(&self) -> Result<u64> {
+        let max: Option<i64> = sqlx::query_scalar(
+            "SELECT max((substring(id FROM 6))::bigint) FROM sessions \
+             WHERE id ~ '^sess-[0-9]+$'",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .context("SELECT max session id")?;
+        Ok(max
+            .and_then(|value| u64::try_from(value).ok())
+            .map_or(1, |value| value.saturating_add(1)))
+    }
+
+    /// Load every session with only its recent event tail. Older history remains
+    /// in Postgres and is fetched by [`Self::history_page`].
+    ///
+    /// # Errors
+    /// If a query fails or a payload is unparseable.
+    #[allow(clippy::too_many_lines)] // one bounded session restore transaction
+    pub async fn load_all(&self) -> Result<Vec<LoadedSession>> {
+        let session_rows: Vec<SessionRow> = sqlx::query_as::<_, SessionRow>(
+            "SELECT id, provider, provider_version, provider_generation_digest, \
+             provider_account_id, provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, workspace_source_path, \
+             execution_binding, cwd, title, origin, status, agent_session_id, \
+             system, next_seq, queue, drafts, \
+             config_options, config_preferences, mobile_review_state, folder_id, trashed_at_ms, last_usage, \
+             owner_user_id, \
+             (SELECT username FROM users WHERE users.id = sessions.owner_user_id) AS owner_username \
+             FROM sessions WHERE deleted_at IS NULL ORDER BY position ASC NULLS LAST, created_at ASC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("SELECT sessions")?;
+
+        let mut out = Vec::with_capacity(session_rows.len());
+        for row in session_rows {
+            let id = row.id.clone();
+            let Ok(account_id) = row.provider_account_id.clone().try_into() else {
+                tracing::warn!(session_id = %id, "Skipping session with invalid Provider account identity");
+                continue;
+            };
+            let event_rows: Vec<EventRow> = sqlx::query_as::<_, EventRow>(
+                "WITH recent AS MATERIALIZED ( \
+                     SELECT seq, payload FROM events \
+                     WHERE session_id = $1 ORDER BY seq DESC LIMIT $2 \
+                 ), sized AS ( \
+                     SELECT seq, payload, \
+                            row_number() OVER (ORDER BY seq DESC) AS recent_rank, \
+                            sum(octet_length(payload::text) + $4) \
+                                OVER (ORDER BY seq DESC) AS cumulative_bytes \
+                     FROM recent \
+                 ), totals AS ( \
+                     SELECT count(*)::bigint AS total_count \
+                     FROM events WHERE session_id = $1 \
+                 ) \
+                 SELECT sized.seq, sized.payload, totals.total_count \
+                 FROM sized CROSS JOIN totals \
+                 WHERE sized.recent_rank = 1 OR sized.cumulative_bytes <= $3 \
+                 ORDER BY sized.seq DESC",
+            )
+            .bind(&id)
+            .bind(i64::try_from(crate::model::HOT_TAIL).unwrap_or(i64::MAX))
+            .bind(i64::try_from(crate::model::HOT_TAIL_MAX_BYTES).unwrap_or(i64::MAX))
+            .bind(i64::try_from(id.len().saturating_add(64)).unwrap_or(i64::MAX))
+            .fetch_all(&self.pool)
+            .await
+            .with_context(|| format!("SELECT events for {id}"))?;
+
+            let event_count = event_rows
+                .first()
+                .and_then(|r| u64::try_from(r.total_count).ok())
+                .unwrap_or(0);
+            let last_event_at_ms: Option<i64> = sqlx::query_scalar(&format!(
+                "SELECT (extract(epoch FROM ts) * 1000)::bigint FROM events \
+                 WHERE session_id = $1 AND NOT ( \
+                     payload->>'kind' = 'lifecycle' \
+                     OR (payload->>'kind' = 'update' \
+                         AND payload->'update'->>'sessionUpdate' IN ({})) \
+                 ) ORDER BY seq DESC LIMIT 1",
+                crate::model::NON_ACTIVITY_SESSION_UPDATES_SQL,
+            ))
+            .bind(&id)
+            .fetch_optional(&self.pool)
+            .await
+            .with_context(|| format!("SELECT last activity for {id}"))?;
+            let mut reached_start =
+                event_count <= u64::try_from(event_rows.len()).unwrap_or(u64::MAX);
+            let mut events = Vec::with_capacity(event_rows.len());
+            for er in event_rows.into_iter().rev() {
+                let seq_for_log = er.seq;
+                // Degrade a single undecodable event to a SKIP (with a warn), not a
+                // hard error: one corrupt/legacy row must not fail the whole
+                // `load_all` and so block the daemon from starting at all (that
+                // bricks EVERY session — a blank UI for the user). Same
+                // "tolerate one bad row" philosophy as queue/drafts
+                // below. The skipped seq leaves a gap, which the client tolerates.
+                let mut payload = er.payload;
+                // The echoed prompt's cmid survives a restart so the restored
+                // Hub can refuse a resent submit and a reloaded client can retire
+                // its outbox entry from the snapshot.
+                let cmid = crate::persistence::take_persisted_cmid(&mut payload);
+                let event: Event = match serde_json::from_value(payload) {
+                    Ok(ev) => ev,
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            session = %id,
+                            seq = seq_for_log,
+                            "skipping undecodable event during restore",
+                        );
+                        continue;
+                    }
+                };
+                let seq = u64::try_from(er.seq).unwrap_or(0);
+                events.push(Envelope {
+                    session_id: id.clone(),
+                    seq,
+                    event,
+                    cmid,
+                });
+            }
+            if crate::persistence::bound_restored_hot_log(&mut events) {
+                reached_start = false;
+            }
+            let next_seq = u64::try_from(row.next_seq).unwrap_or(0);
+            // Tolerate a malformed/legacy payload by degrading to empty rather
+            // than failing the whole restore for one bad row.
+            let queue: Vec<QueuedMessage> =
+                serde_json::from_value(row.queue.clone()).unwrap_or_default();
+            let drafts: Vec<QueuedMessage> =
+                serde_json::from_value(row.drafts.clone()).unwrap_or_default();
+            let config_options = row.config_options.clone();
+            let config_preferences = if row.config_preferences.is_object() {
+                row.config_preferences.clone()
+            } else {
+                serde_json::json!({})
+            };
+            let mobile_review_state = row.mobile_review_state.clone();
+            let folder_id = row.folder_id.clone();
+            out.push(LoadedSession {
+                meta: row.into_meta(account_id),
+                events,
+                event_count,
+                reached_start,
+                next_seq,
+                queue,
+                drafts,
+                config_options,
+                config_preferences,
+                mobile_review_state,
+                folder_id,
+                last_event_at_ms,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Read one cursor-addressed history page directly from Postgres.
+    pub async fn history_page(
+        &self,
+        session_id: &str,
+        before_seq: u64,
+        page_size: usize,
+    ) -> Result<(Vec<Envelope>, Option<u64>, bool)> {
+        let before_i64 = i64::try_from(before_seq).context("history cursor overflow")?;
+        let limit = i64::try_from(page_size).context("history page size overflow")?;
+        let rows: Vec<EventRow> = sqlx::query_as::<_, EventRow>(
+            "SELECT seq, payload, 0::bigint AS total_count FROM events \
+             WHERE session_id = $1 AND seq < $2 ORDER BY seq DESC LIMIT $3",
+        )
+        .bind(session_id)
+        .bind(before_i64)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("SELECT history page for {session_id}"))?;
+        let mut events = Vec::with_capacity(rows.len());
+        for row in rows.into_iter().rev() {
+            let mut payload = row.payload;
+            let cmid = crate::persistence::take_persisted_cmid(&mut payload);
+            match serde_json::from_value::<Event>(payload) {
+                Ok(event) => events.push(Envelope {
+                    session_id: session_id.to_owned(),
+                    seq: u64::try_from(row.seq).unwrap_or(0),
+                    event,
+                    cmid,
+                }),
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    session = %session_id,
+                    seq = row.seq,
+                    "skipping undecodable history event",
+                ),
+            }
+        }
+        let events = bound_history_page(events);
+        let oldest = events.first().map(|event| event.seq);
+        let reached_start = match oldest {
+            Some(seq) => !sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM events WHERE session_id = $1 AND seq < $2)",
+            )
+            .bind(session_id)
+            .bind(i64::try_from(seq).unwrap_or(i64::MAX))
+            .fetch_one(&self.pool)
+            .await
+            .with_context(|| format!("SELECT history start for {session_id}"))?,
+            None => true,
+        };
+        let next_before_seq = (!reached_start).then_some(oldest.unwrap_or(before_seq));
+        Ok((events, next_before_seq, reached_start))
+    }
+
+    /// Load the complete question page immediately preceding `before_seq`.
+    /// Unlike scrollback paging this deliberately follows the durable user
+    /// prompt boundary, so the reader does not repeatedly re-render partial
+    /// answer batches while looking for the preceding question.
+    pub async fn question_page_before(
+        &self,
+        session_id: &str,
+        before_seq: u64,
+    ) -> Result<(Vec<Envelope>, Option<u64>, bool)> {
+        let before_i64 = i64::try_from(before_seq).context("question cursor overflow")?;
+        let root = sqlx::query_scalar::<_, Option<i64>>(
+            "WITH ordered AS ( \
+               SELECT seq, payload, \
+                 LAG(payload->'update'->>'sessionUpdate') OVER (ORDER BY seq) AS previous_update \
+               FROM events WHERE session_id = $1 AND seq < $2 \
+             ) \
+             SELECT MAX(seq) FROM ordered \
+             WHERE payload->>'kind' = 'update' \
+               AND payload->'update'->>'sessionUpdate' = 'user_message_chunk' \
+               AND COALESCE(payload->'update'->>'autoResumed', 'false') <> 'true' \
+               AND COALESCE(payload->'update'->'promptOrigin'->>'actor', 'human') = 'human' \
+               AND POSITION('<system-reminder' IN LOWER(COALESCE(payload->'update'->'content'->>'text', ''))) = 0 \
+               AND BTRIM(COALESCE(payload->'update'->'content'->>'text', '')) \
+                   NOT IN ('/compact', '/compress') \
+               AND previous_update IS DISTINCT FROM 'user_message_chunk'",
+        )
+        .bind(session_id)
+        .bind(before_i64)
+        .fetch_one(&self.pool)
+        .await
+        .with_context(|| format!("SELECT previous question root for {session_id}"))?;
+        let Some(root) = root else {
+            return Ok((Vec::new(), None, true));
+        };
+        let turn_end = sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT MIN(seq) FROM events \
+             WHERE session_id = $1 AND seq >= $2 AND seq < $3 \
+               AND payload->>'kind' = 'turn_end'",
+        )
+        .bind(session_id)
+        .bind(root)
+        .bind(before_i64)
+        .fetch_one(&self.pool)
+        .await
+        .with_context(|| format!("SELECT question turn end for {session_id}"))?;
+        let page_end = turn_end
+            .and_then(|seq| seq.checked_add(1))
+            .unwrap_or(before_i64);
+        let rows: Vec<EventRow> = sqlx::query_as::<_, EventRow>(
+            "SELECT seq, payload, 0::bigint AS total_count FROM events \
+             WHERE session_id = $1 AND seq >= $2 AND seq < $3 ORDER BY seq",
+        )
+        .bind(session_id)
+        .bind(root)
+        .bind(page_end)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("SELECT complete question page for {session_id}"))?;
+        let mut events = Vec::with_capacity(rows.len());
+        for row in rows {
+            let mut payload = row.payload;
+            let cmid = crate::persistence::take_persisted_cmid(&mut payload);
+            match serde_json::from_value::<Event>(payload) {
+                Ok(event) => events.push(Envelope {
+                    session_id: session_id.to_owned(),
+                    seq: u64::try_from(row.seq).unwrap_or(0),
+                    event,
+                    cmid,
+                }),
+                Err(error) => tracing::warn!(
+                    %error,
+                    session = %session_id,
+                    seq = row.seq,
+                    "skipping undecodable question-page event",
+                ),
+            }
+        }
+        let root_u64 = u64::try_from(root).unwrap_or(0);
+        let has_earlier_root = sqlx::query_scalar::<_, bool>(
+            "WITH ordered AS ( \
+               SELECT seq, payload, \
+                 LAG(payload->'update'->>'sessionUpdate') OVER (ORDER BY seq) AS previous_update \
+               FROM events WHERE session_id = $1 AND seq < $2 \
+             ) \
+             SELECT EXISTS(SELECT 1 FROM ordered \
+               WHERE payload->>'kind' = 'update' \
+                 AND payload->'update'->>'sessionUpdate' = 'user_message_chunk' \
+                 AND COALESCE(payload->'update'->>'autoResumed', 'false') <> 'true' \
+                 AND COALESCE(payload->'update'->'promptOrigin'->>'actor', 'human') = 'human' \
+                 AND POSITION('<system-reminder' IN LOWER(COALESCE(payload->'update'->'content'->>'text', ''))) = 0 \
+                 AND BTRIM(COALESCE(payload->'update'->'content'->>'text', '')) \
+                     NOT IN ('/compact', '/compress') \
+                 AND previous_update IS DISTINCT FROM 'user_message_chunk')",
+        )
+        .bind(session_id)
+        .bind(root)
+        .fetch_one(&self.pool)
+        .await
+        .with_context(|| format!("SELECT earlier question root for {session_id}"))?;
+        Ok((
+            events,
+            has_earlier_root.then_some(root_u64),
+            !has_earlier_root,
+        ))
+    }
+
+    /// Return a cursor page of lightweight question roots. This query transfers
+    /// only the prompt text needed for the directory; answer payloads remain in
+    /// Postgres until the reader opens one page.
+    pub async fn question_page_summaries(
+        &self,
+        session_id: &str,
+        before_seq: Option<u64>,
+        limit: usize,
+    ) -> Result<(Vec<QuestionPageSummary>, Option<u64>, u64)> {
+        let before = before_seq
+            .map(i64::try_from)
+            .transpose()
+            .context("question summary cursor overflow")?;
+        let rows = sqlx::query_as::<_, (i64, String, i64, i64)>(
+            "WITH ordered AS ( \
+               SELECT seq, payload, \
+                 LAG(payload->'update'->>'sessionUpdate') OVER (ORDER BY seq) AS previous_update \
+               FROM events WHERE session_id = $1 \
+             ), roots AS ( \
+               SELECT seq, COALESCE(payload->'update'->'content'->>'text', '') AS title \
+               FROM ordered \
+               WHERE payload->>'kind' = 'update' \
+                 AND payload->'update'->>'sessionUpdate' = 'user_message_chunk' \
+                 AND COALESCE(payload->'update'->>'autoResumed', 'false') <> 'true' \
+                 AND COALESCE(payload->'update'->'promptOrigin'->>'actor', 'human') = 'human' \
+                 AND POSITION('<system-reminder' IN LOWER(COALESCE(payload->'update'->'content'->>'text', ''))) = 0 \
+                 AND BTRIM(COALESCE(payload->'update'->'content'->>'text', '')) \
+                     NOT IN ('/compact', '/compress') \
+                 AND previous_update IS DISTINCT FROM 'user_message_chunk' \
+             ), numbered AS ( \
+               SELECT seq, title, \
+                 ROW_NUMBER() OVER (ORDER BY seq) AS ordinal, \
+                 COUNT(*) OVER () AS total \
+               FROM roots \
+             ) \
+             SELECT seq, title, ordinal, total FROM numbered \
+             WHERE ($2::bigint IS NULL OR seq < $2) \
+             ORDER BY seq DESC LIMIT $3",
+        )
+        .bind(session_id)
+        .bind(before)
+        .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("SELECT question summaries for {session_id}"))?;
+        let total = rows
+            .first()
+            .map_or(0, |row| u64::try_from(row.3).unwrap_or(0));
+        let next_before_seq = rows
+            .last()
+            .and_then(|row| (row.2 > 1).then(|| u64::try_from(row.0).unwrap_or(0)));
+        let mut pages = rows
+            .into_iter()
+            .map(|(seq, title, ordinal, _)| {
+                let ordinal = u64::try_from(ordinal).unwrap_or(u64::MAX);
+                QuestionPageSummary {
+                    id: u64::try_from(seq).unwrap_or(0),
+                    title: question_summary_title(&title, ordinal),
+                    ordinal,
+                }
+            })
+            .collect::<Vec<_>>();
+        pages.reverse();
+        Ok((pages, next_before_seq, total))
+    }
+
+    /// Load exactly one immutable question page by its user-message root.
+    pub async fn question_page_at(
+        &self,
+        session_id: &str,
+        root_seq: u64,
+    ) -> Result<Option<Vec<Envelope>>> {
+        let root = i64::try_from(root_seq).context("question root overflow")?;
+        let bounds = sqlx::query_as::<_, (i64, Option<i64>)>(
+            "WITH ordered AS ( \
+               SELECT seq, payload, \
+                 LAG(payload->'update'->>'sessionUpdate') OVER (ORDER BY seq) AS previous_update \
+               FROM events WHERE session_id = $1 \
+             ), roots AS ( \
+               SELECT seq FROM ordered \
+               WHERE payload->>'kind' = 'update' \
+                 AND payload->'update'->>'sessionUpdate' = 'user_message_chunk' \
+                 AND COALESCE(payload->'update'->>'autoResumed', 'false') <> 'true' \
+                 AND COALESCE(payload->'update'->'promptOrigin'->>'actor', 'human') = 'human' \
+                 AND POSITION('<system-reminder' IN LOWER(COALESCE(payload->'update'->'content'->>'text', ''))) = 0 \
+                 AND BTRIM(COALESCE(payload->'update'->'content'->>'text', '')) \
+                     NOT IN ('/compact', '/compress') \
+                 AND previous_update IS DISTINCT FROM 'user_message_chunk' \
+             ), bounded AS ( \
+               SELECT seq, LEAD(seq) OVER (ORDER BY seq) AS next_seq FROM roots \
+             ) \
+             SELECT seq, next_seq FROM bounded WHERE seq = $2",
+        )
+        .bind(session_id)
+        .bind(root)
+        .fetch_optional(&self.pool)
+        .await
+        .with_context(|| format!("SELECT question page bounds for {session_id}:{root_seq}"))?;
+        let Some((start, end)) = bounds else {
+            return Ok(None);
+        };
+        let turn_end = sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT MIN(seq) FROM events \
+             WHERE session_id = $1 AND seq >= $2 \
+               AND ($3::bigint IS NULL OR seq < $3) \
+               AND payload->>'kind' = 'turn_end'",
+        )
+        .bind(session_id)
+        .bind(start)
+        .bind(end)
+        .fetch_one(&self.pool)
+        .await
+        .with_context(|| format!("SELECT question page turn end for {session_id}:{root_seq}"))?;
+        let end = turn_end.and_then(|seq| seq.checked_add(1)).or(end);
+        let rows = sqlx::query_as::<_, EventRow>(
+            "SELECT seq, payload, 0::bigint AS total_count FROM events \
+             WHERE session_id = $1 AND seq >= $2 AND ($3::bigint IS NULL OR seq < $3) \
+             ORDER BY seq",
+        )
+        .bind(session_id)
+        .bind(start)
+        .bind(end)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("SELECT question page at {session_id}:{root_seq}"))?;
+        let events = rows
+            .into_iter()
+            .filter_map(|row| {
+                let mut payload = row.payload;
+                let cmid = crate::persistence::take_persisted_cmid(&mut payload);
+                serde_json::from_value::<Event>(payload)
+                    .map(|event| Envelope {
+                        session_id: session_id.to_owned(),
+                        seq: u64::try_from(row.seq).unwrap_or(0),
+                        event,
+                        cmid,
+                    })
+                    .map_err(|error| {
+                        tracing::warn!(
+                            %error,
+                            session = %session_id,
+                            seq = row.seq,
+                            "skipping undecodable lazy question-page event",
+                        );
+                    })
+                    .ok()
+            })
+            .collect();
+        Ok(Some(events))
+    }
+
+    /// Insert a brand-new session. Caller is expected to set `next_seq = 0`
+    /// (the row default does it too).
+    ///
+    /// # Errors
+    /// If the row already exists or the INSERT fails.
+    pub async fn insert_session(&self, m: &SessionMeta) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO sessions(id, provider, provider_version, provider_generation_digest, \
+             provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, \
+             workspace_source_path, cwd, title, origin, status, next_seq, system, owner_user_id, execution_binding, provider_account_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, $15, $16, $17, $18)",
+        )
+        .bind(&m.id)
+        .bind(&m.provider)
+        .bind(&m.provider_version)
+        .bind(&m.provider_generation_digest)
+        .bind(m.provider_auth_generation.and_then(|value| i64::try_from(value).ok()))
+        .bind(
+            m.provider_behavior
+                .as_ref()
+                .map(serde_json::to_value)
+                .transpose()?,
+        )
+        .bind(&m.machine_id)
+        .bind(m.workspace_id.as_deref())
+        .bind(m.workspace_name.as_deref())
+        .bind(m.workspace_source_path.as_deref())
+        .bind(&m.cwd)
+        .bind(strip_nul_str(&m.title))
+        .bind(origin_to_str(m.origin))
+        .bind(status_to_str(m.status))
+        .bind(m.system)
+        .bind(m.owner_user_id.as_deref())
+        .bind(m.execution_binding.as_ref().map(crate::execution_environment::ExecutionBinding::record))
+        .bind(m.provider_account_id.as_str())
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("INSERT session {}", m.id))?;
+        Ok(())
+    }
+}
+
+impl PostgresStorage {
+    pub async fn insert_user(&self, user: &ProductUser) -> Result<()> {
+        anyhow::ensure!(
+            valid_product_user_id(&user.id),
+            "user id must be 32 hex characters"
+        );
+        let username = normalized_product_username(&user.username)?;
+        anyhow::ensure!(
+            !user.password_hash.is_empty(),
+            "password hash cannot be empty"
+        );
+        sqlx::query(
+            "INSERT INTO users (id, username, password_algo, password_hash, created_at, \
+             updated_at, disabled_at, passkey_reauth_enabled, passkey_reauth_interval_ms, \
+             passkey_verification_interval_ms) VALUES ( \
+             $1, $2, $3, $4, to_timestamp($5::double precision / 1000), \
+             to_timestamp($6::double precision / 1000), \
+             to_timestamp($7::double precision / 1000), false, $8, $8)",
+        )
+        .bind(&user.id)
+        .bind(&username)
+        .bind(&user.password_algo)
+        .bind(&user.password_hash)
+        .bind(user.created_at_ms)
+        .bind(user.updated_at_ms)
+        .bind(user.disabled_at_ms)
+        .bind(crate::passkey::DEFAULT_PASSKEY_REAUTH_AFTER_MS)
+        .execute(&self.pool)
+        .await
+        .map_err(|error| unique_constraint_error(error, "account already exists", "INSERT user"))?;
+        Ok(())
+    }
+
+    pub async fn user_by_id(&self, id: &str) -> Result<Option<ProductUser>> {
+        let row = sqlx::query_as::<_, ProductUserRow>(
+            "SELECT id, username, password_algo, password_hash, created_at, updated_at, \
+             disabled_at FROM users WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .with_context(|| format!("SELECT user {id}"))?;
+        Ok(row.map(ProductUser::from_pg))
+    }
+
+    pub async fn user_by_username(&self, username: &str) -> Result<Option<ProductUser>> {
+        let username = normalized_product_username(username)?;
+        let row = sqlx::query_as::<_, ProductUserRow>(
+            "SELECT id, username, password_algo, password_hash, created_at, updated_at, \
+             disabled_at FROM users WHERE username = $1",
+        )
+        .bind(&username)
+        .fetch_optional(&self.pool)
+        .await
+        .with_context(|| format!("SELECT user by username {username}"))?;
+        Ok(row.map(ProductUser::from_pg))
+    }
+
+    pub async fn list_users(&self) -> Result<Vec<ProductUser>> {
+        let rows = sqlx::query_as::<_, ProductUserRow>(
+            "SELECT id, username, password_algo, password_hash, created_at, updated_at, \
+             disabled_at FROM users ORDER BY username",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("SELECT users")?;
+        Ok(rows.into_iter().map(ProductUser::from_pg).collect())
+    }
+
+    pub async fn update_user_password(
+        &self,
+        id: &str,
+        password_algo: &str,
+        password_hash: &str,
+    ) -> Result<()> {
+        anyhow::ensure!(!password_hash.is_empty(), "password hash cannot be empty");
+        let mut transaction = self.pool.begin().await.context("BEGIN password update")?;
+        let result = sqlx::query(
+            "UPDATE users SET password_algo = $2, password_hash = $3, updated_at = now() \
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(password_algo)
+        .bind(password_hash)
+        .execute(&mut *transaction)
+        .await
+        .with_context(|| format!("UPDATE user password {id}"))?;
+        anyhow::ensure!(result.rows_affected() == 1, "user {id} not found");
+        sqlx::query("DELETE FROM user_sessions WHERE user_id = $1")
+            .bind(id)
+            .execute(&mut *transaction)
+            .await
+            .with_context(|| format!("DELETE sessions after password update for {id}"))?;
+        sqlx::query(
+            "UPDATE user_api_tokens SET revoked_at = now() \
+             WHERE user_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(id)
+        .execute(&mut *transaction)
+        .await
+        .with_context(|| format!("REVOKE API tokens after password update for {id}"))?;
+        sqlx::query(
+            "UPDATE user_devices SET revoked_at = now() \
+             WHERE user_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(id)
+        .execute(&mut *transaction)
+        .await
+        .with_context(|| format!("REVOKE devices after password update for {id}"))?;
+        sqlx::query(
+            "UPDATE user_device_refresh_tokens SET revoked_at = now() \
+             WHERE revoked_at IS NULL AND device_id IN \
+             (SELECT id FROM user_devices WHERE user_id = $1)",
+        )
+        .bind(id)
+        .execute(&mut *transaction)
+        .await
+        .with_context(|| format!("REVOKE device refresh after password update for {id}"))?;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT password update")?;
+        Ok(())
+    }
+
+    pub async fn revoke_user_api_tokens_for_user(&self, user_id: &str) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE user_api_tokens SET revoked_at = now() \
+             WHERE user_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(user_id)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("REVOKE user API tokens for {user_id}"))?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn set_user_disabled_at(&self, id: &str, disabled_at_ms: Option<i64>) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE users SET disabled_at = to_timestamp($2::double precision / 1000), \
+             updated_at = now() WHERE id = $1",
+        )
+        .bind(id)
+        .bind(disabled_at_ms)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE user disabled_at {id}"))?;
+        anyhow::ensure!(result.rows_affected() == 1, "user {id} not found");
+        Ok(())
+    }
+
+    pub async fn delete_user(&self, id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("DELETE user {id}"))?;
+        Ok(())
+    }
+
+    pub async fn insert_user_session(&self, session: &ProductUserSession) -> Result<()> {
+        validate_product_user_session(session)?;
+        let user_agent = truncate_user_agent(session.user_agent.as_deref());
+        sqlx::query(
+            "INSERT INTO user_sessions (token_hash, session_id, user_id, client_kind, \
+             principal_class, created_at, expires_at, \
+             last_seen_at, user_agent, passkey_verified_at, primary_authenticated_at, \
+             primary_auth_method, revoked_at, revoke_reason, auth_provider_id, auth_issuer, \
+             auth_subject, auth_sid, id_token_ciphertext) VALUES ( \
+             $1, $2, $3, $4, $5, to_timestamp($6::double precision / 1000), \
+             to_timestamp($7::double precision / 1000), \
+             to_timestamp($8::double precision / 1000), $9, \
+             to_timestamp($10::double precision / 1000), \
+             to_timestamp($11::double precision / 1000), $12, \
+             to_timestamp($13::double precision / 1000), $14, $15, $16, $17, $18, $19)",
+        )
+        .bind(&session.token_hash)
+        .bind(&session.session_id)
+        .bind(&session.user_id)
+        .bind(&session.client_kind)
+        .bind(&session.principal_class)
+        .bind(session.created_at_ms)
+        .bind(session.expires_at_ms)
+        .bind(session.last_seen_at_ms)
+        .bind(user_agent.as_deref())
+        .bind(session.passkey_verified_at_ms)
+        .bind(session.primary_authenticated_at_ms)
+        .bind(session.primary_auth_method.as_deref())
+        .bind(session.revoked_at_ms)
+        .bind(session.revoke_reason.as_deref())
+        .bind(session.auth_provider_id.as_deref())
+        .bind(session.auth_issuer.as_deref())
+        .bind(session.auth_subject.as_deref())
+        .bind(session.auth_sid.as_deref())
+        .bind(session.id_token_ciphertext.as_deref())
+        .execute(&self.pool)
+        .await
+        .context("INSERT user session")?;
+        Ok(())
+    }
+
+    pub async fn user_session_by_token_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<ProductUserSession>> {
+        let row = sqlx::query_as::<_, ProductUserSessionRow>(
+            "SELECT token_hash, session_id, user_id, client_kind, principal_class, \
+             created_at, expires_at, last_seen_at, user_agent, passkey_verified_at, \
+             primary_authenticated_at, primary_auth_method, revoked_at, revoke_reason, \
+             auth_provider_id, auth_issuer, auth_subject, auth_sid, id_token_ciphertext \
+             FROM user_sessions WHERE token_hash = $1 AND revoked_at IS NULL",
+        )
+        .bind(token_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .context("SELECT user session")?;
+        Ok(row.map(ProductUserSession::from_pg))
+    }
+
+    pub async fn delete_user_session(&self, token_hash: &str) -> Result<()> {
+        let mut transaction = self.pool.begin().await.context("BEGIN local logout")?;
+        let session_id = sqlx::query_scalar::<_, String>(
+            "UPDATE user_sessions SET revoked_at = now(), revoke_reason = 'local_logout' \
+             WHERE token_hash = $1 AND revoked_at IS NULL RETURNING session_id",
+        )
+        .bind(token_hash)
+        .fetch_optional(&mut *transaction)
+        .await
+        .context("DELETE user session")?;
+        if let Some(session_id) = session_id {
+            revoke_active_client_session_pg(&mut transaction, &session_id, "local_logout", None)
+                .await?;
+        }
+        transaction.commit().await.context("COMMIT local logout")?;
+        Ok(())
+    }
+
+    pub async fn delete_user_sessions_for_user(&self, user_id: &str) -> Result<u64> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN all-sessions logout")?;
+        sqlx::query(
+            "UPDATE active_client_leases SET revoked_at = now(), \
+             revoke_reason = 'all_sessions_logout' WHERE revoked_at IS NULL AND session_id IN \
+             (SELECT session_id FROM user_sessions WHERE user_id = $1 AND revoked_at IS NULL)",
+        )
+        .bind(user_id)
+        .execute(&mut *transaction)
+        .await
+        .context("REVOKE all active-client leases for user")?;
+        sqlx::query(
+            "DELETE FROM capacity_waiters WHERE session_id IN \
+             (SELECT session_id FROM user_sessions WHERE user_id = $1 AND revoked_at IS NULL)",
+        )
+        .bind(user_id)
+        .execute(&mut *transaction)
+        .await
+        .context("DELETE all capacity waiters for user")?;
+        let result = sqlx::query(
+            "UPDATE user_sessions SET revoked_at = now(), revoke_reason = 'all_sessions_logout' \
+             WHERE user_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(user_id)
+        .execute(&mut *transaction)
+        .await
+        .with_context(|| format!("DELETE user sessions for {user_id}"))?;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT all-sessions logout")?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn list_user_sessions_for_user(
+        &self,
+        user_id: &str,
+        now_ms: i64,
+    ) -> Result<Vec<ProductUserSession>> {
+        let rows = sqlx::query_as::<_, ProductUserSessionRow>(
+            "SELECT token_hash, session_id, user_id, client_kind, principal_class, \
+             created_at, expires_at, last_seen_at, user_agent, passkey_verified_at, \
+             primary_authenticated_at, primary_auth_method, revoked_at, revoke_reason, \
+             auth_provider_id, auth_issuer, auth_subject, auth_sid, id_token_ciphertext \
+             FROM user_sessions WHERE user_id = $1 AND revoked_at IS NULL \
+             AND expires_at > to_timestamp($2::double precision / 1000) \
+             ORDER BY last_seen_at DESC, created_at DESC, session_id",
+        )
+        .bind(user_id)
+        .bind(now_ms)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("LIST live user sessions for {user_id}"))?;
+        Ok(rows.into_iter().map(ProductUserSession::from_pg).collect())
+    }
+
+    pub async fn revoke_user_session_for_user(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        reason: &str,
+        now_ms: i64,
+    ) -> Result<u64> {
+        anyhow::ensure!((1..=128).contains(&reason.len()), "invalid revoke reason");
+        let mut transaction = self.pool.begin().await.context("BEGIN session revoke")?;
+        let result = sqlx::query(
+            "UPDATE user_sessions SET revoked_at = \
+             to_timestamp($4::double precision / 1000), revoke_reason = $3 \
+             WHERE user_id = $1 AND session_id = $2 AND revoked_at IS NULL \
+             RETURNING session_id",
+        )
+        .bind(user_id)
+        .bind(session_id)
+        .bind(reason)
+        .bind(now_ms)
+        .fetch_optional(&mut *transaction)
+        .await
+        .with_context(|| format!("REVOKE user session {session_id}"))?;
+        if result.is_some() {
+            revoke_active_client_session_pg(&mut transaction, session_id, reason, Some(now_ms))
+                .await?;
+        }
+        transaction
+            .commit()
+            .await
+            .context("COMMIT session revoke")?;
+        Ok(u64::from(result.is_some()))
+    }
+
+    pub async fn revoke_user_sessions_for_provider(
+        &self,
+        user_id: &str,
+        provider_id: &str,
+        reason: &str,
+        now_ms: i64,
+    ) -> Result<u64> {
+        anyhow::ensure!(
+            (1..=128).contains(&provider_id.len()),
+            "invalid provider id"
+        );
+        anyhow::ensure!((1..=128).contains(&reason.len()), "invalid revoke reason");
+        let mut transaction = self.pool.begin().await.context("BEGIN provider logout")?;
+        sqlx::query(
+            "UPDATE active_client_leases SET revoked_at = \
+             to_timestamp($4::double precision / 1000), revoke_reason = $3 \
+             WHERE revoked_at IS NULL AND session_id IN (SELECT session_id FROM user_sessions \
+             WHERE user_id = $1 AND auth_provider_id = $2 AND revoked_at IS NULL)",
+        )
+        .bind(user_id)
+        .bind(provider_id)
+        .bind(reason)
+        .bind(now_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("REVOKE provider active-client leases")?;
+        sqlx::query(
+            "DELETE FROM capacity_waiters WHERE session_id IN (SELECT session_id FROM user_sessions \
+             WHERE user_id = $1 AND auth_provider_id = $2 AND revoked_at IS NULL)",
+        )
+        .bind(user_id)
+        .bind(provider_id)
+        .execute(&mut *transaction)
+        .await
+        .context("DELETE provider capacity waiters")?;
+        let result = sqlx::query(
+            "UPDATE user_sessions SET revoked_at = \
+             to_timestamp($4::double precision / 1000), revoke_reason = $3 \
+             WHERE user_id = $1 AND auth_provider_id = $2 AND revoked_at IS NULL",
+        )
+        .bind(user_id)
+        .bind(provider_id)
+        .bind(reason)
+        .bind(now_ms)
+        .execute(&mut *transaction)
+        .await
+        .with_context(|| format!("REVOKE sessions for provider {provider_id}"))?;
+        sqlx::query(
+            "INSERT INTO auth_audit_events (occurred_at, event_type, actor_user_id, \
+             principal_class, detail) VALUES (to_timestamp($3::double precision / 1000), \
+             'provider_sessions_revoked', $1, 'human', jsonb_build_object('provider_id', $2, \
+             'revoked_sessions', $4::bigint))",
+        )
+        .bind(user_id)
+        .bind(provider_id)
+        .bind(now_ms)
+        .bind(i64::try_from(result.rows_affected()).unwrap_or(i64::MAX))
+        .execute(&mut *transaction)
+        .await
+        .context("AUDIT provider logout")?;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT provider logout")?;
+        Ok(result.rows_affected())
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // one replay-safe PostgreSQL provider logout transaction
+    pub async fn apply_oidc_backchannel_logout(
+        &self,
+        provider_id: &str,
+        issuer: &str,
+        subject: Option<&str>,
+        provider_session_id: Option<&str>,
+        token_id: &str,
+        token_expires_at_ms: i64,
+        now_ms: i64,
+    ) -> Result<OidcBackchannelLogout> {
+        anyhow::ensure!(
+            (1..=128).contains(&provider_id.len()),
+            "invalid provider id"
+        );
+        anyhow::ensure!((1..=2_048).contains(&issuer.len()), "invalid OIDC issuer");
+        anyhow::ensure!(
+            subject.is_some() || provider_session_id.is_some(),
+            "OIDC logout needs sub or sid"
+        );
+        anyhow::ensure!(
+            (1..=512).contains(&token_id.len()),
+            "invalid OIDC logout jti"
+        );
+        anyhow::ensure!(token_expires_at_ms > now_ms, "expired OIDC logout token");
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN OIDC back-channel logout")?;
+        sqlx::query("DELETE FROM oidc_logout_jtis WHERE expires_at <= to_timestamp($1::double precision / 1000)")
+            .bind(now_ms)
+            .execute(&mut *transaction)
+            .await
+            .context("DELETE expired OIDC logout jtis")?;
+        let inserted = sqlx::query(
+            "INSERT INTO oidc_logout_jtis (provider_id, jti, expires_at) VALUES \
+             ($1, $2, to_timestamp($3::double precision / 1000)) ON CONFLICT DO NOTHING",
+        )
+        .bind(provider_id)
+        .bind(token_id)
+        .bind(token_expires_at_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("INSERT OIDC logout jti")?;
+        if inserted.rows_affected() == 0 {
+            transaction
+                .commit()
+                .await
+                .context("COMMIT OIDC logout replay")?;
+            return Ok(OidcBackchannelLogout::Replay);
+        }
+        sqlx::query(
+            "UPDATE active_client_leases SET revoked_at = \
+             to_timestamp($5::double precision / 1000), revoke_reason = 'oidc_backchannel_logout' \
+             WHERE revoked_at IS NULL AND session_id IN (SELECT session_id FROM user_sessions \
+             WHERE revoked_at IS NULL AND auth_provider_id = $1 AND auth_issuer = $2 \
+             AND ($3::text IS NULL OR auth_subject = $3) \
+             AND ($4::text IS NULL OR auth_sid = $4))",
+        )
+        .bind(provider_id)
+        .bind(issuer)
+        .bind(subject)
+        .bind(provider_session_id)
+        .bind(now_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("REVOKE OIDC active-client leases")?;
+        sqlx::query(
+            "DELETE FROM capacity_waiters WHERE session_id IN (SELECT session_id FROM user_sessions \
+             WHERE revoked_at IS NULL AND auth_provider_id = $1 AND auth_issuer = $2 \
+             AND ($3::text IS NULL OR auth_subject = $3) \
+             AND ($4::text IS NULL OR auth_sid = $4))",
+        )
+        .bind(provider_id)
+        .bind(issuer)
+        .bind(subject)
+        .bind(provider_session_id)
+        .execute(&mut *transaction)
+        .await
+        .context("DELETE OIDC capacity waiters")?;
+        let result = sqlx::query(
+            "UPDATE user_sessions SET revoked_at = to_timestamp($5::double precision / 1000), \
+             revoke_reason = 'oidc_backchannel_logout' WHERE revoked_at IS NULL \
+             AND auth_provider_id = $1 AND auth_issuer = $2 \
+             AND ($3::text IS NULL OR auth_subject = $3) \
+             AND ($4::text IS NULL OR auth_sid = $4)",
+        )
+        .bind(provider_id)
+        .bind(issuer)
+        .bind(subject)
+        .bind(provider_session_id)
+        .bind(now_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("REVOKE OIDC sessions")?;
+        sqlx::query(
+            "INSERT INTO auth_audit_events (occurred_at, event_type, principal_class, detail) \
+             VALUES (to_timestamp($3::double precision / 1000), 'oidc_backchannel_logout', \
+             'system', jsonb_build_object('provider_id', $1, 'revoked_sessions', $2::bigint))",
+        )
+        .bind(provider_id)
+        .bind(i64::try_from(result.rows_affected()).unwrap_or(i64::MAX))
+        .bind(now_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("AUDIT OIDC back-channel logout")?;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT OIDC back-channel logout")?;
+        Ok(OidcBackchannelLogout::Applied {
+            revoked_sessions: result.rows_affected(),
+        })
+    }
+
+    pub async fn record_automation_credential_issued(
+        &self,
+        user_id: &str,
+        credential_id: &str,
+        name: &str,
+        scopes: &[String],
+        expires_at_ms: i64,
+        now_ms: i64,
+    ) -> Result<()> {
+        anyhow::ensure!(valid_product_user_id(user_id), "invalid product user id");
+        anyhow::ensure!(
+            valid_product_user_id(credential_id),
+            "invalid credential id"
+        );
+        anyhow::ensure!(
+            (1..=64).contains(&name.chars().count()),
+            "invalid credential name"
+        );
+        anyhow::ensure!(expires_at_ms > now_ms, "expired automation credential");
+        anyhow::ensure!(
+            !scopes.is_empty()
+                && scopes.iter().all(|scope| {
+                    matches!(scope.as_str(), "api:read" | "sessions:write" | "websocket")
+                }),
+            "invalid automation credential scopes"
+        );
+        sqlx::query(
+            "INSERT INTO auth_audit_events (occurred_at, event_type, actor_user_id, \
+             principal_class, detail) VALUES (to_timestamp($6::double precision / 1000), \
+             'automation_credential_issued', $1, 'human', jsonb_build_object( \
+             'credential_id', $2, 'name', $3, 'scopes', to_jsonb($4::text[]), \
+             'expires_at_ms', $5::bigint))",
+        )
+        .bind(user_id)
+        .bind(credential_id)
+        .bind(name)
+        .bind(scopes)
+        .bind(expires_at_ms)
+        .bind(now_ms)
+        .execute(&self.pool)
+        .await
+        .context("AUDIT automation credential issuance")?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_lines)] // one serialized PostgreSQL fairness, reservation, and lease transaction
+    pub async fn claim_active_client(
+        &self,
+        claim: &ActiveClientClaim,
+    ) -> Result<ActiveClientAdmission> {
+        validate_active_client_claim(claim)?;
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN active-client admission")?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext('cowboy-active-client-capacity-v1'))")
+            .execute(&mut *transaction)
+            .await
+            .context("LOCK active-client capacity")?;
+        sqlx::query(
+            "UPDATE active_client_leases SET revoked_at = \
+             to_timestamp($1::double precision / 1000), revoke_reason = 'lease_expired' \
+             WHERE revoked_at IS NULL AND expires_at <= \
+             to_timestamp($1::double precision / 1000)",
+        )
+        .bind(claim.now_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("REVOKE expired active-client leases")?;
+        sqlx::query(
+            "DELETE FROM capacity_waiters WHERE expires_at <= \
+             to_timestamp($1::double precision / 1000) OR (reserved_until IS NOT NULL AND \
+             reserved_until <= to_timestamp($1::double precision / 1000))",
+        )
+        .bind(claim.now_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("DELETE expired active-client waiters")?;
+
+        let existing = sqlx::query_as::<_, ActiveClientLeaseRow>(
+            "SELECT client_id, user_id, principal_class, session_id, client_kind, \
+             fencing_token, acquired_at, heartbeat_at, expires_at FROM active_client_leases \
+             WHERE client_id = $1 AND revoked_at IS NULL AND expires_at > \
+             to_timestamp($2::double precision / 1000) FOR UPDATE",
+        )
+        .bind(&claim.client_id)
+        .bind(claim.now_ms)
+        .fetch_optional(&mut *transaction)
+        .await
+        .context("SELECT existing active-client lease")?;
+        if let Some(existing) = existing {
+            anyhow::ensure!(
+                existing.user_id == claim.user_id
+                    && existing.principal_class == claim.principal_class
+                    && existing.session_id == claim.session_id,
+                "active-client identity changed while its lease is live"
+            );
+            let lease = sqlx::query_as::<_, ActiveClientLeaseRow>(
+                "UPDATE active_client_leases SET heartbeat_at = \
+                 to_timestamp($3::double precision / 1000), expires_at = \
+                 to_timestamp(($3 + $4)::double precision / 1000), client_kind = $5 \
+                 WHERE client_id = $1 AND fencing_token = $2 RETURNING client_id, user_id, \
+                 principal_class, session_id, client_kind, fencing_token, acquired_at, \
+                 heartbeat_at, expires_at",
+            )
+            .bind(&claim.client_id)
+            .bind(existing.fencing_token)
+            .bind(claim.now_ms)
+            .bind(claim.lease_ms)
+            .bind(&claim.client_kind)
+            .fetch_one(&mut *transaction)
+            .await
+            .context("RENEW existing active-client lease")?
+            .into_lease();
+            sqlx::query("DELETE FROM capacity_waiters WHERE client_id = $1")
+                .bind(&claim.client_id)
+                .execute(&mut *transaction)
+                .await
+                .context("DELETE waiter for renewed active client")?;
+            let counts = sqlx::query_as::<_, (i64, i64, i64)>(
+                "SELECT count(*) FILTER (WHERE principal_class = 'human' AND user_id = $1), \
+                 count(*) FILTER (WHERE principal_class = 'human'), \
+                 count(*) FILTER (WHERE principal_class = 'automation') \
+                 FROM active_client_leases WHERE revoked_at IS NULL AND expires_at > \
+                 to_timestamp($2::double precision / 1000)",
+            )
+            .bind(claim.user_id.as_deref())
+            .bind(claim.now_ms)
+            .fetch_one(&mut *transaction)
+            .await
+            .context("COUNT active clients after renewal")?;
+            let capacity = active_client_capacity(counts, claim);
+            let observed_overflow = match claim.principal_class.as_str() {
+                "human" => {
+                    capacity.active_for_user > capacity.per_user_limit
+                        || capacity.active_for_service > capacity.service_limit
+                }
+                "automation" => capacity.active_automation > capacity.automation_limit,
+                _ => false,
+            };
+            transaction
+                .commit()
+                .await
+                .context("COMMIT active-client renewal")?;
+            return Ok(ActiveClientAdmission::Granted {
+                lease,
+                capacity,
+                observed_overflow,
+            });
+        }
+
+        let counts = sqlx::query_as::<_, (i64, i64, i64)>(
+            "SELECT count(*) FILTER (WHERE principal_class = 'human' AND user_id = $1), \
+             count(*) FILTER (WHERE principal_class = 'human'), \
+             count(*) FILTER (WHERE principal_class = 'automation') \
+             FROM active_client_leases WHERE revoked_at IS NULL AND expires_at > \
+             to_timestamp($2::double precision / 1000)",
+        )
+        .bind(claim.user_id.as_deref())
+        .bind(claim.now_ms)
+        .fetch_one(&mut *transaction)
+        .await
+        .context("COUNT active clients before admission")?;
+        let capacity = active_client_capacity(counts, claim);
+        let has_capacity = active_client_has_capacity(&capacity, &claim.principal_class);
+
+        let waiter_expires_at_ms = claim
+            .now_ms
+            .saturating_add(claim.lease_ms.saturating_mul(3).max(300_000));
+        if claim.enforce && claim.principal_class != "system" {
+            let waiter_id = format!(
+                "wait-{}",
+                crate::digest::hex_sha256(claim.client_id.as_bytes())
+            );
+            sqlx::query(
+                "INSERT INTO capacity_waiters (waiter_id, client_id, user_id, principal_class, \
+                 session_id, client_kind, requested_at, expires_at, reserved_until) VALUES ( \
+                 $1, $2, $3, $4, $5, $6, to_timestamp($7::double precision / 1000), \
+                 to_timestamp($8::double precision / 1000), NULL) ON CONFLICT (client_id) \
+                 DO UPDATE SET user_id = EXCLUDED.user_id, principal_class = \
+                 EXCLUDED.principal_class, session_id = EXCLUDED.session_id, client_kind = \
+                 EXCLUDED.client_kind, expires_at = EXCLUDED.expires_at",
+            )
+            .bind(waiter_id)
+            .bind(&claim.client_id)
+            .bind(claim.user_id.as_deref())
+            .bind(&claim.principal_class)
+            .bind(claim.session_id.as_deref())
+            .bind(&claim.client_kind)
+            .bind(claim.now_ms)
+            .bind(waiter_expires_at_ms)
+            .execute(&mut *transaction)
+            .await
+            .context("UPSERT active-client waiter")?;
+            let ordered = sqlx::query_scalar::<_, String>(
+                "SELECT client_id FROM (SELECT client_id, requested_at, waiter_id, \
+                 row_number() OVER (PARTITION BY COALESCE(user_id, client_id) \
+                 ORDER BY requested_at, waiter_id) AS lane_position FROM capacity_waiters \
+                 WHERE principal_class = $1 AND expires_at > \
+                 to_timestamp($2::double precision / 1000)) ranked \
+                 ORDER BY lane_position, requested_at, waiter_id",
+            )
+            .bind(&claim.principal_class)
+            .bind(claim.now_ms)
+            .fetch_all(&mut *transaction)
+            .await
+            .context("ORDER active-client waiters")?;
+            let first_eligible = sqlx::query_scalar::<_, String>(
+                "SELECT client_id FROM (SELECT waiters.client_id, waiters.requested_at, \
+                 waiters.waiter_id, row_number() OVER (PARTITION BY \
+                 COALESCE(waiters.user_id, waiters.client_id) ORDER BY waiters.requested_at, \
+                 waiters.waiter_id) AS lane_position FROM capacity_waiters AS waiters WHERE \
+                 waiters.principal_class = $1 AND waiters.expires_at > \
+                 to_timestamp($2::double precision / 1000) AND ($1 <> 'human' OR (SELECT \
+                 count(*) FROM active_client_leases AS leases WHERE leases.principal_class = \
+                 'human' AND leases.user_id = waiters.user_id AND leases.revoked_at IS NULL AND \
+                 leases.expires_at > to_timestamp($2::double precision / 1000)) < $3)) ranked \
+                 ORDER BY lane_position, requested_at, waiter_id LIMIT 1",
+            )
+            .bind(&claim.principal_class)
+            .bind(claim.now_ms)
+            .bind(i64::from(claim.per_user_limit))
+            .fetch_optional(&mut *transaction)
+            .await
+            .context("SELECT first eligible active-client waiter")?;
+            let position = ordered
+                .iter()
+                .position(|client_id| client_id == &claim.client_id)
+                .map_or(u32::MAX, |position| {
+                    u32::try_from(position + 1).unwrap_or(u32::MAX)
+                });
+            if !has_capacity || first_eligible.as_deref() != Some(claim.client_id.as_str()) {
+                transaction
+                    .commit()
+                    .await
+                    .context("COMMIT active-client waiter")?;
+                return Ok(ActiveClientAdmission::Waiting {
+                    position,
+                    retry_after_ms: claim.reservation_ms,
+                    capacity,
+                });
+            }
+        }
+
+        sqlx::query("DELETE FROM capacity_waiters WHERE client_id = $1")
+            .bind(&claim.client_id)
+            .execute(&mut *transaction)
+            .await
+            .context("DELETE admitted active-client waiter")?;
+        let lease = sqlx::query_as::<_, ActiveClientLeaseRow>(
+            "INSERT INTO active_client_leases (client_id, user_id, principal_class, session_id, \
+             client_kind, fencing_token, acquired_at, heartbeat_at, expires_at, revoked_at, \
+             revoke_reason) VALUES ($1, $2, $3, $4, $5, 1, \
+             to_timestamp($6::double precision / 1000), \
+             to_timestamp($6::double precision / 1000), \
+             to_timestamp(($6 + $7)::double precision / 1000), NULL, NULL) \
+             ON CONFLICT (client_id) DO UPDATE SET user_id = EXCLUDED.user_id, \
+             principal_class = EXCLUDED.principal_class, session_id = EXCLUDED.session_id, \
+             client_kind = EXCLUDED.client_kind, fencing_token = \
+             active_client_leases.fencing_token + 1, acquired_at = EXCLUDED.acquired_at, \
+             heartbeat_at = EXCLUDED.heartbeat_at, expires_at = EXCLUDED.expires_at, \
+             revoked_at = NULL, revoke_reason = NULL RETURNING client_id, user_id, \
+             principal_class, session_id, client_kind, fencing_token, acquired_at, \
+             heartbeat_at, expires_at",
+        )
+        .bind(&claim.client_id)
+        .bind(claim.user_id.as_deref())
+        .bind(&claim.principal_class)
+        .bind(claim.session_id.as_deref())
+        .bind(&claim.client_kind)
+        .bind(claim.now_ms)
+        .bind(claim.lease_ms)
+        .fetch_one(&mut *transaction)
+        .await
+        .context("UPSERT admitted active-client lease")?
+        .into_lease();
+        let final_counts = sqlx::query_as::<_, (i64, i64, i64)>(
+            "SELECT count(*) FILTER (WHERE principal_class = 'human' AND user_id = $1), \
+             count(*) FILTER (WHERE principal_class = 'human'), \
+             count(*) FILTER (WHERE principal_class = 'automation') \
+             FROM active_client_leases WHERE revoked_at IS NULL AND expires_at > \
+             to_timestamp($2::double precision / 1000)",
+        )
+        .bind(claim.user_id.as_deref())
+        .bind(claim.now_ms)
+        .fetch_one(&mut *transaction)
+        .await
+        .context("COUNT active clients after admission")?;
+        let final_capacity = active_client_capacity(final_counts, claim);
+        transaction
+            .commit()
+            .await
+            .context("COMMIT active-client admission")?;
+        Ok(ActiveClientAdmission::Granted {
+            lease,
+            capacity: final_capacity,
+            observed_overflow: !has_capacity,
+        })
+    }
+
+    pub async fn heartbeat_active_client(
+        &self,
+        client_id: &str,
+        fencing_token: i64,
+        now_ms: i64,
+        lease_ms: i64,
+    ) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE active_client_leases SET heartbeat_at = \
+             to_timestamp($3::double precision / 1000), expires_at = \
+             to_timestamp(($3 + $4)::double precision / 1000) WHERE client_id = $1 \
+             AND fencing_token = $2 AND revoked_at IS NULL AND expires_at > \
+             to_timestamp($3::double precision / 1000)",
+        )
+        .bind(client_id)
+        .bind(fencing_token)
+        .bind(now_ms)
+        .bind(lease_ms)
+        .execute(&self.pool)
+        .await
+        .context("HEARTBEAT active-client lease")?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn release_active_client(&self, release: &ActiveClientRelease<'_>) -> Result<bool> {
+        let ActiveClientRelease {
+            client_id,
+            fencing_token,
+            reason,
+            now_ms,
+            reservation_ms,
+            per_user_limit,
+        } = *release;
+        anyhow::ensure!(
+            (1..=128).contains(&reason.len()),
+            "invalid lease release reason"
+        );
+        anyhow::ensure!(per_user_limit > 0, "invalid per-user active-client limit");
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN active-client release")?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext('cowboy-active-client-capacity-v1'))")
+            .execute(&mut *transaction)
+            .await
+            .context("LOCK active-client release")?;
+        let released_class = sqlx::query_scalar::<_, String>(
+            "UPDATE active_client_leases SET revoked_at = \
+             to_timestamp($4::double precision / 1000), revoke_reason = $3 \
+             WHERE client_id = $1 AND fencing_token = $2 AND revoked_at IS NULL \
+             RETURNING principal_class",
+        )
+        .bind(client_id)
+        .bind(fencing_token)
+        .bind(reason)
+        .bind(now_ms)
+        .fetch_optional(&mut *transaction)
+        .await
+        .context("RELEASE active-client lease")?;
+        if let Some(released_class) = released_class.as_deref() {
+            let next = sqlx::query_scalar::<_, String>(
+                "SELECT client_id FROM (SELECT waiters.client_id, waiters.requested_at, \
+                 waiters.waiter_id, row_number() OVER (PARTITION BY \
+                 COALESCE(waiters.user_id, waiters.client_id) ORDER BY waiters.requested_at, \
+                 waiters.waiter_id) AS lane_position FROM capacity_waiters AS waiters WHERE \
+                 waiters.expires_at > to_timestamp($1::double precision / 1000) AND \
+                 waiters.principal_class = $2 AND ($2 <> 'human' OR (SELECT count(*) FROM \
+                 active_client_leases AS leases WHERE leases.principal_class = 'human' AND \
+                 leases.user_id = waiters.user_id AND leases.revoked_at IS NULL AND \
+                 leases.expires_at > to_timestamp($1::double precision / 1000)) < $3)) ranked \
+                 ORDER BY lane_position, requested_at, waiter_id LIMIT 1",
+            )
+            .bind(now_ms)
+            .bind(released_class)
+            .bind(i64::from(per_user_limit))
+            .fetch_optional(&mut *transaction)
+            .await
+            .context("SELECT next active-client waiter")?;
+            if let Some(next) = next {
+                sqlx::query(
+                    "UPDATE capacity_waiters SET reserved_until = \
+                     to_timestamp(($2 + $3)::double precision / 1000) WHERE client_id = $1",
+                )
+                .bind(next)
+                .bind(now_ms)
+                .bind(reservation_ms)
+                .execute(&mut *transaction)
+                .await
+                .context("RESERVE released active-client slot")?;
+            }
+        }
+        transaction
+            .commit()
+            .await
+            .context("COMMIT active-client release")?;
+        Ok(released_class.is_some())
+    }
+
+    pub async fn release_active_client_for_user(
+        &self,
+        user_id: &str,
+        release: &ActiveClientRelease<'_>,
+    ) -> Result<bool> {
+        let ActiveClientRelease {
+            client_id,
+            fencing_token,
+            reason,
+            now_ms,
+            reservation_ms,
+            per_user_limit,
+        } = *release;
+        anyhow::ensure!(!user_id.is_empty(), "invalid active-client owner");
+        anyhow::ensure!(
+            (1..=128).contains(&reason.len()),
+            "invalid lease release reason"
+        );
+        anyhow::ensure!(per_user_limit > 0, "invalid per-user active-client limit");
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN user active-client release")?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext('cowboy-active-client-capacity-v1'))")
+            .execute(&mut *transaction)
+            .await
+            .context("LOCK user active-client release")?;
+        let released_class = sqlx::query_scalar::<_, String>(
+            "UPDATE active_client_leases SET revoked_at = \
+             to_timestamp($4::double precision / 1000), revoke_reason = $3 \
+             WHERE client_id = $1 AND fencing_token = $2 AND user_id = $5 \
+             AND revoked_at IS NULL RETURNING principal_class",
+        )
+        .bind(client_id)
+        .bind(fencing_token)
+        .bind(reason)
+        .bind(now_ms)
+        .bind(user_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .context("RELEASE user active-client lease")?;
+        if let Some(released_class) = released_class.as_deref() {
+            let next = sqlx::query_scalar::<_, String>(
+                "SELECT client_id FROM (SELECT waiters.client_id, waiters.requested_at, \
+                 waiters.waiter_id, row_number() OVER (PARTITION BY \
+                 COALESCE(waiters.user_id, waiters.client_id) ORDER BY waiters.requested_at, \
+                 waiters.waiter_id) AS lane_position FROM capacity_waiters AS waiters WHERE \
+                 waiters.expires_at > to_timestamp($1::double precision / 1000) AND \
+                 waiters.principal_class = $2 AND ($2 <> 'human' OR (SELECT count(*) FROM \
+                 active_client_leases AS leases WHERE leases.principal_class = 'human' AND \
+                 leases.user_id = waiters.user_id AND leases.revoked_at IS NULL AND \
+                 leases.expires_at > to_timestamp($1::double precision / 1000)) < $3)) ranked \
+                 ORDER BY lane_position, requested_at, waiter_id LIMIT 1",
+            )
+            .bind(now_ms)
+            .bind(released_class)
+            .bind(i64::from(per_user_limit))
+            .fetch_optional(&mut *transaction)
+            .await
+            .context("SELECT next waiter after user release")?;
+            if let Some(next) = next {
+                sqlx::query(
+                    "UPDATE capacity_waiters SET reserved_until = \
+                     to_timestamp(($2 + $3)::double precision / 1000) WHERE client_id = $1",
+                )
+                .bind(next)
+                .bind(now_ms)
+                .bind(reservation_ms)
+                .execute(&mut *transaction)
+                .await
+                .context("RESERVE slot after user active-client release")?;
+            }
+            sqlx::query(
+                "INSERT INTO auth_audit_events (occurred_at, event_type, actor_user_id, \
+                 principal_class, detail) VALUES (to_timestamp($3::double precision / 1000), \
+                 'active_client_reclaimed', $1, 'human', jsonb_build_object('client_id', $2))",
+            )
+            .bind(user_id)
+            .bind(client_id)
+            .bind(now_ms)
+            .execute(&mut *transaction)
+            .await
+            .context("AUDIT user active-client release")?;
+        }
+        transaction
+            .commit()
+            .await
+            .context("COMMIT user active-client release")?;
+        Ok(released_class.is_some())
+    }
+
+    pub async fn list_active_clients_for_user(
+        &self,
+        user_id: &str,
+        now_ms: i64,
+    ) -> Result<Vec<ActiveClientLease>> {
+        let rows = sqlx::query_as::<_, ActiveClientLeaseRow>(
+            "SELECT client_id, user_id, principal_class, session_id, client_kind, \
+             fencing_token, acquired_at, heartbeat_at, expires_at FROM active_client_leases \
+             WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > \
+             to_timestamp($2::double precision / 1000) ORDER BY heartbeat_at DESC, client_id",
+        )
+        .bind(user_id)
+        .bind(now_ms)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("LIST active clients for {user_id}"))?;
+        Ok(rows
+            .into_iter()
+            .map(ActiveClientLeaseRow::into_lease)
+            .collect())
+    }
+
+    pub async fn replace_user_session(
+        &self,
+        previous_token_hash: &str,
+        session: &ProductUserSession,
+    ) -> Result<()> {
+        validate_product_user_session(session)?;
+        let user_agent = truncate_user_agent(session.user_agent.as_deref());
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN user session replacement")?;
+        let replaced = sqlx::query(
+            "UPDATE user_sessions SET token_hash = $3, created_at = \
+             to_timestamp($4::double precision / 1000), expires_at = \
+             to_timestamp($5::double precision / 1000), last_seen_at = \
+             to_timestamp($6::double precision / 1000), user_agent = $7, \
+             passkey_verified_at = to_timestamp($8::double precision / 1000), \
+             primary_authenticated_at = to_timestamp($9::double precision / 1000), \
+             primary_auth_method = $10, client_kind = $11, principal_class = $12, \
+             auth_provider_id = $13, auth_issuer = $14, auth_subject = $15, auth_sid = $16, \
+             id_token_ciphertext = $17, revoked_at = NULL, revoke_reason = NULL \
+             WHERE token_hash = $1 AND user_id = $2 AND session_id = $18 \
+             AND revoked_at IS NULL",
+        )
+        .bind(previous_token_hash)
+        .bind(&session.user_id)
+        .bind(&session.token_hash)
+        .bind(session.created_at_ms)
+        .bind(session.expires_at_ms)
+        .bind(session.last_seen_at_ms)
+        .bind(user_agent.as_deref())
+        .bind(session.passkey_verified_at_ms)
+        .bind(session.primary_authenticated_at_ms)
+        .bind(session.primary_auth_method.as_deref())
+        .bind(&session.client_kind)
+        .bind(&session.principal_class)
+        .bind(session.auth_provider_id.as_deref())
+        .bind(session.auth_issuer.as_deref())
+        .bind(session.auth_subject.as_deref())
+        .bind(session.auth_sid.as_deref())
+        .bind(session.id_token_ciphertext.as_deref())
+        .bind(&session.session_id)
+        .execute(&mut *transaction)
+        .await
+        .context("UPDATE user session for primary authentication")?;
+        anyhow::ensure!(
+            replaced.rows_affected() == 1,
+            "previous user session is unavailable"
+        );
+        transaction
+            .commit()
+            .await
+            .context("COMMIT user session replacement")?;
+        Ok(())
+    }
+
+    pub async fn rotate_user_session(
+        &self,
+        previous_token_hash: &str,
+        session: &ProductUserSession,
+    ) -> Result<()> {
+        validate_product_user_session(session)?;
+        let user_agent = truncate_user_agent(session.user_agent.as_deref());
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN user session rotation")?;
+        let refresh_enabled = sqlx::query_scalar::<_, bool>(
+            "SELECT passkey_reauth_enabled FROM users WHERE id = $1 FOR UPDATE",
+        )
+        .bind(&session.user_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .context("LOCK user Passkey refresh policy")?;
+        anyhow::ensure!(refresh_enabled == Some(true), "Passkey refresh is disabled");
+        let rotated = sqlx::query(
+            "UPDATE user_sessions SET token_hash = $3, created_at = \
+             to_timestamp($4::double precision / 1000), expires_at = \
+             to_timestamp($5::double precision / 1000), last_seen_at = \
+             to_timestamp($6::double precision / 1000), user_agent = $7, \
+             passkey_verified_at = to_timestamp($8::double precision / 1000), \
+             primary_authenticated_at = to_timestamp($9::double precision / 1000), \
+             primary_auth_method = $10, client_kind = $11, principal_class = $12, \
+             auth_provider_id = $13, auth_issuer = $14, auth_subject = $15, auth_sid = $16, \
+             id_token_ciphertext = $17 WHERE token_hash = $1 AND user_id = $2 \
+             AND session_id = $18 AND revoked_at IS NULL",
+        )
+        .bind(previous_token_hash)
+        .bind(&session.user_id)
+        .bind(&session.token_hash)
+        .bind(session.created_at_ms)
+        .bind(session.expires_at_ms)
+        .bind(session.last_seen_at_ms)
+        .bind(user_agent.as_deref())
+        .bind(session.passkey_verified_at_ms)
+        .bind(session.primary_authenticated_at_ms)
+        .bind(session.primary_auth_method.as_deref())
+        .bind(&session.client_kind)
+        .bind(&session.principal_class)
+        .bind(session.auth_provider_id.as_deref())
+        .bind(session.auth_issuer.as_deref())
+        .bind(session.auth_subject.as_deref())
+        .bind(session.auth_sid.as_deref())
+        .bind(session.id_token_ciphertext.as_deref())
+        .bind(&session.session_id)
+        .execute(&mut *transaction)
+        .await
+        .context("ROTATE user session")?;
+        anyhow::ensure!(
+            rotated.rows_affected() == 1,
+            "previous user session is unavailable"
+        );
+        transaction
+            .commit()
+            .await
+            .context("COMMIT user session rotation")?;
+        Ok(())
+    }
+
+    pub async fn touch_user_session_activity(&self, token_hash: &str, now_ms: i64) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE user_sessions SET last_seen_at = to_timestamp($2::double precision / 1000) \
+             WHERE token_hash = $1 AND revoked_at IS NULL \
+             AND last_seen_at < to_timestamp(($2::double precision - 60000) / 1000)",
+        )
+        .bind(token_hash)
+        .bind(now_ms)
+        .execute(&self.pool)
+        .await
+        .context("TOUCH user session activity")?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn cap_user_session_expiry(&self, user_id: &str, expires_at_ms: i64) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE user_sessions SET expires_at = to_timestamp($2::double precision / 1000) \
+             WHERE user_id = $1 AND revoked_at IS NULL \
+             AND expires_at > to_timestamp($2::double precision / 1000)",
+        )
+        .bind(user_id)
+        .bind(expires_at_ms)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("CAP user sessions for {user_id}"))?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn insert_user_api_token(&self, token: &ProductApiToken) -> Result<()> {
+        anyhow::ensure!(
+            valid_product_user_id(&token.id),
+            "token id must be 32 hex characters"
+        );
+        anyhow::ensure!(!token.token_hash.is_empty(), "token hash cannot be empty");
+        sqlx::query(
+            "INSERT INTO user_api_tokens (id, user_id, name, token_prefix, token_hash, \
+             created_at, expires_at, last_used_at, revoked_at) VALUES ( \
+             $1, $2, $3, $4, $5, to_timestamp($6::double precision / 1000), \
+             to_timestamp($7::double precision / 1000), \
+             to_timestamp($8::double precision / 1000), \
+             to_timestamp($9::double precision / 1000))",
+        )
+        .bind(&token.id)
+        .bind(&token.user_id)
+        .bind(&token.name)
+        .bind(&token.token_prefix)
+        .bind(&token.token_hash)
+        .bind(token.created_at_ms)
+        .bind(token.expires_at_ms)
+        .bind(token.last_used_at_ms)
+        .bind(token.revoked_at_ms)
+        .execute(&self.pool)
+        .await
+        .map_err(|error| {
+            unique_constraint_error(error, "token hash already exists", "INSERT user API token")
+        })?;
+        Ok(())
+    }
+
+    pub async fn user_api_token_by_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<ProductApiToken>> {
+        let row = sqlx::query_as::<_, ProductApiTokenRow>(
+            "SELECT id, user_id, name, token_prefix, token_hash, created_at, expires_at, \
+             last_used_at, revoked_at FROM user_api_tokens WHERE token_hash = $1",
+        )
+        .bind(token_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .context("SELECT user API token")?;
+        Ok(row.map(ProductApiToken::from_pg))
+    }
+
+    pub async fn list_user_api_tokens_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<ProductApiToken>> {
+        let rows = sqlx::query_as::<_, ProductApiTokenRow>(
+            "SELECT id, user_id, name, token_prefix, token_hash, created_at, expires_at, \
+             last_used_at, revoked_at FROM user_api_tokens \
+             WHERE user_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("SELECT user API tokens for {user_id}"))?;
+        Ok(rows.into_iter().map(ProductApiToken::from_pg).collect())
+    }
+
+    pub async fn revoke_user_api_token_for_user(
+        &self,
+        user_id: &str,
+        token_id: &str,
+    ) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE user_api_tokens SET revoked_at = now() \
+             WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL",
+        )
+        .bind(token_id)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("REVOKE user API token {token_id}"))?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn touch_user_api_token_last_used(&self, token_id: &str, now_ms: i64) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE user_api_tokens SET last_used_at = to_timestamp($2::double precision / 1000) \
+             WHERE id = $1 AND revoked_at IS NULL \
+             AND (last_used_at IS NULL OR last_used_at <= \
+                  to_timestamp(($2::double precision - $3::double precision) / 1000))",
+        )
+        .bind(token_id)
+        .bind(now_ms)
+        .bind(crate::product_auth::API_TOKEN_LAST_USED_TOUCH_MS)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("TOUCH user API token {token_id}"))?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn insert_user_device(
+        &self,
+        device: &ProductDevice,
+        refresh: &ProductDeviceRefreshToken,
+    ) -> Result<()> {
+        validate_user_device(device, refresh)?;
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN user device insert")?;
+        sqlx::query(
+            "INSERT INTO user_devices (id, user_id, name, public_key, created_at, \
+             last_used_at, revoked_at) VALUES ($1, $2, $3, $4, \
+             to_timestamp($5::double precision / 1000), \
+             to_timestamp($6::double precision / 1000), \
+             to_timestamp($7::double precision / 1000))",
+        )
+        .bind(&device.id)
+        .bind(&device.user_id)
+        .bind(&device.name)
+        .bind(&device.public_key)
+        .bind(device.created_at_ms)
+        .bind(device.last_used_at_ms)
+        .bind(device.revoked_at_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("INSERT user device")?;
+        insert_pg_device_refresh(&mut transaction, refresh).await?;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT user device insert")?;
+        Ok(())
+    }
+
+    pub async fn admit_user_device(
+        &self,
+        device: &ProductDevice,
+        refresh: &ProductDeviceRefreshToken,
+        limit: u32,
+        enforce: bool,
+    ) -> Result<ProductDeviceAdmission> {
+        validate_user_device(device, refresh)?;
+        anyhow::ensure!(limit > 0, "authorized client limit must be positive");
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN user device admission")?;
+        let locked =
+            sqlx::query_scalar::<_, String>("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+                .bind(&device.user_id)
+                .fetch_optional(&mut *transaction)
+                .await
+                .context("LOCK user for device admission")?;
+        anyhow::ensure!(locked.is_some(), "user is unavailable");
+        let active = sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM user_devices WHERE user_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(&device.user_id)
+        .fetch_one(&mut *transaction)
+        .await
+        .context("COUNT active user devices")?;
+        let limit_i64 = i64::from(limit);
+        if enforce && active >= limit_i64 {
+            transaction
+                .commit()
+                .await
+                .context("COMMIT full device admission")?;
+            return Ok(ProductDeviceAdmission::CapacityFull {
+                active_clients: u32::try_from(active).unwrap_or(u32::MAX),
+                limit,
+            });
+        }
+        sqlx::query(
+            "INSERT INTO user_devices (id, user_id, name, public_key, created_at, \
+             last_used_at, revoked_at) VALUES ($1, $2, $3, $4, \
+             to_timestamp($5::double precision / 1000), \
+             to_timestamp($6::double precision / 1000), \
+             to_timestamp($7::double precision / 1000))",
+        )
+        .bind(&device.id)
+        .bind(&device.user_id)
+        .bind(&device.name)
+        .bind(&device.public_key)
+        .bind(device.created_at_ms)
+        .bind(device.last_used_at_ms)
+        .bind(device.revoked_at_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("INSERT admitted user device")?;
+        insert_pg_device_refresh(&mut transaction, refresh).await?;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT user device admission")?;
+        Ok(ProductDeviceAdmission::Admitted {
+            active_clients: u32::try_from(active.saturating_add(1)).unwrap_or(u32::MAX),
+            limit,
+            observed_overflow: active >= limit_i64,
+        })
+    }
+
+    pub async fn list_user_devices_for_user(&self, user_id: &str) -> Result<Vec<ProductDevice>> {
+        let rows = sqlx::query_as::<_, ProductDeviceRow>(
+            "SELECT id, user_id, name, public_key, created_at, last_used_at, revoked_at \
+             FROM user_devices WHERE user_id = $1 AND revoked_at IS NULL \
+             ORDER BY created_at DESC",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("SELECT user devices for {user_id}"))?;
+        Ok(rows.into_iter().map(ProductDevice::from_pg).collect())
+    }
+
+    pub async fn user_device_refresh_by_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<(ProductDevice, ProductDeviceRefreshToken)>> {
+        let refresh = sqlx::query_as::<_, ProductDeviceRefreshTokenRow>(
+            "SELECT token_hash, device_id, family_id, created_at, expires_at, used_at, revoked_at \
+             FROM user_device_refresh_tokens WHERE token_hash = $1",
+        )
+        .bind(token_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .context("SELECT user device refresh token")?;
+        let Some(refresh) = refresh else {
+            return Ok(None);
+        };
+        let device = sqlx::query_as::<_, ProductDeviceRow>(
+            "SELECT id, user_id, name, public_key, created_at, last_used_at, revoked_at \
+             FROM user_devices WHERE id = $1",
+        )
+        .bind(&refresh.device_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("SELECT user device for refresh token")?;
+        Ok(device.map(|device| {
+            (
+                ProductDevice::from_pg(device),
+                ProductDeviceRefreshToken::from_pg(refresh),
+            )
+        }))
+    }
+
+    pub async fn rotate_user_device_refresh(
+        &self,
+        previous_token_hash: &str,
+        refresh: &ProductDeviceRefreshToken,
+        now_ms: i64,
+    ) -> Result<bool> {
+        validate_device_refresh(refresh)?;
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN device refresh rotation")?;
+        let consumed = sqlx::query(
+            "UPDATE user_device_refresh_tokens SET used_at = \
+             to_timestamp($4::double precision / 1000) \
+             WHERE token_hash = $1 AND device_id = $2 AND family_id = $3 \
+             AND used_at IS NULL AND revoked_at IS NULL \
+             AND expires_at > to_timestamp($4::double precision / 1000)",
+        )
+        .bind(previous_token_hash)
+        .bind(&refresh.device_id)
+        .bind(&refresh.family_id)
+        .bind(now_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("CONSUME user device refresh token")?;
+        if consumed.rows_affected() != 1 {
+            transaction
+                .rollback()
+                .await
+                .context("ROLLBACK unavailable device refresh")?;
+            return Ok(false);
+        }
+        insert_pg_device_refresh(&mut transaction, refresh).await?;
+        sqlx::query("UPDATE user_devices SET last_used_at = to_timestamp($2::double precision / 1000) WHERE id = $1 AND revoked_at IS NULL")
+            .bind(&refresh.device_id)
+            .bind(now_ms)
+            .execute(&mut *transaction)
+            .await
+            .context("TOUCH refreshed user device")?;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT device refresh rotation")?;
+        Ok(true)
+    }
+
+    pub async fn revoke_user_device_for_user(
+        &self,
+        user_id: &str,
+        device_id: &str,
+        now_ms: i64,
+    ) -> Result<u64> {
+        self.revoke_user_device_scoped(Some(user_id), device_id, now_ms)
+            .await
+    }
+
+    pub async fn revoke_user_device(&self, device_id: &str, now_ms: i64) -> Result<u64> {
+        self.revoke_user_device_scoped(None, device_id, now_ms)
+            .await
+    }
+
+    async fn revoke_user_device_scoped(
+        &self,
+        user_id: Option<&str>,
+        device_id: &str,
+        now_ms: i64,
+    ) -> Result<u64> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN user device revoke")?;
+        let result = match user_id {
+            Some(user_id) => sqlx::query(
+                "UPDATE user_devices SET revoked_at = to_timestamp($3::double precision / 1000) \
+                 WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL",
+            )
+            .bind(device_id)
+            .bind(user_id)
+            .bind(now_ms)
+            .execute(&mut *transaction)
+            .await,
+            None => sqlx::query(
+                "UPDATE user_devices SET revoked_at = to_timestamp($2::double precision / 1000) \
+                 WHERE id = $1 AND revoked_at IS NULL",
+            )
+            .bind(device_id)
+            .bind(now_ms)
+            .execute(&mut *transaction)
+            .await,
+        }
+        .context("REVOKE user device")?;
+        if result.rows_affected() == 1 {
+            sqlx::query(
+                "UPDATE user_device_refresh_tokens SET revoked_at = \
+                 to_timestamp($2::double precision / 1000) \
+                 WHERE device_id = $1 AND revoked_at IS NULL",
+            )
+            .bind(device_id)
+            .bind(now_ms)
+            .execute(&mut *transaction)
+            .await
+            .context("REVOKE user device refresh tokens")?;
+        }
+        transaction
+            .commit()
+            .await
+            .context("COMMIT user device revoke")?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn revoke_user_devices_for_user(&self, user_id: &str, now_ms: i64) -> Result<u64> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN user devices revoke")?;
+        let result = sqlx::query(
+            "UPDATE user_devices SET revoked_at = to_timestamp($2::double precision / 1000) \
+             WHERE user_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(user_id)
+        .bind(now_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("REVOKE all user devices")?;
+        sqlx::query(
+            "UPDATE user_device_refresh_tokens SET revoked_at = \
+             to_timestamp($2::double precision / 1000) WHERE revoked_at IS NULL \
+             AND device_id IN (SELECT id FROM user_devices WHERE user_id = $1)",
+        )
+        .bind(user_id)
+        .bind(now_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("REVOKE all user device refresh tokens")?;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT user devices revoke")?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn touch_user_device_last_used(&self, device_id: &str, now_ms: i64) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE user_devices SET last_used_at = to_timestamp($2::double precision / 1000) \
+             WHERE id = $1 AND revoked_at IS NULL AND (last_used_at IS NULL OR last_used_at <= \
+             to_timestamp(($2::double precision - $3::double precision) / 1000))",
+        )
+        .bind(device_id)
+        .bind(now_ms)
+        .bind(crate::client_auth::DEVICE_LAST_USED_TOUCH_MS)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("TOUCH user device {device_id}"))?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn list_user_passkeys(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<crate::passkey::UserPasskey>> {
+        let rows = sqlx::query_as::<_, ProductPasskeyRow>(
+            "SELECT id, user_id, credential_id, nickname, passkey_json, created_at, last_used_at \
+             FROM user_passkeys WHERE user_id = $1 ORDER BY created_at",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("SELECT user passkeys for {user_id}"))?;
+        Ok(rows
+            .into_iter()
+            .map(ProductPasskeyRow::into_passkey)
+            .collect())
+    }
+
+    pub async fn insert_user_passkey(&self, passkey: &crate::passkey::UserPasskey) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO user_passkeys (id, user_id, credential_id, nickname, passkey_json, \
+             created_at, last_used_at) VALUES ( \
+             $1, $2, $3, $4, $5, to_timestamp($6::double precision / 1000), \
+             to_timestamp($7::double precision / 1000))",
+        )
+        .bind(&passkey.id)
+        .bind(&passkey.user_id)
+        .bind(&passkey.credential_id)
+        .bind(&passkey.nickname)
+        .bind(&passkey.passkey_json)
+        .bind(passkey.created_at_ms)
+        .bind(passkey.last_used_at_ms)
+        .execute(&self.pool)
+        .await
+        .context("INSERT user passkey")?;
+        Ok(())
+    }
+
+    pub async fn delete_user_passkey(&self, user_id: &str, passkey_id: &str) -> Result<u64> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN user passkey deletion")?;
+        let result = sqlx::query("DELETE FROM user_passkeys WHERE id = $1 AND user_id = $2")
+            .bind(passkey_id)
+            .bind(user_id)
+            .execute(&mut *transaction)
+            .await
+            .with_context(|| format!("DELETE user passkey {passkey_id}"))?;
+        if result.rows_affected() == 1 {
+            let remaining = sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*)::bigint FROM user_passkeys WHERE user_id = $1",
+            )
+            .bind(user_id)
+            .fetch_one(&mut *transaction)
+            .await
+            .context("COUNT remaining user passkeys")?;
+            if remaining == 0 {
+                sqlx::query(
+                    "UPDATE users SET passkey_reauth_enabled = false, updated_at = now() \
+                     WHERE id = $1",
+                )
+                .bind(user_id)
+                .execute(&mut *transaction)
+                .await
+                .context("DISABLE Passkey refresh after final passkey deletion")?;
+            }
+        }
+        transaction
+            .commit()
+            .await
+            .context("COMMIT user passkey deletion")?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn update_user_passkey(
+        &self,
+        user_id: &str,
+        passkey_id: &str,
+        passkey_json: &str,
+        now_ms: i64,
+    ) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE user_passkeys SET passkey_json = $3, \
+             last_used_at = to_timestamp($4::double precision / 1000) \
+             WHERE id = $1 AND user_id = $2",
+        )
+        .bind(passkey_id)
+        .bind(user_id)
+        .bind(passkey_json)
+        .bind(now_ms)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE user passkey {passkey_id}"))?;
+        anyhow::ensure!(result.rows_affected() == 1, "passkey not found");
+        Ok(())
+    }
+
+    pub async fn user_passkey_policy(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<crate::passkey::PasskeyPolicy>> {
+        let row = sqlx::query_as::<_, ProductPasskeyPolicyRow>(
+            "SELECT passkey_reauth_enabled, \
+             passkey_verification_interval_ms AS passkey_reauth_interval_ms, last_step_up_at, \
+             (SELECT COUNT(*) FROM user_passkeys WHERE user_id = $1)::bigint AS passkey_count \
+             FROM users WHERE id = $1",
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .with_context(|| format!("SELECT passkey policy {user_id}"))?;
+        Ok(row.map(ProductPasskeyPolicyRow::into_policy))
+    }
+
+    pub async fn set_user_passkey_reauth(
+        &self,
+        user_id: &str,
+        enabled: bool,
+        reauth_after_ms: i64,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            crate::passkey::valid_reauth_interval(reauth_after_ms),
+            "Passkey refresh interval is unsupported"
+        );
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN Passkey refresh update")?;
+        let result = sqlx::query(
+            "UPDATE users SET passkey_reauth_enabled = $2, \
+             passkey_verification_interval_ms = $3, \
+             passkey_reauth_interval_ms = CASE \
+             WHEN $3 IN (3600000, 7200000, 10800000, 14400000, 21600000) THEN 14400000 \
+             WHEN $3 = 43200000 THEN 43200000 \
+             WHEN $3 IN (86400000, 172800000) THEN 86400000 \
+             ELSE 259200000 END, \
+             passkey_refresh_interval_ms = 86400000, \
+             updated_at = now() WHERE id = $1 AND (NOT $2 OR EXISTS ( \
+             SELECT 1 FROM user_passkeys WHERE user_id = $1))",
+        )
+        .bind(user_id)
+        .bind(enabled)
+        .bind(reauth_after_ms)
+        .execute(&mut *transaction)
+        .await
+        .with_context(|| format!("UPDATE passkey reauth {user_id}"))?;
+        anyhow::ensure!(
+            result.rows_affected() == 1,
+            "user not found or no Passkey is registered"
+        );
+        transaction
+            .commit()
+            .await
+            .context("COMMIT Passkey refresh update")?;
+        Ok(())
+    }
+
+    pub async fn upsert_external_passkey_ceremony(
+        &self,
+        ceremony: &crate::passkey::ExternalPasskeyCeremonyRecord,
+    ) -> Result<()> {
+        sqlx::query(
+            "WITH purged AS (DELETE FROM external_passkey_ceremonies WHERE expires_at <= now()) \
+             INSERT INTO external_passkey_ceremonies \
+             (transaction_hash, ceremony_json, expires_at, created_at) \
+             VALUES ($1, $2::jsonb, to_timestamp($3::double precision / 1000), \
+             to_timestamp($4::double precision / 1000)) \
+             ON CONFLICT (transaction_hash) DO UPDATE SET \
+             ceremony_json = EXCLUDED.ceremony_json, expires_at = EXCLUDED.expires_at",
+        )
+        .bind(&ceremony.transaction_hash)
+        .bind(&ceremony.ceremony_json)
+        .bind(ceremony.expires_at_ms)
+        .bind(ceremony.created_at_ms)
+        .execute(&self.pool)
+        .await
+        .context("UPSERT external Passkey ceremony")?;
+        Ok(())
+    }
+
+    pub async fn external_passkey_ceremony(
+        &self,
+        transaction_hash: &str,
+        now_ms: i64,
+    ) -> Result<Option<crate::passkey::ExternalPasskeyCeremonyRecord>> {
+        let row = sqlx::query_as::<_, (String, String, i64, i64)>(
+            "SELECT transaction_hash, ceremony_json::text, \
+             (extract(epoch FROM expires_at) * 1000)::bigint, \
+             (extract(epoch FROM created_at) * 1000)::bigint \
+             FROM external_passkey_ceremonies \
+             WHERE transaction_hash = $1 AND expires_at > to_timestamp($2::double precision / 1000)",
+        )
+        .bind(transaction_hash)
+        .bind(now_ms)
+        .fetch_optional(&self.pool)
+        .await
+        .context("SELECT external Passkey ceremony")?;
+        Ok(row.map(
+            |(transaction_hash, ceremony_json, expires_at_ms, created_at_ms)| {
+                crate::passkey::ExternalPasskeyCeremonyRecord {
+                    transaction_hash,
+                    ceremony_json,
+                    expires_at_ms,
+                    created_at_ms,
+                }
+            },
+        ))
+    }
+
+    pub async fn touch_user_last_step_up(&self, user_id: &str, now_ms: i64) -> Result<()> {
+        sqlx::query(
+            "UPDATE users SET last_step_up_at = to_timestamp($2::double precision / 1000) \
+             WHERE id = $1",
+        )
+        .bind(user_id)
+        .bind(now_ms)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("TOUCH last step-up {user_id}"))?;
+        Ok(())
+    }
+
+    pub async fn list_admin_passkeys(
+        &self,
+        account: &str,
+    ) -> Result<Vec<crate::passkey::UserPasskey>> {
+        let rows = sqlx::query_as::<_, ProductPasskeyRow>(
+            "SELECT id, account AS user_id, credential_id, nickname, passkey_json, created_at, \
+             last_used_at FROM admin_passkeys WHERE account = $1 ORDER BY created_at",
+        )
+        .bind(account)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("SELECT admin passkeys for {account}"))?;
+        Ok(rows
+            .into_iter()
+            .map(ProductPasskeyRow::into_passkey)
+            .collect())
+    }
+
+    pub async fn insert_admin_passkey(&self, passkey: &crate::passkey::UserPasskey) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO admin_passkeys (id, account, credential_id, nickname, passkey_json, \
+             created_at, last_used_at) VALUES ( \
+             $1, $2, $3, $4, $5, to_timestamp($6::double precision / 1000), \
+             to_timestamp($7::double precision / 1000))",
+        )
+        .bind(&passkey.id)
+        .bind(&passkey.user_id)
+        .bind(&passkey.credential_id)
+        .bind(&passkey.nickname)
+        .bind(&passkey.passkey_json)
+        .bind(passkey.created_at_ms)
+        .bind(passkey.last_used_at_ms)
+        .execute(&self.pool)
+        .await
+        .context("INSERT admin passkey")?;
+        Ok(())
+    }
+
+    pub async fn delete_admin_passkey(&self, account: &str, passkey_id: &str) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM admin_passkeys WHERE id = $1 AND account = $2")
+            .bind(passkey_id)
+            .bind(account)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("DELETE admin passkey {passkey_id}"))?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn update_admin_passkey(
+        &self,
+        account: &str,
+        passkey_id: &str,
+        passkey_json: &str,
+        now_ms: i64,
+    ) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE admin_passkeys SET passkey_json = $3, \
+             last_used_at = to_timestamp($4::double precision / 1000) \
+             WHERE id = $1 AND account = $2",
+        )
+        .bind(passkey_id)
+        .bind(account)
+        .bind(passkey_json)
+        .bind(now_ms)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE admin passkey {passkey_id}"))?;
+        anyhow::ensure!(result.rows_affected() == 1, "passkey not found");
+        Ok(())
+    }
+
+    pub async fn count_admin_passkeys(&self, account: &str) -> Result<u32> {
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM admin_passkeys WHERE account = $1")
+                .bind(account)
+                .fetch_one(&self.pool)
+                .await
+                .with_context(|| format!("COUNT admin passkeys {account}"))?;
+        Ok(u32::try_from(count.0.max(0)).unwrap_or(0))
+    }
+
+    pub async fn clear_user_passkey_reauth(&self, user_id: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE users SET passkey_reauth_enabled = false, updated_at = now() WHERE id = $1",
+        )
+        .bind(user_id)
+        .execute(&self.pool)
+        .await
+        .context("CLEAR user Passkey reauth")?;
+        Ok(())
+    }
+
+    pub async fn set_user_passkey_reauth_flags(
+        &self,
+        user_id: &str,
+        enabled: bool,
+        reauth_after_ms: i64,
+    ) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE users SET passkey_reauth_enabled = $2, \
+             passkey_verification_interval_ms = $3, \
+             passkey_reauth_interval_ms = CASE \
+             WHEN $3 IN (3600000, 7200000, 10800000, 14400000, 21600000) THEN 14400000 \
+             WHEN $3 = 43200000 THEN 43200000 \
+             WHEN $3 IN (86400000, 172800000) THEN 86400000 \
+             ELSE 259200000 END, \
+             passkey_refresh_interval_ms = 86400000, \
+             updated_at = now() WHERE id = $1",
+        )
+        .bind(user_id)
+        .bind(enabled)
+        .bind(reauth_after_ms)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE passkey reauth flags {user_id}"))?;
+        anyhow::ensure!(result.rows_affected() == 1, "user not found");
+        Ok(())
+    }
+
+    pub async fn export_passkey_snapshot(&self) -> Result<PasskeySnapshot> {
+        let user_rows = sqlx::query_as::<_, ProductPasskeyRow>(
+            "SELECT id, user_id, credential_id, nickname, passkey_json, created_at, last_used_at \
+             FROM user_passkeys",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("EXPORT user passkeys")?;
+        let admin_rows = sqlx::query_as::<_, ProductPasskeyRow>(
+            "SELECT id, account AS user_id, credential_id, nickname, passkey_json, created_at, \
+             last_used_at FROM admin_passkeys",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("EXPORT admin passkeys")?;
+        let ceremonies = sqlx::query_as::<_, (String, String, i64, i64)>(
+            "SELECT transaction_hash, ceremony_json::text, \
+             (extract(epoch FROM expires_at) * 1000)::bigint, \
+             (extract(epoch FROM created_at) * 1000)::bigint \
+             FROM external_passkey_ceremonies",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("EXPORT external Passkey ceremonies")?;
+        Ok(PasskeySnapshot {
+            user: user_rows
+                .into_iter()
+                .map(ProductPasskeyRow::into_passkey)
+                .collect(),
+            admin: admin_rows
+                .into_iter()
+                .map(ProductPasskeyRow::into_passkey)
+                .collect(),
+            ceremonies: ceremonies
+                .into_iter()
+                .map(
+                    |(transaction_hash, ceremony_json, expires_at_ms, created_at_ms)| {
+                        crate::passkey::ExternalPasskeyCeremonyRecord {
+                            transaction_hash,
+                            ceremony_json,
+                            expires_at_ms,
+                            created_at_ms,
+                        }
+                    },
+                )
+                .collect(),
+        })
+    }
+}
+
+impl PostgresStorage {
+    pub async fn load_settings(&self) -> Result<Vec<(String, serde_json::Value)>> {
+        let rows: Vec<(String, serde_json::Value)> =
+            sqlx::query_as("SELECT key, value FROM settings")
+                .fetch_all(&self.pool)
+                .await
+                .context("SELECT Hub settings")?;
+        Ok(rows
+            .into_iter()
+            .filter(|(key, _)| crate::model::settings_keys::is_persisted_setting_key(key))
+            .collect())
+    }
+
+    pub async fn put_setting(&self, key: &str, value: &serde_json::Value) -> Result<()> {
+        anyhow::ensure!(
+            crate::model::settings_keys::is_persisted_setting_key(key),
+            "unsupported Hub setting"
+        );
+        let mut value = value.clone();
+        strip_nul(&mut value);
+        sqlx::query(
+            "INSERT INTO settings(key, value, updated_at) VALUES ($1, $2, now()) \
+             ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = now()",
+        )
+        .bind(key)
+        .bind(&value)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPSERT Hub setting {key}"))?;
+        Ok(())
+    }
+
+    pub async fn compare_and_put_setting(
+        &self,
+        key: &str,
+        expected: Option<&serde_json::Value>,
+        value: &serde_json::Value,
+    ) -> Result<bool> {
+        anyhow::ensure!(
+            crate::model::settings_keys::is_persisted_setting_key(key),
+            "unsupported Hub setting"
+        );
+        let result = sqlx::query(
+            "INSERT INTO settings(key, value, updated_at) \
+             SELECT $1, $2, now() WHERE $3::jsonb IS NULL OR EXISTS (SELECT 1 FROM settings WHERE key = $1) \
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at \
+             WHERE settings.value = $3",
+        ).bind(key).bind(value).bind(expected).execute(&self.pool).await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    /// Update only `status` and bump `updated_at`. Used when `Hub::set_status`
+    /// fires; the event itself goes through `append_event` separately.
+    ///
+    /// # Errors
+    /// If the UPDATE fails.
+    pub async fn update_status(&self, session_id: &str, status: Status) -> Result<()> {
+        sqlx::query("UPDATE sessions SET status = $1, updated_at = now() WHERE id = $2")
+            .bind(status_to_str(status))
+            .bind(session_id)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("UPDATE session status {session_id}"))?;
+        Ok(())
+    }
+
+    /// Persist the downstream agent's own session id (the ACP id it returns
+    /// from `session/new`). Stored so a revived agent can resume the prior
+    /// conversation via `session/load` instead of starting blank. Mirrors the
+    /// other `update_*` helpers — only this column and `updated_at` move.
+    ///
+    /// # Errors
+    /// If the UPDATE fails.
+    pub async fn update_agent_session_id(
+        &self,
+        session_id: &str,
+        agent_session_id: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query("UPDATE sessions SET agent_session_id = $1, updated_at = now() WHERE id = $2")
+            .bind(agent_session_id)
+            .bind(session_id)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("UPDATE session agent_session_id {session_id}"))?;
+        Ok(())
+    }
+
+    /// Persist the values selected by the user for this session. Keeping this
+    /// separate from the agent snapshot prevents startup defaults from erasing
+    /// a choice before it can be re-applied.
+    pub async fn update_config_preferences(
+        &self,
+        session_id: &str,
+        preferences: &serde_json::Value,
+    ) -> Result<()> {
+        let mut preferences = preferences.clone();
+        strip_nul(&mut preferences);
+        sqlx::query(
+            "UPDATE sessions SET config_preferences = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(preferences)
+        .bind(session_id)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE session config_preferences {session_id}"))?;
+        Ok(())
+    }
+
+    /// Persist a user-renamed title. Mirrors `update_status` — only the
+    /// title and `updated_at` move; everything else stays.
+    ///
+    /// # Errors
+    /// If the UPDATE fails.
+    pub async fn update_title(&self, session_id: &str, title: &str) -> Result<()> {
+        sqlx::query("UPDATE sessions SET title = $1, updated_at = now() WHERE id = $2")
+            .bind(strip_nul_str(title))
+            .bind(session_id)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("UPDATE session title {session_id}"))?;
+        Ok(())
+    }
+
+    /// Persist a migrated session cwd and, when supplied, its untouched default
+    /// title in one statement so the list cannot observe a half-retargeted row.
+    pub async fn update_cwd(&self, session_id: &str, cwd: &str, title: Option<&str>) -> Result<()> {
+        sqlx::query(
+            "UPDATE sessions SET cwd = $1, title = COALESCE($2, title), updated_at = now() WHERE id = $3",
+        )
+        .bind(cwd)
+        .bind(title.map(strip_nul_str))
+        .bind(session_id)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE session cwd {session_id}"))?;
+        Ok(())
+    }
+
+    pub async fn reload_provider(&self, meta: &SessionMeta) -> Result<()> {
+        // A named session's write applies only while the row keeps the login
+        // generation the Hub admitted it with, so a committed transition is
+        // never overwritten. Other fields of the input are never persisted.
+        let result = sqlx::query(
+            "UPDATE sessions SET provider_version = $1, provider_generation_digest = $2, provider_behavior = $3, status = $5, updated_at = now() WHERE id = $4 \
+             AND ($7 OR provider_auth_generation IS NOT DISTINCT FROM $6)",
+        )
+        .bind(&meta.provider_version)
+        .bind(&meta.provider_generation_digest)
+        .bind(meta.provider_behavior.as_ref().map(serde_json::to_value).transpose()?)
+        .bind(&meta.id)
+        .bind(status_to_str(meta.status))
+        .bind(meta.provider_auth_generation.map(i64::try_from).transpose()?)
+        .bind(meta.provider_account_id.is_default())
+        .execute(&self.pool)
+        .await?;
+        anyhow::ensure!(
+            result.rows_affected() == 1 || meta.provider_account_id.is_default(),
+            "session {} login changed; Provider release not persisted",
+            meta.id
+        );
+        Ok(())
+    }
+
+    /// Persist the Mobile-only code-review workspace state for one session.
+    ///
+    /// # Errors
+    /// If the UPDATE fails.
+    pub async fn update_mobile_review_state(
+        &self,
+        session_id: &str,
+        value: &serde_json::Value,
+    ) -> Result<()> {
+        let mut value = value.clone();
+        strip_nul(&mut value);
+        sqlx::query(
+            "UPDATE sessions SET mobile_review_state = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(&value)
+        .bind(session_id)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE mobile review state {session_id}"))?;
+        Ok(())
+    }
+
+    /// Insert or replace a reduced batch of canonical events and advance every
+    /// touched session's sequence watermark in one transaction. Replacing an
+    /// existing `(session_id, seq)` is how the writer coalesces streaming text
+    /// and tool updates without changing their stable timeline position.
+    pub async fn upsert_event_batch(
+        &self,
+        events: &[Envelope],
+        highwaters: &HashMap<String, u64>,
+        anchors: &[crate::transcript_anchors::AnchorWrite],
+        occurrences: &[crate::task_notifications::Occurrence],
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("begin event batch")?;
+        for env in events {
+            let mut payload =
+                crate::persistence::persisted_event_payload(env).context("serialize event")?;
+            strip_nul(&mut payload);
+            self.artifacts.externalize_images(&mut payload)?;
+            let seq = i64::try_from(env.seq).context("seq i64 overflow")?;
+            sqlx::query(
+                "INSERT INTO events(session_id, seq, payload) VALUES ($1, $2, $3) \
+                 ON CONFLICT(session_id, seq) DO UPDATE SET payload = EXCLUDED.payload",
+            )
+            .bind(&env.session_id)
+            .bind(seq)
+            .bind(&payload)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("UPSERT event {}/{}", env.session_id, env.seq))?;
+        }
+        for (session_id, next_seq) in highwaters {
+            let next_seq = i64::try_from(*next_seq).context("next_seq i64 overflow")?;
+            sqlx::query(
+                "UPDATE sessions SET next_seq = GREATEST(next_seq, $1), updated_at = now() \
+                 WHERE id = $2",
+            )
+            .bind(next_seq)
+            .bind(session_id)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("UPDATE next_seq for {session_id}"))?;
+        }
+        let created_at_ms = chrono::Utc::now().timestamp_millis();
+        for anchor in anchors {
+            sqlx::query(
+                "INSERT INTO transcript_anchors(session_id, anchor_key, seq, created_at_ms) \
+                 VALUES ($1, $2, $3, $4) ON CONFLICT(session_id, anchor_key) DO NOTHING",
+            )
+            .bind(&anchor.session_id)
+            .bind(&anchor.key)
+            .bind(i64::try_from(anchor.seq).context("anchor seq i64 overflow")?)
+            .bind(created_at_ms)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("INSERT anchor {}/{}", anchor.session_id, anchor.key))?;
+        }
+        for occurrence in occurrences {
+            sqlx::query(task_notifications::INSERT_INTENT)
+                .bind(&occurrence.dedupe_key)
+                .bind(occurrence.category.code())
+                .bind(&occurrence.destination)
+                .bind(&occurrence.marker)
+                .bind(created_at_ms.saturating_add(occurrence.category.delay_ms()))
+                .bind(created_at_ms.saturating_add(occurrence.category.ttl_ms()))
+                .bind(created_at_ms)
+                .bind(&occurrence.session_id)
+                .execute(&mut *tx)
+                .await
+                .context("INSERT notification intent")?;
+        }
+        tx.commit().await.context("commit event batch")?;
+        Ok(())
+    }
+
+    /// Delete one session's durable transcript while preserving its metadata
+    /// and monotonic `next_seq` watermark.
+    pub async fn clear_events(&self, session_id: &str, calls_before_ms: i64) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM events WHERE session_id = $1")
+            .bind(session_id)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("DELETE events for {session_id}"))?;
+        session_widgets::clear_transcript_projections_pg(&mut tx, session_id).await?;
+        // Archive the old conversation's Calls without changing child execution,
+        // results, admission receipts or budgets. Future calls start visible.
+        sqlx::query("UPDATE managed_agent_calls SET dismissed = TRUE WHERE parent_session_id = $1 AND (document::jsonb->>'created_at_ms')::bigint < $2")
+            .bind(session_id)
+            .bind(calls_before_ms)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub fn artifact_path(&self, name: &str) -> Option<std::path::PathBuf> {
+        self.artifacts.path(name)
+    }
+
+    /// Persist a session's queue + drafts (whole lists, as JSONB). Called on
+    /// every staged-message mutation so the cross-terminal queue/drafts survive
+    /// a daemon restart. Whole-list overwrite (not row-level) keeps it simple;
+    /// the lists are small (a handful of pending prompts at most).
+    ///
+    /// # Errors
+    /// If serializing the lists fails or the UPDATE fails.
+    pub async fn update_pending(
+        &self,
+        session_id: &str,
+        queue: &[QueuedMessage],
+        drafts: &[QueuedMessage],
+    ) -> Result<()> {
+        let mut queue_json = serde_json::to_value(queue).context("serialize queue")?;
+        let mut drafts_json = serde_json::to_value(drafts).context("serialize drafts")?;
+        strip_nul(&mut queue_json);
+        strip_nul(&mut drafts_json);
+        sqlx::query(
+            "UPDATE sessions SET queue = $1, drafts = $2, updated_at = now() WHERE id = $3",
+        )
+        .bind(&queue_json)
+        .bind(&drafts_json)
+        .bind(session_id)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE session pending {session_id}"))?;
+        Ok(())
+    }
+
+    /// Upsert a session's pending `ScheduleWakeup` from the durable baseline.
+    ///
+    /// # Errors
+    /// If the query fails.
+    pub async fn upsert_wakeup(
+        &self,
+        session_id: &str,
+        fire_at_ms: i64,
+        prompt: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO scheduled_wakeups (session_id, fire_at_ms, prompt) VALUES ($1, $2, $3) \
+             ON CONFLICT (session_id) DO UPDATE SET fire_at_ms = $2, prompt = $3",
+        )
+        .bind(session_id)
+        .bind(fire_at_ms)
+        .bind(prompt)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPSERT wakeup {session_id}"))?;
+        Ok(())
+    }
+
+    /// Drop a session's persisted wakeup (it fired, or was dropped).
+    ///
+    /// # Errors
+    /// If the query fails.
+    pub async fn delete_wakeup(&self, session_id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM scheduled_wakeups WHERE session_id = $1")
+            .bind(session_id)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("DELETE wakeup {session_id}"))?;
+        Ok(())
+    }
+
+    /// Load every persisted pending wakeup as `(session_id, fire_at_ms, prompt)`,
+    /// to re-arm the scheduler on startup. Overdue ones fire immediately (catch-up).
+    ///
+    /// # Errors
+    /// If the query fails.
+    pub async fn load_wakeups(&self) -> Result<Vec<(String, i64, String)>> {
+        let rows: Vec<(String, i64, String)> =
+            sqlx::query_as("SELECT session_id, fire_at_ms, prompt FROM scheduled_wakeups")
+                .fetch_all(&self.pool)
+                .await
+                .context("SELECT scheduled_wakeups")?;
+        Ok(rows)
+    }
+
+    /// Persist the manual session ordering: write each id's index as its
+    /// `position`. `load_all` then restores the drag-arranged order (NULLS LAST
+    /// + `created_at` keeps any unknown/never-reordered rows sensible). It writes
+    ///   one update per id in a single transaction; the list is short.
+    ///
+    /// # Errors
+    /// If the transaction or an UPDATE fails.
+    pub async fn update_session_order(&self, order: &[String]) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("begin tx")?;
+        for (i, id) in order.iter().enumerate() {
+            let pos = i64::try_from(i).unwrap_or(i64::MAX);
+            sqlx::query("UPDATE sessions SET position = $1, updated_at = now() WHERE id = $2")
+                .bind(pos)
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .with_context(|| format!("UPDATE position for {id}"))?;
+        }
+        tx.commit().await.context("commit update_session_order")?;
+        Ok(())
+    }
+
+    /// Every persisted sidebar folder (all owners), oldest first within a
+    /// position; the Hub re-sorts per owner.
+    ///
+    /// # Errors
+    /// If the SELECT fails.
+    pub async fn load_session_folders(&self) -> Result<Vec<SessionFolder>> {
+        let rows: Vec<SessionFolderRow> = sqlx::query_as::<_, SessionFolderRow>(
+            "SELECT id, owner_user_id, name, parent_id, project, position, defaults_json, trashed_at_ms \
+             FROM session_folders ORDER BY position ASC, created_at ASC, id ASC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("SELECT session_folders")?;
+        rows.into_iter()
+            .map(SessionFolderRow::into_folder)
+            .collect()
+    }
+
+    /// Persist one owner's whole sidebar folder set: upsert every folder, then
+    /// drop the owner's rows that left the set. The set is bounded by
+    /// `session_folders::FOLDER_CAP`, so a whole-set write beats deltas.
+    ///
+    /// # Errors
+    /// If the transaction or a statement fails.
+    pub async fn replace_session_folders(
+        &self,
+        owner_user_id: Option<&str>,
+        folders: &[SessionFolder],
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("begin tx")?;
+        workspace_documents::reparent_workspace_documents!(tx, owner_user_id, folders);
+        let previous: std::collections::HashMap<String, String> = sqlx::query_as::<_, (String, String)>(
+            "SELECT id, defaults_json FROM session_folders WHERE owner_user_id IS NOT DISTINCT FROM $1 FOR UPDATE",
+        ).bind(owner_user_id).fetch_all(&mut *tx).await?.into_iter().collect();
+        let keep: Vec<String> = folders.iter().map(|folder| folder.id.clone()).collect();
+        sqlx::query(
+            "DELETE FROM session_folders \
+             WHERE owner_user_id IS NOT DISTINCT FROM $1 AND id <> ALL($2)",
+        )
+        .bind(owner_user_id)
+        .bind(&keep)
+        .execute(&mut *tx)
+        .await
+        .context("DELETE stale session_folders")?;
+        for folder in folders {
+            sqlx::query(
+                "INSERT INTO session_folders (id, owner_user_id, name, parent_id, project, position, defaults_json, trashed_at_ms) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+                 ON CONFLICT (id) DO UPDATE SET owner_user_id = excluded.owner_user_id, \
+                 name = excluded.name, parent_id = excluded.parent_id, \
+                 project = excluded.project, position = excluded.position, defaults_json = excluded.defaults_json, \
+                 trashed_at_ms = excluded.trashed_at_ms, updated_at = now()",
+            )
+            .bind(&folder.id)
+            .bind(folder.owner_user_id.as_deref())
+            .bind(&folder.name)
+            .bind(folder.parent.as_deref())
+            .bind(folder.project.as_deref())
+            .bind(folder.position)
+            .bind(crate::session_folders::defaults::stored_json(&folder.defaults, previous.get(&folder.id).map(String::as_str))?)
+            .bind(folder.trashed_at_ms)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("UPSERT session_folder {}", folder.id))?;
+        }
+        tx.commit()
+            .await
+            .context("commit replace_session_folders")?;
+        Ok(())
+    }
+
+    /// Persist explicit sidebar placements; `None` clears one back to the root.
+    ///
+    /// # Errors
+    /// If the transaction or an UPDATE fails.
+    pub async fn update_session_placement(
+        &self,
+        placements: &[(String, Option<String>)],
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("begin tx")?;
+        for (session_id, folder_id) in placements {
+            sqlx::query("UPDATE sessions SET folder_id = $1, updated_at = now() WHERE id = $2")
+                .bind(folder_id.as_deref())
+                .bind(session_id)
+                .execute(&mut *tx)
+                .await
+                .with_context(|| format!("UPDATE folder_id for {session_id}"))?;
+        }
+        tx.commit()
+            .await
+            .context("commit update_session_placement")?;
+        Ok(())
+    }
+
+    /// Record the Trash state of sessions in one transaction.
+    ///
+    /// # Errors
+    /// If the transaction or an UPDATE fails.
+    pub async fn set_sessions_trashed(
+        &self,
+        session_ids: &[String],
+        trashed_at_ms: Option<i64>,
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("begin tx")?;
+        for session_id in session_ids {
+            sqlx::query("UPDATE sessions SET trashed_at_ms = $1, updated_at = now() WHERE id = $2")
+                .bind(trashed_at_ms)
+                .bind(session_id)
+                .execute(&mut *tx)
+                .await
+                .with_context(|| format!("UPDATE trashed_at_ms for {session_id}"))?;
+        }
+        tx.commit().await.context("commit set_sessions_trashed")?;
+        Ok(())
+    }
+
+    /// SOFT-delete a session: mark `deleted_at` so it vanishes from the UI (the
+    /// in-memory Hub already dropped it, and `load_all` skips it) but its rows
+    /// linger for the retention window before [`Self::purge_deleted`] hard-drops
+    /// them (cascade → events). Idempotent; re-deleting keeps the first time.
+    ///
+    /// # Errors
+    /// If the UPDATE fails.
+    pub async fn delete_session(&self, session_id: &str) -> Result<()> {
+        sqlx::query("UPDATE sessions SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL")
+            .bind(session_id)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("soft-delete session {session_id}"))?;
+        Ok(())
+    }
+
+    /// Hard-delete sessions soft-deleted more than `retention_days` ago (cascade
+    /// → their events). The storage-reclaim half of soft-delete; run on startup
+    /// and periodically. Returns the number of sessions purged.
+    ///
+    /// # Errors
+    /// If the DELETE fails.
+    pub async fn native_login_generation_digests(&self) -> Result<Vec<String>> {
+        sqlx::query_scalar(
+            "SELECT DISTINCT value::jsonb #>> '{native_completion,profile,generation_digest}' \
+             FROM provider_login_operations \
+             WHERE value::jsonb #>> '{native_completion,profile,generation_digest}' IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("list PostgreSQL native login generations")
+    }
+
+    pub async fn plugin_install_generation_digests(&self) -> Result<Vec<String>> {
+        sqlx::query_scalar(
+            "SELECT DISTINCT intent::jsonb ->> 'generation_digest' \
+             FROM plugin_install_operations AS operation \
+             WHERE intent::jsonb ->> 'generation_digest' IS NOT NULL \
+             AND (operation.phase NOT IN ('completed', 'aborted') \
+                  OR operation.created_at_ms = ( \
+                      SELECT max(latest.created_at_ms) FROM plugin_install_operations AS latest \
+                      WHERE latest.machine_id = operation.machine_id \
+                      AND latest.plugin_id = operation.plugin_id))",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("list targeted Plugin generations")
+    }
+
+    pub async fn unfinished_plugin_uninstalls(&self) -> Result<Vec<(String, String)>> {
+        sqlx::query_as(
+            "SELECT DISTINCT machine_id, plugin_id FROM plugin_uninstall_operations \
+             WHERE phase NOT IN ('completed', 'compensated', 'aborted')",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("list unfinished Plugin uninstalls")
+    }
+
+    pub async fn deleted_session_generations(&self) -> Result<Vec<(String, String, String)>> {
+        sqlx::query_as(
+            "SELECT DISTINCT machine_id, provider, provider_generation_digest FROM sessions \
+             WHERE deleted_at IS NOT NULL AND provider_generation_digest <> ''",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("list soft-deleted session generations")
+    }
+
+    pub async fn session_auth_generations(&self) -> Result<Vec<(String, String, i64)>> {
+        sqlx::query_as(
+            "SELECT DISTINCT machine_id, provider, provider_auth_generation FROM sessions \
+             WHERE provider_auth_generation IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("list session auth generations")
+    }
+
+    // PostgreSQL reclaims through its own autovacuum; this backend owns no file.
+    #[allow(clippy::unused_self)]
+    pub fn reclaim_free_pages(&self) -> impl std::future::Future<Output = Result<u64>> {
+        std::future::ready(Ok(0))
+    }
+
+    pub async fn purge_deleted(&self, retention_days: i64) -> Result<u64> {
+        let done = sqlx::query(
+            "DELETE FROM sessions WHERE deleted_at IS NOT NULL \
+             AND COALESCE( \
+               purge_after_at, \
+               deleted_at + make_interval(days => $1::int) \
+             ) < now() \
+             AND NOT EXISTS (SELECT 1 FROM managed_agent_calls AS call \
+                 WHERE (call.parent_session_id = sessions.id OR call.child_session_id = sessions.id) \
+                 AND call.state NOT IN ('completed', 'failed', 'cancelled')) \
+             AND NOT EXISTS (SELECT 1 FROM plugin_uninstall_operations AS operation \
+                 WHERE operation.machine_id = sessions.machine_id AND operation.plugin_id = sessions.provider \
+                 AND operation.phase NOT IN ('completed', 'compensated', 'aborted'))",
+        )
+        .bind(i32::try_from(retention_days).unwrap_or(3))
+        .execute(&self.pool)
+        .await
+        .context("purge soft-deleted sessions")?;
+        let mut referenced = HashSet::new();
+        // Extract only the small artifact URLs in Postgres. Pulling every
+        // matching JSON payload across the driver made startup GC deserialize
+        // hundreds of large transcript events, adding avoidable allocation and
+        // latency even though rows were consumed as a stream.
+        let mut rows = sqlx::query(
+            "SELECT DISTINCT value #>> ARRAY[]::text[] AS reference \
+             FROM events \
+             CROSS JOIN LATERAL jsonb_path_query( \
+                 payload, \
+                 'strict $.** ? (@.type() == \"string\" && @ starts with \"/api/artifacts/\")'::jsonpath \
+             ) AS value \
+             UNION SELECT value #>> ARRAY[]::text[] AS reference \
+             FROM managed_agent_calls \
+             CROSS JOIN LATERAL jsonb_path_query(document::jsonb, 'lax $.result.artifacts[*].url') AS value \
+             WHERE jsonb_typeof(value) = 'string'",
+        )
+        .fetch(&self.pool);
+        while let Some(row) = rows
+            .try_next()
+            .await
+            .context("scan retained PostgreSQL artifact references")?
+        {
+            let reference: String = row.try_get("reference")?;
+            crate::artifacts::collect_references(
+                &serde_json::Value::String(reference),
+                &mut referenced,
+            );
+        }
+        let artifacts_removed = self
+            .artifacts
+            .prune_unreferenced(&referenced, Duration::from_hours(24))
+            .context("prune unreferenced PostgreSQL event artifacts")?;
+        if artifacts_removed > 0 {
+            tracing::info!(artifacts_removed, "purged unreferenced event artifacts");
+        }
+        Ok(done.rows_affected())
+    }
+
+    /// Insert an incident idempotently. Raw evidence is retained by Victoria;
+    /// this row is the durable index and recovery record.
+    pub async fn upsert_runtime_incident(&self, incident: &RuntimeIncidentWrite) -> Result<()> {
+        let mut detail = incident.detail.clone();
+        strip_nul(&mut detail);
+        sqlx::query(
+            "INSERT INTO runtime_incidents (id, occurred_at, source, classification, severity, \
+             state, summary, fingerprint, session_id, client_id, machine_id, trace_id, build, \
+             evidence_start, evidence_end, detail) VALUES ( \
+             $1, to_timestamp($2::double precision / 1000), $3, $4, $5, $6, $7, $8, $9, $10, \
+             COALESCE($11, (SELECT machine_id FROM sessions WHERE id = $9)), \
+             $12, $13, to_timestamp($14::double precision / 1000), \
+             to_timestamp($15::double precision / 1000), $16) \
+             ON CONFLICT (id) DO UPDATE SET updated_at = now(), \
+             evidence_end = GREATEST(runtime_incidents.evidence_end, EXCLUDED.evidence_end), \
+             detail = runtime_incidents.detail || EXCLUDED.detail",
+        )
+        .bind(strip_nul_str(&incident.id).as_ref())
+        .bind(incident.occurred_at_ms)
+        .bind(strip_nul_str(&incident.source).as_ref())
+        .bind(strip_nul_str(&incident.classification).as_ref())
+        .bind(strip_nul_str(&incident.severity).as_ref())
+        .bind(strip_nul_str(&incident.state).as_ref())
+        .bind(strip_nul_str(&incident.summary).as_ref())
+        .bind(strip_nul_str(&incident.fingerprint).as_ref())
+        .bind(incident.session_id.as_deref())
+        .bind(incident.client_id.as_deref())
+        .bind(incident.machine_id.as_deref())
+        .bind(incident.trace_id.as_deref())
+        .bind(incident.build.as_deref())
+        .bind(incident.evidence_start_ms)
+        .bind(incident.evidence_end_ms)
+        .bind(detail)
+        .execute(&self.pool)
+        .await
+        .context("UPSERT runtime incident")?;
+        Ok(())
+    }
+
+    /// Mark every active controller runtime incident for a session as recovered.
+    /// Terminal failed-turn and command-error records remain immutable evidence.
+    pub async fn recover_runtime_incident(
+        &self,
+        session_id: &str,
+        recovered_at_ms: i64,
+        outcome: &str,
+    ) -> Result<u64> {
+        let done = sqlx::query(
+            "UPDATE runtime_incidents SET state = 'recovered', \
+             recovered_at = to_timestamp($2::double precision / 1000), \
+             recovery_outcome = $3, updated_at = now() WHERE session_id = $1 \
+               AND source = 'controller' AND state = 'active'",
+        )
+        .bind(session_id)
+        .bind(recovered_at_ms)
+        .bind(outcome)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("recover runtime incident for {session_id}"))?;
+        Ok(done.rows_affected())
+    }
+
+    /// Query recent incident summaries, newest first.
+    pub async fn runtime_incidents(&self, limit: i64) -> Result<Vec<RuntimeIncident>> {
+        sqlx::query_as(
+            "SELECT id, (extract(epoch FROM occurred_at) * 1000)::bigint AS occurred_at_ms, \
+             (extract(epoch FROM updated_at) * 1000)::bigint AS updated_at_ms, source, \
+             classification, severity, state, summary, fingerprint, session_id, client_id, \
+             machine_id, trace_id, build, \
+             (extract(epoch FROM evidence_start) * 1000)::bigint AS evidence_start_ms, \
+             (extract(epoch FROM evidence_end) * 1000)::bigint AS evidence_end_ms, detail, \
+             (extract(epoch FROM recovered_at) * 1000)::bigint AS recovered_at_ms, \
+             recovery_outcome FROM runtime_incidents ORDER BY occurred_at DESC LIMIT $1",
+        )
+        .bind(limit.clamp(1, 500))
+        .fetch_all(&self.pool)
+        .await
+        .context("SELECT runtime incidents")
+    }
+
+    /// Query the unified diagnostic-log index without loading heavy incident
+    /// detail. `PostgreSQL` remains the durable correlation layer; raw service
+    /// evidence stays in `VictoriaLogs`.
+    #[allow(clippy::too_many_lines)] // one SQL read model spanning four existing owners
+    pub async fn diagnostic_logs(
+        &self,
+        filter: &DiagnosticLogFilter,
+    ) -> Result<Vec<DiagnosticLogSummary>> {
+        let query = r"
+            WITH runtime_logs AS (
+              SELECT 'runtime:' || incident.id AS id,
+                (extract(epoch FROM incident.occurred_at) * 1000)::bigint AS occurred_at_ms,
+                'session_error'::text AS kind, incident.severity, incident.state,
+                initcap(replace(incident.classification, '_', ' ')) AS title,
+                incident.summary, incident.session_id AS session_ref,
+                session.provider,
+                __RUNTIME_AGENT_SQL__ AS agent,
+                NULL::text AS model, incident.classification
+              FROM runtime_incidents incident
+              LEFT JOIN sessions session ON session.id = incident.session_id
+              WHERE incident.occurred_at >= to_timestamp($1::double precision / 1000)
+                AND incident.occurred_at <= to_timestamp($2::double precision / 1000)
+            ), provider_error_logs AS (
+              SELECT 'provider:' || event.machine_id || ':' || event.producer_id || ':' ||
+                  event.sequence::text AS id,
+                (extract(epoch FROM event.occurred_at) * 1000)::bigint AS occurred_at_ms,
+                'provider_error'::text AS kind,
+                CASE
+                  WHEN event.status IN (401, 402, 403) THEN 'critical'
+                  WHEN event.status BETWEEN 400 AND 499
+                    AND event.status NOT IN (408, 425, 429, 499) THEN 'error'
+                  ELSE 'warning'
+                END::text AS severity,
+                'failed'::text AS state,
+                'HTTP ' || event.status::text AS title,
+                initcap(event.agent) || ' request ' || CASE
+                  WHEN event.status BETWEEN 400 AND 499
+                    AND event.status NOT IN (408, 425, 429, 499)
+                    THEN 'was blocked with HTTP status '
+                  ELSE 'attempt received retryable HTTP status '
+                END || event.status::text AS summary,
+                event.session_fingerprint AS session_ref, event.provider,
+                event.agent, nullif(coalesce(event.resolved_model, event.model), '') AS model,
+                CASE
+                  WHEN event.status IN (401, 403) THEN 'provider_authentication_failure'
+                  WHEN event.status = 402 THEN 'provider_balance_exhausted'
+                  WHEN event.status BETWEEN 400 AND 499
+                    AND event.status NOT IN (408, 425, 429, 499)
+                    THEN 'provider_request_blocked'
+                  ELSE 'provider_retryable_failure'
+                END::text AS classification
+              FROM provider_usage_events event
+              WHERE event.occurred_at >= to_timestamp($1::double precision / 1000)
+                AND event.occurred_at <= to_timestamp($2::double precision / 1000)
+                AND event.request_purpose = 'interactive'
+                AND event.status >= 400
+            ), cache_keepalive_logs AS (
+              SELECT 'keepalive:' || event.machine_id || ':' || event.producer_id || ':' ||
+                  event.sequence::text AS id,
+                (extract(epoch FROM event.occurred_at) * 1000)::bigint AS occurred_at_ms,
+                'cache_anomaly'::text AS kind,
+                CASE
+                  WHEN event.cache_keepalive_outcome = 'terminal_error'
+                    AND event.status IN (401, 402, 403) THEN 'critical'
+                  WHEN event.cache_keepalive_outcome IN
+                    ('miss', 'partial', 'retryable_error', 'terminal_error') THEN 'warning'
+                  ELSE 'info'
+                END::text AS severity,
+                CASE event.cache_keepalive_outcome
+                  WHEN 'hit' THEN 'succeeded'
+                  WHEN 'preempted' THEN 'recovered'
+                  WHEN 'retryable_error' THEN 'retrying'
+                  ELSE 'failed'
+                END::text AS state,
+                CASE event.cache_keepalive_outcome
+                  WHEN 'hit' THEN 'Cache protected'
+                  WHEN 'miss' THEN 'Keepalive cache miss'
+                  WHEN 'partial' THEN 'Keepalive partial hit'
+                  WHEN 'retryable_error' THEN 'Keepalive will retry'
+                  WHEN 'terminal_error' THEN 'Keepalive stopped'
+                  ELSE 'Keepalive preempted'
+                END::text AS title,
+                CASE event.cache_keepalive_outcome
+                  WHEN 'hit' THEN format('Protected %s cached tokens',
+                    coalesce(event.cache_hit_tokens, 0))
+                  WHEN 'miss' THEN format('Cache expired after %s ms; protection stopped',
+                    coalesce(event.cache_keepalive_source_age_ms, 0))
+                  WHEN 'partial' THEN format('Cache hit fell below 90%% after %s ms; protection stopped',
+                    coalesce(event.cache_keepalive_source_age_ms, 0))
+                  WHEN 'retryable_error' THEN format('Retryable HTTP %s; one bounded retry is allowed',
+                    event.status)
+                  WHEN 'terminal_error' THEN format('HTTP %s made this snapshot ineligible for further keepalives',
+                    event.status)
+                  ELSE 'A real agent request preempted the background keepalive'
+                END::text AS summary,
+                event.session_fingerprint AS session_ref, event.provider,
+                event.agent, nullif(coalesce(event.resolved_model, event.model), '') AS model,
+                'cache_keepalive_' || event.cache_keepalive_outcome AS classification
+              FROM provider_usage_events event
+              WHERE event.occurred_at >= to_timestamp($1::double precision / 1000)
+                AND event.occurred_at <= to_timestamp($2::double precision / 1000)
+                AND event.request_purpose = 'cache_keepalive'
+            ), lineage AS (
+              SELECT event.*,
+                lag(event.status) OVER session_window AS previous_status,
+                lag(event.model_family) OVER session_window AS previous_model_family,
+                lag(event.model_revision) OVER session_window AS previous_model_revision,
+                lag(event.request_role) OVER session_window AS previous_request_role,
+                lag(event.upstream_protocol) OVER session_window AS previous_upstream_protocol,
+                lag(event.translation_mode) OVER session_window AS previous_translation_mode,
+                lag(event.thinking_mode) OVER session_window AS previous_thinking_mode,
+                lag(event.reasoning_effort) OVER session_window AS previous_reasoning_effort,
+                lag(event.static_prefix_fingerprint) OVER session_window AS previous_static_prefix,
+                lag(event.request_prefix_fingerprint) OVER session_window AS previous_request_prefix,
+                lag(event.input_tokens) OVER session_window AS previous_input_tokens,
+                lag(event.input_item_count) OVER session_window AS previous_input_item_count,
+                lag(event.gateway_build) OVER session_window AS previous_gateway_build,
+                lag(event.gateway_boot_id) OVER session_window AS previous_gateway_boot_id,
+                lag(event.cache_hit_tokens) OVER session_window AS previous_cache_hit_tokens,
+                lag(event.cache_miss_tokens) OVER session_window AS previous_cache_miss_tokens,
+                lag(event.sequence) OVER session_window AS previous_sequence,
+                lag(event.occurred_at) OVER session_window AS previous_occurred_at
+              FROM provider_usage_events event
+              WHERE event.occurred_at >=
+                  to_timestamp($1::double precision / 1000) - interval '30 minutes'
+                AND event.occurred_at <= to_timestamp($2::double precision / 1000)
+                AND event.schema_version >= 3
+                AND event.request_purpose = 'interactive'
+                AND event.session_fingerprint IS NOT NULL
+                AND event.session_attribution <> 'prefix_root'
+                AND event.status < 400
+                AND event.cache_observation IN ('explicit', 'derived')
+                AND coalesce(event.input_tokens, 0) >= 8000
+                AND event.cache_hit_tokens + event.cache_miss_tokens > 0
+                AND event.static_prefix_fingerprint IS NOT NULL
+              WINDOW session_window AS (
+                PARTITION BY event.machine_id, event.producer_id, event.account_fingerprint,
+                  event.agent, event.session_fingerprint
+                ORDER BY event.occurred_at, event.sequence
+              )
+            ), cache_transitions AS (
+              SELECT lineage.*,
+                CASE
+                  WHEN operation = 'compact' THEN 'client_compaction'
+                  WHEN gateway_build IS DISTINCT FROM previous_gateway_build
+                    THEN 'gateway_build_changed'
+                  WHEN gateway_boot_id IS DISTINCT FROM previous_gateway_boot_id
+                    THEN 'post_gateway_restart'
+                  WHEN model_family IS DISTINCT FROM previous_model_family THEN 'model_changed'
+                  WHEN model_revision IS DISTINCT FROM previous_model_revision
+                    THEN 'model_revision_changed'
+                  WHEN request_role IS DISTINCT FROM previous_request_role
+                    THEN 'request_role_changed'
+                  WHEN upstream_protocol IS DISTINCT FROM previous_upstream_protocol
+                    THEN 'protocol_changed'
+                  WHEN translation_mode IS DISTINCT FROM previous_translation_mode
+                    THEN 'translation_changed'
+                  WHEN thinking_mode IS DISTINCT FROM previous_thinking_mode
+                    OR reasoning_effort IS DISTINCT FROM previous_reasoning_effort
+                    THEN 'reasoning_configuration_changed'
+                  WHEN compatibility_fixes > 0 THEN 'compatibility_rewrite'
+                  WHEN static_prefix_fingerprint IS DISTINCT FROM previous_static_prefix
+                    THEN 'static_prefix_changed'
+                  WHEN has_previous_response_id IS NOT TRUE
+                    AND input_item_count < previous_input_item_count THEN 'history_rewrite'
+                  WHEN EXISTS (
+                    SELECT 1 FROM provider_usage_events failed
+                    WHERE failed.machine_id = lineage.machine_id
+                      AND failed.producer_id = lineage.producer_id
+                      AND failed.account_fingerprint = lineage.account_fingerprint
+                      AND failed.agent = lineage.agent
+                      AND failed.session_fingerprint IS NOT DISTINCT FROM lineage.session_fingerprint
+                      AND failed.request_purpose = 'interactive'
+                      AND (failed.occurred_at, failed.sequence) >
+                        (lineage.previous_occurred_at, lineage.previous_sequence)
+                      AND (failed.occurred_at, failed.sequence) <
+                        (lineage.occurred_at, lineage.sequence)
+                      AND failed.status >= 400
+                  ) THEN 'post_provider_error'
+                  WHEN request_prefix_fingerprint = previous_request_prefix
+                    THEN 'unexpected_exact_prefix_miss'
+                  ELSE 'unexpected_active_cache_drop'
+                END AS cause
+              FROM lineage
+              WHERE occurred_at >= to_timestamp($1::double precision / 1000)
+                AND occurred_at <= to_timestamp($2::double precision / 1000)
+                AND schema_version >= 3
+                AND session_fingerprint IS NOT NULL
+                AND session_attribution <> 'prefix_root'
+                AND previous_occurred_at IS NOT NULL
+                AND occurred_at >= previous_occurred_at
+                AND occurred_at - previous_occurred_at <= interval '30 minutes'
+                AND status < 400
+                AND previous_status < 400
+                AND cache_observation IN ('explicit', 'derived')
+                AND coalesce(input_tokens, 0) >= 8000
+                AND cache_hit_tokens + cache_miss_tokens > 0
+                AND cache_hit_tokens * 10 < cache_hit_tokens + cache_miss_tokens
+                AND coalesce(previous_input_tokens, 0) >= 8000
+                AND previous_cache_hit_tokens + previous_cache_miss_tokens > 0
+                AND previous_cache_hit_tokens * 10 >=
+                  9 * (previous_cache_hit_tokens + previous_cache_miss_tokens)
+                AND static_prefix_fingerprint IS NOT NULL
+                AND previous_static_prefix IS NOT NULL
+            ), cache_logs AS (
+              SELECT 'cache:' || machine_id || ':' || producer_id || ':' || sequence::text AS id,
+                (extract(epoch FROM occurred_at) * 1000)::bigint AS occurred_at_ms,
+                'cache_anomaly'::text AS kind, 'warning'::text AS severity,
+                'observed'::text AS state,
+                CASE cause
+                  WHEN 'static_prefix_changed' THEN 'Cache prefix changed'
+                  WHEN 'unexpected_exact_prefix_miss' THEN 'Exact-prefix cache miss'
+                  WHEN 'history_rewrite' THEN 'Cached history rewritten'
+                  WHEN 'post_gateway_restart' THEN 'Cache lost after gateway restart'
+                  WHEN 'gateway_build_changed' THEN 'Cache lost after gateway update'
+                  WHEN 'client_compaction' THEN 'Cache changed after compaction'
+                  WHEN 'model_changed' THEN 'Cache lost after model change'
+                  WHEN 'model_revision_changed' THEN 'Cache lost after model revision'
+                  WHEN 'request_role_changed' THEN 'Cache lost after role change'
+                  WHEN 'protocol_changed' THEN 'Cache lost after protocol change'
+                  WHEN 'translation_changed' THEN 'Cache lost after translation change'
+                  WHEN 'reasoning_configuration_changed' THEN 'Cache lost after reasoning change'
+                  WHEN 'compatibility_rewrite' THEN 'Cache lost after compatibility rewrite'
+                  WHEN 'post_provider_error' THEN 'Cache lost after provider error'
+                  ELSE 'Unexplained active-session cache drop'
+                END AS title,
+                format('Cache hit rate fell from %s%% to %s%% within 30 minutes',
+                  round(previous_cache_hit_tokens * 100.0 /
+                    (previous_cache_hit_tokens + previous_cache_miss_tokens), 1),
+                  round(cache_hit_tokens * 100.0 / (cache_hit_tokens + cache_miss_tokens), 1)
+                ) AS summary,
+                session_fingerprint AS session_ref, provider, agent,
+                nullif(coalesce(resolved_model, model), '') AS model, cause AS classification
+              FROM cache_transitions
+            ), automation_logs AS (
+              SELECT 'automation:' || log.id::text AS id, log.created_at_ms AS occurred_at_ms,
+                'automation'::text AS kind,
+                CASE
+                  WHEN log.status = 'failed' THEN 'error'
+                  WHEN log.status IN ('retrying', 'unknown') THEN 'warning'
+                  ELSE 'info'
+                END AS severity,
+                log.status AS state,
+                initcap(log.provider) || ' ' || replace(log.action, '_', ' ') AS title,
+                log.message AS summary, NULL::text AS session_ref, log.provider,
+                __AUTOMATION_AGENT_SQL__ AS agent,
+                NULL::text AS model,
+                'provider_automation'::text AS classification
+              FROM provider_action_logs log
+              WHERE log.created_at_ms >= $1 AND log.created_at_ms <= $2 AND log.provider NOT LIKE 'account-%'
+            ), logs AS (
+              SELECT * FROM runtime_logs
+              UNION ALL SELECT * FROM provider_error_logs
+              UNION ALL SELECT * FROM cache_keepalive_logs
+              UNION ALL SELECT * FROM cache_logs
+              UNION ALL SELECT * FROM automation_logs
+            )
+            SELECT id, occurred_at_ms, kind, severity, state, title, summary,
+              session_ref, provider, agent, model, classification
+            FROM logs
+            WHERE (cardinality($3::text[]) = 0 OR kind = ANY($3))
+              AND (cardinality($4::text[]) = 0 OR severity = ANY($4))
+              AND (cardinality($5::text[]) = 0 OR state = ANY($5))
+              AND (cardinality($6::text[]) = 0 OR agent = ANY($6))
+              AND ($7::text IS NULL OR session_ref = $7)
+              AND ($8::bigint IS NULL OR occurred_at_ms < $8 OR
+                (occurred_at_ms = $8 AND id < $9))
+            ORDER BY occurred_at_ms DESC, id DESC
+            LIMIT $10
+        ";
+        let query = query
+            .replace(
+                "__RUNTIME_AGENT_SQL__",
+                &crate::plugin_runtime_args::diagnostic_agent_case_sql("session.provider"),
+            )
+            .replace(
+                "__AUTOMATION_AGENT_SQL__",
+                &crate::plugin_runtime_args::diagnostic_agent_case_sql("log.provider"),
+            );
+        sqlx::query_as(&query)
+            .bind(filter.since_ms)
+            .bind(filter.until_ms)
+            .bind(&filter.kinds)
+            .bind(&filter.severities)
+            .bind(&filter.states)
+            .bind(&filter.agents)
+            .bind(filter.session_ref.as_deref())
+            .bind(filter.cursor_ms)
+            .bind(filter.cursor_id.as_deref())
+            .bind(filter.limit.clamp(1, 100).saturating_add(1))
+            .fetch_all(&self.pool)
+            .await
+            .context("query diagnostic logs")
+    }
+
+    /// Load one diagnostic event after the user expands it. List requests never
+    /// pay for incident JSON or provider lineage evidence.
+    #[allow(clippy::too_many_lines)] // type-specific lazy detail stays at this storage boundary
+    pub async fn diagnostic_log_detail(&self, id: &str) -> Result<Option<DiagnosticLogDetail>> {
+        if let Some(incident_id) = id.strip_prefix("runtime:") {
+            let incident = sqlx::query_as::<_, RuntimeIncident>(
+                "SELECT id, (extract(epoch FROM occurred_at) * 1000)::bigint AS occurred_at_ms, \
+                 (extract(epoch FROM updated_at) * 1000)::bigint AS updated_at_ms, source, \
+                 classification, severity, state, summary, fingerprint, session_id, client_id, \
+                 machine_id, trace_id, build, \
+                 (extract(epoch FROM evidence_start) * 1000)::bigint AS evidence_start_ms, \
+                 (extract(epoch FROM evidence_end) * 1000)::bigint AS evidence_end_ms, detail, \
+                 (extract(epoch FROM recovered_at) * 1000)::bigint AS recovered_at_ms, \
+                 recovery_outcome FROM runtime_incidents WHERE id = $1",
+            )
+            .bind(incident_id)
+            .fetch_optional(&self.pool)
+            .await
+            .context("load runtime diagnostic detail")?;
+            let Some(incident) = incident else {
+                return Ok(None);
+            };
+            let mut identity = vec![diagnostic_field("Log ID", id, true)];
+            optional_diagnostic_field(
+                &mut identity,
+                "Session ID",
+                incident.session_id.clone(),
+                true,
+            );
+            optional_diagnostic_field(
+                &mut identity,
+                "Machine ID",
+                incident.machine_id.clone(),
+                true,
+            );
+            optional_diagnostic_field(&mut identity, "Client ID", incident.client_id.clone(), true);
+            optional_diagnostic_field(&mut identity, "Trace ID", incident.trace_id.clone(), true);
+            let mut lifecycle = vec![
+                diagnostic_field("Source", incident.source.clone(), false),
+                diagnostic_field("Classification", incident.classification.clone(), false),
+                diagnostic_field("Severity", incident.severity.clone(), false),
+                diagnostic_field("State", incident.state.clone(), false),
+                diagnostic_field("Fingerprint", incident.fingerprint.clone(), true),
+                diagnostic_field(
+                    "Evidence start",
+                    incident.evidence_start_ms.to_string(),
+                    false,
+                ),
+                diagnostic_field("Evidence end", incident.evidence_end_ms.to_string(), false),
+            ];
+            optional_diagnostic_field(&mut lifecycle, "Build", incident.build.clone(), true);
+            optional_diagnostic_field(
+                &mut lifecycle,
+                "Recovered at",
+                incident.recovered_at_ms.map(|value| value.to_string()),
+                false,
+            );
+            optional_diagnostic_field(
+                &mut lifecycle,
+                "Recovery outcome",
+                incident.recovery_outcome.clone(),
+                false,
+            );
+            return Ok(Some(DiagnosticLogDetail {
+                id: id.to_owned(),
+                kind: "session_error".to_owned(),
+                occurred_at_ms: incident.occurred_at_ms,
+                title: diagnostic_title(&incident.classification),
+                summary: incident.summary,
+                sections: vec![
+                    DiagnosticLogSection {
+                        title: "Identity".to_owned(),
+                        fields: identity,
+                    },
+                    DiagnosticLogSection {
+                        title: "Lifecycle".to_owned(),
+                        fields: lifecycle,
+                    },
+                ],
+                evidence: (!incident
+                    .detail
+                    .as_object()
+                    .is_some_and(serde_json::Map::is_empty))
+                .then_some(incident.detail),
+            }));
+        }
+
+        if let Some(action_id) = id.strip_prefix("automation:") {
+            let Ok(action_id) = action_id.parse::<i64>() else {
+                return Ok(None);
+            };
+            let row = sqlx::query_as::<
+                _,
+                (
+                    String,
+                    String,
+                    String,
+                    String,
+                    String,
+                    String,
+                    Option<String>,
+                    Option<String>,
+                    i64,
+                ),
+            >(
+                "SELECT provider, action, trigger, status, phase, message, credit_id, \
+                 idempotency_suffix, created_at_ms FROM provider_action_logs WHERE id = $1 AND provider NOT LIKE 'account-%'",
+            )
+            .bind(action_id)
+            .fetch_optional(&self.pool)
+            .await
+            .context("load automation diagnostic detail")?;
+            let Some((
+                provider,
+                action,
+                trigger,
+                status,
+                phase,
+                message,
+                credit_id,
+                key,
+                occurred_at_ms,
+            )) = row
+            else {
+                return Ok(None);
+            };
+            let mut fields = vec![
+                diagnostic_field("Log ID", id, true),
+                diagnostic_field("Provider", provider.clone(), false),
+                diagnostic_field("Action", action.clone(), false),
+                diagnostic_field("Trigger", trigger, false),
+                diagnostic_field("Status", status, false),
+                diagnostic_field("Phase", phase, false),
+            ];
+            optional_diagnostic_field(&mut fields, "Credit ID", credit_id, true);
+            optional_diagnostic_field(&mut fields, "Idempotency suffix", key, true);
+            return Ok(Some(DiagnosticLogDetail {
+                id: id.to_owned(),
+                kind: "automation".to_owned(),
+                occurred_at_ms,
+                title: format!(
+                    "{} {}",
+                    diagnostic_title(&provider),
+                    action.replace('_', " ")
+                ),
+                summary: message,
+                sections: vec![DiagnosticLogSection {
+                    title: "Automation".to_owned(),
+                    fields,
+                }],
+                evidence: None,
+            }));
+        }
+
+        let (kind, prefix) = if id.starts_with("provider:") {
+            ("provider_error", "provider:")
+        } else if id.starts_with("cache:") {
+            ("cache_anomaly", "cache:")
+        } else if id.starts_with("keepalive:") {
+            ("cache_keepalive", "keepalive:")
+        } else {
+            return Ok(None);
+        };
+        let Some((machine_id, producer_id, sequence)) = parse_provider_diagnostic_id(id, prefix)
+        else {
+            return Ok(None);
+        };
+        let row = sqlx::query_as::<_, (i64, serde_json::Value)>(
+            r"
+                WITH target AS (
+                  SELECT * FROM provider_usage_events
+                  WHERE machine_id = $1 AND producer_id = $2 AND sequence = $3
+                ), previous AS (
+                  SELECT candidate.* FROM provider_usage_events candidate, target
+                  WHERE candidate.machine_id = target.machine_id
+                    AND candidate.producer_id = target.producer_id
+                    AND candidate.account_fingerprint = target.account_fingerprint
+                    AND candidate.agent = target.agent
+                    AND candidate.session_fingerprint IS NOT DISTINCT FROM target.session_fingerprint
+                    AND candidate.schema_version >= 3
+                    AND candidate.request_purpose = 'interactive'
+                    AND candidate.session_attribution <> 'prefix_root'
+                    AND candidate.status < 400
+                    AND candidate.cache_observation IN ('explicit', 'derived')
+                    AND coalesce(candidate.input_tokens, 0) >= 8000
+                    AND candidate.cache_hit_tokens + candidate.cache_miss_tokens > 0
+                    AND candidate.static_prefix_fingerprint IS NOT NULL
+                    AND (candidate.occurred_at, candidate.sequence) <
+                      (target.occurred_at, target.sequence)
+                  ORDER BY candidate.occurred_at DESC, candidate.sequence DESC
+                  LIMIT 1
+                )
+                SELECT (extract(epoch FROM target.occurred_at) * 1000)::bigint,
+                  jsonb_build_object(
+                    'current', to_jsonb(target),
+                    'previous', CASE WHEN previous.sequence IS NULL THEN '{}'::jsonb
+                      ELSE to_jsonb(previous) END,
+                    'gap_ms', CASE WHEN previous.sequence IS NULL THEN NULL
+                      ELSE (extract(epoch FROM target.occurred_at - previous.occurred_at) * 1000)::bigint END,
+                    'intervening_provider_errors', CASE WHEN previous.sequence IS NULL THEN 0
+                      ELSE (SELECT count(*) FROM provider_usage_events failed
+                        WHERE failed.machine_id = target.machine_id
+                          AND failed.producer_id = target.producer_id
+                          AND failed.account_fingerprint = target.account_fingerprint
+                          AND failed.agent = target.agent
+                          AND failed.session_fingerprint IS NOT DISTINCT FROM target.session_fingerprint
+                          AND failed.request_purpose = 'interactive'
+                          AND (failed.occurred_at, failed.sequence) >
+                            (previous.occurred_at, previous.sequence)
+                          AND (failed.occurred_at, failed.sequence) <
+                            (target.occurred_at, target.sequence)
+                          AND failed.status >= 400) END
+                  )
+                FROM target LEFT JOIN previous ON true
+            ",
+        )
+        .bind(machine_id)
+        .bind(producer_id)
+        .bind(sequence)
+        .fetch_optional(&self.pool)
+        .await
+        .context("load provider diagnostic detail")?;
+        let Some((occurred_at_ms, evidence)) = row else {
+            return Ok(None);
+        };
+        let current = evidence.get("current").cloned().unwrap_or_default();
+        let previous = evidence.get("previous").cloned().unwrap_or_default();
+        let gap_ms = json_i64(&evidence, "gap_ms");
+        if kind == "cache_keepalive" {
+            if json_scalar(&current, "request_purpose").as_deref() != Some("cache_keepalive") {
+                return Ok(None);
+            }
+            let outcome = json_scalar(&current, "cache_keepalive_outcome")
+                .unwrap_or_else(|| "unknown".to_owned());
+            let status = json_scalar(&current, "status").unwrap_or_else(|| "unknown".to_owned());
+            let title = diagnostic_keepalive_title(&outcome).to_owned();
+            let summary = match outcome.as_str() {
+                "hit" => format!(
+                    "Protected {} cached tokens",
+                    json_scalar(&current, "cache_hit_tokens")
+                        .unwrap_or_else(|| "0".to_owned())
+                ),
+                "miss" => "The cached prefix expired; automatic protection stopped".to_owned(),
+                "partial" => {
+                    "The cached prefix fell below the 90% hit threshold; automatic protection stopped"
+                        .to_owned()
+                }
+                "retryable_error" => {
+                    format!("Retryable HTTP {status}; one bounded retry is allowed")
+                }
+                "terminal_error" => {
+                    format!("HTTP {status} made this snapshot ineligible for further keepalives")
+                }
+                "preempted" => {
+                    "A real agent request preempted the background keepalive".to_owned()
+                }
+                _ => "Unknown cache-protection outcome".to_owned(),
+            };
+            let mut identity = vec![
+                diagnostic_field("Log ID", id, true),
+                diagnostic_field("Machine ID", machine_id, true),
+                diagnostic_field("Producer ID", producer_id, true),
+                diagnostic_field("Sequence", sequence.to_string(), true),
+            ];
+            for (label, key, copyable) in [
+                ("Provider", "provider", false),
+                ("Agent", "agent", false),
+                ("Model", "model", false),
+                ("Resolved model", "resolved_model", false),
+                ("Session fingerprint", "session_fingerprint", true),
+                ("Account fingerprint", "account_fingerprint", true),
+            ] {
+                optional_diagnostic_field(
+                    &mut identity,
+                    label,
+                    json_scalar(&current, key),
+                    copyable,
+                );
+            }
+            let mut protection = Vec::new();
+            for (label, key, copyable) in [
+                ("Outcome", "cache_keepalive_outcome", false),
+                ("Algorithm", "cache_keepalive_algorithm", false),
+                ("Attempt", "cache_keepalive_attempt", false),
+                (
+                    "Scheduled interval ms",
+                    "cache_keepalive_interval_ms",
+                    false,
+                ),
+                ("Source age ms", "cache_keepalive_source_age_ms", false),
+                ("HTTP status", "status", false),
+                ("Duration ms", "duration_ms", false),
+                ("Input tokens", "input_tokens", false),
+                ("Output tokens", "output_tokens", false),
+                ("Cache hit tokens", "cache_hit_tokens", false),
+                ("Cache miss tokens", "cache_miss_tokens", false),
+                (
+                    "Source request prefix",
+                    "source_request_prefix_fingerprint",
+                    true,
+                ),
+                ("Replay request prefix", "request_prefix_fingerprint", true),
+                ("Static prefix", "static_prefix_fingerprint", true),
+                ("Gateway build", "gateway_build", true),
+                ("Gateway boot", "gateway_boot_id", true),
+            ] {
+                optional_diagnostic_field(
+                    &mut protection,
+                    label,
+                    json_scalar(&current, key),
+                    copyable,
+                );
+            }
+            return Ok(Some(DiagnosticLogDetail {
+                id: id.to_owned(),
+                kind: "cache_anomaly".to_owned(),
+                occurred_at_ms,
+                title,
+                summary,
+                sections: vec![
+                    DiagnosticLogSection {
+                        title: "Identity".to_owned(),
+                        fields: identity,
+                    },
+                    DiagnosticLogSection {
+                        title: "Cache protection".to_owned(),
+                        fields: protection,
+                    },
+                ],
+                evidence: Some(evidence),
+            }));
+        }
+        if !provider_detail_matches_kind(kind, &current, &previous, gap_ms) {
+            return Ok(None);
+        }
+        let status_code = json_i64(&current, "status");
+        let status = json_scalar(&current, "status").unwrap_or_else(|| "unknown".to_owned());
+        let agent = json_scalar(&current, "agent").unwrap_or_else(|| "unknown".to_owned());
+        let intervening_provider_errors =
+            json_i64(&evidence, "intervening_provider_errors").unwrap_or_default();
+        let cause = (kind == "cache_anomaly")
+            .then(|| cache_transition_cause(&current, &previous, intervening_provider_errors > 0));
+        let title = cause.map_or_else(
+            || diagnostic_http_title(&status),
+            |cause| cache_transition_title(cause).to_owned(),
+        );
+        let summary = if kind == "cache_anomaly" {
+            match (cache_rate_label(&previous), cache_rate_label(&current)) {
+                (Some(previous), Some(current)) => {
+                    format!("Cache hit rate fell from {previous}% to {current}% within 30 minutes")
+                }
+                _ => "Active-session cache hit rate fell below 10%".to_owned(),
+            }
+        } else if status_code.is_some_and(|status| provider_status_impact(status).1) {
+            format!(
+                "{} request was blocked with HTTP status {status}",
+                diagnostic_title(&agent)
+            )
+        } else {
+            format!(
+                "{} request attempt received retryable HTTP status {status}",
+                diagnostic_title(&agent)
+            )
+        };
+        let mut identity = vec![
+            diagnostic_field("Log ID", id, true),
+            diagnostic_field("Machine ID", machine_id, true),
+            diagnostic_field("Producer ID", producer_id, true),
+            diagnostic_field("Sequence", sequence.to_string(), true),
+        ];
+        for (label, key, copyable) in [
+            ("Provider", "provider", false),
+            ("Agent", "agent", false),
+            ("Model", "model", false),
+            ("Resolved model", "resolved_model", false),
+            ("Model family", "model_family", false),
+            ("Model revision", "model_revision", true),
+            ("Session fingerprint", "session_fingerprint", true),
+            ("Account fingerprint", "account_fingerprint", true),
+        ] {
+            optional_diagnostic_field(&mut identity, label, json_scalar(&current, key), copyable);
+        }
+        let mut request = Vec::new();
+        if let Some(cause) = cause {
+            request.push(diagnostic_field("Cache classification", cause, false));
+        } else if let Some(status) = status_code {
+            request.push(diagnostic_field(
+                "Observed impact",
+                provider_status_impact(status).0,
+                false,
+            ));
+        }
+        for (label, key) in [
+            ("HTTP status", "status"),
+            ("Operation", "operation"),
+            ("Request role", "request_role"),
+            ("Client protocol", "client_protocol"),
+            ("Upstream protocol", "upstream_protocol"),
+            ("Translation mode", "translation_mode"),
+            ("Thinking mode", "thinking_mode"),
+            ("Reasoning effort", "reasoning_effort"),
+            ("Duration ms", "duration_ms"),
+            ("Completed", "completed"),
+            ("Streaming", "streaming"),
+            ("Input tokens", "input_tokens"),
+            ("Output tokens", "output_tokens"),
+            ("Reasoning tokens", "reasoning_tokens"),
+            ("Cache hit tokens", "cache_hit_tokens"),
+            ("Cache miss tokens", "cache_miss_tokens"),
+            ("Request bytes", "request_bytes"),
+            ("Input items", "input_item_count"),
+            ("Tools", "tool_count"),
+            ("System blocks", "system_block_count"),
+            ("Compatibility fixes", "compatibility_fixes"),
+        ] {
+            optional_diagnostic_field(&mut request, label, json_scalar(&current, key), false);
+        }
+        let mut cache_identity = Vec::new();
+        for (label, key) in [
+            ("Static prefix", "static_prefix_fingerprint"),
+            ("Request prefix", "request_prefix_fingerprint"),
+            ("Gateway build", "gateway_build"),
+            ("Gateway boot", "gateway_boot_id"),
+        ] {
+            optional_diagnostic_field(&mut cache_identity, label, json_scalar(&current, key), true);
+            optional_diagnostic_field(
+                &mut cache_identity,
+                &format!("Previous {label}"),
+                json_scalar(&previous, key),
+                true,
+            );
+        }
+        optional_diagnostic_field(
+            &mut cache_identity,
+            "Previous cache hit tokens",
+            json_scalar(&previous, "cache_hit_tokens"),
+            false,
+        );
+        optional_diagnostic_field(
+            &mut cache_identity,
+            "Previous cache miss tokens",
+            json_scalar(&previous, "cache_miss_tokens"),
+            false,
+        );
+        optional_diagnostic_field(
+            &mut cache_identity,
+            "Gap ms",
+            gap_ms.map(|value| value.to_string()),
+            false,
+        );
+        optional_diagnostic_field(
+            &mut cache_identity,
+            "Intervening provider errors",
+            (intervening_provider_errors > 0).then(|| intervening_provider_errors.to_string()),
+            false,
+        );
+        let mut sections = vec![
+            DiagnosticLogSection {
+                title: "Identity".to_owned(),
+                fields: identity,
+            },
+            DiagnosticLogSection {
+                title: "Request".to_owned(),
+                fields: request,
+            },
+        ];
+        if !cache_identity.is_empty() {
+            sections.push(DiagnosticLogSection {
+                title: "Cache lineage".to_owned(),
+                fields: cache_identity,
+            });
+        }
+        Ok(Some(DiagnosticLogDetail {
+            id: id.to_owned(),
+            kind: kind.to_owned(),
+            occurred_at_ms,
+            title,
+            summary,
+            sections,
+            evidence: Some(evidence),
+        }))
+    }
+
+    /// Storage metrics for the info panel: `(db_bytes, events_rows,
+    /// sessions_soft_deleted)`. One round-trip.
+    ///
+    /// # Errors
+    /// If the query fails.
+    pub async fn storage_metrics(&self) -> Result<(i64, i64, i64)> {
+        let row: (i64, i64, i64) = sqlx::query_as(
+            "SELECT pg_database_size(current_database())::bigint, \
+             (SELECT count(*) FROM events)::bigint, \
+             (SELECT count(*) FROM sessions WHERE deleted_at IS NOT NULL)::bigint",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .context("storage metrics")?;
+        Ok(row)
+    }
+}
+
+// --- enum ↔ text helpers -----------------------------------------------------
+//
+// We store enums as text columns rather than postgres enums so adding a
+// variant doesn't need a schema migration. The cost is a tiny match arm.
+
+fn origin_to_str(o: SessionOrigin) -> &'static str {
+    match o {
+        SessionOrigin::Api => "api",
+        SessionOrigin::Web => "web",
+    }
+}
+
+fn origin_from_str(s: &str) -> SessionOrigin {
+    // Legacy "zed" rows (the retired Zed bridge) fall through to the Api default.
+    match s {
+        "web" => SessionOrigin::Web,
+        _ => SessionOrigin::Api,
+    }
+}
+
+fn status_to_str(s: Status) -> &'static str {
+    match s {
+        Status::Starting => "starting",
+        Status::Running => "running",
+        Status::Busy => "busy",
+        Status::Exited => "exited",
+        Status::Crashed => "crashed",
+        Status::Interrupted => "interrupted",
+    }
+}
+
+fn status_from_str(s: &str) -> Status {
+    match s {
+        "running" => Status::Running,
+        "busy" => Status::Busy,
+        "exited" => Status::Exited,
+        "crashed" => Status::Crashed,
+        "interrupted" => Status::Interrupted,
+        _ => Status::Starting,
+    }
+}
+
+fn provider_usage_metrics_within_bounds(
+    event: &crate::machine_protocol::ProviderUsageEvent,
+) -> bool {
+    ![
+        event.input_tokens,
+        event.output_tokens,
+        event.reasoning_tokens,
+        event.cache_hit_tokens,
+        event.cache_miss_tokens,
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value > crate::machine_protocol::PROVIDER_USAGE_MAX_TOKENS)
+        && event
+            .duration_ms
+            .is_none_or(|value| value <= crate::machine_protocol::PROVIDER_USAGE_MAX_DURATION_MS)
+        && event
+            .request_bytes
+            .is_none_or(|value| value <= crate::machine_protocol::PROVIDER_USAGE_MAX_REQUEST_BYTES)
+        && ![
+            event.input_item_count,
+            event.tool_count,
+            event.system_block_count,
+            event.compatibility_fixes,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|value| value > crate::machine_protocol::PROVIDER_USAGE_MAX_SHAPE_COUNT)
+        && ![
+            event.cache_keepalive_interval_ms,
+            event.cache_keepalive_source_age_ms,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|value| value > crate::machine_protocol::PROVIDER_USAGE_MAX_KEEPALIVE_MS)
+        && ![event.search_requests, event.fetch_requests]
+            .into_iter()
+            .flatten()
+            .any(|value| value > crate::machine_protocol::PROVIDER_USAGE_MAX_SERVER_TOOL_REQUESTS)
+}
+
+fn valid_provider_usage_hex(value: &str, length: usize) -> bool {
+    value.len() == length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn valid_optional_provider_usage_hex(value: Option<&String>, length: usize) -> bool {
+    value.is_none_or(|value| valid_provider_usage_hex(value, length))
+}
+
+fn valid_provider_usage_keepalive_algorithm(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.as_bytes()[0].is_ascii_lowercase()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        })
+}
+
+fn valid_provider_usage_text(value: &str, max_len: usize) -> bool {
+    (1..=max_len).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii() && !byte.is_ascii_control())
+}
+
+fn valid_provider_usage_activity_dimensions(values: &[String]) -> bool {
+    values.len() <= crate::plugin_host::MAX_ACTIVITY_ENTRIES
+        && values
+            .iter()
+            .all(|value| crate::plugin_host::validate_plugin_id(value).is_ok())
+        && values.iter().collect::<HashSet<_>>().len() == values.len()
+}
+
+fn validate_provider_usage_activity_filter(
+    provider: &str,
+    from_ms: i64,
+    to_ms: i64,
+    agents: &[String],
+    model_families: &[String],
+) -> Result<i64> {
+    let window_ms = to_ms.saturating_sub(from_ms);
+    if crate::plugin_host::validate_plugin_id(provider).is_err()
+        || !(60_000..=i64::from(30 * 86_400) * 1_000).contains(&window_ms)
+        || !valid_provider_usage_activity_dimensions(agents)
+        || !valid_provider_usage_activity_dimensions(model_families)
+    {
+        anyhow::bail!("invalid provider usage activity filter");
+    }
+    Ok(window_ms)
+}
+
+fn valid_provider_usage_v3_dimensions(event: &crate::machine_protocol::ProviderUsageEvent) -> bool {
+    let session_valid = match event.session_attribution.as_str() {
+        "response_lineage" | "prefix_root" | "explicit" => event.session_fingerprint.is_some(),
+        "unattributed" => event.session_fingerprint.is_none(),
+        _ => false,
+    };
+    event.protocol == event.upstream_protocol
+        && crate::plugin_host::validate_plugin_id(&event.model_family).is_ok()
+        && valid_provider_usage_text(&event.request_role, 64)
+        && valid_provider_usage_text(&event.client_protocol, 64)
+        && valid_provider_usage_text(&event.upstream_protocol, 64)
+        && valid_provider_usage_text(&event.translation_mode, 64)
+        && valid_provider_usage_text(&event.thinking_mode, 64)
+        && valid_provider_usage_text(&event.reasoning_effort, 64)
+        && matches!(event.traffic_source.as_str(), "unattributed" | "cowboy")
+        && (event.traffic_source != "cowboy" || event.session_attribution == "explicit")
+        && session_valid
+        && valid_optional_provider_usage_hex(event.session_fingerprint.as_ref(), 32)
+        && valid_optional_provider_usage_hex(event.static_prefix_fingerprint.as_ref(), 32)
+        && valid_optional_provider_usage_hex(event.request_prefix_fingerprint.as_ref(), 32)
+        && valid_optional_provider_usage_hex(event.gateway_build.as_ref(), 16)
+        && valid_optional_provider_usage_hex(event.gateway_boot_id.as_ref(), 16)
+        && event.static_prefix_fingerprint.is_some()
+        && event.request_prefix_fingerprint.is_some()
+        && event.gateway_build.is_some()
+        && event.gateway_boot_id.is_some()
+        && event
+            .resolved_model
+            .as_ref()
+            .is_none_or(|value| valid_provider_usage_text(value, 128))
+        && event
+            .model_revision
+            .as_ref()
+            .is_none_or(|value| valid_provider_usage_text(value, 128))
+}
+
+fn valid_provider_usage_v4_dimensions(event: &crate::machine_protocol::ProviderUsageEvent) -> bool {
+    if !valid_provider_usage_v3_dimensions(event) {
+        return false;
+    }
+    match event.request_purpose.as_str() {
+        "interactive" => {
+            event.cache_keepalive_outcome == "not_applicable"
+                && event.cache_keepalive_algorithm.is_none()
+                && event.cache_keepalive_attempt.is_none_or(|value| value == 0)
+                && event
+                    .cache_keepalive_interval_ms
+                    .is_none_or(|value| value == 0)
+                && event
+                    .cache_keepalive_source_age_ms
+                    .is_none_or(|value| value == 0)
+                && event.source_request_prefix_fingerprint.is_none()
+        }
+        "cache_keepalive" => {
+            event.session_attribution == "explicit"
+                && event.traffic_source == "cowboy"
+                && matches!(
+                    event.cache_keepalive_outcome.as_str(),
+                    "hit" | "miss" | "partial" | "retryable_error" | "terminal_error" | "preempted"
+                )
+                && event
+                    .cache_keepalive_algorithm
+                    .as_deref()
+                    .is_some_and(valid_provider_usage_keepalive_algorithm)
+                && event
+                    .cache_keepalive_attempt
+                    .is_some_and(|value| (1..=1_000).contains(&value))
+                && event
+                    .cache_keepalive_interval_ms
+                    .is_some_and(|value| value > 0)
+                && event.cache_keepalive_source_age_ms.is_some()
+                && valid_optional_provider_usage_hex(
+                    event.source_request_prefix_fingerprint.as_ref(),
+                    32,
+                )
+                && event.source_request_prefix_fingerprint.is_some()
+        }
+        _ => false,
+    }
+}
+
+fn valid_provider_usage_token_algebra(event: &crate::machine_protocol::ProviderUsageEvent) -> bool {
+    if event.schema_version < 2 {
+        return true;
+    }
+    match event.usage_observed {
+        Some(false) => {
+            event.input_tokens.is_none()
+                && event.output_tokens.is_none()
+                && event.reasoning_tokens.is_none()
+                && event.cache_hit_tokens.is_none()
+                && event.cache_miss_tokens.is_none()
+                && event.cache_observation == "absent"
+        }
+        Some(true) => {
+            let (Some(input), Some(output), Some(reasoning)) = (
+                event.input_tokens,
+                event.output_tokens,
+                event.reasoning_tokens,
+            ) else {
+                return false;
+            };
+            if reasoning > output {
+                return false;
+            }
+            match event.cache_observation.as_str() {
+                "absent" => event.cache_hit_tokens.is_none() && event.cache_miss_tokens.is_none(),
+                "derived" | "explicit" => {
+                    let (Some(hit), Some(miss)) = (event.cache_hit_tokens, event.cache_miss_tokens)
+                    else {
+                        return false;
+                    };
+                    hit.checked_add(miss) == Some(input)
+                }
+                _ => false,
+            }
+        }
+        None => false,
+    }
+}
+
+fn validate_provider_usage_event(
+    producer_id: &str,
+    event: &crate::machine_protocol::ProviderUsageEvent,
+) -> Result<()> {
+    if event.producer_id != producer_id
+        || crate::plugin_host::validate_plugin_id(producer_id).is_err()
+        || crate::plugin_host::validate_plugin_id(&event.provider).is_err()
+        || crate::plugin_host::validate_plugin_id(&event.agent).is_err()
+        || event.account_fingerprint.len() != 16
+        || !event
+            .account_fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+        || !valid_provider_usage_text(&event.model, 128)
+        || !(100..=599).contains(&event.status)
+        || !matches!(event.schema_version, 1..=4)
+        || !valid_provider_usage_text(&event.operation, 64)
+        || !valid_provider_usage_text(&event.protocol, 64)
+        || !matches!(
+            event.cache_observation.as_str(),
+            "legacy" | "absent" | "derived" | "explicit"
+        )
+        || !provider_usage_metrics_within_bounds(event)
+        || !valid_provider_usage_token_algebra(event)
+    {
+        anyhow::bail!("invalid provider usage event");
+    }
+    if event.schema_version >= 2
+        && (event.operation == "legacy"
+            || event.protocol == "legacy"
+            || event.cache_observation == "legacy"
+            || event.usage_observed.is_none()
+            || event.completed.is_none()
+            || event.streaming.is_none()
+            || event.duration_ms.is_none()
+            || event.request_bytes.is_none()
+            || event.input_item_count.is_none()
+            || event.tool_count.is_none()
+            || event.system_block_count.is_none()
+            || event.has_previous_response_id.is_none()
+            || event.compatibility_fixes.is_none())
+    {
+        anyhow::bail!("incomplete provider usage event");
+    }
+    if event.schema_version >= 3 && !valid_provider_usage_v3_dimensions(event) {
+        anyhow::bail!("invalid version three provider usage dimensions");
+    }
+    if event.schema_version == 4 && !valid_provider_usage_v4_dimensions(event) {
+        anyhow::bail!("invalid version four provider usage dimensions");
+    }
+    match event.cache_observation.as_str() {
+        "absent" if event.cache_hit_tokens.is_some() || event.cache_miss_tokens.is_some() => {
+            anyhow::bail!("cache counters require a measured observation");
+        }
+        "derived" | "explicit"
+            if event.usage_observed != Some(true)
+                || event.cache_hit_tokens.is_none()
+                || event.cache_miss_tokens.is_none() =>
+        {
+            anyhow::bail!("measured cache observations require complete counters");
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod provider_usage_validation_tests;
+
+fn provider_usage_metric(value: Option<u64>) -> Result<Option<i64>> {
+    value
+        .map(i64::try_from)
+        .transpose()
+        .context("provider usage metric overflow")
+}
+
+async fn insert_provider_usage_event(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    machine_id: &str,
+    producer_id: &str,
+    event: &crate::machine_protocol::ProviderUsageEvent,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO provider_usage_events (machine_id, producer_id, sequence, occurred_at, \
+         account_fingerprint, provider, agent, model, model_family, resolved_model, \
+         model_revision, request_role, status, input_tokens, output_tokens, reasoning_tokens, \
+         cache_hit_tokens, cache_miss_tokens, schema_version, operation, protocol, \
+         client_protocol, upstream_protocol, translation_mode, thinking_mode, \
+         reasoning_effort, session_fingerprint, session_attribution, traffic_source, \
+         static_prefix_fingerprint, request_prefix_fingerprint, gateway_build, \
+         gateway_boot_id, cache_observation, usage_observed, completed, streaming, \
+         duration_ms, request_bytes, input_item_count, tool_count, system_block_count, \
+         has_previous_response_id, compatibility_fixes, request_purpose, \
+         cache_keepalive_outcome, cache_keepalive_algorithm, cache_keepalive_attempt, \
+         cache_keepalive_interval_ms, cache_keepalive_source_age_ms, \
+         source_request_prefix_fingerprint, search_requests, fetch_requests) VALUES ( \
+         $1, $2, $3, to_timestamp($4::double precision / 1000), $5, $6, $7, $8, $9, \
+         $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, \
+         $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, \
+         $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, \
+         $51, $52, $53) ON CONFLICT DO NOTHING",
+    )
+    .bind(machine_id)
+    .bind(producer_id)
+    .bind(i64::try_from(event.sequence).context("usage sequence overflow")?)
+    .bind(event.occurred_at_ms)
+    .bind(&event.account_fingerprint)
+    .bind(&event.provider)
+    .bind(&event.agent)
+    .bind(&event.model)
+    .bind(&event.model_family)
+    .bind(&event.resolved_model)
+    .bind(&event.model_revision)
+    .bind(&event.request_role)
+    .bind(i32::from(event.status))
+    .bind(provider_usage_metric(event.input_tokens)?)
+    .bind(provider_usage_metric(event.output_tokens)?)
+    .bind(provider_usage_metric(event.reasoning_tokens)?)
+    .bind(provider_usage_metric(event.cache_hit_tokens)?)
+    .bind(provider_usage_metric(event.cache_miss_tokens)?)
+    .bind(i32::from(event.schema_version))
+    .bind(&event.operation)
+    .bind(&event.protocol)
+    .bind(&event.client_protocol)
+    .bind(&event.upstream_protocol)
+    .bind(&event.translation_mode)
+    .bind(&event.thinking_mode)
+    .bind(&event.reasoning_effort)
+    .bind(&event.session_fingerprint)
+    .bind(&event.session_attribution)
+    .bind(&event.traffic_source)
+    .bind(&event.static_prefix_fingerprint)
+    .bind(&event.request_prefix_fingerprint)
+    .bind(&event.gateway_build)
+    .bind(&event.gateway_boot_id)
+    .bind(&event.cache_observation)
+    .bind(event.usage_observed)
+    .bind(event.completed)
+    .bind(event.streaming)
+    .bind(provider_usage_metric(event.duration_ms)?)
+    .bind(provider_usage_metric(event.request_bytes)?)
+    .bind(provider_usage_metric(event.input_item_count)?)
+    .bind(provider_usage_metric(event.tool_count)?)
+    .bind(provider_usage_metric(event.system_block_count)?)
+    .bind(event.has_previous_response_id)
+    .bind(provider_usage_metric(event.compatibility_fixes)?)
+    .bind(&event.request_purpose)
+    .bind(&event.cache_keepalive_outcome)
+    .bind(&event.cache_keepalive_algorithm)
+    .bind(provider_usage_metric(event.cache_keepalive_attempt)?)
+    .bind(provider_usage_metric(event.cache_keepalive_interval_ms)?)
+    .bind(provider_usage_metric(event.cache_keepalive_source_age_ms)?)
+    .bind(&event.source_request_prefix_fingerprint)
+    .bind(provider_usage_metric(event.search_requests)?)
+    .bind(provider_usage_metric(event.fetch_requests)?)
+    .execute(&mut **transaction)
+    .await
+    .context("insert provider usage event")?;
+    Ok(())
+}
+
+const PROVIDER_USAGE_AGGREGATE_COLUMNS: &str = "count(*) FILTER (WHERE request_purpose = 'interactive')::bigint AS requests, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND status >= 400)::bigint AS errors, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND status BETWEEN 400 AND 499 AND status NOT IN (408, 425, 429, 499))::bigint AS blocking_errors, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND (status IN (408, 425, 429, 499) OR status >= 500))::bigint AS transient_errors, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND completed IS TRUE)::bigint AS completed_requests, \
+     count(completed) FILTER (WHERE request_purpose = 'interactive')::bigint AS completion_observations, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND usage_observed IS TRUE)::bigint AS usage_observations, \
+     least(coalesce(sum(input_tokens::numeric) FILTER (WHERE request_purpose = 'interactive'), 0), 9223372036854775807)::bigint AS input_tokens, \
+     least(coalesce(sum(output_tokens::numeric) FILTER (WHERE request_purpose = 'interactive'), 0), 9223372036854775807)::bigint AS output_tokens, \
+     least(coalesce(sum(reasoning_tokens::numeric) FILTER (WHERE request_purpose = 'interactive'), 0), 9223372036854775807)::bigint AS reasoning_tokens, \
+     least(coalesce(sum(cache_hit_tokens::numeric) FILTER (WHERE request_purpose = 'interactive' AND cache_observation IN ('explicit', 'derived')), 0), 9223372036854775807)::bigint AS cache_hit_tokens, \
+     least(coalesce(sum(cache_miss_tokens::numeric) FILTER (WHERE request_purpose = 'interactive' AND cache_observation IN ('explicit', 'derived')), 0), 9223372036854775807)::bigint AS cache_miss_tokens, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND cache_observation IN ('explicit', 'derived') AND cache_hit_tokens IS NOT NULL AND cache_miss_tokens IS NOT NULL)::bigint AS cache_observations, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND cache_observation = 'explicit')::bigint AS explicit_cache_observations, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND cache_observation = 'derived')::bigint AS derived_cache_observations, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND cache_observation = 'absent')::bigint AS absent_cache_observations, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND cache_observation IN ('explicit', 'derived') AND cache_hit_tokens::numeric + cache_miss_tokens::numeric > 0 AND cache_hit_tokens::numeric * 10 < cache_hit_tokens::numeric + cache_miss_tokens::numeric)::bigint AS cold_cache_requests, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND cache_observation IN ('explicit', 'derived') AND cache_hit_tokens::numeric + cache_miss_tokens::numeric > 0 AND cache_hit_tokens::numeric * 10 >= 9 * (cache_hit_tokens::numeric + cache_miss_tokens::numeric))::bigint AS hot_cache_requests, \
+     least(coalesce(sum(duration_ms::numeric) FILTER (WHERE request_purpose = 'interactive'), 0), 9223372036854775807)::bigint AS duration_ms, \
+     count(duration_ms) FILTER (WHERE request_purpose = 'interactive')::bigint AS duration_observations, \
+     least(coalesce(sum(request_bytes::numeric) FILTER (WHERE request_purpose = 'interactive'), 0), 9223372036854775807)::bigint AS request_bytes, \
+     count(request_bytes) FILTER (WHERE request_purpose = 'interactive')::bigint AS request_shape_observations, \
+     least(coalesce(sum(input_item_count::numeric) FILTER (WHERE request_purpose = 'interactive'), 0), 9223372036854775807)::bigint AS input_item_count, \
+     least(coalesce(sum(tool_count::numeric) FILTER (WHERE request_purpose = 'interactive'), 0), 9223372036854775807)::bigint AS tool_count, \
+     least(coalesce(sum(system_block_count::numeric) FILTER (WHERE request_purpose = 'interactive'), 0), 9223372036854775807)::bigint AS system_block_count, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND has_previous_response_id IS TRUE)::bigint AS previous_response_requests, \
+     least(coalesce(sum(compatibility_fixes::numeric) FILTER (WHERE request_purpose = 'interactive'), 0), 9223372036854775807)::bigint AS compatibility_fixes, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND streaming IS TRUE)::bigint AS streaming_requests, \
+     least(coalesce(sum(search_requests::numeric) FILTER (WHERE request_purpose = 'interactive'), 0), 9223372036854775807)::bigint AS search_requests, \
+     least(coalesce(sum(fetch_requests::numeric) FILTER (WHERE request_purpose = 'interactive'), 0), 9223372036854775807)::bigint AS fetch_requests, \
+     count(*) FILTER (WHERE request_purpose = 'cache_keepalive')::bigint AS cache_keepalive_requests, \
+     count(*) FILTER (WHERE request_purpose = 'cache_keepalive' AND cache_keepalive_outcome = 'hit')::bigint AS cache_keepalive_hits, \
+     count(*) FILTER (WHERE request_purpose = 'cache_keepalive' AND cache_keepalive_outcome = 'miss')::bigint AS cache_keepalive_misses, \
+     count(*) FILTER (WHERE request_purpose = 'cache_keepalive' AND cache_keepalive_outcome = 'partial')::bigint AS cache_keepalive_partials, \
+     count(*) FILTER (WHERE request_purpose = 'cache_keepalive' AND cache_keepalive_outcome = 'retryable_error')::bigint AS cache_keepalive_retryable_errors, \
+     count(*) FILTER (WHERE request_purpose = 'cache_keepalive' AND cache_keepalive_outcome = 'terminal_error')::bigint AS cache_keepalive_terminal_errors, \
+     count(*) FILTER (WHERE request_purpose = 'cache_keepalive' AND cache_keepalive_outcome = 'preempted')::bigint AS cache_keepalive_preemptions, \
+     count(*) FILTER (WHERE request_purpose = 'cache_keepalive' AND usage_observed IS TRUE)::bigint AS cache_keepalive_usage_observations, \
+     least(coalesce(sum(input_tokens::numeric) FILTER (WHERE request_purpose = 'cache_keepalive'), 0), 9223372036854775807)::bigint AS cache_keepalive_input_tokens, \
+     least(coalesce(sum(output_tokens::numeric) FILTER (WHERE request_purpose = 'cache_keepalive'), 0), 9223372036854775807)::bigint AS cache_keepalive_output_tokens, \
+     least(coalesce(sum(reasoning_tokens::numeric) FILTER (WHERE request_purpose = 'cache_keepalive'), 0), 9223372036854775807)::bigint AS cache_keepalive_reasoning_tokens, \
+     least(coalesce(sum(cache_hit_tokens::numeric) FILTER (WHERE request_purpose = 'cache_keepalive' AND cache_observation IN ('explicit', 'derived')), 0), 9223372036854775807)::bigint AS cache_keepalive_hit_tokens, \
+     least(coalesce(sum(cache_miss_tokens::numeric) FILTER (WHERE request_purpose = 'cache_keepalive' AND cache_observation IN ('explicit', 'derived')), 0), 9223372036854775807)::bigint AS cache_keepalive_miss_tokens, \
+     least(coalesce(sum(duration_ms::numeric) FILTER (WHERE request_purpose = 'cache_keepalive'), 0), 9223372036854775807)::bigint AS cache_keepalive_duration_ms, \
+     count(duration_ms) FILTER (WHERE request_purpose = 'cache_keepalive')::bigint AS cache_keepalive_duration_observations, \
+     least(coalesce(sum(cache_keepalive_interval_ms::numeric) FILTER (WHERE request_purpose = 'cache_keepalive'), 0), 9223372036854775807)::bigint AS cache_keepalive_interval_ms, \
+     count(cache_keepalive_interval_ms) FILTER (WHERE request_purpose = 'cache_keepalive')::bigint AS cache_keepalive_interval_observations, \
+     least(coalesce(sum(cache_keepalive_source_age_ms::numeric) FILTER (WHERE request_purpose = 'cache_keepalive'), 0), 9223372036854775807)::bigint AS cache_keepalive_source_age_ms, \
+     count(cache_keepalive_source_age_ms) FILTER (WHERE request_purpose = 'cache_keepalive')::bigint AS cache_keepalive_source_age_observations";
+
+#[derive(Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderUsageBreakdown {
+    summary: UsageAggregate,
+    by_agent: std::collections::BTreeMap<String, UsageAggregate>,
+    by_agent_model:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, UsageAggregate>>,
+    by_agent_model_family:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, UsageAggregate>>,
+    by_agent_request_role:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, UsageAggregate>>,
+    by_machine: std::collections::BTreeMap<String, UsageAggregate>,
+    by_operation: std::collections::BTreeMap<String, UsageAggregate>,
+    by_model: std::collections::BTreeMap<String, UsageAggregate>,
+    by_resolved_model: std::collections::BTreeMap<String, UsageAggregate>,
+    by_billing_model: std::collections::BTreeMap<String, UsageAggregate>,
+    by_model_revision: std::collections::BTreeMap<String, UsageAggregate>,
+    by_model_family: std::collections::BTreeMap<String, UsageAggregate>,
+    by_request_role: std::collections::BTreeMap<String, UsageAggregate>,
+    by_protocol: std::collections::BTreeMap<String, UsageAggregate>,
+    by_client_protocol: std::collections::BTreeMap<String, UsageAggregate>,
+    by_upstream_protocol: std::collections::BTreeMap<String, UsageAggregate>,
+    by_translation_mode: std::collections::BTreeMap<String, UsageAggregate>,
+    by_thinking_mode: std::collections::BTreeMap<String, UsageAggregate>,
+    by_reasoning_effort: std::collections::BTreeMap<String, UsageAggregate>,
+    by_session_attribution: std::collections::BTreeMap<String, UsageAggregate>,
+    by_traffic_source: std::collections::BTreeMap<String, UsageAggregate>,
+    by_gateway_build: std::collections::BTreeMap<String, UsageAggregate>,
+    by_schema_version: std::collections::BTreeMap<String, UsageAggregate>,
+    by_agent_operation:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, UsageAggregate>>,
+    by_agent_billing_model:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, UsageAggregate>>,
+}
+
+impl ProviderUsageBreakdown {
+    fn add_row(&mut self, row: &sqlx::postgres::PgRow) {
+        let aggregate = UsageAggregate::from_row(row);
+        let agent = row.get::<String, _>("agent");
+        let model = row.get::<String, _>("model");
+        let resolved_model = row.get::<String, _>("resolved_model");
+        let billing_model = if resolved_model.is_empty() {
+            model.clone()
+        } else {
+            resolved_model.clone()
+        };
+        let model_family = row.get::<String, _>("model_family");
+        let request_role = row.get::<String, _>("request_role");
+        let operation = row.get::<String, _>("operation");
+        self.summary.add(&aggregate);
+        for (map, key) in [
+            (&mut self.by_agent, agent.clone()),
+            (&mut self.by_machine, row.get("machine_id")),
+            (&mut self.by_operation, operation.clone()),
+            (&mut self.by_model, model.clone()),
+            (&mut self.by_resolved_model, resolved_model),
+            (&mut self.by_billing_model, billing_model.clone()),
+            (&mut self.by_model_revision, row.get("model_revision")),
+            (&mut self.by_model_family, model_family.clone()),
+            (&mut self.by_request_role, request_role.clone()),
+            (&mut self.by_protocol, row.get("protocol")),
+            (&mut self.by_client_protocol, row.get("client_protocol")),
+            (&mut self.by_upstream_protocol, row.get("upstream_protocol")),
+            (&mut self.by_translation_mode, row.get("translation_mode")),
+            (&mut self.by_thinking_mode, row.get("thinking_mode")),
+            (&mut self.by_reasoning_effort, row.get("reasoning_effort")),
+            (
+                &mut self.by_session_attribution,
+                row.get("session_attribution"),
+            ),
+            (&mut self.by_traffic_source, row.get("traffic_source")),
+            (&mut self.by_gateway_build, row.get("gateway_build")),
+            (
+                &mut self.by_schema_version,
+                row.get::<i32, _>("schema_version").to_string(),
+            ),
+        ] {
+            map.entry(key).or_default().add(&aggregate);
+        }
+        self.by_agent_model
+            .entry(agent.clone())
+            .or_default()
+            .entry(model)
+            .or_default()
+            .add(&aggregate);
+        self.by_agent_billing_model
+            .entry(agent.clone())
+            .or_default()
+            .entry(billing_model)
+            .or_default()
+            .add(&aggregate);
+        self.by_agent_model_family
+            .entry(agent.clone())
+            .or_default()
+            .entry(model_family)
+            .or_default()
+            .add(&aggregate);
+        self.by_agent_request_role
+            .entry(agent.clone())
+            .or_default()
+            .entry(request_role)
+            .or_default()
+            .add(&aggregate);
+        self.by_agent_operation
+            .entry(agent)
+            .or_default()
+            .entry(operation)
+            .or_default()
+            .add(&aggregate);
+    }
+}
+
+async fn load_provider_usage_breakdown(
+    pool: &PgPool,
+    provider: &str,
+    days: i32,
+) -> Result<ProviderUsageBreakdown> {
+    let query = format!(
+        "SELECT agent, machine_id, coalesce(model, '') AS model, \
+         coalesce(resolved_model, '') AS resolved_model, coalesce(model_revision, '') AS model_revision, \
+         coalesce(gateway_build, '') AS gateway_build, model_family, request_role, \
+         operation, protocol, client_protocol, upstream_protocol, translation_mode, \
+         thinking_mode, reasoning_effort, session_attribution, traffic_source, schema_version, \
+         {PROVIDER_USAGE_AGGREGATE_COLUMNS} FROM provider_usage_events WHERE provider = $1 \
+         AND occurred_at >= now() - make_interval(days => $2::int) \
+         GROUP BY agent, machine_id, model, resolved_model, model_revision, gateway_build, \
+         model_family, request_role, operation, protocol, \
+         client_protocol, upstream_protocol, translation_mode, thinking_mode, reasoning_effort, \
+         session_attribution, traffic_source, schema_version"
+    );
+    let rows = sqlx::query(&query)
+        .bind(provider)
+        .bind(days)
+        .fetch_all(pool)
+        .await
+        .context("aggregate provider usage")?;
+    let mut breakdown = ProviderUsageBreakdown::default();
+    for row in &rows {
+        breakdown.add_row(row);
+    }
+    Ok(breakdown)
+}
+
+async fn load_provider_usage_breakdown_hours(
+    pool: &PgPool,
+    provider: &str,
+    hours: i32,
+) -> Result<ProviderUsageBreakdown> {
+    let query = format!(
+        "SELECT agent, machine_id, coalesce(model, '') AS model, \
+         coalesce(resolved_model, '') AS resolved_model, coalesce(model_revision, '') AS model_revision, \
+         coalesce(gateway_build, '') AS gateway_build, model_family, request_role, \
+         operation, protocol, client_protocol, upstream_protocol, translation_mode, \
+         thinking_mode, reasoning_effort, session_attribution, traffic_source, schema_version, \
+         {PROVIDER_USAGE_AGGREGATE_COLUMNS} FROM provider_usage_events WHERE provider = $1 \
+         AND occurred_at >= now() - make_interval(hours => $2::int) \
+         GROUP BY agent, machine_id, model, resolved_model, model_revision, gateway_build, \
+         model_family, request_role, operation, protocol, \
+         client_protocol, upstream_protocol, translation_mode, thinking_mode, reasoning_effort, \
+         session_attribution, traffic_source, schema_version"
+    );
+    let rows = sqlx::query(&query)
+        .bind(provider)
+        .bind(hours)
+        .fetch_all(pool)
+        .await
+        .context("aggregate rolling provider usage")?;
+    let mut breakdown = ProviderUsageBreakdown::default();
+    for row in &rows {
+        breakdown.add_row(row);
+    }
+    Ok(breakdown)
+}
+
+async fn load_daily_provider_usage(
+    pool: &PgPool,
+    provider: &str,
+    days: i32,
+) -> Result<Vec<serde_json::Value>> {
+    let query = format!(
+        "SELECT to_char(date_trunc('day', occurred_at), 'YYYY-MM-DD') AS day, \
+         {PROVIDER_USAGE_AGGREGATE_COLUMNS} FROM provider_usage_events WHERE provider = $1 \
+         AND occurred_at >= now() - make_interval(days => $2::int) \
+         GROUP BY date_trunc('day', occurred_at) ORDER BY date_trunc('day', occurred_at)"
+    );
+    Ok(sqlx::query(&query)
+        .bind(provider)
+        .bind(days)
+        .fetch_all(pool)
+        .await
+        .context("aggregate daily provider usage")?
+        .into_iter()
+        .map(|row| {
+            serde_json::json!({
+                "day": row.get::<String, _>("day"),
+                "totals": UsageAggregate::from_row(&row),
+            })
+        })
+        .collect())
+}
+
+async fn load_provider_usage_coverage(
+    pool: &PgPool,
+    provider: &str,
+    days: i32,
+) -> Result<Vec<serde_json::Value>> {
+    Ok(sqlx::query(
+        "SELECT machine_id, agent, last_sequence, \
+         (extract(epoch FROM last_received_at) * 1000)::bigint AS last_received_at_ms \
+         FROM provider_usage_producers WHERE provider = $1 AND last_received_at >= \
+         now() - make_interval(days => $2::int) ORDER BY machine_id, agent",
+    )
+    .bind(provider)
+    .bind(days)
+    .fetch_all(pool)
+    .await
+    .context("load provider usage coverage")?
+    .into_iter()
+    .map(|row| {
+        serde_json::json!({
+            "machine": row.get::<String, _>("machine_id"),
+            "agent": row.get::<String, _>("agent"),
+            "lastSequence": row.get::<i64, _>("last_sequence"),
+            "lastReceivedAtMs": row.get::<i64, _>("last_received_at_ms"),
+        })
+    })
+    .collect())
+}
+
+async fn load_provider_usage_available_agents(
+    pool: &PgPool,
+    provider: &str,
+    days: i32,
+) -> Result<Vec<String>> {
+    sqlx::query_scalar(
+        "SELECT DISTINCT agent FROM provider_usage_events WHERE provider = $1 AND occurred_at >= \
+         now() - make_interval(days => $2::int) ORDER BY agent",
+    )
+    .bind(provider)
+    .bind(days)
+    .fetch_all(pool)
+    .await
+    .context("load provider usage available agents")
+}
+
+async fn load_filtered_provider_usage_breakdown(
+    pool: &PgPool,
+    provider: &str,
+    from_ms: i64,
+    to_ms: i64,
+    agent: Option<&str>,
+    model_family: Option<&str>,
+) -> Result<ProviderUsageBreakdown> {
+    let query = format!(
+        "SELECT agent, machine_id, coalesce(model, '') AS model, \
+         coalesce(resolved_model, '') AS resolved_model, coalesce(model_revision, '') AS model_revision, \
+         coalesce(gateway_build, '') AS gateway_build, model_family, request_role, \
+         operation, protocol, client_protocol, upstream_protocol, translation_mode, \
+         thinking_mode, reasoning_effort, session_attribution, traffic_source, schema_version, \
+         {PROVIDER_USAGE_AGGREGATE_COLUMNS} FROM provider_usage_events WHERE provider = $1 \
+         AND occurred_at >= to_timestamp($2::double precision / 1000) \
+         AND occurred_at <= to_timestamp($3::double precision / 1000) \
+         AND ($4::text IS NULL OR agent = $4) AND ($5::text IS NULL OR model_family = $5) \
+         GROUP BY agent, machine_id, model, resolved_model, model_revision, gateway_build, \
+         model_family, request_role, operation, protocol, \
+         client_protocol, upstream_protocol, translation_mode, thinking_mode, reasoning_effort, \
+         session_attribution, traffic_source, schema_version"
+    );
+    let rows = sqlx::query(&query)
+        .bind(provider)
+        .bind(from_ms)
+        .bind(to_ms)
+        .bind(agent)
+        .bind(model_family)
+        .fetch_all(pool)
+        .await
+        .context("aggregate filtered provider usage")?;
+    let mut breakdown = ProviderUsageBreakdown::default();
+    for row in &rows {
+        breakdown.add_row(row);
+    }
+    Ok(breakdown)
+}
+
+async fn load_provider_usage_timeline(
+    pool: &PgPool,
+    provider: &str,
+    from_ms: i64,
+    to_ms: i64,
+    bucket: &str,
+    agent: Option<&str>,
+    model_family: Option<&str>,
+) -> Result<Vec<serde_json::Value>> {
+    let truncation = match bucket {
+        "hour" => "hour",
+        "day" => "day",
+        _ => anyhow::bail!("invalid provider usage timeline bucket"),
+    };
+    let query = format!(
+        "SELECT (extract(epoch FROM date_trunc('{truncation}', occurred_at)) * 1000)::bigint \
+         AS start_ms, {PROVIDER_USAGE_AGGREGATE_COLUMNS} FROM provider_usage_events \
+         WHERE provider = $1 AND occurred_at >= to_timestamp($2::double precision / 1000) \
+         AND occurred_at <= to_timestamp($3::double precision / 1000) \
+         AND ($4::text IS NULL OR agent = $4) AND ($5::text IS NULL OR model_family = $5) \
+         GROUP BY date_trunc('{truncation}', occurred_at) ORDER BY date_trunc('{truncation}', occurred_at)"
+    );
+    Ok(sqlx::query(&query)
+        .bind(provider)
+        .bind(from_ms)
+        .bind(to_ms)
+        .bind(agent)
+        .bind(model_family)
+        .fetch_all(pool)
+        .await
+        .context("aggregate provider usage timeline")?
+        .into_iter()
+        .map(|row| {
+            serde_json::json!({
+                "startMs": row.get::<i64, _>("start_ms"),
+                "totals": UsageAggregate::from_row(&row),
+            })
+        })
+        .collect())
+}
+
+#[derive(Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LowHitBreakdown {
+    summary: UsageAggregate,
+    by_cause: std::collections::BTreeMap<String, UsageAggregate>,
+    by_cause_model:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, UsageAggregate>>,
+}
+
+#[allow(clippy::too_many_lines)] // SQL lineage classification is clearest as one bounded query
+async fn load_provider_usage_low_hit(
+    pool: &PgPool,
+    provider: &str,
+    from_ms: i64,
+    to_ms: i64,
+    agent: Option<&str>,
+    model_family: Option<&str>,
+) -> Result<LowHitBreakdown> {
+    let query = format!(
+        "WITH lineage AS ( \
+           SELECT events.*, \
+             lag(model_family) OVER session_window AS previous_model_family, \
+             lag(model_revision) OVER session_window AS previous_model_revision, \
+             lag(request_role) OVER session_window AS previous_request_role, \
+             lag(upstream_protocol) OVER session_window AS previous_upstream_protocol, \
+             lag(translation_mode) OVER session_window AS previous_translation_mode, \
+             lag(thinking_mode) OVER session_window AS previous_thinking_mode, \
+             lag(reasoning_effort) OVER session_window AS previous_reasoning_effort, \
+             lag(static_prefix_fingerprint) OVER session_window AS previous_static_prefix, \
+             lag(request_prefix_fingerprint) OVER session_window AS previous_request_prefix, \
+             lag(input_item_count) OVER session_window AS previous_input_item_count, \
+             lag(gateway_build) OVER session_window AS previous_gateway_build, \
+             lag(gateway_boot_id) OVER session_window AS previous_gateway_boot_id, \
+             lag(cache_hit_tokens) OVER session_window AS previous_cache_hit_tokens, \
+             lag(cache_miss_tokens) OVER session_window AS previous_cache_miss_tokens, \
+             lag(occurred_at) OVER session_window AS previous_occurred_at \
+           FROM provider_usage_events events \
+           WHERE provider = $1 AND occurred_at >= \
+             to_timestamp($2::double precision / 1000) - interval '6 hours' \
+             AND occurred_at <= to_timestamp($3::double precision / 1000) \
+             AND request_purpose = 'interactive' \
+             AND ($4::text IS NULL OR agent = $4) \
+           WINDOW session_window AS ( \
+             PARTITION BY machine_id, producer_id, account_fingerprint, agent, \
+               coalesce(session_fingerprint, producer_id || ':' || sequence::text) \
+             ORDER BY occurred_at, sequence \
+           ) \
+         ), classified AS ( \
+           SELECT lineage.*, CASE \
+             WHEN schema_version < 3 THEN 'legacy_unattributed' \
+             WHEN session_fingerprint IS NULL AND has_previous_response_id IS TRUE \
+               THEN 'session_lineage_unavailable' \
+             WHEN session_fingerprint IS NULL THEN 'unattributed' \
+             WHEN session_attribution = 'prefix_root' THEN 'prefix_lineage_ambiguous' \
+             WHEN previous_occurred_at IS NULL THEN 'first_session_observation' \
+             WHEN operation = 'compact' THEN 'client_compaction' \
+             WHEN occurred_at - previous_occurred_at >= interval '6 hours' \
+               AND previous_cache_hit_tokens * 10 >= \
+                 9 * (previous_cache_hit_tokens + previous_cache_miss_tokens) \
+               THEN 'probable_cache_eviction' \
+             WHEN gateway_build IS DISTINCT FROM previous_gateway_build THEN 'gateway_build_changed' \
+             WHEN gateway_boot_id IS DISTINCT FROM previous_gateway_boot_id THEN 'post_gateway_restart' \
+             WHEN model_family IS DISTINCT FROM previous_model_family THEN 'model_changed' \
+             WHEN model_revision IS DISTINCT FROM previous_model_revision THEN 'model_revision_changed' \
+             WHEN request_role IS DISTINCT FROM previous_request_role THEN 'request_role_changed' \
+             WHEN upstream_protocol IS DISTINCT FROM previous_upstream_protocol THEN 'protocol_changed' \
+             WHEN translation_mode IS DISTINCT FROM previous_translation_mode THEN 'translation_changed' \
+             WHEN thinking_mode IS DISTINCT FROM previous_thinking_mode \
+               OR reasoning_effort IS DISTINCT FROM previous_reasoning_effort \
+               THEN 'reasoning_configuration_changed' \
+             WHEN compatibility_fixes > 0 THEN 'compatibility_rewrite' \
+             WHEN static_prefix_fingerprint IS DISTINCT FROM previous_static_prefix THEN 'static_prefix_changed' \
+             WHEN has_previous_response_id IS NOT TRUE \
+               AND input_item_count < previous_input_item_count THEN 'history_rewrite' \
+             WHEN request_prefix_fingerprint = previous_request_prefix \
+               AND previous_cache_hit_tokens * 10 >= \
+                 9 * (previous_cache_hit_tokens + previous_cache_miss_tokens) \
+               THEN 'unexpected_exact_prefix_miss' \
+             ELSE 'unexplained_low_hit' END AS cause \
+           FROM lineage WHERE occurred_at >= to_timestamp($2::double precision / 1000) \
+             AND occurred_at <= to_timestamp($3::double precision / 1000) \
+             AND ($5::text IS NULL OR model_family = $5) \
+             AND cache_observation IN ('explicit', 'derived') \
+             AND coalesce(input_tokens, 0) >= 8000 \
+             AND cache_hit_tokens + cache_miss_tokens > 0 \
+             AND cache_hit_tokens * 10 < cache_hit_tokens + cache_miss_tokens \
+         ) \
+         SELECT cause, coalesce(resolved_model, model, '') AS model, {PROVIDER_USAGE_AGGREGATE_COLUMNS} \
+         FROM classified GROUP BY cause, coalesce(resolved_model, model, '') \
+         ORDER BY cause, coalesce(resolved_model, model, '')"
+    );
+    let rows = sqlx::query(&query)
+        .bind(provider)
+        .bind(from_ms)
+        .bind(to_ms)
+        .bind(agent)
+        .bind(model_family)
+        .fetch_all(pool)
+        .await
+        .context("classify low-hit provider usage")?;
+    let mut result = LowHitBreakdown::default();
+    for row in rows {
+        let cause = row.get::<String, _>("cause");
+        let model = row.get::<String, _>("model");
+        let aggregate = UsageAggregate::from_row(&row);
+        result.summary.add(&aggregate);
+        result
+            .by_cause
+            .entry(cause.clone())
+            .or_default()
+            .add(&aggregate);
+        result
+            .by_cause_model
+            .entry(cause)
+            .or_default()
+            .entry(model)
+            .or_default()
+            .add(&aggregate);
+    }
+    Ok(result)
+}
+
+async fn load_filtered_provider_usage_coverage(
+    pool: &PgPool,
+    provider: &str,
+    from_ms: i64,
+    to_ms: i64,
+    agent: Option<&str>,
+    model_family: Option<&str>,
+) -> Result<Vec<serde_json::Value>> {
+    Ok(sqlx::query(
+        "SELECT producers.machine_id, producers.agent, producers.last_sequence, \
+         (extract(epoch FROM producers.last_received_at) * 1000)::bigint AS last_received_at_ms \
+         FROM provider_usage_producers producers WHERE producers.provider = $1 \
+         AND ($4::text IS NULL OR producers.agent = $4) AND EXISTS ( \
+           SELECT 1 FROM provider_usage_events events \
+           WHERE events.machine_id = producers.machine_id \
+             AND events.producer_id = producers.producer_id AND events.provider = $1 \
+             AND events.occurred_at >= to_timestamp($2::double precision / 1000) \
+             AND events.occurred_at <= to_timestamp($3::double precision / 1000) \
+             AND ($5::text IS NULL OR events.model_family = $5) \
+         ) ORDER BY producers.machine_id, producers.agent",
+    )
+    .bind(provider)
+    .bind(from_ms)
+    .bind(to_ms)
+    .bind(agent)
+    .bind(model_family)
+    .fetch_all(pool)
+    .await
+    .context("load filtered provider usage coverage")?
+    .into_iter()
+    .map(|row| {
+        serde_json::json!({
+            "machine": row.get::<String, _>("machine_id"),
+            "agent": row.get::<String, _>("agent"),
+            "lastSequence": row.get::<i64, _>("last_sequence"),
+            "lastReceivedAtMs": row.get::<i64, _>("last_received_at_ms"),
+        })
+    })
+    .collect())
+}
+
+impl PostgresStorage {
+    /// Persist one authenticated Machine usage batch idempotently and advance
+    /// its producer watermark in the same transaction.
+    pub async fn ingest_provider_usage(
+        &self,
+        machine_id: &str,
+        producer_id: &str,
+        events: &[crate::machine_protocol::ProviderUsageEvent],
+    ) -> Result<u64> {
+        if !valid_machine_id(machine_id)
+            || producer_id.is_empty()
+            || producer_id.len() > 128
+            || events.is_empty()
+            || events.len() > 200
+        {
+            anyhow::bail!("invalid provider usage batch");
+        }
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("begin provider usage batch")?;
+        for event in events {
+            validate_provider_usage_event(producer_id, event)?;
+            insert_provider_usage_event(&mut transaction, machine_id, producer_id, event).await?;
+        }
+        let last = events.iter().map(|event| event.sequence).max().unwrap_or(0);
+        let newest = events
+            .iter()
+            .max_by_key(|event| event.occurred_at_ms)
+            .context("empty provider usage batch")?;
+        sqlx::query(
+            "INSERT INTO provider_usage_producers (machine_id, producer_id, provider, \
+             account_fingerprint, agent, last_sequence, last_occurred_at) VALUES \
+             ($1, $2, $3, $4, $5, $6, to_timestamp($7::double precision / 1000)) \
+             ON CONFLICT (machine_id, producer_id) \
+             DO UPDATE SET provider = EXCLUDED.provider, \
+             account_fingerprint = EXCLUDED.account_fingerprint, agent = EXCLUDED.agent, \
+             last_sequence = GREATEST(provider_usage_producers.last_sequence, \
+             EXCLUDED.last_sequence), last_occurred_at = GREATEST( \
+             provider_usage_producers.last_occurred_at, EXCLUDED.last_occurred_at), \
+             last_received_at = now()",
+        )
+        .bind(machine_id)
+        .bind(producer_id)
+        .bind(&newest.provider)
+        .bind(&newest.account_fingerprint)
+        .bind(&newest.agent)
+        .bind(i64::try_from(last).context("usage watermark overflow")?)
+        .bind(newest.occurred_at_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("upsert provider usage producer")?;
+        transaction
+            .commit()
+            .await
+            .context("commit provider usage batch")?;
+        Ok(last)
+    }
+
+    /// Aggregate gateway-measured usage separately from provider-owned account facts.
+    pub async fn provider_usage_summary(
+        &self,
+        provider: &str,
+        days: i32,
+        retention_days: i32,
+    ) -> Result<serde_json::Value> {
+        let breakdown = load_provider_usage_breakdown(&self.pool, provider, days).await?;
+        let last_24_hours = load_provider_usage_breakdown_hours(&self.pool, provider, 24).await?;
+        let daily = load_daily_provider_usage(&self.pool, provider, days).await?;
+        let producers = load_provider_usage_coverage(&self.pool, provider, days).await?;
+        let available_agents =
+            load_provider_usage_available_agents(&self.pool, provider, retention_days).await?;
+        Ok(serde_json::json!({
+            "source": "cowboy", "windowField": "occurred_at", "windowDays": days,
+            "retentionDays": retention_days, "availableAgents": available_agents,
+            "summary": breakdown.summary, "byAgent": breakdown.by_agent,
+            "byAgentModel": breakdown.by_agent_model,
+            "byAgentBillingModel": breakdown.by_agent_billing_model,
+            "byAgentModelFamily": breakdown.by_agent_model_family,
+            "byAgentRequestRole": breakdown.by_agent_request_role,
+            "byMachine": breakdown.by_machine, "byOperation": breakdown.by_operation,
+            "byModel": breakdown.by_model, "byResolvedModel": breakdown.by_resolved_model,
+            "byBillingModel": breakdown.by_billing_model,
+            "byModelRevision": breakdown.by_model_revision,
+            "byModelFamily": breakdown.by_model_family,
+            "byRequestRole": breakdown.by_request_role, "byProtocol": breakdown.by_protocol,
+            "byClientProtocol": breakdown.by_client_protocol,
+            "byUpstreamProtocol": breakdown.by_upstream_protocol,
+            "byTranslationMode": breakdown.by_translation_mode,
+            "byThinkingMode": breakdown.by_thinking_mode,
+            "byReasoningEffort": breakdown.by_reasoning_effort,
+            "bySessionAttribution": breakdown.by_session_attribution,
+            "byTrafficSource": breakdown.by_traffic_source,
+            "byGatewayBuild": breakdown.by_gateway_build,
+            "bySchemaVersion": breakdown.by_schema_version,
+            "byAgentOperation": breakdown.by_agent_operation, "daily": daily,
+            "last24Hours": {
+                "summary": last_24_hours.summary,
+                "byModel": last_24_hours.by_model,
+                "byAgentModel": last_24_hours.by_agent_model,
+                "byBillingModel": last_24_hours.by_billing_model,
+                "byAgentBillingModel": last_24_hours.by_agent_billing_model,
+                "byModelFamily": last_24_hours.by_model_family,
+                "byAgentModelFamily": last_24_hours.by_agent_model_family,
+            },
+            "coverage": { "producers": producers },
+        }))
+    }
+
+    /// Query one bounded, provider-owned telemetry view without refreshing
+    /// account balance facts. The HTTP boundary checks each filter against the
+    /// signed Plugin declaration; persistence repeats generic slug, cardinality,
+    /// uniqueness, and time bounds for long-lived diagnostic data.
+    pub async fn provider_usage_activity(
+        &self,
+        provider: &str,
+        from_ms: i64,
+        to_ms: i64,
+        agents: &[String],
+        model_families: &[String],
+    ) -> Result<serde_json::Value> {
+        let window_ms = validate_provider_usage_activity_filter(
+            provider,
+            from_ms,
+            to_ms,
+            agents,
+            model_families,
+        )?;
+        let agent = (agents.len() == 1).then(|| agents[0].as_str());
+        let model_family = (model_families.len() == 1).then(|| model_families[0].as_str());
+        let window_seconds = window_ms / 1_000;
+        let bucket = if window_seconds <= 86_400 {
+            "hour"
+        } else {
+            "day"
+        };
+        let (breakdown, timeline, low_hit, producers) = tokio::try_join!(
+            load_filtered_provider_usage_breakdown(
+                &self.pool,
+                provider,
+                from_ms,
+                to_ms,
+                agent,
+                model_family,
+            ),
+            load_provider_usage_timeline(
+                &self.pool,
+                provider,
+                from_ms,
+                to_ms,
+                bucket,
+                agent,
+                model_family,
+            ),
+            load_provider_usage_low_hit(&self.pool, provider, from_ms, to_ms, agent, model_family,),
+            load_filtered_provider_usage_coverage(
+                &self.pool,
+                provider,
+                from_ms,
+                to_ms,
+                agent,
+                model_family,
+            ),
+        )?;
+        Ok(serde_json::json!({
+            "source": "cowboy", "windowField": "occurred_at", "retentionDays": 30,
+            "windowSeconds": window_seconds, "fromMs": from_ms, "toMs": to_ms, "bucket": bucket,
+            "filters": { "agents": agents, "modelFamilies": model_families },
+            "summary": breakdown.summary, "byAgent": breakdown.by_agent,
+            "byAgentModel": breakdown.by_agent_model,
+            "byAgentBillingModel": breakdown.by_agent_billing_model,
+            "byAgentModelFamily": breakdown.by_agent_model_family,
+            "byAgentRequestRole": breakdown.by_agent_request_role,
+            "byMachine": breakdown.by_machine, "byOperation": breakdown.by_operation,
+            "byModel": breakdown.by_model, "byResolvedModel": breakdown.by_resolved_model,
+            "byBillingModel": breakdown.by_billing_model,
+            "byModelRevision": breakdown.by_model_revision,
+            "byModelFamily": breakdown.by_model_family,
+            "byRequestRole": breakdown.by_request_role, "byProtocol": breakdown.by_protocol,
+            "byClientProtocol": breakdown.by_client_protocol,
+            "byUpstreamProtocol": breakdown.by_upstream_protocol,
+            "byTranslationMode": breakdown.by_translation_mode,
+            "byThinkingMode": breakdown.by_thinking_mode,
+            "byReasoningEffort": breakdown.by_reasoning_effort,
+            "bySessionAttribution": breakdown.by_session_attribution,
+            "byTrafficSource": breakdown.by_traffic_source,
+            "byGatewayBuild": breakdown.by_gateway_build,
+            "bySchemaVersion": breakdown.by_schema_version,
+            "byAgentOperation": breakdown.by_agent_operation,
+            "timeline": timeline,
+            "lowHit": {
+                "definition": { "minimumInputTokens": 8000, "maximumHitRatePercent": 10 },
+                "summary": low_hit.summary,
+                "byCause": low_hit.by_cause,
+                "byCauseModel": low_hit.by_cause_model,
+            },
+            "coverage": { "producers": producers },
+        }))
+    }
+
+    /// Bound the internal ledger independently from the shorter UI window.
+    pub async fn purge_provider_usage(&self, retention_days: i32) -> Result<u64> {
+        let result = sqlx::query(
+            "DELETE FROM provider_usage_events WHERE received_at < \
+             now() - make_interval(days => $1::int)",
+        )
+        .bind(retention_days)
+        .execute(&self.pool)
+        .await
+        .context("purge provider usage ledger")?;
+        Ok(result.rows_affected())
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UsageAggregate {
+    requests: i64,
+    errors: i64,
+    blocking_errors: i64,
+    transient_errors: i64,
+    completed_requests: i64,
+    completion_observations: i64,
+    usage_observations: i64,
+    input_tokens: i64,
+    output_tokens: i64,
+    reasoning_tokens: i64,
+    cache_hit_tokens: i64,
+    cache_miss_tokens: i64,
+    cache_observations: i64,
+    explicit_cache_observations: i64,
+    derived_cache_observations: i64,
+    absent_cache_observations: i64,
+    cold_cache_requests: i64,
+    hot_cache_requests: i64,
+    duration_ms: i64,
+    duration_observations: i64,
+    request_bytes: i64,
+    request_shape_observations: i64,
+    input_item_count: i64,
+    tool_count: i64,
+    system_block_count: i64,
+    previous_response_requests: i64,
+    compatibility_fixes: i64,
+    streaming_requests: i64,
+    cache_keepalive_requests: i64,
+    cache_keepalive_hits: i64,
+    cache_keepalive_misses: i64,
+    cache_keepalive_partials: i64,
+    cache_keepalive_retryable_errors: i64,
+    cache_keepalive_terminal_errors: i64,
+    cache_keepalive_preemptions: i64,
+    cache_keepalive_usage_observations: i64,
+    cache_keepalive_input_tokens: i64,
+    cache_keepalive_output_tokens: i64,
+    cache_keepalive_reasoning_tokens: i64,
+    cache_keepalive_hit_tokens: i64,
+    cache_keepalive_miss_tokens: i64,
+    cache_keepalive_duration_ms: i64,
+    cache_keepalive_duration_observations: i64,
+    cache_keepalive_interval_ms: i64,
+    cache_keepalive_interval_observations: i64,
+    cache_keepalive_source_age_ms: i64,
+    cache_keepalive_source_age_observations: i64,
+    /// Billable server-side Search and Fetch calls of interactive requests.
+    search_requests: i64,
+    fetch_requests: i64,
+}
+
+impl UsageAggregate {
+    fn from_row(row: &sqlx::postgres::PgRow) -> Self {
+        Self {
+            requests: row.get("requests"),
+            errors: row.get("errors"),
+            blocking_errors: row.get("blocking_errors"),
+            transient_errors: row.get("transient_errors"),
+            completed_requests: row.get("completed_requests"),
+            completion_observations: row.get("completion_observations"),
+            usage_observations: row.get("usage_observations"),
+            input_tokens: row.get("input_tokens"),
+            output_tokens: row.get("output_tokens"),
+            reasoning_tokens: row.get("reasoning_tokens"),
+            cache_hit_tokens: row.get("cache_hit_tokens"),
+            cache_miss_tokens: row.get("cache_miss_tokens"),
+            cache_observations: row.get("cache_observations"),
+            explicit_cache_observations: row.get("explicit_cache_observations"),
+            derived_cache_observations: row.get("derived_cache_observations"),
+            absent_cache_observations: row.get("absent_cache_observations"),
+            cold_cache_requests: row.get("cold_cache_requests"),
+            hot_cache_requests: row.get("hot_cache_requests"),
+            duration_ms: row.get("duration_ms"),
+            duration_observations: row.get("duration_observations"),
+            request_bytes: row.get("request_bytes"),
+            request_shape_observations: row.get("request_shape_observations"),
+            input_item_count: row.get("input_item_count"),
+            tool_count: row.get("tool_count"),
+            system_block_count: row.get("system_block_count"),
+            previous_response_requests: row.get("previous_response_requests"),
+            compatibility_fixes: row.get("compatibility_fixes"),
+            streaming_requests: row.get("streaming_requests"),
+            cache_keepalive_requests: row.get("cache_keepalive_requests"),
+            cache_keepalive_hits: row.get("cache_keepalive_hits"),
+            cache_keepalive_misses: row.get("cache_keepalive_misses"),
+            cache_keepalive_partials: row.get("cache_keepalive_partials"),
+            cache_keepalive_retryable_errors: row.get("cache_keepalive_retryable_errors"),
+            cache_keepalive_terminal_errors: row.get("cache_keepalive_terminal_errors"),
+            cache_keepalive_preemptions: row.get("cache_keepalive_preemptions"),
+            cache_keepalive_usage_observations: row.get("cache_keepalive_usage_observations"),
+            cache_keepalive_input_tokens: row.get("cache_keepalive_input_tokens"),
+            cache_keepalive_output_tokens: row.get("cache_keepalive_output_tokens"),
+            cache_keepalive_reasoning_tokens: row.get("cache_keepalive_reasoning_tokens"),
+            cache_keepalive_hit_tokens: row.get("cache_keepalive_hit_tokens"),
+            cache_keepalive_miss_tokens: row.get("cache_keepalive_miss_tokens"),
+            cache_keepalive_duration_ms: row.get("cache_keepalive_duration_ms"),
+            cache_keepalive_duration_observations: row.get("cache_keepalive_duration_observations"),
+            cache_keepalive_interval_ms: row.get("cache_keepalive_interval_ms"),
+            cache_keepalive_interval_observations: row.get("cache_keepalive_interval_observations"),
+            cache_keepalive_source_age_ms: row.get("cache_keepalive_source_age_ms"),
+            cache_keepalive_source_age_observations: row
+                .get("cache_keepalive_source_age_observations"),
+            search_requests: row.get("search_requests"),
+            fetch_requests: row.get("fetch_requests"),
+        }
+    }
+
+    fn add(&mut self, other: &Self) {
+        self.requests = self.requests.saturating_add(other.requests);
+        self.errors = self.errors.saturating_add(other.errors);
+        self.blocking_errors = self.blocking_errors.saturating_add(other.blocking_errors);
+        self.transient_errors = self.transient_errors.saturating_add(other.transient_errors);
+        self.completed_requests = self
+            .completed_requests
+            .saturating_add(other.completed_requests);
+        self.completion_observations = self
+            .completion_observations
+            .saturating_add(other.completion_observations);
+        self.usage_observations = self
+            .usage_observations
+            .saturating_add(other.usage_observations);
+        self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
+        self.reasoning_tokens = self.reasoning_tokens.saturating_add(other.reasoning_tokens);
+        self.cache_hit_tokens = self.cache_hit_tokens.saturating_add(other.cache_hit_tokens);
+        self.cache_miss_tokens = self
+            .cache_miss_tokens
+            .saturating_add(other.cache_miss_tokens);
+        self.cache_observations = self
+            .cache_observations
+            .saturating_add(other.cache_observations);
+        self.explicit_cache_observations = self
+            .explicit_cache_observations
+            .saturating_add(other.explicit_cache_observations);
+        self.derived_cache_observations = self
+            .derived_cache_observations
+            .saturating_add(other.derived_cache_observations);
+        self.absent_cache_observations = self
+            .absent_cache_observations
+            .saturating_add(other.absent_cache_observations);
+        self.cold_cache_requests = self
+            .cold_cache_requests
+            .saturating_add(other.cold_cache_requests);
+        self.hot_cache_requests = self
+            .hot_cache_requests
+            .saturating_add(other.hot_cache_requests);
+        self.duration_ms = self.duration_ms.saturating_add(other.duration_ms);
+        self.duration_observations = self
+            .duration_observations
+            .saturating_add(other.duration_observations);
+        self.request_bytes = self.request_bytes.saturating_add(other.request_bytes);
+        self.request_shape_observations = self
+            .request_shape_observations
+            .saturating_add(other.request_shape_observations);
+        self.input_item_count = self.input_item_count.saturating_add(other.input_item_count);
+        self.tool_count = self.tool_count.saturating_add(other.tool_count);
+        self.system_block_count = self
+            .system_block_count
+            .saturating_add(other.system_block_count);
+        self.previous_response_requests = self
+            .previous_response_requests
+            .saturating_add(other.previous_response_requests);
+        self.compatibility_fixes = self
+            .compatibility_fixes
+            .saturating_add(other.compatibility_fixes);
+        self.streaming_requests = self
+            .streaming_requests
+            .saturating_add(other.streaming_requests);
+        self.add_cache_keepalive(other);
+    }
+
+    fn add_cache_keepalive(&mut self, other: &Self) {
+        self.cache_keepalive_requests = self
+            .cache_keepalive_requests
+            .saturating_add(other.cache_keepalive_requests);
+        self.cache_keepalive_hits = self
+            .cache_keepalive_hits
+            .saturating_add(other.cache_keepalive_hits);
+        self.cache_keepalive_misses = self
+            .cache_keepalive_misses
+            .saturating_add(other.cache_keepalive_misses);
+        self.cache_keepalive_partials = self
+            .cache_keepalive_partials
+            .saturating_add(other.cache_keepalive_partials);
+        self.cache_keepalive_retryable_errors = self
+            .cache_keepalive_retryable_errors
+            .saturating_add(other.cache_keepalive_retryable_errors);
+        self.cache_keepalive_terminal_errors = self
+            .cache_keepalive_terminal_errors
+            .saturating_add(other.cache_keepalive_terminal_errors);
+        self.cache_keepalive_preemptions = self
+            .cache_keepalive_preemptions
+            .saturating_add(other.cache_keepalive_preemptions);
+        self.cache_keepalive_usage_observations = self
+            .cache_keepalive_usage_observations
+            .saturating_add(other.cache_keepalive_usage_observations);
+        self.cache_keepalive_input_tokens = self
+            .cache_keepalive_input_tokens
+            .saturating_add(other.cache_keepalive_input_tokens);
+        self.cache_keepalive_output_tokens = self
+            .cache_keepalive_output_tokens
+            .saturating_add(other.cache_keepalive_output_tokens);
+        self.cache_keepalive_reasoning_tokens = self
+            .cache_keepalive_reasoning_tokens
+            .saturating_add(other.cache_keepalive_reasoning_tokens);
+        self.cache_keepalive_hit_tokens = self
+            .cache_keepalive_hit_tokens
+            .saturating_add(other.cache_keepalive_hit_tokens);
+        self.cache_keepalive_miss_tokens = self
+            .cache_keepalive_miss_tokens
+            .saturating_add(other.cache_keepalive_miss_tokens);
+        self.cache_keepalive_duration_ms = self
+            .cache_keepalive_duration_ms
+            .saturating_add(other.cache_keepalive_duration_ms);
+        self.cache_keepalive_duration_observations = self
+            .cache_keepalive_duration_observations
+            .saturating_add(other.cache_keepalive_duration_observations);
+        self.cache_keepalive_interval_ms = self
+            .cache_keepalive_interval_ms
+            .saturating_add(other.cache_keepalive_interval_ms);
+        self.cache_keepalive_interval_observations = self
+            .cache_keepalive_interval_observations
+            .saturating_add(other.cache_keepalive_interval_observations);
+        self.cache_keepalive_source_age_ms = self
+            .cache_keepalive_source_age_ms
+            .saturating_add(other.cache_keepalive_source_age_ms);
+        self.cache_keepalive_source_age_observations = self
+            .cache_keepalive_source_age_observations
+            .saturating_add(other.cache_keepalive_source_age_observations);
+        self.search_requests = self.search_requests.saturating_add(other.search_requests);
+        self.fetch_requests = self.fetch_requests.saturating_add(other.fetch_requests);
+    }
+}
+
+// --- row types ---------------------------------------------------------------
+
+#[derive(sqlx::FromRow)]
+struct SessionFolderRow {
+    id: String,
+    owner_user_id: Option<String>,
+    name: String,
+    parent_id: Option<String>,
+    project: Option<String>,
+    position: i64,
+    defaults_json: String,
+    trashed_at_ms: Option<i64>,
+}
+
+impl SessionFolderRow {
+    fn into_folder(self) -> Result<SessionFolder> {
+        Ok(SessionFolder {
+            id: self.id,
+            owner_user_id: self.owner_user_id,
+            name: self.name,
+            parent: self.parent_id,
+            position: self.position,
+            project: self.project,
+            defaults: crate::session_folders::defaults::parse_stored(&serde_json::from_str(
+                &self.defaults_json,
+            )?)
+            .map_err(anyhow::Error::msg)?,
+            trashed_at_ms: self.trashed_at_ms,
+        })
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct SessionRow {
+    id: String,
+    provider: String,
+    provider_version: String,
+    provider_generation_digest: String,
+    provider_auth_generation: Option<i64>,
+    provider_account_id: String,
+    provider_behavior: Option<serde_json::Value>,
+    machine_id: String,
+    workspace_id: Option<String>,
+    workspace_name: Option<String>,
+    workspace_source_path: Option<String>,
+    execution_binding: Option<serde_json::Value>,
+    cwd: String,
+    title: String,
+    origin: String,
+    status: String,
+    agent_session_id: Option<String>,
+    system: bool,
+    next_seq: i64,
+    queue: serde_json::Value,
+    drafts: serde_json::Value,
+    config_options: Option<serde_json::Value>,
+    config_preferences: serde_json::Value,
+    mobile_review_state: serde_json::Value,
+    folder_id: Option<String>,
+    trashed_at_ms: Option<i64>,
+    last_usage: Option<serde_json::Value>,
+    owner_user_id: Option<String>,
+    owner_username: Option<String>,
+}
+
+#[derive(sqlx::FromRow)]
+struct EventRow {
+    seq: i64,
+    payload: serde_json::Value,
+    total_count: i64,
+}
+
+/// Session and pool fixtures shared by the store's tests and the base crate's.
+#[cfg(any(test, feature = "test-support"))]
+pub mod fixtures;
+#[cfg(any(test, feature = "test-support"))]
+pub use fixtures::TestPool;
+
+#[cfg(test)]
+mod storage_contract_tests;

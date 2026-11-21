@@ -16,7 +16,7 @@
 pub use tikv_jemallocator::Jemalloc;
 
 #[cfg(feature = "full")]
-pub mod account_controls;
+pub use cowboy_store::account_controls;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod account_sandbox;
 #[cfg(feature = "full")]
@@ -26,15 +26,15 @@ pub mod acp_bridge;
 #[cfg(feature = "full")]
 pub mod acp_memory;
 #[cfg(feature = "full")]
-pub mod admin;
+pub use cowboy_store::admin;
 #[cfg(all(unix, any(feature = "full", feature = "machine-host")))]
 pub mod agent_mcp;
 #[cfg(feature = "full")]
-pub mod agent_model;
+pub use cowboy_store::agent_model;
 #[cfg(feature = "full")]
 pub mod agent_sink;
 #[cfg(feature = "full")]
-pub mod artifacts;
+pub use cowboy_store::artifacts;
 #[cfg(feature = "full")]
 pub mod auth_plugins;
 #[cfg(feature = "full")]
@@ -46,7 +46,7 @@ pub mod claude_shell;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod cli;
 #[cfg(feature = "full")]
-pub mod client_auth;
+pub use cowboy_store::client_auth;
 #[cfg(feature = "full")]
 pub mod client_auth_client;
 #[cfg(any(feature = "full", feature = "code-adapter"))]
@@ -64,19 +64,19 @@ pub mod composition;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod config;
 #[cfg(feature = "full")]
-pub mod context_rollover;
+pub use cowboy_store::context_rollover;
 #[cfg(feature = "full")]
 pub mod controller_hooks;
 #[cfg(feature = "full")]
 pub mod core;
 #[cfg(feature = "full")]
-pub mod core_passkeys;
+pub use cowboy_store::core_passkeys;
 #[cfg(feature = "full")]
-pub mod core_passkeys_contract;
+pub use cowboy_store::core_passkeys_contract;
 #[cfg(feature = "full")]
-pub mod core_security;
+pub use cowboy_store::core_security;
 #[cfg(feature = "full")]
-pub mod credentials;
+pub use cowboy_store::credentials;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 #[path = "provider/deepseek_cache.rs"]
 pub mod deepseek_cache;
@@ -86,13 +86,15 @@ pub mod deepseek_context;
 #[cfg(feature = "full")]
 pub mod diff_snapshot;
 #[cfg(feature = "full")]
-pub mod digest;
+pub use cowboy_store::digest;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod durable_state;
 // Re-exports for code that moved to cowboy-server without a manifest edit:
 // Cargo.toml and Cargo.lock are worker-generation inputs, so a new server
 // dependency waits for a planned worker maintenance. Delete these and add
 // `png`/`cowboy-wire` to the server manifest in that maintenance.
+#[cfg(any(feature = "full", feature = "machine-host"))]
+pub use cowboy_store::execution_target_environment;
 #[cfg(feature = "full")]
 pub use cowboy_wire::agent_api as agent_api_limits;
 #[cfg(any(feature = "full", feature = "machine-host"))]
@@ -102,12 +104,10 @@ pub use cowboy_wire::execution_protocol;
 #[cfg(feature = "full")]
 #[doc(hidden)]
 pub use png;
-#[cfg(any(feature = "full", feature = "machine-host"))]
-pub mod execution_target_environment;
 #[cfg(any(feature = "full", feature = "code-adapter"))]
 pub mod files;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-pub mod first_party_sources;
+pub use cowboy_store::first_party_sources;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod generation_retention;
 #[cfg(any(feature = "full", feature = "machine-host"))]
@@ -134,14 +134,14 @@ pub use cowboy_wire::mcp_binding;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod machine_transport;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-pub mod managed_calls;
+pub use cowboy_store::managed_calls;
 #[cfg(feature = "full")]
 #[path = "provider/managed_config.rs"]
 pub mod managed_config;
 #[cfg(feature = "full")]
 pub mod memory_observability;
 #[cfg(feature = "full")]
-pub mod model;
+pub use cowboy_store::model;
 #[cfg(feature = "full")]
 pub mod native_configuration;
 #[cfg(feature = "full")]
@@ -149,69 +149,69 @@ pub mod observability;
 #[cfg(feature = "full")]
 pub mod oidc;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-pub mod operation_budget;
+pub use cowboy_store::operation_budget;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod otlp;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod owned_json;
 #[cfg(feature = "full")]
-pub mod passkey;
+pub use cowboy_store::passkey;
 #[cfg(feature = "full")]
-pub mod persistence;
+pub use cowboy_store::persistence;
 #[cfg(feature = "full")]
 pub mod plugin;
 #[cfg(feature = "full")]
 pub mod plugin_activation;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-pub mod plugin_auth_probe;
+pub use cowboy_store::plugin_auth_probe;
 #[cfg(feature = "full")]
 pub mod plugin_catalog;
 #[cfg(feature = "full")]
-pub mod plugin_dir;
+pub use cowboy_store::plugin_dir;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-pub mod plugin_host;
+pub use cowboy_store::plugin_host;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-pub mod plugin_host_bundle;
+pub use cowboy_store::plugin_host_bundle;
 #[cfg(feature = "full")]
-pub mod plugin_operation;
+pub use cowboy_store::plugin_operation;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod plugin_process;
 #[cfg(feature = "full")]
 pub mod plugin_runtime;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-pub mod plugin_runtime_args;
+pub use cowboy_store::plugin_runtime_args;
 #[cfg(feature = "full")]
-pub mod plugin_storage;
+pub use cowboy_store::plugin_storage;
 #[cfg(feature = "full")]
-pub mod product_auth;
+pub use cowboy_store::product_auth;
 #[cfg(feature = "full")]
 pub mod product_cli;
 #[cfg(feature = "full")]
 pub mod project_placement;
 #[cfg(feature = "full")]
-pub mod prompt_origin;
+pub use cowboy_store::prompt_origin;
 #[cfg(feature = "full")]
 pub mod provider;
 #[cfg(feature = "full")]
 pub mod subagent_transcripts;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+pub use cowboy_store::provider_behavior;
 #[cfg(feature = "full")]
-pub mod transcript_anchors;
+pub use cowboy_store::transcript_anchors;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub use cowboy_wire::provider_account;
-#[cfg(any(feature = "full", feature = "machine-host"))]
-pub mod provider_behavior;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod provider_catalog;
 #[cfg(feature = "full")]
 pub mod provider_info;
 #[cfg(feature = "full")]
-pub mod provider_service;
+pub use cowboy_store::provider_service;
 #[cfg(feature = "machine-host")]
 pub mod provider_usage_spool;
 #[cfg(feature = "full")]
 pub mod remote_runtime;
 #[cfg(feature = "full")]
-pub mod review_directory;
+pub use cowboy_store::review_directory;
 #[cfg(feature = "full")]
 pub mod runtime;
 #[cfg(feature = "full")]
@@ -235,15 +235,15 @@ pub mod session_context;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod session_deletion_admission;
 #[cfg(feature = "full")]
-pub mod session_folders;
+pub use cowboy_store::session_folders;
 #[cfg(feature = "machine-host")]
-pub mod session_workspace;
+pub use cowboy_store::session_workspace;
 #[cfg(feature = "full")]
-pub mod store;
+pub use cowboy_store::store;
 #[cfg(feature = "full")]
 pub mod supervisor;
 #[cfg(feature = "full")]
-pub mod telemetry_binding;
+pub use cowboy_store::telemetry_binding;
 #[cfg(feature = "full")]
 pub mod telemetry_file;
 #[cfg(any(feature = "full", feature = "machine-host"))]
@@ -262,7 +262,7 @@ pub mod workspace;
 pub mod workspace_roots;
 
 #[cfg(feature = "full")]
-pub mod migration_compat;
+pub use cowboy_store::migration_compat;
 #[cfg(all(test, feature = "full"))]
 pub mod migration_policy;
 #[cfg(all(test, feature = "full"))]
@@ -271,9 +271,9 @@ pub mod protocol_contract;
 // flake.nix do not carry these files, so an unconditional declaration breaks
 // their release builds while the full checkout still compiles.
 #[cfg(feature = "full")]
-pub mod superagent;
+pub use cowboy_store::superagent;
 #[cfg(feature = "full")]
-pub mod task_notifications;
+pub use cowboy_store::task_notifications;
 #[cfg(feature = "full")]
 pub mod web_push;
 
@@ -286,14 +286,7 @@ pub mod workspace_extensions;
     any(test, feature = "test-support"),
     any(feature = "full", feature = "machine-host")
 ))]
-pub fn test_fifo(path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
-    let status = std::process::Command::new("mkfifo")
-        .args(["-m", "600"])
-        .arg(path.as_ref())
-        .status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(std::io::Error::other(format!("mkfifo failed: {status}")))
-    }
-}
+pub use cowboy_store::test_fifo;
+
+#[cfg(all(test, feature = "full"))]
+mod store_hub_tests;

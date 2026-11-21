@@ -100,7 +100,7 @@ typing-free, auditable decisions within measured bounds.
   need a header parser the Controller does not have). Retention needs no
   separate reference table: the stored notice event carries the artifact URL,
   which the existing collector already roots for as long as the row exists,
-  and the pin lock in `src/artifacts.rs` closes the G3 race (a pin refreshes
+  and the pin lock in `components/store/src/artifacts.rs` closes the G3 race (a pin refreshes
   the age under the lock; the collector re-reads it under the lock before
   unlinking). The Web draws verified sources through `ProtectedImage` with
   the product lightbox (`web/src/widgets/WidgetPictures.tsx`, lazy) and keeps
@@ -707,9 +707,9 @@ guarantees one row in history and on current clients, not on a pre-widget
 client's live view until it reloads. That is accepted as strictly better
 than showing nothing.
 
-`anchor_key` in `src/transcript_anchors.rs` gains `widget:<widgetId>` for
+`anchor_key` in `components/store/src/transcript_anchors.rs` gains `widget:<widgetId>` for
 notices carrying `_cowboy.widget`, so both reducers (the Hub hot log and the
-store writer, `src/persistence.rs` `reduce_anchor`) rewrite every later
+store writer, `components/store/src/persistence.rs` `reduce_anchor`) rewrite every later
 snapshot to the first row's seq, the durable `transcript_anchors` table
 keeps the first anchor, and a Controller restart never starts a second row.
 Snapshots are ordered by `stateVersion`, which advances on every mutation of

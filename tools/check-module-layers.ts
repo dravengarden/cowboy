@@ -24,6 +24,7 @@ import { rustCode, stripRustTests } from "./check-structure.ts";
 
 export const CRATES: Record<string, string> = {
   cowboy: "src",
+  cowboy_store: "components/store/src",
   cowboy_server: "components/server/src",
   cowboy_machine: "components/machine/src",
   cowboy_wire: "components/wire/src",
@@ -193,7 +194,13 @@ export function buildGraph(crates: Map<string, CrateSource>): Map<string, Set<st
       const out = graph.get(node) ?? new Set<string>();
       graph.set(node, out);
       for (const file of files) {
-        const inside = file.path.slice(file.path.indexOf(module));
+        // Depth counts from the crate's source directory: a module may share
+        // its name with a directory above it (components/store/src/store.rs).
+        const dir = CRATES[crate];
+        const inside =
+          dir !== undefined && file.path.startsWith(`${dir}/`)
+            ? file.path.slice(dir.length + 1)
+            : file.path.slice(file.path.indexOf(module));
         const depth = inside.endsWith("/mod.rs")
           ? inside.split("/").length - 1
           : inside.split("/").length;

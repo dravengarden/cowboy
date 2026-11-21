@@ -257,7 +257,7 @@ async function rejected(url) {
                 assert report and report[0].get("ok"), report
                 sources = ["tools/browser-device-conformance.py", "tools/browser-device-fixture.js",
                            "web/device-proof.js", "src/browser_device.rs", "components/server/src/server/secure_transport.rs",
-                           "src/store/browser_devices.rs"]
+                           "components/store/src/store/browser_devices.rs"]
                 with open(executable, "rb") as binary:
                     binary_digest = hashlib.file_digest(binary, "sha256").hexdigest()
                 print(json.dumps({**report[0], "tests": tls_checks + report[0]["tests"],
