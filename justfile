@@ -814,7 +814,9 @@ session-deletion-production-conformance OLD NEW READER DEFAULT_READER RECEIPT:
 # instead of after the Rust builds. Release binaries are not rebuilt here: the
 # debug graphs above compile the same code, and the Nix release packages are
 # the release build. `build-web` keeps the production frontend bundle covered.
-check: toolchain-check fmt structure-check docs-index-check protocol-contract-check typecheck idb-conformance-check site-check native-shell-check dependencies lint feature-check plugin-check composition-check provider-check release-sources-check test test-postgres logs-conformance build-web
+# `feature-check` is not repeated: `release-sources-check` checks the same
+# packages, features and binaries inside the exact release source closures.
+check: toolchain-check fmt structure-check docs-index-check protocol-contract-check typecheck idb-conformance-check site-check native-shell-check dependencies lint plugin-check composition-check provider-check release-sources-check test test-postgres logs-conformance build-web
 
 # Real diagnostic CLI, typed OTel fixture, query/metrics/tail/watch/RPC contracts.
 # An optional explicit --ssh in the standalone tool adds same-host SSH acceptance.
