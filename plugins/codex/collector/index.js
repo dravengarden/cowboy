@@ -126,7 +126,7 @@ export function nearestCredit(rateLimits) {
           (right.expiresAt ?? Number.MAX_SAFE_INTEGER) ||
         (left.grantedAt ?? Number.MAX_SAFE_INTEGER) -
           (right.grantedAt ?? Number.MAX_SAFE_INTEGER) ||
-        left.id.localeCompare(right.id),
+        (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
     )[0]?.id;
 }
 

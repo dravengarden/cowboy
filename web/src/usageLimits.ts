@@ -156,7 +156,8 @@ export function nearestAvailableResetCredit(
   return available.sort((left, right) =>
     order(left.expiresAt) - order(right.expiresAt) ||
     order(left.grantedAt) - order(right.grantedAt) ||
-    String(left.id).localeCompare(String(right.id))
+    // Locale-independent, exactly like the collectors.
+    (String(left.id) < String(right.id) ? -1 : String(left.id) > String(right.id) ? 1 : 0)
   )[0];
 }
 

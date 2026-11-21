@@ -24,6 +24,7 @@ import {
   nearestCredit as nearestGrokCredit,
   readLines as grokLines,
 } from "./grok/collector/index.js";
+import codexDeclaration from "./codex/collector/portable-account.json" with { type: "json" };
 import grokDeclaration from "./grok/collector/portable-account.json" with { type: "json" };
 import grokHost from "./grok/host.json" with { type: "json" };
 import grokProvider from "./grok/provider.json" with { type: "json" };
@@ -566,4 +567,33 @@ test("A Codex observation names the grant consume_reset would spend", async () =
     }),
   );
   equal(usage.rate_limits.rateLimitResetCredits.nearestCreditId, "c", "nearest");
+});
+
+/* components/wire/src/machine_protocol/portable_usage.rs tests the reader
+ * against copies of these exact declarations. */
+test("The refresh-free declarations match the wire crate's tested copies", () => {
+  equal(
+    codexDeclaration,
+    {
+      schema: 1,
+      token_refresh: "request",
+      token_refresh_guard: "refresh_endpoint_refused",
+      reset_token_refresh: "request",
+    },
+    "codex",
+  );
+  equal(
+    grokDeclaration,
+    { schema: 1, token_refresh: "request", token_refresh_guard: "cli_not_started" },
+    "grok",
+  );
+});
+
+test("Codex and Grok order equal-time grants by code units, not locale", () => {
+  const credits = [
+    { id: "b", status: "available", expiresAt: 1 },
+    { id: "B", status: "available", expiresAt: 1 },
+  ];
+  equal(nearestCodexCredit({ rateLimitResetCredits: { credits } }), "B", "codex");
+  equal(nearestGrokCredit(credits.map(({ id, expiresAt }) => ({ id, expiresAt }))).id, "B", "grok");
 });

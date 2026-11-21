@@ -640,3 +640,18 @@ test("the nearest reset grant follows the collector's canonical choice and order
   // A canonical ID that is not an available credit is ignored.
   assertEquals(nearestAvailableResetCredit(usage({ credits, nearestCreditId: "x" }))?.id, "c");
 });
+
+test("the nearest grant's ID tie-break is locale-independent", () => {
+  const credits = [
+    { id: "b", status: "available", expiresAt: 1 },
+    { id: "B", status: "available", expiresAt: 1 },
+  ];
+  // Code-unit order: "B" (0x42) before "b" (0x62), whatever the locale.
+  assertEquals(
+    nearestAvailableResetCredit({
+      provider: "openai", status: "available", source: "", observed_at_ms: 1,
+      rate_limits: { rateLimitResetCredits: { credits } },
+    })?.id,
+    "B",
+  );
+});

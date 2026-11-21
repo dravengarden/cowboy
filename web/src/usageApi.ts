@@ -160,19 +160,70 @@ export async function consumeNearestReset(
   if (target.kind === "account") await expectNamedResetSpent(response, expectedCreditId);
 }
 
-/** A named reset succeeded only if its body names a closed outcome for the
- * confirmed grant; an unreadable or different success may have spent
- * another credit, so it is unknown and locks the dialog. */
+/** A named reset succeeded only if its body, read within a bound of time and
+ * size, names a closed outcome for the confirmed grant and carries no error;
+ * anything else may have spent another credit, so it is unknown and locks the
+ * dialog. */
 async function expectNamedResetSpent(
   response: Response,
   expectedCreditId: string | undefined,
 ): Promise<void> {
-  const body = await response
-    .json()
-    .catch(() => undefined) as { outcome?: unknown; credit_id?: unknown } | undefined;
-  const closed = body?.outcome === "reset" || body?.outcome === "already_used";
-  if (!closed || expectedCreditId === undefined || body?.credit_id !== expectedCreditId) {
+  const body = await readBoundedJson(response, RESET_BODY_LIMIT_BYTES, RESET_BODY_TIMEOUT_MS);
+  const reply = body !== null && typeof body === "object" && !Array.isArray(body)
+    ? body as { outcome?: unknown; credit_id?: unknown; error?: unknown }
+    : undefined;
+  const closed = reply?.outcome === "reset" || reply?.outcome === "already_used";
+  if (
+    !closed || reply?.error !== undefined || expectedCreditId === undefined ||
+    reply?.credit_id !== expectedCreditId
+  ) {
     throw new ResetOutcomeUnknown(UNKNOWN_OUTCOME);
+  }
+}
+
+const RESET_BODY_LIMIT_BYTES = 16 * 1024;
+const RESET_BODY_TIMEOUT_MS = 10_000;
+
+/** The body as JSON, or `undefined` when it is unreadable, larger than
+ * `limit` bytes or slower than `timeoutMs`; the stream is then cancelled. */
+export async function readBoundedJson(
+  response: Response,
+  limit: number,
+  timeoutMs: number,
+): Promise<unknown> {
+  const reader = response.body?.getReader();
+  if (!reader) return undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<"expired">((resolve) => {
+    timer = setTimeout(() => resolve("expired"), timeoutMs);
+  });
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const next = await Promise.race([reader.read(), expired]);
+      if (next === "expired") return undefined;
+      if (next.done) break;
+      size += next.value.byteLength;
+      if (size > limit) return undefined;
+      chunks.push(next.value);
+    }
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+    reader.cancel().catch(() => undefined);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return undefined;
   }
 }
 

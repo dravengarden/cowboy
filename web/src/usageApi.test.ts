@@ -14,6 +14,7 @@ import {
 } from "./usageLimits.ts";
 import {
   consumeNearestReset,
+  readBoundedJson,
   readUsage,
   readUsageExecutors,
   ResetOutcomeUnknown,
@@ -346,6 +347,8 @@ test("a named reset succeeds only for the confirmed grant with a closed outcome"
       ["another grant", { outcome: "reset", credit_id: "g:2" }, true],
       ["no grant", { outcome: "reset" }, true],
       ["open outcome", { outcome: "consumed", credit_id: "g:1" }, true],
+      ["success with an error", { outcome: "reset", credit_id: "g:1", error: { code: "x" } }, true],
+      ["too large", { outcome: "reset", credit_id: "g:1", pad: "x".repeat(20_000) }, true],
       ["unreadable", "<html>", true],
     ];
     for (const [name, body, unknown] of replies) {
@@ -360,4 +363,11 @@ test("a named reset succeeds only for the confirmed grant with a closed outcome"
   } finally {
     globalThis.fetch = original;
   }
+});
+
+test("a named reset body that never finishes is unknown, not a busy dialog", async () => {
+  const stalled = new Response(new ReadableStream({ start() {} }));
+  assertEquals(await readBoundedJson(stalled, 1024, 20), undefined);
+  const ok = Response.json({ a: 1 });
+  assertEquals(await readBoundedJson(ok, 1024, 1000), { a: 1 });
 });
