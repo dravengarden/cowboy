@@ -83,6 +83,26 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.129.0 records provider-runtime 1.3.14 with
+`cowboy-antigravity-acp` 1.0.12 and `cowboy-antigravity-launch` 1.1.2: the
+read-only managed profile for context asks. Antigravity 0.2.14 pins them and
+declares `provider.managed-profiles.v1` with one `read_only_v1` profile (no
+`image_v1`). Before it starts `agy` the proxy validates its execution
+descriptor, the binding's managed record (exact profile and parent session)
+and its agreement with the launch flag; it learns managed mode from that
+binding and the target keeper's announcement. A managed child gets only the
+facade's read tools and `RunCommand`, no Cowboy MCP, folder MCP, memory,
+repository skills or slash commands, text-only prompts carrying their managed
+round (no output schema) and exactly one native session, to which every
+request, cancel, permission and update is bound. The `PreToolUse` hook
+applies the ordinary policy only for the proxy's exact `ordinary` marker,
+and nothing `agy` asks for is allowed before the runtime settles; the
+launcher refuses every managed profile (see
+[Managed read-only context asks](antigravity-provider-plan.md#managed-read-only-context-asks)).
+The other six Providers pinning provider-runtime advance one patch version
+(claude-code 3.20.59, claude-deepseek 3.1.77, codex 3.6.18, codex-deepseek
+3.1.77, deepseek-harness 1.0.35, grok 3.2.17).
+
 Component release 3.128.0 records provider-runtime 1.3.13, whose
 `cowboy-antigravity-acp` 1.0.11 lists a repository's skills
 (`.agents/skills`, `.claude/skills`) in an Antigravity session's projection
