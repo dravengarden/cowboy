@@ -1,7 +1,7 @@
 // Public surface of Cowboy's business-free React + MUI app-shell component.
 export { DetentSheet, type DetentSheetProps } from "./detent-sheet.tsx";
 export { ScrollEdges } from "./scroll-edges.tsx";
-export { readerTopEdge, readerTopInset } from "./reader-top-edge.ts";
+export { READER_TOP_FROST_FADE, readerTopEdge, readerTopFrost, readerTopInset } from "./reader-top-edge.ts";
 export { FLOATING_CONTROLS_BOTTOM, readerBottomEdge } from "./reader-bottom-edge.ts";
 export {
   haptic,

@@ -135,6 +135,13 @@ Use the active theme background, never fixed white or a new blur layer. Cover
 readers without a top header opt into `readerTopBleed`; their scroller owns the
 safe-area padding so content can pass behind the status area while scrolling.
 Keep the gradient noninteractive and the first item clear at the scroll boundary.
+A cover reader that owns its scroller outside the swipe path (a Call's Details in
+the background-tasks inspector) uses `readerTopFrost` instead: a bounded blurred
+status-area layer on the non-scrolling parent, never on the scroller or a peek
+surface, with the first row resting below it (`readerTopInset()` plus
+`READER_TOP_FROST_FADE`) and `ScrollEdges top={false}` so only one top treatment
+paints. Pills that floor at 24px (`StatusChip`) need a row at least that tall
+where the scroller has no top padding.
 Floating sheet footers use the shared `readerBottomEdge` masked frost and theme
 gradient behind controls. Keep this single layer bounded to the footer, never
 on the scrolling body; title-only dock contexts have no empty information card.

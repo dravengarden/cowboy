@@ -1,4 +1,5 @@
 import { ScrollEdges } from "@cowboy/app-shell";
+import { READER_TOP_FROST_FADE, readerTopFrost } from "./readerTopEdge";
 // The background-tasks inspector (docs/background-tasks.md §6.2): the Tool
 // inspector's frame — a Desktop Dialog with a rail beside the details, a
 // Mobile cover Sheet — listing every TaskSummary grouped Needs you / Active /
@@ -218,7 +219,15 @@ function TaskDetail({
     : null;
   return (
     <Box data-task-detail={task.key} sx={{ color: "text.primary", typography: "body2", minWidth: 0 }}>
-      <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1, minWidth: 0 }}>
+      <Stack
+        direction="row"
+        alignItems="center"
+        spacing={1}
+        // The pill floors at 24px while its slot follows rem, so the row
+        // reserves the pill's true height: at a reduced app font scale it
+        // would otherwise overflow the row and be clipped by the scroller.
+        sx={{ mb: 1, minWidth: 0, minHeight: `max(24px, ${desktop ? "2rem" : "1.5rem"})` }}
+      >
         {/* Mobile names the task in the sheet's title already. */}
         <Typography
           variant="subtitle1"
@@ -227,7 +236,8 @@ function TaskDetail({
           {task.title}
         </Typography>
         {task.health && <Typography variant="caption" color="warning.main">{task.health}</Typography>}
-        <TaskChip task={task} size="medium" />
+        {/* Mobile stacks this beside a Call's own state pill: one pill size. */}
+        <TaskChip task={task} size={desktop ? "medium" : "small"} />
       </Stack>
       {task.subtitle && task.source !== "subagent" && (
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>{task.subtitle}</Typography>
@@ -710,7 +720,7 @@ export function BackgroundTasksInspector({
         ? undefined
         : (): void => globalThis.history?.back()}
       fill={level !== "list" && conversation}
-      readerTopBleed={level === "conversation" && conversation}
+      readerTopBleed={level !== "list" && conversation}
       forceSheet
       cover
       portal
@@ -735,13 +745,42 @@ export function BackgroundTasksInspector({
           )
           : conversation
           ? (
-            <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", position: "relative" }}>
+            <Box
+              data-task-reader
+              sx={(theme) => ({
+                flex: 1,
+                minWidth: 0,
+                minHeight: 0,
+                display: "flex",
+                position: "relative",
+                // Details scroll behind the status area and blur there; the
+                // Transcript keeps its own paint-only fade (readerTopEdge).
+                ...(level === "detail" ? readerTopFrost(theme) : {}),
+              })}
+            >
               <Box inert={level !== "conversation"} sx={{ flex: 1, minWidth: 0, display: "flex", visibility: level === "conversation" ? "visible" : "hidden" }}>
                 {selected.call
                   ? <CallConversation call={selected.call} desktop={false} onDetails={showMobileDetails} />
                   : selected.subagent && <SubagentConversation sessionId={sessionId} subagent={selected.subagent} state={child} desktop={false} />}
               </Box>
-              {level === "detail" && <Box sx={{ position: "absolute", inset: 0, overflowY: "auto", px: 2, pb: "var(--cowboy-sheet-dock-clearance, 76px)" }}>{detail}<ScrollEdges /></Box>}
+              {level === "detail" && (
+                <Box
+                  data-task-reader-scroll
+                  sx={{
+                    position: "absolute",
+                    inset: 0,
+                    overflowY: "auto",
+                    px: 2,
+                    // At rest the first row sits below the frost; only content
+                    // that scrolled under the status area is blurred.
+                    pt: `calc(var(--cowboy-reader-top-inset, 0px) + ${READER_TOP_FROST_FADE})`,
+                    pb: "var(--cowboy-sheet-dock-clearance, 76px)",
+                  }}
+                >
+                  {detail}
+                  <ScrollEdges top={false} />
+                </Box>
+              )}
             </Box>
           )
           : detail}

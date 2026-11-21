@@ -342,7 +342,13 @@ inspector before removing the switch.
   ignored during IME composition and in inputs.
 - Mobile: list → detail → conversation, one history entry each, so Back walks
   up a level and returns to the transcript at its scroll; `#task=<key>` deep
-  links into details; the sheet respects safe-area insets.
+  links into details; the sheet respects safe-area insets. A Call's details
+  scroll behind the status area and blur there (`readerTopFrost`, the status
+  strip's lens) instead of being cut at a flat band; the first row rests below
+  the frost, so only scrolled content is blurred. The header's task pill and
+  the Call's own state pill share one 24px-floor height, and the header row
+  reserves it so a reduced app font scale never clips the pill at the scroll
+  boundary.
 
 ## 7. Acceptance (Phase 1)
 
