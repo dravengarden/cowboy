@@ -83,6 +83,15 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.133.0 records provider-runtime 1.3.17, whose
+`cowboy-antigravity-acp` 1.0.15 asks Cloud Code's quota summary with `agy`'s
+own client identity (`antigravity/cli/<version>`), which answers the Gemini
+weekly and 5-hour groups and Pro's separate Argon quota
+([Client identity decides the summary](antigravity-real-accounts-design.md)).
+Antigravity 0.2.17 pins it. The other six Providers pinning provider-runtime
+advance one patch version (claude-code 3.20.62, claude-deepseek 3.1.80,
+codex 3.6.21, codex-deepseek 3.1.80, deepseek-harness 1.0.38, grok 3.2.20).
+
 Component release 3.132.0 records provider-runtime 1.3.16, whose
 `cowboy-antigravity-acp` 1.0.14 adds a "Gemini models" group to an
 Antigravity account's quota report from Cloud Code's model catalogue

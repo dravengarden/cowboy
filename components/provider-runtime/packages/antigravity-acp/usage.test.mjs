@@ -5,7 +5,9 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   AGY_USAGE_ARGUMENTS,
+  AGY_VERSION_ARGUMENTS,
   accessToken,
+  agyVersion,
   envelope,
   GEMINI_GROUP,
   geminiGroup,
@@ -13,6 +15,7 @@ import {
   refusedEligibility,
   runAgy,
   usageReport,
+  userAgent,
 } from "./usage.mjs";
 
 // `agy` 1.5.9 print mode on OVH for a paid Google AI Pro account whose free
@@ -240,17 +243,25 @@ test("a native report passes through, gaining Gemini when it lacks it", async (t
 
 test("an eligibility refusal is answered from Cloud Code with agy's token", async (t) => {
   let sent;
+  const agents = [];
   const report = await usageReport({
     agy: "agy",
     home: home(t),
     run: native(1, REFUSED),
-    quota: async (token) => {
+    version: async () => "1.5.9",
+    quota: async (token, client) => {
       sent = token;
+      agents.push(client.userAgent);
       return SUMMARY;
     },
-    models: async () => CATALOGUE,
+    models: async (_token, client) => {
+      agents.push(client.userAgent);
+      return CATALOGUE;
+    },
   });
   assert.equal(sent, "ya29.a0-test-access-token");
+  // Both requests carry agy's own client identity.
+  assert.deepEqual(agents, ["antigravity/cli/1.5.9", "antigravity/cli/1.5.9"]);
   assert.equal(report.code, 0);
   const parsed = JSON.parse(report.output.toString());
   assert.equal(parsed.status, "SUCCESS");
@@ -259,6 +270,37 @@ test("an eligibility refusal is answered from Cloud Code with agy's token", asyn
   assert.equal(parsed.command.data.groups[0].name, "Claude and GPT models");
   assert.deepEqual(parsed.command.data.groups[1], GEMINI);
   assert.ok(!report.output.toString().includes("ya29"));
+  // A summary answered for agy's identity already has Gemini's groups.
+  const full = {
+    groups: [
+      {
+        displayName: "Gemini Models",
+        buckets: [
+          {
+            bucketId: "gemini-weekly",
+            displayName: "Weekly Limit Remaining",
+            window: "weekly",
+            resetTime: "2026-11-28T10:57:43Z",
+            remainingFraction: 0.83,
+          },
+        ],
+      },
+      ...SUMMARY.groups,
+    ],
+  };
+  const native2 = await usageReport({
+    agy: "agy",
+    home: home(t),
+    run: native(1, REFUSED),
+    version: async () => "1.5.9",
+    quota: async () => full,
+    models: async () => CATALOGUE,
+  });
+  const groups = JSON.parse(native2.output.toString()).command.data.groups;
+  assert.deepEqual(
+    groups.map((group) => group.name),
+    ["Gemini Models", "Claude and GPT models"],
+  );
   // Without the catalogue the summary alone is the report.
   const alone = await usageReport({
     agy: "agy",
@@ -290,6 +332,23 @@ test("without a token or a summary agy's own refusal stands", async (t) => {
     assert.equal(report.output.toString(), `${REFUSED}\n`);
   }
   assert.equal(await accessToken("/nonexistent"), undefined);
+});
+
+test("the client identity is agy's own version, else the bare name", async (t) => {
+  assert.equal(userAgent("1.5.9"), "antigravity/cli/1.5.9");
+  assert.equal(userAgent(undefined), "antigravity");
+  const base = home(t);
+  const script = (name, body) => {
+    const path = join(base, name);
+    writeFileSync(path, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    return path;
+  };
+  assert.deepEqual(AGY_VERSION_ARGUMENTS, ["--version"]);
+  assert.equal(await agyVersion(script("ok", `[ "$1" = --version ] && echo 1.5.9`)), "1.5.9");
+  assert.equal(await agyVersion(script("noise", "echo 'agy 1.5.9; rm -rf'")), undefined);
+  assert.equal(await agyVersion(script("fails", "echo 1.5.9; exit 2")), undefined);
+  assert.equal(await agyVersion(join(base, "missing")), undefined);
+  assert.equal(await agyVersion(script("slow", "exec sleep 30"), { timeoutMs: 100 }), undefined);
 });
 
 test("print mode runs with the fixed arguments and bounded output", async (t) => {

@@ -11,8 +11,9 @@
 // Only for that refusal it asks Cloud Code's quota summary itself, the same
 // request `agy` makes, and prints a report in print mode's own shape.
 //
-// The quota summary covers only third-party models (Claude, GPT-OSS:
-// `3p-5h`, `3p-weekly`). Gemini's quota is reported per model by
+// The quota summary lists the Gemini groups (weekly and 5-hour, and Argon)
+// only for `agy`'s client identity, so the helper sends `agy`'s user agent
+// (see `userAgent`). Gemini's 5-hour quota is also reported per model by
 // `fetchAvailableModels` (`quotaInfo`), the catalogue `agy` itself loads, so
 // every successful report gains a "Gemini models" group built from it unless
 // the report already has a Gemini group. Without that answer the report is
@@ -39,8 +40,16 @@ export const AGY_USAGE_ARGUMENTS = Object.freeze([
 const CLOUD_CODE = "https://daily-cloudcode-pa.googleapis.com/v1internal";
 export const QUOTA_URL = `${CLOUD_CODE}:retrieveUserQuotaSummary`;
 export const MODELS_URL = `${CLOUD_CODE}:fetchAvailableModels`;
-/** Cloud Code refuses this endpoint without a client user agent. */
+/**
+ * Cloud Code refuses these methods without a client user agent, and the
+ * quota summary lists the Gemini groups only for `agy`'s own client identity
+ * (`antigravity/cli/<version>`, observed 2026-11-21): with a bare
+ * `antigravity` it answers only the third-party group. The version is the
+ * pinned `agy`'s own (`agy --version`); without it the bare name is sent.
+ */
 const USER_AGENT = "antigravity";
+export const AGY_VERSION_ARGUMENTS = Object.freeze(["--version"]);
+const VERSION_TIMEOUT_MS = 3_000;
 const TOKEN_PATH = [".gemini", "antigravity-cli", "antigravity-oauth-token"];
 /** The daemon accepts at most 256 KiB of report; stay well below. */
 const MAX_OUTPUT = 192 * 1024;
@@ -84,6 +93,32 @@ export function runAgy(agy, { timeoutMs = AGY_TIMEOUT_MS } = {}) {
   });
 }
 
+/** The pinned `agy`'s version (`1.5.9`), or `undefined`. */
+export function agyVersion(agy, { timeoutMs = VERSION_TIMEOUT_MS } = {}) {
+  return new Promise((done) => {
+    const child = spawn(agy, AGY_VERSION_ARGUMENTS, { stdio: ["ignore", "pipe", "ignore"] });
+    let text = "";
+    child.stdout.on("data", (chunk) => {
+      if (text.length < 256) text += chunk.toString("utf8");
+    });
+    const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
+    child.once("error", () => {
+      clearTimeout(timer);
+      done(undefined);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      const version = text.trim();
+      done(code === 0 && /^[0-9]{1,6}(\.[0-9]{1,6}){1,3}$/.test(version) ? version : undefined);
+    });
+  });
+}
+
+/** The client identity Cloud Code serves the full quota summary to. */
+export function userAgent(version) {
+  return version ? `antigravity/cli/${version}` : USER_AGENT;
+}
+
 /** The last JSON object line of print mode's output, if any. */
 export function envelope(output) {
   const lines = output.toString("utf8").split("\n").reverse();
@@ -121,7 +156,7 @@ export async function accessToken(home) {
 export function postCloudCode(
   token,
   url,
-  { timeoutMs = REQUEST_TIMEOUT_MS, maxBytes = MAX_OUTPUT } = {},
+  { timeoutMs = REQUEST_TIMEOUT_MS, maxBytes = MAX_OUTPUT, userAgent = USER_AGENT } = {},
 ) {
   return new Promise((done) => {
     const body = "{}";
@@ -136,7 +171,7 @@ export function postCloudCode(
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
           "Content-Length": Buffer.byteLength(body),
-          "User-Agent": USER_AGENT,
+          "User-Agent": userAgent,
         },
       },
       (response) => {
@@ -265,10 +300,14 @@ export async function usageReport({
   agy,
   home,
   run = runAgy,
+  version = agyVersion,
   quota = fetchQuota,
   models = fetchModels,
 }) {
-  const native = await run(agy);
+  // The version probe takes well under a second; it runs beside print mode
+  // so the fallback's requests still fit the daemon's bound.
+  const [native, agyRelease] = await Promise.all([run(agy), version(agy)]);
+  const client = { userAgent: userAgent(agyRelease) };
   const report = envelope(native.output);
   if (!refusedEligibility(native.code, report)) {
     // Print mode's own report: add Gemini when it lacks it, else unchanged.
@@ -276,13 +315,13 @@ export async function usageReport({
     const succeeded = native.code === 0 && report?.status === "SUCCESS";
     if (!succeeded || !Array.isArray(data?.groups) || hasGemini(data)) return native;
     const token = await accessToken(home);
-    const gemini = token ? geminiGroup(await models(token)) : undefined;
+    const gemini = token ? geminiGroup(await models(token, client)) : undefined;
     if (!gemini) return native;
     return printed({ ...report, command: { ...report.command, data: withGemini(data, gemini) } });
   }
   const token = await accessToken(home);
   if (!token) return native;
-  const [summary, catalogue] = await Promise.all([quota(token), models(token)]);
+  const [summary, catalogue] = await Promise.all([quota(token, client), models(token, client)]);
   const document = quotaDocument(summary);
   if (!document) return native;
   return printed({
