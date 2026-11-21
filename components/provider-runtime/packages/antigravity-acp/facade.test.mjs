@@ -518,6 +518,7 @@ test("a command's deadline holds without polling; an unconfirmed stop keeps it",
     wait_seconds: 0,
   });
   assert.match(started.text, /Still running/);
+  assert.match(started.text, /Continue it with wait_seconds 1 to wait for the rest of its 1 s/);
   const session = facade.session("s1");
   assert.equal(session.commands.size, 1);
   const deadline = Date.now() + 8000;
