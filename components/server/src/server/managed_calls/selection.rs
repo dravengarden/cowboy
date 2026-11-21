@@ -80,6 +80,53 @@ pub(super) fn candidates(
         .unwrap_or_else(|| legacy(presets, provider, preference, high_risk))
 }
 
+/// A fresh review's preset at admission, or the refusal to return. A high
+/// tier needs a reason the caller wrote; the CLI fills an omitted reason
+/// with its own default, which is no reason.
+pub(super) fn admit(
+    request: &crate::managed_calls::Request,
+    presets: &Value,
+    provider: &str,
+    preference: &super::super::agent_tools::ReviewPreferences,
+    explicit: Option<&str>,
+) -> Result<String, Value> {
+    let refuse = |code: &str, hint: String| {
+        let mut refused = super::coordinator::error(code, "not_submitted");
+        if !hint.is_empty() {
+            refused["error"]["hint"] = json!(hint);
+        }
+        refused
+    };
+    let high_risk = request
+        .labels
+        .get(crate::managed_calls::review::RISK)
+        .is_some_and(|risk| risk == "high");
+    if high_risk
+        && request
+            .labels
+            .get("selection_reason")
+            .is_none_or(|reason| reason.trim().is_empty() || reason == "Session Tools selection")
+    {
+        return Err(refuse(
+            "risk_reason_required",
+            "risk:'high' needs a reason naming the risk (for example persistence, permissions or a risk area in the review root's guidance)".into(),
+        ));
+    }
+    let choices = candidates(presets, provider, preference, high_risk);
+    let all = reviewers(presets, provider, preference);
+    review_preset(&choices, &all, explicit).map_err(|code| {
+        let hint = if code == "preset_outside_tier" {
+            format!(
+                "this preset is stronger than a routine review needs; omit preset (automatic: {}), name a cheaper one, or declare risk:'high' with a reason",
+                choices.first().and_then(|choice| choice["id"].as_str()).unwrap_or("none")
+            )
+        } else {
+            String::new()
+        };
+        refuse(code, hint)
+    })
+}
+
 /// Every reviewer preset the session's family lists admit, strongest first.
 pub(super) fn reviewers(
     presets: &Value,
