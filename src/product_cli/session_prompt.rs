@@ -131,11 +131,17 @@ pub(super) async fn prompt_notified(args: PromptArgs) -> Result<()> {
     };
     let reply = exchange(context, action, 0).await;
     println!("{}", serde_json::to_string(&reply)?);
-    let receipt = &reply["result"];
-    if reply.get("error").is_some_and(|e| !e.is_null()) || receipt["status"] != "accepted" {
+    if !notify_accepted(&reply) {
         bail!("not accepted: see the printed reply; observe a pending one with its operation");
     }
     Ok(())
+}
+
+/// Whether the Agent API accepted a `queue.submit` with `--notify`.
+fn notify_accepted(reply: &Value) -> bool {
+    reply["state"] == "ok"
+        && reply.get("error").is_none_or(Value::is_null)
+        && reply["value"]["status"] == "accepted"
 }
 
 /// Wait until the turn of `prompt` (the id printed by `session prompt`)
@@ -236,6 +242,24 @@ mod tests {
         assert!(plain_id("agent-abc.1_2"));
         for bad in ["", "batch#2", "a/b", "a b", "a?b", "a'b"] {
             assert!(!plain_id(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn notify_acceptance_matches_the_agent_api_envelope() {
+        assert!(notify_accepted(&json!({
+            "schema": 1,
+            "state": "ok",
+            "value": {"status": "accepted"}
+        })));
+        for rejected in [
+            json!({"schema": 1, "state": "ok", "value": {"status": "pending"}}),
+            json!({"schema": 1, "state": "error", "error": {"code": "not_found"}}),
+            json!({"error": "gateway_unavailable", "admission": "not_submitted"}),
+            json!({"result": {"status": "accepted"}}),
+            json!({"state": "ok", "error": "unexpected", "value": {"status": "accepted"}}),
+        ] {
+            assert!(!notify_accepted(&rejected), "{rejected}");
         }
     }
 }

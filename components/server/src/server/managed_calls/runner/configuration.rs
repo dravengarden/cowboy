@@ -205,4 +205,44 @@ mod tests {
         assert!(!matches(None, &json!({})));
         assert!(matches(Some(&json!([])), &json!({})));
     }
+
+    #[test]
+    fn fable_5_2_preset_confirms_advertised_and_resumed_equivalences_only() {
+        let expected = json!({"model":"claude-fable-5-2[1m]", "effort":"max"});
+        for (current, equivalents) in [
+            ("claude-fable-5-2[1m]", json!(["claude-fable-5-2", "fable"])),
+            ("claude-fable-5-2", json!(["claude-fable-5-2[1m]", "fable"])),
+            ("fable", json!(["claude-fable-5-2", "claude-fable-5-2[1m]"])),
+        ] {
+            let options = json!([
+                {"id":"model", "currentValue":current, "_meta":{
+                    "cowboy.dev/configuration-equivalence":{
+                        "schema":1, "value":current, "equivalent_values":equivalents
+                    }
+                }},
+                {"id":"effort", "currentValue":"max"}
+            ]);
+            assert!(matches(Some(&options), &expected), "{current}");
+        }
+        // Default or Fable 5.1 (even with 5.1 equivalence) must never confirm Fable 5.2.
+        assert!(!matches(
+            Some(&json!([
+                {"id":"model", "currentValue":"default"},
+                {"id":"effort", "currentValue":"max"}
+            ])),
+            &expected
+        ));
+        assert!(!matches(
+            Some(&json!([
+                {"id":"model", "currentValue":"claude-fable-5-1", "_meta":{
+                    "cowboy.dev/configuration-equivalence":{
+                        "schema":1, "value":"claude-fable-5-1",
+                        "equivalent_values":["claude-fable-5-1[1m]"]
+                    }
+                }},
+                {"id":"effort", "currentValue":"max"}
+            ])),
+            &expected
+        ));
+    }
 }

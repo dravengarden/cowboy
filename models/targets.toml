@@ -68,7 +68,7 @@ effort = "max"
 released = "2026-11-09"
 provider = "claude-code"
 preset = "fable-max"
-values = { model = "fable", effort = "max" }
+values = { model = "claude-fable-5-2[1m]", effort = "max" }
 
 [[targets]]
 id = "claude-fable-5-2:high"
@@ -78,7 +78,7 @@ effort = "high"
 released = "2026-11-09"
 provider = "claude-code"
 preset = "fable-high"
-values = { model = "fable", effort = "high" }
+values = { model = "claude-fable-5-2[1m]", effort = "high" }
 
 [[targets]]
 id = "claude-opus-5-5:high"

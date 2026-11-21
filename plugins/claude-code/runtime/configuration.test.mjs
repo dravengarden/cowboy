@@ -3,39 +3,55 @@ import test from "node:test";
 import { configurationEquivalence, installConfigurationEquivalence } from "./configuration.mjs";
 
 const KEY = "cowboy.dev/configuration-equivalence";
-test("only exact Fable 5.1 spellings are equivalent; native values stay truthful", () => {
-  for (const value of ["claude-fable-5-1", "claude-fable-5-1[1m]"]) {
-    const options = [
-      {
-        id: "model",
-        currentValue: value,
-        _meta: { native: true },
-      },
-      { id: "effort", currentValue: "max" },
-    ];
-    configurationEquivalence(options);
-    assert.equal(options[0].currentValue, value);
-    assert.equal(options[0]._meta.native, true);
-    assert.equal(options[0]._meta[KEY].value, value);
-    assert.equal(options[0]._meta[KEY].equivalent_values.length, 1);
-    assert.notEqual(options[0]._meta[KEY].equivalent_values[0], value);
-    assert.equal(options[1]._meta, undefined);
-    for (const other of [
-      "opus",
-      "claude-opus-4-6",
-      "claude-fable-5",
-      "claude-fable-5-2",
-      "custom-fable-5-1",
-    ]) {
-      options[0].currentValue = other;
+test("only exact per-version Fable spellings are equivalent; native values stay truthful", () => {
+  const groups = [
+    ["claude-fable-5-1", "claude-fable-5-1[1m]"],
+    ["claude-fable-5-2", "claude-fable-5-2[1m]", "fable"],
+  ];
+  for (const group of groups) {
+    const otherGroupValues = groups.filter((candidate) => candidate !== group).flat();
+    for (const value of group) {
+      const options = [
+        {
+          id: "model",
+          currentValue: value,
+          _meta: { native: true },
+        },
+        { id: "effort", currentValue: "max" },
+      ];
       configurationEquivalence(options);
-      assert.equal(options[0]._meta[KEY], undefined);
+      assert.equal(options[0].currentValue, value);
+      assert.equal(options[0]._meta.native, true);
+      assert.equal(options[0]._meta[KEY].schema, 1);
+      assert.equal(options[0]._meta[KEY].value, value);
+      assert.deepEqual(
+        options[0]._meta[KEY].equivalent_values,
+        group.filter((candidate) => candidate !== value),
+      );
+      for (const cross of otherGroupValues) {
+        assert.equal(options[0]._meta[KEY].equivalent_values.includes(cross), false);
+      }
+      assert.equal(options[1]._meta, undefined);
+      for (const other of [
+        "default",
+        "opus",
+        "claude-opus-4-6",
+        "claude-fable-5",
+        "claude-fable-5-3",
+        "fable[1m]",
+        "custom-fable-5-1",
+        "custom-fable-5-2",
+      ]) {
+        options[0].currentValue = other;
+        configurationEquivalence(options);
+        assert.equal(options[0]._meta[KEY], undefined);
+      }
     }
   }
   configurationEquivalence(undefined);
 });
 
-test("creation, resume, configuration replies and notifications carry native equivalence", async () => {
+test("creation, resume, initial config options, replies and notifications carry native equivalence", async () => {
   let sent;
   class Agent {
     client = {
@@ -49,14 +65,23 @@ test("creation, resume, configuration replies and notifications carry native equ
     }
     async createSession() {
       return {
-        configOptions: [{ id: "model", currentValue: "claude-fable-5-1" }],
+        configOptions: [{ id: "model", currentValue: "claude-fable-5-2[1m]" }],
+      };
+    }
+    async withInitialConfigOptions() {
+      return {
+        configOptions: [{ id: "model", currentValue: "fable" }],
       };
     }
     async resumeSession() {
-      return this.createSession();
+      return {
+        configOptions: [{ id: "model", currentValue: "claude-fable-5-2" }],
+      };
     }
     async setSessionConfigOption() {
-      return this.createSession();
+      return {
+        configOptions: [{ id: "model", currentValue: "claude-fable-5-1" }],
+      };
     }
   }
   installConfigurationEquivalence(Agent);
@@ -65,16 +90,42 @@ test("creation, resume, configuration replies and notifications carry native equ
   const sender = agent.client.sessionUpdate;
   await agent.initialize();
   assert.equal(agent.client.sessionUpdate, sender);
-  for (const method of ["createSession", "resumeSession", "setSessionConfigOption"]) {
-    const result = await agent[method]();
-    assert.equal(result.configOptions[0]._meta[KEY].value, "claude-fable-5-1");
-  }
-  const options = [{ id: "model", currentValue: "claude-fable-5-1[1m]" }];
+
+  const created = await agent.createSession();
+  assert.equal(created.configOptions[0]._meta[KEY].value, "claude-fable-5-2[1m]");
+  assert.deepEqual(created.configOptions[0]._meta[KEY].equivalent_values, [
+    "claude-fable-5-2",
+    "fable",
+  ]);
+
+  const initial = await agent.withInitialConfigOptions();
+  assert.equal(initial.configOptions[0]._meta[KEY].value, "fable");
+  assert.deepEqual(initial.configOptions[0]._meta[KEY].equivalent_values, [
+    "claude-fable-5-2",
+    "claude-fable-5-2[1m]",
+  ]);
+
+  const resumed = await agent.resumeSession();
+  assert.equal(resumed.configOptions[0]._meta[KEY].value, "claude-fable-5-2");
+  assert.deepEqual(resumed.configOptions[0]._meta[KEY].equivalent_values, [
+    "claude-fable-5-2[1m]",
+    "fable",
+  ]);
+
+  const updated = await agent.setSessionConfigOption();
+  assert.equal(updated.configOptions[0]._meta[KEY].value, "claude-fable-5-1");
+  assert.deepEqual(updated.configOptions[0]._meta[KEY].equivalent_values, ["claude-fable-5-1[1m]"]);
+
+  const options = [{ id: "model", currentValue: "claude-fable-5-2[1m]" }];
   assert.equal(
     await agent.client.sessionUpdate({
       update: { sessionUpdate: "config_option_update", configOptions: options },
     }),
     "sent",
   );
-  assert.equal(sent.update.configOptions[0]._meta[KEY].value, "claude-fable-5-1[1m]");
+  assert.equal(sent.update.configOptions[0]._meta[KEY].value, "claude-fable-5-2[1m]");
+  assert.deepEqual(sent.update.configOptions[0]._meta[KEY].equivalent_values, [
+    "claude-fable-5-2",
+    "fable",
+  ]);
 });

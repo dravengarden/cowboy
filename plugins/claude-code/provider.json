@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "claude-code",
-  "version": "3.20.61",
+  "version": "3.20.62",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.7.0",
   "display": {
@@ -97,7 +97,7 @@
       "detail": "Fable 5.2 (1M context) · High effort",
       "is_default": false,
       "values": {
-        "model": "fable",
+        "model": "claude-fable-5-2[1m]",
         "effort": "high"
       }
     },
@@ -107,7 +107,7 @@
       "detail": "Fable 5.2 (1M context) · Max effort",
       "is_default": false,
       "values": {
-        "model": "fable",
+        "model": "claude-fable-5-2[1m]",
         "effort": "max"
       }
     }

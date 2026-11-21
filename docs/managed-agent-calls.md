@@ -647,8 +647,11 @@ equivalent_values: string[]}` (at most eight values).
 `value` must equal the actual `currentValue`. Only a connected worker's
 observation carries this evidence; saved preferences, UI projections, stale
 metadata and suffix guesses do not. The call still records the actual native
-value. Claude declares only the two exact Fable 5.1 spellings with and without
-`[1m]` equivalent: both have the native 1M window, as documented in
+value. Claude declares two separate exact equivalence classes: Fable 5.1
+(`claude-fable-5-1` and `claude-fable-5-1[1m]`) and Fable 5.2
+(`claude-fable-5-2`, `claude-fable-5-2[1m]`, and the `fable` alias that ACP
+0.107.3's `aliasResumedModelRow` emits when resuming a Fable 5.2 transcript);
+both versions have the native 1M window, as documented in
 [Claude model configuration](https://code.claude.com/docs/en/model-config#extended-context).
 Other versions, models and effort levels remain distinct. This avoids a
 configuration timeout when a continuation restores the transcript's canonical
