@@ -156,7 +156,13 @@ test("the fable alias is equivalent only while its own row is Fable 5.2", () => 
   }
   // Grouped select entries are read like flat ones.
   assert.deepEqual(
-    equivalents("fable", [{ group: "claude", name: "Claude", options: [{ value: "fable", name: "Fable 5.2 (1M context)" }] }]),
+    equivalents("fable", [
+      {
+        group: "claude",
+        name: "Claude",
+        options: [{ value: "fable", name: "Fable 5.2 (1M context)" }],
+      },
+    ]),
     ["claude-fable-5-2", "claude-fable-5-2[1m]"],
   );
 });
