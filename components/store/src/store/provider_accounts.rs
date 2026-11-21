@@ -10,6 +10,7 @@ pub mod browser_placements;
 pub mod browser_shares;
 pub mod grants;
 pub mod legacy_cards;
+mod legacy_cleanup;
 pub mod logins;
 pub mod portable;
 pub mod revocation;

@@ -13,7 +13,7 @@ use super::BrowserAccount;
 use crate::machine_protocol::MACHINE_BROWSER_PROTOCOL_VERSION;
 use crate::machine_protocol::machine_browser::{Command, Reason, State as BrowserState};
 use crate::provider_account::ProviderAccountId;
-use crate::store::provider_accounts::browser_families;
+use crate::store::provider_accounts::{browser_families, legacy_cards};
 use crate::store::provider_accounts::browser_shares::{self, Member, Shares, families_distinct};
 use crate::store::provider_accounts::{Change, Mutation, MutationResult, Registry};
 use serde_json::{Value, json};
@@ -176,6 +176,12 @@ pub(in crate::server) async fn list_value(
                 // Families the profile belongs to (kept after a member left).
                 "bound": shares.bindings.iter().filter(|row| row.share_id == share.share_id)
                     .map(|row| json!({"family": row.family, "account_id": row.member.own_key(owner)}))
+                    // A retired card's binding keeps blocking its family until
+                    // a confirmed reset; named by the card's browser key.
+                    .chain(shares.unreadable_bindings.iter()
+                        .filter(|row| row.share_id == share.share_id)
+                        .filter_map(|row| row.retired_card().map(|card| json!({"family": row.family,
+                            "account_id": legacy_cards::browser_key(owner, card), "retired_card": card}))))
                     .collect::<Vec<_>>()})
         })
         .collect();

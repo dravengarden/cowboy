@@ -1396,7 +1396,7 @@ async fn an_unreadable_binding_is_kept_and_blocks_its_family_until_a_confirmed_r
 }
 
 #[tokio::test]
-async fn the_retirement_migration_drops_card_members_and_keeps_their_bindings() {
+async fn the_retirement_cleanup_drops_card_members_and_keeps_their_bindings() {
     let dir = tempfile::tempdir().unwrap();
     let store = sqlite_store(&dir).await;
     let lark = named_account(&store, "retired-lark", "claude-code").await;
@@ -1412,6 +1412,7 @@ async fn the_retirement_migration_drops_card_members_and_keeps_their_bindings() 
     .unwrap();
     applied(&store, "retired-pika", join(card("openai"), &share)).await;
     let revision = store.browser_shares(OWNER).await.unwrap().shares[0].revision;
+    let registry = store.provider_accounts(OWNER).await.unwrap().revision;
     let StorageBackend::Sqlite(db) = &store.backend else {
         panic!("sqlite")
     };
@@ -1446,12 +1447,9 @@ async fn the_retirement_migration_drops_card_members_and_keeps_their_bindings() 
     .execute(&db.pool)
     .await
     .unwrap();
-    sqlx::raw_sql(include_str!(
-        "../../../../../migrations/sqlite/0060_retire_legacy_cards.sql"
-    ))
-    .execute(&db.pool)
-    .await
-    .unwrap();
+    // Every migration run (an upgrade, a re-upgrade after a rollback, a
+    // copied store) ends with the cleanup.
+    store.migrate().await.unwrap();
     let members: Vec<String> = sqlx::query_scalar(
         "SELECT member FROM provider_browser_share_members WHERE owner_user_id=$1 ORDER BY member",
     )
@@ -1467,6 +1465,10 @@ async fn the_retirement_migration_drops_card_members_and_keeps_their_bindings() 
     assert_eq!(enabled, 0);
     let shares = store.browser_shares(OWNER).await.unwrap();
     assert_eq!(shares.shares[0].revision, revision + 1);
+    // An account mutation captured before the cleanup fails its compare.
+    let after = store.provider_accounts(OWNER).await.unwrap();
+    assert_eq!(after.revision, registry + 1);
+    rerun_cleanup(&store, &share, (registry + 1, revision + 1)).await;
     // Lynx's binding stays and keeps every Claude account out until a reset.
     assert_eq!(shares.unreadable_bindings.len(), 1);
     assert_eq!(
@@ -1485,4 +1487,43 @@ async fn the_retirement_migration_drops_card_members_and_keeps_their_bindings() 
         join(Member::account(lark), &share),
     )
     .await;
+}
+
+/// The cleanup moved the registry revision in its column and serialized
+/// value, is idempotent, and removes a card member a rolled-back Controller
+/// wrote again on the next start (`SQLx` skips the recorded migrations).
+async fn rerun_cleanup(store: &Store, share: &str, (registry, revision): (i64, i64)) {
+    let StorageBackend::Sqlite(db) = &store.backend else {
+        panic!("sqlite")
+    };
+    let stored: (i64, String) = sqlx::query_as(
+        "SELECT revision,value FROM provider_account_registries WHERE owner_user_id=$1",
+    )
+    .bind(OWNER)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(stored.0, registry);
+    assert_eq!(
+        serde_json::from_str::<Registry>(&stored.1).unwrap().revision,
+        registry
+    );
+    assert_eq!(store.retire_legacy_card_rows().await.unwrap(), 0);
+    assert_eq!(store.provider_accounts(OWNER).await.unwrap().revision, registry);
+    sqlx::query(
+        "INSERT INTO provider_browser_share_members (owner_user_id,member,share_id,family) VALUES ($1,'card:anthropic',$2,'anthropic')",
+    )
+    .bind(OWNER)
+    .bind(share)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    store.migrate().await.unwrap();
+    assert_eq!(
+        store.provider_accounts(OWNER).await.unwrap().revision,
+        registry + 1
+    );
+    let shares = store.browser_shares(OWNER).await.unwrap();
+    assert_eq!(shares.shares[0].revision, revision + 1);
+    assert_eq!(shares.members.len(), 1);
 }

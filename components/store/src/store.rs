@@ -1291,7 +1291,9 @@ impl Store {
     }
 
     pub async fn migrate(&self) -> Result<()> {
-        dispatch_storage!(self, migrate())
+        dispatch_storage!(self, migrate())?;
+        // Before anything is served, after every migration (and store copy).
+        self.retire_legacy_card_rows().await.map(drop)
     }
 
     #[must_use]

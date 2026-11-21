@@ -108,14 +108,31 @@ keys) replace every card.
   refused with `named_account_required`, by Provider family and whether or not
   a root entry exists; managed readiness reports the same code. Folder and
   registry defaults that name a named account are unaffected.
-- **Database rows.** Migration `0086_retire_legacy_cards.sql` (SQLite `0060`)
-  removes every `card:<card>` browser share member, bumping its share's
-  revision, and clears `provider_legacy_browsers`. Family bindings recorded
-  for a card are kept: they become unreadable bindings that block every member
-  of that family until a confirmed profile reset, so Claude · Lark can never
-  inherit Claude · Lynx's cookies. The `provider_legacy_browsers` table stays
-  (empty) so a rolled-back Controller can still read it; the stored
-  `subscriptions` preference row is ignored.
+- **Database rows.** No migration: `Store::retire_legacy_card_rows` runs after
+  every `Store::migrate`, before anything is served, and is idempotent. It
+  removes every `card:<card>` browser share member and clears
+  `provider_legacy_browsers`, and in the same transaction advances each
+  affected share's revision and the owner's account registry revision (column
+  and serialized value), so a share reset or account mutation captured against
+  the earlier membership fails its compare. Running at every start also covers
+  a re-upgrade after a rollback (the previous Controller may write card rows
+  again, and SQLx never reruns a recorded migration) and a copied store (which
+  is migrated empty and imported before a Controller opens it). Family
+  bindings recorded for a card are kept. A binding of a retired card under its
+  own family is a known, read-only identity: it keeps every member of that
+  family out until a confirmed profile reset (so Claude · Lark can never
+  inherit Claude · Lynx's cookies), its network requirements still apply, it
+  is listed in the share's `bound` families (`retired_card`, account id = the
+  card's browser key), and the share's other members keep their browser. The
+  `provider_legacy_browsers` table stays (empty) so a rolled-back Controller
+  can still read it; the stored `subscriptions` preference is no longer
+  written, but `accounts.list()` still returns it as `display_preferences`, a
+  read-only projection a Web client from before the retirement compares.
+- **Scheduled resets.** A pending Service reset of a retired card's collector
+  is cancelled and audited (`cancelled`, "the legacy default card is
+  retired") at startup, so a rolled-back Controller cannot fire it later.
+  Named account resets are untouched. The usage executor settings neither list
+  nor accept a retired card's collector.
 - **Credentials.** Nothing is wiped implicitly by this release. Every legacy
   root credential must already be wiped through the existing paths: adoption
   (`openai`, `xai`, `deepseek`), or the Service sign-out (`DELETE

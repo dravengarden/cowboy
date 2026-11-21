@@ -67,6 +67,33 @@ pub(super) async fn restore_provider_reset_schedules(usage: &UsageService, store
     let Some(store) = store else {
         return;
     };
+    // A retired card's pending Service reset would fire again after a
+    // rollback, spending a credit of whatever credential is active then.
+    for provider in &usage.retired_reset_provider_ids() {
+        match store.load_provider_reset(provider).await {
+            Ok(Some(_)) => {
+                if let Err(error) = store.delete_provider_reset(provider).await {
+                    tracing::warn!(%error, %provider, "cancelling a retired card's scheduled reset");
+                    continue;
+                }
+                let _ = store
+                    .append_provider_action_log(
+                        provider,
+                        "scheduled",
+                        "cancelled",
+                        "timer",
+                        "Scheduled reset cancelled: the legacy default card is retired",
+                        None,
+                        None,
+                        now_ms(),
+                    )
+                    .await;
+                tracing::info!(%provider, "cancelled a retired card's scheduled reset");
+            }
+            Ok(None) => {}
+            Err(error) => tracing::warn!(%error, %provider, "loading a retired card's scheduled reset"),
+        }
+    }
     for provider in &usage.reset_provider_ids() {
         match store.load_provider_reset(provider).await {
             Ok(Some(action)) => {

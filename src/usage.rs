@@ -459,6 +459,19 @@ impl UsageService {
         }
     }
 
+    /// The reset lanes of the retired cards' Service collectors: a schedule
+    /// left on one is cancelled at upgrade, never fired.
+    #[must_use]
+    pub fn retired_reset_provider_ids(&self) -> Vec<String> {
+        let live = self.reset_provider_ids();
+        self.plugin_bindings()
+            .into_iter()
+            .filter(|binding| self.retired.contains(&binding.account))
+            .filter_map(|binding| binding.reset)
+            .filter(|reset| !live.contains(reset))
+            .collect()
+    }
+
     #[must_use]
     pub fn reset_provider_ids(&self) -> Vec<String> {
         self.service_bindings()
@@ -1586,6 +1599,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retired_cards_offer_no_usage_executor() {
+        let mut openai = openai_usage_binding();
+        openai.collector_argv = vec!["must-not-run".to_owned()];
+        let mut xai = xai_like_binding("xai");
+        xai.collector_argv = vec!["must-not-run".to_owned()];
+        let service = UsageService::with_bindings(None, None, vec![openai, xai])
+            .with_retired_service_accounts(&["openai"]);
+        let settings = service.execution_settings().await.unwrap();
+        assert!(!settings.providers.contains_key("openai"));
+        assert!(settings.providers.contains_key("xai"));
+        let refused = service
+            .set_execution_machine("openai", None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(refused, "account has no usage collector");
+    }
+
+    #[tokio::test]
     async fn retired_cards_leave_the_service_but_keep_their_presentation_binding() {
         let service = UsageService::with_bindings(
             None,
@@ -1610,6 +1642,7 @@ mod tests {
                 .any(|usage| usage.provider == "xai")
         );
         assert_eq!(service.reset_provider_ids(), ["xai"]);
+        assert_eq!(service.retired_reset_provider_ids(), ["codex"]);
         assert!(service.reserve_reset("codex").await.is_err());
         assert!(service.refresh_provider("openai").await.is_err());
         assert!(

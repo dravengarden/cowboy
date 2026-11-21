@@ -227,20 +227,29 @@ pub(in crate::server) fn identity_of(
 
 /// The identities share `share_id`'s browser serves: its current members
 /// (each with the family recorded at join) and every identity whose family
-/// is bound to its profile. A binding whose member cannot be read may hold
-/// any identity's cookies: the share is `browser_share_machine_unknown`
-/// until it is readable again or a confirmed reset releases it.
+/// is bound to its profile, including a retired legacy card's. A binding
+/// whose member cannot be read otherwise may hold any identity's cookies:
+/// the share is `browser_share_machine_unknown` until it is readable again or
+/// a confirmed reset releases it.
 pub(in crate::server) fn share_identities(
     shares: &Shares,
     share_id: &str,
     registry: &Registry,
 ) -> Result<Vec<Identity>, &'static str> {
-    if shares
+    // A retired card's binding is a known identity of its own family (its
+    // network needs still apply); any other unreadable one may be anything.
+    let mut retired = Vec::new();
+    for row in shares
         .unreadable_bindings
         .iter()
-        .any(|row| row.share_id == share_id)
+        .filter(|row| row.share_id == share_id)
     {
-        return Err(MACHINE_UNKNOWN);
+        row.retired_card().ok_or(MACHINE_UNKNOWN)?;
+        retired.push(Identity {
+            family: Some(row.family.clone()),
+            provider: None,
+            pinned: false,
+        });
     }
     let current = shares
         .members_of(share_id)
@@ -251,7 +260,7 @@ pub(in crate::server) fn share_identities(
         .iter()
         .filter(|row| row.share_id == share_id)
         .map(|row| identity_of(&row.member, Some(row.family.clone()), registry, false));
-    Ok(current.chain(bound).collect())
+    Ok(current.chain(bound).chain(retired).collect())
 }
 
 /// Whether `provider` is an active Agent Provider installation on
@@ -650,5 +659,35 @@ mod tests {
         );
         // Another share is unaffected.
         assert_eq!(share_identities(&shares, "t", &registry), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn a_retired_card_binding_is_a_known_identity_of_its_own_family() {
+        use crate::store::provider_accounts::browser_shares::UnreadableBinding;
+        let registry = Registry::default();
+        let mut shares = Shares::default();
+        shares.unreadable_bindings.push(UnreadableBinding {
+            share_id: "s".into(),
+            family: "anthropic".into(),
+            member: "card:anthropic".into(),
+        });
+        assert_eq!(
+            share_identities(&shares, "s", &registry),
+            Ok(vec![Identity {
+                family: Some("anthropic".into()),
+                provider: None,
+                pinned: false,
+            }])
+        );
+        // A card member under another family is no card identity.
+        shares.unreadable_bindings.push(UnreadableBinding {
+            share_id: "t".into(),
+            family: "openai".into(),
+            member: "card:anthropic".into(),
+        });
+        assert_eq!(
+            share_identities(&shares, "t", &registry),
+            Err(MACHINE_UNKNOWN)
+        );
     }
 }

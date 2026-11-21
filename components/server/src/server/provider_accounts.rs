@@ -161,6 +161,14 @@ pub(super) async fn read_value(state: &Arc<AppState>, owner: &str) -> Result<Val
         .provider_accounts(owner)
         .await
         .map_err(|_| "unavailable")?;
+    // Read-only compatibility projection: a Web client from before the
+    // retirement compares this revision too and would discard every later
+    // snapshot without it. Nothing writes the `subscriptions` preference now.
+    let display = store
+        .preferences(owner, "subscriptions")
+        .await
+        .map_err(|_| "unavailable")?
+        .ok_or("unavailable")?;
     let enabled = state
         .service_config
         .get(&crate::config::schema::ACCOUNT_NATIVE_CLAUDE_SESSIONS);
@@ -170,7 +178,7 @@ pub(super) async fn read_value(state: &Arc<AppState>, owner: &str) -> Result<Val
         .map_err(|_| "unavailable")?;
     let (shares, families) = browser::shares::list_value(state, owner).await?;
     Ok(
-        json!({"registry":registry,"revoked_accounts":revoked,"session_admission":if enabled {"enabled"} else {"not_enabled"},
+        json!({"registry":registry,"display_preferences":display,"revoked_accounts":revoked,"session_admission":if enabled {"enabled"} else {"not_enabled"},
         "session_providers":if enabled {session_providers(state).into_iter().collect()} else {Vec::<String>::new()},
         // Accounts of these Providers take an API key instead of a sign-in;
         // each inner list is one credential scope an account serves whole.

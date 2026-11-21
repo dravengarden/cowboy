@@ -155,6 +155,17 @@ pub struct UnreadableBinding {
     pub member: String,
 }
 
+impl UnreadableBinding {
+    /// The retired legacy card this binding belongs to: its member is
+    /// `card:<card>` of its own family. Such a binding is a known, read-only
+    /// identity (no other family's cookies), not an unknown one.
+    pub fn retired_card(&self) -> Option<&str> {
+        self.member
+            .strip_prefix("card:")
+            .filter(|card| *card == self.family && super::legacy_cards::CARDS.contains(card))
+    }
+}
+
 /// One owner's shares, memberships and family bindings.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Shares {
@@ -516,12 +527,12 @@ fn set_share(
         return Err("invalid_argument");
     }
     // Only the owner's own identities, even to leave (a no-op too).
-    if let Member::Account(account) = member
-        && !ctx
-            .registry
-            .accounts
-            .iter()
-            .any(|entry| entry.id == account.account_id)
+    let Member::Account(account) = member;
+    if !ctx
+        .registry
+        .accounts
+        .iter()
+        .any(|entry| entry.id == account.account_id)
     {
         return Err("account_not_found");
     }
