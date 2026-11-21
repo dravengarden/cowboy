@@ -248,14 +248,14 @@ impl MachinePluginStore {
             anyhow::bail!("portable_usage_replica_pending");
         };
         // Account-owned (removed with the account's credentials and at
-        // Machine start), never the shared system temporary directory.
-        let parent = self.auth_provider_root(plugin_id).join(PRIVATE_HOMES);
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&parent)?;
-        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700))?;
+        // Machine start), never the shared system temporary directory. Each
+        // level is created parent-first and a symlink is refused.
+        let provider = self.auth_provider_root(plugin_id);
+        let parent = provider.join(PRIVATE_HOMES);
         let root = parent.join(format!("{:032x}", rand::random::<u128>()));
+        for directory in [self.auth_watch_root(), provider, parent] {
+            crate::provider_account::prepare_private_directory(&directory)?;
+        }
         fs::DirBuilder::new().mode(0o700).create(&root)?;
         let private = PrivateHome(Some(root));
         restore_projected_bundle(auth, private.path(), &bundle)?;
@@ -278,26 +278,30 @@ impl MachinePluginStore {
         Ok(Some((private, environment)))
     }
 
-    /// Remove every account's private credential copies left by an
-    /// interrupted run. The Machine runs this before it accepts work.
+    /// Remove every named account's private credential copies left by an
+    /// interrupted run. The Machine runs this before it accepts work. Only
+    /// real named-account provider directories are traversed, from opened
+    /// directory descriptors; a symlink at any level is never followed.
     ///
     /// # Errors
-    /// If any copy cannot be removed.
+    /// If a directory cannot be enumerated or any copy cannot be removed.
     pub fn remove_private_homes(&self) -> Result<()> {
-        for scope in self.existing_auth_scopes() {
-            let providers = scope.auth_watch_root();
-            let Ok(entries) = fs::read_dir(&providers) else {
-                continue;
-            };
-            for entry in entries {
-                let homes = entry?.path().join(PRIVATE_HOMES);
-                if fs::symlink_metadata(&homes).is_ok() {
-                    remove_projection::remove(&homes)
-                        .with_context(|| format!("removing {}", homes.display()))?;
-                }
-            }
-        }
-        Ok(())
+        let scoped = (!self.account_id.is_default()).then(|| self.account_id.as_str());
+        remove_projection::remove_below_named_providers(
+            &self.auth_base,
+            &|name| {
+                scoped.map_or_else(
+                    || {
+                        crate::provider_account::ProviderAccountId::try_from(name.to_owned())
+                            .is_ok_and(|id| !id.is_default())
+                    },
+                    |only| only == name,
+                )
+            },
+            PRIVATE_HOMES,
+            None,
+        )
+        .context("removing private credential copies")
     }
 
     /// The refresh-free declaration of an exact verified generation.
@@ -359,7 +363,7 @@ impl MachinePluginStore {
             .await
             .map_err(|error| PluginHostInvocationFailure {
                 started: false,
-                error: anyhow::anyhow!(portable_usage_error_code(&format!("{error:#}"))),
+                error: anyhow::anyhow!(pre_spend_code(&format!("{error:#}"))),
             })?;
         if !self
             .refresh_free(&request.plugin_id, &request.generation_digest)

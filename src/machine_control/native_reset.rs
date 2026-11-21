@@ -65,30 +65,13 @@ impl MachineControl {
         let wait = std::time::Duration::from_millis(window) + RESET_TIMEOUT;
         Ok(async move {
             let _pending = pending;
-            match tokio::time::timeout(wait, rx).await {
-                Ok(Ok(Reply::PluginHost {
-                    accepted: true,
-                    payload: Some(value),
-                    ..
-                })) if !value.is_null() => Ok(value),
-                Ok(Ok(Reply::PluginHost {
-                    accepted: false,
-                    started,
-                    detail: Some(code),
-                    ..
-                })) => {
-                    Err(NativeResetFailure {
-                        call_may_have_reached_provider:
-                            !crate::machine_protocol::reset_refusal_unsent(Some(started), &code),
-                        code: native_usage_error_code(&code),
-                    })
-                }
-                // A lost, malformed or late reply may follow a sent reset.
-                _ => Err(NativeResetFailure {
-                    call_may_have_reached_provider: true,
-                    code: "native_reset_outcome_unknown",
-                }),
-            }
+            decode_reset_reply(
+                tokio::time::timeout(wait, rx)
+                    .await
+                    .ok()
+                    .and_then(Result::ok),
+                native_usage_error_code,
+            )
         })
     }
 
@@ -137,31 +120,47 @@ impl MachineControl {
         let wait = std::time::Duration::from_millis(window) + RESET_TIMEOUT;
         Ok(async move {
             let _pending = pending;
-            match tokio::time::timeout(wait, rx).await {
-                Ok(Ok(Reply::PluginHost {
-                    accepted: true,
-                    payload: Some(value),
-                    ..
-                })) if !value.is_null() => Ok(value),
-                Ok(Ok(Reply::PluginHost {
-                    accepted: false,
-                    started,
-                    detail: Some(code),
-                    ..
-                })) => {
-                    Err(NativeResetFailure {
-                        call_may_have_reached_provider:
-                            !crate::machine_protocol::reset_refusal_unsent(Some(started), &code),
-                        code: portable_reset_code(&code),
-                    })
-                }
-                // A lost, malformed or late reply may follow a sent reset.
-                _ => Err(NativeResetFailure {
-                    call_may_have_reached_provider: true,
-                    code: "native_reset_outcome_unknown",
-                }),
-            }
+            decode_reset_reply(
+                tokio::time::timeout(wait, rx)
+                    .await
+                    .ok()
+                    .and_then(Result::ok),
+                portable_reset_code,
+            )
         })
+    }
+}
+
+/// Decode a reset reply: a result, or a refusal that is unsent only with an
+/// explicit `started: false`, a pre-start code and no result payload. A lost,
+/// malformed or late reply may follow a sent reset.
+fn decode_reset_reply(
+    reply: Option<Reply>,
+    code: fn(&str) -> &'static str,
+) -> Result<serde_json::Value, NativeResetFailure> {
+    match reply {
+        Some(Reply::PluginHost {
+            accepted: true,
+            payload: Some(value),
+            ..
+        }) if !value.is_null() => Ok(value),
+        Some(Reply::PluginHost {
+            accepted: false,
+            started,
+            detail: Some(detail),
+            payload: None,
+            ..
+        }) => Err(NativeResetFailure {
+            call_may_have_reached_provider: !crate::machine_protocol::reset_refusal_unsent(
+                Some(started),
+                &detail,
+            ),
+            code: code(&detail),
+        }),
+        _ => Err(NativeResetFailure {
+            call_may_have_reached_provider: true,
+            code: "native_reset_outcome_unknown",
+        }),
     }
 }
 
@@ -219,6 +218,26 @@ mod portable_tests {
         )));
         assert!(!decode(reply(serde_json::json!({"started": false,
             "detail": "native_reset_preflight_failed"}))));
+    }
+
+    /// A refusal carrying a result payload is malformed and stays unknown.
+    #[test]
+    fn a_refusal_with_a_result_payload_is_unknown() {
+        let refusal = |payload: Option<serde_json::Value>| Reply::PluginHost {
+            accepted: false,
+            started: false,
+            payload,
+            detail: Some("native_reset_expired".to_owned()),
+        };
+        let unsent = decode_reset_reply(Some(refusal(None)), native_usage_error_code).unwrap_err();
+        assert!(!unsent.call_may_have_reached_provider);
+        let mixed = decode_reset_reply(
+            Some(refusal(Some(serde_json::json!({"outcome": "reset"})))),
+            native_usage_error_code,
+        )
+        .unwrap_err();
+        assert!(mixed.call_may_have_reached_provider);
+        assert_eq!(mixed.code, "native_reset_outcome_unknown");
     }
 
     #[test]

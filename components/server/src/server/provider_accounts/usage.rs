@@ -264,7 +264,8 @@ fn resets_on(state: &AppState, provider_id: &str, machine_id: &str) -> bool {
         .machine_control
         .connection_protocol(machine_id)
         .is_some_and(|(_, version)| {
-            version >= crate::machine_protocol::NATIVE_RESET_PROTOCOL_VERSION
+            // A two-start reset needs a Machine that enforces its spacing.
+            version >= crate::machine_protocol::NATIVE_RESET_SPACING_PROTOCOL_VERSION
         })
         && state
             .supervisor
@@ -286,9 +287,11 @@ fn machine_rank(state: &AppState, provider_id: &str, machine_id: &str) -> (bool,
 /// Placement rank of a native login's Machine: allowed by host policy and
 /// reset-capable first, then usage-capable, then connected, then offline.
 fn login_rank(protocol: Option<u16>, allowed: bool) -> (bool, u8) {
-    use crate::machine_protocol::{NATIVE_RESET_PROTOCOL_VERSION, NATIVE_USAGE_PROTOCOL_VERSION};
+    use crate::machine_protocol::{
+        NATIVE_RESET_SPACING_PROTOCOL_VERSION, NATIVE_USAGE_PROTOCOL_VERSION,
+    };
     let capability = match protocol {
-        Some(version) if version >= NATIVE_RESET_PROTOCOL_VERSION => 0,
+        Some(version) if version >= NATIVE_RESET_SPACING_PROTOCOL_VERSION => 0,
         Some(version) if version >= NATIVE_USAGE_PROTOCOL_VERSION => 1,
         Some(_) => 2,
         None => 3,
@@ -1077,12 +1080,16 @@ mod tests {
     #[test]
     fn an_old_or_disallowed_login_never_masks_an_eligible_one() {
         use crate::machine_protocol::{
-            NATIVE_RESET_PROTOCOL_VERSION, NATIVE_USAGE_PROTOCOL_VERSION,
+            NATIVE_RESET_PROTOCOL_VERSION, NATIVE_RESET_SPACING_PROTOCOL_VERSION,
+            NATIVE_USAGE_PROTOCOL_VERSION,
         };
-        let eligible = login_rank(Some(NATIVE_RESET_PROTOCOL_VERSION), true);
+        let eligible = login_rank(Some(NATIVE_RESET_SPACING_PROTOCOL_VERSION), true);
         for worse in [
+            // A Machine that cannot enforce the reset spacing never ranks
+            // as reset-capable.
+            login_rank(Some(NATIVE_RESET_PROTOCOL_VERSION), true),
             login_rank(Some(NATIVE_USAGE_PROTOCOL_VERSION), true),
-            login_rank(Some(NATIVE_RESET_PROTOCOL_VERSION), false),
+            login_rank(Some(NATIVE_RESET_SPACING_PROTOCOL_VERSION), false),
             login_rank(Some(1), true),
             login_rank(None, true),
         ] {
@@ -1090,7 +1097,7 @@ mod tests {
         }
         assert!(
             login_rank(Some(NATIVE_USAGE_PROTOCOL_VERSION), true)
-                < login_rank(Some(NATIVE_RESET_PROTOCOL_VERSION), false)
+                < login_rank(Some(NATIVE_RESET_SPACING_PROTOCOL_VERSION), false)
         );
     }
 

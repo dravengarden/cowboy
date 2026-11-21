@@ -438,7 +438,7 @@ link, and, when its own usage reports reset credits, an immediate reset only
 `confirm` and the confirmed `expected_credit_id`) or
 `control.apply("usage.account_reset", {account:account_id,...})`. Admission is
 the quota read's (owner, binding, identity, enabled account), but only logins on
-a Machine that speaks protocol 49 and that host policy pins for `claude-code`
+a Machine that speaks protocol 51 (it enforces the reset's spacing) and that host policy pins for `claude-code`
 (`--provider-runtime-machine claude-code=ovh`) are considered; another owner's
 account is `404 account_unavailable`. `resets_supported` in the usage read is
 derived from the same resolved login and the exact release installed on its

@@ -2930,7 +2930,11 @@ impl MachinePluginStore {
     pub fn auth_refresh_observations(&self) -> ProviderAuthRefreshObservations {
         let _lifecycle = self.lifecycle.blocking_lock();
         let mut observations = ProviderAuthRefreshObservations::default();
-        for scope in self.existing_auth_scopes() {
+        let scopes = self.existing_auth_scopes().unwrap_or_else(|error| {
+            tracing::warn!(%error, "cannot enumerate account credential scopes");
+            vec![self.clone()]
+        });
+        for scope in scopes {
             scope.collect_auth_refresh_observations(&mut observations);
         }
         observations.candidates.sort_by(|left, right| {
@@ -2945,20 +2949,25 @@ impl MachinePluginStore {
 
     /// Enumerate only Cowboy-owned account roots; never discover identities by
     /// walking native homes or following symlinks. Scoped callers stay scoped.
-    fn existing_auth_scopes(&self) -> Vec<Self> {
+    ///
+    /// # Errors
+    /// If the real accounts directory cannot be enumerated: an unreadable
+    /// directory is never mistaken for an empty one.
+    fn existing_auth_scopes(&self) -> Result<Vec<Self>> {
         let mut scopes = vec![self.clone()];
         if !self.account_id.is_default() {
-            return scopes;
+            return Ok(scopes);
         }
         let accounts = self.auth_base.join("accounts");
-        if !fs::symlink_metadata(&accounts).is_ok_and(|metadata| metadata.is_dir()) {
-            return scopes;
+        match fs::symlink_metadata(&accounts) {
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => return Ok(scopes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(scopes),
+            Err(error) => return Err(error).context("inspecting the accounts directory"),
         }
-        let Ok(entries) = fs::read_dir(accounts) else {
-            return scopes;
-        };
-        for entry in entries.flatten() {
-            if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+        for entry in fs::read_dir(accounts).context("enumerating accounts")? {
+            let entry = entry.context("enumerating accounts")?;
+            if !entry.file_type()?.is_dir() {
                 continue;
             }
             let Ok(account_id) = crate::provider_account::ProviderAccountId::try_from(
@@ -2979,7 +2988,7 @@ impl MachinePluginStore {
             scope.auth_root = entry.path();
             scopes.push(scope);
         }
-        scopes
+        Ok(scopes)
     }
 
     fn collect_auth_refresh_observations(
@@ -5852,7 +5861,7 @@ mod tests {
         fs::remove_dir(account.auth_root.join("providers")).unwrap();
         symlink(&target, account.auth_root.join("providers")).unwrap();
         assert!(store.for_account(&id).is_err());
-        assert_eq!(store.existing_auth_scopes().len(), 1);
+        assert_eq!(store.existing_auth_scopes().unwrap().len(), 1);
         fs::remove_file(account.auth_root.join("providers")).unwrap();
         fs::remove_dir(&account.auth_root).unwrap();
         symlink(&target, &account.auth_root).unwrap();
@@ -5861,7 +5870,7 @@ mod tests {
         fs::remove_dir(store.auth_base.join("accounts")).unwrap();
         symlink(&target, store.auth_base.join("accounts")).unwrap();
         assert!(store.for_account(&id).is_err());
-        assert_eq!(store.existing_auth_scopes().len(), 1);
+        assert_eq!(store.existing_auth_scopes().unwrap().len(), 1);
         assert_eq!(fs::read_dir(&target).unwrap().count(), 0);
     }
 
@@ -6386,14 +6395,55 @@ mod tests {
         assert!(store.private_credential_home("grok", 2).is_err());
         private.remove().unwrap();
         assert!(!private_root.exists());
-        // A copy an interrupted run left behind is removed at Machine start,
-        // and with the account's credentials.
-        let (left, _) = store.private_credential_home("grok", 1).unwrap().unwrap();
+        // A named account's copy an interrupted run left behind is removed at
+        // Machine start, and with the account's credentials.
+        let named: crate::provider_account::ProviderAccountId =
+            uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let scoped = store.for_account(&named).unwrap();
+        let sealed = seal_auth_for_test(&scoped, &package, &service_signer, 1, &bundle);
+        scoped.apply_auth(&sealed).await.unwrap();
+        let (left, _) = scoped.private_credential_home("grok", 1).unwrap().unwrap();
         let left_root = left.path().to_path_buf();
         std::mem::forget(left);
         assert!(left_root.exists());
         store.remove_private_homes().unwrap();
         assert!(!left_root.exists());
+        // The sweep never follows a symlink: a symlinked providers directory
+        // or private-homes directory leaves its target untouched, and staging
+        // refuses a symlinked private-homes directory.
+        let outside = root.join("outside");
+        fs::create_dir_all(outside.join("grok/private-homes/copy")).unwrap();
+        let homes = scoped
+            .auth_provider_root("grok")
+            .join(native_usage::PRIVATE_HOMES);
+        assert!(homes.symlink_metadata().is_err(), "the sweep removed it");
+        symlink(outside.join("grok/private-homes"), &homes).unwrap();
+        assert!(scoped.private_credential_home("grok", 1).is_err());
+        store.remove_private_homes().unwrap();
+        assert!(homes.symlink_metadata().is_err(), "symlink only unlinked");
+        assert!(outside.join("grok/private-homes/copy").exists());
+        let other: crate::provider_account::ProviderAccountId =
+            uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let other_root = store.auth_base.join("accounts").join(other.as_str());
+        fs::create_dir_all(&other_root).unwrap();
+        symlink(&outside, other_root.join("providers")).unwrap();
+        store.remove_private_homes().unwrap();
+        assert!(outside.join("grok/private-homes/copy").exists());
+        fs::remove_file(other_root.join("providers")).unwrap();
+        // An unreadable accounts directory is never treated as empty.
+        let accounts = store.auth_base.join("accounts");
+        fs::set_permissions(&accounts, fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = fs::read_dir(&accounts).is_err();
+        let swept = store.remove_private_homes();
+        let enumerated = store.existing_auth_scopes();
+        fs::set_permissions(&accounts, fs::Permissions::from_mode(0o700)).unwrap();
+        if unreadable {
+            assert!(swept.is_err());
+            assert!(enumerated.is_err());
+        }
+        for account in [named.as_str(), other.as_str()] {
+            fs::remove_dir_all(store.auth_base.join("accounts").join(account)).unwrap();
+        }
         let verifications = store.runtime_verifications.load(Ordering::Relaxed);
         let collected = store
             .invoke_host_for_test(
@@ -6644,11 +6694,28 @@ mod tests {
         assert!(store.plugin_root("grok").join("active").exists());
         assert!(named_projection.join("synthetic-credential").is_file());
         fs::remove_dir_all(named_projection).unwrap();
+        // A named account's outstanding private credential copy also refuses
+        // the uninstall; an empty private-homes directory is removed with it.
+        let named_homes = store
+            .auth_base
+            .join("accounts/11111111-1111-4111-8111-111111111111/providers/grok/private-homes");
+        fs::create_dir_all(named_homes.join("copy")).unwrap();
+        assert!(
+            store
+                .uninstall("grok", &release.artifact_digest)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("Revoke named")
+        );
+        assert!(store.plugin_root("grok").join("active").exists());
+        fs::remove_dir(named_homes.join("copy")).unwrap();
         store
             .uninstall("grok", &release.artifact_digest)
             .await
             .unwrap();
         assert!(store.inventory().unwrap().is_empty());
+        assert!(named_homes.symlink_metadata().is_err());
         atomic_write(&command, b"#!/bin/sh\nexit 0\n# tampered again\n", 0o700).unwrap();
         let error = store
             .reactivate("grok", &release.artifact_digest)

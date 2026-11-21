@@ -191,6 +191,11 @@ impl MachinePluginStore {
         if !request.valid() {
             return refuse("native_reset_request_invalid");
         }
+        // The two-start reset needs the Controller's spacing (protocol 51),
+        // kept here from the identity read's actual start.
+        let Some(spacing) = dispatch.min_spacing_ms.filter(|spacing| *spacing >= 0) else {
+            return refuse("native_reset_unsupported");
+        };
         let _observation = tokio::time::timeout(
             invocation.remaining()?,
             self.native_observations
@@ -230,19 +235,17 @@ impl MachinePluginStore {
             return refuse("native_reset_unsupported");
         }
         before_expiry(&invocation, dispatch)?;
-        let identity_started_ms = unix_ms();
-        let report = run_unstarted(&checked, &check).await?;
+        let (report, identity_started) = run_unstarted(&checked, &check).await?;
         verify_reported_identity(&checked.environment, &report)?;
-        // The spend is the reset's second paced start: wait for its slot and,
-        // with protocol 51, a full spacing after the identity read actually
-        // started, within the Controller's expiry.
-        let spend_at = spend_start(dispatch, identity_started_ms)?;
-        let wait = spend_at.saturating_sub(unix_ms());
-        if wait > 0 {
+        // The spend is the reset's second paced start: wait for its slot and
+        // a full spacing after the identity read's process actually spawned
+        // (monotonic), within the Controller's expiry.
+        let wait = spend_wait(dispatch, spacing, identity_started, unix_ms())?;
+        if !wait.is_zero() {
             // Never hold the installation lifecycle across the paced wait;
             // after it, the exact selected release must still be active.
             drop(lifecycle.take());
-            tokio::time::sleep(Duration::from_millis(u64::try_from(wait).unwrap_or(0))).await;
+            tokio::time::sleep(wait).await;
             let remaining =
                 u64::try_from(dispatch.expires_at_ms.saturating_sub(unix_ms())).unwrap_or(0);
             lifecycle = Some(
@@ -270,10 +273,11 @@ impl MachinePluginStore {
         .await
         .map_err(|failure| PluginHostInvocationFailure {
             started: failure.started,
+            // A spend that provably never spawned is a pre-start refusal.
             error: anyhow::anyhow!(if failure.started {
                 "native_reset_outcome_unknown"
             } else {
-                "native_usage_collector_failed"
+                "native_reset_preflight_failed"
             }),
         })?;
         // Held through the spend, as Service resets do.
@@ -339,18 +343,24 @@ impl MachinePluginStore {
 /// When the spend may start: the Controller's paced slot and, when it sent the
 /// spacing, a full spacing after the identity read actually started. A spend
 /// that could then not start before the expiry is refused unsent.
-fn spend_start(
+/// How long the spend waits from `now_ms`: until the Controller's absolute
+/// slot and a full `spacing` after the identity read spawned (monotonic).
+/// Refused (unsent) if it could then not start before the dispatch expiry.
+fn spend_wait(
     dispatch: &crate::machine_protocol::NativeResetDispatch,
-    identity_started_ms: i64,
-) -> Result<i64> {
-    let spend_at =
-        dispatch
-            .spend_not_before_ms
-            .max(dispatch.min_spacing_ms.map_or(i64::MIN, |spacing| {
-                identity_started_ms.saturating_add(spacing)
-            }));
-    ensure!(spend_at < dispatch.expires_at_ms, "native_reset_expired");
-    Ok(spend_at)
+    spacing: i64,
+    identity_started: std::time::Instant,
+    now_ms: i64,
+) -> Result<Duration> {
+    let millis = |value: i64| Duration::from_millis(u64::try_from(value).unwrap_or(0));
+    let wait = millis(dispatch.spend_not_before_ms.saturating_sub(now_ms))
+        .max(millis(spacing).saturating_sub(identity_started.elapsed()));
+    let wait_ms = i64::try_from(wait.as_millis()).unwrap_or(i64::MAX);
+    ensure!(
+        now_ms.saturating_add(wait_ms) < dispatch.expires_at_ms,
+        "native_reset_expired"
+    );
+    Ok(wait)
 }
 
 /// Refuse to start anything once the invocation or the Controller's dispatch
@@ -382,33 +392,38 @@ pub(super) fn unix_ms() -> i64 {
 async fn run_unstarted(
     resolved: &ResolvedPluginHostInvocation,
     payload: &serde_json::Value,
-) -> Result<serde_json::Value> {
+) -> Result<(serde_json::Value, std::time::Instant)> {
     let (program, arguments) = resolved
         .command
         .split_first()
         .context("native_usage_collector_unavailable")?;
+    // Captured when the process actually spawned; the spacing runs from it.
+    let mut started = None;
     let output = crate::plugin_process::run_plugin_command_with_environment_on_started(
         program,
         arguments,
         &serde_json::to_vec(payload)?,
         &resolved.environment,
-        || {},
+        || started = Some(std::time::Instant::now()),
     )
     .await
     .map_err(|_| anyhow::anyhow!("native_reset_preflight_failed"))?;
+    let started = started.context("native_reset_preflight_failed")?;
     // An authentication failure keeps its category so the Service backs off.
-    decode_host_response(&output).map_err(|failure| {
-        if failure
-            .error
-            .to_string()
-            .contains("Claude Code usage authentication required.")
-        {
-            anyhow::anyhow!("native_usage_authentication_required")
-        } else {
-            // The identity read failed before any spend: unsent.
-            anyhow::anyhow!("native_reset_preflight_failed")
-        }
-    })
+    decode_host_response(&output)
+        .map_err(|failure| {
+            if failure
+                .error
+                .to_string()
+                .contains("Claude Code usage authentication required.")
+            {
+                anyhow::anyhow!("native_usage_authentication_required")
+            } else {
+                // The identity read failed before any spend: unsent.
+                anyhow::anyhow!("native_reset_preflight_failed")
+            }
+        })
+        .map(|report| (report, started))
 }
 
 fn text(value: &serde_json::Value) -> Option<&str> {
@@ -679,16 +694,22 @@ mod tests {
             generation_digest: "digest".into(),
             expires_at_ms: i64::MAX,
             spend_not_before_ms: 0,
-            min_spacing_ms: None,
+            min_spacing_ms: Some(0),
         };
-        for (request, code) in [
-            (invalid, "native_reset_request_invalid"),
+        let unspaced = crate::machine_protocol::NativeResetDispatch {
+            min_spacing_ms: None,
+            ..dispatch.clone()
+        };
+        for (request, dispatch, code) in [
+            (invalid, &dispatch, "native_reset_request_invalid"),
+            // Without an enforceable spacing (protocol 51) nothing starts.
+            (request.clone(), &unspaced, "native_reset_unsupported"),
             // No verified login of this generation exists in its home.
-            (request, "native_usage_profile_changed"),
+            (request, &dispatch, "native_usage_profile_changed"),
         ] {
             let invocation = Invocation::new(profile.clone(), Arc::new(AtomicBool::new(true)));
             let failure = store
-                .consume_native_reset(invocation, &request, &dispatch)
+                .consume_native_reset(invocation, &request, dispatch)
                 .await
                 .unwrap_err();
             assert!(!failure.started, "{code}");
@@ -701,22 +722,31 @@ mod tests {
     #[test]
     fn the_spend_keeps_the_spacing_from_the_actual_identity_read() {
         let dispatch =
-            |expires_at_ms, min_spacing_ms| crate::machine_protocol::NativeResetDispatch {
+            |expires_at_ms, spend_not_before_ms| crate::machine_protocol::NativeResetDispatch {
                 plugin_version: "1".into(),
                 generation_digest: "digest".into(),
                 expires_at_ms,
-                spend_not_before_ms: 1_000,
-                min_spacing_ms,
+                spend_not_before_ms,
+                min_spacing_ms: Some(60_000),
             };
-        let now = unix_ms();
-        // An identity read that started late moves the spend.
+        let now = 1_000_000;
+        let started = std::time::Instant::now();
+        // An identity read that spawned late moves the spend past the slot.
+        let wait = spend_wait(&dispatch(i64::MAX, now), 60_000, started, now).unwrap();
+        assert!(wait > Duration::from_secs(59) && wait <= Duration::from_mins(1));
+        // A later absolute slot still wins.
         assert_eq!(
-            spend_start(&dispatch(i64::MAX, Some(60_000)), now).unwrap(),
-            now + 60_000
+            spend_wait(&dispatch(i64::MAX, now + 90_000), 60_000, started, now).unwrap(),
+            Duration::from_secs(90)
         );
-        assert_eq!(spend_start(&dispatch(i64::MAX, None), now).unwrap(), 1_000);
+        // Spacing already elapsed since the spawn: no wait.
+        let earlier = started.checked_sub(Duration::from_secs(61)).unwrap();
         assert_eq!(
-            spend_start(&dispatch(now + 30_000, Some(60_000)), now)
+            spend_wait(&dispatch(i64::MAX, now), 60_000, earlier, now).unwrap(),
+            Duration::ZERO
+        );
+        assert_eq!(
+            spend_wait(&dispatch(now + 30_000, now), 60_000, started, now)
                 .unwrap_err()
                 .to_string(),
             "native_reset_expired"

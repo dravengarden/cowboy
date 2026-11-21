@@ -67,6 +67,11 @@ pub fn project_native_reset_reply(reply: &serde_json::Value) -> serde_json::Valu
         serde_json::json!({"error": {"code": code,
             "call_may_have_reached_provider": reached, "credit_id": credit_id}})
     };
+    // A reply naming both a success and an error is malformed and may
+    // follow a spent reset.
+    if reply.get("error").is_some() && reply.get("outcome").is_some() {
+        return failure("reset_outcome_unknown", true, None);
+    }
     let Some(error) = reply.get("error") else {
         let credit_id = credit(reply.get("credit_id"));
         return match reply.get("outcome").and_then(serde_json::Value::as_str) {
@@ -267,6 +272,13 @@ mod tests {
                 json!({"error": {"message": "No Claude reset is currently usable.",
                     "call_may_have_reached_provider": false}}),
                 error("reset_unavailable", false, json!(null)),
+            ),
+            // A success and an error together are malformed.
+            (
+                json!({"outcome": "reset", "credit_id": "grant:1",
+                    "error": {"message": "No Claude reset is currently usable.",
+                    "call_may_have_reached_provider": false}}),
+                error("reset_outcome_unknown", true, json!(null)),
             ),
             // Missing reached evidence is unknown; collector text never leaves.
             (

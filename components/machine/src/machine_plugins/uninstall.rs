@@ -111,6 +111,21 @@ impl MachinePluginStore {
                 runtime.display()
             )
         })?;
+        // Private credential copies: this scope's, then every named account's
+        // (the guard proved them empty). The uninstall completes only once
+        // all are gone.
+        let homes = self
+            .auth_provider_root(provider_id)
+            .join(native_usage::PRIVATE_HOMES);
+        remove_projection::remove(&homes)
+            .with_context(|| format!("removing private credential copies {}", homes.display()))?;
+        remove_projection::remove_below_named_providers(
+            &self.auth_base,
+            &|_| true,
+            native_usage::PRIVATE_HOMES,
+            Some(provider_id),
+        )
+        .context("removing named private credential copies")?;
         Ok(())
     }
 
@@ -128,7 +143,8 @@ impl MachinePluginStore {
             let provider = entry.path().join("providers").join(provider_id);
             ensure!(
                 !provider.join("materialized").try_exists()?
-                    && !provider.join("runtime").try_exists()?,
+                    && !provider.join("runtime").try_exists()?
+                    && no_private_copies(&provider.join(native_usage::PRIVATE_HOMES))?,
                 "Revoke named Provider account projections before uninstalling this Plugin"
             );
             native_profile::ensure_revoked(
@@ -138,5 +154,16 @@ impl MachinePluginStore {
             )?;
         }
         Ok(())
+    }
+}
+
+/// Whether a named account holds no private credential copy: its private
+/// homes directory is absent or a real, empty directory.
+fn no_private_copies(homes: &Path) -> Result<bool> {
+    match fs::symlink_metadata(homes) {
+        Ok(metadata) if metadata.is_dir() => Ok(fs::read_dir(homes)?.next().is_none()),
+        Ok(_) => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(error.into()),
     }
 }

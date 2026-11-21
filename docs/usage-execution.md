@@ -210,7 +210,8 @@ authentication failure does.
 A named native Claude account's confirmed reset is immediate only (named
 accounts have no schedules) and runs on the Machine holding its native login,
 through the same signed collector, CLI identity and token as its quota read
-(Machine protocol 49), on the exact release the Controller selected and never
+(Machine protocol 51, which enforces the reset's spacing; older Machines are
+never selected or dispatched to), on the exact release the Controller selected and never
 after its dispatch expiry. It takes its start from the same Anthropic Provider
 window and spacing, on the account's own lane, and holds the account's
 collection lock, so a quota read and a reset of one account never overlap. A
@@ -218,11 +219,25 @@ reset that never reached the Machine's collector records no failure backoff;
 an authentication failure backs off even after the call was sent. A named reset
 runs two collector invocations (the identity read, then the spend with its own
 preflight). At admission the Controller reserves two starts one Provider
-spacing apart; the Machine runs the identity read, releases its lifecycle lock,
-waits for the second slot, rechecks the selected release and spends, all before
-the dispatch expiry measured from the original admission. When the Provider
+spacing apart, deriving the expiry, both reservations and the dispatched
+spacing from one configuration snapshot; the Machine runs the identity read,
+releases its lifecycle lock, waits for the second slot and a full spacing
+measured monotonically from the identity read's actual spawn, rechecks the
+selected release and spends, all before the dispatch expiry measured from the
+original admission. A spend that provably never spawned is an unsent
+`native_reset_preflight_failed`; a reply that carries both a success and an
+error, or a refusal with a result payload, is an unknown outcome. When the Provider
 window cannot hold two spaced starts, named resets are unsupported. A named
 reset therefore takes at least one spacing interval end to end.
+
+Known residuals, accepted for this release: a remote quota poll reserves its
+Provider start before the account's binding transaction, so a poll refused
+inside that transaction still consumes its paced slot (pacing only, never a
+Provider call); a named reset's audit insert that times out after the
+row was written leaves a `started` row with no terminal row (the permit settles
+unsent); and the Service Grok collector's equal-time reset tie-break is not
+aligned with the code-unit ordering of the named collectors (no Service Grok
+card is operated).
 
 Claude usage reads and resets (Service card and named accounts) contact
 Anthropic only from a Machine that host policy explicitly pins for

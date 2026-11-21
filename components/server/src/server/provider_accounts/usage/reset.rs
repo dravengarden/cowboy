@@ -81,7 +81,8 @@ fn native_route(state: &AppState, target: Target) -> Result<Route, &'static str>
         .machine_control
         .connection_protocol(&completion.machine_id)
         .ok_or("machine_unavailable")?;
-    if version < crate::machine_protocol::NATIVE_RESET_PROTOCOL_VERSION {
+    // The two-start reset needs a Machine that enforces the spacing.
+    if version < crate::machine_protocol::NATIVE_RESET_SPACING_PROTOCOL_VERSION {
         return Err("machine_usage_update_required");
     }
     if !state
@@ -148,6 +149,9 @@ struct Admitted {
     route: Route,
     admitted_at_ms: i64,
     expires_at_ms: i64,
+    /// The Provider spacing the expiry and reservations were derived from;
+    /// the dispatch carries the same value.
+    spacing_ms: i64,
     permit: crate::usage::limiter::Permit,
     _serial: tokio::sync::OwnedMutexGuard<()>,
 }
@@ -176,6 +180,7 @@ async fn admit(
         .map_err(|_| "usage_reset_paced")?;
     let key = crate::usage::limiter::Limiter::account_key(owner, id.as_str());
     let now = now_ms();
+    // One config snapshot: the expiry, both reservations and the dispatch.
     let spacing = state.usage.limiter.spacing_ms();
     let expires_at_ms = expiry(&route, now, spacing);
     // Every start happens no later than the expiry: record the last one there
@@ -186,12 +191,13 @@ async fn admit(
     let permit = state
         .usage
         .limiter
-        .start_action_bounded(&route.binding.account, &key, now, starts, first)
+        .start_action_bounded(&route.binding.account, &key, now, starts, (first, spacing))
         .map_err(|_| "usage_reset_paced")?;
     Ok(Admitted {
         route,
         admitted_at_ms: now,
         expires_at_ms,
+        spacing_ms: spacing,
         permit,
         _serial: serial,
     })
@@ -229,10 +235,10 @@ async fn consume(
         route,
         admitted_at_ms,
         expires_at_ms,
+        spacing_ms: spacing,
         permit,
         _serial,
     } = admitted;
-    let spacing = state.usage.limiter.spacing_ms();
     let request = crate::machine_protocol::NativeResetRequest {
         provider: route.binding.account.clone(),
         idempotency_key: idempotency_key.to_owned(),
@@ -245,7 +251,7 @@ async fn consume(
         // bound within which the Machine must start the spend.
         expires_at_ms,
         spend_not_before_ms: admitted_at_ms.saturating_add(spacing),
-        // Sent only to Machines that understand it (see `dispatch`).
+        // Protocol 51: the Machine also keeps it from the identity read.
         min_spacing_ms: Some(spacing),
     };
     let reply = match &route.target {
@@ -349,9 +355,10 @@ fn settle(
     };
     let code = closed_reset_code(error["code"].as_str());
     // Unsent only for a well-formed error naming a closed refusal code with
-    // an explicit `call_may_have_reached_provider: false`; any other shape or
-    // code may follow a spent reset.
+    // an explicit `call_may_have_reached_provider: false` and no success
+    // payload; any other shape or code may follow a spent reset.
     let reached = !(error.is_object()
+        && reply.get("outcome").is_none()
         && error["call_may_have_reached_provider"] == Value::Bool(false)
         && error["code"].as_str() == Some(code)
         && code != "reset_outcome_unknown");
@@ -393,7 +400,7 @@ async fn dispatch(
     owner: &str,
     target: &Target,
     request: crate::machine_protocol::NativeResetRequest,
-    mut release: crate::machine_protocol::NativeResetDispatch,
+    release: crate::machine_protocol::NativeResetDispatch,
 ) -> Result<Value, NativeResetFailure> {
     let store = state.store.as_ref().ok_or(unsent("unavailable"))?;
     let completion = &target.completion;
@@ -401,12 +408,11 @@ async fn dispatch(
         .machine_control
         .connection_protocol(&completion.machine_id)
         .ok_or(unsent("machine_unavailable"))?;
-    if version < crate::machine_protocol::NATIVE_RESET_PROTOCOL_VERSION {
+    // Only a Machine that enforces the spacing runs the two-start reset.
+    if version < crate::machine_protocol::NATIVE_RESET_SPACING_PROTOCOL_VERSION
+        || release.min_spacing_ms.is_none()
+    {
         return Err(unsent("machine_usage_update_required"));
-    }
-    // An older Machine rejects the unknown field; it keeps the paced slot.
-    if version < crate::machine_protocol::NATIVE_RESET_SPACING_PROTOCOL_VERSION {
-        release.min_spacing_ms = None;
     }
     let mut sent = None;
     let admitted = store
@@ -692,6 +698,9 @@ mod tests {
             json!({"error":{"code":"collector text","call_may_have_reached_provider":false}}),
             json!({"error":"reset_refused"}),
             json!({"error":{"code":"reset_outcome_unknown","call_may_have_reached_provider":false}}),
+            // A success and an error together are never an unsent refusal.
+            json!({"outcome":"reset","credit_id":"grant:1",
+                "error":{"code":"reset_refused","call_may_have_reached_provider":false}}),
         ] {
             let (result, _) = settle(Ok(reply.clone()), "grant:1");
             assert!(
