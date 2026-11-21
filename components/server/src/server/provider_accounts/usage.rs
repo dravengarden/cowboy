@@ -509,10 +509,14 @@ pub(in crate::server) async fn read_one(
             return Ok(value);
         }
     };
-    value["machine_id"] = json!(match &target {
+    let machine_id = match &target {
         Resolved::Native(native) => Some(native.completion.machine_id.clone()),
         Resolved::Portable(portable) => portable::selected_machine(state, owner, id, portable),
-    });
+    };
+    // A cached placement refusal describes the Machines as they were; once a
+    // collection could be placed again it is no longer the reason.
+    let placed_now = matches!(target, Resolved::Portable(_)) && machine_id.is_some();
+    value["machine_id"] = json!(machine_id);
     value["available"] = json!(true);
     value["signed_in"] = json!(true);
     // Whether a reset of exactly this resolved binding can be spent now.
@@ -543,12 +547,18 @@ pub(in crate::server) async fn read_one(
     if let Some(code) = if stopped {
         Some("usage_admission_unavailable")
     } else {
-        entry.error
+        current_error(entry.error, placed_now)
     } {
         value["reason"] = json!(code);
         value["message"] = json!(error_message(code));
     }
     Ok(value)
+}
+
+/// The cached error to report, without a placement refusal that a currently
+/// possible placement has superseded.
+fn current_error(error: Option<&'static str>, placed_now: bool) -> Option<&'static str> {
+    error.filter(|code| !(placed_now && portable::placement_refusal(code)))
 }
 
 pub(in crate::server) async fn list_value(
@@ -882,6 +892,17 @@ pub(in crate::server) async fn run(state: Arc<AppState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_placement_refusal_is_not_reported_once_placement_succeeds() {
+        let refused = Some("portable_usage_refresh_unsupported");
+        assert_eq!(current_error(refused, false), refused);
+        assert_eq!(current_error(refused, true), None);
+        // An observation's outcome stays until the next collection replaces it.
+        let observed = Some("portable_usage_authentication_required");
+        assert_eq!(current_error(observed, true), observed);
+        assert_eq!(current_error(None, true), None);
+    }
 
     fn package(source: &str) -> cowboy_provider_sdk::ProviderPackage {
         let source: cowboy_provider_sdk::StandardProviderSource =
