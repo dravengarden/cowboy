@@ -498,12 +498,12 @@ pub(in crate::server) async fn dispatch_calls_from(
         Action::Inspect { call_id } => match ledger.inspect(&call_id).await {
             Ok(Some(record)) => envelope(&record),
             Ok(None) => error("not_found", "not_submitted"),
-            Err(_) => error("capacity", "not_submitted"),
+            Err(_) => error("unavailable", "not_submitted"),
         },
         Action::Observe { request_id } => match ledger.observe(&request_id).await {
             Ok(Some(record)) => envelope(&record),
             Ok(None) => error("not_found", "not_submitted"),
-            Err(_) => error("capacity", "not_submitted"),
+            Err(_) => error("unavailable", "not_submitted"),
         },
         Action::Wait {
             call_id,
@@ -526,7 +526,7 @@ pub(in crate::server) async fn dispatch_calls_from(
                 value
             }
             Ok(None) => error("not_found", "not_submitted"),
-            Err(_) => error("capacity", "not_submitted"),
+            Err(_) => error("unavailable", "not_submitted"),
         },
         Action::Cancel { call_id } => cancel(state, ledger, &call_id).await,
         Action::Mcp { .. }

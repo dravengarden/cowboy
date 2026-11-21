@@ -28,6 +28,7 @@ use crate::agent_api::MAX_REPLY_BYTES;
 const RUNNER: &str = include_str!("agent_api/runner.js");
 mod account_actions;
 mod actions;
+mod admission;
 mod code_reads;
 pub(super) use code_reads::maintain_holdings;
 mod control;
@@ -45,8 +46,6 @@ pub(super) use actions::{invoke, read_parent};
 pub(super) use widget_app_messages::api_widget_app_message;
 pub(super) use widget_interactions::{api_widget_interaction, recover_decisions};
 pub(super) use widgets::{WIDGET_WRITES, push as push_widget};
-/// Concurrent programs across the Controller; excess is refused, not queued.
-static SLOTS: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(2));
 /// Raw hot-log events one `session.events` call may coalesce.
 const EVENT_WINDOW: usize = 2000;
 
@@ -106,10 +105,19 @@ pub(super) async fn read(
     state: &Arc<AppState>,
     meta: &SessionMeta,
     ledger: &Ledger,
-    program: Program,
+    mut program: Program,
 ) -> Value {
-    let Ok(_slot) = SLOTS.try_acquire() else {
-        return error("capacity");
+    let admission = &*admission::ADMISSION;
+    let wait = admission::Admission::wait_budget(program.timeout_ms);
+    let _slot = match admission.acquire(&meta.id, wait).await {
+        Ok(slot) => {
+            // Time spent queued comes out of the program's own deadline, so
+            // the caller's total wall time stays what it asked for.
+            let waited = u64::try_from(slot.waited.as_millis()).unwrap_or(u64::MAX);
+            program.timeout_ms = program.timeout_ms.saturating_sub(waited);
+            slot
+        }
+        Err(scope) => return admission.refusal(scope, &meta.id, wait),
     };
     let sandbox = match Sandbox::resolve() {
         Ok(sandbox) => sandbox,

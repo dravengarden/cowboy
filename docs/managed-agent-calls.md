@@ -706,7 +706,9 @@ Use an argv array, not an executable shell string, for machine-readable next
 actions. Error envelopes carry a stable code, admission certainty and allowed
 next action. Initial codes include `context_unavailable`, `permission_denied`,
 `provider_unavailable`, `authentication_required`, `unsupported_capability`,
-`input_changed`, `request_conflict`, `capacity`, and `outcome_unknown`.
+`input_changed`, `request_conflict`, `capacity`, `unavailable`, and
+`outcome_unknown`. `calls.inspect`, `calls.observe` and `calls.result` report a
+ledger read failure as `unavailable`, distinct from an admission `capacity`.
 
 ### Conversation continuity
 

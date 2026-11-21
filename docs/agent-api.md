@@ -1813,7 +1813,14 @@ Programs run on the Controller host in a fresh process per call:
 - `prlimit`: 4 s CPU, 512 MiB data, 64 descriptors, 1 MiB files, no core;
 - Bun as the TS/JS engine; it strips TypeScript without type-checking;
 - a wall-clock deadline (default 20 s, at most 60 s) that kills the process
-  tree; at most two concurrent programs, excess refused with `capacity`.
+  tree;
+- admission: at most six concurrent programs per Controller and two per
+  session. A program waits up to 5 s (never more than half its deadline, and
+  the wait is deducted from it) for a slot; if none frees it is refused before
+  running with `capacity`, `scope` (`controller` or `session`),
+  `retryable: true`, `retry_after_ms` and a message. Each refusal is logged
+  with the current per-session holders. A `capacity` refusal is a transient
+  admission result, never an empty search.
 
 The runtime reaches Cowboy only through line-delimited frames on its standard
 streams. The broker validates every operation and its arguments, allows 16
