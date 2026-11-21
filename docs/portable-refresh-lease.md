@@ -1,6 +1,6 @@
 # Portable refresh custody lease — design
 
-Status: revision 3, 2026-11-21. Revision 3 adds the owner's choice **Grok
+Status: **paused**, 2026-11-21 (see [Status: paused](#status-paused-2026-11-21)); revision 3. Revision 3 adds the owner's choice **Grok
 first, Codex later** and the [Grok implementation
 design](#grok-implementation-design-revision-3), which takes precedence over
 the general design sections below for Grok; Codex keeps today's behaviour.
@@ -591,3 +591,43 @@ The original questions are kept for the record:
 5. Should usage renewal be allowed to make an idle Machine the custodian
    (it holds the refresh token afterwards until release), or only when the
    custodian already exists?
+
+## Status: paused (2026-11-21)
+
+The independent review of this branch (call `call-04dd1ab2cdef1d11f031660f`)
+returned needs-attention with 7 critical and about 20 high findings. The owner
+paused the work; today's shipped behaviour (refresh-free usage, sessions'
+own CLI refresh with the Service compare-and-swap) stays. Main failure classes
+the review found, to be resolved before any resumption:
+
+- **Lost vendor reply → reuse.** A renewal whose vendor response is lost (the
+  CLI redeemed but nothing durable recorded the new token) can lead a later
+  renewal to present the spent refresh token.
+- **Enablement leaves full credentials behind.** Becoming managed re-seals
+  access-only copies, but full credentials remain in existing worker homes,
+  retained generations and process memory.
+- **Root-level `refresh_token` not stripped.** The strip only visits entries
+  one level below the document root; a refresh token at another depth
+  survives the access-only copy.
+- **Cross-owner sealing on renewal-needed.** The session-triggered path
+  resolves and seals by account without binding the request to the owner and
+  Machine that may receive the full credential.
+- **Ledger missing or rolled back reopens full distribution.** A deleted or
+  older custody state file makes managed accounts look unmanaged, and the
+  next distribution seals full credentials again.
+- **Controller rollback re-seals full tokens.** A Controller without custody
+  code distributes full credentials to every Machine.
+- **Crash leaves the private renewal credential on disk.** A Machine crash or
+  kill during a renewal leaves the full credential in the temporary directory.
+- **Authorization replay.** Renewal and resume requests are not bound tightly
+  enough to the admitting connection and decision to exclude replay.
+- **Unvalidated compare-and-swap input.** The renewal reply's bundle reaches
+  the vault without independent validation of its identity and shape.
+
+Independently of this branch, the [custodian lock
+verification](#custodian-lock-verification-2026-11-21) showed that
+**concurrent Codex processes already double-redeem today**: two app-servers
+of one account presented the same refresh token in 5/5 forced and 2/3 natural
+concurrent refreshes, even sharing one `auth.json`. That risk exists in the
+shipped product and is unchanged by pausing this work.
+
