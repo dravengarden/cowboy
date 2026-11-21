@@ -67,7 +67,7 @@ Candidate fallbacks for Codex, for the owner to choose:
   runs access-only and picks up rotations as new generations. Correct, but it
   means at most one concurrently refreshing Codex worker per account, and
   other workers fail authentication if the access token (ten days, per
-  `plugins/codex/collector/index.js:125`) expires before the holder renews it.
+  `plugins/codex/collector/index.js:124`) expires before the holder renews it.
 - **The Machine serializes Codex refreshes itself** (a per-account Machine lock
   taken by a wrapper around the app-server's token request, for example a
   loopback proxy set through `CODEX_REFRESH_TOKEN_URL_OVERRIDE` that admits one
