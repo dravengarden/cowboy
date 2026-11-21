@@ -2546,8 +2546,8 @@ export function SessionList({
                 {allowNewSession && onNewInFolder && (
                     <MenuItem
                         onClick={(): void => {
+                            flushSync(() => setFolderMenu(null)); // its focus restore must precede the keyboard claim
                             if (folderMenuFolder) onNewInFolder(folderMenuFolder.id);
-                            setFolderMenu(null);
                         }}
                     >
                         <ListItemIcon><Add fontSize="medium" /></ListItemIcon>

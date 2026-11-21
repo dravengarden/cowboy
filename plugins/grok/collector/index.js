@@ -17,6 +17,13 @@ export async function* readLines(stream) {
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const WEB_BASE = "https://grok.com";
+// The chat proxy the pinned CLI reads billing from (its default base URL).
+const CHAT_PROXY_BASE = "https://cli-chat-proxy.grok.com/v1";
+// The client headers the pinned Grok CLI sends with its billing request.
+export const GROK_CLI_VERSION = "1.0.77";
+// A token this close to expiry would be renewed by the CLI; without the CLI
+// the collector reports authentication required instead.
+const EXPIRY_MARGIN_MS = 60_000;
 const CHILD_ENV_KEYS = [
   "HOME",
   "PATH",
@@ -41,6 +48,9 @@ class ResetFailure extends Error {
     this.creditId = creditId;
   }
 }
+
+/** A named portable account's sign-in must be renewed by its sessions. */
+export class AuthenticationRequired extends Error {}
 
 class AcpRpc {
   constructor(child) {
@@ -134,10 +144,43 @@ export function credentialFromJson(document) {
       typeof value.user_id === "string" &&
       value.user_id.trim() !== ""
     ) {
-      return { key: value.key.trim(), userId: value.user_id.trim() };
+      const expiresAt = expiryMs(value.expires_at) ?? jwtExpiryMs(value.key.trim());
+      return {
+        key: value.key.trim(),
+        userId: value.user_id.trim(),
+        ...(expiresAt === undefined ? {} : { expiresAt }),
+      };
     }
   }
   return undefined;
+}
+
+function expiryMs(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value < 1e12 ? value * 1000 : value;
+  }
+  if (typeof value !== "string") return undefined;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function jwtExpiryMs(token) {
+  const payload = token.split(".")[1];
+  if (!payload) return undefined;
+  try {
+    const claims = JSON.parse(
+      decoder.decode(
+        Uint8Array.from(atob(payload.replace(/-/g, "+").replace(/_/g, "/")), (c) =>
+          c.charCodeAt(0),
+        ),
+      ),
+    );
+    return typeof claims?.exp === "number" && Number.isFinite(claims.exp)
+      ? claims.exp * 1000
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function loadCredential() {
@@ -317,8 +360,8 @@ function decodeGrpcWeb(body) {
   return message;
 }
 
-async function grpcWeb(credential, path, message = new Uint8Array()) {
-  const response = await fetch(`${WEB_BASE}${path}`, {
+async function grpcWeb(credential, path, message = new Uint8Array(), fetchImpl = fetch) {
+  const response = await fetchImpl(`${WEB_BASE}${path}`, {
     method: "POST",
     redirect: "manual",
     headers: authHeaders(credential, "application/grpc-web+proto"),
@@ -328,18 +371,22 @@ async function grpcWeb(credential, path, message = new Uint8Array()) {
   return decodeGrpcWeb(await boundedBytes(response, `xAI RPC ${path}`));
 }
 
-async function accountMetadata() {
-  const credential = await loadCredential();
+async function accountMetadata(credential, fetchImpl = fetch) {
   if (!credential) return {};
   const [planResult, resetsResult] = await Promise.allSettled([
-    fetch(`${WEB_BASE}/rest/subscriptions`, {
+    fetchImpl(`${WEB_BASE}/rest/subscriptions`, {
       headers: authHeaders(credential),
       redirect: "manual",
       signal: AbortSignal.timeout(10_000),
     })
       .then((response) => boundedBytes(response, "xAI subscriptions"))
       .then((bytes) => activePlan(JSON.parse(decoder.decode(bytes)))),
-    grpcWeb(credential, "/prod_mc_billing.ConsumerUiSvc/GetRemainingResets").then(resetTokens),
+    grpcWeb(
+      credential,
+      "/prod_mc_billing.ConsumerUiSvc/GetRemainingResets",
+      undefined,
+      fetchImpl,
+    ).then(resetTokens),
   ]);
   return {
     ...(planResult.status === "fulfilled" && planResult.value ? { plan: planResult.value } : {}),
@@ -378,25 +425,166 @@ export function nearestCredit(credits) {
     )[0];
 }
 
-async function collect(rpc) {
-  const billing = await rpc.request("_x.ai/billing", {});
-  const metadata = await accountMetadata();
+function usage(billing, metadata, observedAtMs) {
   const merged = attachMetadata(billing, metadata);
   return {
     provider: "xai",
     status: "available",
     source: "xAI",
-    observed_at_ms: Date.now(),
+    observed_at_ms: observedAtMs,
     ...(merged.plan ? { account: { account: { planType: merged.plan } } } : {}),
     rate_limits: merged.billing,
   };
 }
 
+async function collect(rpc, { credential = loadCredential, fetch: fetchImpl = fetch } = {}) {
+  const billing = await rpc.request("_x.ai/billing", {});
+  return usage(billing, await accountMetadata(await credential(), fetchImpl), Date.now());
+}
+
+// The pinned CLI decodes its billing response into typed structs and answers
+// `_x.ai/billing` with `{ config }`: unknown fields are dropped, absent or null
+// optional fields are omitted, an amount without `val` reads as 0, and any type
+// mismatch fails the whole read. This reproduces that projection exactly for
+// JSON objects (the serde sequence form of a struct is refused instead).
+function malformed() {
+  throw new Error("xAI billing returned an unexpected response");
+}
+
+function isObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function optional(value, read) {
+  return value === undefined || value === null ? undefined : read(value);
+}
+
+function compact(entries) {
+  return Object.fromEntries(entries.filter(([, value]) => value !== undefined));
+}
+
+const text = (value) => (typeof value === "string" ? value : malformed());
+const flag = (value) => (typeof value === "boolean" ? value : malformed());
+const real = (value) => (typeof value === "number" && Number.isFinite(value) ? value : malformed());
+const integer = (value) => (Number.isInteger(value) ? value : malformed());
+
+function amount(value) {
+  if (!isObject(value)) malformed();
+  return { val: value.val === undefined ? 0 : integer(value.val) };
+}
+
+function period(value) {
+  if (!isObject(value)) malformed();
+  return compact([
+    ["type", optional(value.type, text)],
+    ["start", optional(value.start, text)],
+    ["end", optional(value.end, text)],
+  ]);
+}
+
+function cycle(value) {
+  if (!isObject(value)) malformed();
+  return { year: integer(value.year), month: integer(value.month) };
+}
+
+function periodUsage(value) {
+  if (!isObject(value)) malformed();
+  return compact([
+    ["billingCycle", optional(value.billingCycle, cycle)],
+    ["includedUsed", optional(value.includedUsed, amount)],
+    ["onDemandUsed", optional(value.onDemandUsed, amount)],
+    ["totalUsed", optional(value.totalUsed, amount)],
+  ]);
+}
+
+function billingConfig(value) {
+  if (!isObject(value)) malformed();
+  if (value.history !== undefined && !Array.isArray(value.history)) malformed();
+  const history = value.history?.map(periodUsage);
+  return compact([
+    ["creditUsagePercent", optional(value.creditUsagePercent, real)],
+    ["currentPeriod", optional(value.currentPeriod, period)],
+    ["monthlyLimit", optional(value.monthlyLimit, amount)],
+    ["used", optional(value.used, amount)],
+    ["onDemandCap", optional(value.onDemandCap, amount)],
+    ["onDemandUsed", optional(value.onDemandUsed, amount)],
+    ["prepaidBalance", optional(value.prepaidBalance, amount)],
+    ["isUnifiedBillingUser", optional(value.isUnifiedBillingUser, flag)],
+    ["billingPeriodStart", optional(value.billingPeriodStart, text)],
+    ["billingPeriodEnd", optional(value.billingPeriodEnd, text)],
+    ["history", history?.length ? history : undefined],
+  ]);
+}
+
+/** The `_x.ai/billing` result the pinned CLI returns for this response body. */
+export function billingProjection(document) {
+  if (!isObject(document)) malformed();
+  optional(document.on_demand_enabled, flag);
+  optional(document.subscription_tier, text);
+  return { config: optional(document.config, billingConfig) ?? null };
+}
+
+async function billingWithoutCli(credential, fetchImpl) {
+  const response = await fetchImpl(`${CHAT_PROXY_BASE}/billing?format=credits`, {
+    redirect: "manual",
+    headers: {
+      ...authHeaders(credential),
+      "x-grok-client-version": GROK_CLI_VERSION,
+      "x-grok-client-mode": "interactive",
+    },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (response.status === 401 || response.status === 403) {
+    throw new AuthenticationRequired(
+      "Grok usage authentication required: xAI rejected the access token.",
+    );
+  }
+  const bytes = await boundedBytes(response, "xAI billing");
+  let document;
+  try {
+    document = JSON.parse(decoder.decode(bytes));
+  } catch {
+    malformed();
+  }
+  return billingProjection(document);
+}
+
+/** A named portable account's poll (`token_refresh: false`). The Grok CLI
+ * renews an expiring sign-in on start and after any 401, so this path never
+ * starts it: it reads the current token, refuses one that has (nearly)
+ * expired, and reads billing, plan and resets directly with it. A rejected
+ * token is authentication required; nothing is retried or refreshed. */
+export async function collectWithoutRefresh({
+  credential = loadCredential,
+  fetch: fetchImpl = fetch,
+  now = Date.now,
+} = {}) {
+  const current = await credential();
+  if (!current) {
+    throw new AuthenticationRequired("Grok usage authentication required: no Grok sign-in.");
+  }
+  if (current.expiresAt !== undefined && current.expiresAt - now() < EXPIRY_MARGIN_MS) {
+    throw new AuthenticationRequired(
+      "Grok usage authentication required: the access token expired.",
+    );
+  }
+  const billing = await billingWithoutCli(current, fetchImpl);
+  return usage(billing, await accountMetadata(current, fetchImpl), now());
+}
+
 async function reset(rpc, request) {
-  await rpc.request("_x.ai/billing", {});
+  // Without the CLI (`token_refresh: false`) the token is used as it is.
+  if (rpc) await rpc.request("_x.ai/billing", {});
   const credential = await loadCredential();
   if (!credential) {
     throw new ResetFailure("official Grok OIDC credential is unavailable");
+  }
+  if (
+    !rpc &&
+    credential.expiresAt !== undefined &&
+    credential.expiresAt - Date.now() < EXPIRY_MARGIN_MS
+  ) {
+    throw new ResetFailure("Grok usage authentication required: the access token expired.");
   }
   const credits = resetTokens(
     await grpcWeb(credential, "/prod_mc_billing.ConsumerUiSvc/GetRemainingResets"),
@@ -428,14 +616,28 @@ async function reset(rpc, request) {
   };
 }
 
+/** Answer one request. Only a request that may refresh starts the CLI. */
+export async function handle(request, { startRpc = () => AcpRpc.start(), ...direct } = {}) {
+  if (request.token_refresh === false) {
+    return request.operation === "consume_reset"
+      ? await reset(undefined, request)
+      : await collectWithoutRefresh(direct);
+  }
+  const rpc = await startRpc();
+  try {
+    return request.operation === "consume_reset"
+      ? await reset(rpc, request)
+      : await collect(rpc, direct);
+  } finally {
+    rpc.close();
+  }
+}
+
 async function main() {
-  let rpc;
   let request;
   try {
     request = await input();
-    rpc = await AcpRpc.start();
-    const result =
-      request.operation === "consume_reset" ? await reset(rpc, request) : await collect(rpc);
+    const result = await handle(request);
     console.log(JSON.stringify(result));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -456,8 +658,6 @@ async function main() {
       console.error(message);
       process.exitCode = 1;
     }
-  } finally {
-    rpc?.close();
   }
 }
 

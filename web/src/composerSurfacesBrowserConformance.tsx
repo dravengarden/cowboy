@@ -338,6 +338,68 @@ export async function renderQuestionKeyboardPreview(coverPx = 268): Promise<unkn
   return questionGeometry(scenario.container);
 }
 
+/** A busy session whose newest row is a running tool call, on a phone layout. */
+async function mountRunningToolScenario(): Promise<{ container: HTMLElement; teardown: () => void }> {
+  const mobile = mount("touch", "390px");
+  await until(() => editorIn(mobile.container) && liveSocket, "the Mobile composer");
+  await delay(100);
+  const event = (seq: number, update: Record<string, unknown>) =>
+    liveSocket?.publish({ type: "event", envelope: { session_id: SESSION, seq, kind: "update", update } });
+  event(1, { sessionUpdate: "user_message_chunk", content: { type: "text", text: "run the checks" } });
+  for (let i = 0; i < 10; i++) {
+    event(2 + i, {
+      sessionUpdate: "tool_call",
+      toolCallId: `done-${i}`,
+      title: `cd /srv/storage/fast0/agent/worktrees/cowboy/example && step ${i}`,
+      kind: "execute",
+      status: "completed",
+    });
+  }
+  event(20, {
+    sessionUpdate: "tool_call",
+    toolCallId: "running",
+    title: "timeout 900 nix develop -c bash -c 'for s in elicitation subagents'",
+    kind: "execute",
+    status: "pending",
+  });
+  await until(() => mobile.container.querySelector("[data-transcript-tail-row=activity]"), "the activity row under the running card");
+  await delay(300);
+  return {
+    container: mobile.container,
+    teardown: () => {
+      mobile.root.unmount();
+      mobile.container.remove();
+    },
+  };
+}
+
+/** The tool row's card and the row under it, measured in page pixels. */
+function runningToolGeometry(container: HTMLElement) {
+  const row = container.querySelector<HTMLElement>("[data-key]");
+  const card = row?.firstElementChild as HTMLElement | null | undefined;
+  check(row && card, "the running tool row is missing");
+  const activity = container.querySelector("[data-transcript-tail-row=activity]");
+  check(activity, "the activity row is missing");
+  const animation = card.getAnimations()[0];
+  return {
+    cardBottom: Math.round(card.getBoundingClientRect().bottom),
+    activityTop: Math.round(activity.getBoundingClientRect().top),
+    animated: animation
+      ? (animation.effect as KeyframeEffect).getKeyframes().flatMap((frame) => Object.keys(frame))
+      : null,
+    opacity: getComputedStyle(card).opacity,
+  };
+}
+
+/** Leave the running-tool tail on screen for a visual review. */
+export async function renderTranscriptTailPreview(): Promise<unknown> {
+  installFakes([]);
+  resetProviderCatalog();
+  await loadProviderCatalog();
+  const scenario = await mountRunningToolScenario();
+  return runningToolGeometry(scenario.container);
+}
+
 /** Trusted-key flow (tools/cdp-keyboard-acceptance.ts `surfaces`): the same
  *  fakes and Desktop App, with sent frames exposed for the runner. */
 export async function mountComposerSurfacesKeyboardAcceptance(): Promise<void> {
@@ -504,5 +566,46 @@ export async function runComposerSurfacesBrowserConformance(): Promise<string[]>
   check(resting.plan.shown && resting.primary.shown, "Plan and the Composer return when the keyboard leaves");
   question.teardown();
   passed.push("A long question stays whole above the keyboard and owns the stack only while its answer is typed");
+
+  // A running tool card breathes by its fill only. An opacity animation makes
+  // it an iOS compositor layer that was left painted one row low, over the
+  // activity row beneath it, once that row changed height.
+  const tail = await mountRunningToolScenario();
+  const running = runningToolGeometry(tail.container);
+  check(running.animated !== null && running.animated.includes("backgroundColor"), `the running card breathes (${String(running.animated)})`);
+  check(!running.animated.some((property: string) => ["opacity", "transform", "filter", "backdropFilter"].includes(property)), `the breath stays off the compositor (${running.animated.join(",")})`);
+  check(running.opacity === "1", `the card itself is never dimmed (${running.opacity})`);
+  check(running.cardBottom <= running.activityTop, `the card ends above the activity row (${running.cardBottom} > ${running.activityTop})`);
+  tail.teardown();
+  passed.push("A running tool card breathes off the compositor and stays above the activity row");
+
+  // "New session here" from a folder's menu: the menu must be gone before the
+  // opener claims the keyboard, or its focus restore blurs the claim inside
+  // the same tap and Create opens with a caret but no keyboard.
+  const filed = mount("touch", "390px");
+  await until(() => editorIn(filed.container) && liveSocket, "the Mobile composer");
+  liveSocket?.publish({
+    type: "sync_patch",
+    state: "folders",
+    version: 1,
+    value: { folders: [{ id: "f1", name: "Project", parent: null, project: null, position: 0 }], placement: { [SESSION]: "f1" } },
+    confirmed: [],
+    resync: true,
+  });
+  const kebab = await until(() => filed.container.querySelector<HTMLElement>("[aria-label='folder actions Project']"), "the folder actions button");
+  kebab.focus();
+  kebab.click();
+  const item = await until(() => byText("[role=menuitem]", "New session here"), "the New session here item");
+  item.click();
+  const claim = document.activeElement;
+  check(
+    claim instanceof HTMLInputElement && claim.getAttribute("aria-hidden") === "true" && !claim.closest("[role=dialog]"),
+    `the keyboard claim keeps focus through the tap (${String(claim?.tagName)} ${claim?.getAttribute("aria-label") ?? ""})`,
+  );
+  const titleField = await until(() => document.querySelector<HTMLInputElement>("[role=dialog] input[type=text], [role=dialog] input:not([type])"), "the Create title field");
+  await until(() => document.activeElement === titleField, "focus to transfer to the Create title");
+  filed.root.unmount();
+  filed.container.remove();
+  passed.push("New session here from a folder menu keeps the keyboard claim until Create's title takes focus");
   return passed;
 }

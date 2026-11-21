@@ -283,6 +283,15 @@ rows breaks the iOS column-reverse anchor and drops local tool-card
 state. Do not use `content-visibility` on rows inside that scroller:
 WebKit can keep the intrinsic height and skip paint, leaving a hole.
 
+Nor may a row inside that scroller run an opacity, transform or filter
+animation: iOS WebKit gives it a compositor layer that can stay at its old
+offset when a row below it changes height. The running tool card did exactly
+that (the activity row mounted beneath it and the card painted one row low,
+over "Analyzing…", leaving a hole where it belongs). It now breathes by fill
+colour (`toolBreath.ts`), which repaints in the ordinary scroll flow. The
+`composer-surfaces` suite asserts the animated properties; physical iOS
+acceptance is still requested from the user.
+
 `contain: none` on `[data-mobile-drawer-surface] [data-key]` is standing
 (`mobilePeekRestLayerSx`), not a prepare-time toggle. Swiping a long
 transcript must not restyle N paint boundaries on the first frame.

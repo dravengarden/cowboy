@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "id": "grok",
-  "version": "3.2.15",
+  "version": "3.2.16",
   "component_release": "3.128.0",
   "publisher": "cowboy-first-party",
   "kind": "agent_provider",

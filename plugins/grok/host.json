@@ -171,7 +171,7 @@
       "--allow-env=COWBOY_PLUGIN_COMMAND_GROK,COWBOY_ACP_GROK_CMD,GROK_AUTH,GROK_AUTH_PATH,GROK_HOME,HOME,PATH,TMPDIR,USER,XDG_CONFIG_HOME,XDG_DATA_HOME,XDG_CACHE_HOME,SSL_CERT_FILE,NIX_SSL_CERT_FILE",
       "--allow-read=${ENV:GROK_AUTH_PATH},${ENV:GROK_HOME}/auth.json,${ENV:HOME}/.grok/auth.json",
       "--allow-run=grok,${ENV:COWBOY_PLUGIN_COMMAND_GROK},${ENV:COWBOY_ACP_GROK_CMD}",
-      "--allow-net=grok.com:443",
+      "--allow-net=grok.com:443,cli-chat-proxy.grok.com:443",
       "${PLUGIN_DIR}/collector/index.js",
       "grok"
     ],
@@ -184,7 +184,7 @@
       "--allow-env=COWBOY_PLUGIN_COMMAND_GROK,COWBOY_ACP_GROK_CMD,GROK_AUTH,GROK_AUTH_PATH,GROK_HOME,HOME,PATH,TMPDIR,USER,XDG_CONFIG_HOME,XDG_DATA_HOME,XDG_CACHE_HOME,SSL_CERT_FILE,NIX_SSL_CERT_FILE",
       "--allow-read=${ENV:GROK_AUTH_PATH},${ENV:GROK_HOME}/auth.json,${ENV:HOME}/.grok/auth.json",
       "--allow-run=grok,${ENV:COWBOY_PLUGIN_COMMAND_GROK},${ENV:COWBOY_ACP_GROK_CMD}",
-      "--allow-net=grok.com:443",
+      "--allow-net=grok.com:443,cli-chat-proxy.grok.com:443",
       "${PLUGIN_DIR}/collector/index.js",
       "grok"
     ],

@@ -34,10 +34,7 @@ import { transcriptLifecycleLabel } from "./transcriptLoadingPresentation";
 import { ProtectedImageLightbox as ImageLightbox } from "./ProtectedImageLightbox";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { toolIcon } from "./ToolDetailsBrowser";
-export const pulse = keyframes`
-  0%, 100% { opacity: 1; }
-  50%      { opacity: 0.55; }
-`;
+import { toolBreathSx } from "./toolBreath";
 
 // Claude Code's "prompt keyword shimmer": a highlight band sweeps across the
 // verb word (color applied via background-clip:text in sx).
@@ -733,7 +730,8 @@ export function ToolCard({
         // outlined border (theme `divider`) drew a faint violet line top+bottom
         // on every collapsed card, and a tool-heavy transcript stacked them into
         // a "ruled paper" look. The icon + status chip already mark it as a tool.
-        bgcolor: "background.paper",
+        // The fill also breathes while the call is in flight (toolBreath.ts).
+        ...toolBreathSx(running, theme),
         // Keep the card borderless, but give the execution state a quiet wash
         // that reads in a long tool run. It preserves the existing fill-based
         // selection language and avoids a stack of purple leading rails.
@@ -746,9 +744,6 @@ export function ToolCard({
           theme.palette.mode === "dark" ? 0.16 : 0.06,
         )}`,
         borderRadius: desktop ? `${DESKTOP_INSET_RADIUS}px` : 1,
-        // Subtle breathing while a tool is mid-flight; nothing while
-        // completed/failed (those are static states).
-        animation: running ? `${pulse} 1.6s ease-in-out infinite` : undefined,
       })}
     >
       <Stack
