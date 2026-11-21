@@ -1,4 +1,4 @@
-import { Alert, Box, Button, MenuItem, Paper, Stack, TextField, Typography } from "@mui/material";
+import { Alert, Button, MenuItem, Paper, Stack, TextField, Typography } from "@mui/material";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { latestProviderEntries, useProviderCatalog } from "./providerCatalog";
@@ -8,16 +8,15 @@ import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import { providerSubscriptionEnabled } from "./SessionSubscription";
 import { SubscriptionLogins } from "./SubscriptionLogins";
 import { SubscriptionApiKey } from "./SubscriptionApiKey";
-import { SubscriptionLegacyAdoption } from "./SubscriptionLegacyAdoption";
 import { SubscriptionRevocation } from "./SubscriptionRevocation";
-import { LegacyBrowserActions, SubscriptionBrowserActions } from "./SubscriptionBrowserActions";
+import { SubscriptionBrowserActions } from "./SubscriptionBrowserActions";
 import { type BrowserShareChange, BrowserShareSettings } from "./machineBrowser/BrowserShareSettings";
 import { sharedBrowser } from "./machineBrowser/shareRules";
 import { browserErrorText } from "./machineBrowser/api";
 import { ProviderAccountIdentity, providerAccountCardSx } from "./ProviderAccountIdentity";
-import { legacySubscriptionLabel, validLegacyLabels, validSubscriptionLabel } from "./subscriptionDisplay";
-import { providerDefault, type SubscriptionSnapshot as Snapshot, validSubscriptionSnapshot } from "./subscriptionAccounts";
-import { accountControl, namedOnlyProvider } from "./accountControls";
+import { validSubscriptionLabel } from "./subscriptionDisplay";
+import { type SubscriptionSnapshot as Snapshot, validSubscriptionSnapshot } from "./subscriptionAccounts";
+import { accountControl } from "./accountControls";
 import { AccountControlsPanel } from "./AccountControlsPanel";
 import { useNativeAccountUsage } from "./nativeAccountUsage";
 export { validSubscriptionSnapshot } from "./subscriptionAccounts";
@@ -27,9 +26,7 @@ type Change = { type: "create"; provider_id: string; label: string }
   | { type: "rename"; id: string; label: string }
   | { type: "set_enabled"; id: string; enabled: boolean }
   | { type: "set_default"; provider_id: string; id: string }
-  | { type: "set_legacy_labels"; labels: Record<string, string> }
   | { type: "set_browser_enabled"; id: string; enabled: boolean }
-  | { type: "set_legacy_browser_enabled"; card: string; enabled: boolean }
   | BrowserShareChange;
 interface Pending { operation: string; dataset: string; expected_revision: number; change: Change }
 
@@ -46,11 +43,9 @@ export function validPendingSubscription(value: unknown): value is Pending {
   if (Object.keys(value).some((key) => !["operation", "dataset", "expected_revision", "change"].includes(key))) return false;
   const change = value.change;
   const fields = change.type === "create" ? ["type", "provider_id", "label"]
-    : change.type === "set_legacy_labels" ? ["type", "labels"]
     : change.type === "rename" ? ["type", "id", "label"]
     : change.type === "set_enabled" ? ["type", "id", "enabled"]
     : change.type === "set_browser_enabled" ? ["type", "id", "enabled"]
-    : change.type === "set_legacy_browser_enabled" ? ["type", "card", "enabled"]
     : change.type === "set_default" ? ["type", "provider_id", "id"]
     : change.type === "create_browser_share" ? ["type", "label"]
     : change.type === "rename_browser_share" ? ["type", "share_id", "label"]
@@ -58,11 +53,9 @@ export function validPendingSubscription(value: unknown): value is Pending {
     : change.type === "set_browser_share" ? ["type", "member", "share_id"] : [];
   if (fields.length === 0 || Object.keys(change).some((key) => !fields.includes(key))) return false;
   switch (change.type) {
-    case "set_legacy_labels": return validLegacyLabels(change.labels);
     case "create": return text(change.provider_id) && typeof change.label === "string" && validSubscriptionLabel(change.label);
     case "rename": return text(change.id) && typeof change.label === "string" && validSubscriptionLabel(change.label);
     case "set_enabled": case "set_browser_enabled": return text(change.id) && typeof change.enabled === "boolean";
-    case "set_legacy_browser_enabled": return text(change.card) && typeof change.enabled === "boolean";
     case "set_default": return text(change.provider_id) && text(change.id);
     case "create_browser_share": return typeof change.label === "string" && validSubscriptionLabel(change.label);
     case "rename_browser_share": return text(change.share_id) && typeof change.label === "string" && validSubscriptionLabel(change.label);
@@ -73,7 +66,7 @@ export function validPendingSubscription(value: unknown): value is Pending {
 }
 
 function validShareMember(value: unknown): boolean {
-  return record(value) && Object.keys(value).length === 1 && (text(value.account_id) || text(value.card));
+  return record(value) && Object.keys(value).length === 1 && text(value.account_id);
 }
 
 /** Only explicit domain rejections establish that this mutation did not commit. */
@@ -93,9 +86,9 @@ export function subscriptionRejectionText(code: string): string {
 }
 
 export interface SubscriptionCards {
-  legacy: (provider: string) => { title: string | undefined; controls: ReactNode };
   named: { id: string; provider: string; content: ReactNode }[];
-  /** Providers with no default (Service) account: only their named cards render. */
+  /** Providers with no default (Service) account: named-only Providers and
+   * every retired legacy card's Provider. Only their named cards render. */
   namedOnly: string[];
 }
 
@@ -131,7 +124,7 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
         throw new Error("Account changed. Reload before editing subscriptions.");
       }
       setSnapshot((old) => !old || old.dataset.dataset_id !== value.dataset.dataset_id ||
-        (value.registry.revision >= old.registry.revision && (value.display_preferences?.revision ?? 0) >= (old.display_preferences?.revision ?? 0)) ? value : old);
+        value.registry.revision >= old.registry.revision ? value : old);
     } catch (cause) { if (live() && sequence === loading.current) setError(String(cause)); }
   }
   useEffect(() => {
@@ -149,7 +142,7 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
     void load();
     const refresh = (event: Event) => {
       const scopes = (event as CustomEvent<Record<string, number> | undefined>).detail;
-      if (!scopes || Object.hasOwn(scopes, "provider_accounts") || Object.hasOwn(scopes, "subscriptions")) void load();
+      if (!scopes || Object.hasOwn(scopes, "provider_accounts")) void load();
     };
     window.addEventListener(PREFERENCES_CHANGED, refresh);
     return () => { alive.current = false; ++loading.current; window.removeEventListener(PREFERENCES_CHANGED, refresh); };
@@ -170,14 +163,9 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
       // replace an uncertain create with a second operation.
       sessionStorage.setItem(journalKey, JSON.stringify(input));
       setPending(input);
-      const legacy = input.change.type === "set_legacy_labels";
-      const body = input.change.type === "set_legacy_labels"
-        ? { operation: input.operation, dataset: input.dataset, scope: "subscriptions", expected_revision: input.expected_revision,
-          changes: { legacy_labels: input.change.labels } }
-        : input;
-      const response = await fetch(legacy ? "/api/preferences" : "/api/provider-accounts", {
+      const response = await fetch("/api/provider-accounts", {
         method: "PUT", headers: { "Content-Type": "application/json" },
-        signal: productSessionSignal(), body: JSON.stringify(body),
+        signal: productSessionSignal(), body: JSON.stringify(input),
       });
       const result = await response.json() as { status?: string; error?: { code?: string } };
       if (!live()) return false;
@@ -188,12 +176,6 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
         if (input.change.type === "rename") {
           const id = input.change.id;
           setNames((old) => { const next = { ...old }; delete next[id]; return next; });
-        }
-        if (input.change.type === "set_legacy_labels") {
-          const saved = input.change.labels;
-          setNames((old) => Object.fromEntries(Object.entries(old).filter(([id, name]) =>
-            !id.startsWith("legacy:") || name.trim() !== saved[id.slice("legacy:".length)]
-          )));
         }
         await load();
         return true;
@@ -214,31 +196,10 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
   }
   function save(change: Change): Promise<boolean> {
     if (!snapshot || pending || busy || !journalReady) return Promise.resolve(false);
-    if (change.type === "set_legacy_labels" && !snapshot.display_preferences) return Promise.resolve(false);
     return commit({ operation: crypto.randomUUID(), dataset: snapshot.dataset.dataset_id,
-      expected_revision: change.type === "set_legacy_labels" ? snapshot.display_preferences!.revision : snapshot.registry.revision, change });
+      expected_revision: snapshot.registry.revision, change });
   }
-  const legacyProviders = snapshot?.display_preferences ? [...new Set([
-    ...providers.map((entry) => entry.provider_id), ...snapshot.registry.accounts.map((account) => account.provider_id),
-    ...Object.keys(snapshot.display_preferences.values.legacy_labels),
-  ])].filter((id) => !namedOnlyProvider(snapshot, id)) : [];
   const disabled = busy || Boolean(pending) || !snapshot || !journalReady;
-  const legacy: SubscriptionCards["legacy"] = (id) => {
-    const current = legacySubscriptionLabel(snapshot?.display_preferences, id);
-    const draft = names[`legacy:${id}`];
-    return { title: snapshot?.display_preferences?.values.legacy_labels[id], controls: <Stack spacing={1}>
-      <Stack direction="row" spacing={1} alignItems="center">
-        <TextField size="small" label="Account label" value={draft ?? current} disabled={disabled || !snapshot?.display_preferences} fullWidth sx={{ minWidth: 0 }}
-          onChange={(event) => setNames((old) => ({ ...old, [`legacy:${id}`]: event.target.value }))} />
-        <Button disabled={disabled || !snapshot?.display_preferences || !validSubscriptionLabel(draft ?? "") || draft?.trim() === current}
-          onClick={() => save({ type: "set_legacy_labels", labels: { ...snapshot!.display_preferences!.values.legacy_labels, [id]: draft!.trim() } })}>Save</Button>
-      </Stack>
-      <Typography variant="caption" color="text.secondary">{id} · Service account{(providerDefault(snapshot, id) ?? "default") === "default" ? " · Default" : ""}</Typography>
-      {(providerDefault(snapshot, id) ?? "default") !== "default" && <Button disabled={disabled} onClick={() => save({ type: "set_default", provider_id: id, id: "default" })}>Use by default</Button>}
-      <LegacyBrowserActions snapshot={snapshot} provider={id} label={current} owner={owner} disabled={disabled} onSetBrowserEnabled={(card, enabled) => save({ type: "set_legacy_browser_enabled", card, enabled })} />
-      <SubscriptionLegacyAdoption snapshot={snapshot} provider={id} owner={owner} disabled={disabled} onChange={() => void load()} />
-    </Stack> };
-  };
   const named: SubscriptionCards["named"] = snapshot?.registry.accounts.filter((account) => !snapshot.revoked_accounts?.includes(account.id)).map((account) => {
     const entry = providers.find((entry) => entry.provider_id === account.provider_id);
     const control = accountControl(snapshot, account.id);
@@ -268,7 +229,6 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
           <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
             <Button disabled={disabled || account.revoking} onClick={() => save({ type: "set_enabled", id: account.id, enabled: !account.enabled })}>{account.revoking ? "Revoked access" : account.enabled ? "Disable" : "Enable"}</Button>
             {!control && <Button disabled={disabled || !account.enabled || snapshot.registry.defaults[account.provider_id] === account.id || !providerSubscriptionEnabled(snapshot, account.provider_id)} onClick={() => save({ type: "set_default", provider_id: account.provider_id, id: account.id })}>Use by default</Button>}
-            {snapshot.registry.defaults[account.provider_id] === account.id && <Button disabled={disabled} onClick={() => save({ type: "set_default", provider_id: account.provider_id, id: "default" })}>Use existing account by default</Button>}
             {owner && <SubscriptionBrowserActions account={account} owner={owner} dataset={snapshot.dataset.dataset_id} disabled={disabled} shared={sharedBrowser(snapshot, account.id)}
               onSetBrowserEnabled={(enabled) => save({ type: "set_browser_enabled", id: account.id, enabled })} />}
             {owner && <SubscriptionRevocation account={account.id} label={account.label} revoking={Boolean(account.revoking)} owner={owner}
@@ -296,10 +256,9 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
       <Typography variant="caption" color="text.secondary">Add an account, then choose a Machine to see its supported sign-in methods.</Typography>
     </Stack>}
     {snapshot?.session_admission !== "enabled" && <Typography variant="caption" color="text.secondary">Additional accounts support sign-in setup. Creating sessions with them is not enabled yet.</Typography>}
-    {renderAccounts ? renderAccounts({ legacy, named, namedOnly: snapshot?.named_only_providers ?? [] }) : <>
-      {legacyProviders.map((id) => <Box key={`legacy:${id}`}>{legacy(id).controls}</Box>)}
-      {named.map((card) => card.content)}
-    </>}
+    {renderAccounts
+      ? renderAccounts({ named, namedOnly: [...snapshot?.named_only_providers ?? [], ...snapshot?.retired_default_providers ?? []] })
+      : named.map((card) => card.content)}
     <BrowserShareSettings snapshot={snapshot} disabled={disabled} save={save} />
   </Stack>;
 }

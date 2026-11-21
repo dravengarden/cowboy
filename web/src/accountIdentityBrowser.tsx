@@ -29,7 +29,6 @@ export async function accountIdentityBrowser(observe?: (surface: string, stage: 
       { id: "otter", provider_id: "claude-code", label: "Claude · Otter", enabled: true },
     ] },
     session_admission: "enabled",
-    display_preferences: { scope: "subscriptions", revision: 1, values: { legacy_labels: { "claude-code": "Claude · Lynx" } } },
   };
   let reads = 0;
   let release: (() => void) | undefined;

@@ -941,9 +941,7 @@ function ProviderManagement(
             : undefined;
           const credentialEntries = credentialGroup?.entries ?? [entry];
           const sharedCredential = credentialEntries.length > 1;
-          const accountNames = credentialEntries.map((item) => accounts?.legacy(item.provider_id).title);
-          const accountTitle = accountNames[0] && accountNames.every((name) => name === accountNames[0])
-            ? accountNames[0] : undefined;
+          const accountTitle: string | undefined = undefined;
           const readyCredential = scope === "service" &&
             entry.manifest.authentication.required &&
             auth?.authentication_state === "ready";
@@ -1124,7 +1122,6 @@ function ProviderManagement(
                               sx={{ pl: { xs: 0, sm: 5.25 } }}
                             >
                               <Stack spacing={1}>
-                                {accounts && credentialEntries.map((provider) => <Box key={provider.provider_id}>{accounts.legacy(provider.provider_id).controls}</Box>)}
                                 {lifecycleSurface}
                               </Stack>
                             </Box>

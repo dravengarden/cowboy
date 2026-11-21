@@ -21,11 +21,9 @@ import { ExpandMore, OpenInNew, Refresh, Tune } from "@mui/icons-material";
 import { NetworkButton, NetworkIconButton } from "./NetworkActionFeedback";
 import { PluginSlot } from "./pluginHost";
 import { ProviderUsageCredits } from "./ProviderUsageCredits";
-import { UsageExecutorPicker } from "./UsageExecutorPicker";
-import { exactUsageTime, manualRefreshWaitMinutes, usageFreshness } from "./usageFreshness";
+import { exactUsageTime, usageFreshness } from "./usageFreshness";
 import {
   readUsageExecutors,
-  setUsageExecutor,
   type UsageExecutionSettings,
 } from "./usageApi";
 import {
@@ -47,7 +45,7 @@ import {
   usagePluginId,
   usageRefreshing,
 } from "./usageLimits";
-import { loadUsageSnapshot, requestUsageRefresh, useStoreSelector } from "./store";
+import { loadUsageSnapshot, useStoreSelector } from "./store";
 import { refreshAllUsage } from "./usageRefresh";
 import { ConfirmSheet } from "./Sheet";
 import { desktopPanelSx } from "./desktop/DesktopEmbeddedControl";
@@ -61,7 +59,7 @@ import { ClientStorageInfoSection, ServiceStorageInfoSection } from "./InfoRunti
 import { SessionMaintenancePanel } from "./SessionMaintenancePanel";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { AccountBrowserEntry } from "./machineBrowser/AccountBrowserEntry";
-import { displayPlan, orderUsageAccounts, registeredUsageAccounts, type UsageAccountCard, usageCardManageUrl, usageCardResetSchedule, usageResetTarget } from "./usageAccounts";
+import { displayPlan, orderUsageAccounts, registeredUsageAccounts, type UsageAccountCard, usageCardManageUrl, usageResetTarget } from "./usageAccounts";
 import { UsageResetActions, UsageResetFields, useUsageResetFlow } from "./UsageResetFlow";
 import { useProviderCatalog } from "./providerCatalog";
 import { useNativeAccountUsage } from "./nativeAccountUsage";
@@ -121,7 +119,7 @@ function ProviderUsageCard({ account, usage, schedule, now, onUsageChanged, onRe
   /** Account-level controls shown on the card itself (the browser entry). */
   action?: React.ReactNode;
   usage: ProviderUsage;
-  schedule: { fire_at_ms: number } | undefined;
+  schedule?: { fire_at_ms: number } | undefined;
   now: number;
   onUsageChanged: () => Promise<void>;
   onRefresh?: (() => Promise<void>) | undefined;
@@ -148,7 +146,7 @@ function ProviderUsageCardBody({ account: identity, usage, schedule, now, onUsag
   children?: React.ReactNode;
   action?: React.ReactNode;
   usage: ProviderUsage;
-  schedule: { fire_at_ms: number } | undefined;
+  schedule?: { fire_at_ms: number } | undefined;
   now: number;
   onUsageChanged: () => Promise<void>;
   onRefresh?: (() => Promise<void>) | undefined;
@@ -219,11 +217,6 @@ function ProviderUsageCardBody({ account: identity, usage, schedule, now, onUsag
     : refreshBusy ? "REFRESHING" : "NOT REPORTED");
   const refresh = async (): Promise<void> => {
     if (!onRefresh || refreshBusy) return;
-    const wait = identity.collector ? manualRefreshWaitMinutes(usage, Date.now()) : 0;
-    if (wait > 0) {
-      setCooldownNotice(`Can refresh in ${String(wait)}m`);
-      return;
-    }
     setRequesting(true);
     try {
       await onRefresh();
@@ -572,15 +565,6 @@ export function UsageInfoSection({ order, layoutAction, accounts }: {
       setError(cause instanceof Error ? cause.message : "Refresh failed");
     }
   }, [accounts.refresh]);
-  const loadProvider = useCallback(async (provider: string): Promise<void> => {
-    setError(null);
-    try {
-      await requestUsageRefresh(provider);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Refresh failed");
-      throw cause;
-    }
-  }, []);
   useEffect(() => {
     void load(false);
   }, []); // load only when Info mounts
@@ -633,24 +617,12 @@ export function UsageInfoSection({ order, layoutAction, accounts }: {
           key={account.id}
           account={account}
           usage={account.usage}
-          schedule={usageCardResetSchedule(snapshot, account)}
           now={clock}
           onUsageChanged={() => load(false)}
-          onRefresh={account.collector ? () => loadProvider(account.collector!)
-            : account.native?.available ? () => native.refresh(account.id) : undefined}
-          refreshing={account.collector ? usageRefreshing(snapshot, account.collector) : account.native?.refreshing ?? false}
+          onRefresh={account.native?.available ? () => native.refresh(account.id) : undefined}
+          refreshing={account.native?.refreshing ?? false}
           action={<AccountBrowserEntry snapshot={accounts.data} account={account.id} label={account.title} />}
         >
-          {execution && account.collector && (
-            <UsageExecutorPicker
-              account={account.collector}
-              settings={execution}
-              onChange={async (account, machine) => {
-                setExecution(await setUsageExecutor(account, machine));
-                await loadProvider(account);
-              }}
-            />
-          )}
           {account.native?.machine_id && <InfoRow k="Usage query Machine" v={execution?.machines.find((machine) => machine.id === account.native!.machine_id)?.name ?? account.native.machine_id} />}
           {account.native?.message && account.native.usage && <Typography variant="caption" color="warning.main">{account.native.message}</Typography>}
         </ProviderUsageCard>

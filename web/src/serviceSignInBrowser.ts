@@ -1,10 +1,6 @@
-/** Where a Service (legacy default account) sign-in may show its
- * verification link. When the Service runs Machine browsers and the
- * Provider's usage card has a browser key, the link opens only in that
- * card's Machine browser on the login's Machine, never on this device
- * (owner decision 2026-11-17): every request of the Provider page and every
- * fingerprint it can read then come from the Machine that holds the
- * credential. Only a Service without that browser keeps the device page. */
+/** Where a Service sign-in may show its verification link. The legacy card
+ * browsers that once kept it on the credential's Machine (owner decision
+ * 2026-11-17) were retired with the cards, so it is the device page. */
 import type { SubscriptionSnapshot } from "./subscriptionAccounts";
 
 export type ServiceSignInBrowser =
@@ -18,18 +14,10 @@ export type ServiceSignInBrowser =
 export function serviceSignInBrowser(
   snapshot: SubscriptionSnapshot | undefined,
   owner: string | undefined,
-  provider: string,
+  _provider: string,
 ): ServiceSignInBrowser {
-  if (!snapshot || !owner) return { kind: "unknown" };
-  if (snapshot.machine_browser !== "enabled") return { kind: "device" };
-  const card = snapshot.legacy_browsers?.find((browser) =>
-    browser.available && browser.providers.includes(provider)
-  );
-  if (!card) return { kind: "device" };
-  return {
-    kind: "machine",
-    owner,
-    dataset: snapshot.dataset.dataset_id,
-    account: card.account_id,
-  };
+  // The legacy default cards and their Machine browsers are retired
+  // (docs/legacy-card-retirement.md): no card browser serves a Service
+  // sign-in any more.
+  return !snapshot || !owner ? { kind: "unknown" } : { kind: "device" };
 }

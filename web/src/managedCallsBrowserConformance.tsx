@@ -281,7 +281,6 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     if (url === "/api/provider-accounts") return Promise.resolve(Response.json({
       dataset: { dataset_id: "calls-fixture", user_id: "call-account-fixture" },
       registry: { revision: 1, accounts: [], defaults: {} }, session_admission: "enabled",
-      display_preferences: { scope: "subscriptions", revision: 1, values: { legacy_labels: { codex: "OpenAI · Pika" } } },
     }));
     if (url === "/api/sessions/parent-clear/bootstrap") {
       return Promise.resolve(Response.json({ messages: [{
@@ -797,7 +796,7 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       "call previews show recorded model and reasoning on a dedicated configuration row");
     check(configuredPreview.querySelector("[data-call-preview-configuration]") === configuredPreview.firstElementChild!.children[1],
       "configuration must occupy the middle row between title and status");
-    check(configuredPreview.querySelector("[data-account-badge]")?.textContent === "Pika" &&
+    check(configuredPreview.querySelector("[data-account-badge]")?.textContent === "Retired legacy account" &&
       configuredPreview.firstElementChild!.children.length === 3,
       "recorded execution account appears without adding a fourth preview row");
     check(previewRail.querySelector('[data-call-preview="call-security"] [data-account-badge="unknown"]') !== null,
@@ -1433,7 +1432,6 @@ export async function renderManagedCallsPreview(
     if (url === "/api/provider-accounts") return Promise.resolve(Response.json({
       dataset: { dataset_id: "calls-fixture", user_id: "call-account-fixture" },
       registry: { revision: 1, accounts: [], defaults: {} }, session_admission: "enabled",
-      display_preferences: { scope: "subscriptions", revision: 1, values: { legacy_labels: { codex: "OpenAI · Pika" } } },
     }));
     const bootstrap = childBootstrap(url);
     if (bootstrap) return Promise.resolve(bootstrap);
