@@ -890,8 +890,15 @@ pub(super) fn presets_on(
 }
 
 /// Targets with their presets; `caller` limits them to the ones it may call.
+/// The embedded review routing table (docs/review-routing.md), shown
+/// read-only in Settings.
+static REVIEW_ROUTING: std::sync::LazyLock<serde_json::Value> = std::sync::LazyLock::new(|| {
+    serde_json::from_str(include_str!("../../../../models/routing.json")).unwrap_or_default()
+});
+
 fn catalog(state: &AppState, caller: Option<&str>) -> serde_json::Value {
     json!({
+        "review_routing": &*REVIEW_ROUTING,
         "call_targets": CALL_TARGETS.iter().filter(|agent| {
             caller.is_none_or(|caller| !same_family(agent, caller))
         }).map(|agent| json!({

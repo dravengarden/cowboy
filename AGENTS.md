@@ -93,6 +93,26 @@ require the exact successful build receipt and published SideStore version.
   operation ID, and inspect receipts after failures. Never substitute browser
   credential copying, live database edits or installation-pointer writes.
 
+## Review risk
+
+Managed reviews pick their reviewer by declared risk
+([`docs/review-routing.md`](docs/review-routing.md)); declare it from this
+list and the affected paths, and give a reason for `high`.
+
+- **high**: Machine durable namespaces and their writers
+  (`components/machine/src/machine_broker/{deletions,incarnations,cleanups,namespace}.rs`);
+  store migrations and ledger CAS (`migrations/`, `src/store/`); managed-call
+  lifecycle, cancellation and recovery (`components/server/src/server/managed_calls/`);
+  authentication, permissions, Operator delegation and account isolation
+  (provider accounts, account sandboxes, credentials, browser profiles);
+  the Controller/Machine/worker wire and release, activation or recovery
+  pins (`components/wire/`, `flake.nix` release outputs); deletion paths;
+  anything touching money or usage limits; large refactors.
+- **routine**: Web presentation and interaction (`web/`), docs, tests only,
+  model evidence (`models/`), Plugin presets and copy, CLI help.
+- Confirm named fixes with a cheaper preset or a continued review child, not a
+  fresh full review.
+
 ## Architecture gotchas
 - **Structure ratchet** (`just structure-check`, part of `just check`): no
   production file, function or TSX hook count over its limit (Rust file 1,500

@@ -1,0 +1,258 @@
+{
+  "schema": 1,
+  "measured_at": "2026-11-21",
+  "window_days": 14,
+  "source": "Hawk Controller managed_agent_calls (read-only), completed reviews and design reviews",
+  "caveat": "Observational mixed workload: inputs differ between groups, so this compares cost, not quality.",
+  "groups": [
+    {
+      "provider": "codex",
+      "purpose": "review",
+      "target": "gpt-6-astra:max",
+      "n": 326,
+      "with_usage": 326,
+      "median_tokens": 1883465,
+      "p75_tokens": 3032295,
+      "median_uncached_tokens": 149563,
+      "median_minutes": 9,
+      "mean_findings": 2.5,
+      "verdicts": {
+        "needs-attention": 158,
+        "approve": 61,
+        "none": 107
+      },
+      "risk": {
+        "undeclared": 326
+      }
+    },
+    {
+      "provider": "codex",
+      "purpose": "review",
+      "target": "gpt-6.2-astra:max",
+      "n": 99,
+      "with_usage": 99,
+      "median_tokens": 6742914,
+      "p75_tokens": 10039214,
+      "median_uncached_tokens": 258956,
+      "median_minutes": 20,
+      "mean_findings": 9.4,
+      "verdicts": {
+        "needs-attention": 85,
+        "none": 12,
+        "approve": 2
+      },
+      "risk": {
+        "undeclared": 69,
+        "high": 25,
+        "routine": 5
+      }
+    },
+    {
+      "provider": "codex",
+      "purpose": "design_review",
+      "target": "gpt-6-astra:max",
+      "n": 47,
+      "with_usage": 47,
+      "median_tokens": 2246866,
+      "p75_tokens": 2781567,
+      "median_uncached_tokens": 148477,
+      "median_minutes": 13,
+      "mean_findings": 12.4,
+      "verdicts": {
+        "none": 42,
+        "needs-attention": 5
+      },
+      "risk": {
+        "undeclared": 47
+      }
+    },
+    {
+      "provider": "codex",
+      "purpose": "design_review",
+      "target": "gpt-6.2-astra:max",
+      "n": 17,
+      "with_usage": 17,
+      "median_tokens": 2860430,
+      "p75_tokens": 5920006,
+      "median_uncached_tokens": 158657,
+      "median_minutes": 17,
+      "mean_findings": 18,
+      "verdicts": {
+        "none": 15,
+        "needs-attention": 2
+      },
+      "risk": {
+        "undeclared": 15,
+        "high": 2
+      }
+    },
+    {
+      "provider": "codex",
+      "purpose": "review",
+      "target": "gpt-6.2-astra:medium",
+      "n": 10,
+      "with_usage": 10,
+      "median_tokens": 266810,
+      "p75_tokens": 552865,
+      "median_uncached_tokens": 43343,
+      "median_minutes": 3,
+      "mean_findings": 7.3,
+      "verdicts": {
+        "needs-attention": 7,
+        "approve": 1,
+        "none": 2
+      },
+      "risk": {
+        "undeclared": 10
+      }
+    },
+    {
+      "provider": "codex",
+      "purpose": "review",
+      "target": "gpt-6-astra:medium",
+      "n": 8,
+      "with_usage": 8,
+      "median_tokens": 148143,
+      "p75_tokens": 156096,
+      "median_uncached_tokens": 38325,
+      "median_minutes": 1,
+      "mean_findings": null,
+      "verdicts": {
+        "none": 8
+      },
+      "risk": {
+        "undeclared": 8
+      }
+    },
+    {
+      "provider": "codex",
+      "purpose": "review",
+      "target": "gpt-6.2-sol:max",
+      "n": 6,
+      "with_usage": 6,
+      "median_tokens": 2406303,
+      "p75_tokens": 3544350,
+      "median_uncached_tokens": 171944,
+      "median_minutes": 7,
+      "mean_findings": 7,
+      "verdicts": {
+        "needs-attention": 6
+      },
+      "risk": {
+        "undeclared": 5,
+        "routine": 1
+      }
+    },
+    {
+      "provider": "codex",
+      "purpose": "review",
+      "target": "gpt-6.2-sol:medium",
+      "n": 5,
+      "with_usage": 5,
+      "median_tokens": 799259,
+      "p75_tokens": 956023,
+      "median_uncached_tokens": 76443,
+      "median_minutes": 3,
+      "mean_findings": 5.5,
+      "verdicts": {
+        "needs-attention": 3,
+        "approve": 1,
+        "none": 1
+      },
+      "risk": {
+        "undeclared": 5
+      }
+    },
+    {
+      "provider": "claude-code",
+      "purpose": "review",
+      "target": "claude-fable-5-1[1m]:max",
+      "n": 3,
+      "with_usage": 3,
+      "median_tokens": 1294230,
+      "p75_tokens": 1554639,
+      "median_uncached_tokens": 155114,
+      "median_minutes": 10,
+      "mean_findings": 2.7,
+      "verdicts": {
+        "needs-attention": 1,
+        "approve": 2
+      },
+      "risk": {
+        "undeclared": 3
+      }
+    },
+    {
+      "provider": "claude-code",
+      "purpose": "design_review",
+      "target": "opus:high",
+      "n": 2,
+      "with_usage": 2,
+      "median_tokens": 313289,
+      "p75_tokens": 440166,
+      "median_uncached_tokens": 33581,
+      "median_minutes": 3,
+      "mean_findings": null,
+      "verdicts": {
+        "none": 2
+      },
+      "risk": {
+        "undeclared": 2
+      }
+    },
+    {
+      "provider": "codex",
+      "purpose": "design_review",
+      "target": "gpt-6-astra:medium",
+      "n": 1,
+      "with_usage": 1,
+      "median_tokens": 152902,
+      "p75_tokens": 152902,
+      "median_uncached_tokens": 32040,
+      "median_minutes": 1,
+      "mean_findings": null,
+      "verdicts": {
+        "none": 1
+      },
+      "risk": {
+        "undeclared": 1
+      }
+    },
+    {
+      "provider": "codex",
+      "purpose": "review",
+      "target": "gpt-6.1-sol:max",
+      "n": 1,
+      "with_usage": 1,
+      "median_tokens": 6858692,
+      "p75_tokens": 6858692,
+      "median_uncached_tokens": 293903,
+      "median_minutes": 10,
+      "mean_findings": 0,
+      "verdicts": {
+        "approve": 1
+      },
+      "risk": {
+        "undeclared": 1
+      }
+    },
+    {
+      "provider": "codex",
+      "purpose": "design_review",
+      "target": "gpt-6.2-sol:max",
+      "n": 1,
+      "with_usage": 1,
+      "median_tokens": 2124890,
+      "p75_tokens": 2124890,
+      "median_uncached_tokens": 186689,
+      "median_minutes": 6,
+      "mean_findings": 16,
+      "verdicts": {
+        "needs-attention": 1
+      },
+      "risk": {
+        "routine": 1
+      }
+    }
+  ]
+}

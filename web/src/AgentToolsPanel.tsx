@@ -46,6 +46,7 @@ import {
   withTarget,
 } from "./agentTools";
 import { ProviderIcon } from "./ProviderIcon";
+import { ReviewRoutingTable } from "./ReviewRoutingTable";
 
 function Row(
   { label, description, children }: {
@@ -445,6 +446,7 @@ export function AgentToolsEditor(
     <Box data-agent-tools-editor sx={{ color: "text.primary" }}>
       <ReviewPreferenceRows review={calls.review} disabled={disabled}
         onChange={(review) => setCalls({ review })} />
+      {catalog.review_routing && <ReviewRoutingTable routing={catalog.review_routing} />}
       <Heading>Agent calls</Heading>
       <Row
         label="Allow calls"

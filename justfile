@@ -629,6 +629,7 @@ provider-check: claude-remote-check plugin-check
     bun x --no-install biome format tools/third-party.ts tools/third-party_test.ts tools/lib/third-party.ts third_party
     bun test ./.agents/skills/release-cowboy-plugin/scripts/converge-machine_test.ts
     bun test ./.agents/skills/model-intel/scripts/score_test.ts
+    bun test ./.agents/skills/model-intel/scripts/field_test.ts
     bun test ./tools/plugin-publication-receipt_test.ts
     bun test ./tools/immutable-publication_test.ts
     python3 -m unittest discover -s tools -p plugin_runtime_conformance_test.py

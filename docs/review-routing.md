@@ -1,8 +1,9 @@
 # Review routing: tiers, cost and project risk
 
-Status: design revision 2 for review (2026-11-21). Revision 1 was reviewed by
-Sol Max (`call-e1837ba3d988af644704918d`, 16 findings); §Revision 1 findings
-lists how each was resolved.
+Status: implemented and active on Hawk (Controller and Web `7a821ea64`,
+2026-11-21); the read-only Settings table and field costs followed. Revision 1
+was reviewed by Sol Max (`call-e1837ba3d988af644704918d`, 16 findings);
+§Revision 1 findings lists how each was resolved.
 
 ## Problem
 
@@ -221,3 +222,22 @@ replaces this estimate.
 | 14 | Pilot over-claimed | Evidence section restated |
 | 15 | Fable default without evidence | Opus is the Claude baseline; Fable explicit-only |
 | 16 | Mixed cost populations | Pilot medians with n and source; quota ≠ tokens |
+
+## Appendix: draft Review risk section for Suger
+
+Suger owns its repository guidance; this is a proposal for its `AGENTS.md`,
+not applied from Cowboy.
+
+```markdown
+## Review risk
+
+- high: tenant isolation and authorization (organization, partner, buyer
+  scoping; JWT scopes), PII in responses and logs, entitlement and billing
+  sync, database writers and migrations, CRM/marketplace pushes that write
+  external systems, Temporal workflow identity and retries.
+- routine: console/React presentation, copy, tests only, docs, generated SDKs
+  already covered by their generator.
+- Speckit aspect fan-out: one fresh routine review per aspect is enough; use
+  high only for the aspects above. E2E execution audits and plan-quality
+  checks are `analysis` calls, not reviews.
+```

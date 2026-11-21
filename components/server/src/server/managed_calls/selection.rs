@@ -364,7 +364,7 @@ mod tests {
         assert_eq!(family("gpt-6-luna"), None);
         let view = routing_view(&gpt, "codex", &preference);
         assert_eq!(view["routine"]["preset"], "sol-max");
-        assert_eq!(view["routine"]["cost"]["n"], 4);
+        assert_eq!(view["routine"]["cost"]["pilot"]["n"], 4);
         assert_eq!(view["high"]["preset"], "astra-max");
     }
 

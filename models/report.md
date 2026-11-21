@@ -10,6 +10,44 @@ verified review pilot) and 164 reference-only observations kept in local state
 forbid redistribution are not reproduced here; statements derived from them
 are marked *(local inputs)* and can be checked only against that digest.
 
+## Update 2026-11-21: Sol Max arm, field costs and routing
+
+**Sol Max arm.** GPT-6.2 Sol Max re-ran the four pilot inputs (same clean
+worktrees, input revisions, base and focus). Matched against the 14
+blind-verified serious defects it found 12 (keeper 4/5, pr8818 5/5, pr8895
+3/4), using 12.9M tokens and 29 minutes in total against Astra Max's 23.5M and
+116. It missed keeper K8 (retirement not gated on recovery feasibility) and
+pr8895 Q2 (a later approval push hides an earlier failed push). The match was
+done by the orchestrating agent, unblinded; its new findings were not
+adjudicated, so the rows are `validity = "unverified"` and are not scored.
+Summary: `models/pilots/2026-11-21-sol-max-arm.json`.
+
+**Field costs (Cowboy's own feedback).** `scripts/field.ts` aggregated the
+Hawk ledger's completed reviews for 14 days to 2026-11-21
+(`models/field/2026-11-21.json`, aggregates only):
+
+| Review target | n | Median tokens | Median uncached | Median minutes |
+| --- | --- | --- | --- | --- |
+| GPT-6 Astra Max | 326 | 1.88M | 150k | 9 |
+| GPT-6.2 Astra Max | 99 | 6.74M | 259k | 20 |
+| GPT-6.2 Sol Max | 6 | 2.41M | 172k | 7 |
+| GPT-6.2 Sol Medium | 5 | 0.80M | 76k | 3 |
+| GPT-6.2 Astra Medium | 10 | 0.27M | 43k | 3 |
+| Claude Fable 5.1 Max | 3 | 1.29M | 155k | 10 |
+
+The signed `astra-max` preset moved from GPT-6 Astra to GPT-6.2 Astra during
+the window (codex 0.169, first GPT-6.2 reviews on 2026-11-18). On the field mix each GPT-6.2 Astra Max review costs
+about 3.6× the GPT-6 one in tokens and twice the time: 2026-11-19 used
+416M review tokens for 60 reviews, against 256M for 91 on 2026-11-17.
+Field rows compare cost only: inputs differ between groups.
+
+**Decision.** `models/routing.json` (docs/review-routing.md) now routes
+routine reviews to GPT-6.2 Sol Max and Claude Opus, keeps Astra Max for
+declared high risk, and Fable only by explicit high-risk choice. It carries
+both pilot and field costs; Claude pilot costs are `unknown`. Next: a blind
+adjudication of routine Sol Max reviews after a week of field data, and a
+paired Opus/Fable review pilot from a non-Claude parent session.
+
 ## What the evidence decides
 
 The catalog determines **no tier for any executable Codex or Claude preset**

@@ -47,6 +47,12 @@ both input sets so a later audit can tell whether its inputs are complete. Read
    as `provenance = "internal"`, benchmark `cowboy-review-pilot`, with
    `validity = "unverified"` until every reference finding has been checked
    against the code; unverified rows are reported but never scored.
+   **Field data.** Refresh Cowboy's own cost feedback with
+   `nix develop -c bun .agents/skills/model-intel/scripts/field.ts --days 14
+   --out models/field/<date>.json` on the Controller host (read-only ledger
+   read, aggregates only), then update the `field` costs in
+   `models/routing.json`. Field rows compare cost on mixed inputs, never
+   quality, and are not scored.
 5. **Score.** `nix develop -c bun .agents/skills/model-intel/scripts/score.ts
    --as-of YYYY-MM-DD`. It refuses to run without the local reference-only
    inputs or with fewer observations than the committed catalog;

@@ -79,12 +79,34 @@ export interface ToolOption {
   choices: { value: string; name: string }[];
 }
 
+/** One reviewer in the routing table: a family, optional exact model and efforts. */
+export interface RoutingRow {
+  family: string;
+  model?: string;
+  efforts?: string[];
+}
+export interface RoutingTier {
+  auto: RoutingRow[];
+  allow?: RoutingRow[];
+}
+export interface RoutingCost {
+  pilot?: { median_tokens: number; n: number; serious_recall?: string } | "unknown";
+  field?: { median_tokens: number; median_minutes: number; n: number };
+}
+/** docs/review-routing.md; read-only. Absent from older Controllers. */
+export interface ReviewRouting {
+  evidence: string;
+  providers: Record<string, { high: RoutingTier; routine: RoutingTier; economy?: RoutingTier }>;
+  costs: Record<string, RoutingCost>;
+}
+
 export interface ToolsCatalog {
   call_targets: {
     agent: string;
     presets: ToolPreset[];
     options?: ToolOption[];
   }[];
+  review_routing?: ReviewRouting;
 }
 
 /** The values a choice sets: its preset's, or its custom ones. */
