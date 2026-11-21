@@ -54,7 +54,7 @@ allowed to redeem is the sessions' existing refresh path. The Controller puts
 again. For a Provider whose CLI rotates credentials (`compare_and_swap`) only a
 collector whose exact signed release declares (`collector/portable-account.json`,
 `token_refresh: "request"`) that it then reports authentication required runs;
-otherwise `portable_usage_refresh_unsupported`. Codex declares it from 3.6.16,
+otherwise `portable_usage_refresh_unsupported` (see the guard below). Codex declares it from 3.6.16,
 so named Codex usage needs that release (or later) installed on the chosen
 Machine. Grok's CLI renews an expiring sign-in on start and after any 401, so
 from Grok 3.2.16 its collector never starts the CLI for such a request: it reads
@@ -85,8 +85,22 @@ and never retried. It runs on the Machine the account's usage placement selects
 vault generation and admission revision, with an absolute dispatch expiry, and
 only when the exact selected release declares resets and a refresh-free reset
 (`collector/portable-account.json` `"reset_token_refresh": "request"`, Codex
-3.6.19). Its `consume_reset` runs with `"token_refresh": false`. Grok and
-DeepSeek named accounts have no resets.
+3.6.19). Its `consume_reset` runs with `"token_refresh": false` from a private
+copy of the replica's sealed credential at the admitted generation (never the
+writable session home), and only for an account with a verified subscription
+identity (`portable_reset_identity_required` otherwise). The starts are reserved
+at admission from the dispatch expiry, so a preceding usage read never blocks a
+manual reset and the Provider spacing holds whenever the Machine ran it. A
+success must name the confirmed grant; a refusal is unsent only with an explicit
+`started: false` and a pre-start code. Grok and DeepSeek named accounts have no
+resets.
+
+Refresh-free usage needs a guarded declaration (`"token_refresh_guard"`):
+`refresh_endpoint_refused` (Codex 3.6.19) or `cli_not_started` (Grok 3.2.18).
+The unguarded claim of Codex 3.6.16-3.6.18 and Grok 3.2.16-3.2.17 no longer
+admits named usage, so named Codex usage stays off until 3.6.19 is installed on
+the chosen Machine, and Grok until 3.2.18. Rotating subscriptions (Codex, Grok)
+read usage from the same private sealed copy.
 
 The Codex app-server refreshes an expired access token on its own
 (`proactive_expiry`), whatever the collector asks: an offline check against the

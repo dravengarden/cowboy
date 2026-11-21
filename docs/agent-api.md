@@ -371,8 +371,10 @@ keep their credential in the account's Service vault. Their usage is read-only:
 the same released signed collector as the Service account runs on one
 connected Machine inside the account's own vault replica (the credential, home
 and checked sidecars a session on that account launches with), never with the
-Machine's Service credential and never on the Controller. Portable accounts
-have no resets (`resets_supported` is false). The command is enqueued under the
+Machine's Service credential and never on the Controller. Of the portable
+accounts only Codex (3.6.19, Machine protocol 51, a verified subscription
+identity) spends banked resets, immediately, on its usage Machine; Grok and
+DeepSeek have none (`resets_supported` is false). The command is enqueued under the
 owner's account lock after availability, the reserved identity and admission
 revision, and the exact vault generation are rechecked. Every participant (the
 collector and each sidecar, such as the DeepSeek gateways) must hold one
