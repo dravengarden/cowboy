@@ -458,12 +458,27 @@ pub(super) fn citations(answer: &str) -> Vec<Citation> {
 }
 
 fn normalized(text: &str) -> String {
-    text.split_whitespace()
+    unescape_markdown(text)
+        .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
         // Answers often re-quote nested quotation marks in another style.
         .replace(['“', '”', '‘', '’', '\'', '「', '」'], "\"")
         .to_lowercase()
+}
+
+/// Drop Markdown backslash escapes before ASCII punctuation: answers quoting
+/// a record inside a table cell write `a\|b` for the record's `a|b`.
+fn unescape_markdown(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' && chars.peek().is_some_and(char::is_ascii_punctuation) {
+            continue;
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// Check each citation against the exact records the child was given: the

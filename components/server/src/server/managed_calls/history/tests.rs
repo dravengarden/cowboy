@@ -301,3 +301,11 @@ async fn a_message_streamed_across_export_pages_is_one_record() {
     .await;
     assert_eq!(report["verified"], 1, "{report}");
 }
+
+#[test]
+fn a_table_escaped_quote_matches_its_record() {
+    let record = normalized("2026-11-08 01:37:42|sess-1794101037389");
+    assert!(record.contains(&normalized(r"2026-11-08 01:37:42\|sess-1794101037389")));
+    // A literal backslash before a letter stays significant.
+    assert!(!normalized(r"C:\path").contains(&normalized("C:path")));
+}
