@@ -62,6 +62,8 @@ pub struct ActivatedHostPlugin {
     /// The signed collector declares it never redeems a refresh token when a
     /// request says so ([`crate::machine_protocol::portable_usage::REFRESH_FREE_DECLARATION`]).
     pub refresh_free_collector: bool,
+    /// The same declaration also covers its banked reset (`consume_reset`).
+    pub refresh_free_reset: bool,
 }
 
 /// Least-privilege projection served to Cowboy Web.
@@ -631,11 +633,19 @@ fn build_activated_host(
         rpc_argv: expand_plugin_argv(&spec.rpc_argv, generation),
         visual: spec.visual.clone(),
         native_capabilities: spec.native_capabilities.clone(),
-        refresh_free_collector: files
-            .get(crate::machine_protocol::portable_usage::REFRESH_FREE_DECLARATION)
-            .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
-            .is_some_and(|value| value["token_refresh"] == "request"),
+        refresh_free_collector: refresh_free(files).usage,
+        refresh_free_reset: refresh_free(files).reset,
     })
+}
+
+fn refresh_free(
+    files: &BTreeMap<String, String>,
+) -> crate::machine_protocol::portable_usage::RefreshFree {
+    crate::machine_protocol::portable_usage::RefreshFree::from_declaration(
+        files
+            .get(crate::machine_protocol::portable_usage::REFRESH_FREE_DECLARATION)
+            .map(String::as_str),
+    )
 }
 
 fn validate_host_files(spec: &PluginHostSpec, files: &BTreeMap<String, String>) -> Result<()> {
@@ -887,6 +897,7 @@ mod tests {
             visual: None,
             native_capabilities: Vec::new(),
             refresh_free_collector: false,
+            refresh_free_reset: false,
         };
         let grok = ActivatedHostPlugin {
             id: "grok".to_owned(),
@@ -903,6 +914,7 @@ mod tests {
             visual: None,
             native_capabilities: Vec::new(),
             refresh_free_collector: false,
+            refresh_free_reset: false,
         };
         assert!(login.public_auth_surface());
         assert!(!grok.public_auth_surface());
@@ -1000,6 +1012,7 @@ mod tests {
             visual: spec.visual,
             native_capabilities: spec.native_capabilities,
             refresh_free_collector: false,
+            refresh_free_reset: false,
         };
 
         let public = serde_json::to_value(host.public_descriptor(true)).expect("public descriptor");

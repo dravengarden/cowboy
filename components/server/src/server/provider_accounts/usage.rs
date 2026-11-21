@@ -520,7 +520,7 @@ pub(in crate::server) async fn read_one(
     value["available"] = json!(true);
     value["signed_in"] = json!(true);
     // Whether a reset of exactly this resolved binding can be spent now.
-    value["resets_supported"] = json!(reset::supported_for(state, &target));
+    value["resets_supported"] = json!(reset::supported_for(state, owner, id, &target));
     let cache = state.usage.native.entry(owner, id.as_str());
     value["refreshing"] = json!(cache.collection.try_lock().is_err());
     // A read neither takes the database admission write lock nor binds a cache

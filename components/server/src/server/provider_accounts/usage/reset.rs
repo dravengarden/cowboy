@@ -4,7 +4,10 @@
 //! talks to the Provider. A reset is a synchronous, typed-confirmed request
 //! like the Service card's: it shares the Provider pacing, and an unknown
 //! outcome is reported as unknown and never retried. Named accounts have no
-//! scheduled resets, and portable accounts no resets at all.
+//! scheduled resets. A named portable account (Codex) resets the same way on
+//! the Machine its usage runs on, only with an exact release whose collector
+//! declares a refresh-free reset (`portable`).
+mod portable;
 use super::*;
 use crate::machine_control::NativeResetFailure;
 use crate::usage::{ResetError, ResetResult};
@@ -26,9 +29,30 @@ fn declares_reset(binding: &crate::plugin_host::PluginUsageSpec) -> bool {
 /// The login, Machine and exact installed release one reset runs on,
 /// resolved before the reservation and retained through dispatch.
 struct Route {
-    target: Target,
+    target: RouteTarget,
     binding: Box<crate::plugin_host::PluginUsageSpec>,
     installed: Box<crate::machine_protocol::PluginInventory>,
+}
+
+/// Where the reset runs: a native login, or a vault account's replica on the
+/// Machine its usage placement selects.
+enum RouteTarget {
+    Native(Box<Target>),
+    Portable {
+        target: Box<super::portable::Target>,
+        machine: String,
+    },
+}
+
+impl Route {
+    /// Provider starts this reset charges: the native identity read and the
+    /// spend, or the portable collector's single run.
+    fn starts(&self) -> usize {
+        match self.target {
+            RouteTarget::Native(_) => RESET_COLLECTOR_STARTS,
+            RouteTarget::Portable { .. } => 1,
+        }
+    }
 }
 
 /// The reset binding of exactly this installed release, if it declares
@@ -70,7 +94,7 @@ fn native_route(state: &AppState, target: Target) -> Result<Route, &'static str>
     let binding = exact_reset_binding(state, &installed, &target.provider)
         .ok_or("account_reset_unsupported")?;
     Ok(Route {
-        target,
+        target: RouteTarget::Native(Box::new(target)),
         binding: Box::new(binding),
         installed: Box::new(installed),
     })
@@ -88,15 +112,20 @@ async fn route(
         .map_err(public_code)?
     {
         Resolved::Native(target) => native_route(state, *target),
-        Resolved::Portable(_) => Err("account_reset_unsupported"),
+        Resolved::Portable(target) => portable::route(state, owner, id, *target),
     }
 }
 
 /// Whether the binding the read model resolved can spend a reset now.
-pub(super) fn supported_for(state: &AppState, resolved: &Resolved) -> bool {
+pub(super) fn supported_for(
+    state: &AppState,
+    owner: &str,
+    id: &ProviderAccountId,
+    resolved: &Resolved,
+) -> bool {
     match resolved {
         Resolved::Native(target) => native_route(state, (**target).clone()).is_ok(),
-        Resolved::Portable(_) => false,
+        Resolved::Portable(target) => portable::route(state, owner, id, (**target).clone()).is_ok(),
     }
 }
 
@@ -174,7 +203,7 @@ async fn consume(
     let permit = state
         .usage
         .limiter
-        .start_action_counted(&route.binding.account, &key, now, RESET_COLLECTOR_STARTS)
+        .start_action_counted(&route.binding.account, &key, now, route.starts())
         .map_err(|_| ResetError::new(false, None, error_message("usage_reset_paced")))?;
     let spacing = state.usage.limiter.spacing_ms();
     let request = crate::machine_protocol::NativeResetRequest {
@@ -192,7 +221,22 @@ async fn consume(
             .saturating_add(DISPATCH_EXPIRY_MS),
         spend_not_before_ms: now.saturating_add(spacing),
     };
-    let (result, outcome) = settle(dispatch(state, owner, &route, request, timing).await);
+    let reply = match &route.target {
+        RouteTarget::Native(target) => dispatch(state, owner, target, request, timing).await,
+        RouteTarget::Portable { target, machine } => {
+            portable::dispatch(
+                state,
+                owner,
+                id,
+                (target, machine),
+                &route,
+                request,
+                admitted_at_ms,
+            )
+            .await
+        }
+    };
+    let (result, outcome) = settle(reply);
     permit.finish(outcome, now_ms());
     drop(_serial);
     // Publish through the existing budgeted path; a reset just charged this
@@ -300,12 +344,12 @@ fn closed_reset_code(code: Option<&str>) -> &'static str {
 async fn dispatch(
     state: &AppState,
     owner: &str,
-    route: &Route,
+    target: &Target,
     request: crate::machine_protocol::NativeResetRequest,
     release: crate::machine_protocol::NativeResetDispatch,
 ) -> Result<Value, NativeResetFailure> {
     let store = state.store.as_ref().ok_or(unsent("unavailable"))?;
-    let completion = &route.target.completion;
+    let completion = &target.completion;
     let (connection, version) = state
         .machine_control
         .connection_protocol(&completion.machine_id)
@@ -315,7 +359,7 @@ async fn dispatch(
     }
     let mut sent = None;
     let admitted = store
-        .with_native_login_binding(owner, &route.target.operation, completion, || {
+        .with_native_login_binding(owner, &target.operation, completion, || {
             if !state
                 .supervisor
                 .vendor_request_allowed(&completion.profile.provider_id, &completion.machine_id)
