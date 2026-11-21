@@ -43,10 +43,15 @@ keys) replace every card.
   them. Managed-call `quota` reports named accounts only.
 - Service (`default`) sign-in for every Provider of a card family:
   `default_login_refusal` and the direct commit route refuse it with
-  `named_account_required`, `set_default` to `default` is refused, and
-  Settings → Providers shows no Service credential row for them (named cards
-  take their place, as for Antigravity; `accounts.list()` reports them as
-  `retired_default_providers`).
+  `named_account_required`, and Settings → Providers shows no Service
+  credential row for them (named cards take their place, as for Antigravity;
+  `accounts.list()` reports them as `retired_default_providers`). After
+  startup admission the root vault itself refuses every write destination of
+  such a Provider: a commit, a shared-scope sign-in of another member, a
+  shared scope adoption, and a Machine refresh promotion (answered as stale,
+  so the Machine is resynchronised to the wipe). `set_default` to `default`
+  remains accepted: it clears the named selection (for example to disable the
+  last named default), and creation then needs an explicit named account.
 
 ## What is kept
 
@@ -83,6 +88,11 @@ keys) replace every card.
   usable as context sources. A prompt to one is refused at the dispatch account
   gate and stays queued with the visible reason "This session ran on a retired
   legacy default account; continue it in a new agent on a named account".
+  The queue is parked for good: it is never retried, woken, or counted as a
+  waiter for capacity reclamation. A direct WebSocket prompt and current-turn
+  or next-checkpoint steering are refused with the same reason, and a managed
+  call that continues such a child is refused (`named_account_required`) or,
+  if it was admitted earlier and its prompt is still queued, settled failed.
   Native fork is refused with the same guidance. Rationale: a native session
   can only resume inside the login home it was created in, and that credential
   no longer exists anywhere (it was wiped or moved into an account vault at a
@@ -94,9 +104,10 @@ keys) replace every card.
   a card is unaffected; a `default` session of a Provider without any root
   entry still fails as before with "not authenticated at Cowboy Service scope".
 - **Creation** of a `default` session (new session, managed child, context
-  next-agent, Continue) for a retired Provider is refused with
-  `named_account_required`. Folder and registry defaults that name a named
-  account are unaffected.
+  next-agent, Continue, the store-less local path) for a retired Provider is
+  refused with `named_account_required`, by Provider family and whether or not
+  a root entry exists; managed readiness reports the same code. Folder and
+  registry defaults that name a named account are unaffected.
 - **Database rows.** Migration `0086_retire_legacy_cards.sql` (SQLite `0060`)
   removes every `card:<card>` browser share member, bumping its share's
   revision, and clears `provider_legacy_browsers`. Family bindings recorded
@@ -126,8 +137,15 @@ this release
 The component activator then restores the previous Controller profile, so
 shipping this release before Pika is adopted cannot break Pika: the old
 Controller keeps serving it and its adoption path. After a successful start no
-card credential can reappear (Service sign-in and commit are refused), so the
-gate cannot fail a later reboot.
+card credential can reappear (the root vault refuses every write to a card
+Provider), so the gate cannot fail a later reboot.
+
+An adoption interrupted after its root wipe but before its move journal was
+marked completed passes the credential check. The gate finishes such a
+journal (the root entries are wiped and the account holds the copy), so a
+Machine's later rotation of the moved generation is still promoted into the
+account; it refuses a journal whose root entry still holds a credential, and
+leaves unrouted one whose account no longer holds a copy (a revoked account).
 
 ## Release order and operations
 

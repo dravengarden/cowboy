@@ -161,6 +161,17 @@ mod tests {
     }
 
     #[test]
+    fn no_session_is_created_on_a_card_default_even_without_a_root_entry() {
+        for provider in ["codex", "claude-code", "grok", "codex-deepseek"] {
+            assert_eq!(
+                super::super::creatable_default(provider),
+                Err("named_account_required")
+            );
+        }
+        assert_eq!(super::super::creatable_default("portable-fixture"), Ok(()));
+    }
+
+    #[test]
     fn startup_refuses_a_live_card_credential_until_it_is_signed_out() {
         use base64::Engine as _;
         let root = tempfile::tempdir().unwrap();

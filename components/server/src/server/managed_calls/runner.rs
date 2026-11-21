@@ -473,6 +473,13 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
             advance(state, store, record, fail("identity_mismatch", None)).await;
             return Step::Again;
         }
+        // A retired card's child can never run its prompt.
+        if existing.as_ref().is_some_and(|existing| {
+            crate::server::provider_accounts::retirement::session_retired(state, &existing.meta)
+        }) {
+            advance(state, store, record, fail("named_account_required", None)).await;
+            return Step::Again;
+        }
         if let Err(code) = quiesce(state, child).await {
             advance(state, store, record, fail(code, None)).await;
             return Step::Again;
@@ -1359,10 +1366,18 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
 /// a cancelled call (resuming the queue during the stop grace would run it)
 /// or a review that would fail the reviewer check now (for example one
 /// admitted before reviews required a signed reviewer preset and queued
-/// across a restart).
+/// across a restart), or a continued child of a retired legacy card.
 async fn withdraw_unstarted(state: &AppState, store: &Store, record: &Record) -> Option<Step> {
     let cancelled = record.cancel_requested_at_ms.is_some();
-    if record.state != State::Running || !(cancelled || review_admissible(state, record).is_err()) {
+    let retired = state
+        .hub
+        .session_info(&record.child_session_id)
+        .is_some_and(|child| {
+            crate::server::provider_accounts::retirement::session_retired(state, &child.meta)
+        });
+    if record.state != State::Running
+        || !(cancelled || retired || review_admissible(state, record).is_err())
+    {
         return None;
     }
     // Only positive evidence counts: absent echoes are no proof, since the
@@ -1374,7 +1389,12 @@ async fn withdraw_unstarted(state: &AppState, store: &Store, record: &Record) ->
         return None;
     }
     if !cancelled {
-        advance(state, store, record, fail("review_model_not_allowed", None)).await;
+        let code = if retired {
+            "named_account_required"
+        } else {
+            "review_model_not_allowed"
+        };
+        advance(state, store, record, fail(code, None)).await;
         return Some(Step::Again);
     }
     // Running may only stop through Stopping. No native turn exists, so the

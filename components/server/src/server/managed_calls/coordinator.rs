@@ -892,6 +892,24 @@ async fn first_ready(
     Err(refusal.unwrap_or("provider_unavailable"))
 }
 
+/// The agent of a continued conversation (`None` for a fresh one), or the
+/// refusal of a child that cannot continue.
+fn continued_agent(state: &AppState, conversation: &Conversation) -> Result<Option<String>, Value> {
+    let Conversation::Continue { child_session_id } = conversation else {
+        return Ok(None);
+    };
+    match state.hub.session_info(child_session_id) {
+        // It ran on a retired card: continue in a new agent instead.
+        Some(child)
+            if super::super::provider_accounts::retirement::session_retired(state, &child.meta) =>
+        {
+            Err(error("named_account_required", "not_submitted"))
+        }
+        Some(child) if !child.meta.closing => Ok(Some(child.meta.provider)),
+        _ => Err(error("conversation_unavailable", "not_submitted")),
+    }
+}
+
 #[allow(clippy::too_many_arguments)] // The admission inputs plus the anchor's origin.
 async fn start(
     state: &Arc<AppState>,
@@ -930,14 +948,9 @@ async fn start(
     }
     let own_family = agent_tools::own_family(&policy, &request);
     // A continued conversation keeps its own agent.
-    let continued = match &request.conversation {
-        Conversation::Continue { child_session_id } => {
-            match state.hub.session_info(child_session_id) {
-                Some(child) if !child.meta.closing => Some(child.meta.provider),
-                _ => return error("conversation_unavailable", "not_submitted"),
-            }
-        }
-        Conversation::Fresh {} => None,
+    let continued = match continued_agent(state, &request.conversation) {
+        Ok(continued) => continued,
+        Err(refusal) => return refusal,
     };
     let requested = match &continued {
         Some(agent) if requested == agent_tools::AUTO || requested == agent => agent.as_str(),

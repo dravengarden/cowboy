@@ -69,7 +69,7 @@ pub(super) async fn resolve_for_create(
             .await
             .map_err(|_| "unavailable")?,
         None if explicit.is_none_or(crate::provider_account::ProviderAccountId::is_default) => {
-            return Ok(Default::default());
+            return creatable_default(provider).map(|()| Default::default());
         }
         None => return Err("unavailable"),
     };
@@ -80,10 +80,9 @@ pub(super) async fn resolve_for_create(
     // Any number of sessions may run one account concurrently (design
     // "Revision 6"); the daemon's per-account bound is the only cap.
     named_only_admitted(state, provider, &id).await?;
-    if id.is_default() && retirement::retired(state, provider) {
-        return Err("named_account_required");
-    }
-    if !id.is_default() {
+    if id.is_default() {
+        creatable_default(provider)?;
+    } else {
         allow_named_creation(
             named_session_provider(state, provider),
             state
@@ -92,6 +91,15 @@ pub(super) async fn resolve_for_create(
         )?;
     }
     Ok(id)
+}
+
+/// No session is created on a retired card's `default` account, whether or
+/// not its root entry exists (only historical sessions keep that exception).
+pub(super) fn creatable_default(provider: &str) -> Result<(), &'static str> {
+    if crate::store::provider_accounts::legacy_cards::retired_provider(provider) {
+        return Err("named_account_required");
+    }
+    Ok(())
 }
 
 /// A named-only Provider (Antigravity) has no default account, and admits
@@ -218,13 +226,9 @@ pub(super) async fn update_value(
     input: &Mutation,
 ) -> Result<Value, &'static str> {
     let store = state.store.as_ref().ok_or("unavailable")?;
-    // A retired legacy card can never become a default again.
-    if let crate::store::provider_accounts::Change::SetDefault { provider_id, id } = &input.change
-        && id.is_default()
-        && crate::store::provider_accounts::legacy_cards::retired_provider(provider_id)
-    {
-        return Err("named_account_required");
-    }
+    // `set_default` to `default` of a retired card's Provider clears the
+    // named selection (so its last named default can be disabled); creation
+    // then requires an explicit named account (`creatable_default`).
     // Metadata writes share one authority and receipt; no native login, usage
     // probe, credential access or worker activation happens here. Share
     // changes use the same writer, with families from the static table. Membership
