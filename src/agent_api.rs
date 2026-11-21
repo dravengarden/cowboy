@@ -289,8 +289,7 @@ pub const ACTION_SDK: &str = r#"// cowboy_execute({action,arguments,operation});
 // Images: discover calls.capabilities({capability:"image.generate"}); send only task + input paths.
 // calls.result returns verified artifact paths on the execution machine, never image bytes.
 // review.start: {focus?:string,design?:boolean,provider?:"auto"|"codex"|"claude-code",files?:string[],root?:string,preset?:string,title?:string,reason?:string,task?:string,base?:string,fresh?:boolean,notify?:boolean,risk?:"routine"|"high"}
-// risk:"high" (with reason) for the risks named in review_selection gets the strongest reviewer; routine gets the
-//   routine tier and refuses a stronger preset (preset_outside_tier). Omit preset unless the user named one.
+// risk:"high" (needs reason) gets the strongest reviewer; routine refuses a stronger preset. Omit preset.
 // notify:true queues one Cowboy notice into this session when the call ends (idle: new turn;
 // busy: next turn). End your turn instead of polling calls.wait; then read calls.result.
 // task (stable id: letters, digits, -_. up to 128, e.g. "f01-awaiting-merge"; prose goes in focus)
@@ -518,7 +517,7 @@ export type CallView = CallTiming & {
 export type CallCapabilities = {
   enabled:boolean;default:string;review_input_reuse:boolean;
   capabilities:{id:string;enabled:boolean;providers:string[]}[];
-  providers:{id:string;available:boolean;reason:string|null;presets:unknown[];review_candidates:string[];review_routing:unknown;preset:string|null;options:Record<string,string>|null;quota_account:string|null}[];
+  providers:{id:string;available:boolean;reason:string|null;presets:unknown[];review_candidates:string[];preset:string|null;options:Record<string,string>|null;quota_account:string|null}[];
   review_selection:string;review_preferences:{claude:string[];gpt:string[]};
   quota:{observed_now_ms?:number;accounts?:{account:string;status:string;observed_at_ms:number|null;stale:boolean;limits:unknown;needs_read:boolean}[];unavailable_accounts?:string[];status?:string};
   purposes:string[];limits:Record<string,number>;
