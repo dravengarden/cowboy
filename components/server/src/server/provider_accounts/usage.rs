@@ -686,7 +686,12 @@ async fn refresh_owned(
             let mut entry = cache.data.lock();
             entry.bind(&scope);
             let due = entry.due(now_ms())
-                && match state.usage.limiter.start(&target.provider, &key, now_ms()) {
+                && match state.usage.limiter.start_bounded(
+                    &target.provider,
+                    &key,
+                    now_ms(),
+                    now_ms().saturating_add(crate::usage::limiter::REMOTE_POLL_START_BOUND_MS),
+                ) {
                     Ok(value) => {
                         permit = Some(value);
                         true

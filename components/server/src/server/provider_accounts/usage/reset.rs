@@ -176,17 +176,17 @@ async fn admit(
         .map_err(|_| "usage_reset_paced")?;
     let key = crate::usage::limiter::Limiter::account_key(owner, id.as_str());
     let now = now_ms();
-    let expires_at_ms = expiry(&route, now, state.usage.limiter.spacing_ms());
+    let spacing = state.usage.limiter.spacing_ms();
+    let expires_at_ms = expiry(&route, now, spacing);
+    // Every start happens no later than the expiry: record the last one there
+    // and each earlier one a spacing before it.
+    let starts = route.starts();
+    let first = expires_at_ms
+        .saturating_sub(spacing.saturating_mul(i64::try_from(starts - 1).unwrap_or(0)));
     let permit = state
         .usage
         .limiter
-        .start_action_bounded(
-            &route.binding.account,
-            &key,
-            now,
-            route.starts(),
-            expires_at_ms,
-        )
+        .start_action_bounded(&route.binding.account, &key, now, starts, first)
         .map_err(|_| "usage_reset_paced")?;
     Ok(Admitted {
         route,
@@ -195,6 +195,13 @@ async fn admit(
         permit,
         _serial: serial,
     })
+}
+
+/// How long the pre-dispatch audit insert may take: a few seconds, and never
+/// into the last second of the dispatch window.
+fn audit_bound(expires_at_ms: i64, now_ms: i64) -> std::time::Duration {
+    let left = expires_at_ms.saturating_sub(now_ms).saturating_sub(1_000);
+    std::time::Duration::from_millis(u64::try_from(left.clamp(0, 5_000)).unwrap_or(0))
 }
 
 /// The absolute expiry after which the Machine starts nothing of the reset:
@@ -238,6 +245,8 @@ async fn consume(
         // bound within which the Machine must start the spend.
         expires_at_ms,
         spend_not_before_ms: admitted_at_ms.saturating_add(spacing),
+        // Sent only to Machines that understand it (see `dispatch`).
+        min_spacing_ms: Some(spacing),
     };
     let reply = match &route.target {
         RouteTarget::Native(target) => dispatch(state, owner, target, request, timing).await,
@@ -280,10 +289,17 @@ fn settle(
     let reply = match reply {
         Ok(reply) => reply,
         Err(failure) => {
+            // An uncertain dispatch never shows a message saying nothing was
+            // sent; its code still classifies the backoff below.
+            let display = if failure.call_may_have_reached_provider {
+                "reset_outcome_unknown"
+            } else {
+                failure.code
+            };
             let error = ResetError::new(
                 failure.call_may_have_reached_provider,
                 None,
-                error_message(failure.code),
+                error_message(display),
             );
             // An authentication failure backs off whether or not it was sent;
             // otherwise nothing reached the Provider: keep the charge only.
@@ -332,9 +348,14 @@ fn settle(
         };
     };
     let code = closed_reset_code(error["code"].as_str());
-    // Unknown unless the Machine says it was never sent.
-    let reached = error["call_may_have_reached_provider"] != Value::Bool(false);
-    let display = if reached && code != "reset_authentication_required" {
+    // Unsent only for a well-formed error naming a closed refusal code with
+    // an explicit `call_may_have_reached_provider: false`; any other shape or
+    // code may follow a spent reset.
+    let reached = !(error.is_object()
+        && error["call_may_have_reached_provider"] == Value::Bool(false)
+        && error["code"].as_str() == Some(code)
+        && code != "reset_outcome_unknown");
+    let display = if reached {
         "reset_outcome_unknown"
     } else {
         code
@@ -372,7 +393,7 @@ async fn dispatch(
     owner: &str,
     target: &Target,
     request: crate::machine_protocol::NativeResetRequest,
-    release: crate::machine_protocol::NativeResetDispatch,
+    mut release: crate::machine_protocol::NativeResetDispatch,
 ) -> Result<Value, NativeResetFailure> {
     let store = state.store.as_ref().ok_or(unsent("unavailable"))?;
     let completion = &target.completion;
@@ -382,6 +403,10 @@ async fn dispatch(
         .ok_or(unsent("machine_unavailable"))?;
     if version < crate::machine_protocol::NATIVE_RESET_PROTOCOL_VERSION {
         return Err(unsent("machine_usage_update_required"));
+    }
+    // An older Machine rejects the unknown field; it keeps the paced slot.
+    if version < crate::machine_protocol::NATIVE_RESET_SPACING_PROTOCOL_VERSION {
+        release.min_spacing_ms = None;
     }
     let mut sent = None;
     let admitted = store
@@ -504,14 +529,28 @@ pub(in crate::server) async fn http_reset(
         let expected = request.expected_credit_id;
         let row = (lane.as_str(), key.as_str());
         let started = ("started", "preflight");
-        log(
-            &store,
-            row,
-            started,
-            "Manual reset attempt started",
-            Some(&expected),
+        // The audit row precedes the spend but never holds the Provider
+        // permit past the dispatch window: a stuck insert settles unsent.
+        let bound = audit_bound(admitted.expires_at_ms, now_ms());
+        let audited = tokio::time::timeout(
+            bound,
+            log(
+                &store,
+                row,
+                started,
+                "Manual reset attempt started",
+                Some(&expected),
+            ),
         )
         .await;
+        if audited.is_err() {
+            admitted
+                .permit
+                .finish(crate::usage::limiter::Outcome::Unused, now_ms());
+            let body = json!({"error":{"code":"reset_failed",
+                "message":error_message("unavailable"),"credit_id":null}});
+            return Ok((StatusCode::CONFLICT, Json(body)).into_response());
+        }
         let result = consume(&state, &owner, &id, admitted, &key, &expected).await;
         Ok::<_, &'static str>(match result {
             Ok(result) => {
@@ -596,13 +635,13 @@ mod tests {
                 Outcome::Success,
                 error_message("reset_outcome_unknown"),
             ),
-            // A 401 after the call still backs off.
+            // A 401 after the call still backs off, but its outcome is unknown.
             (
                 json!({"error":{"code":"reset_authentication_required",
                     "call_may_have_reached_provider":true}}),
                 true,
                 Outcome::Authentication,
-                error_message("reset_authentication_required"),
+                error_message("reset_outcome_unknown"),
             ),
         ] {
             let (result, charged) = settle(Ok(reply.clone()), "grant:1");
@@ -642,6 +681,47 @@ mod tests {
             "grant:1",
         );
         assert_eq!(outcome, Outcome::Authentication);
+    }
+
+    /// An error reply is unsent only with a well-formed closed refusal and an
+    /// explicit false; an uncertain dispatch never says nothing was sent.
+    #[test]
+    fn only_a_closed_explicit_refusal_is_unsent_and_uncertainty_says_so() {
+        use crate::usage::limiter::Outcome;
+        for reply in [
+            json!({"error":{"code":"collector text","call_may_have_reached_provider":false}}),
+            json!({"error":"reset_refused"}),
+            json!({"error":{"code":"reset_outcome_unknown","call_may_have_reached_provider":false}}),
+        ] {
+            let (result, _) = settle(Ok(reply.clone()), "grant:1");
+            assert!(
+                result.unwrap_err().call_may_have_reached_provider,
+                "{reply}"
+            );
+        }
+        let (result, outcome) = settle(
+            Ok(json!({"error":{"code":"reset_authentication_required",
+                "call_may_have_reached_provider":true}})),
+            "grant:1",
+        );
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            error_message("reset_outcome_unknown")
+        );
+        assert_eq!(outcome, Outcome::Authentication);
+        let uncertain = NativeResetFailure {
+            call_may_have_reached_provider: true,
+            code: "native_usage_authentication_required",
+        };
+        let (result, outcome) = settle(Err(uncertain), "grant:1");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            error_message("reset_outcome_unknown")
+        );
+        assert_eq!(outcome, Outcome::Authentication);
+        assert_eq!(audit_bound(100_000, 0), std::time::Duration::from_secs(5));
+        assert_eq!(audit_bound(1_500, 0), std::time::Duration::from_millis(500));
+        assert_eq!(audit_bound(0, 10), std::time::Duration::ZERO);
     }
 
     #[test]

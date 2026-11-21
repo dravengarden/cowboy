@@ -18,6 +18,9 @@ use crate::config::{Config, Handle, Scope, schema};
 pub const QUICK_RETRIES: u32 = 2;
 const QUICK_RETRY_MS: i64 = 60_000;
 
+/// The latest a Machine may start a remote poll: its Plugin host reply bound.
+pub const REMOTE_POLL_START_BOUND_MS: i64 = 45_000;
+
 #[derive(Clone)]
 pub struct Limiter {
     inner: Arc<parking_lot::Mutex<State>>,
@@ -222,6 +225,19 @@ impl Limiter {
     /// Charges failed and cancelled attempts too. Persist before dispatch.
     pub fn start(&self, provider: &str, account: &str, now: i64) -> Result<Permit, Budget> {
         self.start_with(provider, account, now, true, 1, now)
+    }
+
+    /// [`Self::start`] for a poll a Machine runs at an unknown time no later
+    /// than `latest_start_ms` (its reply bound): the start is recorded there,
+    /// so the Provider spacing holds against the remote start.
+    pub fn start_bounded(
+        &self,
+        provider: &str,
+        account: &str,
+        now: i64,
+        latest_start_ms: i64,
+    ) -> Result<Permit, Budget> {
+        self.start_with(provider, account, now, true, 1, latest_start_ms.max(now))
     }
 
     /// A confirmed usage action (a reset) is a user write, not a poll. It
@@ -519,6 +535,20 @@ mod tests {
 
     /// A remote action recorded from its latest possible start keeps the
     /// Provider spacing against it whenever the Machine actually ran it.
+    #[test]
+    fn a_remote_poll_paces_from_its_reply_bound() {
+        let limiter = Limiter::new(None);
+        let spacing = limiter.spacing_ms();
+        let permit = limiter
+            .start_bounded("openai", "a", 1_000, 1_000 + REMOTE_POLL_START_BOUND_MS)
+            .unwrap();
+        permit.finish(Outcome::Success, 2_000);
+        assert_eq!(
+            limiter.view("openai", "other", 2_000).next_allowed_ms,
+            1_000 + REMOTE_POLL_START_BOUND_MS + spacing
+        );
+    }
+
     #[test]
     fn a_bounded_action_paces_from_its_latest_possible_start() {
         let limiter = Limiter::new(None);

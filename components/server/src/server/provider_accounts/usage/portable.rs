@@ -321,11 +321,12 @@ pub(super) async fn refresh(
         if !entry.due(now_ms()) {
             return Ok(());
         }
-        let Ok(permit) = state
-            .usage
-            .limiter
-            .start(&target.binding.account, &key, now_ms())
-        else {
+        let Ok(permit) = state.usage.limiter.start_bounded(
+            &target.binding.account,
+            &key,
+            now_ms(),
+            now_ms().saturating_add(crate::usage::limiter::REMOTE_POLL_START_BOUND_MS),
+        ) else {
             return Ok(());
         };
         entry.last_attempt_at_ms = now_ms();
