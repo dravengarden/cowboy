@@ -497,27 +497,48 @@ reads history for the caller rather than giving a second opinion, the caller's
 own agent family is admitted (for example a Codex parent asking
 `codex`/`luna-6-max`).
 
-`provider:"antigravity"` (for example preset `gemini-hydrogen-high`) is a
-context-only target: it is admitted only for an explicit, fresh, text-output
-context ask, never for reviews, plain analysis, images, Auto, Tools targets or
-approvals. It runs on the owner's admitted named default Antigravity account
-(`authentication_required` otherwise), guarded by that account's controls
-(rate-limit back-off, suspension) and the parent's call budget; a managed
-prompt never counts as an owner send, so it cannot clear an ended rate limit.
-It needs a signed Antigravity package declaring the read-only managed profile.
-`calls.capabilities` lists it under `context_ask` (with the Codex and Claude
-agents a context ask may use) with no review candidates, and marks it
-`machine_upgrade_required` when the execution Machine cannot receive history.
-Its child always runs split, on a Machine allowed by Provider and project
-placement policy whose keeper supplies the execution descriptor the adapter
-requires; a parent executing on that Machine itself gets `runtime_policy`.
-Placement policy is checked when the call is admitted; a later policy change
-applies to new calls. Enabling calls for a session (including "Allow for this
-session" on another agent's request) is the owner's consent to these asks;
-there is no separate Antigravity approval. Rollback floor: a Controller older
-than this release cannot decode a call record whose provider is
-`antigravity`, so roll back only after such calls are terminal and their
-parents' listings are no longer needed, or not at all.
+`provider:"antigravity"` (for example preset `gemini-hydrogen-high`) is an
+explicit-only target: it is admitted only when named, for one fresh read-only
+round: a text-output context ask, or an analysis, review or design review of
+the workspace (owner extension, 2026-11-21). It is never used for images,
+continuations, Auto, Tools targets or approvals, and never reviews for an
+Antigravity parent (`same_agent`). It runs on the owner's admitted named
+default Antigravity account (`authentication_required` otherwise), guarded by
+that account's controls (rate-limit back-off, suspension) and the parent's call
+budget; a managed prompt never counts as an owner send, so it cannot clear an
+ended rate limit. It needs a signed Antigravity package declaring the
+read-only managed profile. `calls.capabilities` lists it under `context_ask`
+(with the Codex and Claude agents a context ask may use) and `read_only`, with
+`selection: "explicit"`; its entry carries `context_ask_reason:
+"machine_upgrade_required"` when the execution Machine cannot receive history
+(workspace rounds still run), and an Antigravity parent sees it for analysis
+only. Its review candidates are its Claude
+Opus preset only (`claude-opus-high`, the opus family; Gemini presets have no
+reviewer family, so `review_model_not_allowed`). `agy` has no native schema
+constraint: a generation declaring `--cowboy-output-contract=v1` advertises
+`json_schema` output (an older one is text-only and a structured round is
+`unsupported_capability`). Admission accepts structured output for Antigravity
+only for a review or design review carrying Cowboy's own review schema, and
+requires it there, since a text review would be an unchecked verdict (reviews
+pin their generation); any other schema, and a structured analysis,
+is `unsupported_capability` before a child starts. For such a round the proxy
+also refuses any keyword its exact check does not cover, appends the schema
+as an output contract, holds the reply back as thought, validates it, asks for a
+corrected reply at most twice inside the same turn, and sends only a validated
+reply as the final message; otherwise the round ends with
+`structured_output_invalid`. Its child always runs split, on a Machine allowed
+by Provider and project placement policy whose keeper supplies the execution
+descriptor the adapter requires; a parent executing on that Machine itself
+gets `runtime_policy`. Placement policy is checked when the call is admitted; a
+later policy change applies to new calls. Enabling calls for a session
+(including "Allow for this session" on another agent's request) is the owner's
+consent to these calls; there is no separate Antigravity approval. Rollback
+floor: a Controller older than the context-ask release (components 3.129.0)
+cannot decode a call record whose provider is `antigravity`, so roll back
+below it only after such calls are terminal and their parents' listings are
+no longer needed, or not at all. Rolling back from the review release (3.130.0)
+to 3.129.0 keeps those records readable; drain active Antigravity reviews
+first, since 3.129.0 refuses them and their structured output.
 
 Design, following the measured weaknesses of one-shot summaries:
 
@@ -711,12 +732,15 @@ replacement id and retry blindly.
 
 Requests may additionally carry
 `output: {"format":"json_schema","schema":{...}}`. This is a native turn
-constraint, included in the immutable request digest; it is not appended to the
-prompt. Omission means text output. The schema is bounded to 64 KiB and nesting
+constraint, included in the immutable request digest; a native adapter does
+not append it to the prompt (Antigravity's output contract, below, is the one
+adapter-enforced exception). Omission means text output. The schema is bounded to 64 KiB and nesting
 depth 32, with remote references and schema resource rebasing refused. These
 transport checks do not prove native dialect support. Admission must require
 the exact Provider adapter to enforce the schema; otherwise return
-`unsupported_capability` before launching a child. Never silently downgrade to
+`unsupported_capability` before launching a child. An adapter without a
+native constraint enforces it only by a signed output contract: Antigravity's
+generation must declare `--cowboy-output-contract=v1` (see below). Never silently downgrade to
 text and parse it afterwards as if native structured output were enforced.
 
 ```json

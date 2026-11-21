@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   AcpProxy,
   accountPlan,
+  injectedEcho,
   REFUSAL_PREFIX,
   stripTier,
   TURN_ERROR_CODE,
@@ -1300,8 +1301,8 @@ test("a managed turn needs its round, is text-only and never reaches agy with it
     request(10, "session/prompt", { sessionId: "s", prompt: [{ type: "text", text: "hi" }] }),
   );
   assert.match(client.at(-1).error.message, /managed-call round/);
-  await proxy.fromClient(managedTurn(11, "hi", { ...ROUND, outputSchema: { type: "object" } }));
-  assert.match(client.at(-1).error.message, /text only/);
+  await proxy.fromClient(managedTurn(11, "hi", { ...ROUND, outputSchema: ["not", "a", "schema"] }));
+  assert.match(client.at(-1).error.message, /JSON Schema object/);
   await proxy.fromClient(managedTurn(12, "/compact"));
   assert.match(client.at(-1).error.message, /slash command/);
   assert.equal(agent.length, before);
@@ -1608,4 +1609,647 @@ test("an ordinary session is not bound to one session id", async () => {
     },
   });
   assert.equal(client.at(-1).params.sessionId, "t");
+});
+
+const REVIEW_SCHEMA = {
+  type: "object",
+  properties: {
+    review_complete: { type: "boolean" },
+    verdict: { type: "string", enum: ["approve", "needs-attention", "incomplete"] },
+    findings: { type: "array", items: { type: "object" } },
+  },
+  required: ["review_complete", "verdict", "findings"],
+  additionalProperties: false,
+};
+const structuredTurn = (id) =>
+  managedTurn(id, "Review the change", { ...ROUND, outputSchema: REVIEW_SCHEMA });
+// Native message ids tie an answer to its attempt (a correction needs them).
+const agentText = (text, messageId = "m1") =>
+  updateIn("agent_message_chunk", { messageId, content: { type: "text", text } });
+// A corrected reply begins with its correction prompt's nonce line.
+const nonced = (correction, json) =>
+  `cowboy-nonce: ${/cowboy-nonce: (\S+)/.exec(correction.params.prompt[0].text)[1]}\n${json}`;
+const idlessText = (text) => updateIn("agent_message_chunk", { content: { type: "text", text } });
+
+test("a structured managed turn states the contract and ends with the checked JSON", async () => {
+  const { proxy, agent, client, turns } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(20));
+  const sent = agent.at(-1);
+  assert.equal(sent.params._meta, undefined);
+  assert.equal(sent.params.prompt.length, 2);
+  assert.ok(sent.params.prompt[1].text.startsWith("<cowboy_output_contract>"));
+  assert.ok(injectedEcho({ sessionUpdate: "user_message_chunk", content: sent.params.prompt[1] }));
+  await proxy.fromAgent(agentText('{"verdict":"approve"}'));
+  assert.equal(client.at(-1).params.update.sessionUpdate, "agent_thought_chunk", "held back");
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 20, result: { stopReason: "end_turn" } });
+  const correction = agent.at(-1);
+  assert.match(String(correction.id), /^cowboy-correction-/);
+  assert.match(correction.params.prompt[0].text, /review_complete is required/);
+  assert.equal(client.filter((message) => message.id === 20).length, 0, "the turn stays open");
+  // The attempt's facade calls are fenced, then reopened for the correction.
+  assert.deepEqual(
+    turns.slice(-2).map(([kind]) => kind),
+    ["end", "begin"],
+    "its facade calls are fenced and reopened",
+  );
+  await proxy.fromAgent(
+    agentText(
+      nonced(
+        correction,
+        '```json\n{"review_complete":true,"verdict":"approve","findings":[]}\n```',
+      ),
+      "m2",
+    ),
+  );
+  await proxy.fromAgent({ jsonrpc: "2.0", id: correction.id, result: { stopReason: "end_turn" } });
+  assert.equal(
+    client.at(-2).params.update.content.text,
+    '{"review_complete":true,"verdict":"approve","findings":[]}',
+  );
+  assert.equal(client.at(-2).params.update.sessionUpdate, "agent_message_chunk");
+  assert.equal(client.at(-1).id, 20, "the worker's prompt is answered");
+  assert.equal(client.at(-1).result.stopReason, "end_turn");
+});
+
+test("an uncorrectable structured reply is never sent as the result", async () => {
+  const { proxy, agent, client } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(21));
+  let id = 21;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    // Valid JSON, wrong shape: an unchecked approval must not pass.
+    await proxy.fromAgent(agentText('{"review_complete":true,"verdict":"approve"}'));
+    await proxy.fromAgent({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } });
+    id = agent.at(-1).id;
+  }
+  const corrections = agent.filter((message) =>
+    String(message.id).startsWith("cowboy-correction-"),
+  );
+  assert.equal(corrections.length, 2);
+  assert.equal(client.at(-1).id, 21);
+  assert.ok(
+    client.every((message) => message.params?.update?.sessionUpdate !== "agent_message_chunk"),
+    "no final message: the Controller records the output as invalid",
+  );
+});
+
+test("a refused structured turn is not corrected", async () => {
+  const refused = { class: "rate_limited", successes: 0, barrier: true, refusals: [] };
+  const { proxy, agent, client } = harness({ managed: true, backend: refused });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(22));
+  await proxy.fromAgent(agentText("partial"));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 22, result: { stopReason: "end_turn" } });
+  assert.equal(
+    agent.filter((message) => String(message.id).startsWith("cowboy-correction-")).length,
+    0,
+  );
+  assert.equal(client.at(-1).id, 22);
+  assert.match(client.at(-1).error.message, /rate_limited/);
+});
+
+test("a tool call hidden from the worker still discards the reply before it", async () => {
+  const { proxy, agent, client } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(23));
+  await proxy.fromAgent(agentText('{"review_complete":true,"verdict":"approve","findings":[]}'));
+  // UpdatePlan is never shown, but it still ends the answer before it.
+  const shown = client.length;
+  await proxy.fromAgent(
+    updateIn("tool_call", {
+      toolCallId: "plan-1",
+      name: "mcp_cowboy_UpdatePlan",
+      status: "in_progress",
+      rawInput: { plan: [] },
+    }),
+  );
+  assert.equal(client.length, shown, "the plan call is hidden");
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 23, result: { stopReason: "end_turn" } });
+  assert.match(String(agent.at(-1).id), /^cowboy-correction-/, "the stale verdict is not final");
+});
+
+test("status lines and earlier messages are not part of the structured answer", async () => {
+  const { proxy, client } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(24));
+  const chunk = (text, messageId) =>
+    updateIn("agent_message_chunk", { messageId, content: { type: "text", text } });
+  await proxy.fromAgent(chunk("Let me look at the diff first.", "m1"));
+  await proxy.fromAgent(chunk("⚠️ API error (attempt 1): overloaded\n", "m2"));
+  await proxy.fromAgent(chunk('{"review_complete":true,', "m2"));
+  await proxy.fromAgent(chunk('"verdict":"approve","findings":[]}', "m2"));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 24, result: { stopReason: "end_turn" } });
+  assert.equal(
+    client.at(-2).params.update.content.text,
+    '{"review_complete":true,"verdict":"approve","findings":[]}',
+  );
+  assert.equal(client.at(-1).id, 24);
+});
+
+test("a stopped structured turn is not corrected and ends as cancelled", async () => {
+  const { proxy, agent, client } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(25));
+  await proxy.fromAgent(agentText("not json yet"));
+  await proxy.fromClient({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId: "s" } });
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 25, result: { stopReason: "end_turn" } });
+  assert.equal(
+    agent.filter((message) => String(message.id).startsWith("cowboy-correction-")).length,
+    0,
+  );
+  assert.equal(client.at(-1).id, 25);
+  assert.equal(client.at(-1).result.stopReason, "cancelled");
+});
+
+test("a corrected turn reports every attempt's usage and backend evidence", async () => {
+  const { proxy, agent, client } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(26));
+  await proxy.fromAgent(agentText('{"verdict":"approve"}'));
+  const usage = (input) => ({ inputTokens: input, outputTokens: 5, totalTokens: input + 5 });
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 26,
+    result: { stopReason: "end_turn", usage: usage(100) },
+  });
+  const retry = agent.at(-1).id;
+  await proxy.fromAgent(
+    agentText(
+      nonced(agent.at(-1), '{"review_complete":true,"verdict":"approve","findings":[]}'),
+      "m2",
+    ),
+  );
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: retry,
+    result: { stopReason: "end_turn", usage: usage(20) },
+  });
+  const { result } = client.at(-1);
+  assert.deepEqual(result.usage, { inputTokens: 120, outputTokens: 10, totalTokens: 130 });
+  assert.equal(result._meta.cowboy.antigravity_backend.attempts, 2);
+  assert.equal(result._meta.cowboy.antigravity_backend.successes, 2);
+});
+
+test("a schema the proxy cannot enforce is refused before agy runs", async () => {
+  const { proxy, agent, client } = harness({ managed: true });
+  await openedSession(proxy);
+  const before = agent.length;
+  for (const [id, outputSchema] of [
+    [27, { type: "string", pattern: "^a+$" }],
+    [28, { $ref: "#" }],
+    [29, { type: "toString" }],
+  ]) {
+    await proxy.fromClient(managedTurn(id, "Review", { ...ROUND, outputSchema }));
+    assert.equal(client.at(-1).id, id);
+    assert.match(client.at(-1).error.message, /not supported by Antigravity/);
+  }
+  assert.equal(agent.length, before);
+});
+
+const VERDICT = '{"review_complete":true,"verdict":"approve","findings":[]}';
+
+test("updates after the attempt's result never change its answer", async () => {
+  const { proxy, client } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(30));
+  await proxy.fromAgent(agentText(VERDICT));
+  const ending = proxy.fromAgent({ jsonrpc: "2.0", id: 30, result: { stopReason: "end_turn" } });
+  await proxy.fromAgent(
+    updateIn("tool_call", { toolCallId: "late", name: "mcp_cowboy_ReadFile", status: "pending" }),
+  );
+  await proxy.fromAgent(agentText('{"verdict":"late"}'));
+  await ending;
+  const final = client.filter(
+    (message) => message.params?.update?.sessionUpdate === "agent_message_chunk",
+  );
+  assert.deepEqual(
+    final.map((message) => message.params.update.content.text),
+    [VERDICT],
+  );
+  assert.equal(client.at(-1).id, 30);
+});
+
+test("message ids and content kinds decide the candidate answer", async () => {
+  const chunk = (content, messageId) => updateIn("agent_message_chunk", { messageId, content });
+  const text = (value) => ({ type: "text", text: value });
+  // An id-less continuation keeps the identified message it continues.
+  {
+    const { proxy, client } = harness({ managed: true });
+    await openedSession(proxy);
+    await proxy.fromClient(structuredTurn(31));
+    await proxy.fromAgent(chunk(text('{"review_complete":true,'), "m1"));
+    await proxy.fromAgent(chunk(text('"verdict":"approve","findings":[]}')));
+    await proxy.fromAgent({ jsonrpc: "2.0", id: 31, result: { stopReason: "end_turn" } });
+    assert.equal(client.at(-2).params.update.content.text, VERDICT);
+  }
+  // A new message with only non-text content replaces the earlier verdict.
+  {
+    const { proxy, agent } = harness({ managed: true });
+    await openedSession(proxy);
+    await proxy.fromClient(structuredTurn(32));
+    await proxy.fromAgent(chunk(text(VERDICT), "m1"));
+    await proxy.fromAgent(chunk({ type: "image", data: "", mimeType: "image/png" }, "m2"));
+    await proxy.fromAgent({ jsonrpc: "2.0", id: 32, result: { stopReason: "end_turn" } });
+    assert.match(agent.at(-1).params.prompt[0].text, /not text/);
+  }
+  // An overflowing reply is never accepted from its prefix.
+  {
+    const { proxy, agent } = harness({ managed: true });
+    await openedSession(proxy);
+    await proxy.fromClient(structuredTurn(33));
+    await proxy.fromAgent(agentText(`${VERDICT}${" ".repeat(1024 * 1024)}`));
+    await proxy.fromAgent(agentText("trailing words"));
+    await proxy.fromAgent({ jsonrpc: "2.0", id: 33, result: { stopReason: "end_turn" } });
+    assert.match(agent.at(-1).params.prompt[0].text, /too long/);
+  }
+});
+
+test("usage is summed inclusively and optional counters only when every attempt has them", async () => {
+  const { proxy, agent, client } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(34));
+  await proxy.fromAgent(agentText("not json"));
+  // Disjoint convention: inputTokens excludes the cache read.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 34,
+    result: {
+      stopReason: "end_turn",
+      usage: { totalTokens: 110, outputTokens: 10, inputTokens: 60, cachedReadTokens: 40 },
+    },
+  });
+  const retry = agent.at(-1).id;
+  await proxy.fromAgent(agentText(nonced(agent.at(-1), VERDICT), "m2"));
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: retry,
+    result: {
+      stopReason: "end_turn",
+      usage: { totalTokens: 25, outputTokens: 5, inputTokens: 20 },
+    },
+  });
+  assert.deepEqual(client.at(-1).result.usage, {
+    totalTokens: 135,
+    outputTokens: 15,
+    inputTokens: 120,
+  });
+});
+
+test("an attempt without totals leaves the turn without usage", async () => {
+  const { proxy, agent, client } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(35));
+  await proxy.fromAgent(agentText("not json"));
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 35,
+    result: { stopReason: "end_turn", usage: { inputTokens: 100 } },
+  });
+  const retry = agent.at(-1).id;
+  await proxy.fromAgent(agentText(nonced(agent.at(-1), VERDICT), "m2"));
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: retry,
+    result: {
+      stopReason: "end_turn",
+      usage: { totalTokens: 25, outputTokens: 5, inputTokens: 20 },
+    },
+  });
+  assert.equal(client.at(-1).result.usage, undefined);
+});
+
+test("a notice with its own id mid-answer starts the next candidate", async () => {
+  // Conservative: never a stale or altered verdict, at worst a correction.
+  const { proxy, agent } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(36));
+  const chunk = (text, messageId) =>
+    updateIn("agent_message_chunk", { messageId, content: { type: "text", text } });
+  await proxy.fromAgent(chunk(VERDICT, "m1"));
+  await proxy.fromAgent(chunk("⚠ I could not verify the base.\n", "n1"));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 36, result: { stopReason: "end_turn" } });
+  assert.match(String(agent.at(-1).id), /^cowboy-correction-/, "the earlier draft is not final");
+});
+test("late native text after a structured turn stays thought", async () => {
+  const { proxy, client } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(37));
+  await proxy.fromAgent(agentText(VERDICT));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 37, result: { stopReason: "end_turn" } });
+  await proxy.fromAgent(agentText('{"verdict":"unchecked"}'));
+  assert.equal(client.at(-1).params.update.sessionUpdate, "agent_thought_chunk");
+});
+
+test("a late chunk of a rejected attempt never replaces the corrected answer", async () => {
+  const { proxy, agent, client } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(40));
+  const chunk = (text, messageId) =>
+    updateIn("agent_message_chunk", { messageId, content: { type: "text", text } });
+  await proxy.fromAgent(chunk('{"verdict":"approve"}', "old"));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 40, result: { stopReason: "end_turn" } });
+  const retry = agent.at(-1).id;
+  await proxy.fromAgent(chunk(VERDICT, "new"));
+  await proxy.fromAgent(chunk(" trailing", "old"));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: retry, result: { stopReason: "end_turn" } });
+  assert.equal(client.at(-2).params.update.content.text, VERDICT);
+});
+
+test("a notice-shaped chunk inside an answer is part of it", async () => {
+  const { proxy, client } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(41));
+  const chunk = (text) =>
+    updateIn("agent_message_chunk", { messageId: "m1", content: { type: "text", text } });
+  await proxy.fromAgent(chunk('{"review_complete":true,"findings":[{"title":"'));
+  await proxy.fromAgent(chunk('⚠ File moved"}],\n'));
+  await proxy.fromAgent(chunk('"verdict":"approve"}'));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 41, result: { stopReason: "end_turn" } });
+  assert.equal(
+    JSON.parse(client.at(-2).params.update.content.text).findings[0].title,
+    "⚠ File moved",
+  );
+});
+
+test("a late tool update is still shown and partial usage is not forwarded", async () => {
+  const { proxy, client } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(42));
+  await proxy.fromAgent(agentText(VERDICT));
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 42,
+    result: { stopReason: "end_turn", usage: { inputTokens: 100 } },
+  });
+  assert.equal(client.at(-1).result.usage, undefined, "a partial report is not forwarded");
+  const shown = client.length;
+  await proxy.fromAgent(updateIn("tool_call_update", { toolCallId: "late", status: "completed" }));
+  assert.equal(client.length, shown + 1, "the transcript keeps the tool's outcome");
+  // Its own id and outcome, marked as after the answer for the Controller.
+  const late = client.at(-1).params.update;
+  assert.equal(late.toolCallId, "late");
+  assert.equal(late._meta["cowboy.dev/afterAnswer"], true);
+});
+
+test("null optional counters are absent; a tool call keeps the answer's message id", async () => {
+  const { proxy, client } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(43));
+  const chunk = (text) =>
+    updateIn("agent_message_chunk", { messageId: "m1", content: { type: "text", text } });
+  await proxy.fromAgent(chunk("Let me read the file."));
+  await proxy.fromAgent(
+    updateIn("tool_call", { toolCallId: "t1", name: "mcp_cowboy_ReadFile", status: "pending" }),
+  );
+  await proxy.fromAgent(chunk(VERDICT));
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 43,
+    result: {
+      stopReason: "end_turn",
+      usage: { totalTokens: 30, outputTokens: 10, inputTokens: 20, thoughtTokens: null },
+    },
+  });
+  assert.equal(client.at(-2).params.update.content.text, VERDICT);
+  assert.deepEqual(client.at(-1).result.usage, {
+    totalTokens: 30,
+    outputTokens: 10,
+    inputTokens: 20,
+  });
+});
+
+test("an id-less status line after answer text is part of the answer", async () => {
+  const { proxy, agent } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(44));
+  await proxy.fromAgent(agentText(VERDICT));
+  await proxy.fromAgent(agentText("⚠️ Model produced invalid output\n"));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 44, result: { stopReason: "end_turn" } });
+  assert.match(String(agent.at(-1).id), /^cowboy-correction-/);
+});
+
+test("an id-less notice-shaped chunk inside an open JSON string is answer text", async () => {
+  const { proxy, client } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(45));
+  await proxy.fromAgent(agentText('{"review_complete":true,"findings":[{"title":"'));
+  await proxy.fromAgent(agentText('⚠ File moved"},{"title":"x"}],\n'));
+  await proxy.fromAgent(agentText('"verdict":"approve"}'));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 45, result: { stopReason: "end_turn" } });
+  const verdict = JSON.parse(client.at(-2).params.update.content.text);
+  assert.equal(verdict.findings.length, 2);
+});
+
+test("malformed text blocks and oversized message ids never become the answer", async () => {
+  {
+    const { proxy, agent } = harness({ managed: true });
+    await openedSession(proxy);
+    await proxy.fromClient(structuredTurn(46));
+    await proxy.fromAgent(
+      updateIn("agent_message_chunk", {
+        messageId: "m1",
+        content: { type: "text", text: [VERDICT] },
+      }),
+    );
+    await proxy.fromAgent({ jsonrpc: "2.0", id: 46, result: { stopReason: "end_turn" } });
+    assert.match(agent.at(-1).params.prompt[0].text, /not text/);
+  }
+  {
+    const { proxy, agent, client } = harness({ managed: true });
+    await openedSession(proxy);
+    await proxy.fromClient(structuredTurn(47));
+    await proxy.fromAgent(
+      updateIn("agent_message_chunk", {
+        messageId: "x".repeat(10000),
+        content: { type: "text", text: VERDICT },
+      }),
+    );
+    await proxy.fromAgent({ jsonrpc: "2.0", id: 47, result: { stopReason: "end_turn" } });
+    assert.ok(!String(agent.at(-1).id).startsWith("cowboy-correction-"), "the turn just ends");
+    assert.equal(client.at(-1).id, 47);
+    assert.ok(
+      client.every((message) => message.params?.update?.sessionUpdate !== "agent_message_chunk"),
+    );
+  }
+});
+
+test("messages first seen while an attempt closes, and their id-less continuations, are retired", async () => {
+  const { proxy, agent, client } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(48));
+  const chunk = (text, messageId) =>
+    updateIn("agent_message_chunk", { messageId, content: { type: "text", text } });
+  await proxy.fromAgent(chunk('{"verdict":"approve"}', "a1"));
+  const ending = proxy.fromAgent({ jsonrpc: "2.0", id: 48, result: { stopReason: "end_turn" } });
+  await proxy.fromAgent(chunk("late draft", "a2"));
+  await ending;
+  const retry = agent.at(-1).id;
+  await proxy.fromAgent(chunk(nonced(agent.at(-1), VERDICT), "b1"));
+  // A late chunk of a2, then an id-less continuation of it.
+  await proxy.fromAgent(chunk(" stale", "a2"));
+  await proxy.fromAgent(idlessText(" more stale"));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: retry, result: { stopReason: "end_turn" } });
+  // The late a2 chunk is ignored; the id-less one after b1's answer has no
+  // provable owner, so the correction fails rather than guess.
+  assert.ok(
+    client.every((message) => message.params?.update?.sessionUpdate !== "agent_message_chunk"),
+  );
+});
+
+test("only the proxy marks an update as after the answer", async () => {
+  const { proxy, client } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(49));
+  await proxy.fromAgent(
+    updateIn("tool_call", {
+      toolCallId: "t",
+      name: "mcp_cowboy_ReadFile",
+      status: "pending",
+      _meta: { "cowboy.dev/afterAnswer": true, kept: 1 },
+    }),
+  );
+  const shown = client.at(-1).params.update;
+  assert.equal(shown._meta["cowboy.dev/afterAnswer"], undefined);
+});
+
+test("native text before a structured round's collector exists is thought", async () => {
+  const { proxy, client } = harness({ managed: true });
+  await openedSession(proxy);
+  const admitting = proxy.fromClient(structuredTurn(50));
+  await proxy.fromAgent(agentText('{"review_complete":true,"verdict":"approve"}'));
+  await admitting;
+  const early = client.filter(
+    (message) => message.params?.update?.sessionUpdate === "agent_message_chunk",
+  );
+  assert.deepEqual(early, [], "never an unchecked answer");
+});
+
+test("an id-less continuation of a message retired while closing stays retired", async () => {
+  const { proxy, agent, client } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(51));
+  await proxy.fromAgent(agentText("not json"));
+  const ending = proxy.fromAgent({ jsonrpc: "2.0", id: 51, result: { stopReason: "end_turn" } });
+  await proxy.fromAgent(
+    updateIn("agent_message_chunk", { messageId: "z", content: { type: "text", text: "{" } }),
+  );
+  await ending;
+  const retry = agent.at(-1).id;
+  await proxy.fromAgent(agentText(VERDICT));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: retry, result: { stopReason: "end_turn" } });
+  assert.ok(
+    client.every((message) => message.params?.update?.sessionUpdate !== "agent_message_chunk"),
+    "the retired message's continuation is not the correction's answer",
+  );
+});
+
+test("a tool's terminal outcome ends the draft before it", async () => {
+  const { proxy, agent } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(52));
+  await proxy.fromAgent(
+    updateIn("tool_call", { toolCallId: "r1", name: "mcp_cowboy_ReadFile", status: "pending" }),
+  );
+  await proxy.fromAgent(agentText(VERDICT));
+  await proxy.fromAgent(updateIn("tool_call_update", { toolCallId: "r1", status: "failed" }));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 52, result: { stopReason: "end_turn" } });
+  assert.match(String(agent.at(-1).id), /^cowboy-correction-/, "the draft is not final");
+});
+
+test("id-less text while an attempt closes stops any correction", async () => {
+  const { proxy, agent, client } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(53));
+  await proxy.fromAgent(agentText("not json"));
+  const ending = proxy.fromAgent({ jsonrpc: "2.0", id: 53, result: { stopReason: "end_turn" } });
+  await proxy.fromAgent(idlessText(VERDICT));
+  await ending;
+  assert.equal(
+    agent.filter((message) => String(message.id).startsWith("cowboy-correction-")).length,
+    0,
+  );
+  assert.equal(client.at(-1).id, 53);
+  assert.ok(
+    client.every((message) => message.params?.update?.sessionUpdate !== "agent_message_chunk"),
+  );
+});
+
+test("a delayed reply without the correction's nonce cannot answer it", async () => {
+  const { proxy, agent, client } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(54));
+  await proxy.fromAgent(idlessText('{"verdict":"approve"}'));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 54, result: { stopReason: "end_turn" } });
+  const retry = agent.at(-1);
+  assert.match(String(retry.id), /^cowboy-correction-/);
+  // A delayed approval of the failed attempt, under a fresh id: no nonce.
+  await proxy.fromAgent(agentText(VERDICT, "late"));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: retry.id, result: { stopReason: "end_turn" } });
+  assert.match(agent.at(-1).params.prompt[0].text, /nonce line/);
+  assert.ok(
+    client.every((message) => message.params?.update?.sessionUpdate !== "agent_message_chunk"),
+  );
+});
+
+test("an id-less chunk cannot complete a streamed correction", async () => {
+  const { proxy, agent, client } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(55));
+  await proxy.fromAgent(agentText('{"verdict":"approve"}'));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 55, result: { stopReason: "end_turn" } });
+  const retry = agent.at(-1);
+  await proxy.fromAgent(agentText(nonced(retry, "{"), "m2"));
+  // The rest of an approval, delayed and without an id.
+  await proxy.fromAgent(idlessText(VERDICT.slice(1)));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: retry.id, result: { stopReason: "end_turn" } });
+  assert.ok(
+    client.every((message) => message.params?.update?.sessionUpdate !== "agent_message_chunk"),
+  );
+});
+
+test("an id-less correction is accepted in one chunk", async () => {
+  const { proxy, agent, client } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(56));
+  await proxy.fromAgent(idlessText("not json"));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 56, result: { stopReason: "end_turn" } });
+  const retry = agent.at(-1);
+  await proxy.fromAgent(idlessText(nonced(retry, VERDICT)));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: retry.id, result: { stopReason: "end_turn" } });
+  assert.equal(client.at(-2).params.update.content.text, VERDICT);
+});
+
+test("a correction's ambiguous chunk invalidates it rather than keeping an earlier draft", async () => {
+  const { proxy, agent, client } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(57));
+  await proxy.fromAgent(agentText("not json", "A"));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 57, result: { stopReason: "end_turn" } });
+  const retry = agent.at(-1);
+  await proxy.fromAgent(agentText(nonced(retry, VERDICT), "B"));
+  await proxy.fromAgent(agentText(" late", "A"));
+  // The retry's final word, id-less: its owner cannot be proven.
+  await proxy.fromAgent(idlessText(nonced(retry, '{"verdict":"needs-attention"}')));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: retry.id, result: { stopReason: "end_turn" } });
+  assert.ok(
+    client.every((message) => message.params?.update?.sessionUpdate !== "agent_message_chunk"),
+    "B's approval is not kept",
+  );
+});
+
+test("an empty delayed chunk cannot adopt a correction's id-less nonce line", async () => {
+  const { proxy, agent, client } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(structuredTurn(58));
+  await proxy.fromAgent(agentText("not json", "A"));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 58, result: { stopReason: "end_turn" } });
+  const retry = agent.at(-1);
+  await proxy.fromAgent(agentText("", "B"));
+  await proxy.fromAgent(idlessText(nonced(retry, "")));
+  await proxy.fromAgent(agentText(VERDICT, "B"));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: retry.id, result: { stopReason: "end_turn" } });
+  assert.ok(
+    client.every((message) => message.params?.update?.sessionUpdate !== "agent_message_chunk"),
+  );
 });

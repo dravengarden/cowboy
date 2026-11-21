@@ -9,7 +9,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::super::AppState;
-use super::coordinator::{child_runtime, execution_action, runtime_readiness};
+use super::coordinator::{child_runtime_pinned, execution_action, runtime_readiness};
 use crate::core::Status;
 use crate::execution_environment::{ExecutionBinding, ManagedChildV1};
 use crate::machine_protocol::execution;
@@ -302,13 +302,14 @@ async fn claim(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
             child.meta.provider_generation_digest.clone(),
         ),
         None => {
-            let (runtime, readiness) = child_runtime(
+            let (runtime, readiness) = child_runtime_pinned(
                 state,
                 parent.meta.owner_user_id.as_deref(),
                 &record.placement.machine_id,
                 Some(parent.meta.machine_id.as_str()),
                 &record.provider,
                 record.purpose.profile(),
+                record.provider_generation_digest.as_deref(),
             )
             .await;
             match readiness.generation {
@@ -360,12 +361,7 @@ async fn claim(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
             let review = super::super::agent_tools::effective(state, &parent.meta)
                 .calls
                 .review;
-            let order = if record.provider == "codex" {
-                review.gpt
-            } else {
-                review.claude
-            };
-            order
+            super::selection::reviewer_families(&record.provider, &review)
                 .iter()
                 .any(|preferred| Some(preferred.as_str()) == family)
                 .then_some(())
@@ -843,10 +839,11 @@ fn resolve_preset(
 /// order is admission's concern, so a running review is not refused on
 /// recovery after a person narrows the list for future calls.
 fn reviewer_family_allowed(provider: &str, model: Option<&str>) -> bool {
-    let families: &[&str] = if provider == "codex" {
-        &["astra", "sol"]
-    } else {
-        &["opus", "fable"]
+    let families: &[&str] = match provider {
+        "codex" => &["astra", "sol"],
+        // Antigravity reviews with Claude Opus only.
+        "antigravity" => &["opus"],
+        _ => &["opus", "fable"],
     };
     model
         .and_then(super::selection::family)
@@ -1212,11 +1209,14 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
         return Step::Again;
     };
     if let Some(stop_reason) = turn.stop_reason.as_deref() {
-        let request = store
+        // A transient read failure is retried: without the input a schema
+        // round's unchecked text could be recorded as completed.
+        let Ok(request) = store
             .managed_call_input(&record.placement.parent_session_id, &record.call_id)
             .await
-            .ok()
-            .flatten();
+        else {
+            return Step::Wait(Duration::from_secs(1));
+        };
         let wants_schema = request
             .as_ref()
             .is_some_and(|request| output_schema(request).is_some());
@@ -1238,7 +1238,10 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
                     )
             });
         let mut result = result_value(&turn.final_text, stop_reason, parsed.as_ref());
-        let truncated_review = scoped_review && result["truncated"] == true;
+        // A structured review whose verdict was dropped for size is never
+        // completed, whether or not it is base-scoped.
+        let truncated_review = (scoped_review || (wants_schema && record.purpose.is_review()))
+            && result["truncated"] == true;
         if let Some(usage) = turn.usage {
             result["usage"] = json!(usage);
         }

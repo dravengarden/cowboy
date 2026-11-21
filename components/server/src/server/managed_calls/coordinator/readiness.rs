@@ -4,6 +4,11 @@ use std::collections::HashSet;
 
 use super::super::super::AppState;
 
+/// The signed managed-profile argument by which a context-only adapter
+/// (Antigravity) declares that it enforces a round's output schema itself.
+pub(in crate::server::managed_calls) const OUTPUT_CONTRACT_FLAG: &str =
+    "--cowboy-output-contract=v1";
+
 pub(in crate::server::managed_calls) struct ProviderReadiness {
     pub available: bool,
     pub reason: Option<&'static str>,
@@ -44,6 +49,30 @@ pub(in crate::server::managed_calls) async fn child_runtime(
     provider: &str,
     profile: cowboy_provider_sdk::ManagedRuntimeProfile,
 ) -> (String, ProviderReadiness) {
+    child_runtime_pinned(
+        state,
+        owner,
+        execution_machine,
+        parent_runtime,
+        provider,
+        profile,
+        None,
+    )
+    .await
+}
+
+/// `child_runtime`, preferring a runtime whose generation is `pinned` (the
+/// digest admission recorded), so a claim finds the admitted generation
+/// while it is still ready anywhere.
+pub(in crate::server::managed_calls) async fn child_runtime_pinned(
+    state: &AppState,
+    owner: Option<&str>,
+    execution_machine: &str,
+    parent_runtime: Option<&str>,
+    provider: &str,
+    profile: cowboy_provider_sdk::ManagedRuntimeProfile,
+    pinned: Option<&str>,
+) -> (String, ProviderReadiness) {
     if profile == cowboy_provider_sdk::ManagedRuntimeProfile::ImageV1
         && state
             .machine_control
@@ -66,7 +95,19 @@ pub(in crate::server::managed_calls) async fn child_runtime(
     // descriptor, which only a split child supplies: never run it locally,
     // and never let a missing local login hide a remote one.
     let split_only = super::super::super::agent_tools::context_only(provider);
-    if !split_only
+    let on_pin = |readiness: &ProviderReadiness| {
+        pinned.is_none_or(|digest| {
+            readiness
+                .generation
+                .as_ref()
+                .is_some_and(|generation| generation.digest == digest)
+        })
+    };
+    // A local runtime on another generation than the pinned one is only a
+    // fallback: a permitted remote may still run the pinned generation.
+    let local_fallback = !split_only && local.available && !on_pin(&local);
+    if !local_fallback
+        && !split_only
         && (local.available
             || !matches!(
                 local.reason,
@@ -90,6 +131,10 @@ pub(in crate::server::managed_calls) async fn child_runtime(
     let mut seen = HashSet::new();
     candidates.retain(|machine| machine != execution_machine && seen.insert(machine.clone()));
     let mut remote_reason = None;
+    // The pinned generation first; else, as a context-only adapter's output
+    // contract varies by generation, a runtime that enforces it over the
+    // first one that merely runs.
+    let mut fallback = None;
     for runtime in candidates {
         if !state.supervisor.runtime_allowed(provider, &runtime)
             || !state
@@ -101,10 +146,25 @@ pub(in crate::server::managed_calls) async fn child_runtime(
         }
         let readiness =
             runtime_readiness(state, owner, execution_machine, &runtime, provider, profile).await;
-        if readiness.available {
+        let preferred = if pinned.is_some() {
+            on_pin(&readiness)
+        } else {
+            !split_only || readiness.structured_output
+        };
+        if readiness.available && preferred {
             return (runtime, readiness);
         }
+        if readiness.available {
+            fallback.get_or_insert((runtime, readiness));
+            continue;
+        }
         remote_reason.get_or_insert(readiness.reason.unwrap_or("provider_unavailable"));
+    }
+    if local_fallback {
+        return (execution_machine.to_owned(), local);
+    }
+    if let Some(found) = fallback {
+        return found;
     }
     let readiness = match remote_reason {
         Some(reason) => ProviderReadiness {
@@ -263,16 +323,18 @@ pub(in crate::server::managed_calls) async fn provider_readiness(
             );
         }
     };
-    let supports = state
+    let package = state
         .provider_catalog
-        .package(provider, &generation.version, &generation.digest)
-        .is_some_and(|package| {
-            package
-                .manifest
-                .runtime
-                .launch_arguments(Some(profile))
-                .is_ok()
-        });
+        .package(provider, &generation.version, &generation.digest);
+    let arguments = package.as_ref().and_then(|package| {
+        package
+            .manifest
+            .runtime
+            .launch_arguments(Some(profile))
+            .ok()
+    });
+    let supports = arguments.is_some();
+    let output_contract = enforces_output(provider, arguments);
     if !supports {
         return ProviderReadiness {
             available: false,
@@ -289,6 +351,50 @@ pub(in crate::server::managed_calls) async fn provider_readiness(
         account,
         // The managed read-only profile contract includes the native turn
         // constraint; an adapter declaring it must apply the schema.
-        structured_output: profile == cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1,
+        structured_output: profile == cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1
+            && output_contract,
+    }
+}
+
+/// Whether `provider`'s managed launch `arguments` enforce a round's output
+/// schema. A context-only adapter has no native schema constraint: it
+/// enforces one only when its signed managed profile declares the contract.
+pub(in crate::server::managed_calls) fn enforces_output(
+    provider: &str,
+    arguments: Option<&[cowboy_provider_sdk::RuntimeValue]>,
+) -> bool {
+    !super::super::super::agent_tools::context_only(provider)
+        || arguments.is_some_and(|arguments| {
+            arguments.iter().any(|argument| {
+                matches!(argument, cowboy_provider_sdk::RuntimeValue::Literal(flag)
+                    if flag == OUTPUT_CONTRACT_FLAG)
+            })
+        })
+}
+
+#[cfg(test)]
+mod output_tests {
+    use cowboy_provider_sdk::RuntimeValue;
+
+    use super::*;
+
+    #[test]
+    fn only_a_declared_output_contract_makes_antigravity_structured() {
+        let literal = |text: &str| RuntimeValue::Literal(text.to_owned());
+        let old = [
+            literal("acp"),
+            literal("--cowboy-managed-profile=read-only-v1"),
+        ];
+        let new = [
+            literal("acp"),
+            literal("--cowboy-managed-profile=read-only-v1"),
+            literal(OUTPUT_CONTRACT_FLAG),
+        ];
+        assert!(!enforces_output("antigravity", Some(&old)));
+        assert!(!enforces_output("antigravity", None));
+        assert!(enforces_output("antigravity", Some(&new)));
+        // Codex and Claude constrain the turn natively.
+        assert!(enforces_output("codex", Some(&old)));
+        assert!(enforces_output("claude-code", None));
     }
 }

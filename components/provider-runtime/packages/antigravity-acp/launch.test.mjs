@@ -357,9 +357,9 @@ test("a managed child gets only the read tools, no extensions, and its hook poli
   const structured = await call("session/prompt", {
     sessionId: "fake-session",
     prompt: [{ type: "text", text: "read hello.txt" }],
-    _meta: { "cowboy.dev/managedCall": { ...ROUND, outputSchema: { type: "object" } } },
+    _meta: { "cowboy.dev/managedCall": { ...ROUND, outputSchema: [] } },
   });
-  assert.match(structured.error.message, /text only.*outputSchema/);
+  assert.match(structured.error.message, /JSON Schema object/);
   const prompt = await call("session/prompt", {
     sessionId: "fake-session",
     prompt: [{ type: "text", text: "read hello.txt" }],

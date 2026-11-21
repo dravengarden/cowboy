@@ -3,6 +3,7 @@
 // R2-16). It admits only the runtime mode's methods, replaces every session's
 // MCP servers with the Cowboy facade, appends the target projection to the
 // system prompt, and settles each turn with backend refusal evidence.
+import { randomUUID } from "node:crypto";
 import { Compaction, compactionStatus } from "./compaction.mjs";
 import { allowedTool } from "./hook.mjs";
 import {
@@ -21,6 +22,16 @@ import {
   presentToolCall,
   resultContent,
 } from "./presentation.mjs";
+import {
+  CONTRACT_OPEN,
+  checkReply,
+  contractBlock,
+  correctionBlock,
+  MAX_REPLY_CHARS,
+  afterNonce,
+  MAX_CORRECTIONS,
+  schemaRefusal,
+} from "./managed-output.mjs";
 import { expandSkillCommand, skillCommands } from "./skills.mjs";
 
 /** Client requests a `runtime` unit forwards; everything else is refused. */
@@ -50,7 +61,9 @@ export function injectedEcho(update) {
   const text = update.content?.type === "text" ? update.content.text : undefined;
   return (
     typeof text === "string" &&
-    (text.startsWith(MEMORY_OPEN) || text.startsWith("<cowboy_context_restated>"))
+    (text.startsWith(MEMORY_OPEN) ||
+      text.startsWith("<cowboy_context_restated>") ||
+      text.startsWith(CONTRACT_OPEN))
   );
 }
 
@@ -227,6 +240,8 @@ export class AcpProxy {
     this.pending = new Map();
     this.agentRequests = new Set();
     this.turns = new Map();
+    /** Sessions whose structured managed turn ended: native text there is held. */
+    this.sealed = new Set();
     /** The account plan `agy` last reported (one proxy serves one account). */
     this.plan = undefined;
     /** The mode `agy` confirmed, per session (absent: unknown). */
@@ -382,7 +397,7 @@ export class AcpProxy {
    * left out (its plan is sent instead), and only runnable slash commands.
    * `undefined` when nothing is forwarded.
    */
-  presentUpdate(message) {
+  presentUpdate(message, answer = false) {
     const update = message.params?.update;
     if (update?.sessionUpdate === "available_commands_update") {
       // A managed turn's instruction is never a native command or skill,
@@ -397,7 +412,7 @@ export class AcpProxy {
         ? message
         : { ...message, params: { ...message.params, update: shown } };
     }
-    if (this.notices) {
+    if (this.notices && !answer) {
       const notice = agyNotice(update);
       if (notice) return { ...message, params: { ...message.params, update: notice } };
     }
@@ -485,7 +500,8 @@ export class AcpProxy {
   toolProgress(call, text) {
     const id = this.bind(call);
     if (id === undefined || typeof text !== "string") return;
-    this.client({
+    // Through the same seal as native tool updates.
+    const shown = this.holdReply({
       jsonrpc: "2.0",
       method: "session/update",
       params: {
@@ -498,6 +514,7 @@ export class AcpProxy {
         },
       },
     });
+    if (shown !== undefined) this.client(shown);
   }
 
   /** Messages from the worker are handled strictly in order. */
@@ -594,6 +611,20 @@ export class AcpProxy {
         const admitted = managedPrompt(forwarded.params);
         if (admitted.error) return this.refuse(id, admitted.error, -32602);
         forwarded.params = admitted.params;
+        // A schema the proxy cannot enforce exactly is refused before `agy`
+        // runs.
+        const refusal = admitted.schema && schemaRefusal(admitted.schema);
+        if (refusal) return this.refuse(id, `A managed Antigravity round's ${refusal}`, -32602);
+        // A structured round's session is sealed from admission, before
+        // anything is awaited: native text before its collector exists is
+        // held as thought, never an unchecked answer. A text round unseals.
+        if (admitted.schema) this.sealed.add(sessionId);
+        else this.sealed.delete(sessionId);
+        if (admitted.schema) {
+          // The reply is checked against the schema before it is final.
+          record.schema = admitted.schema;
+          forwarded.params.prompt = [...forwarded.params.prompt, contractBlock(admitted.schema)];
+        }
       } else if (hasManagedRound(forwarded.params)) {
         return this.refuse(id, "This Antigravity session is not a Cowboy managed call", -32602);
       }
@@ -635,6 +666,27 @@ export class AcpProxy {
         evidence: [],
         bytes: 0,
         recorded: new Set(),
+        // A structured managed round: the reply held back for checking.
+        structured: record.schema
+          ? {
+              schema: record.schema,
+              reply: "",
+              messageId: undefined,
+              // Native message ids of attempts already checked: a late chunk
+              // carrying one is never part of a later answer.
+              retired: new Set(),
+              // Why the current candidate cannot be the answer, if it cannot.
+              invalid: undefined,
+              // Set when the attempt's result arrives: later updates are not
+              // part of its answer.
+              closed: false,
+              corrections: 0,
+              final: undefined,
+              // Earlier attempts' backend evidence and reported usage.
+              backends: [],
+              usage: [],
+            }
+          : undefined,
       });
       runtime.facade.beginTurn(sessionId);
       if (record.compaction) {
@@ -649,6 +701,8 @@ export class AcpProxy {
   async cancel(message) {
     const sessionId = message.params?.sessionId;
     if (typeof sessionId === "string" && this.turns.has(sessionId)) {
+      // Marked before anything is awaited: no correction starts after a stop.
+      this.turns.get(sessionId).cancelled = true;
       const runtime = await this.runtime;
       await runtime.facade.endTurn(sessionId, { cancelled: true });
     }
@@ -775,13 +829,25 @@ export class AcpProxy {
           } else if (update?.sessionUpdate === "config_option_update") {
             this.reportMode(message.params.sessionId, update);
           }
+          // Only the proxy marks an update as after a structured answer.
+          if (message.params?.update?._meta?.[AFTER_ANSWER] !== undefined) {
+            const { [AFTER_ANSWER]: _marker, ...meta } = message.params.update._meta;
+            message = {
+              ...message,
+              params: { ...message.params, update: { ...message.params.update, _meta: meta } },
+            };
+          }
           // agy echoes every prompt block as the owner's message; the blocks
           // Cowboy injected (recalled memory, restated context) are not.
           if (injectedEcho(update)) return;
           this.observe(message.params);
+          // Before presentation, which hides some tool calls (UpdatePlan).
+          const answer = this.collectReply(message.params);
           // Evidence and the worker see the same sanitized, presented
-          // update: a tool's result counts, `agy`'s status lines do not.
-          const shown = this.presentUpdate(this.annotateUsage(stripTier(message)));
+          // update: a tool's result counts, `agy`'s status lines do not
+          // (text the answer took is never shown as one).
+          const presented = this.presentUpdate(this.annotateUsage(stripTier(message)), answer);
+          const shown = presented && this.holdReply(presented);
           if (shown === undefined) return;
           this.remember(shown.params);
           return this.client(shown);
@@ -902,15 +968,23 @@ export class AcpProxy {
     // settled: a built-in tool reported in the same chunk as this result,
     // or while it settles, still turns the reply into a violation.
     const turn = this.turns.get(record.sessionId);
+    // A correction prompt answers the worker's prompt it continues.
+    const replyId = record.replyId ?? id;
+    // Checked synchronously, and every ending fences the turn's facade calls
+    // before anything is awaited; an admitted correction reopens them.
+    const problem = this.correction(turn, message);
     await runtime.facade.endTurn(record.sessionId);
     // Every ending is classified, a vendor error too: its log window may
     // hold a refusal; an error without one is `unknown_refusal`, never a
     // vendor message the Controller cannot attribute.
-    const backend = await runtime.evidence.settle(
+    const settled = await runtime.evidence.settle(
       record.cursor,
       record.sessionId,
       message.result?.stopReason,
     );
+    if (problem && (await this.correct(record, turn, problem, replyId, settled, message))) return;
+    if (turn?.structured) this.sealed.add(record.sessionId);
+    const backend = attempts(turn, settled);
     if (this.turns.get(record.sessionId) === turn) this.turns.delete(record.sessionId);
     await this.settleMemory(turn);
     const violation = turn?.violation;
@@ -927,7 +1001,7 @@ export class AcpProxy {
           : (TURN_ERROR_TEXT[cowboy.antigravity_backend.class] ?? TURN_ERROR_TEXT.unknown_refusal);
       return this.endPrompt(record, {
         jsonrpc: "2.0",
-        id,
+        id: replyId,
         error: {
           code: TURN_ERROR_CODE,
           message:
@@ -941,7 +1015,201 @@ export class AcpProxy {
     }
     const result = structuredClone(message.result);
     result._meta = { ...(result._meta ?? {}), cowboy };
-    this.endPrompt(record, { ...message, result });
+    const structured = turn?.structured;
+    if (structured) {
+      const usage = totalUsage([...structured.usage, result.usage]);
+      if (usage === undefined) delete result.usage;
+      else result.usage = usage;
+    }
+    if (structured) {
+      // A stop that left no valid reply ends as cancelled, not as an
+      // invalid structured answer.
+      if (turn.cancelled && structured.final === undefined) result.stopReason = "cancelled";
+    }
+    if (structured?.final !== undefined) {
+      // The checked JSON is the turn's last message, as Claude's native
+      // structured output is.
+      this.client({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: record.sessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: structured.final },
+          },
+        },
+      });
+    }
+    this.endPrompt(record, { ...message, id: replyId, result });
+  }
+
+  /**
+   * Gather a structured managed turn's answer from `agy`'s raw updates: the
+   * text of its last native message after its last tool call. Status lines
+   * are never part of it, however the worker shows them.
+   */
+  collectReply(params) {
+    const structured = this.turns.get(params?.sessionId)?.structured;
+    const update = params?.update;
+    if (!structured) return false;
+    // A message first seen while the attempt closes belongs to it: retired,
+    // so it can never become a later attempt's answer.
+    if (structured.closed) {
+      const chunk = update?.sessionUpdate === "agent_message_chunk";
+      const late = chunk ? update.messageId : undefined;
+      // Id-less text while the attempt closes has no provable origin: no
+      // correction may follow it.
+      if (chunk && typeof late !== "string") structured.ambiguous = true;
+      if (typeof late === "string" && late !== structured.messageId) {
+        retire(structured, late);
+        // Its id-less continuations stay with it after a correction reopens.
+        structured.stream = late;
+      }
+      return false;
+    }
+    // Only text after the last tool call, and after its outcome, is the
+    // answer; the message may go on.
+    if (update?.sessionUpdate === "tool_call") return clearReply(structured);
+    if (update?.sessionUpdate === "tool_call_update" && TERMINAL.has(update.status)) {
+      return clearReply(structured);
+    }
+    if (update?.sessionUpdate !== "agent_message_chunk") return false;
+    const own = typeof update.messageId === "string" ? update.messageId : undefined;
+    if (own !== undefined && own.length > MAX_MESSAGE_ID) {
+      structured.terminal = "a message id is too long";
+      return false;
+    }
+    // A correction's reply has its own, stricter ownership rules.
+    if (structured.nonce !== undefined) return collectCorrection(structured, update, own);
+    // A chunk without an id continues the last message seen, which may be
+    // a retired one: then it is ignored with it.
+    if (own !== undefined) structured.stream = own;
+    const messageId = own ?? structured.stream;
+    if (messageId !== undefined && structured.retired.has(messageId)) return false;
+    // A new message is the next candidate, whatever it says.
+    if (messageId !== structured.messageId) restartReply(structured, messageId);
+    const text = update.content?.type === "text" ? update.content.text : undefined;
+    if (typeof text !== "string") {
+      structured.invalid = "the reply is not text";
+      return false;
+    }
+    // A status line is skipped only before any answer text. Elsewhere it is
+    // answer text: at worst a correction, never a stale or altered verdict.
+    if (agyNotice(update) && structured.reply === "") return false;
+    if (structured.reply.length + text.length > MAX_REPLY_CHARS) {
+      structured.invalid = "the reply is too long";
+      return false;
+    }
+    structured.reply += text;
+    return true;
+  }
+
+  /**
+   * A structured managed turn's reply as thought until it is checked: its
+   * final message is the validated JSON alone.
+   */
+  holdReply(message) {
+    const sessionId = message.params?.sessionId;
+    const structured = this.turns.get(sessionId)?.structured;
+    const update = message.params?.update;
+    // After a structured turn ends its session stays sealed until the next
+    // managed prompt: late native text is never an unchecked answer.
+    // So is all native text of a managed child outside a turn (or before its
+    // policy is known): only a turn's own output can be its answer.
+    const sealed =
+      !structured &&
+      (this.sealed.has(sessionId) || (this.managed !== false && !this.turns.has(sessionId)));
+    if (!structured && !sealed) return message;
+    // A late tool event keeps its id and output, marked so the Controller's
+    // final-text selection does not let it end the validated answer.
+    if (sealed && ["tool_call", "tool_call_update"].includes(update?.sessionUpdate)) {
+      const meta = { ...(update._meta ?? {}), [AFTER_ANSWER]: true };
+      return { ...message, params: { ...message.params, update: { ...update, _meta: meta } } };
+    }
+    if (update?.sessionUpdate !== "agent_message_chunk") return message;
+    return {
+      ...message,
+      params: { ...message.params, update: { ...update, sessionUpdate: "agent_thought_chunk" } },
+    };
+  }
+
+  /**
+   * The schema problem a structured turn's reply must be corrected for, if
+   * a correction is still allowed. A valid reply becomes the final message;
+   * an invalid one never does, so the Controller records the output as
+   * invalid rather than accepting unchecked JSON.
+   */
+  correction(turn, message) {
+    const structured = turn?.structured;
+    if (!structured) return undefined;
+    // Only what arrived before the result is this attempt's answer.
+    structured.closed = true;
+    // A turn that overran its bounds ends without an answer or correction.
+    if (structured.terminal || message.result?.stopReason !== "end_turn") return undefined;
+    // A corrected reply must first prove it answers this correction.
+    const body =
+      structured.nonce === undefined
+        ? structured.reply
+        : afterNonce(structured.reply, structured.nonce);
+    const checked = structured.invalid
+      ? { problem: structured.invalid }
+      : body === undefined
+        ? { problem: "the reply does not begin with the correction's nonce line" }
+        : checkReply(structured.schema, body);
+    structured.final = checked.text;
+    return checked.problem && structured.corrections < MAX_CORRECTIONS
+      ? checked.problem
+      : undefined;
+  }
+
+  /**
+   * Ask for a corrected reply inside the same turn when the attempt's
+   * settled backend evidence is clean and nothing stopped the turn;
+   * `true` when the correction was sent. Rechecked after the last await.
+   */
+  async correct(record, turn, problem, replyId, settled, message) {
+    const { structured } = turn;
+    const { runtime } = record;
+    const stopped = () =>
+      settled.class !== "ok" ||
+      // No room to retire this attempt's message: its answer would be lost.
+      structured.retired.size >= MAX_MESSAGES ||
+      structured.ambiguous === true ||
+      structured.terminal !== undefined ||
+      turn.cancelled === true ||
+      turn.violation !== undefined ||
+      turn.uncertain !== undefined;
+    if (stopped()) return false;
+    const cursor = await runtime.evidence.mark();
+    // Without a cursor the correction's evidence could not be settled.
+    if (cursor === undefined || stopped()) return false;
+    structured.backends.push(settled);
+    structured.usage.push(message.result?.usage);
+    structured.corrections += 1;
+    // Only a reply that begins with this nonce can answer the correction.
+    structured.nonce = randomUUID();
+    // Every message seen so far belongs to an earlier attempt.
+    for (const seen of [structured.mode, structured.stream]) {
+      if (typeof seen === "string") retire(structured, seen);
+    }
+    structured.mode = undefined;
+    restartReply(structured, undefined);
+    structured.closed = false;
+    structured.final = undefined;
+    const retry = `cowboy-correction-${randomUUID()}`;
+    this.pending.set(retry, { ...record, cursor, replyId });
+    runtime.facade.beginTurn(record.sessionId);
+    this.agent({
+      jsonrpc: "2.0",
+      id: retry,
+      method: "session/prompt",
+      params: {
+        sessionId: record.sessionId,
+        prompt: [correctionBlock(structured.schema, problem, structured.nonce)],
+      },
+    });
+    return true;
   }
 
   /**
@@ -961,3 +1229,147 @@ export class AcpProxy {
     this.client(reply);
   }
 }
+
+/**
+ * A structured turn's backend evidence over all its attempts: the last
+ * attempt's class (an earlier one was clean, or no correction followed it)
+ * with every attempt's counts and refusals.
+ */
+function attempts(turn, settled) {
+  const earlier = turn?.structured?.backends ?? [];
+  if (!earlier.length) return settled;
+  const all = [...earlier, settled];
+  const total = (key) => all.reduce((sum, item) => sum + (Number(item[key]) || 0), 0);
+  return {
+    ...settled,
+    successes: total("successes"),
+    transient: total("transient"),
+    refusals: all.flatMap((item) => (Array.isArray(item.refusals) ? item.refusals : [])),
+    attempts: all.length,
+  };
+}
+
+/** Optional ACP usage counters, published only when every attempt has one. */
+const DETAIL_COUNTERS = ["cachedReadTokens", "cachedWriteTokens", "thoughtTokens"];
+
+/**
+ * The usage of every attempt, summed. Each attempt is first made inclusive
+ * (`inputTokens` = total - output, whichever ACP convention it used), so the
+ * sum reconciles; an optional counter is published only when every attempt
+ * reported it, and nothing when an attempt lacks its totals.
+ */
+function totalUsage(reports) {
+  if (!reports.every(consistentUsage)) return undefined;
+  const sum = (pick) => reports.reduce((total, usage) => total + pick(usage), 0);
+  const total = {
+    totalTokens: sum((usage) => usage.totalTokens),
+    outputTokens: sum((usage) => usage.outputTokens),
+    inputTokens: sum((usage) => usage.totalTokens - usage.outputTokens),
+  };
+  for (const key of DETAIL_COUNTERS) {
+    if (reports.every((usage) => usage[key] != null)) {
+      total[key] = sum((usage) => usage[key]);
+    }
+  }
+  return total;
+}
+
+/**
+ * Whether one ACP usage report reconciles as the Controller requires
+ * (`TurnUsage::from_acp`): non-negative safe integers, input either
+ * inclusive (total - output) or disjoint from the cache counters, cache
+ * counters within the input and thought within the output.
+ */
+function consistentUsage(usage) {
+  if (usage === null || typeof usage !== "object") return false;
+  for (const key of ["totalTokens", "outputTokens", "inputTokens", ...DETAIL_COUNTERS]) {
+    const value = usage[key];
+    // `null` is an absent optional counter, as the ACP reader treats it.
+    if (value != null && !(Number.isSafeInteger(value) && value >= 0)) return false;
+  }
+  const { totalTokens: total, outputTokens: output, inputTokens: reported } = usage;
+  if (total == null || output == null || reported == null || output > total) {
+    return false;
+  }
+  const input = total - output;
+  const read = usage.cachedReadTokens ?? 0;
+  const write = usage.cachedWriteTokens ?? 0;
+  return (
+    (reported === input || reported + read + write === input) &&
+    read <= input &&
+    write <= input - read &&
+    (usage.thoughtTokens ?? 0) <= output
+  );
+}
+
+/** Start a structured turn's candidate answer over (a new message or tool call). */
+function restartReply(structured, messageId) {
+  // The message it ends is over: a late chunk of it is never an answer.
+  if (structured.messageId !== undefined) retire(structured, structured.messageId);
+  clearReply(structured);
+  structured.messageId = messageId;
+}
+
+/**
+ * A correction's chunk. Its reply is either one id-less chunk, complete in
+ * itself, or chunks that all carry one explicit, unretired native id (a new
+ * id starts the candidate over, which must begin with the nonce again).
+ * Any chunk whose ownership is ambiguous (an id-less one after the first,
+ * or any chunk after an id-less reply) invalidates the reply: a delayed
+ * message of the failed attempt can never contribute to it.
+ */
+function collectCorrection(structured, update, own) {
+  if (own !== undefined && structured.retired.has(own)) return false;
+  const text = update.content?.type === "text" ? update.content.text : undefined;
+  const untouched = structured.mode === undefined && structured.reply === "";
+  // A status line before anything else is native.
+  if (typeof text === "string" && untouched && agyNotice(update)) return false;
+  const ambiguous = (problem) => {
+    structured.invalid = problem;
+    return false;
+  };
+  if (own === undefined) {
+    if (!untouched) return ambiguous("a correction's continuation carries no message id");
+    structured.mode = IDLESS;
+  } else if (structured.mode === IDLESS) {
+    return ambiguous("a correction's one-chunk reply was followed by more");
+  } else if (own !== structured.mode) {
+    if (structured.mode !== undefined) retire(structured, structured.mode);
+    structured.mode = own;
+    clearReply(structured);
+  }
+  if (typeof text !== "string") return ambiguous("the reply is not text");
+  if (structured.reply.length + text.length > MAX_REPLY_CHARS) {
+    return ambiguous("the reply is too long");
+  }
+  structured.reply += text;
+  return true;
+}
+
+/** A correction whose reply is one id-less chunk. */
+const IDLESS = Symbol("idless");
+
+/** Retire a native message id; past the bound the turn ends unanswered. */
+function retire(structured, messageId) {
+  if (structured.retired.has(messageId)) return;
+  if (structured.retired.size >= MAX_MESSAGES || messageId.length > MAX_MESSAGE_ID) {
+    structured.terminal = "too many messages";
+  } else {
+    structured.retired.add(messageId);
+  }
+}
+
+/** Marks a tool event that arrived after a structured turn's answer. */
+const AFTER_ANSWER = "cowboy.dev/afterAnswer";
+/** The longest native message id kept. */
+const MAX_MESSAGE_ID = 256;
+
+/** Drop the candidate text at a tool call; its message may continue. */
+function clearReply(structured) {
+  structured.reply = "";
+  structured.invalid = undefined;
+  return false;
+}
+
+/** The most native messages one structured attempt may end. */
+const MAX_MESSAGES = 1000;

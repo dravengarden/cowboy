@@ -270,7 +270,8 @@ pin advance and OVH maintenance.
   profiles where Phase 1 allows, OAuth method only.
 - Risk controls from the requirements section: per-account placement and
   concurrency caps, backoff, suspension error rule, exclusion from unattended
-  work and from every managed call except read-only context asks (see
+  work and from every managed call except explicit fresh read-only rounds
+  (context asks, and since the owner's extension analyses and reviews; see
   [Managed read-only context asks](#managed-read-only-context-asks)).
 - Kill switch: admission fence, confirmed worker termination, native logout,
   offline-Machine handling, conversations and worktrees preserved.
@@ -311,7 +312,8 @@ restart, logout, kill switch, and two-account isolation if Phase 1.3 passed.
 - Configuration: ACP `configOptions` ids `model` and `thought_level`; default
   preset Gemini 3.8 Flash · High. Not offered to managed calls at the time
   (no `managed_profiles`, not a `CALL_TARGETS` member); since 2026-11-21 it
-  is a target of read-only context asks only (see
+  is an explicit-only target of fresh read-only context asks, analyses,
+  reviews and design reviews (see
   [Managed read-only context asks](#managed-read-only-context-asks)).
 - Codex Astra Max review (call `call-0c43947387086ddb8138f08d`) findings and
   fixes: older SDK 3.4.0 readers would have treated the logins as portable, so
@@ -356,19 +358,27 @@ declaration").
 ### Phase 5 — Extras
 
 Usage card only from a documented surface; fork; Matrix memory bridge.
-Managed calls other than read-only context asks stay out of scope.
+Managed calls beyond explicit fresh read-only rounds (images, writes,
+continuations, Auto) stay out of scope.
 
 ### Managed read-only context asks
 
 Owner decision 2026-11-21: Antigravity (Gemini 4 Hydrogen) may answer
 managed `analysis` and `sessions` context asks, accepting the account risk;
 reviews, design reviews, image calls and every call that could write stay
-unavailable. The Controller admits only those asks and advertises text-only
-output for Antigravity.
+unavailable. Owner extension the same day: explicit, fresh workspace
+analyses, reviews and design reviews are admitted too (reviews only with the
+Claude Opus preset, never for an Antigravity parent), with structured output
+enforced by the proxy's output contract (below). Image calls, writes,
+continuations and Auto remain unavailable.
 
 - The manifest declares `provider.managed-profiles.v1` with one
   `read_only_v1` profile (`acp`, `--disable-telemetry`,
-  `--cowboy-managed-profile=read-only-v1`); there is no `image_v1`. An
+  `--cowboy-managed-profile=read-only-v1`, `--cowboy-output-contract=v1`);
+  there is no `image_v1`. `--cowboy-output-contract=v1` is the signed
+  declaration that the adapter enforces a round's output schema: the
+  Controller advertises and admits structured rounds only for a generation
+  that carries it (0.2.14 does not), and the adapter strips it. An
   account-sandbox runtime unit starts `bin/agy-proxy` with the command line
   the daemon fixes, so these arguments are a declaration there: the proxy
   learns managed mode from its execution binding (`binding.managed`) and the
@@ -418,8 +428,12 @@ output for Antigravity.
 - Each turn must carry the Machine-written round as prompt
   `_meta["cowboy.dev/managedCall"]`; the proxy strips it before `agy`. A
   prompt without it, a prompt that is not a nonempty list of text blocks
-  (images, resources or mixed content), a round with a non-null
-  `outputSchema` (Antigravity cannot apply structured output), a slash
+  (images, resources or mixed content), a round whose `outputSchema` uses a
+  keyword the proxy cannot check exactly (anything beyond the keywords
+  Cowboy's review schema uses: type, scalar enum, properties, required,
+  additionalProperties, items, count and range bounds; no references,
+  combinators, `pattern` or dialect switch; the Controller admits only that
+  schema for Antigravity anyway), a slash
   command, `session/set_mode` and any `session/set_config_option` other than
   `model` and `thought_level` are refused. A managed child has exactly one
   native session, the one its own `session/new` created: a second
@@ -433,6 +447,21 @@ output for Antigravity.
   is single-round: a proxy replaced by a worker reload refuses every load or
   resume, the call fails, and its caller retries. An ordinary session
   refuses a prompt that carries a round.
+- Structured reviews (owner extension): the proxy picks the answer from the
+  native stream conservatively (a new message is the next candidate; a
+  status line is skipped only before answer text; retired message ids,
+  including their id-less continuations, never become an answer), so an
+  ambiguity costs at most a correction, never a stale verdict. A corrected
+  reply must begin with a nonce line the correction prompt names, so no
+  delayed message of the failed attempt (produced before the nonce
+  existed) can become its answer. Tool events
+  after the validated answer are forwarded with
+  `_meta["cowboy.dev/afterAnswer"]`, which `Hub::managed_turn` honors only
+  for Antigravity sessions. Known limits: the Hub reconstructs the answer
+  from its bounded in-memory transcript, so an extreme burst of late events
+  could evict it (`structured_output_invalid`, never a wrong verdict); and a
+  late completion's `_meta` replaces the tool row's when the history
+  reducer merges it. Both need the checked reply carried on the turn end.
 
 ## Rollout
 

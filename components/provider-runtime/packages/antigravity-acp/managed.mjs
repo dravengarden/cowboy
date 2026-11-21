@@ -20,6 +20,8 @@
 import { isAbsolute } from "node:path";
 
 export const MANAGED_PROFILE_FLAG = "--cowboy-managed-profile=read-only-v1";
+/** Kept in step with the Controller's `OUTPUT_CONTRACT_FLAG`. */
+export const OUTPUT_CONTRACT_FLAG = "--cowboy-output-contract=v1";
 /** The hook policy marker the proxy sets in `agy`'s environment. */
 export const HOOK_PROFILE_ENV = "COWBOY_HOOK_PROFILE";
 export const HOOK_PROFILE_ORDINARY = "ordinary";
@@ -65,11 +67,21 @@ export const MANAGED_ROUTING = [
  * present. Any other spelling of a managed profile is refused.
  */
 export function managedArguments(args) {
-  const rest = args.filter((argument) => argument !== MANAGED_PROFILE_FLAG);
-  if (rest.some((argument) => argument.startsWith("--cowboy-managed-profile"))) {
+  const profile = args.filter((argument) => argument !== MANAGED_PROFILE_FLAG);
+  const managed = profile.length !== args.length;
+  if (profile.some((argument) => argument.startsWith("--cowboy-managed-profile"))) {
     throw new Error("Unsupported Cowboy managed profile");
   }
-  return { managed: rest.length !== args.length, args: rest };
+  // The signed declaration that this adapter enforces output schemas; the
+  // Controller reads it, `agy` never sees it.
+  const rest = profile.filter((argument) => argument !== OUTPUT_CONTRACT_FLAG);
+  if (rest.some((argument) => argument.startsWith("--cowboy-output-contract"))) {
+    throw new Error("Unsupported Cowboy output contract");
+  }
+  if (rest.length !== profile.length && !managed) {
+    throw new Error("The Cowboy output contract needs the managed profile");
+  }
+  return { managed, args: rest };
 }
 
 /**
@@ -153,9 +165,9 @@ function promptWords(prompt) {
 /**
  * Admit one `session/prompt` of a managed child. Returns `{ error }` for a
  * refused turn or `{ params }`: the request without Cowboy's round
- * metadata, which `agy` never sees. A round must be present; Antigravity
- * answers with text only, so a round asking for structured output fails,
- * and a turn's instruction is never a native slash command.
+ * metadata, which `agy` never sees, and the round's output schema, if any.
+ * A round must be present, and a turn's instruction is never a native
+ * slash command.
  */
 export function managedPrompt(params) {
   const round = params?._meta?.[MANAGED_META_KEY];
@@ -176,11 +188,9 @@ export function managedPrompt(params) {
   ) {
     return { error: "A managed Antigravity turn takes text blocks only" };
   }
-  if (round.outputSchema !== undefined && round.outputSchema !== null) {
-    return {
-      error:
-        "Antigravity managed calls return text only; this round requests structured output (outputSchema), which Antigravity cannot apply",
-    };
+  const schema = round.outputSchema ?? undefined;
+  if (schema !== undefined && !isObject(schema)) {
+    return { error: "A managed Antigravity round's outputSchema must be a JSON Schema object" };
   }
   if (/^\s*\//.test(promptWords(prompt))) {
     return { error: "A managed Antigravity turn cannot run a slash command" };
@@ -189,7 +199,9 @@ export function managedPrompt(params) {
   const next = { ...params };
   if (Object.keys(meta).length) next._meta = meta;
   else delete next._meta;
-  return { params: next };
+  // A structured round is answered through the proxy's output contract
+  // (`managed-output.mjs`).
+  return schema === undefined ? { params: next } : { params: next, schema };
 }
 
 /** Whether a prompt carries a managed round (refused outside managed mode). */

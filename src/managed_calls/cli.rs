@@ -68,7 +68,7 @@ pub struct CallArgs {
 enum CallCommand {
     /// Submit using the same contract as the Provider shortcuts.
     Start {
-        #[arg(long, value_parser = ["codex", "claude-code", "auto"])]
+        #[arg(long, value_parser = ["codex", "claude-code", "antigravity", "auto"])]
         provider: String,
         #[command(flatten)]
         request: StartArgs,
@@ -364,8 +364,9 @@ pub struct ReviewArgs {
     /// them in Cowboy and wait for the answer instead of skipping.
     #[arg(long)]
     ask: bool,
-    /// Reviewer agent; Auto lets the session's Tools choose.
-    #[arg(long, default_value = "auto", value_parser = ["auto", "codex", "claude"])]
+    /// Reviewer agent; Auto lets the session's Tools choose. Antigravity runs
+    /// only when named, on the owner's account, with its Claude Opus preset.
+    #[arg(long, default_value = "auto", value_parser = ["auto", "codex", "claude", "antigravity"])]
     agent: String,
     /// One of the reviewer's presets (model and reasoning) for this review.
     #[arg(long)]

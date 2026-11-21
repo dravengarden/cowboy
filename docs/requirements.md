@@ -862,7 +862,9 @@ These boundaries are mandatory and fail closed:
   refuses `/usage` at its eligibility check (an ineligible free tier listed
   beside the paid tier that serves the account, observed over IPv4 too), the
   account-sandbox usage unit, as the account's own identity, reads the access
-  token `agy` just refreshed and asks Cloud Code's quota summary itself. It
+  token `agy` just refreshed and asks Cloud Code's quota summary itself, with
+  the `User-Agent: antigravity` the endpoint requires (accepted by the owner,
+  2026-11-21, as the one qualification of the client-identity rule). It
   never refreshes, writes, prints or forwards the token, the root daemon
   never sees it, and every other path keeps the rule above. See
   [Antigravity account quota](antigravity-real-accounts-design.md#account-quota-antigravity-0210).
@@ -878,9 +880,14 @@ These boundaries are mandatory and fail closed:
   rotation or quota-driven fallback to another account.
 - Human-paced use, with one owner-approved exception (2026-11-21). Antigravity
   is not offered to scheduled or background jobs, auto-continue loops,
-  automatic rollover turns, reviews, Auto selection or Tools call targets. The
-  single managed-call use is an explicitly requested context ask: a fresh,
-  text-only `analysis` over recorded session history, run in the read-only
+  automatic rollover turns, Auto selection or Tools call targets. Its
+  managed-call use is an explicitly requested, fresh read-only round: a
+  context ask (a text-only `analysis` over recorded session history) or,
+  as the owner extended it the same day ("other sessions can call
+  Antigravity"), a text-only analysis, or a review or design review of the
+  workspace whose structured output is Cowboy's own review schema, checked by
+  the proxy (a review uses its Claude Opus preset and is never Antigravity's
+  own), run in the read-only
   managed profile (no writes, network tools, Cowboy Agent API or subagents; its
   read tools can read what the execution user can), on the owner's admitted
   named default account under that account's controls. The

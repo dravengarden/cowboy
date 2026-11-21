@@ -176,6 +176,32 @@ pub(super) fn exclude_caller_model(
     )
 }
 
+/// Whether another vendor's package (Antigravity's Claude Opus) lost its
+/// reviewer only to the caller's own model: of the tier's `eligible` choices
+/// before that exclusion, the named one runs it, or the tier is now empty
+/// although an eligible choice ran it.
+fn cross_vendor_same_model(
+    eligible: &[Value],
+    choices: &[Value],
+    explicit: Option<&str>,
+    caller: Option<Option<&str>>,
+) -> bool {
+    let presets = eligible;
+    let own = |preset: &Value| {
+        same_model(
+            false,
+            caller,
+            preset["values"]["model"].as_str().and_then(family),
+        )
+    };
+    match explicit {
+        Some(id) => presets
+            .iter()
+            .any(|preset| preset["id"].as_str() == Some(id) && own(preset)),
+        None => choices.is_empty() && presets.iter().any(own),
+    }
+}
+
 /// A fresh review's preset at admission, or the refusal to return. A high
 /// tier needs a reason the caller wrote; the CLI fills an omitted reason
 /// with its own default, which is no reason.
@@ -243,6 +269,30 @@ pub(super) fn admit(
         return Err(refuse(
             "same_model",
             "a review never runs the caller's own model and this tier has no other model of this vendor; use another vendor's reviewer, or declare risk:'high' with a reason to name a stronger model of this vendor".into(),
+        ));
+    }
+    // The tier before the caller-model exclusion (a known non-reviewer
+    // caller excludes nothing).
+    let eligible = candidates_for(
+        runnable,
+        provider,
+        preference,
+        high_risk,
+        (false, Some(None)),
+    );
+    // Unnamed, the exclusion may also remove only the tier's automatic choice.
+    let lost_automatic = explicit.is_none() && eligible.automatic && !tier.automatic;
+    // Named, the exclusion removed that preset; unnamed, it removed only the
+    // tier's automatic choice (an empty explicit-only tier is no evidence).
+    let lost = match explicit {
+        Some(_) => cross_vendor_same_model(&eligible.list, &choices, explicit, caller),
+        None => lost_automatic && cross_vendor_same_model(&eligible.list, &[], None, caller),
+    };
+    if !same_vendor && lost {
+        return Err(refuse(
+            "same_model",
+            "a review never runs the caller's own model, even through another vendor's package"
+                .into(),
         ));
     }
     if unnamed {
@@ -320,6 +370,25 @@ pub(super) fn routing_view(
 }
 
 /// The family/effort order that predates the routing table.
+/// The reviewer families `provider` may review with, in the session's order.
+/// Antigravity reviews only with Claude Opus (its named account's Claude
+/// quota), whatever else a signed generation's presets offer.
+pub(super) fn reviewer_families(
+    provider: &str,
+    preference: &super::super::agent_tools::ReviewPreferences,
+) -> Vec<String> {
+    match provider {
+        "codex" => preference.gpt.clone(),
+        "antigravity" => preference
+            .claude
+            .iter()
+            .filter(|family| *family == "opus")
+            .cloned()
+            .collect(),
+        _ => preference.claude.clone(),
+    }
+}
+
 fn legacy(
     presets: &Value,
     provider: &str,
@@ -327,10 +396,11 @@ fn legacy(
     high_risk: bool,
 ) -> Vec<Value> {
     use super::super::agent_tools::ReviewEffort;
-    let (order, effort_policy) = if provider == "codex" {
-        (&preference.gpt, preference.gpt_effort)
+    let order = reviewer_families(provider, preference);
+    let effort_policy = if provider == "codex" {
+        preference.gpt_effort
     } else {
-        (&preference.claude, preference.claude_effort)
+        preference.claude_effort
     };
     // High-risk reviews keep the strongest-first order whatever the policy.
     let standard = !high_risk && effort_policy == ReviewEffort::Standard;
@@ -341,9 +411,11 @@ fn legacy(
         .filter_map(|preset| {
             let family = family(preset["values"]["model"].as_str()?)?;
             let rank = order.iter().position(|v| v == family)?;
+            // Codex, Claude and Antigravity name the reasoning option apart.
             let effort = preset["values"]["reasoning_effort"]
                 .as_str()
                 .or(preset["values"]["effort"].as_str())
+                .or(preset["values"]["thought_level"].as_str())
                 .unwrap_or("default");
             let effort_rank = match (standard, effort) {
                 (false, "max") | (true, "medium") => 0,
@@ -639,6 +711,58 @@ mod tests {
             )
             .unwrap(),
             "astra-medium"
+        );
+    }
+
+    #[test]
+    fn antigravity_reviews_only_with_its_claude_opus_preset() {
+        let presets = json!([
+            {"id":"gemini-neon-high","values":{"model":"gemini-4-neon","thought_level":"high"}},
+            {"id":"gemini-hydrogen-xhigh","values":{"model":"gemini-4-hydrogen","thought_level":"xhigh"}},
+            {"id":"claude-opus-high","values":{"model":"claude-opus-5-5","thought_level":"high"}},
+            {"id":"claude-sonnet-high","values":{"model":"claude-sonnet-5-5","thought_level":"high"}},
+            {"id":"claude-fable-high","values":{"model":"claude-fable-5-2","thought_level":"high"}},
+        ]);
+        // Even a session that prefers Fable gets Opus only from Antigravity.
+        let preference = super::super::super::agent_tools::ReviewPreferences {
+            claude: vec!["fable".into(), "opus".into()],
+            ..Default::default()
+        };
+        assert_eq!(reviewer_families("antigravity", &preference), ["opus"]);
+        // An Opus caller loses Antigravity's only reviewer to its own model.
+        let opus = vec![presets[2].clone()];
+        let filtered = exclude_caller_model(&json!(opus), false, Some(Some("opus")));
+        let caller = Some(Some("opus"));
+        assert!(cross_vendor_same_model(&opus, &[], None, caller));
+        assert!(cross_vendor_same_model(
+            &opus,
+            &[],
+            Some("claude-opus-high"),
+            caller
+        ));
+        assert!(!cross_vendor_same_model(
+            &opus,
+            &[],
+            Some("gemini-neon-high"),
+            caller
+        ));
+        // A disabled family is no same-model refusal: nothing was eligible.
+        assert!(!cross_vendor_same_model(&[], &[], None, caller));
+        assert!(filtered.as_array().unwrap().is_empty());
+        let choices = candidates(&presets, "antigravity", &preference, true);
+        let ids: Vec<_> = choices.iter().filter_map(|c| c["id"].as_str()).collect();
+        assert_eq!(ids, ["claude-opus-high"]);
+        // The routing table does not cover Antigravity: a routine review
+        // keeps the same single Claude Opus candidate.
+        let routine = candidates(&presets, "antigravity", &preference, false);
+        assert_eq!(routine, choices);
+        assert_eq!(
+            review_preset(&choices, &choices, None).as_deref(),
+            Ok("claude-opus-high")
+        );
+        assert_eq!(
+            review_preset(&choices, &choices, Some("gemini-neon-high")),
+            Err("review_model_not_allowed")
         );
     }
 

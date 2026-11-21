@@ -1,16 +1,17 @@
 //! Context-only call targets (Antigravity): admission and discovery.
 //!
-//! A context-only agent answers only an explicit context ask: a fresh,
-//! text-output `analysis` over recorded history. It runs on a person's own
-//! named account, guarded by that account's own controls (rate-limit
-//! back-off, suspension) and the parent's call budget.
+//! A context-only agent runs only when a caller names it: one fresh read-only
+//! round (a context ask, an analysis, a review or a design review). It runs on
+//! a person's own named account, guarded by that account's own controls
+//! (rate-limit back-off, suspension) and the parent's call budget, and it is
+//! never an Auto choice, a Tools target or an approval.
 
 use serde_json::{Value, json};
 
 use super::super::super::AppState;
 use super::super::super::agent_tools::{self, CallsPolicy, Choice};
-use crate::managed_calls::Request;
 use crate::managed_calls::service::Ledger;
+use crate::managed_calls::{Conversation, Request};
 
 /// Every agent discovery describes: call targets, then context-only agents.
 pub(super) fn discoverable() -> impl Iterator<Item = &'static str> {
@@ -27,25 +28,27 @@ pub(super) fn resolve(
     state: &AppState,
     ledger: &Ledger,
     policy: &CallsPolicy,
+    caller: &str,
     requested: &str,
     request: &Request,
-    continued: &Option<String>,
 ) -> Option<Choice> {
     if history_refusal(state, ledger, request) {
         return Some(Choice::Closed("machine_upgrade_required"));
     }
-    choose(policy, requested, request, continued.is_some())
+    let continued = matches!(request.conversation, Conversation::Continue { .. });
+    choose(policy, caller, requested, request, continued)
 }
 
 /// `requested`'s admission decision when it is a context-only agent.
 pub(super) fn choose(
     policy: &CallsPolicy,
+    caller: &str,
     requested: &str,
     request: &Request,
     continued: bool,
 ) -> Option<Choice> {
     agent_tools::context_only(requested).then(|| {
-        match agent_tools::choose_context_only(policy, requested, request, continued) {
+        match agent_tools::choose_context_only(policy, caller, requested, request, continued) {
             Ok(target) => Choice::Candidates {
                 targets: vec![target],
                 selection: "explicit",
@@ -101,12 +104,6 @@ pub(super) fn policy_reason(
     }
 }
 
-/// A context-only agent serves nothing when the execution Machine cannot
-/// receive history, so discovery marks it unavailable.
-pub(super) fn history_reason(provider: &str, history_capable: bool) -> Option<&'static str> {
-    (agent_tools::context_only(provider) && !history_capable).then_some("machine_upgrade_required")
-}
-
 /// Whether a context ask may use `provider`: admission admits the caller's
 /// own family and context-only agents without a Tools target.
 pub(super) fn serves_context_asks(
@@ -121,13 +118,36 @@ pub(super) fn serves_context_asks(
             || agent_tools::same_family(provider, caller))
 }
 
-/// Narrow a context-only provider's discovery entry to what it accepts.
-pub(super) fn restrict(entry: &mut Value) {
-    entry["review_candidates"] = json!([]);
-    entry["output"] = json!(["text"]);
+/// Narrow a context-only provider's discovery entry to what admission
+/// accepts: fresh rounds only, named explicitly (a context ask answers in
+/// text). It is listed among the read-only providers too; `selection:
+/// explicit` says it runs only when named. It never reviews for its own
+/// family, and only its context asks need a Machine that receives history.
+pub(super) fn restrict(entry: &mut Value, caller: &str, history_capable: bool) {
     entry["conversation"] = json!(["fresh"]);
-    entry["purposes"] = json!(["analysis"]);
-    entry["requires"] = json!("sessions");
+    entry["selection"] = json!("explicit");
+    // No review for its own family, nor when the session's reviewer families
+    // leave it no eligible (Opus) preset.
+    let reviews = !agent_tools::same_family(entry["id"].as_str().unwrap_or_default(), caller)
+        && entry["review_candidates"]
+            .as_array()
+            .is_some_and(|candidates| !candidates.is_empty());
+    if !reviews {
+        entry["purposes"] = json!(["analysis"]);
+        entry["review_candidates"] = json!([]);
+        entry["review_routing"] = Value::Null;
+        entry["review_available"] = json!(false);
+        entry["output"] = json!(["text"]);
+    } else {
+        entry["purposes"] = json!(["analysis", "review", "design_review"]);
+        // Structured output is a review's own schema; analyses answer in text.
+        if entry["output"] == json!(["text", "json_schema"]) {
+            entry["json_schema"] = json!("review_schema_only");
+        }
+    }
+    if !history_capable {
+        entry["context_ask_reason"] = json!("machine_upgrade_required");
+    }
 }
 
 /// The discovery entry of the context-ask capability.
@@ -139,6 +159,27 @@ pub(super) fn capability(policy: &CallsPolicy, providers: &[&str]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovery_offers_reviews_only_to_other_families() {
+        let mut entry = json!({"id": "antigravity", "review_candidates": ["claude-opus-high"]});
+        restrict(&mut entry, "codex", false);
+        assert_eq!(
+            entry["purposes"],
+            json!(["analysis", "review", "design_review"])
+        );
+        assert_eq!(entry["review_candidates"], json!(["claude-opus-high"]));
+        assert_eq!(entry["context_ask_reason"], "machine_upgrade_required");
+        let mut own = json!({"id": "antigravity", "review_candidates": ["claude-opus-high"]});
+        restrict(&mut own, "antigravity", true);
+        let mut none = json!({"id": "antigravity", "review_candidates": []});
+        restrict(&mut none, "codex", true);
+        assert_eq!(none["purposes"], json!(["analysis"]));
+        assert_eq!(own["purposes"], json!(["analysis"]));
+        assert_eq!(own["review_candidates"], json!([]));
+        assert_eq!(own["output"], json!(["text"]));
+        assert!(own.get("context_ask_reason").is_none());
+    }
 
     fn policy(enabled: bool) -> CallsPolicy {
         let mut calls = agent_tools::AgentTools::builtin("codex").calls;
@@ -179,15 +220,30 @@ mod tests {
 
     #[test]
     fn a_context_only_refusal_is_never_an_approval_question() {
-        let request = Request::parse(br#"{"schema":1,"request_id":"r","purpose":"review","instruction":"Review","context":{"scope":"current-worktree"},"access":"read-only","conversation":{"mode":"fresh"}}"#).unwrap();
+        let document = format!(
+            r#"{{"schema":1,"request_id":"r","purpose":"review","instruction":"Review","context":{{"scope":"current-worktree"}},"access":"read-only","conversation":{{"mode":"fresh"}},"output":{{"format":"json_schema","schema":{}}}}}"#,
+            crate::managed_calls::review::output_schema()
+        );
+        let request = Request::parse(document.as_bytes()).unwrap();
         assert!(matches!(
-            choose(&policy(true), "antigravity", &request, false),
+            choose(&policy(true), "codex", "antigravity", &request, false),
+            Some(Choice::Candidates {
+                selection: "explicit",
+                ..
+            })
+        ));
+        assert!(matches!(
+            choose(&policy(true), "codex", "antigravity", &request, true),
             Some(Choice::Closed("unsupported_capability"))
         ));
         assert!(matches!(
-            choose(&policy(false), "antigravity", &request, false),
+            choose(&policy(true), "antigravity", "antigravity", &request, false),
+            Some(Choice::Closed("same_agent"))
+        ));
+        assert!(matches!(
+            choose(&policy(false), "codex", "antigravity", &request, false),
             Some(Choice::Closed(_))
         ));
-        assert!(choose(&policy(true), "codex", &request, false).is_none());
+        assert!(choose(&policy(true), "codex", "codex", &request, false).is_none());
     }
 }

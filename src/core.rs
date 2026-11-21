@@ -2530,6 +2530,11 @@ impl Hub {
         };
         let mut final_text = String::new();
         let mut message_id: Option<&str> = None;
+        // The first Antigravity release whose proxy marks late tool events
+        // and strips any native copy of the marker.
+        let after_answer = s.meta.provider == "antigravity"
+            && semver::Version::parse(&s.meta.provider_version)
+                .is_ok_and(|version| version >= semver::Version::new(0, 2, 15));
         for entry in s.log.iter().filter(|entry| entry.seq > after_seq) {
             match &entry.event {
                 Event::Update { update } => {
@@ -2569,6 +2574,13 @@ impl Hub {
                             | "notice",
                         )
                         | None => {}
+                        // A tool event Antigravity's proxy marks as arriving
+                        // after its validated answer does not end it; the
+                        // proxy strips any native copy of the marker.
+                        Some(_)
+                            if after_answer
+                                && update.pointer("/_meta/cowboy.dev~1afterAnswer")
+                                    == Some(&serde_json::Value::Bool(true)) => {}
                         Some(_) => {
                             final_text.clear();
                             message_id = None;

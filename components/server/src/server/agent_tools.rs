@@ -23,30 +23,65 @@ pub(super) const SCHEMA: u16 = 1;
 /// Agents a managed call can start. Each must declare the read-only profile.
 pub(super) const CALL_TARGETS: [&str; 2] = ["codex", "claude-code"];
 pub(super) const AUTO: &str = "auto";
-/// Agents a managed call may start only to answer an explicit context ask (a
-/// fresh `analysis` over recorded history). They are never Tools policy
-/// targets, Auto choices, approvals or reviewers: Antigravity accounts are
-/// personal, so agent-initiated work stays limited to reading history.
+/// Agents a managed call may start only when a caller names them explicitly,
+/// for one fresh read-only round: an analysis (a context ask over recorded
+/// history included), a review or a design review. They are never Tools
+/// policy targets, Auto choices or approvals: Antigravity accounts are
+/// personal, so only an explicit request spends one.
 pub(super) const CONTEXT_ONLY_TARGETS: [&str; 1] = ["antigravity"];
 
 pub(super) fn context_only(agent: &str) -> bool {
     CONTEXT_ONLY_TARGETS.contains(&agent)
 }
 
-/// The single candidate for an explicit context-only request, or why the
-/// request cannot use that agent.
+/// The single candidate for an explicit request to a context-only agent, or
+/// why the request cannot use that agent. A context ask (an analysis over
+/// recorded history) and a workspace analysis answer in text; a review or
+/// design review may carry Cowboy's own review schema and nothing else. A
+/// review is a second opinion, so it never comes from the caller's own agent.
 pub(super) fn choose_context_only(
     policy: &CallsPolicy,
+    caller: &str,
     requested: &str,
     request: &crate::managed_calls::Request,
     continued: bool,
 ) -> Result<CallTarget, &'static str> {
+    use crate::managed_calls::Purpose;
     let context_ask = !request.context.sessions.is_empty()
-        && request.purpose == crate::managed_calls::Purpose::Analysis
-        && !continued
+        && request.purpose == Purpose::Analysis
         && request.output.is_text();
-    if !context_ask {
+    let workspace = request.context.sessions.is_empty()
+        && matches!(
+            request.purpose,
+            Purpose::Analysis | Purpose::Review | Purpose::DesignReview
+        );
+    // `agy` has no native schema constraint: its proxy checks only Cowboy's
+    // own review schema, so any other structured output is refused here,
+    // before a child could be launched on the owner's account.
+    // A review is a verdict, so it always carries that checked schema; an
+    // analysis answers in text.
+    let review = matches!(request.purpose, Purpose::Review | Purpose::DesignReview);
+    let output = match &request.output {
+        crate::managed_calls::OutputFormat::Text {} => !review,
+        crate::managed_calls::OutputFormat::JsonSchema { schema } => {
+            review && *schema == crate::managed_calls::review::output_schema()
+        }
+    };
+    // The proxy refuses a prompt `agy` would read as a slash command; refusing
+    // it here keeps that refusal from reaching the owner's account.
+    // Unicode whitespace and a byte-order mark: a superset of what the
+    // proxy's `\s` strips, so admission refuses at least what it would.
+    let slash = request
+        .prompt()
+        .trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
+        .starts_with('/');
+    if continued || !output || slash || !(context_ask || workspace) {
         return Err("unsupported_capability");
+    }
+    if matches!(request.purpose, Purpose::Review | Purpose::DesignReview)
+        && same_family(requested, caller)
+    {
+        return Err("same_agent");
     }
     if !policy.enabled {
         return Err("calls_disabled");
@@ -1302,33 +1337,79 @@ mod tests {
     }
 
     #[test]
-    fn antigravity_serves_only_an_explicit_fresh_text_context_ask() {
+    fn antigravity_serves_explicit_fresh_read_only_rounds() {
         let context = ask(
             r#"{"schema":1,"request_id":"a","purpose":"analysis","instruction":"what did we decide?","context":{"scope":"current-worktree","sessions":[{"session_id":"sess-1","before":9}]},"access":"read-only","conversation":{"mode":"fresh"}}"#,
         );
         let plain = ask(
             r#"{"schema":1,"request_id":"b","purpose":"analysis","instruction":"Summarize","context":{"scope":"current-worktree"},"access":"read-only","conversation":{"mode":"fresh"}}"#,
         );
-        let review = ask(
-            r#"{"schema":1,"request_id":"c","purpose":"review","instruction":"Review","context":{"scope":"current-worktree"},"access":"read-only","conversation":{"mode":"fresh"}}"#,
+        let schema = crate::managed_calls::review::output_schema();
+        let review = ask(&format!(
+            r#"{{"schema":1,"request_id":"c","purpose":"review","instruction":"Review","context":{{"scope":"current-worktree"}},"access":"read-only","conversation":{{"mode":"fresh"}},"output":{{"format":"json_schema","schema":{schema}}}}}"#
+        ));
+        // Any schema but Cowboy's own review schema is refused.
+        let custom = ask(
+            r#"{"schema":1,"request_id":"f","purpose":"review","instruction":"Review","context":{"scope":"current-worktree"},"access":"read-only","conversation":{"mode":"fresh"},"output":{"format":"json_schema","schema":{"type":"object"}}}"#,
+        );
+        // A prompt agy would read as a slash command never reaches it.
+        let slash = ask(
+            r#"{"schema":1,"request_id":"h","purpose":"analysis","instruction":"/tmp/notes.md: summarize","context":{"scope":"current-worktree"},"access":"read-only","conversation":{"mode":"fresh"}}"#,
+        );
+        let bom = ask(
+            r#"{"schema":1,"request_id":"i","purpose":"analysis","instruction":"\ufeff\u0085 /tmp/notes.md","context":{"scope":"current-worktree"},"access":"read-only","conversation":{"mode":"fresh"}}"#,
+        );
+        let structured_analysis = ask(&format!(
+            r#"{{"schema":1,"request_id":"g","purpose":"analysis","instruction":"Summarize","context":{{"scope":"current-worktree"}},"access":"read-only","conversation":{{"mode":"fresh"}},"output":{{"format":"json_schema","schema":{schema}}}}}"#
+        ));
+        let design = ask(&format!(
+            r#"{{"schema":1,"request_id":"d","purpose":"design_review","instruction":"Review the plan","context":{{"scope":"current-worktree"}},"access":"read-only","conversation":{{"mode":"fresh"}},"output":{{"format":"json_schema","schema":{}}}}}"#,
+            crate::managed_calls::review::output_schema()
+        ));
+        // A review without the checked schema would be an unchecked verdict.
+        let text_review = ask(
+            r#"{"schema":1,"request_id":"j","purpose":"review","instruction":"Review","context":{"scope":"current-worktree"},"access":"read-only","conversation":{"mode":"fresh"}}"#,
+        );
+        let structured_history = ask(
+            r#"{"schema":1,"request_id":"e","purpose":"analysis","instruction":"what?","context":{"scope":"current-worktree","sessions":[{"session_id":"sess-1"}]},"access":"read-only","conversation":{"mode":"fresh"},"output":{"format":"json_schema","schema":{"type":"object"}}}"#,
         );
         let on = policy(true, false);
-        assert_eq!(
-            choose_context_only(&on, "antigravity", &context, false)
-                .unwrap()
-                .agent,
-            "antigravity"
-        );
-        for (request, continued) in [(&plain, false), (&review, false), (&context, true)] {
+        for request in [&context, &plain, &review, &design] {
             assert_eq!(
-                choose_context_only(&on, "antigravity", request, continued).err(),
+                choose_context_only(&on, "codex", "antigravity", request, false)
+                    .unwrap()
+                    .agent,
+                "antigravity"
+            );
+        }
+        // A context ask answers in text; nothing is continued.
+        for (request, continued) in [
+            (&structured_history, false),
+            (&custom, false),
+            (&text_review, false),
+            (&slash, false),
+            (&bom, false),
+            (&structured_analysis, false),
+            (&plain, true),
+            (&review, true),
+        ] {
+            assert_eq!(
+                choose_context_only(&on, "codex", "antigravity", request, continued).err(),
                 Some("unsupported_capability")
             );
         }
+        // A review is a second opinion: never Antigravity's own.
+        for request in [&review, &design] {
+            assert_eq!(
+                choose_context_only(&on, "antigravity", "antigravity", request, false).err(),
+                Some("same_agent")
+            );
+        }
+        assert!(choose_context_only(&on, "antigravity", "antigravity", &context, false).is_ok());
         let mut off = on.clone();
         off.enabled = false;
         assert_eq!(
-            choose_context_only(&off, "antigravity", &context, false).err(),
+            choose_context_only(&off, "codex", "antigravity", &context, false).err(),
             Some("calls_disabled")
         );
         // Never a policy target, approval widening or Auto candidate.

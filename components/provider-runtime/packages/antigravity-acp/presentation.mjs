@@ -270,7 +270,11 @@ export function planUpdate(input) {
  * line and stay out of the reply and memory. `undefined` for anything else.
  */
 export function agyNotice(update) {
-  if (update?.sessionUpdate !== "agent_message_chunk" || update.content?.type !== "text") {
+  if (
+    update?.sessionUpdate !== "agent_message_chunk" ||
+    update.content?.type !== "text" ||
+    typeof update.content.text !== "string"
+  ) {
     return undefined;
   }
   // A failed step may carry its timestamps ("Created At: …", "Completed At:
