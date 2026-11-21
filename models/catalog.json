@@ -1,10 +1,10 @@
 {
   "schema": 2,
-  "as_of": "2026-11-20",
+  "as_of": "2026-11-21",
   "inputs": {
     "repository": {
-      "count": 90,
-      "digest": "sha256:d1a9d82b37759a305e9451185d0a3140c21abfa90dbcf60c5b86f555471b26ef"
+      "count": 101,
+      "digest": "sha256:a8b03c17416e56bb3364e52b6ae4c5a8fab2f6f28d87ffd08b255e1d603ccf32"
     },
     "local": {
       "count": 164,
@@ -14,7 +14,7 @@
     "normalized_capability_rows": 118,
     "excluded_after_snapshot": 0,
     "methodology": "sha256:1a7de7d9cd0a1c404047d76b6a593960df7c2a8ec2cb733b81766a0613f3d9a3",
-    "targets": "sha256:f43db974eb2a8c961c0d0c230b6ac988195f32547cd18e49c5128b0a26de3178"
+    "targets": "sha256:6352e91f4b469d63d4e2d7fa67201bc509ea4a8471c0bfa6f8be66e55f491592"
   },
   "bindings": [
     {
@@ -68,7 +68,7 @@
       "preset": "fable-max",
       "values": {
         "effort": "max",
-        "model": "fable"
+        "model": "claude-fable-5-2[1m]"
       }
     },
     {
@@ -77,7 +77,7 @@
       "preset": "fable-high",
       "values": {
         "effort": "high",
-        "model": "fable"
+        "model": "claude-fable-5-2[1m]"
       }
     },
     {
@@ -144,6 +144,24 @@
       }
     },
     {
+      "id": "claude-opus-5-5:high@antigravity",
+      "provider": "antigravity",
+      "preset": "claude-opus-high",
+      "values": {
+        "model": "claude-opus-5-5",
+        "thought_level": "high"
+      }
+    },
+    {
+      "id": "claude-sonnet-5-5:high@antigravity",
+      "provider": "antigravity",
+      "preset": "claude-sonnet-high",
+      "values": {
+        "model": "claude-sonnet-5-5",
+        "thought_level": "high"
+      }
+    },
+    {
       "id": "deepseek-v4.1-flash:max@claude-deepseek",
       "provider": "claude-deepseek",
       "preset": "deepseek-flash-max",
@@ -206,7 +224,7 @@
           "mean": 0.637,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "medium"
         },
         "code_review": {
@@ -214,7 +232,7 @@
           "mean": 1,
           "uncertainty": 0.05,
           "lineages": 3,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "high"
         },
         "reasoning": {
@@ -222,7 +240,7 @@
           "mean": 0.95,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "medium"
         },
         "long_context": {
@@ -268,7 +286,7 @@
           "mean": 0.65,
           "uncertainty": 0.103,
           "lineages": 3,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "high"
         },
         "reasoning": {
@@ -276,7 +294,7 @@
           "mean": 0.875,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "medium"
         },
         "long_context": {
@@ -318,7 +336,7 @@
           "mean": 0.604,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "medium"
         },
         "code_review": {
@@ -330,7 +348,7 @@
           "mean": 0.841,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "medium"
         },
         "long_context": {
@@ -375,7 +393,7 @@
           "mean": 0.633,
           "uncertainty": 0.072,
           "lineages": 3,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "high"
         },
         "reasoning": {
@@ -383,7 +401,7 @@
           "mean": 0.771,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "medium"
         },
         "long_context": {
@@ -424,7 +442,7 @@
           "mean": 0.129,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "medium"
         },
         "code_review": {
@@ -436,7 +454,7 @@
           "mean": 0.321,
           "uncertainty": 0.106,
           "lineages": 3,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "high"
         },
         "long_context": {
@@ -466,7 +484,7 @@
       "provider": "claude-code",
       "preset": "fable-max",
       "values": {
-        "model": "fable",
+        "model": "claude-fable-5-2[1m]",
         "effort": "max"
       },
       "executable": true,
@@ -477,7 +495,7 @@
           "mean": 0.657,
           "uncertainty": 0.069,
           "lineages": 3,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "high"
         },
         "code_review": {
@@ -489,7 +507,7 @@
           "mean": 0.888,
           "uncertainty": 0.063,
           "lineages": 3,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "high"
         },
         "long_context": {
@@ -519,7 +537,7 @@
       "provider": "claude-code",
       "preset": "fable-high",
       "values": {
-        "model": "fable",
+        "model": "claude-fable-5-2[1m]",
         "effort": "high"
       },
       "executable": true,
@@ -538,7 +556,7 @@
           "mean": 0.831,
           "uncertainty": 0.071,
           "lineages": 3,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "high"
         },
         "long_context": {
@@ -586,7 +604,7 @@
           "mean": 0.688,
           "uncertainty": 0.08,
           "lineages": 3,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "high"
         },
         "long_context": {
@@ -676,7 +694,7 @@
           "mean": 0.597,
           "uncertainty": 0.066,
           "lineages": 4,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "high"
         },
         "long_context": {
@@ -724,7 +742,7 @@
           "mean": 0.3,
           "uncertainty": 0.055,
           "lineages": 3,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "high"
         },
         "long_context": {
@@ -835,6 +853,90 @@
       "preset": "gemini-hydrogen-high",
       "values": {
         "model": "gemini-4-hydrogen",
+        "thought_level": "high"
+      },
+      "executable": true,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "cost_groups": {}
+    },
+    {
+      "id": "claude-opus-5-5:high@antigravity",
+      "vendor": "anthropic",
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "released": "2026-09-22",
+      "provider": "antigravity",
+      "preset": "claude-opus-high",
+      "values": {
+        "model": "claude-opus-5-5",
+        "thought_level": "high"
+      },
+      "executable": true,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "cost_groups": {}
+    },
+    {
+      "id": "claude-sonnet-5-5:high@antigravity",
+      "vendor": "anthropic",
+      "model": "claude-sonnet-5-5",
+      "effort": "high",
+      "released": "2026-09-28",
+      "provider": "antigravity",
+      "preset": "claude-sonnet-high",
+      "values": {
+        "model": "claude-sonnet-5-5",
         "thought_level": "high"
       },
       "executable": true,
@@ -1045,7 +1147,7 @@
           "mean": 0.633,
           "uncertainty": 0.053,
           "lineages": 3,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "high"
         },
         "code_review": {
@@ -1057,7 +1159,7 @@
           "mean": 0.777,
           "uncertainty": 0.077,
           "lineages": 3,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "high"
         },
         "long_context": {
@@ -1100,7 +1202,7 @@
           "mean": 0.748,
           "uncertainty": 0.083,
           "lineages": 3,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "high"
         },
         "long_context": {
@@ -1169,7 +1271,7 @@
           "mean": 0.637,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "medium"
         },
         "code_review": {
@@ -1181,7 +1283,7 @@
           "mean": 0.654,
           "uncertainty": 0.074,
           "lineages": 2,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "medium"
         },
         "long_context": {
@@ -1215,7 +1317,7 @@
           "mean": 0.651,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "medium"
         },
         "code_review": {
@@ -1227,7 +1329,7 @@
           "mean": 0.905,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "medium"
         },
         "long_context": {
@@ -1261,7 +1363,7 @@
           "mean": 0.569,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "medium"
         },
         "code_review": {
@@ -1273,7 +1375,7 @@
           "mean": 0.689,
           "uncertainty": 0.077,
           "lineages": 3,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "high"
         },
         "long_context": {
@@ -1342,7 +1444,7 @@
           "mean": 0.545,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "medium"
         },
         "code_review": {
@@ -1421,7 +1523,7 @@
           "mean": 0.272,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "medium"
         },
         "code_review": {
@@ -1433,7 +1535,7 @@
           "mean": 0.416,
           "uncertainty": 0.067,
           "lineages": 3,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "high"
         },
         "long_context": {
@@ -1467,7 +1569,7 @@
           "mean": 0.354,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "medium"
         },
         "code_review": {
@@ -1479,7 +1581,7 @@
           "mean": 0.447,
           "uncertainty": 0.124,
           "lineages": 3,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "high"
         },
         "long_context": {
@@ -1513,7 +1615,7 @@
           "mean": 0.128,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "medium"
         },
         "code_review": {
@@ -1525,7 +1627,7 @@
           "mean": 0.262,
           "uncertainty": 0.137,
           "lineages": 3,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "high"
         },
         "long_context": {
@@ -1613,7 +1715,7 @@
           "mean": 0.592,
           "uncertainty": 0.16,
           "lineages": 2,
-          "max_age_days": 119,
+          "max_age_days": 120,
           "confidence": "medium"
         },
         "writing": {
@@ -1643,7 +1745,7 @@
           "mean": 0.583,
           "uncertainty": 0.083,
           "lineages": 3,
-          "max_age_days": 2,
+          "max_age_days": 3,
           "confidence": "high"
         },
         "reasoning": {

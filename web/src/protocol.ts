@@ -356,6 +356,8 @@ export interface ConfigOption {
     name: string;
     description?: string;
   }[];
+  /** Provider-owned metadata, such as `cowboy.dev/configuration-equivalence`. */
+  _meta?: Record<string, unknown>;
 }
 
 // A staged message on the wire — a queued prompt or a draft. `content` is the

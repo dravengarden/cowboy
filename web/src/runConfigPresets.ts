@@ -12,6 +12,27 @@ export interface RunConfigPreset {
 
 type DeclaredPreset = ProviderUiManifest["configuration"]["presets"][number];
 
+const EQUIVALENCE = "cowboy.dev/configuration-equivalence";
+
+/** Whether the option already holds `value`: exactly, or through the
+ * connected Provider's own exact equivalence (a resumed Fable 5.2 session
+ * reports the alias its CLI lists). Mirrors the Controller's matcher. */
+export function optionHolds(option: ConfigOption | undefined, value: string): boolean {
+  if (!option) return false;
+  const current = option.currentValue;
+  if (String(current) === value) return true;
+  const equivalence = option._meta?.[EQUIVALENCE] as
+    | { schema?: unknown; value?: unknown; equivalent_values?: unknown }
+    | undefined;
+  return equivalence?.schema === 1 &&
+    typeof current === "string" &&
+    equivalence.value === current &&
+    Array.isArray(equivalence.equivalent_values) &&
+    equivalence.equivalent_values.length <= 8 &&
+    equivalence.equivalent_values.every((item) => typeof item === "string") &&
+    equivalence.equivalent_values.includes(value);
+}
+
 /** Describe acknowledged values, including custom values outside the presets. */
 export function runConfigSummary(options: readonly ConfigOption[]): string {
   return options.map((option) => {
@@ -35,13 +56,16 @@ function supportsPreset(
   const changingModel = Object.entries(preset.values).some(([id, value]) => {
     const option = optionById.get(id);
     return option?.category === "model" &&
-      String(option.currentValue) !== value &&
+      !optionHolds(option, value) &&
       option.options.some((candidate) => String(candidate.value) === value);
   });
   return Object.entries(preset.values).every(([id, value]) =>
     optionById.get(id)?.options.some((candidate) =>
         String(candidate.value) === value
       ) === true ||
+    // A resumed session may list the held model under another exact
+    // spelling; switching models still requires an advertised value.
+    optionHolds(optionById.get(id), value) ||
     // Reasoning choices describe the CURRENT model. A signed preset for a
     // different advertised model must not inherit that model's restrictions.
     // The serial config path applies the model first, then validates its effort.
@@ -84,7 +108,7 @@ export function activeRunConfigPreset(
   const optionById = new Map(options.map((option) => [option.id, option]));
   return presets.find((preset) =>
     Object.entries(preset.values).every(([id, value]) =>
-      String(optionById.get(id)?.currentValue) === value
+      optionHolds(optionById.get(id), value)
     )
   );
 }
@@ -95,7 +119,7 @@ export function runConfigPresetChanges(
 ): { configId: string; value: string }[] {
   const optionById = new Map(options.map((option) => [option.id, option]));
   return Object.entries(preset.values).flatMap(([configId, value]) =>
-    String(optionById.get(configId)?.currentValue) === value
+    optionHolds(optionById.get(configId), value)
       ? []
       : [{ configId, value }]
   ).sort((left, right) =>

@@ -324,3 +324,43 @@ test("a Run configuration draft saves only real changes, model first", () => {
     { configId: "fast", value: true },
   ]);
 });
+
+test("a resumed Fable 5.2 session keeps its preset under the Provider's exact equivalence", () => {
+  const declared: DeclaredPreset[] = [
+    {
+      id: "fable-max",
+      name: "Fable · Max",
+      detail: "Fable 5.2 · Max",
+      is_default: false,
+      values: { model: "claude-fable-5-2[1m]", effort: "max" },
+    },
+  ];
+  const resumed: ConfigOption[] = [
+    {
+      ...selectOption("model", "fable", ["default", "fable", "opus"]),
+      category: "model",
+      _meta: {
+        "cowboy.dev/configuration-equivalence": {
+          schema: 1,
+          value: "fable",
+          equivalent_values: ["claude-fable-5-2", "claude-fable-5-2[1m]"],
+        },
+      },
+    },
+    selectOption("effort", "max", ["high", "max"]),
+  ];
+  const presets = supportedRunConfigPresets(declared, resumed);
+  assertEquals(presets.map((preset) => preset.id), ["fable-max"]);
+  assertEquals(activeRunConfigPreset(presets, resumed)?.id, "fable-max");
+  assertEquals(runConfigPresetChanges(presets[0]!, resumed), []);
+
+  // Without the Provider's declaration the alias is not that preset.
+  const undeclared = resumed.map(({ _meta, ...option }) => option);
+  assertEquals(supportedRunConfigPresets(declared, undeclared), []);
+  // Metadata naming another current value proves nothing.
+  const stale: ConfigOption[] = [
+    { ...resumed[0]!, currentValue: "opus" },
+    resumed[1]!,
+  ];
+  assertEquals(activeRunConfigPreset(presets, stale), undefined);
+});

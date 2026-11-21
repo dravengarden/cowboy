@@ -3,6 +3,11 @@ import test from "node:test";
 import { configurationEquivalence, installConfigurationEquivalence } from "./configuration.mjs";
 
 const KEY = "cowboy.dev/configuration-equivalence";
+// A resumed Fable 5.2 session lists its row under the family alias.
+const ROWS = [
+  { value: "default", name: "Default (recommended)" },
+  { value: "fable", name: "Fable 5.2" },
+];
 test("only exact per-version Fable spellings are equivalent; native values stay truthful", () => {
   const groups = [
     ["claude-fable-5-1", "claude-fable-5-1[1m]"],
@@ -15,6 +20,7 @@ test("only exact per-version Fable spellings are equivalent; native values stay 
         {
           id: "model",
           currentValue: value,
+          options: ROWS,
           _meta: { native: true },
         },
         { id: "effort", currentValue: "max" },
@@ -65,22 +71,22 @@ test("creation, resume, initial config options, replies and notifications carry 
     }
     async createSession() {
       return {
-        configOptions: [{ id: "model", currentValue: "claude-fable-5-2[1m]" }],
+        configOptions: [{ id: "model", options: ROWS, currentValue: "claude-fable-5-2[1m]" }],
       };
     }
     async withInitialConfigOptions() {
       return {
-        configOptions: [{ id: "model", currentValue: "fable" }],
+        configOptions: [{ id: "model", options: ROWS, currentValue: "fable" }],
       };
     }
     async resumeSession() {
       return {
-        configOptions: [{ id: "model", currentValue: "claude-fable-5-2" }],
+        configOptions: [{ id: "model", options: ROWS, currentValue: "claude-fable-5-2" }],
       };
     }
     async setSessionConfigOption() {
       return {
-        configOptions: [{ id: "model", currentValue: "claude-fable-5-1" }],
+        configOptions: [{ id: "model", options: ROWS, currentValue: "claude-fable-5-1" }],
       };
     }
   }
@@ -116,7 +122,7 @@ test("creation, resume, initial config options, replies and notifications carry 
   assert.equal(updated.configOptions[0]._meta[KEY].value, "claude-fable-5-1");
   assert.deepEqual(updated.configOptions[0]._meta[KEY].equivalent_values, ["claude-fable-5-1[1m]"]);
 
-  const options = [{ id: "model", currentValue: "claude-fable-5-2[1m]" }];
+  const options = [{ id: "model", options: ROWS, currentValue: "claude-fable-5-2[1m]" }];
   assert.equal(
     await agent.client.sessionUpdate({
       update: { sessionUpdate: "config_option_update", configOptions: options },
@@ -128,4 +134,29 @@ test("creation, resume, initial config options, replies and notifications carry 
     "claude-fable-5-2",
     "fable",
   ]);
+});
+
+test("the fable alias is equivalent only while its own row is Fable 5.2", () => {
+  const equivalents = (currentValue, options) => {
+    const option = { id: "model", currentValue, options };
+    configurationEquivalence([option]);
+    return option._meta?.[KEY]?.equivalent_values;
+  };
+  // A fresh session advertises no alias row: the alias joins no class.
+  const fresh = [{ value: "claude-fable-5-2[1m]", name: "Fable 5.2" }];
+  assert.deepEqual(equivalents("claude-fable-5-2[1m]", fresh), ["claude-fable-5-2"]);
+  assert.equal(equivalents("fable", fresh), undefined);
+  assert.equal(equivalents("fable", undefined), undefined);
+  // A CLI that moves the alias to a newer Fable must not confirm 5.2.
+  for (const name of ["Fable 5.3", "Fable 5.21", "Fable 5.2.1", "Fable", 7]) {
+    assert.equal(equivalents("fable", [{ value: "fable", name }]), undefined);
+    assert.deepEqual(equivalents("claude-fable-5-2", [{ value: "fable", name }]), [
+      "claude-fable-5-2[1m]",
+    ]);
+  }
+  // Grouped select entries are read like flat ones.
+  assert.deepEqual(
+    equivalents("fable", [{ group: "claude", name: "Claude", options: [{ value: "fable", name: "Fable 5.2 (1M context)" }] }]),
+    ["claude-fable-5-2", "claude-fable-5-2[1m]"],
+  );
 });

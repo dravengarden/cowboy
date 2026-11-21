@@ -3,10 +3,16 @@
 // session and may emit `claude-fable-5-2` on resume, which ACP 0.107.3's
 // `aliasResumedModelRow` rewrites to `fable`. Keep the actual value; advertise
 // only each exact, provider-owned equivalence class (never across versions).
+// The family alias names whatever model the CLI resolves it to, so it joins a
+// class only while this session's own `fable` row is the version the class
+// pins: a newer CLI that moves the alias stops confirming instead of drifting.
 // https://code.claude.com/docs/en/model-config#extended-context
 const EQUIVALENCES = [
-  ["claude-fable-5-1", "claude-fable-5-1[1m]"],
-  ["claude-fable-5-2", "claude-fable-5-2[1m]", "fable"],
+  { values: ["claude-fable-5-1", "claude-fable-5-1[1m]"] },
+  {
+    values: ["claude-fable-5-2", "claude-fable-5-2[1m]"],
+    alias: { value: "fable", name: /^Fable 5\.2(?![.\d])/ },
+  },
 ];
 const KEY = "cowboy.dev/configuration-equivalence";
 const OPTIONAL_SESSION_METHODS = [
@@ -18,13 +24,29 @@ const OPTIONAL_SESSION_METHODS = [
   "sessionOptions",
 ];
 
+function advertised(option, value) {
+  const entries = (Array.isArray(option.options) ? option.options : []).flatMap((entry) =>
+    Array.isArray(entry?.options) ? entry.options : [entry],
+  );
+  return entries.find((entry) => entry?.value === value);
+}
+
+function members(group, option) {
+  const alias = group.alias && advertised(option, group.alias.value);
+  return typeof alias?.name === "string" && group.alias.name.test(alias.name)
+    ? [...group.values, group.alias.value]
+    : group.values;
+}
+
 export function configurationEquivalence(options) {
   if (!Array.isArray(options)) return;
   for (const option of options) {
     if (option.id !== "model") continue;
     // Rebuilding a native option may retain metadata from its previous value.
     if (option._meta) delete option._meta[KEY];
-    const group = EQUIVALENCES.find((values) => values.includes(option.currentValue));
+    const group = EQUIVALENCES.map((candidate) => members(candidate, option)).find((values) =>
+      values.includes(option.currentValue),
+    );
     if (!group) continue;
     option._meta = {
       ...option._meta,

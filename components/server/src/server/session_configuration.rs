@@ -222,7 +222,7 @@ fn model_matches(options: &Value, preferences: &Value) -> bool {
             };
             preferences
                 .get(id)
-                .is_some_and(|value| option.get("currentValue") == Some(value))
+                .is_some_and(|value| cowboy::native_configuration::confirmed(option, value))
         })
     })
 }

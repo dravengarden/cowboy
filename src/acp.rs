@@ -716,7 +716,7 @@ async fn run_config_queue(
                                 options.iter().any(|option| {
                                     option.get("id").and_then(serde_json::Value::as_str)
                                         == Some(config_id.as_str())
-                                        && option.get("currentValue") == Some(&value)
+                                        && crate::native_configuration::confirmed(option, &value)
                                 })
                             });
                             state.sink.set_config_options(

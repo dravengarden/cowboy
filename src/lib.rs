@@ -142,6 +142,7 @@ pub mod managed_config;
 pub mod memory_observability;
 #[cfg(feature = "full")]
 pub mod model;
+pub mod native_configuration;
 #[cfg(feature = "full")]
 pub mod observability;
 #[cfg(feature = "full")]
