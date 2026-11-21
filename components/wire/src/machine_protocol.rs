@@ -93,8 +93,9 @@ mod portable_bundle;
 pub use portable_bundle::PortableCredentialBundle;
 pub mod portable_usage;
 pub use native_usage::{
-    NATIVE_RESET_OUTCOMES, NativeResetDispatch, NativeResetRequest, PRE_START_RESET_REFUSALS,
-    native_usage_error_code, project_native_reset_reply, reset_refusal_unsent,
+    NATIVE_RESET_OUTCOMES, NATIVE_RESET_SPACING_PROTOCOL_VERSION, NativeResetDispatch,
+    NativeResetRequest, PRE_START_RESET_REFUSALS, native_usage_error_code,
+    project_native_reset_reply, reset_refusal_unsent,
 };
 
 pub const CURRENT_TURN_PROTOCOL_VERSION: u16 = 34;

@@ -55,8 +55,8 @@ pub const REFRESH_FREE_DECLARATION: &str = "collector/portable-account.json";
 /// claim alone is not evidence: Codex 3.6.16-3.6.18 carried it while the
 /// app-server still refreshed an expired token on its own. Usage counts as
 /// refresh-free only with a guard the fixed collector names:
-/// `"refresh_endpoint_refused"` (Codex 3.6.19: the app-server can reach no
-/// refresh endpoint) or `"cli_not_started"` (Grok 3.2.18: the CLI never
+/// `"refresh_endpoint_refused"` (Codex 3.6.20: the app-server can reach no
+/// refresh endpoint) or `"cli_not_started"` (Grok 3.2.19: the CLI never
 /// starts). The banked reset additionally needs `"reset_token_refresh":
 /// "request"`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -466,6 +466,13 @@ mod tests {
         assert!(serde_json::from_value::<PortableUsageRequest>(extra).is_err());
     }
 
+    /// Copies of the shipped declarations; `plugins/collector-sidecars.test.js`
+    /// pins the files to these exact values (the wire crate's release source
+    /// does not carry Plugin files).
+    const CODEX_DECLARATION: &str = r#"{"schema":1,"token_refresh":"request","token_refresh_guard":"refresh_endpoint_refused","reset_token_refresh":"request"}"#;
+    const GROK_DECLARATION: &str =
+        r#"{"schema":1,"token_refresh":"request","token_refresh_guard":"cli_not_started"}"#;
+
     #[test]
     fn only_a_guarded_refresh_free_declaration_is_admitted() {
         let free = |text: &str| RefreshFree::from_declaration(Some(text));
@@ -476,18 +483,14 @@ mod tests {
             RefreshFree::default()
         );
         assert_eq!(
-            free(include_str!(
-                "../../../../plugins/codex/collector/portable-account.json"
-            )),
+            free(CODEX_DECLARATION),
             RefreshFree {
                 usage: true,
                 reset: true
             }
         );
         assert_eq!(
-            free(include_str!(
-                "../../../../plugins/grok/collector/portable-account.json"
-            )),
+            free(GROK_DECLARATION),
             RefreshFree {
                 usage: true,
                 reset: false
@@ -512,7 +515,7 @@ mod tests {
         let command: super::super::MachineCommand = serde_json::from_value(serde_json::json!({
             "command": "consume_portable_reset", "request_id": "r",
             "request": {"account_id": "11111111-1111-4111-8111-111111111111",
-                "plugin_id": "codex", "plugin_version": "3.6.19",
+                "plugin_id": "codex", "plugin_version": "3.6.20",
                 "generation_digest": "sha256:x", "auth_generation": 3,
                 "reset": {"provider": "openai", "idempotency_key": "cowboy-reset-1",
                     "expected_credit_id": "credit-1"},

@@ -76,13 +76,13 @@ impl MachineControl {
                     started,
                     detail: Some(code),
                     ..
-                })) => Err(NativeResetFailure {
-                    call_may_have_reached_provider: !crate::machine_protocol::reset_refusal_unsent(
-                        Some(started),
-                        native_usage_error_code(&code),
-                    ),
-                    code: native_usage_error_code(&code),
-                }),
+                })) => {
+                    Err(NativeResetFailure {
+                        call_may_have_reached_provider:
+                            !crate::machine_protocol::reset_refusal_unsent(Some(started), &code),
+                        code: native_usage_error_code(&code),
+                    })
+                }
                 // A lost, malformed or late reply may follow a sent reset.
                 _ => Err(NativeResetFailure {
                     call_may_have_reached_provider: true,
@@ -148,13 +148,13 @@ impl MachineControl {
                     started,
                     detail: Some(code),
                     ..
-                })) => Err(NativeResetFailure {
-                    call_may_have_reached_provider: !crate::machine_protocol::reset_refusal_unsent(
-                        Some(started),
-                        portable_reset_code(&code),
-                    ),
-                    code: portable_reset_code(&code),
-                }),
+                })) => {
+                    Err(NativeResetFailure {
+                        call_may_have_reached_provider:
+                            !crate::machine_protocol::reset_refusal_unsent(Some(started), &code),
+                        code: portable_reset_code(&code),
+                    })
+                }
                 // A lost, malformed or late reply may follow a sent reset.
                 _ => Err(NativeResetFailure {
                     call_may_have_reached_provider: true,
@@ -192,10 +192,7 @@ mod portable_tests {
             else {
                 unreachable!()
             };
-            !crate::machine_protocol::reset_refusal_unsent(
-                Some(started),
-                portable_reset_code(&detail.unwrap()),
-            )
+            !crate::machine_protocol::reset_refusal_unsent(Some(started), &detail.unwrap())
         };
         let reply = |extra: serde_json::Value| {
             let mut value = serde_json::json!({"event": "plugin_host_response",
@@ -216,6 +213,12 @@ mod portable_tests {
         assert!(decode(reply(
             serde_json::json!({"detail": "native_reset_expired"})
         )));
+        // Free text is never normalised into a pre-start code.
+        assert!(decode(reply(
+            serde_json::json!({"started": false, "detail": "HTTP 401"})
+        )));
+        assert!(!decode(reply(serde_json::json!({"started": false,
+            "detail": "native_reset_preflight_failed"}))));
     }
 
     #[test]

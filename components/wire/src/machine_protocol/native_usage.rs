@@ -29,7 +29,15 @@ pub struct NativeResetDispatch {
     /// The spend is the reset's second paced Provider start: the Machine runs
     /// the identity read first and never starts the spend before this.
     pub spend_not_before_ms: i64,
+    /// Protocol 51: the Provider spacing, which the Machine also keeps from
+    /// its actual identity-read start; it refuses (unsent) a spend that would
+    /// then start after `expires_at_ms`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_spacing_ms: Option<i64>,
 }
+
+/// Machines from which a named reset carries `min_spacing_ms`.
+pub const NATIVE_RESET_SPACING_PROTOCOL_VERSION: u16 = 51;
 
 /// The closed success outcomes of the signed Claude collector's
 /// `consume_reset`. Anything else is an unknown outcome.
@@ -110,11 +118,15 @@ impl NativeResetRequest {
     }
 }
 
-/// Refusals a Machine reports only before a reset's collector started.
-pub const PRE_START_RESET_REFUSALS: [&str; 20] = [
+/// The exact raw codes a Machine reports only when a reset's spend never
+/// started: refusals and failures before the spend (the identity read or the
+/// spawn included). Nothing else, and no normalised or free-text detail, is
+/// evidence that nothing was sent.
+pub const PRE_START_RESET_REFUSALS: [&str; 19] = [
     "native_reset_request_invalid",
     "native_reset_expired",
     "native_reset_unsupported",
+    "native_reset_preflight_failed",
     "native_usage_busy",
     "native_usage_admission_expired",
     "native_usage_profile_changed",
@@ -129,18 +141,15 @@ pub const PRE_START_RESET_REFUSALS: [&str; 20] = [
     "portable_usage_replica_pending",
     "portable_usage_collector_unavailable",
     "portable_usage_refresh_unsupported",
-    "portable_usage_machine_unavailable",
-    "portable_usage_authentication_required",
-    "native_usage_location_unsupported",
+    "portable_reset_identity_required",
 ];
 
-/// Whether a refused reset certainly never reached the Provider: only an
-/// explicit `started: false` with a recognised pre-start refusal. A missing
-/// `started` field, an unknown code or `native_reset_outcome_unknown` may
-/// follow a spent reset.
+/// Whether a refused reset certainly never reached the Provider: an explicit
+/// `started: false` with the exact raw pre-start code (never a normalised or
+/// free-text detail). Anything else may follow a spent reset.
 #[must_use]
-pub fn reset_refusal_unsent(started: Option<bool>, code: &str) -> bool {
-    started == Some(false) && PRE_START_RESET_REFUSALS.contains(&code)
+pub fn reset_refusal_unsent(started: Option<bool>, raw_code: &str) -> bool {
+    started == Some(false) && PRE_START_RESET_REFUSALS.contains(&raw_code)
 }
 
 /// Closed diagnostics for native observations; arbitrary subprocess output is
@@ -160,6 +169,7 @@ pub fn native_usage_error_code(value: &str) -> &'static str {
         "native_reset_request_invalid" => "native_reset_request_invalid",
         "native_reset_outcome_unknown" => "native_reset_outcome_unknown",
         "native_reset_expired" => "native_reset_expired",
+        "native_reset_preflight_failed" => "native_reset_preflight_failed",
         "machine_usage_update_required" => "machine_usage_update_required",
         "machine_connection_changed" => "machine_connection_changed",
         _ => "native_usage_unavailable",
@@ -289,5 +299,11 @@ mod tests {
             "native_reset_outcome_unknown"
         ));
         assert!(!reset_refusal_unsent(Some(false), "something new"));
+        // Free text is never normalised into a pre-start code.
+        assert!(!reset_refusal_unsent(Some(false), "HTTP 401"));
+        assert!(reset_refusal_unsent(
+            Some(false),
+            "native_reset_preflight_failed"
+        ));
     }
 }
