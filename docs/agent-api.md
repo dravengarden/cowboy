@@ -205,6 +205,58 @@ as `--notify` on `cowboy review` (which then returns right after admission) and
 on `cowboy codex`/`cowboy claude`; Review 1.0.6 guidance starts reviews this way
 because a shell command cannot outlive its tool timeout.
 
+### Session completion notices
+
+A session that hands work to another of its owner's sessions (not a managed
+call: the peer edits, tests and commits in its own worktree and context) uses
+`control.apply` `queue.submit` with `notify:true`, or `cowboy session prompt
+--notify` from inside a session (it calls the same action through the session's
+Agent API grant, so the Controller knows the sender and no product login is
+needed). Only a non-empty next-turn prompt to another ordinary session is
+accepted; `notify_requires_next_turn`, `notify_requires_another_session`,
+`notify_unavailable` and `capacity` are definite refusals. An accepted receipt
+names the queued `prompt` id, the `target` and a `next` step.
+
+A result is bound to the prompt's own turn: the first `TurnEnd` after its
+echoed user message, never the session's later state, so a following prompt
+cannot change it. When that turn ends, the Controller queues one `[Cowboy]
+Session … finished the turn for your message …` prompt into the sender through
+the ordinary next-turn queue (`session-notice:<target>:<prompt>`, deduplicated,
+Cowboy origin `session_notice`), with the stop reason and the last 1,200
+characters of the peer's reply. A peer that stopped without a turn end, a
+prompt that left the queue without reaching the worker, and a deleted peer each
+produce their own notice. Before delivery the Controller rechecks that the
+sender exists, is not closing and still has the owner that asked.
+
+The watch polls Hub state every 2 s for at most 24 h and is Controller-process
+state. A restart loses it; replaying the same operation afterwards reports
+`notify:"lost"` with a wait command instead of promising a notice.
+`GET /api/sessions/{id}/prompts/{prompt}` is the authority: `state` is
+`queued`, `running`, `finished` (with `stop_reason` and `reply_tail`),
+`stopped`, or `unknown` (removed, moved to drafts, or evidence that left the
+bounded hot window), and 404 for a deleted session. `?wait_ms=N` (at most
+50,000) answers as soon as the prompt is no longer queued or running, so any
+installed CLI can wait with `cowboy api GET`. `cowboy session wait <session>
+<prompt>` loops over it (default 540 s) and prints one JSON line.
+
+The same holds for managed calls: an Antigravity parent's `calls.start` and
+`review.start` receipts carry a `next` that tells it to stay in the turn with
+RunCommand `cowboy call wait <call_id> --timeout-ms 580000` (or
+`cowboy.calls.wait` when the call context is unavailable) and then read
+`calls.result`, because its `notify:true` notice only parks as a draft. Its
+routing projection states the rule once per session, and the denial of native
+subagents and schedules names the same path: read-only delegation through
+calls, file-editing delegation through another session.
+
+Antigravity runs human-paced only ([requirements](requirements.md)): an Agent
+API command never dispatches into an Antigravity session (`queue.submit`,
+`queue.send`, `queue.force_send`, `drafts.activate[_all]` and `sessions.retry`
+return `human_paced_target`; `drafts.add` leaves the send to a person), and
+Cowboy never starts an Antigravity sender's turn. Its notice parks as a draft
+with a task notification. Its receipt therefore tells it to stay in the human's
+turn instead: RunCommand (`wait_seconds` and `timeout_seconds` 600) with the
+printed `cowboy api` wait loop, repeated while the state is queued or running.
+
 Selection `path` values are JSON pointers; a missing leading slash (`"plugins"`,
 `"0"`) is read as the same pointer. Each broker operation rechecks the live
 parent and, for owned sessions, the active product account. A long-running read

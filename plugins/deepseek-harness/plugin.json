@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "id": "deepseek-harness",
-  "version": "1.0.31",
-  "component_release": "3.124.0",
+  "version": "1.0.33",
+  "component_release": "3.127.0",
   "publisher": "cowboy-first-party",
   "kind": "agent_provider",
   "entrypoint": "provider.json",
@@ -29,7 +29,7 @@
     },
     {
       "id": "cowboy.provider-runtime",
-      "version": "1.3.10"
+      "version": "1.3.12"
     }
   ]
 }

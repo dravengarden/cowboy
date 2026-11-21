@@ -72,6 +72,9 @@ pub const WAKEUP_PREFIX: &str = "__wake__";
 /// It is a client-style id so the Hub deduplicates a repeated notice against
 /// the queue, recent dispatches and the transcript.
 pub const CALL_NOTICE_PREFIX: &str = "call-notice:";
+/// A Controller notice telling a session that the turn of a prompt it sent
+/// to another session ended. Deduplicated like [`CALL_NOTICE_PREFIX`].
+pub const PEER_NOTICE_PREFIX: &str = "session-notice:";
 
 #[cfg(test)]
 mod usage_tests {

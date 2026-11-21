@@ -232,6 +232,7 @@
     "code_api::check_routes": "code.checks",
     "code_api::search_routes": "code.search",
     "code_buffers::routes": "exception:native — browser-owned unsaved buffers, navigation and file synchronization stay with native code tools and the Code UI.",
+    "peer_notices::routes": "exception:native — the blocking prompt wait serves `cowboy session wait` inside a turn; agents observe the same state through sessions.queue and sessions.info, and queue.submit notify:true delivers the outcome.",
     "mcp_bindings::routes": "exception:identity — session MCP policy writes are owner-authorized CAS and launch preparation is Controller-owned; agents observe bindings through configuration.read('mcp').",
     "product_auth_router": "exception:identity — login, credentials, passkeys, grants and account administration remain with the identity owner.",
     "provider_browser_routes": "accounts.browser",

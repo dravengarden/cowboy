@@ -39,6 +39,8 @@ mod hub_config;
 use hub_config::{ConfigPreviews, add_config_choices};
 mod hub_events;
 mod hub_managed_calls;
+mod hub_peer_notice;
+pub use hub_peer_notice::PromptProgress;
 mod hub_provider_pins;
 mod hub_queue;
 mod hub_superagent;
@@ -3781,8 +3783,8 @@ impl Hub {
         &self,
         session_id: &str,
         expected: Option<(Status, u64)>,
-        status: Status,
-        detail: Option<String>,
+        mut status: Status,
+        mut detail: Option<String>,
     ) -> bool {
         let settled_update = {
             let mut sessions = self.inner.sessions.lock();
@@ -3799,6 +3801,9 @@ impl Hub {
             let was = s.meta.status;
             if expected.is_some_and(|expected| expected != (was, s.lifecycle_epoch)) {
                 return false;
+            }
+            if hub_events::idle_sandbox_loss(was, s.in_flight, status, detail.as_deref()) {
+                (status, detail) = (Status::Exited, None);
             }
             if status == Status::Busy && was != Status::Busy {
                 s.turn_completion_latched = false;

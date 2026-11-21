@@ -451,6 +451,9 @@ fn error_message(code: &str) -> &str {
         "portable_usage_collector_failed" | "portable_usage_temporarily_unavailable" => {
             "The account quota query failed. Cowboy will retry automatically."
         }
+        "native_usage_location_unsupported" => {
+            "Google does not report quota for this account's location. Sessions may still work; Cowboy checks again rarely."
+        }
         "usage_admission_unavailable" => {
             "Usage collection is paused. The Service admission ledger needs repair and a restart."
         }
@@ -713,6 +716,8 @@ fn collection_outcome(error: Option<&str>) -> crate::usage::limiter::Outcome {
             Outcome::Authentication
         }
         Some("portable_usage_throttled") => Outcome::Throttled,
+        // A vendor refusal for the account: never retry quickly.
+        Some("native_usage_location_unsupported") => Outcome::Throttled,
         Some(
             "machine_unavailable"
             | "machine_usage_update_required"

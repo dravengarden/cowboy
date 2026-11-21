@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::agent_model::{
-    CALL_NOTICE_PREFIX, LEGACY_AUTO_CONTINUE_PREFIX, SCHED_PREFIX, WAKEUP_PREFIX,
+    CALL_NOTICE_PREFIX, LEGACY_AUTO_CONTINUE_PREFIX, PEER_NOTICE_PREFIX, SCHED_PREFIX,
+    WAKEUP_PREFIX,
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -69,6 +70,9 @@ pub fn origin_from_cmid(cmid: Option<&str>) -> PromptOrigin {
             if value.starts_with(CALL_NOTICE_PREFIX) || value.starts_with("managed-call:") =>
         {
             PromptOrigin::cowboy("managed_call")
+        }
+        Some(value) if value.starts_with(PEER_NOTICE_PREFIX) => {
+            PromptOrigin::cowboy("session_notice")
         }
         Some(value) if value.starts_with("cowboy-superagent:") => {
             PromptOrigin::cowboy("superagent")

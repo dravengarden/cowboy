@@ -107,7 +107,8 @@ fn read_bounded(mut reader: impl std::io::Read) -> Option<Vec<u8>> {
 }
 
 /// The reply of one finished report: `{"outcome":"available","quota":{..}}`
-/// or `{"outcome":"authentication_required"}`; anything else is a fixed
+/// `{"outcome":"authentication_required"}` or
+/// `{"outcome":"location_unsupported"}`; anything else is a fixed
 /// `internal` failure without vendor text.
 pub fn interpret(exit: Option<i32>, output: &[u8]) -> Outcome<Value> {
     let text = String::from_utf8_lossy(output);
@@ -148,6 +149,11 @@ pub fn interpret(exit: Option<i32>, output: &[u8]) -> Outcome<Value> {
         .any(|needle| error.contains(needle))
         {
             return Ok(json!({"outcome": "authentication_required"}));
+        }
+        // Google refuses the quota report (and print mode) for an account
+        // whose location it does not serve, while ACP sessions may still run.
+        if error.contains("location") {
+            return Ok(json!({"outcome": "location_unsupported"}));
         }
         return Err(fail(
             Code::Internal,
@@ -426,6 +432,11 @@ mod tests {
         );
         let other =
             json!({"status": "ERROR", "error": "secret vendor detail /home/x", "num_turns": 0});
+        let location = json!({"status": "ERROR", "error": "Eligibility check failed: Your current account is not eligible for Antigravity, because it is not currently available in your location."});
+        assert_eq!(
+            interpret(Some(1), location.to_string().as_bytes()).unwrap(),
+            json!({"outcome": "location_unsupported"})
+        );
         let error = interpret(Some(1), other.to_string().as_bytes()).unwrap_err();
         assert_eq!(error.code, Code::Internal);
         assert!(!error.message.contains("secret"), "{}", error.message);

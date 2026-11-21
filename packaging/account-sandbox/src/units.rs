@@ -20,7 +20,10 @@ pub const COMMANDS: &[(Mode, &[&str])] = &[
     // Print mode answers a leading supported slash command locally (Cloud
     // Code `retrieveUserQuotaSummary`) without starting a conversation or a
     // model turn; its log goes to the unit's private `/tmp`, so repeated
-    // reports never accumulate files in the account home.
+    // reports never accumulate files in the account home. The sandboxed
+    // launcher hands exactly this command to the proxy's quota helper, which
+    // answers print mode's eligibility refusal of a paid account from Cloud
+    // Code itself (design "Eligibility fallback").
     (
         Mode::Usage,
         &[

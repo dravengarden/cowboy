@@ -1075,6 +1075,10 @@ async fn dispatch(
             crate::send_delivery::DeliveryMode::NextTurn => "next_turn",
         });
     }
+    let notify = web::peer_notices::admit(&state.hub, name, &mut input, &parent.id);
+    let Ok(notify) = notify else {
+        return Ok(notify.err().unwrap_or_default());
+    };
     if matches!(name, "sessions.trash" | "sessions.purge")
         && input["session_ids"]
             .as_array()
@@ -1189,7 +1193,12 @@ async fn dispatch(
         return Ok(json!({"status":"accepted","refreshing":snapshot.refreshing}));
     }
     if command(name).is_some() {
-        return run_command(state, auth, name, &input, operation.ok_or("read_only")?);
+        let op = operation.ok_or("read_only")?;
+        let receipt = run_command(state, auth, name, &input, op)?;
+        let call = (parent.id.as_str(), name, &input);
+        return Ok(web::peer_notices::after_command(
+            state, notify, call, op, receipt,
+        ));
     }
     if name == "sessions.create" {
         let body = input
@@ -1397,9 +1406,8 @@ pub(super) async fn apply(
     {
         Admission::Existing(result) => {
             current_identity(state, parent, &auth).await?;
-            return Ok(receipt_view(result.unwrap_or(
-                json!({"status":"pending","outcome":"unknown","domain_operation":domain_operation}),
-            )));
+            let receipt = web::peer_notices::replayed(result, &domain_operation);
+            return Ok(receipt_view(receipt));
         }
         Admission::Conflict => return Err("operation_conflict"),
         Admission::New => {}

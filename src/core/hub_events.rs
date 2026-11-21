@@ -184,3 +184,92 @@ fn live_subagent_child(event: &Event) -> Option<String> {
         _ => None,
     }
 }
+
+/// An idle sandboxed agent whose account-sandbox connection closed (the
+/// daemon restarted for maintenance) ended without losing any work: record a
+/// sleeping session, which the next prompt starts again, instead of a crash.
+/// A loss during a turn or startup stays a crash.
+pub(super) fn idle_sandbox_loss(
+    was: Status,
+    in_flight: bool,
+    status: Status,
+    detail: Option<&str>,
+) -> bool {
+    was == Status::Running
+        && !in_flight
+        && status == Status::Crashed
+        && detail.is_some_and(|detail| {
+            detail.starts_with("agent subprocess exited mid-session (account sandbox ")
+        })
+}
+
+#[cfg(test)]
+mod idle_sandbox_loss_tests {
+    use super::*;
+
+    #[test]
+    fn only_an_idle_sandbox_connection_loss_becomes_a_sleep() {
+        let lost = Some(
+            "agent subprocess exited mid-session (account sandbox connection lost: writing to the account sandbox daemon: Broken pipe (os error 32))",
+        );
+        assert!(idle_sandbox_loss(
+            Status::Running,
+            false,
+            Status::Crashed,
+            lost
+        ));
+        assert!(!idle_sandbox_loss(
+            Status::Busy,
+            false,
+            Status::Crashed,
+            lost
+        ));
+        assert!(!idle_sandbox_loss(
+            Status::Running,
+            true,
+            Status::Crashed,
+            lost
+        ));
+        assert!(!idle_sandbox_loss(
+            Status::Starting,
+            false,
+            Status::Crashed,
+            lost
+        ));
+        assert!(!idle_sandbox_loss(
+            Status::Running,
+            false,
+            Status::Crashed,
+            Some("acp connection: x")
+        ));
+        assert!(!idle_sandbox_loss(
+            Status::Running,
+            false,
+            Status::Exited,
+            lost
+        ));
+    }
+
+    #[test]
+    fn a_hub_records_the_idle_loss_as_exited() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "agy".to_owned(),
+            "antigravity".to_owned(),
+            "/tmp".to_owned(),
+            "t".to_owned(),
+            SessionOrigin::Web,
+            false,
+        );
+        hub.set_status("agy", Status::Running, None);
+        hub.set_status(
+            "agy",
+            Status::Crashed,
+            Some(
+                "agent subprocess exited mid-session (account sandbox unit cga-x ended (failed))"
+                    .into(),
+            ),
+        );
+        assert_eq!(hub.status("agy"), Some(Status::Exited));
+    }
+}

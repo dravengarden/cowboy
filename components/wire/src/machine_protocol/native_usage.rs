@@ -121,6 +121,7 @@ pub fn native_usage_error_code(value: &str) -> &'static str {
         "native_usage_home_unsupported" => "native_usage_home_unsupported",
         "native_usage_installation_changed" => "native_usage_installation_changed",
         "native_usage_authentication_required" => "native_usage_authentication_required",
+        "native_usage_location_unsupported" => "native_usage_location_unsupported",
         "native_usage_collector_failed" => "native_usage_collector_failed",
         "native_reset_unsupported" => "native_reset_unsupported",
         "native_reset_request_invalid" => "native_reset_request_invalid",

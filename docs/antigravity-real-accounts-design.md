@@ -1221,6 +1221,30 @@ takes no arguments (`--json` is not a flag), and without a usable token print
 mode starts its interactive sign-in, which the closed stdin and the bound end
 (reported as authentication required).
 
+**Eligibility fallback (2026-11-20).** Print mode checks eligibility before
+it runs a command, and `agy` 1.5.9 refuses an account whose `loadCodeAssist`
+lists an ineligible free tier (`UNSUPPORTED_LOCATION`) even when a paid tier
+(`g1-pro-tier`, Google AI Pro) serves it: "Eligibility check failed: ... not
+currently available in your location". Such an account's ACP sessions still
+run its Claude and GPT-OSS models (its Gemini models answer
+`FAILED_PRECONDITION` "User location is not supported"), and Cloud Code's
+`retrieveUserQuotaSummary` answers the same token normally. In the sandbox the
+launcher therefore hands this exact usage command to the proxy component's
+helper (`bin/agy-proxy --cowboy-usage`, `proxy/app/usage.mjs`). The helper
+runs the same print-mode command and passes its report through unchanged;
+only for that eligibility refusal does it read the access token `agy` just
+refreshed and persisted in the account home (print mode refreshes before its
+eligibility check, observed with an expired token), POST `{}` to
+`https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`
+(the host `agy` uses, IPv4, `User-Agent: antigravity`, which the endpoint
+requires), and print a print-mode envelope with the mapped document
+(`displayName` → `name`, `bucketId` → `id`; proto3 omits a zero
+`remainingFraction`, so a bucket with a reset time and no fraction is
+exhausted). The helper runs as the account's identity like `agy`; it never
+refreshes, writes or prints the token, and without a token or a valid summary
+`agy`'s own refusal stands (`location_unsupported`). The daemon still
+validates and projects the result; its command and wire are unchanged.
+
 **Presentation.** Each vendor group (model family: Gemini Pro, Gemini Flash,
 ...) is one row when its buckets share one quota; otherwise one row per distinct
 quota, named by its bucket. Disabled buckets and buckets without a remaining
@@ -1330,7 +1354,7 @@ other or future command is offered.
 | --- | --- | --- |
 | `read_file`, `write_file`, `edit_file`, `run_command` (and `list_dir`, `grep_search`, `find_by_name`, `command_status`, …) | they act on the runtime Machine | the facade tools |
 | `invoke_subagent`, `define_subagent`, `manage_subagents`, `send_message`, `swarm` (`post_message`, `read_board`, `swarm_wait`, `claim_next`), `run_workflow` | see "Subagents" | Cowboy managed calls (`mcp_cowboy_cowboy_execute`, action `calls.start`) when listed |
-| `schedule`, `manage_task` | timers and background tasks live in the `agy` process, which Cowboy stops when the session idles; a fired timer would start a turn no client prompted | `RunCommand` with `wait_seconds`; a scheduled message in Cowboy |
+| `schedule`, `manage_task` | timers and background tasks live in the `agy` process, which Cowboy stops when the session idles; a fired timer would start a turn no client prompted | `RunCommand` with `wait_seconds`; a scheduled message in Cowboy; for work handed to another session, `cowboy session wait` inside the human's turn ([session completion notices](agent-api.md#session-completion-notices)) |
 | `execute_url`, browser and computer-use tools (`bind_app`, `ax_*`, `focus_app`) | no browser or desktop in the account unit | `search_web`, `read_url_content`, a browser MCP tool of the folder |
 | `generate_image` | writes the image to the account's artifact directory on the runtime Machine, which the session cannot see | none yet |
 

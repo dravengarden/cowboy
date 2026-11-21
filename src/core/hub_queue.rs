@@ -673,6 +673,7 @@ impl Hub {
         Self::is_client_cmid(cmid)
             && !cmid.starts_with(MANAGED_CALL_CMID_PREFIX)
             && !cmid.starts_with(crate::agent_model::CALL_NOTICE_PREFIX)
+            && !cmid.starts_with(crate::agent_model::PEER_NOTICE_PREFIX)
     }
 
     pub(super) fn is_client_cmid(cmid: &str) -> bool {

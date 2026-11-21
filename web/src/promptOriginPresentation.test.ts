@@ -29,6 +29,10 @@ test("Cowboy notes keep the existing resume and schedule captions", () => {
     cowboyOriginCaption({ actor: "cowboy", source: "schedule" }),
     "Scheduled wakeup",
   );
+  assertEquals(
+    cowboyOriginCaption({ actor: "cowboy", source: "session_notice" }),
+    "Another session finished your message",
+  );
 });
 
 test("post-edit diagnostics read as a Cowboy code intelligence note", () => {
