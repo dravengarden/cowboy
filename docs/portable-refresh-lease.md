@@ -1,14 +1,82 @@
 # Portable refresh custody lease — design
 
-Status: design, revision 1, 2026-11-21. Not implemented. Approved for design
+Status: design, revision 2, 2026-11-21. Not implemented. Approved for design
 by the owner ("续期许可"); every implementation step below still needs its own
-review and acceptance.
+review and acceptance. Revision 2 records the
+[owner decisions](#owner-decisions-2026-11-21) and the
+[custodian lock verification](#custodian-lock-verification-2026-11-21), which
+blocks the Codex part of the design; those sections take precedence.
 
 Scope: named portable **subscription** accounts whose Provider declares
 `refresh: compare_and_swap` and a sign-in method with a portable twin —
 today Codex (ChatGPT) and Grok (xAI). Entered API keys (DeepSeek, OpenAI and
 xAI keys) have no refresh token and are out of scope. Native-only accounts
 (Claude, Antigravity) never enter the vault and are out of scope.
+
+## Owner decisions (2026-11-21)
+
+1. **Acceptance** uses a fake vendor/IdP only: one that rejects refresh-token
+   reuse and exercises concurrent races, restarts, disconnects and expiry
+   enforcement. There is no real-account acceptance step; after release the
+   real accounts are observed passively.
+2. **Codex** shares one `auth.json` per account on the custodian Machine
+   across auth generations, provided the pinned CLI serializes it with its own
+   lock. If it does not, stop and report before choosing a fallback.
+3. **The Service never redeems tokens with the vendor itself** (alternative 3
+   rejected): redemption stays on Machines and Cowboy adds no vendor-facing
+   origin.
+4. **Older Machines** (below protocol 51, today Falcon and MacBook Air) are
+   excluded from a lease-managed account: no new placements there, and an
+   account becomes lease-managed only after its sessions on older Machines have
+   ended. The exclusion is a visible reason in Web and MCP.
+5. **Idle renewal** is allowed: a budgeted usage read may make an idle eligible
+   Machine the temporary custodian, renew once, distribute, then release.
+
+## Custodian lock verification (2026-11-21)
+
+Decision 2 depends on the pinned CLIs serializing concurrent refreshes of one
+shared credential file. It was checked offline: each pinned CLI ran in a user
+and network namespace with loopback only, against a fake IdP that issues
+single-use refresh tokens and logs every token request, with a fake
+`auth.json`, no real credentials and no internet (`CODEX_REFRESH_TOKEN_URL_OVERRIDE`
+for Codex; the auth entry's `oidc_issuer` for Grok).
+
+| Case | Result |
+| --- | --- |
+| Codex 0.169.1, two `app-server` processes, two homes whose `auth.json` is a symlink to one file, sequential forced refresh | Writes go through the symlink (it stays a symlink); the second process re-reads and presents the rotated token. Locks are created per home (`<home>/auth.lock`) plus `<target>.lock`. |
+| Same, concurrent forced refresh (`account/read {refreshToken:true}`), 5 runs | **Both processes presented the same refresh token in 5/5 runs.** |
+| Codex, two processes in **one** `CODEX_HOME`, concurrent forced refresh, 3 runs | **Both presented the same token in 3/3 runs.** |
+| Codex, one `CODEX_HOME`, expired access token, concurrent natural refresh (`refresh_reason: proactive_expiry`), 3 runs | **Both presented the same token in 2/3 runs.** |
+| Grok 1.0.77, two `agent stdio` processes, one `HOME`, expired access token, concurrent startup refresh, 3 runs | Exactly one redemption per run (3/3); the other process adopted the rotated token. |
+| Grok, refresh token removed (access-only projection), expired token | No token-endpoint request; the CLI stays signed out. |
+| Codex, empty refresh token, expired token | The CLI still calls the token endpoint (with an empty token) and cannot redeem anything. |
+
+Conclusion: **the pinned Codex CLI does not serialize concurrent refreshes,
+even for processes sharing one `auth.json` in one home.** Its lock protects
+the file commit ("Credentials changed before refresh commit."), not the
+vendor request. Decision 2 therefore fails as specified, and implementation
+stopped before choosing a fallback. The Grok CLI's lock does serialize
+refreshes of one shared file, and an access-only Grok projection cannot
+redeem.
+
+Candidate fallbacks for Codex, for the owner to choose:
+
+- **One Codex process holds the refresh token.** On the custodian only one
+  process at a time gets the full projection (a single designated worker, or
+  a Machine-side refresh helper), every other Codex worker, on every Machine,
+  runs access-only and picks up rotations as new generations. Correct, but it
+  means at most one concurrently refreshing Codex worker per account, and
+  other workers fail authentication if the access token (ten days, per
+  `plugins/codex/collector/index.js:125`) expires before the holder renews it.
+- **The Machine serializes Codex refreshes itself** (a per-account Machine lock
+  taken by a wrapper around the app-server's token request, for example a
+  loopback proxy set through `CODEX_REFRESH_TOKEN_URL_OVERRIDE` that admits one
+  in-flight refresh and answers others from the result). This keeps every
+  Codex worker refresh-capable on the custodian, but adds a Machine-local
+  component in the vendor path and must be accepted against the exact CLI.
+- **Grok first, Codex later**: implement the lease for Grok (whose lock was
+  verified) and keep Codex on today's behaviour until one of the above is
+  chosen.
 
 ## Goal
 
@@ -46,7 +114,9 @@ independent writers is not an isolation design."
     refresh token was already used. Please log out and sign in again."
     (strings of the pinned binary; `refresh token has expired` and `was
     revoked` are separate permanent outcomes).
-  - Both CLIs serialize only processes sharing **one** credential file. Neither
+  - Grok serializes only processes sharing **one** credential file; Codex does
+    not serialize concurrent refreshes at all, even then (see the
+    [custodian lock verification](#custodian-lock-verification-2026-11-21)). Neither
     Plugin uses the SDK's `CredentialDirectory` binding
     (`components/provider-sdk/src/lib.rs:845-849`, "Without it each generation
     locks its own private home and concurrent refreshes race a single-use
@@ -311,6 +381,11 @@ idle usage reads and a forced custodian disconnect.
   nor its default may pin execution to one Machine" (`requirements.md:190-192`).
 
 ## Open questions for the owner
+
+Questions 1-5 below were answered in [Owner decisions](#owner-decisions-2026-11-21).
+The open question now is which Codex fallback in the
+[custodian lock verification](#custodian-lock-verification-2026-11-21) to take.
+The original questions are kept for the record:
 
 1. May we create a throwaway Codex and Grok subscription account for real
    acceptance, or should acceptance use only the fake vendor plus the owner's
