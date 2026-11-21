@@ -82,10 +82,7 @@ impl HostAdmission {
         &self,
         store: &MachinePluginStore,
         plugin_id: &str,
-    ) -> std::result::Result<
-        Option<(PrivateHome, BTreeMap<String, String>)>,
-        PluginHostInvocationFailure,
-    > {
+    ) -> std::result::Result<StagedHome, PluginHostInvocationFailure> {
         let Some((generation, required)) = self.private_home else {
             return Ok(None);
         };
@@ -131,6 +128,9 @@ pub(in crate::machine_plugins) fn remove_private_home(
         _ => Ok(()),
     }
 }
+
+/// A staged private credential home and the variables pointing into it.
+type StagedHome = Option<(PrivateHome, BTreeMap<String, String>)>;
 
 /// One immediate banked reset of a named portable account; see
 /// [`MachinePluginStore::consume_portable_reset`].
@@ -449,7 +449,7 @@ impl MachinePluginStore {
         }
         // The Service host path resolves exactly the selected release under
         // the lifecycle lock and keeps it through the reset.
-        let result = scoped
+        scoped
             .invoke_executable_host_admitted(
                 PluginHostRequest {
                     plugin_id: request.plugin_id,
@@ -470,8 +470,7 @@ impl MachinePluginStore {
                 } else {
                     pre_spend_code(&format!("{:#}", failure.error))
                 }),
-            });
-        result
+            })
     }
 
     /// Collect one named portable account's usage. Errors are closed codes
@@ -504,7 +503,7 @@ impl MachinePluginStore {
         // lock, launches the collector with the account's session environment
         // (only the checked sidecars) and refuses an observation whose
         // generation changed while it ran.
-        let result = scoped
+        scoped
             .invoke_executable_host_admitted(
                 PluginHostRequest {
                     plugin_id: request.plugin_id,
@@ -519,8 +518,7 @@ impl MachinePluginStore {
             .await
             .map_err(|failure| {
                 anyhow::anyhow!(portable_usage_error_code(&format!("{:#}", failure.error)))
-            });
-        result
+            })
     }
 }
 
