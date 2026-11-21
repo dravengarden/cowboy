@@ -15,7 +15,8 @@
 //! starts.
 use super::*;
 use crate::machine_protocol::portable_usage::{
-    PortableUsageRequest, REFRESH_FREE_DECLARATION, portable_usage_error_code,
+    PortableResetRequest, PortableUsageRequest, REFRESH_FREE_DECLARATION, RefreshFree,
+    portable_usage_error_code,
 };
 
 /// Every portable invocation must start within this bound of its receipt: the
@@ -57,6 +58,19 @@ impl HostAdmission {
     /// The only sidecar Plugin generations this invocation may start.
     pub(in crate::machine_plugins) fn sidecars(&self) -> Option<&BTreeMap<String, String>> {
         self.sidecars.as_ref()
+    }
+}
+
+/// One immediate banked reset of a named portable account; see
+/// [`MachinePluginStore::consume_portable_reset`].
+pub struct PortableResetInvocation {
+    request: PortableResetRequest,
+    connected: Arc<AtomicBool>,
+}
+
+impl PortableResetInvocation {
+    pub fn new(request: PortableResetRequest, connected: Arc<AtomicBool>) -> Self {
+        Self { request, connected }
     }
 }
 
@@ -138,6 +152,103 @@ impl MachinePluginStore {
             .is_some_and(|value| value["token_refresh"] == "request");
         ensure!(declared, "portable_usage_refresh_unsupported");
         Ok(())
+    }
+
+    /// The refresh-free declaration of an exact verified generation.
+    fn refresh_free(&self, plugin_id: &str, digest: &str) -> RefreshFree {
+        let Ok((plugin, release, content)) = self.verified_plugin_generation(plugin_id, digest)
+        else {
+            return RefreshFree::default();
+        };
+        let host = verified_plugin_host_bundle(&plugin, &release, &content)
+            .ok()
+            .flatten();
+        RefreshFree::from_declaration(
+            host.as_ref()
+                .and_then(|host| host.files.get(REFRESH_FREE_DECLARATION))
+                .map(String::as_str),
+        )
+    }
+
+    /// Spend one owner-confirmed banked reset of a named portable account:
+    /// the exact selected release's collector runs `consume_reset` with
+    /// `"token_refresh": false` under the admission of its usage (account
+    /// scope, current replica generation, account credential guard), and the
+    /// release must declare that this path never redeems a refresh token.
+    /// Nothing starts after `expires_at_ms`. Only the closed reset reply
+    /// leaves the Machine; a failure after start is unknown, never retried.
+    pub async fn consume_portable_reset(
+        &self,
+        invocation: PortableResetInvocation,
+    ) -> std::result::Result<serde_json::Value, PluginHostInvocationFailure> {
+        let PortableResetInvocation { request, connected } = invocation;
+        let refuse = |code: &'static str| PluginHostInvocationFailure {
+            started: false,
+            error: anyhow::anyhow!(code),
+        };
+        let remaining = request.expires_at_ms.saturating_sub(super::unix_ms());
+        if !request.reset.valid() || remaining <= 0 {
+            return Err(refuse(if remaining <= 0 {
+                "native_reset_expired"
+            } else {
+                "native_reset_request_invalid"
+            }));
+        }
+        let mut admission = HostAdmission::new(connected);
+        admission.deadline = admission
+            .deadline
+            .min(Instant::now() + Duration::from_millis(u64::try_from(remaining).unwrap_or(0)));
+        let usage = PortableUsageRequest {
+            account_id: request.account_id.clone(),
+            plugin_id: request.plugin_id.clone(),
+            plugin_version: request.plugin_version.clone(),
+            generation_digest: request.generation_digest.clone(),
+            auth_generation: request.auth_generation,
+            payload: serde_json::Value::Null,
+            sidecars: Vec::new(),
+        };
+        let (scoped, _guard) = self
+            .admit_portable(&usage, &admission)
+            .await
+            .map_err(|error| PluginHostInvocationFailure {
+                started: false,
+                error: anyhow::anyhow!(portable_usage_error_code(&format!("{error:#}"))),
+            })?;
+        if !self
+            .refresh_free(&request.plugin_id, &request.generation_digest)
+            .reset
+        {
+            return Err(refuse("native_reset_unsupported"));
+        }
+        admission.sidecars = Some(BTreeMap::new());
+        let mut payload = serde_json::to_value(&request.reset).map_err(anyhow::Error::from)?;
+        if let Some(object) = payload.as_object_mut() {
+            object.insert("token_refresh".into(), serde_json::Value::Bool(false));
+        }
+        // The Service host path resolves exactly the selected release under
+        // the lifecycle lock and keeps it through the reset.
+        scoped
+            .invoke_executable_host_admitted(
+                PluginHostRequest {
+                    plugin_id: request.plugin_id,
+                    plugin_version: request.plugin_version,
+                    generation_digest: request.generation_digest,
+                    auth_generation: Some(request.auth_generation),
+                    operation: PluginHostOperation::ResetUsage,
+                    payload,
+                },
+                Some(&admission),
+            )
+            .await
+            .map(|reply| crate::machine_protocol::project_native_reset_reply(&reply))
+            .map_err(|failure| PluginHostInvocationFailure {
+                started: failure.started,
+                error: anyhow::anyhow!(if failure.started {
+                    "native_reset_outcome_unknown"
+                } else {
+                    portable_usage_error_code(&format!("{:#}", failure.error))
+                }),
+            })
     }
 
     /// Collect one named portable account's usage. Errors are closed codes
@@ -314,5 +425,40 @@ mod tests {
                 .expect("independent accounts never wait for each other")
                 .unwrap_err();
         assert_eq!(error.to_string(), "portable_usage_replica_pending");
+    }
+
+    /// A reset that is invalid, expired, not a vault account or without the
+    /// account's current replica never starts the collector.
+    #[tokio::test]
+    async fn a_portable_reset_that_cannot_be_admitted_never_starts() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MachinePluginStore::new(dir.path(), Platform::Linux, "x86_64".into()).unwrap();
+        let reset = |key: &str, expires_at_ms: i64| -> PortableResetRequest {
+            serde_json::from_value(serde_json::json!({
+                "account_id": "11111111-1111-4111-8111-111111111111", "plugin_id": "codex",
+                "plugin_version": "3.6.19", "generation_digest": "sha256:x", "auth_generation": 3,
+                "reset": {"provider": "openai", "idempotency_key": key,
+                    "expected_credit_id": "credit-1"},
+                "expires_at_ms": expires_at_ms,
+            }))
+            .unwrap()
+        };
+        let later = super::super::unix_ms() + 60_000;
+        let mut claude = reset("cowboy-reset-1", later);
+        claude.plugin_id = "claude-code".into();
+        for (request, code) in [
+            (reset("not a key", later), "native_reset_request_invalid"),
+            (reset("cowboy-reset-1", 1), "native_reset_expired"),
+            (claude, "portable_usage_account_required"),
+            (
+                reset("cowboy-reset-1", later),
+                "portable_usage_replica_pending",
+            ),
+        ] {
+            let invocation = PortableResetInvocation::new(request, Arc::new(AtomicBool::new(true)));
+            let failure = store.consume_portable_reset(invocation).await.unwrap_err();
+            assert!(!failure.started, "{code}");
+            assert_eq!(failure.error.to_string(), code);
+        }
     }
 }

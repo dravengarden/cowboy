@@ -6,7 +6,7 @@ use std::sync::{Arc, Weak};
 
 mod portable;
 mod sandbox;
-pub use portable::{HostAdmission, PortableInvocation};
+pub use portable::{HostAdmission, PortableInvocation, PortableResetInvocation};
 
 /// Native processes share a home only within one account. They must not hold
 /// the global installation lock or serialize independent accounts.
@@ -351,7 +351,7 @@ fn before_expiry(
     Ok(())
 }
 
-fn unix_ms() -> i64 {
+pub(super) fn unix_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(i64::MAX, |elapsed| {

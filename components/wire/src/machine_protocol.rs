@@ -37,7 +37,7 @@ pub use challenge_proof::{challenge_proof_v1, challenge_proof_v2, challenge_proo
 /// banked usage limit (`ConsumeNativeReset`), sent only by that account's
 /// signed collector inside its verified native home.
 pub const NATIVE_RESET_PROTOCOL_VERSION: u16 = 49;
-pub const MACHINE_PROTOCOL_VERSION: u16 = 50;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 51;
 /// Named portable accounts' usage (`CollectPortableUsage`): the signed
 /// collector runs in the account's vault replica scope, never the Service's.
 pub const PORTABLE_USAGE_PROTOCOL_VERSION: u16 = 50;
@@ -859,6 +859,12 @@ pub enum MachineCommand {
     CollectPortableUsage {
         request_id: String,
         request: Box<portable_usage::PortableUsageRequest>,
+    },
+    /// Answered only by `PluginHostResponse`; see
+    /// [`portable_usage::PortableResetRequest`].
+    ConsumePortableReset {
+        request_id: String,
+        request: Box<portable_usage::PortableResetRequest>,
     },
     NativeLogout {
         request_id: String,
