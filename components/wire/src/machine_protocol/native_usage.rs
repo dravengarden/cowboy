@@ -110,6 +110,39 @@ impl NativeResetRequest {
     }
 }
 
+/// Refusals a Machine reports only before a reset's collector started.
+pub const PRE_START_RESET_REFUSALS: [&str; 20] = [
+    "native_reset_request_invalid",
+    "native_reset_expired",
+    "native_reset_unsupported",
+    "native_usage_busy",
+    "native_usage_admission_expired",
+    "native_usage_profile_changed",
+    "native_usage_installation_changed",
+    "native_usage_collector_unavailable",
+    "native_usage_home_unsupported",
+    "native_usage_authentication_required",
+    "machine_usage_update_required",
+    "machine_connection_changed",
+    "portable_usage_account_required",
+    "portable_usage_busy",
+    "portable_usage_replica_pending",
+    "portable_usage_collector_unavailable",
+    "portable_usage_refresh_unsupported",
+    "portable_usage_machine_unavailable",
+    "portable_usage_authentication_required",
+    "native_usage_location_unsupported",
+];
+
+/// Whether a refused reset certainly never reached the Provider: only an
+/// explicit `started: false` with a recognised pre-start refusal. A missing
+/// `started` field, an unknown code or `native_reset_outcome_unknown` may
+/// follow a spent reset.
+#[must_use]
+pub fn reset_refusal_unsent(started: Option<bool>, code: &str) -> bool {
+    started == Some(false) && PRE_START_RESET_REFUSALS.contains(&code)
+}
+
 /// Closed diagnostics for native observations; arbitrary subprocess output is
 /// never an account API error or a log field.
 pub fn native_usage_error_code(value: &str) -> &'static str {
@@ -244,5 +277,17 @@ mod tests {
         ] {
             assert_eq!(project_native_reset_reply(&reply), projected, "{reply}");
         }
+    }
+
+    #[test]
+    fn only_an_explicit_pre_start_refusal_is_unsent() {
+        assert!(reset_refusal_unsent(Some(false), "native_reset_expired"));
+        assert!(!reset_refusal_unsent(None, "native_reset_expired"));
+        assert!(!reset_refusal_unsent(Some(true), "native_reset_expired"));
+        assert!(!reset_refusal_unsent(
+            Some(false),
+            "native_reset_outcome_unknown"
+        ));
+        assert!(!reset_refusal_unsent(Some(false), "something new"));
     }
 }

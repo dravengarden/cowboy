@@ -77,7 +77,10 @@ impl MachineControl {
                     detail: Some(code),
                     ..
                 })) => Err(NativeResetFailure {
-                    call_may_have_reached_provider: started,
+                    call_may_have_reached_provider: !crate::machine_protocol::reset_refusal_unsent(
+                        Some(started),
+                        native_usage_error_code(&code),
+                    ),
                     code: native_usage_error_code(&code),
                 }),
                 // A lost, malformed or late reply may follow a sent reset.
@@ -146,7 +149,10 @@ impl MachineControl {
                     detail: Some(code),
                     ..
                 })) => Err(NativeResetFailure {
-                    call_may_have_reached_provider: started,
+                    call_may_have_reached_provider: !crate::machine_protocol::reset_refusal_unsent(
+                        Some(started),
+                        portable_reset_code(&code),
+                    ),
                     code: portable_reset_code(&code),
                 }),
                 // A lost, malformed or late reply may follow a sent reset.
@@ -174,6 +180,43 @@ pub fn portable_reset_code(code: &str) -> &'static str {
 #[cfg(test)]
 mod portable_tests {
     use super::*;
+
+    /// A refusal decodes as unsent only with an explicit `started: false`
+    /// and a pre-start code; an omitted field reads as started.
+    #[test]
+    fn a_reply_without_started_or_with_an_unknown_code_is_unknown() {
+        let decode = |value: serde_json::Value| -> bool {
+            let crate::machine_protocol::MachineEvent::PluginHostResponse {
+                started, detail, ..
+            } = serde_json::from_value(value).unwrap()
+            else {
+                unreachable!()
+            };
+            !crate::machine_protocol::reset_refusal_unsent(
+                Some(started),
+                portable_reset_code(&detail.unwrap()),
+            )
+        };
+        let reply = |extra: serde_json::Value| {
+            let mut value = serde_json::json!({"event": "plugin_host_response",
+                "request_id": "r", "accepted": false, "detail": "native_reset_outcome_unknown"});
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            value
+        };
+        assert!(decode(reply(serde_json::json!({}))), "missing started");
+        assert!(
+            decode(reply(serde_json::json!({"started": false}))),
+            "unknown code"
+        );
+        assert!(!decode(reply(serde_json::json!({"started": false,
+            "detail": "native_reset_expired"}))));
+        assert!(decode(reply(
+            serde_json::json!({"detail": "native_reset_expired"})
+        )));
+    }
 
     #[test]
     fn portable_reset_refusals_are_closed_codes() {
