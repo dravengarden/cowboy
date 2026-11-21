@@ -471,6 +471,9 @@ fn error_message(code: &str) -> &str {
         "reset_credit_invalid" => {
             "The confirmed reset is invalid. Refresh usage and confirm again."
         }
+        "portable_reset_identity_required" => {
+            "Sign in to this account again before using its resets: Cowboy has not verified which subscription it is."
+        }
         "reset_authentication_required" => {
             "This account's sign-in needs renewal before a reset can be used."
         }
@@ -509,9 +512,19 @@ pub(in crate::server) async fn read_one(
             return Ok(value);
         }
     };
-    let machine_id = match &target {
-        Resolved::Native(native) => Some(native.completion.machine_id.clone()),
-        Resolved::Portable(portable) => portable::selected_machine(state, owner, id, portable),
+    // One placement decides both the reported Machine and reset support.
+    let (machine_id, resets_supported) = match &target {
+        Resolved::Native(native) => (
+            Some(native.completion.machine_id.clone()),
+            reset::supported_for(state, &target),
+        ),
+        Resolved::Portable(portable) => match portable::placement(state, owner, id, portable) {
+            Ok(placed) => (
+                Some(placed.0.clone()),
+                reset::supported_placed(state, (**portable).clone(), placed),
+            ),
+            Err(_) => (None, false),
+        },
     };
     // A cached placement refusal describes the Machines as they were; once a
     // collection could be placed again it is no longer the reason.
@@ -520,7 +533,7 @@ pub(in crate::server) async fn read_one(
     value["available"] = json!(true);
     value["signed_in"] = json!(true);
     // Whether a reset of exactly this resolved binding can be spent now.
-    value["resets_supported"] = json!(reset::supported_for(state, owner, id, &target));
+    value["resets_supported"] = json!(resets_supported);
     let cache = state.usage.native.entry(owner, id.as_str());
     value["refreshing"] = json!(cache.collection.try_lock().is_err());
     // A read neither takes the database admission write lock nor binds a cache

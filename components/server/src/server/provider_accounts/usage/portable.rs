@@ -283,18 +283,6 @@ pub(super) fn placement(
     Ok((machine.clone(), plugin.clone(), sidecars))
 }
 
-/// The Machine a collection would run on now, for the read model.
-pub(super) fn selected_machine(
-    state: &AppState,
-    owner: &str,
-    id: &ProviderAccountId,
-    target: &Target,
-) -> Option<String> {
-    placement(state, owner, id, target)
-        .ok()
-        .map(|(machine, _, _)| machine)
-}
-
 /// One budgeted, coalesced collection; the caller holds `collection`.
 pub(super) async fn refresh(
     state: &Arc<AppState>,

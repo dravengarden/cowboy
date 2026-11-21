@@ -1246,6 +1246,9 @@ impl MachinePluginStore {
         prepared_sidecars
             .configure_environment(&mut environment)
             .map_err(PluginHostInvocationFailure::from)?;
+        if let Some(private) = admission.and_then(native_usage::HostAdmission::environment) {
+            environment.extend(private.clone());
+        }
         let (program, command_args) = resolved
             .command
             .split_first()
@@ -6361,6 +6364,20 @@ mod tests {
         let envelope = seal_auth_for_test(&store, &package, &service_signer, 1, &bundle);
         let first_receipt = store.apply_auth(&envelope).await.unwrap();
         assert!(first_receipt.auth_generation_advanced);
+        // Portable reads and resets of a rotating subscription run from a
+        // private copy of exactly the sealed generation, never the writable
+        // session home; another generation is refused, and the copy is
+        // removed with its guard.
+        let (private, environment) = store.private_credential_home("grok", 1).unwrap().unwrap();
+        let private_root = private.0.clone();
+        assert!(PathBuf::from(&environment["HOME"]).starts_with(&private_root));
+        assert!(
+            !PathBuf::from(&environment["HOME"]).starts_with(root.join("machine")),
+            "never the session home"
+        );
+        assert!(store.private_credential_home("grok", 2).is_err());
+        drop(private);
+        assert!(!private_root.exists());
         let verifications = store.runtime_verifications.load(Ordering::Relaxed);
         let collected = store
             .invoke_host_for_test(

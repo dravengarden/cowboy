@@ -17,11 +17,24 @@ pub(super) fn route(
     id: &ProviderAccountId,
     target: super::super::portable::Target,
 ) -> Result<Route, &'static str> {
+    let placed = super::super::portable::placement(state, owner, id, &target)?;
+    route_placed(state, target, placed)
+}
+
+/// [`route`] for an already resolved usage placement.
+pub(super) fn route_placed(
+    state: &AppState,
+    target: super::super::portable::Target,
+    (machine, installed, sidecars): super::super::portable::Placement,
+) -> Result<Route, &'static str> {
     if !state.usage.limiter.holds(1) {
         return Err("account_reset_unsupported");
     }
-    let (machine, installed, sidecars) =
-        super::super::portable::placement(state, owner, id, &target)?;
+    // A reset needs the account's verified subscription identity: an adopted
+    // account without one could spend another subscription's grant.
+    if target.scope.identity_fingerprint.is_none() {
+        return Err("portable_reset_identity_required");
+    }
     // A reset runs only the collector; never a sidecar Plugin.
     if !sidecars.is_empty() {
         return Err("account_reset_unsupported");
@@ -55,7 +68,7 @@ pub(super) async fn dispatch(
     (target, machine): (&super::super::portable::Target, &String),
     route: &Route,
     reset: crate::machine_protocol::NativeResetRequest,
-    admitted_at_ms: i64,
+    expires_at_ms: i64,
 ) -> Result<Value, NativeResetFailure> {
     let request = PortableResetRequest {
         account_id: id.clone(),
@@ -64,7 +77,7 @@ pub(super) async fn dispatch(
         generation_digest: route.installed.generation_digest.clone(),
         auth_generation: target.auth_generation,
         reset,
-        expires_at_ms: admitted_at_ms.saturating_add(DISPATCH_EXPIRY_MS),
+        expires_at_ms,
     };
     let (pending, code) =
         super::super::portable::under_account_lock(state, owner, id, target, || {

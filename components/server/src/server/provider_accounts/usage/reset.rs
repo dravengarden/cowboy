@@ -116,17 +116,21 @@ async fn route(
     }
 }
 
-/// Whether the binding the read model resolved can spend a reset now.
-pub(super) fn supported_for(
-    state: &AppState,
-    owner: &str,
-    id: &ProviderAccountId,
-    resolved: &Resolved,
-) -> bool {
+/// Whether the native login the read model resolved can spend a reset now.
+pub(super) fn supported_for(state: &AppState, resolved: &Resolved) -> bool {
     match resolved {
         Resolved::Native(target) => native_route(state, (**target).clone()).is_ok(),
-        Resolved::Portable(target) => portable::route(state, owner, id, (**target).clone()).is_ok(),
+        Resolved::Portable(_) => false,
     }
+}
+
+/// Whether a portable account's resolved usage placement can spend a reset.
+pub(super) fn supported_placed(
+    state: &AppState,
+    target: super::portable::Target,
+    placed: super::portable::Placement,
+) -> bool {
+    portable::route_placed(state, target, placed).is_ok()
 }
 
 fn unsent(code: &'static str) -> NativeResetFailure {
@@ -136,11 +140,15 @@ fn unsent(code: &'static str) -> NativeResetFailure {
     }
 }
 
-/// One admitted reset: its route and the account's collection lock (a quota
-/// read and a reset of one account never overlap). Nothing is charged yet.
+/// One admitted reset: its route, the account's collection lock (a quota
+/// read and a reset of one account never overlap) and its Provider starts,
+/// reserved at admission (before anything is logged or sent) from the latest
+/// moment the Machine may run them.
 struct Admitted {
     route: Route,
     admitted_at_ms: i64,
+    expires_at_ms: i64,
+    permit: crate::usage::limiter::Permit,
     _serial: tokio::sync::OwnedMutexGuard<()>,
 }
 
@@ -153,8 +161,9 @@ const RESET_COLLECTOR_STARTS: usize = 2;
 const ADMISSION_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Admit a reset on an eligible route, within the request (bounded): the
-/// configured Provider window must be able to hold its two starts and have
-/// room for them now. Nothing is charged or sent yet.
+/// Provider window must have room for its starts now. A manual reset obeys
+/// the Provider spacing and backoff, never the account poll interval a
+/// preceding usage read started. Its starts are charged here.
 async fn admit(
     state: &AppState,
     owner: &str,
@@ -167,20 +176,36 @@ async fn admit(
         .map_err(|_| "usage_reset_paced")?;
     let key = crate::usage::limiter::Limiter::account_key(owner, id.as_str());
     let now = now_ms();
-    if state
+    let expires_at_ms = expiry(&route, now, state.usage.limiter.spacing_ms());
+    let permit = state
         .usage
         .limiter
-        .view(&route.binding.account, &key, now)
-        .next_allowed_ms
-        > now
-    {
-        return Err("usage_reset_paced");
-    }
+        .start_action_bounded(
+            &route.binding.account,
+            &key,
+            now,
+            route.starts(),
+            expires_at_ms,
+        )
+        .map_err(|_| "usage_reset_paced")?;
     Ok(Admitted {
         route,
         admitted_at_ms: now,
+        expires_at_ms,
+        permit,
         _serial: serial,
     })
+}
+
+/// The absolute expiry after which the Machine starts nothing of the reset:
+/// after the native paced second start, or the portable single start.
+fn expiry(route: &Route, admitted_at_ms: i64, spacing: i64) -> i64 {
+    match route.target {
+        RouteTarget::Native(_) => admitted_at_ms
+            .saturating_add(spacing)
+            .saturating_add(DISPATCH_EXPIRY_MS),
+        RouteTarget::Portable { .. } => admitted_at_ms.saturating_add(DISPATCH_EXPIRY_MS),
+    }
 }
 
 /// Charge the reset's two spaced Provider starts at enqueue, spend it and
@@ -196,15 +221,10 @@ async fn consume(
     let Admitted {
         route,
         admitted_at_ms,
+        expires_at_ms,
+        permit,
         _serial,
     } = admitted;
-    let key = crate::usage::limiter::Limiter::account_key(owner, id.as_str());
-    let now = now_ms();
-    let permit = state
-        .usage
-        .limiter
-        .start_action_counted(&route.binding.account, &key, now, route.starts())
-        .map_err(|_| ResetError::new(false, None, error_message("usage_reset_paced")))?;
     let spacing = state.usage.limiter.spacing_ms();
     let request = crate::machine_protocol::NativeResetRequest {
         provider: route.binding.account.clone(),
@@ -216,10 +236,8 @@ async fn consume(
         generation_digest: route.installed.generation_digest.clone(),
         // From the original admission: the paced second start, then the
         // bound within which the Machine must start the spend.
-        expires_at_ms: admitted_at_ms
-            .saturating_add(spacing)
-            .saturating_add(DISPATCH_EXPIRY_MS),
-        spend_not_before_ms: now.saturating_add(spacing),
+        expires_at_ms,
+        spend_not_before_ms: admitted_at_ms.saturating_add(spacing),
     };
     let reply = match &route.target {
         RouteTarget::Native(target) => dispatch(state, owner, target, request, timing).await,
@@ -231,12 +249,12 @@ async fn consume(
                 (target, machine),
                 &route,
                 request,
-                admitted_at_ms,
+                expires_at_ms,
             )
             .await
         }
     };
-    let (result, outcome) = settle(reply);
+    let (result, outcome) = settle(reply, expected_credit_id);
     permit.finish(outcome, now_ms());
     drop(_serial);
     // Publish through the existing budgeted path; a reset just charged this
@@ -253,6 +271,7 @@ async fn consume(
 /// and the pacing outcome it charges. Display messages are fixed per code.
 fn settle(
     reply: Result<Value, NativeResetFailure>,
+    expected_credit_id: &str,
 ) -> (
     Result<ResetResult, ResetError>,
     crate::usage::limiter::Outcome,
@@ -268,7 +287,10 @@ fn settle(
             );
             // An authentication failure backs off whether or not it was sent;
             // otherwise nothing reached the Provider: keep the charge only.
-            let outcome = if failure.code == "native_usage_authentication_required" {
+            let outcome = if matches!(
+                failure.code,
+                "native_usage_authentication_required" | "portable_usage_authentication_required"
+            ) {
                 Outcome::Authentication
             } else if failure.call_may_have_reached_provider {
                 Outcome::Success
@@ -278,15 +300,19 @@ fn settle(
             return (Err(error), outcome);
         }
     };
+    // A credit ID the Machine returns is kept only in the confirmed grammar.
     let credit = reply
         .pointer("/error/credit_id")
         .or_else(|| reply.get("credit_id"))
         .and_then(Value::as_str)
+        .filter(|id| valid_credit_id(id))
         .map(str::to_owned);
     let Some(error) = reply.get("error") else {
+        // A success must be a closed outcome for exactly the pinned grant.
         let outcome = reply["outcome"]
             .as_str()
-            .filter(|outcome| crate::machine_protocol::NATIVE_RESET_OUTCOMES.contains(outcome));
+            .filter(|outcome| crate::machine_protocol::NATIVE_RESET_OUTCOMES.contains(outcome))
+            .filter(|_| credit.as_deref() == Some(expected_credit_id));
         return match outcome {
             Some(outcome) => (
                 Ok(ResetResult {
@@ -541,11 +567,14 @@ mod tests {
     #[test]
     fn only_closed_machine_replies_are_results_and_unknown_is_never_a_refusal() {
         use crate::usage::limiter::Outcome;
-        let (result, outcome) = settle(Ok(json!({"outcome":"reset","credit_id":"grant:1"})));
+        let (result, outcome) = settle(
+            Ok(json!({"outcome":"reset","credit_id":"grant:1"})),
+            "grant:1",
+        );
         assert_eq!(result.unwrap().outcome, "reset");
         assert_eq!(outcome, Outcome::Success);
         // An outcome outside the closed set is unknown.
-        let (result, _) = settle(Ok(json!({"outcome":"consumed"})));
+        let (result, _) = settle(Ok(json!({"outcome":"consumed"})), "grant:1");
         assert!(result.unwrap_err().call_may_have_reached_provider);
         for (reply, reached, outcome, message) in [
             (
@@ -576,15 +605,43 @@ mod tests {
                 error_message("reset_authentication_required"),
             ),
         ] {
-            let (result, charged) = settle(Ok(reply.clone()));
+            let (result, charged) = settle(Ok(reply.clone()), "grant:1");
             let error = result.unwrap_err();
             assert_eq!(error.call_may_have_reached_provider, reached, "{reply}");
             assert_eq!(charged, outcome, "{reply}");
             assert_eq!(error.to_string(), message, "{reply}");
         }
-        let (result, outcome) = settle(Err(unsent("machine_unavailable")));
+        let (result, outcome) = settle(Err(unsent("machine_unavailable")), "grant:1");
         assert!(!result.unwrap_err().call_may_have_reached_provider);
         assert_eq!(outcome, Outcome::Unused);
+    }
+
+    /// A success for another grant, or naming none, is unknown; a malformed
+    /// credit ID never reaches the log; a portable authentication refusal
+    /// backs off.
+    #[test]
+    fn a_success_must_name_the_pinned_grant() {
+        use crate::usage::limiter::Outcome;
+        for reply in [
+            json!({"outcome":"reset","credit_id":"grant:2"}),
+            json!({"outcome":"already_used"}),
+            json!({"outcome":"reset","credit_id":"../x"}),
+        ] {
+            let (result, _) = settle(Ok(reply.clone()), "grant:1");
+            let error = result.unwrap_err();
+            assert!(error.call_may_have_reached_provider, "{reply}");
+            assert_ne!(error.credit_id.as_deref(), Some("../x"), "{reply}");
+        }
+        let (result, _) = settle(
+            Ok(json!({"outcome":"already_used","credit_id":"grant:1"})),
+            "grant:1",
+        );
+        assert_eq!(result.unwrap().outcome, "already_used");
+        let (_, outcome) = settle(
+            Err(unsent("portable_usage_authentication_required")),
+            "grant:1",
+        );
+        assert_eq!(outcome, Outcome::Authentication);
     }
 
     #[test]
@@ -601,7 +658,10 @@ mod tests {
 
     #[test]
     fn an_authentication_refusal_backs_off_even_before_dispatch() {
-        let (result, outcome) = settle(Err(unsent("native_usage_authentication_required")));
+        let (result, outcome) = settle(
+            Err(unsent("native_usage_authentication_required")),
+            "grant:1",
+        );
         assert!(!result.unwrap_err().call_may_have_reached_provider);
         assert_eq!(outcome, crate::usage::limiter::Outcome::Authentication);
     }
