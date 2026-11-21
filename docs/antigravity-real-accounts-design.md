@@ -1245,6 +1245,24 @@ refreshes, writes or prints the token, and without a token or a valid summary
 `agy`'s own refusal stands (`location_unsupported`). The daemon still
 validates and projects the result; its command and wire are unchanged.
 
+**Gemini quota (2026-11-21).** `retrieveUserQuotaSummary` covers only
+third-party models: for Husky (Google AI Pro) it answered one group, "Claude
+and GPT models" (`3p-5h`, `3p-weekly`), so the card showed no Gemini row.
+Gemini's quota is reported per model by Cloud Code's
+`v1internal:fetchAvailableModels` (the catalogue `agy` loads), as
+`quotaInfo {remainingFraction, resetTime}`; on that account every Gemini
+model shared one quota (0.874, one reset time) while the editor's completion
+models (`tab_*`) carried a fraction without a reset time. The usage helper
+therefore asks the catalogue with the same token and appends a "Gemini
+models" group to every successful report that has no Gemini group yet:
+print mode's own report (the envelope is otherwise unchanged) and the
+eligibility fallback, whose two requests run concurrently within the
+daemon's 25 s bound. Each Google model with a reset time is one bucket
+named after the model (proto3: a reset without a fraction is spent); the
+Machine folds buckets sharing one quota into a single "Gemini models" row.
+The catalogue states no window, so the row has a reset time but no window
+label. Without the catalogue the report is the summary alone, as before.
+
 **Egress decides location (2026-11-21).** Gemini models answer
 `FAILED_PRECONDITION` "User location is not supported for the API use" when
 `agy` reaches Google over the host's IPv6 address, while the same account,

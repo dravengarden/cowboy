@@ -3,12 +3,20 @@
 //
 // It first runs the pinned `agy` in print mode with the fixed `/usage`
 // command, which answers locally from Cloud Code's quota summary, and passes
-// that report through unchanged. Print mode refuses some paid accounts
-// before it reaches the command: its eligibility check treats an ineligible
+// that report through, gaining only the Gemini group described below. Print
+// mode refuses some paid accounts before it reaches the command: its
+// eligibility check treats an ineligible
 // free tier (`UNSUPPORTED_LOCATION`) as an ineligible account even when a
 // paid tier serves it, while ACP sessions on that account still run.
 // Only for that refusal it asks Cloud Code's quota summary itself, the same
 // request `agy` makes, and prints a report in print mode's own shape.
+//
+// The quota summary covers only third-party models (Claude, GPT-OSS:
+// `3p-5h`, `3p-weekly`). Gemini's quota is reported per model by
+// `fetchAvailableModels` (`quotaInfo`), the catalogue `agy` itself loads, so
+// every successful report gains a "Gemini models" group built from it unless
+// the report already has a Gemini group. Without that answer the report is
+// the summary alone, as before.
 //
 // Credentials: the helper runs as the account's own identity over its own
 // home, exactly like `agy`. It reads the access token `agy` just used (print
@@ -28,15 +36,24 @@ export const AGY_USAGE_ARGUMENTS = Object.freeze([
   "--log-file",
   "/tmp/agy-usage.log",
 ]);
-export const QUOTA_URL =
-  "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
+const CLOUD_CODE = "https://daily-cloudcode-pa.googleapis.com/v1internal";
+export const QUOTA_URL = `${CLOUD_CODE}:retrieveUserQuotaSummary`;
+export const MODELS_URL = `${CLOUD_CODE}:fetchAvailableModels`;
 /** Cloud Code refuses this endpoint without a client user agent. */
 const USER_AGENT = "antigravity";
 const TOKEN_PATH = [".gemini", "antigravity-cli", "antigravity-oauth-token"];
 /** The daemon accepts at most 256 KiB of report; stay well below. */
 const MAX_OUTPUT = 192 * 1024;
+/** The model catalogue is parsed here only (about 95 KiB on 2026-11-21). */
+const MAX_MODELS_BODY = 1024 * 1024;
+/** Gemini buckets in one report; the daemon allows 128 over all groups. */
+const MAX_GEMINI_BUCKETS = 24;
+export const GEMINI_GROUP = "Gemini models";
 const MAX_TOKEN_FILE = 64 * 1024;
-/** The daemon's bound is 25 s: print mode, then one request. */
+/**
+ * The daemon's bound is 25 s: print mode, then one round of requests (the
+ * fallback sends both of its requests concurrently).
+ */
 const AGY_TIMEOUT_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 8_000;
 
@@ -100,8 +117,12 @@ export async function accessToken(home) {
   }
 }
 
-/** POST `{}` to Cloud Code's quota summary; the parsed body on 200. */
-export function fetchQuota(token, { url = QUOTA_URL, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
+/** POST `{}` to a Cloud Code method; the parsed body on 200. */
+export function postCloudCode(
+  token,
+  url,
+  { timeoutMs = REQUEST_TIMEOUT_MS, maxBytes = MAX_OUTPUT } = {},
+) {
   return new Promise((done) => {
     const body = "{}";
     const req = request(
@@ -123,12 +144,15 @@ export function fetchQuota(token, { url = QUOTA_URL, timeoutMs = REQUEST_TIMEOUT
         let size = 0;
         response.on("data", (chunk) => {
           size += chunk.length;
-          if (size > MAX_OUTPUT) response.destroy();
+          if (size > maxBytes) response.destroy();
           else chunks.push(chunk);
         });
         response.on("error", () => done(undefined));
+        response.on("close", () => {
+          if (size > maxBytes) done(undefined);
+        });
         response.on("end", () => {
-          if (response.statusCode !== 200 || size > MAX_OUTPUT) return done(undefined);
+          if (response.statusCode !== 200 || size > maxBytes) return done(undefined);
           try {
             done(JSON.parse(Buffer.concat(chunks).toString("utf8")));
           } catch {
@@ -141,6 +165,16 @@ export function fetchQuota(token, { url = QUOTA_URL, timeoutMs = REQUEST_TIMEOUT
     req.on("error", () => done(undefined));
     req.end(body);
   });
+}
+
+/** Cloud Code's quota summary (third-party model groups). */
+export function fetchQuota(token, options) {
+  return postCloudCode(token, QUOTA_URL, options);
+}
+
+/** Cloud Code's model catalogue, which carries each model's `quotaInfo`. */
+export function fetchModels(token, options) {
+  return postCloudCode(token, MODELS_URL, { maxBytes: MAX_MODELS_BODY, ...options });
 }
 
 function text(value) {
@@ -180,19 +214,82 @@ export function quotaDocument(summary) {
   return { groups };
 }
 
+/**
+ * The Gemini group of Cloud Code's model catalogue, or `undefined`. Each
+ * Google model with a metered quota (a reset time; the editor's completion
+ * models report none) is one bucket named after the model; models sharing a
+ * quota become one card row on the Machine. Proto3 omits a zero
+ * `remainingFraction`, so a quota with a reset time and no fraction is spent.
+ */
+export function geminiGroup(catalogue) {
+  const models = catalogue?.models;
+  if (!models || typeof models !== "object" || Array.isArray(models)) return undefined;
+  const buckets = [];
+  const names = new Set();
+  for (const [id, model] of Object.entries(models)) {
+    if (buckets.length >= MAX_GEMINI_BUCKETS) break;
+    if (model?.modelProvider !== "MODEL_PROVIDER_GOOGLE") continue;
+    const quota = model.quotaInfo;
+    const resetTime = text(quota?.resetTime);
+    if (!resetTime) continue;
+    const fraction = quota.remainingFraction ?? 0;
+    if (typeof fraction !== "number" || !(fraction >= 0 && fraction <= 1)) continue;
+    const name = text(model.displayName) ?? id;
+    if (names.has(name)) continue;
+    names.add(name);
+    const bucket = { name };
+    if (/^[\x21-\x7e]{1,128}$/.test(id)) bucket.id = id;
+    bucket.remaining_fraction = fraction;
+    bucket.reset_time = resetTime;
+    buckets.push(bucket);
+  }
+  return buckets.length ? { name: GEMINI_GROUP, buckets } : undefined;
+}
+
+function hasGemini(document) {
+  return document.groups.some((group) => /gemini/i.test(group?.name ?? ""));
+}
+
+/** `document` with the Gemini group appended when it has none yet. */
+export function withGemini(document, gemini) {
+  if (!gemini || hasGemini(document)) return document;
+  return { ...document, groups: [...document.groups, gemini] };
+}
+
+function printed(report) {
+  return { code: 0, output: Buffer.from(`${JSON.stringify(report)}\n`) };
+}
+
 /** One report: `{ code, output }` for the daemon to read from stdout. */
-export async function usageReport({ agy, home, run = runAgy, quota = fetchQuota }) {
+export async function usageReport({
+  agy,
+  home,
+  run = runAgy,
+  quota = fetchQuota,
+  models = fetchModels,
+}) {
   const native = await run(agy);
-  if (!refusedEligibility(native.code, envelope(native.output))) return native;
+  const report = envelope(native.output);
+  if (!refusedEligibility(native.code, report)) {
+    // Print mode's own report: add Gemini when it lacks it, else unchanged.
+    const data = report?.command?.data;
+    const succeeded = native.code === 0 && report?.status === "SUCCESS";
+    if (!succeeded || !Array.isArray(data?.groups) || hasGemini(data)) return native;
+    const token = await accessToken(home);
+    const gemini = token ? geminiGroup(await models(token)) : undefined;
+    if (!gemini) return native;
+    return printed({ ...report, command: { ...report.command, data: withGemini(data, gemini) } });
+  }
   const token = await accessToken(home);
-  const document = token ? quotaDocument(await quota(token)) : undefined;
+  if (!token) return native;
+  const [summary, catalogue] = await Promise.all([quota(token), models(token)]);
+  const document = quotaDocument(summary);
   if (!document) return native;
-  const report = {
+  return printed({
     status: "SUCCESS",
     num_turns: 0,
-    command: { name: "/usage", data: document },
-  };
-  return { code: 0, output: Buffer.from(`${JSON.stringify(report)}\n`) };
+    command: { name: "/usage", data: withGemini(document, geminiGroup(catalogue)) },
+  });
 }
 
 /** The `--cowboy-usage` entry: write the report and return its exit code. */
