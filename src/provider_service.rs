@@ -946,7 +946,19 @@ impl ProviderAuthService {
         provider_id: &str,
         machine_public_key: &str,
     ) -> Result<SealedProviderAuth> {
-        self.seal_for_machine_with_admission(provider_id, machine_public_key, None)
+        self.seal_for_machine_with_admission(provider_id, machine_public_key, None, None)
+    }
+
+    /// Seal the access-only copy of a refresh-custody managed account: the
+    /// declared refresh fields are removed before encryption, so the Machine
+    /// never receives them. An unstrippable bundle is refused.
+    pub fn seal_access_only_for_machine(
+        &self,
+        provider_id: &str,
+        machine_public_key: &str,
+        custody: &crate::machine_protocol::refresh_custody::RefreshCustody,
+    ) -> Result<SealedProviderAuth> {
+        self.seal_for_machine_with_admission(provider_id, machine_public_key, None, Some(custody))
     }
 
     fn seal_for_machine_with_admission(
@@ -954,6 +966,7 @@ impl ProviderAuthService {
         provider_id: &str,
         machine_public_key: &str,
         admitted: Option<(&str, u64)>,
+        custody: Option<&crate::machine_protocol::refresh_custody::RefreshCustody>,
     ) -> Result<SealedProviderAuth> {
         let recipient = decode_fixed::<32>(machine_public_key, "Machine encryption public key")?;
         ensure!(
@@ -981,7 +994,15 @@ impl ProviderAuthService {
             } else {
                 stored.require_legacy_admission()?;
             }
-            self.open_vault(&stored)?
+            let plaintext = self.open_vault(&stored)?;
+            match custody {
+                None => plaintext,
+                Some(custody) => {
+                    let bundle: PortableCredentialBundle = serde_json::from_slice(&plaintext)
+                        .context("decoding Provider credential bundle")?;
+                    serde_json::to_vec(&custody.strip(&bundle).map_err(anyhow::Error::msg)?)?
+                }
+            }
         } else {
             ensure!(admitted.is_none(), "Provider grant was revoked");
             Vec::new()
@@ -2584,6 +2605,76 @@ mod tests {
                 && status.authentication_state == ServiceAuthenticationState::SignedOut
         }));
         assert!(service.logout_scope(&["grok".to_owned()]).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Open an envelope the way a Machine does (test-only decryption).
+    fn open_for_test(
+        envelope: &SealedProviderAuth,
+        secret: &StaticSecret,
+    ) -> PortableCredentialBundle {
+        let ephemeral: [u8; 32] = base64::engine::general_purpose::STANDARD
+            .decode(&envelope.ephemeral_public_key)
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let shared = secret.diffie_hellman(&PublicKey::from(ephemeral));
+        let key = derive_seal_key(shared.as_bytes());
+        let nonce = base64::engine::general_purpose::STANDARD
+            .decode(&envelope.nonce)
+            .unwrap();
+        let plaintext = XChaCha20Poly1305::new(Key::from_slice(&key))
+            .decrypt(
+                XNonce::from_slice(&nonce),
+                Payload {
+                    msg: &base64::engine::general_purpose::STANDARD
+                        .decode(&envelope.ciphertext)
+                        .unwrap(),
+                    aad: &provider_auth_aad(envelope),
+                },
+            )
+            .unwrap();
+        serde_json::from_slice(&plaintext).unwrap()
+    }
+
+    /// A custody-managed account's Machines never receive its refresh token;
+    /// the ordinary seal (every unmanaged account, and renewals) is unchanged.
+    #[test]
+    fn an_access_only_seal_never_carries_the_refresh_token() {
+        let (root, service) = service();
+        let account = service
+            .account(&uuid::Uuid::new_v4().to_string().try_into().unwrap())
+            .unwrap();
+        let package = package("grok");
+        let document = serde_json::json!({"https://auth.x.ai::client": {
+            "auth_mode": "oidc", "key": "access", "user_id": "user",
+            "refresh_token": "single-use", "expires_at": "2026-11-21T03:00:00Z",
+            "oidc_issuer": "https://auth.x.ai", "oidc_client_id": "client"}});
+        let mut full = bundle(&package);
+        full.values.insert(
+            "auth_json".into(),
+            base64::engine::general_purpose::STANDARD
+                .encode(serde_json::to_vec(&document).unwrap()),
+        );
+        account.commit(&package, &full, None, None).unwrap();
+        let custody = crate::machine_protocol::refresh_custody::RefreshCustody::parse(
+            include_str!("../plugins/grok/collector/refresh-custody.json"),
+        )
+        .unwrap();
+        let secret = StaticSecret::from([7; 32]);
+        let key =
+            base64::engine::general_purpose::STANDARD.encode(PublicKey::from(&secret).as_bytes());
+        let ordinary = account.seal_for_machine("grok", &key).unwrap();
+        assert_eq!(open_for_test(&ordinary, &secret), full);
+        let access_only = account
+            .seal_access_only_for_machine("grok", &key, &custody)
+            .unwrap();
+        let opened = open_for_test(&access_only, &secret);
+        assert!(!custody.holds_refresh_material(&opened));
+        assert_eq!(opened, custody.strip(&full).unwrap());
+        // Same generation and routing metadata: Machines accept the re-seal.
+        assert_eq!(access_only.auth_generation, ordinary.auth_generation);
+        assert_eq!(access_only.projection_schema, ordinary.projection_schema);
         fs::remove_dir_all(root).unwrap();
     }
 }
