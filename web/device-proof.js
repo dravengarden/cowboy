@@ -145,7 +145,15 @@
     async function send(source, refresh) {
       const headers = new Headers(source.headers);
       if (refresh || !headers.has("x-cowboy-browser-proof")) {
-        headers.set("x-cowboy-browser-proof", await proof(source.url, source.method));
+        let value;
+        try {
+          value = await proof(source.url, source.method);
+        } catch (error) {
+          // Nothing was sent: callers may report it as an ordinary failure.
+          if (error && typeof error === "object") error.cowboyBeforeDispatch = true;
+          throw error;
+        }
+        headers.set("x-cowboy-browser-proof", value);
       }
       return rawFetch(new Request(source, { headers, mode: "same-origin", redirect: "error" }));
     }

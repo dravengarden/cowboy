@@ -3,7 +3,7 @@ import type { SubscriptionSnapshot } from "./subscriptionAccounts";
 import { sessionQuota } from "./sessionQuota";
 import type { NativeAccountUsage } from "./nativeAccountUsage";
 import { accountControl, accountPlanLabel, namedOnlyProvider } from "./accountControls";
-import { accountManageUrl, accountProviderLabel, providerUsage, type ProviderUsage, record, type UsageSnapshot, usageCardProviders, usagePluginId, usageResetProvider, usageResetSchedule } from "./usageLimits";
+import { accountManageUrl, providerManageUrl, accountProviderLabel, providerUsage, type ProviderUsage, record, type UsageSnapshot, usageCardProviders, usagePluginId, usageResetProvider, usageResetSchedule } from "./usageLimits";
 import type { UsageResetTarget } from "./usageApi";
 
 export interface UsageAccountCard {
@@ -17,6 +17,8 @@ export interface UsageAccountCard {
   emptyMessage?: string;
   statusLabel?: string;
   native?: NativeAccountUsage;
+  /** A named card's registered Provider (`claude-code`). */
+  providerId?: string;
 }
 
 /** A session notice must use the same bound identity as Settings and About.
@@ -73,7 +75,7 @@ export function registeredUsageAccounts(
     const control = collected && !record(collected.account?.account)?.planType ? accountControl(accounts, account.id) : undefined;
     const plan = control ? accountPlanLabel(control) : undefined;
     return {
-      id: account.id, group: provider, title: account.label,
+      id: account.id, group: provider, title: account.label, providerId: account.provider_id,
       subtitle: `${accountProviderLabel(provider)}${defaultLabel}`,
       usage: usage ?? { provider, status: "unavailable", source: "", observed_at_ms: 0 },
       ...(native ? { native } : {}),
@@ -158,7 +160,8 @@ export function usageCardResetSchedule(snapshot: UsageSnapshot | null, card: Usa
 
 /** The Provider's plan and reset page, on the cards that own reset actions. */
 export function usageCardManageUrl(card: UsageAccountCard): string | undefined {
-  // The Provider identity decides (named Claude cards included), never
-  // whether reset credits happen to be reported right now.
-  return accountManageUrl(card.usage.provider);
+  // The Provider identity decides (named Claude cards included, even with no
+  // observation or snapshot), never whether reset credits are reported now.
+  return accountManageUrl(card.usage.provider) ??
+    (card.providerId === undefined ? undefined : providerManageUrl(card.providerId));
 }

@@ -326,15 +326,19 @@ revision, and the exact vault generation are rechecked. Every participant (the
 collector and each sidecar, such as the DeepSeek gateways) must hold one
 committed shared generation; otherwise no observation is taken. The Machine
 must hold exactly that generation for each, holds the account's credential
-guard so no apply or wipe overlaps the collector, starts only the exact sidecar
-Plugin generations the Controller checked for that Machine (including the
+guard so no apply or wipe overlaps the collector, starts only the sidecars the
+selected exact collector release declares, each from the member Plugin whose
+exact installed release fills that slot on that Machine (including the
 collector's own gateway at its verified digest), and starts neither the
-collector nor a sidecar after its deadline or Controller connection ended;
-sidecar readiness waits are bounded by the time remaining. Permanent
+collector nor a sidecar, nor keeps waiting for a sidecar's readiness, after the
+command's absolute deadline or once the Controller connection ended. Permanent
 ineligibility (no eligible Machine, an unsafe collector such as Grok's) is
-resolved before the shared Provider window is charged and stays on the card.
-An explicit sign-in drops the account's cached and in-flight observation, even
-for the same identity; token refreshes keep it. The Machine is
+resolved before the shared Provider window is charged and stays on the card;
+a change of that reason is broadcast to the owner's surfaces. An observation
+also binds the account's latest explicit sign-in receipt (its committed vault
+generation), checked at admission and publication, so a new sign-in, even of
+the same identity, never shows an older observation while token refreshes keep
+it; the cache slot itself is not rewritten after the sign-in commit. The Machine is
 chosen deterministically among those with an exact released active collector
 generation that host runtime policy allows for the collector and every sidecar
 Plugin: the one running most of the owner's live sessions on the account, then
@@ -384,16 +388,27 @@ Machine. The Machine holding the native login runs the signed collector's
 under the Machine lifecycle lock) and never after the Controller's dispatch
 expiry. Immediately before the spend, in the same invocation, the collector's
 own report of the credential's account must match the login. Pacing is the
-Service reset's, but a named reset charges two starts (that identity read and
-the spend) to the shared Provider window and is refused unless both fit. The
-`expected_credit_id` is validated (64 bytes of `[A-Za-z0-9_:-]`) before
-admission, and the attempt is logged only once an eligible, paced reset is
-admitted. The admitted spend runs in a Service-owned task that holds the
+Service reset's, but a named reset runs two collector starts (that identity
+read and the spend), so at admission the Controller reserves two slots one
+Provider spacing apart in the shared window; the Machine waits for the second
+slot before spending, and the dispatch expiry counts from the original
+admission. A Provider window that cannot hold two spaced starts makes named
+resets unsupported. The `expected_credit_id` is validated (64 bytes of
+`[A-Za-z0-9_:-]`) before admission; admission (bounded wait for the account
+lock plus pacing) happens inside the request, and the attempt is logged only
+once an eligible, paced reset is admitted. The admitted spend runs in a Service-owned task that holds the
 pacing permit and account lock until it settles and writes its terminal log
-row, so a caller disconnect never abandons it. The request is synchronous for
+row, so a caller disconnect never abandons it. Login selection evaluates every eligible login's
+exact capabilities: a login with an unsupported collector does not end the
+search, a reset target prefers a login that can reset over one that can only
+read, and only when every verified login is read-only is the reset
+`account_reset_unsupported`. The identity check reads only the needed fields of
+the live `.claude.json` while streaming it under a fixed size budget (bounded
+string fields; a `*` path step matches only a sole member). The request is synchronous for
 the caller: `409 reset_failed` sent nothing;
 `409 reset_outcome_unknown` may have spent the grant, is never retried, and in
-`control.apply` is an `unknown` receipt, never `rejected`. Only closed success
+`control.apply` is an `unknown` receipt, never `rejected`. The Service card's
+reset conflict uses the same JSON body (`{"error":{"code":"reset_failed"|"reset_outcome_unknown","message":...}}`). Only closed success
 outcomes (`reset`, `already_used`) are successes, and only fixed codes with
 fixed messages leave the Machine; collector text never does. A named lane's
 action-log rows are visible only to the account's owner (`usage.logs`,
@@ -406,11 +421,15 @@ identity. Web pins the account and grant when the dialog opens and asks for a
 fresh confirmation if either changes; after an unknown outcome, a lost
 response, a gateway or server error or an unreadable conflict it shows
 "Outcome unknown — check credits before trying again" and requires reopening
-and a new confirmation. Named Claude cards show the plan and manage link on
-both layouts whether or not reset credits are reported. Only `claude-code`
+and a new confirmation. A device-proof failure before the request is sent keeps
+its own actionable error; an abort after dispatch is unknown. Named Claude cards
+show the plan and manage link on both layouts whether or not reset credits are
+reported, and the manage link comes from the registered Provider even before
+any observation. Only `claude-code`
 requires an explicit host pin for usage and resets, including the Controller's
-bundled bootstrap collector, which never contacts Anthropic from the
-Controller unless `local` is pinned; Antigravity keeps its normal runtime
+bundled bootstrap collector, which runs only when a currently loaded catalog
+host declares that usage account and every such host is pinned to `local`, and
+otherwise fails closed; Antigravity keeps its normal runtime
 restrictions.
 
 `cowboy.accounts.usage(account_id)` reads the same owner-scoped observation as

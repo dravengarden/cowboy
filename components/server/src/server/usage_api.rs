@@ -226,7 +226,21 @@ pub(super) async fn api_provider_reset(
                     )
                     .await;
             }
-            (StatusCode::CONFLICT, error.to_string()).into_response()
+            // Machine-readable: only `reset_failed` says nothing was sent;
+            // the shared Web handler treats anything else as unknown.
+            let code = if error.call_may_have_reached_provider {
+                "reset_outcome_unknown"
+            } else {
+                "reset_failed"
+            };
+            (
+                StatusCode::CONFLICT,
+                Json(
+                    serde_json::json!({"error":{"code":code,"message":error.to_string(),
+                    "credit_id":error.credit_id}}),
+                ),
+            )
+                .into_response()
         }
     }
 }

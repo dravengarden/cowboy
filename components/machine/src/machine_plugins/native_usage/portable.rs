@@ -49,6 +49,11 @@ impl HostAdmission {
         Ok(remaining)
     }
 
+    /// The absolute instant after which nothing of this invocation starts.
+    pub(in crate::machine_plugins) fn deadline(&self) -> Instant {
+        self.deadline
+    }
+
     /// The only sidecar Plugin generations this invocation may start.
     pub(in crate::machine_plugins) fn sidecars(&self) -> Option<&BTreeMap<String, String>> {
         self.sidecars.as_ref()

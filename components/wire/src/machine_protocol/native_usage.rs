@@ -26,6 +26,9 @@ pub struct NativeResetDispatch {
     pub plugin_version: String,
     pub generation_digest: String,
     pub expires_at_ms: i64,
+    /// The spend is the reset's second paced Provider start: the Machine runs
+    /// the identity read first and never starts the spend before this.
+    pub spend_not_before_ms: i64,
 }
 
 /// The closed success outcomes of the signed Claude collector's
@@ -144,7 +147,7 @@ mod tests {
             "request":{"provider":"anthropic","idempotency_key":"cowboy-reset-1-2-3",
                 "expected_credit_id":"grant_1:2"},
             "dispatch":{"plugin_version":"3.0.0","generation_digest":"sha256:x",
-                "expires_at_ms":1}});
+                "expires_at_ms":1,"spend_not_before_ms":1}});
         let command: MachineCommand = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(command.minimum_protocol(), NATIVE_RESET_PROTOCOL_VERSION);
         const {

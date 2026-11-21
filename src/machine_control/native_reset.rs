@@ -7,9 +7,9 @@ use crate::machine_protocol::{
     MachineCommand, NativeResetDispatch, NativeResetRequest, native_usage_error_code,
 };
 
-/// The collector starts the Provider CLI under a ten-second deadline and the
-/// Machine admission waits at most thirty seconds before it.
-const RESET_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
+/// The margin after the dispatch expiry for the spend the Machine started
+/// before it (the collector's own twelve-second process bound, plus slack).
+const RESET_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Why a dispatched reset has no collector answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +38,7 @@ impl MachineControl {
         if !request.valid() {
             return Err("native_reset_request_invalid".into());
         }
+        let expires_at_ms = dispatch.expires_at_ms;
         let request_id = self.request_id("native-reset")?;
         let (rx, pending) = self.begin_request(
             &connection.0.machine_id,
@@ -51,9 +52,18 @@ impl MachineControl {
             ReplyKind::PluginHost,
             Some(RequestBinding::Connection(connection)),
         )?;
+        // Wait for the Machine's whole bounded window (its paced second start
+        // and dispatch expiry), then a margin for the spend itself.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| {
+                i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
+            });
+        let window = u64::try_from(expires_at_ms.saturating_sub(now)).unwrap_or(0);
+        let wait = std::time::Duration::from_millis(window) + RESET_TIMEOUT;
         Ok(async move {
             let _pending = pending;
-            match tokio::time::timeout(RESET_TIMEOUT, rx).await {
+            match tokio::time::timeout(wait, rx).await {
                 Ok(Ok(Reply::PluginHost {
                     accepted: true,
                     payload: Some(value),

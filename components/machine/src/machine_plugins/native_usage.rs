@@ -198,19 +198,12 @@ impl MachinePluginStore {
         )
         .await
         .context("native_usage_busy")?;
-        let _lifecycle = tokio::time::timeout(invocation.remaining()?, self.lifecycle.lock())
-            .await
-            .context("native_usage_busy")?;
-        self.validate_native_usage(profile)
-            .context("native_usage_profile_changed")?;
-        let (active, active_digest) = self
-            .active_package(&profile.provider_id)?
-            .context("native_usage_collector_unavailable")?;
-        if active.manifest.version != dispatch.plugin_version
-            || active_digest != dispatch.generation_digest
-        {
-            return refuse("native_usage_installation_changed");
-        }
+        let mut lifecycle = Some(
+            tokio::time::timeout(invocation.remaining()?, self.lifecycle.lock())
+                .await
+                .context("native_usage_busy")?,
+        );
+        let (active, active_digest) = self.selected_release(profile, dispatch)?;
         // An account-sandbox credential never leaves its daemon's custody.
         if account_sandbox::sandboxed(&active) {
             return refuse("native_reset_unsupported");
@@ -238,6 +231,26 @@ impl MachinePluginStore {
         before_expiry(&invocation, dispatch)?;
         let report = run_unstarted(&checked, &check).await?;
         verify_reported_identity(&checked.environment, &report)?;
+        // The spend is the reset's second paced start: wait for its slot,
+        // within the Controller's expiry.
+        let wait = dispatch.spend_not_before_ms.saturating_sub(unix_ms());
+        if wait > 0 {
+            if dispatch.spend_not_before_ms >= dispatch.expires_at_ms {
+                return refuse("native_reset_expired");
+            }
+            // Never hold the installation lifecycle across the paced wait;
+            // after it, the exact selected release must still be active.
+            drop(lifecycle.take());
+            tokio::time::sleep(Duration::from_millis(u64::try_from(wait).unwrap_or(0))).await;
+            let remaining =
+                u64::try_from(dispatch.expires_at_ms.saturating_sub(unix_ms())).unwrap_or(0);
+            lifecycle = Some(
+                tokio::time::timeout(Duration::from_millis(remaining), self.lifecycle.lock())
+                    .await
+                    .context("native_usage_busy")?,
+            );
+            self.selected_release(profile, dispatch)?;
+        }
         let mut payload = serde_json::to_value(request).map_err(anyhow::Error::from)?;
         let resolved = resolve(PluginHostOperation::ResetUsage, &mut payload)?;
         verify_live_login(&active, profile, &resolved.environment)?;
@@ -262,6 +275,8 @@ impl MachinePluginStore {
                 "native_usage_collector_failed"
             }),
         })?;
+        // Held through the spend, as Service resets do.
+        drop(lifecycle);
         // The collector answers every reset, refused or not, on stdout. Only
         // the closed projection leaves the Machine; never collector text.
         decode_host_response(&output)
@@ -270,6 +285,26 @@ impl MachinePluginStore {
                 started: true,
                 error: anyhow::anyhow!("native_reset_outcome_unknown"),
             })
+    }
+
+    /// The login is unchanged and exactly the release the Controller selected
+    /// is active; the caller holds the installation lifecycle.
+    fn selected_release(
+        &self,
+        profile: &NativeProfileReceipt,
+        dispatch: &crate::machine_protocol::NativeResetDispatch,
+    ) -> Result<(ProviderPackage, String)> {
+        self.validate_native_usage(profile)
+            .context("native_usage_profile_changed")?;
+        let (active, active_digest) = self
+            .active_package(&profile.provider_id)?
+            .context("native_usage_collector_unavailable")?;
+        ensure!(
+            active.manifest.version == dispatch.plugin_version
+                && active_digest == dispatch.generation_digest,
+            "native_usage_installation_changed"
+        );
+        Ok((active, active_digest))
     }
 
     pub(super) fn validate_native_usage(&self, profile: &NativeProfileReceipt) -> Result<()> {
@@ -306,14 +341,22 @@ fn before_expiry(
     invocation: &Invocation,
     dispatch: &crate::machine_protocol::NativeResetDispatch,
 ) -> Result<()> {
-    invocation.remaining()?;
-    let now = std::time::SystemTime::now()
+    ensure!(unix_ms() < dispatch.expires_at_ms, "native_reset_expired");
+    // The invocation's connection must still be current; its relative
+    // deadline does not bound a paced wait the Controller granted.
+    ensure!(
+        invocation.connected.load(Ordering::Acquire),
+        "native_usage_admission_expired"
+    );
+    Ok(())
+}
+
+fn unix_ms() -> i64 {
+    std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(i64::MAX, |elapsed| {
             i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
-        });
-    ensure!(now < dispatch.expires_at_ms, "native_reset_expired");
-    Ok(())
+        })
 }
 
 /// Run a read-only collector invocation that must not have reached anything
@@ -372,10 +415,11 @@ fn verify_reported_identity(
             .context("native_usage_home_unsupported")?,
     );
     // Streamed with bounded memory: the config grows with projects and MCP.
-    let login = serde_json::Value::Object(
-        native_identity::read_live_members(home, ".claude.json", &["oauthAccount"])
-            .map_err(|_| anyhow::anyhow!("native_usage_profile_changed"))?,
-    );
+    let path = |leaf: &str| vec!["oauthAccount".to_owned(), leaf.to_owned()];
+    let (email_path, organization_path) = (path("emailAddress"), path("organizationName"));
+    let login =
+        native_identity::read_live_fields(home, ".claude.json", &[&email_path, &organization_path])
+            .map_err(|_| anyhow::anyhow!("native_usage_profile_changed"))?;
     let reported = &report["account"]["account"];
     let email = text(&login["oauthAccount"]["emailAddress"]);
     ensure!(
@@ -615,6 +659,7 @@ mod tests {
             plugin_version: "1".into(),
             generation_digest: "digest".into(),
             expires_at_ms: i64::MAX,
+            spend_not_before_ms: 0,
         };
         for (request, code) in [
             (invalid, "native_reset_request_invalid"),
@@ -645,6 +690,7 @@ mod tests {
             plugin_version: "1".into(),
             generation_digest: "digest".into(),
             expires_at_ms,
+            spend_not_before_ms: 0,
         };
         before_expiry(&invocation, &dispatch(i64::MAX)).unwrap();
         assert_eq!(

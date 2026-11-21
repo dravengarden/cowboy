@@ -235,69 +235,111 @@ fn open_login_file(home: &Path, relative_path: &str, limit: usize) -> Result<std
 /// The most a live native login file is scanned: config files that grow with
 /// projects and MCP servers stay readable, but nothing beyond this is read.
 const LIVE_SCAN_LIMIT: usize = 64 * 1024 * 1024;
-/// The most one selected top-level member may hold in memory.
-const LIVE_MEMBER_LIMIT: usize = 64 * 1024;
+/// The fields of a live login file a caller needs, as a tree of keys.
+#[derive(Default)]
+struct Wanted(std::collections::BTreeMap<String, Wanted>);
 
-/// Stream a live login file and keep only the top-level members named in
-/// `keys`, each re-serialized within [`LIVE_MEMBER_LIMIT`]; every other member
-/// is skipped without being kept, so memory stays bounded however large the
-/// file grows. A selected member appearing twice is refused.
-pub(super) fn read_live_members(
+/// Selects exactly the wanted fields while streaming: unwanted members are
+/// skipped without being kept, every kept leaf is a string of at most 512
+/// bytes (or null), so memory stays bounded however large the file is. A
+/// wanted member appearing twice is refused; [`NATIVE_IDENTITY_SOLE_MEMBER`]
+/// selects the only member of an object and refuses any other shape.
+///
+/// [`NATIVE_IDENTITY_SOLE_MEMBER`]: cowboy_provider_sdk::NATIVE_IDENTITY_SOLE_MEMBER
+struct Pick<'a>(&'a Wanted);
+
+impl<'de> serde::de::DeserializeSeed<'de> for Pick<'_> {
+    type Value = serde_json::Value;
+    fn deserialize<D: serde::Deserializer<'de>>(
+        self,
+        deserializer: D,
+    ) -> Result<Self::Value, D::Error> {
+        deserializer.deserialize_any(self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for Pick<'_> {
+    type Value = serde_json::Value;
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(if self.0.0.is_empty() {
+            "a short string"
+        } else {
+            "an object"
+        })
+    }
+    fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+        if !self.0.0.is_empty() || value.len() > 512 {
+            return Err(E::custom("unexpected native identity field"));
+        }
+        Ok(value.into())
+    }
+    fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+        Ok(serde_json::Value::Null)
+    }
+    fn visit_map<M: serde::de::MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
+        let mut selected = serde_json::Map::new();
+        if let Some(only) = self
+            .0
+            .0
+            .get(cowboy_provider_sdk::NATIVE_IDENTITY_SOLE_MEMBER)
+        {
+            let key = map
+                .next_key::<String>()?
+                .ok_or_else(|| serde::de::Error::custom("native identity object is empty"))?;
+            selected.insert(key, map.next_value_seed(Pick(only))?);
+            if map.next_key::<serde::de::IgnoredAny>()?.is_some() {
+                return Err(serde::de::Error::custom(
+                    "native identity object must have one member",
+                ));
+            }
+            return Ok(serde_json::Value::Object(selected));
+        }
+        while let Some(key) = map.next_key::<String>()? {
+            let Some(child) = self.0.0.get(&key) else {
+                map.next_value::<serde::de::IgnoredAny>()?;
+                continue;
+            };
+            if selected.contains_key(&key) {
+                return Err(serde::de::Error::custom("duplicate native identity member"));
+            }
+            let value = map.next_value_seed(Pick(child))?;
+            selected.insert(key, value);
+        }
+        Ok(serde_json::Value::Object(selected))
+    }
+}
+
+/// Stream a live login file and keep only the fields at `paths` (see
+/// [`Pick`]); the result is a skeleton document for [`field`] and [`lookup`].
+pub(super) fn read_live_fields(
     home: &Path,
     relative_path: &str,
-    keys: &[&str],
-) -> Result<serde_json::Map<String, serde_json::Value>> {
-    struct Select<'a>(&'a [&'a str]);
-    impl<'de> serde::de::DeserializeSeed<'de> for Select<'_> {
-        type Value = serde_json::Map<String, serde_json::Value>;
-        fn deserialize<D: serde::Deserializer<'de>>(
-            self,
-            deserializer: D,
-        ) -> Result<Self::Value, D::Error> {
-            deserializer.deserialize_map(self)
-        }
-    }
-    impl<'de> serde::de::Visitor<'de> for Select<'_> {
-        type Value = serde_json::Map<String, serde_json::Value>;
-        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            formatter.write_str("a native login JSON object")
-        }
-        fn visit_map<M: serde::de::MapAccess<'de>>(
-            self,
-            mut map: M,
-        ) -> Result<Self::Value, M::Error> {
-            let mut selected = serde_json::Map::new();
-            while let Some(key) = map.next_key::<String>()? {
-                if !self.0.contains(&key.as_str()) {
-                    map.next_value::<serde::de::IgnoredAny>()?;
-                    continue;
-                }
-                if selected.contains_key(&key) {
-                    return Err(serde::de::Error::custom("duplicate native identity member"));
-                }
-                let value = map.next_value::<UniqueJson>()?.0;
-                if serde_json::to_vec(&value).map_or(true, |bytes| bytes.len() > LIVE_MEMBER_LIMIT)
-                {
-                    return Err(serde::de::Error::custom("native identity member too large"));
-                }
-                selected.insert(key, value);
-            }
-            Ok(selected)
+    paths: &[&[String]],
+) -> Result<serde_json::Value> {
+    let mut wanted = Wanted::default();
+    for path in paths {
+        ensure!(
+            !path.is_empty() && path.len() <= 16,
+            "invalid native identity field path"
+        );
+        let mut node = &mut wanted;
+        for part in *path {
+            node = node.0.entry(part.clone()).or_default();
         }
     }
     let file = open_login_file(home, relative_path, LIVE_SCAN_LIMIT)?;
     let reader = std::io::BufReader::new(file.take(LIVE_SCAN_LIMIT as u64));
     let mut deserializer = serde_json::Deserializer::from_reader(reader);
-    let selected = serde::de::DeserializeSeed::deserialize(Select(keys), &mut deserializer)
+    let document = serde::de::DeserializeSeed::deserialize(Pick(&wanted), &mut deserializer)
         .map_err(|_| anyhow::anyhow!("invalid native identity JSON"))?;
     deserializer
         .end()
         .map_err(|_| anyhow::anyhow!("invalid native identity JSON"))?;
-    Ok(selected)
+    Ok(document)
 }
 
-/// [`read`] on a live native home: a fresh-login recipe reads its fields by
-/// streaming only their top-level members, with bounded memory.
+/// [`read`] on a live native home: a fresh-login recipe reads exactly its
+/// fields by streaming, with bounded memory.
 pub(super) fn read_live(
     home: &Path,
     recipe: &NativeIdentityRecipe,
@@ -313,16 +355,10 @@ pub(super) fn read_live(
     else {
         return read(home, recipe, account);
     };
-    let roots: Vec<&str> = std::iter::once(subject_path)
-        .chain(tenant_path)
-        .filter_map(|path| path.first().map(String::as_str))
-        .filter(|root| *root != cowboy_provider_sdk::NATIVE_IDENTITY_SOLE_MEMBER)
+    let paths: Vec<&[String]> = std::iter::once(subject_path.as_slice())
+        .chain(tenant_path.as_deref())
         .collect();
-    ensure!(
-        roots.len() == 1 + usize::from(tenant_path.is_some()),
-        "native identity recipe needs named members"
-    );
-    let document = serde_json::Value::Object(read_live_members(home, relative_path, &roots)?);
+    let document = read_live_fields(home, relative_path, &paths)?;
     Ok(crate::provider_account::NativeIdentity {
         authority: authority.clone(),
         subject: field(&document, subject_path)?,
@@ -604,9 +640,37 @@ mod tests {
         let identity = read_live(&home, &claude, &named()).unwrap();
         assert_eq!(identity.subject, "otter");
         assert_eq!(identity.tenant.as_deref(), Some("org-a"));
-        let members = read_live_members(&home, ".claude.json", &["oauthAccount"]).unwrap();
-        assert_eq!(members["oauthAccount"]["emailAddress"], "o@x");
-        assert!(!members.contains_key("projects"));
+        let email = vec!["oauthAccount".to_owned(), "emailAddress".to_owned()];
+        let fields = read_live_fields(&home, ".claude.json", &[&email]).unwrap();
+        assert_eq!(fields["oauthAccount"]["emailAddress"], "o@x");
+        assert!(fields.get("projects").is_none());
+        // Only the wanted fields are kept: the organization is not.
+        assert!(fields["oauthAccount"].get("organizationUuid").is_none());
+        // A sole-member recipe selects the only member of an object.
+        std::fs::write(
+            home.join("sole.json"),
+            br#"{"accounts":{"https://issuer":{"sub":"lynx"}},"big":[1,2,3]}"#,
+        )
+        .unwrap();
+        let sole = vec!["accounts".to_owned(), "*".to_owned(), "sub".to_owned()];
+        let document = read_live_fields(&home, "sole.json", &[&sole]).unwrap();
+        assert_eq!(field(&document, &sole).unwrap(), "lynx");
+        std::fs::write(
+            home.join("two.json"),
+            br#"{"accounts":{"a":{"sub":"x"},"b":{"sub":"y"}}}"#,
+        )
+        .unwrap();
+        assert!(read_live_fields(&home, "two.json", &[&sole]).is_err());
+        // An oversized selected field is refused without keeping it.
+        std::fs::write(
+            home.join("long.json"),
+            serde_json::to_vec(
+                &serde_json::json!({"oauthAccount": {"emailAddress": "x".repeat(600)}}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(read_live_fields(&home, "long.json", &[&email]).is_err());
     }
 
     #[test]

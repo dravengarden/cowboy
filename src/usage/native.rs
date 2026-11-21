@@ -55,6 +55,11 @@ pub struct PortableScope {
     /// replacement need not change the admission revision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_generation: Option<u64>,
+    /// The vault generation the latest explicit sign-in committed (its
+    /// durable login receipt): a new sign-in, even to the same identity,
+    /// never shows its predecessor's observation; a token refresh keeps it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign_in_generation: Option<u64>,
 }
 
 impl From<NativeCompletion> for Scope {
@@ -142,19 +147,6 @@ impl Cache {
                 .entry((owner.into(), account.into()))
                 .or_default(),
         )
-    }
-
-    /// Drop one account's observation, including a collection in flight
-    /// (its detached slot is never published), and persist that.
-    pub fn forget(&self, owner: &str, account: &str) {
-        let removed = self
-            .0
-            .lock()
-            .remove(&(owner.to_owned(), account.to_owned()))
-            .is_some();
-        if removed {
-            self.persist();
-        }
     }
 
     pub fn retain(&self, owner: &str, ids: &[&str]) {
@@ -364,6 +356,7 @@ mod tests {
                 identity_fingerprint: Some("sha256:fox".into()),
                 admission_revision: Some(revision),
                 credential_generation: None,
+                sign_in_generation: None,
             })
         };
         for (account, scope) in [("fox", portable(4)), ("mink", completion(4))] {
@@ -392,39 +385,5 @@ mod tests {
         entry.last_attempt_at_ms = 1000;
         entry.finish(&portable(4), Err("portable_usage_replica_pending"));
         assert_eq!(entry.last_attempt_at_ms, 0);
-    }
-
-    #[test]
-    fn a_new_sign_in_drops_cached_and_in_flight_usage() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("usage-named.json");
-        let cache = Cache::persistent(path.clone());
-        let scope = completion(4);
-        let in_flight = cache.entry("owner", "pika");
-        in_flight
-            .data
-            .lock()
-            .finish(&scope, Ok(serde_json::json!({"rate_limits": {}})));
-        in_flight.data.lock().bind(&scope);
-        in_flight
-            .data
-            .lock()
-            .finish(&scope, Ok(serde_json::json!({"rate_limits": {}})));
-        cache.persist();
-        cache.forget("owner", "pika");
-        // A collection still holding the old slot publishes nowhere.
-        in_flight
-            .data
-            .lock()
-            .finish(&scope, Ok(serde_json::json!({"rate_limits": {"late": 1}})));
-        assert!(cache.entry("owner", "pika").data.lock().usage.is_none());
-        assert!(
-            Cache::persistent(path)
-                .entry("owner", "pika")
-                .data
-                .lock()
-                .usage
-                .is_none()
-        );
     }
 }

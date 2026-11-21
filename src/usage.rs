@@ -287,22 +287,28 @@ impl UsageService {
         let released_hosts = runtime.exact_usage_hosts(account);
         let preferred_machine = self.execution_machines.read().get(account).cloned();
         if released_hosts.is_empty() {
-            if preferred_machine.is_some()
-                || runtime.default_hosts().iter().any(|host| {
-                    host.usage
-                        .as_ref()
-                        .is_some_and(|usage| usage.account == account)
-                        // Controller-local bootstrap is a vendor request too:
-                        // Claude must never reach Anthropic from here unless
-                        // host policy pins `local` explicitly.
-                        && !self.runtime_restrictions.allows_vendor_request(&host.id, "local")
-                })
-            {
-                return PluginCommandRoute::Unavailable(
-                    "Usage Machine policy requires a released Plugin host".to_owned(),
+            // Controller-local bootstrap needs a positive match: a current
+            // default host still declaring this account whose Provider host
+            // policy admits vendor requests from `local` (Claude only when
+            // `local` is pinned). A binding whose declaration a catalog
+            // reload removed never runs.
+            let declaring = runtime.default_hosts().into_iter().filter(|host| {
+                host.usage
+                    .as_ref()
+                    .is_some_and(|usage| usage.account == account)
+            });
+            let admitted = preferred_machine.is_none()
+                && bootstrap_admitted(
+                    declaring.map(|host| host.id.as_str()),
+                    &self.runtime_restrictions,
                 );
-            }
-            return PluginCommandRoute::Bootstrap;
+            return if admitted {
+                PluginCommandRoute::Bootstrap
+            } else {
+                PluginCommandRoute::Unavailable(
+                    "Usage Machine policy requires a released Plugin host".to_owned(),
+                )
+            };
         }
         let hosts = released_hosts
             .iter()
@@ -1004,6 +1010,21 @@ enum RefreshPolicy {
     Background,
 }
 
+/// Whether Controller-local bootstrap may run an account's collector: some
+/// current default host still declares it, and every declaring Provider's
+/// host policy admits vendor requests from `local`.
+fn bootstrap_admitted<'a>(
+    mut declaring: impl Iterator<Item = &'a str>,
+    restrictions: &crate::project_placement::RuntimeRestrictions,
+) -> bool {
+    let Some(first) = declaring.next() else {
+        return false;
+    };
+    std::iter::once(first)
+        .chain(declaring)
+        .all(|host| restrictions.allows_vendor_request(host, "local"))
+}
+
 fn duration_ms(duration: std::time::Duration) -> i64 {
     i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
 }
@@ -1474,6 +1495,21 @@ struct PluginActivityTransform {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn controller_bootstrap_needs_a_current_declaring_and_admitted_host() {
+        use crate::project_placement::RuntimeRestrictions;
+        let none = RuntimeRestrictions::parse(&[]).unwrap();
+        // A binding whose declaration a reload removed never runs locally.
+        assert!(!bootstrap_admitted(std::iter::empty(), &none));
+        assert!(bootstrap_admitted(["codex"].into_iter(), &none));
+        // Claude reaches Anthropic from the Controller only if `local` is pinned.
+        assert!(!bootstrap_admitted(["claude-code"].into_iter(), &none));
+        let ovh = RuntimeRestrictions::parse(&["claude-code=ovh".into()]).unwrap();
+        assert!(!bootstrap_admitted(["claude-code"].into_iter(), &ovh));
+        let local = RuntimeRestrictions::parse(&["claude-code=local".into()]).unwrap();
+        assert!(bootstrap_admitted(["claude-code"].into_iter(), &local));
+    }
+
     use super::*;
     use crate::plugin_host::{UsageCollectorKind, UsageErrorKind};
 

@@ -232,9 +232,25 @@ impl Limiter {
         self.start_with(provider, account, now, false, 1)
     }
 
+    /// The configured minimum time between two starts of one Provider.
+    pub fn spacing_ms(&self) -> i64 {
+        let config = self.config.current();
+        let window = super::duration_ms(config.get(&schema::USAGE_PROVIDER_WINDOW));
+        let count = config.get(&schema::USAGE_REQUESTS_PER_WINDOW).max(1);
+        (window + count - 1) / count
+    }
+
+    /// Whether the configured Provider window can ever hold `starts` starts.
+    pub fn holds(&self, starts: usize) -> bool {
+        usize::try_from(self.config.get(&schema::USAGE_REQUESTS_PER_WINDOW))
+            .is_ok_and(|count| count >= starts)
+    }
+
     /// [`Self::start_action`] for an action that runs `starts` collector
     /// invocations (a named reset reads the account's identity, then spends):
-    /// the Provider window must hold all of them, and all are charged.
+    /// the Provider window must hold all of them, and they are charged at
+    /// properly spaced slots `now, now + spacing, ...`; the caller must not run
+    /// invocation `i` before `now + i * spacing`.
     pub fn start_action_counted(
         &self,
         provider: &str,
@@ -277,7 +293,14 @@ impl Limiter {
         let starts = next.providers.entry(provider.into()).or_default();
         // Retain the maximum configurable window, including across live edits.
         starts.retain(|time| time.saturating_add(3_600_000) > now);
-        starts.extend(std::iter::repeat_n(now, charged));
+        let spacing = {
+            let config = self.config.current();
+            let count = config.get(&schema::USAGE_REQUESTS_PER_WINDOW).max(1);
+            (window + count - 1) / count
+        };
+        starts.extend((0..charged).map(|slot| {
+            now.saturating_add(spacing.saturating_mul(i64::try_from(slot).unwrap_or(0)))
+        }));
         let slot = next.accounts.entry(account.into()).or_default();
         slot.last_attempt_ms = now;
         slot.next_allowed_ms = slot
@@ -500,6 +523,11 @@ mod tests {
             .unwrap_or_else(|_| panic!("counted"))
             .finish(Outcome::Success, 1_000);
         assert!(counted.start("anthropic", "service", 70_000).is_err());
+        // The second start is a properly spaced slot, not a duplicate stamp.
+        assert_eq!(counted.spacing_ms(), 60_000);
+        assert!(counted.holds(2));
+        assert!(!counted.holds(3));
+        assert!(counted.start("anthropic", "service", 120_000).is_err());
     }
 
     #[test]

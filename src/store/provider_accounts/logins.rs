@@ -248,6 +248,36 @@ impl Store {
         })
     }
 
+    /// The vault generation the account's latest committed explicit
+    /// sign-in recorded in its durable login receipt, if any.
+    pub async fn latest_vault_sign_in(
+        &self,
+        owner: &str,
+        account: &ProviderAccountId,
+    ) -> Result<Option<u64>> {
+        let query = "SELECT value FROM provider_login_operations WHERE owner_user_id=$1";
+        let values: Vec<String> = match &self.backend {
+            StorageBackend::Postgres(db) => {
+                sqlx::query_scalar(query)
+                    .bind(owner)
+                    .fetch_all(&db.pool)
+                    .await?
+            }
+            StorageBackend::Sqlite(db) => {
+                sqlx::query_scalar(query)
+                    .bind(owner)
+                    .fetch_all(&db.pool)
+                    .await?
+            }
+        };
+        Ok(values
+            .iter()
+            .filter_map(|value| serde_json::from_str::<Receipt>(value).ok())
+            .filter(|receipt| &receipt.input.account_id == account)
+            .filter_map(|receipt| receipt.vault_generation)
+            .max())
+    }
+
     pub async fn provider_login_receipt(
         &self,
         owner: &str,

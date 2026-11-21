@@ -257,6 +257,9 @@ test("a named card owns its reset lane only when its own usage reports reset cre
   assertEquals(usageCardResetSchedule(service, plain!), undefined);
   // A named Claude card links to its plan page even without reset credits.
   assertEquals(usageCardManageUrl(plain!), "https://claude.ai/settings/usage");
+  // And with no observation or Service snapshot at all.
+  const bare = registeredUsageAccounts(null, registry, [], []).find((card) => card.id === "otter");
+  assertEquals(usageCardManageUrl(bare!), "https://claude.ai/settings/usage");
   // A session-reported quota is never a reset lane.
   const [, reported] = registeredUsageAccounts(service, registry, [session], []);
   assertEquals(usageResetTarget(reported!), undefined);

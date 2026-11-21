@@ -1579,15 +1579,12 @@ impl MachinePluginStore {
                     continue;
                 }
             };
-            let limit = admission
-                .map(native_usage::HostAdmission::remaining)
-                .transpose()?;
             match start_usage_sidecar(
                 &package,
                 &sidecar,
                 &launch,
                 (&self.platform, &self.architecture),
-                limit,
+                admission,
             )
             .await
             {
@@ -4566,8 +4563,12 @@ async fn start_usage_sidecar(
     sidecar: &RuntimeSidecar,
     context: &ProviderLaunchContext,
     (platform, architecture): (&Platform, &str),
-    limit: Option<Duration>,
+    admission: Option<&native_usage::HostAdmission>,
 ) -> Result<(tokio::process::Child, String)> {
+    // The admission's absolute deadline and connection bound the spawn and
+    // every readiness poll; no fresh relative timer starts after spawn.
+    let admitted = || admission.map_or(Ok(()), |admission| admission.remaining().map(drop));
+    admitted()?;
     ensure!(
         sidecar.component.kind == PrivateComponentKind::ProviderGateway,
         "usage sidecar component is not a Provider gateway"
@@ -4610,11 +4611,12 @@ async fn start_usage_sidecar(
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true);
+    admitted()?;
     let mut child = command
         .spawn()
         .with_context(|| format!("spawning usage sidecar {}", executable.display()))?;
-    let wait = Duration::from_millis(*timeout_ms);
-    let deadline = Instant::now() + limit.map_or(wait, |limit| limit.min(wait));
+    let wait = Instant::now() + Duration::from_millis(*timeout_ms);
+    let deadline = admission.map_or(wait, |admission| admission.deadline().min(wait));
     let client = reqwest::Client::builder()
         .timeout(Duration::from_millis(250))
         .build()?;
@@ -4630,7 +4632,7 @@ async fn start_usage_sidecar(
         {
             return Ok((child, base_url));
         }
-        if Instant::now() >= deadline {
+        if Instant::now() >= deadline || admitted().is_err() {
             let _ = child.kill().await;
             bail!("usage sidecar readiness timed out");
         }

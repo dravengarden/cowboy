@@ -216,17 +216,6 @@ async fn commit_signed_in(
                 _ => "unavailable".into(),
             }
         })
-        .inspect(|committed| {
-            // An explicit sign-in is a new authority even for the same
-            // identity: its predecessor's cached or in-flight usage never
-            // shows for it. Token refreshes do not pass here.
-            if committed.is_some() {
-                state
-                    .usage
-                    .native
-                    .forget(&executor.owner_user_id, executor.account_id.as_str());
-            }
-        })
 }
 
 pub(in crate::server) async fn accept(

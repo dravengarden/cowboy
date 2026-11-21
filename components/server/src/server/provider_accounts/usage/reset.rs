@@ -47,6 +47,11 @@ pub(super) fn exact_reset_binding(
 /// The reset route of exactly this resolved native login and its verified
 /// release, or why none is eligible (protocol, host policy, support).
 fn native_route(state: &AppState, target: Target) -> Result<Route, &'static str> {
+    // A window that can never hold the reset's two starts never advertises
+    // or admits it.
+    if !state.usage.limiter.holds(RESET_COLLECTOR_STARTS) {
+        return Err("account_reset_unsupported");
+    }
     let completion = &target.completion;
     let (_, version) = state
         .machine_control
@@ -102,21 +107,25 @@ fn unsent(code: &'static str) -> NativeResetFailure {
     }
 }
 
-/// One admitted reset: its route, the account's collection lock (a quota read
-/// and a reset of one account never overlap) and its Provider pacing permit.
+/// One admitted reset: its route and the account's collection lock (a quota
+/// read and a reset of one account never overlap). Nothing is charged yet.
 struct Admitted {
     route: Route,
-    permit: crate::usage::limiter::Permit,
+    admitted_at_ms: i64,
     _serial: tokio::sync::OwnedMutexGuard<()>,
 }
 
 /// Collector starts one named reset makes: the identity read the Machine runs
-/// immediately before the spend, and the spend itself (whose own preflight
-/// re-reads availability inside the same invocation).
+/// immediately before the spend, and the spend itself. They are charged as
+/// two properly spaced Provider starts; the Machine waits for the second.
 const RESET_COLLECTOR_STARTS: usize = 2;
 
-/// Admit a reset on an eligible route, charging every collector start it
-/// will make to the shared Provider window. Nothing is sent yet.
+/// How long a request waits for the account's collection lock.
+const ADMISSION_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Admit a reset on an eligible route, within the request (bounded): the
+/// configured Provider window must be able to hold its two starts and have
+/// room for them now. Nothing is charged or sent yet.
 async fn admit(
     state: &AppState,
     owner: &str,
@@ -124,26 +133,29 @@ async fn admit(
 ) -> Result<Admitted, &'static str> {
     let route = route(state, owner, id).await?;
     let slot = state.usage.native.entry(owner, id.as_str());
-    let serial = Arc::clone(&slot.collection).lock_owned().await;
+    let serial = tokio::time::timeout(ADMISSION_WAIT, Arc::clone(&slot.collection).lock_owned())
+        .await
+        .map_err(|_| "usage_reset_paced")?;
     let key = crate::usage::limiter::Limiter::account_key(owner, id.as_str());
-    let permit = state
+    let now = now_ms();
+    if state
         .usage
         .limiter
-        .start_action_counted(
-            &route.binding.account,
-            &key,
-            now_ms(),
-            RESET_COLLECTOR_STARTS,
-        )
-        .map_err(|_| "usage_reset_paced")?;
+        .view(&route.binding.account, &key, now)
+        .next_allowed_ms
+        > now
+    {
+        return Err("usage_reset_paced");
+    }
     Ok(Admitted {
         route,
-        permit,
+        admitted_at_ms: now,
         _serial: serial,
     })
 }
 
-/// Spend the admitted reset and settle its permit.
+/// Charge the reset's two spaced Provider starts at enqueue, spend it and
+/// settle the permit.
 async fn consume(
     state: &Arc<AppState>,
     owner: &str,
@@ -154,15 +166,33 @@ async fn consume(
 ) -> Result<ResetResult, ResetError> {
     let Admitted {
         route,
-        permit,
+        admitted_at_ms,
         _serial,
     } = admitted;
+    let key = crate::usage::limiter::Limiter::account_key(owner, id.as_str());
+    let now = now_ms();
+    let permit = state
+        .usage
+        .limiter
+        .start_action_counted(&route.binding.account, &key, now, RESET_COLLECTOR_STARTS)
+        .map_err(|_| ResetError::new(false, None, error_message("usage_reset_paced")))?;
+    let spacing = state.usage.limiter.spacing_ms();
     let request = crate::machine_protocol::NativeResetRequest {
         provider: route.binding.account.clone(),
         idempotency_key: idempotency_key.to_owned(),
         expected_credit_id: Some(expected_credit_id.to_owned()),
     };
-    let (result, outcome) = settle(dispatch(state, owner, &route, request).await);
+    let timing = crate::machine_protocol::NativeResetDispatch {
+        plugin_version: route.installed.plugin_version.clone(),
+        generation_digest: route.installed.generation_digest.clone(),
+        // From the original admission: the paced second start, then the
+        // bound within which the Machine must start the spend.
+        expires_at_ms: admitted_at_ms
+            .saturating_add(spacing)
+            .saturating_add(DISPATCH_EXPIRY_MS),
+        spend_not_before_ms: now.saturating_add(spacing),
+    };
+    let (result, outcome) = settle(dispatch(state, owner, &route, request, timing).await);
     permit.finish(outcome, now_ms());
     drop(_serial);
     // Publish through the existing budgeted path; a reset just charged this
@@ -272,6 +302,7 @@ async fn dispatch(
     owner: &str,
     route: &Route,
     request: crate::machine_protocol::NativeResetRequest,
+    release: crate::machine_protocol::NativeResetDispatch,
 ) -> Result<Value, NativeResetFailure> {
     let store = state.store.as_ref().ok_or(unsent("unavailable"))?;
     let completion = &route.target.completion;
@@ -282,11 +313,6 @@ async fn dispatch(
     if version < crate::machine_protocol::NATIVE_RESET_PROTOCOL_VERSION {
         return Err(unsent("machine_usage_update_required"));
     }
-    let release = crate::machine_protocol::NativeResetDispatch {
-        plugin_version: route.installed.plugin_version.clone(),
-        generation_digest: route.installed.generation_digest.clone(),
-        expires_at_ms: now_ms().saturating_add(DISPATCH_EXPIRY_MS),
-    };
     let mut sent = None;
     let admitted = store
         .with_native_login_binding(owner, &route.target.operation, completion, || {
@@ -397,9 +423,13 @@ pub(in crate::server) async fn http_reset(
     if let Err(code) = owned(&store, &owner, &id).await {
         return refusal(code);
     }
+    // Admission (bounded) belongs to the request: a disconnect before it
+    // leaves nothing behind. The admitted spend then belongs to the Service.
+    let admitted = match admit(&state, &owner, &id).await {
+        Ok(admitted) => admitted,
+        Err(code) => return refusal(code),
+    };
     let task = tokio::spawn(async move {
-        // Only an eligible, paced reset is started and logged.
-        let admitted = admit(&state, &owner, &id).await?;
         let (lane, key) = (lane(&id), new_reset_idempotency_key());
         let expected = request.expected_credit_id;
         let row = (lane.as_str(), key.as_str());

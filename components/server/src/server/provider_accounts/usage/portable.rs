@@ -32,18 +32,13 @@ pub(super) struct Target {
     members: Vec<String>,
     /// The vault's current Ready generation of `plugin_id`.
     auth_generation: u64,
-    /// Other scope members whose sidecar the collector starts. They share
-    /// `auth_generation`; the Machine fences each replica on it.
-    sidecar_plugins: Vec<String>,
-    /// The collector Plugin owns one of its own sidecars (the Claude
-    /// gateway of `claude-deepseek`): it is allowed at its verified digest.
-    collector_sidecar: bool,
 }
 
 /// `None` when the account's Provider keeps no named credential in a vault.
 pub(super) fn target(
     state: &AppState,
     account: &crate::store::provider_accounts::Account,
+    sign_in_generation: Option<u64>,
 ) -> Option<Result<Target, &'static str>> {
     if !super::super::portable::provider(state, &account.provider_id) {
         return None;
@@ -59,14 +54,12 @@ pub(super) fn target(
         super::super::portable::scope(state, &account.id, plugin)
             .and_then(|vault| vault.status(plugin))
     };
-    let sidecars = host
-        .sidecar_plugins
+    let others = members
         .iter()
         .filter(|plugin| **plugin != host.plugin_id)
-        .map(|plugin| (plugin.clone(), status(plugin)))
+        .map(|plugin| status(plugin))
         .collect::<Vec<_>>();
     let collector = status(&host.plugin_id);
-    let collector_sidecar = host.sidecar_plugins.contains(&host.plugin_id);
     Some(
         ready_target(
             account,
@@ -75,17 +68,21 @@ pub(super) fn target(
             members,
             collector.as_ref(),
         )
-        .and_then(|mut target| {
-            // One committed shared generation across every participant, or
-            // no observation: a half-distributed key replacement never mixes
-            // two credentials in one balance.
-            for (plugin, status) in sidecars {
-                if ready(status.as_ref())? != target.auth_generation {
+        .map(|mut target| {
+            target.scope.sign_in_generation = sign_in_generation;
+            target
+        })
+        .and_then(|target| {
+            // One committed shared generation across every scope member that
+            // holds a key, or no observation: a half-distributed key
+            // replacement never mixes two credentials in one balance (the
+            // Machine fences each participating replica on it too).
+            for status in others.iter().flatten() {
+                if ready(Some(status)).is_ok_and(|generation| generation != target.auth_generation)
+                {
                     return Err("portable_usage_replica_pending");
                 }
-                target.sidecar_plugins.push(plugin);
             }
-            target.collector_sidecar = collector_sidecar;
             Ok(target)
         }),
     )
@@ -123,13 +120,12 @@ fn ready_target(
             identity_fingerprint: account.identity_fingerprint.clone(),
             admission_revision: account.admission_revision,
             credential_generation: account.identity_fingerprint.is_none().then_some(generation),
+            sign_in_generation: None,
         },
         binding,
         plugin_id,
         members,
         auth_generation: generation,
-        sidecar_plugins: Vec::new(),
-        collector_sidecar: false,
     })
 }
 
@@ -212,24 +208,31 @@ fn placement(
             package.manifest.authentication.refresh
                 == cowboy_provider_sdk::RefreshOwnership::CompareAndSwap
         });
-    let sidecars = |machine: &str| {
-        state
-            .usage
-            .sidecar_generations(machine, &target.sidecar_plugins)
-    };
+    // The sidecars the exact collector release on each Machine starts.
+    let sidecars: Vec<_> = host
+        .candidates
+        .iter()
+        .map(|(machine, plugin, _)| state.usage.exact_sidecars(machine, plugin, &target.members))
+        .collect();
     let candidates: Vec<_> = host
         .candidates
         .iter()
-        .map(|(machine, _, refresh_free)| Candidate {
+        .zip(&sidecars)
+        .map(|((machine, _, refresh_free), sidecars)| Candidate {
             refresh_safe: *refresh_free || !rotates,
-            complete: sidecars(machine).is_some(),
+            complete: sidecars.is_some(),
             machine_id: machine.clone(),
             current: state.machine_control.machine_supports(
                 machine,
                 crate::machine_protocol::PORTABLE_USAGE_PROTOCOL_VERSION,
             ) && super::super::portable::machine_ready(state, machine, &target.plugin_id),
-            allowed: std::iter::once(&target.plugin_id)
-                .chain(&target.sidecar_plugins)
+            allowed: std::iter::once(target.plugin_id.as_str())
+                .chain(
+                    sidecars
+                        .iter()
+                        .flatten()
+                        .map(|sidecar| sidecar.plugin_id.as_str()),
+                )
                 .all(|plugin| state.supervisor.vendor_request_allowed(plugin, machine)),
             sessions: sessions
                 .iter()
@@ -244,12 +247,13 @@ fn placement(
         })
         .collect();
     let machine = choose(&candidates)?;
-    let (machine, plugin, _) = host
+    let ((machine, plugin, _), sidecars) = host
         .candidates
         .iter()
-        .find(|(candidate, _, _)| candidate == machine)
+        .zip(sidecars)
+        .find(|((candidate, _, _), _)| candidate == machine)
         .ok_or("portable_usage_machine_unavailable")?;
-    let sidecars = sidecars(machine).ok_or("portable_usage_collector_unavailable")?;
+    let sidecars = sidecars.ok_or("portable_usage_collector_unavailable")?;
     Ok((machine.clone(), plugin.clone(), sidecars))
 }
 
@@ -283,9 +287,17 @@ pub(super) async fn refresh(
     let placed = match placement(state, owner, id, target) {
         Ok(placed) => placed,
         Err(code) => {
-            let mut entry = cache.data.lock();
-            entry.bind(&scope);
-            entry.finish(&scope, Err(code));
+            let changed = {
+                let mut entry = cache.data.lock();
+                entry.bind(&scope);
+                let changed = entry.error != Some(code);
+                entry.finish(&scope, Err(code));
+                changed
+            };
+            // Owner surfaces learn a new reason at once.
+            if changed {
+                state.hub.broadcast_account_usage_changed(owner);
+            }
             return Ok(());
         }
     };
@@ -344,9 +356,7 @@ async fn under_account_lock<T>(
                 .and_then(|vault| vault.status(plugin))
                 .and_then(|status| ready(Some(&status)).ok())
         };
-        std::iter::once(&target.plugin_id)
-            .chain(&target.sidecar_plugins)
-            .all(|plugin| generation(plugin) == Some(target.auth_generation))
+        generation(&target.plugin_id) == Some(target.auth_generation)
     };
     let locked = store
         .with_portable_account(
@@ -388,13 +398,7 @@ async fn collect(
     target: &Target,
     placed: Placement,
 ) -> Result<Value, &'static str> {
-    let (machine, plugin, mut sidecars) = placed;
-    if target.collector_sidecar {
-        sidecars.push(crate::machine_protocol::portable_usage::PortableSidecar {
-            plugin_id: plugin.plugin_id.clone(),
-            generation_digest: plugin.generation_digest.clone(),
-        });
-    }
+    let (machine, plugin, sidecars) = placed;
     // Activity attachments are Provider-wide request telemetry with no
     // account dimension; attaching them would show other accounts' spend.
     let request = PortableUsageRequest {
@@ -536,14 +540,13 @@ mod tests {
                 identity_fingerprint: Some("sha256:pika".into()),
                 admission_revision: Some(3),
                 credential_generation: None,
+                sign_in_generation: None,
             },
             binding: serde_json::from_value(json!({"account":"openai","product":"OpenAI"}))
                 .unwrap(),
             plugin_id: "codex".into(),
             members: vec!["codex".into()],
             auth_generation: 9,
-            sidecar_plugins: Vec::new(),
-            collector_sidecar: false,
         }
     }
 

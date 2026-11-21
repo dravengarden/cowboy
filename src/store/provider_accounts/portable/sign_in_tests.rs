@@ -306,6 +306,18 @@ async fn a_sign_in_binds_and_commits_only_for_its_admitted_live_request() {
         .unwrap()
         .unwrap();
     assert_eq!(receipt.vault_generation, Some(7));
+    // Named usage binds to the latest explicit sign-in, not to refreshes.
+    assert_eq!(
+        store.latest_vault_sign_in(OWNER, &pika).await.unwrap(),
+        Some(7)
+    );
+    assert_eq!(
+        store
+            .latest_vault_sign_in("someone-else", &pika)
+            .await
+            .unwrap(),
+        None
+    );
     // Disabling and re-enabling the account fences the old login.
     let fenced = create(
         &store,

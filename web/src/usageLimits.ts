@@ -91,6 +91,14 @@ const ACCOUNT_MANAGE_URLS: Record<string, string> = {
   anthropic: "https://claude.ai/settings/usage",
 };
 
+/** The account page of a registered Provider identity (`claude-code`). */
+const PROVIDER_MANAGE_ACCOUNTS: Record<string, string> = { "claude-code": "anthropic" };
+
+export function providerManageUrl(providerId: string): string | undefined {
+  const account = PROVIDER_MANAGE_ACCOUNTS[providerId];
+  return account === undefined ? undefined : ACCOUNT_MANAGE_URLS[account];
+}
+
 /** Account page for a provider id, or undefined when none is published. */
 export function accountManageUrl(provider: string): string | undefined {
   return ACCOUNT_MANAGE_URLS[provider];

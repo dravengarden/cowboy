@@ -105,7 +105,12 @@ async fn target(
     owner: &str,
     id: &ProviderAccountId,
 ) -> Result<Resolved, &'static str> {
-    target_for(state, owner, id, Purpose::Usage).await
+    // One binding serves the read and its reset support: a login that can
+    // also spend a reset wins over a read-only one on another Machine.
+    match target_for(state, owner, id, Purpose::Reset).await {
+        Ok(resolved) => Ok(resolved),
+        Err(_) => target_for(state, owner, id, Purpose::Usage).await,
+    }
 }
 
 async fn target_for(
@@ -129,7 +134,13 @@ async fn target_for(
     }
     // A vault account's sessions run from its Service replica on any
     // Machine, whatever native login it may also have.
-    if let Some(portable) = portable::target(state, account) {
+    if super::portable::provider(state, &account.provider_id) {
+        let sign_in = store
+            .latest_vault_sign_in(owner, id)
+            .await
+            .map_err(|_| "unavailable")?;
+        let portable =
+            portable::target(state, account, sign_in).unwrap_or(Err("account_usage_unsupported"));
         return portable.map(|target| Resolved::Portable(Box::new(target)));
     }
     if !state
@@ -147,16 +158,7 @@ async fn target_for(
         // host policy, before ranking: an old or disallowed login never
         // masks an eligible one.
         .filter(|machine| {
-            purpose == Purpose::Usage
-                || state
-                    .machine_control
-                    .connection_protocol(&machine.id)
-                    .is_some_and(|(_, version)| {
-                        version >= crate::machine_protocol::NATIVE_RESET_PROTOCOL_VERSION
-                    })
-                    && state
-                        .supervisor
-                        .vendor_request_allowed(&account.provider_id, &machine.id)
+            purpose == Purpose::Usage || resets_on(state, &account.provider_id, &machine.id)
         })
         .collect();
     // Prefer the login whose Machine can serve every named-usage operation
@@ -164,19 +166,11 @@ async fn target_for(
     // never masks an eligible one; the order is deterministic.
     machines.sort_by_key(|machine| {
         (
-            login_rank(
-                state
-                    .machine_control
-                    .connection_protocol(&machine.id)
-                    .map(|(_, version)| version),
-                state
-                    .supervisor
-                    .vendor_request_allowed(&account.provider_id, &machine.id),
-            ),
+            machine_rank(state, &account.provider_id, &machine.id),
             machine.id.clone(),
         )
     });
-    let (mut outdated, mut pending) = (false, false);
+    let (mut outdated, mut pending, mut unsupported, mut read_only) = (false, false, false, false);
     for machine in machines {
         let Some((operation, completion)) = store
             .native_login_for_session(owner, id, &machine.id)
@@ -219,19 +213,27 @@ async fn target_for(
                 continue;
             }
             Err(UsageGeneration::Unavailable) => continue,
-            Err(UsageGeneration::Unsupported) => return Err(SIGNED_IN_USAGE_UNSUPPORTED),
+            // Another login may still declare usage: keep looking.
+            Err(UsageGeneration::Unsupported) => {
+                unsupported = true;
+                continue;
+            }
         };
-        let binding = state
+        let Some(binding) = state
             .usage
             .plugin_bindings()
             .into_iter()
             .find(|binding| binding.account == provider)
-            .ok_or(SIGNED_IN_USAGE_UNSUPPORTED)?;
+        else {
+            unsupported = true;
+            continue;
+        };
         // A reset considers only a login whose exact installed release
         // declares resets for this account, before any later login.
         if purpose == Purpose::Reset
             && reset::exact_reset_binding(state, &installed, &provider).is_none()
         {
+            read_only = true;
             continue;
         }
         return Ok(Resolved::Native(Box::new(Target {
@@ -242,13 +244,43 @@ async fn target_for(
             installed,
         })));
     }
-    Err(if pending {
+    Err(if purpose == Purpose::Reset && read_only {
+        // Verified logins exist, but none can spend a reset.
+        "account_reset_unsupported"
+    } else if pending {
         "native_login_pending"
     } else if outdated {
         "native_login_outdated"
+    } else if unsupported {
+        SIGNED_IN_USAGE_UNSUPPORTED
     } else {
         "native_login_required"
     })
+}
+
+/// Whether a login's Machine can spend a named reset under host policy.
+fn resets_on(state: &AppState, provider_id: &str, machine_id: &str) -> bool {
+    state
+        .machine_control
+        .connection_protocol(machine_id)
+        .is_some_and(|(_, version)| {
+            version >= crate::machine_protocol::NATIVE_RESET_PROTOCOL_VERSION
+        })
+        && state
+            .supervisor
+            .vendor_request_allowed(provider_id, machine_id)
+}
+
+fn machine_rank(state: &AppState, provider_id: &str, machine_id: &str) -> (bool, u8) {
+    login_rank(
+        state
+            .machine_control
+            .connection_protocol(machine_id)
+            .map(|(_, version)| version),
+        state
+            .supervisor
+            .vendor_request_allowed(provider_id, machine_id),
+    )
 }
 
 /// Placement rank of a native login's Machine: allowed by host policy and

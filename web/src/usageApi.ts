@@ -136,7 +136,12 @@ export async function consumeNearestReset(
       body: JSON.stringify({ confirm, expected_credit_id: expectedCreditId }),
     });
   } catch (cause) {
-    if (cause instanceof Error && cause.name === "AbortError") throw cause;
+    // A device-proof failure happens before anything is sent: keep its
+    // actionable message. Anything else (network loss, an abort after the
+    // request left) may follow a spent reset.
+    if ((cause as { cowboyBeforeDispatch?: unknown } | null)?.cowboyBeforeDispatch === true) {
+      throw cause;
+    }
     throw new ResetOutcomeUnknown(UNKNOWN_OUTCOME);
   }
   if (response.status === 408 || response.status >= 500) {

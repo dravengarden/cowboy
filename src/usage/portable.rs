@@ -25,9 +25,6 @@ pub struct PortableUsageHost {
     /// and whether that release's collector declares it never redeems a
     /// refresh token on request.
     pub candidates: Vec<(String, PluginInventory, bool)>,
-    /// Scope members whose sidecars the collector starts (the gateways):
-    /// host policy must admit each of them too.
-    pub sidecar_plugins: Vec<String>,
 }
 
 impl UsageService {
@@ -77,57 +74,70 @@ impl UsageService {
                     ))
                 })
                 .collect();
-            let slots: Vec<_> = presentation
-                .collector_sidecars
-                .iter()
-                .map(|sidecar| sidecar.adapter_slot.as_str())
-                .collect();
-            let sidecar_plugins = members
-                .iter()
-                .filter(|other| {
-                    runtime.default_host(other).is_some_and(|host| {
-                        host.adapter_slot
-                            .as_deref()
-                            .is_some_and(|slot| slots.contains(&slot))
-                    })
-                })
-                .cloned()
-                .collect();
             Some(PortableUsageHost {
                 binding: presentation,
                 plugin_id: member.clone(),
                 candidates,
-                sidecar_plugins,
             })
         })
     }
 
-    /// The exact active generation of each sidecar Plugin on `machine_id`,
-    /// or `None` if one is missing there: a collection starts only that
-    /// checked set.
+    /// The sidecar Plugin generations the exact `collector` release starts on
+    /// `machine_id`: for each sidecar adapter slot its signed usage binding
+    /// declares, the scope member installed there whose exact release fills
+    /// that slot. `None` when a declared slot has no such member. Nothing is
+    /// taken from the catalog's presentation default.
     #[must_use]
-    pub fn sidecar_generations(
+    pub fn exact_sidecars(
         &self,
         machine_id: &str,
-        plugins: &[String],
+        collector: &PluginInventory,
+        members: &[String],
     ) -> Option<Vec<PortableSidecar>> {
+        let catalog = match &self.bindings {
+            super::UsageBindingSource::Catalog(catalog) => catalog,
+            #[cfg(any(test, feature = "test-support"))]
+            super::UsageBindingSource::Static(_) => return None,
+        };
+        let runtime = catalog.runtime()?;
+        let usage = runtime
+            .exact_host(
+                &collector.plugin_id,
+                &collector.plugin_version,
+                &collector.generation_digest,
+            )?
+            .usage
+            .clone()?;
         let installed = self.machine_control.connected_plugin_inventory();
-        plugins
+        let mut sidecars = Vec::new();
+        for slot in usage
+            .collector_sidecars
             .iter()
-            .map(|plugin| {
-                installed
-                    .iter()
-                    .find(|candidate| {
-                        candidate.machine_id == machine_id
-                            && &candidate.plugin.plugin_id == plugin
-                            && candidate.plugin.state == PluginInstallationState::Active
-                    })
-                    .map(|candidate| PortableSidecar {
-                        plugin_id: plugin.clone(),
-                        generation_digest: candidate.plugin.generation_digest.clone(),
-                    })
-            })
-            .collect()
+            .map(|sidecar| sidecar.adapter_slot.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+        {
+            let found = installed.iter().find_map(|candidate| {
+                let plugin = &candidate.plugin;
+                (candidate.machine_id == machine_id
+                    && plugin.state == PluginInstallationState::Active
+                    && members.contains(&plugin.plugin_id))
+                .then(|| {
+                    runtime.exact_host(
+                        &plugin.plugin_id,
+                        &plugin.plugin_version,
+                        &plugin.generation_digest,
+                    )
+                })
+                .flatten()
+                .filter(|host| host.adapter_slot.as_deref() == Some(slot))
+                .map(|_| PortableSidecar {
+                    plugin_id: plugin.plugin_id.clone(),
+                    generation_digest: plugin.generation_digest.clone(),
+                })
+            })?;
+            sidecars.push(found);
+        }
+        Some(sidecars)
     }
 
     /// The usage binding of exactly this installed release: what its signed

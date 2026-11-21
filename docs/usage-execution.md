@@ -37,7 +37,10 @@ for DeepSeek), dispatched as `CollectPortableUsage` (Machine protocol 50; an
 older Machine is `machine_usage_update_required`). The Machine runs it through
 the Service host path at account scope, so the collector sees exactly the
 credential projection and home of a session on that account, and starts only
-the exact sidecar Plugin generations the Controller checked for that Machine.
+the sidecars the selected exact collector release declares, each from the
+member Plugin whose exact installed release fills that slot on that Machine,
+within the command's absolute deadline and live connection (including sidecar
+readiness).
 Every participant must hold one committed shared vault generation; the Machine
 refuses otherwise, refuses an observation whose generation changed while the
 collector ran, and holds the account's credential guard for the run.
@@ -164,9 +167,13 @@ window and spacing, on the account's own lane, and holds the account's
 collection lock, so a quota read and a reset of one account never overlap. A
 reset that never reached the Machine's collector records no failure backoff;
 an authentication failure backs off even after the call was sent. A named reset
-runs two collector invocations (the identity read immediately before the spend,
-then the spend with its own preflight), so it charges two starts to the Provider
-window and is admitted only when both fit.
+runs two collector invocations (the identity read, then the spend with its own
+preflight). At admission the Controller reserves two starts one Provider
+spacing apart; the Machine runs the identity read, releases its lifecycle lock,
+waits for the second slot, rechecks the selected release and spends, all before
+the dispatch expiry measured from the original admission. When the Provider
+window cannot hold two spaced starts, named resets are unsupported. A named
+reset therefore takes at least one spacing interval end to end.
 
 Claude usage reads and resets (Service card and named accounts) contact
 Anthropic only from a Machine that host policy explicitly pins for

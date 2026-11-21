@@ -318,6 +318,8 @@ test("an unknown reset outcome is distinguishable from a refusal", async () => {
       ["unreadable conflict", () => Promise.resolve(new Response("<html>", { status: 409 })), true],
       ["gateway timeout", () => Promise.resolve(new Response("", { status: 504 })), true],
       ["lost response", () => Promise.reject(new TypeError("Failed to fetch")), true],
+      ["aborted after dispatch", () => Promise.reject(new DOMException("aborted", "AbortError")), true],
+      ["device proof failed before dispatch", () => Promise.reject(Object.assign(new Error("Device signature failed"), { cowboyBeforeDispatch: true })), false],
       ["preflight refusal", () => Promise.resolve(Response.json({ error: { code: "usage_reset_paced" } }, { status: 429 })), false],
     ];
     for (const [code, reply, unknown] of replies) {
