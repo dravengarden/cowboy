@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 mod routing;
 
-pub(super) const GUIDANCE: &str = "For Review/Design Review, the Controller picks the reviewer from providers[].review_routing by declared risk; cost matters. Declare risk from the review root's own guidance (its AGENTS.md/CLAUDE.md Review risk section) and the affected paths: risk:'high' (security, permissions, concurrency, persistence, deletion, money, large refactors, or a risk area that guidance names) needs a reason and gets the strongest reviewer (Astra Max; Claude starts at Opus, Fable only by explicit preset with high risk). Everything else is routine (Sol Max; Claude Opus). Prefer another vendor's reviewer (an Auto call tries other vendors first); the caller's own vendor is allowed, but a review never runs the caller's own model (same_model). Omit preset unless the user named one; a routine review refuses a stronger preset (preset_outside_tier), and a user-named stronger preset is sent with risk:'high' and that request as its reason. Confirm named fixes with a cheaper preset from review_routing.cheaper, or continue the same review child, instead of a fresh full review. Evidence and test-run audits are analysis calls, not reviews; design and contract checks stay design reviews. Costs are measured tokens, not quota; inspect quota windows and reset times before choosing a Provider. review_candidates is the routine order for older callers. No silent fallback after a failed call: diagnose before retrying. usedPercent is USED; resetsAt is epoch seconds. Large quota payloads: use cowboy.usage.read.";
+pub(super) const GUIDANCE: &str = "For Review/Design Review, the Controller picks the reviewer from providers[].review_routing by declared risk; cost matters. Declare risk from the review root's own guidance (its AGENTS.md/CLAUDE.md Review risk section) and the affected paths: risk:'high' (security, permissions, concurrency, persistence, deletion, money, large refactors, or a risk area that guidance names) needs a reason and gets the strongest reviewer (Astra Max; Claude starts at Opus, Fable only by explicit preset with high risk). Everything else is routine (Sol Max; Claude Opus). Prefer another vendor's reviewer (an Auto call tries other vendors first); the caller's own vendor is allowed, but a review never runs the caller's own model (same_model). Omit preset unless the user named one; a routine review refuses a stronger preset (preset_outside_tier), and a user-named stronger preset is sent with risk:'high' and that request as its reason. A fix-confirmation round is routine: continue the same review child when it runs a routine-tier preset; a child on a stronger preset (for example Astra Max) refuses a routine round (preset_outside_tier), so start a fresh routine review with the same task and base (it reuses the captured input), or continue with risk:'high' and a reason only when the fixes changed a high-risk area. When three rounds keep finding the same class of high finding, stop and redesign that mechanism instead of another round. Evidence and test-run audits are analysis calls, not reviews; design and contract checks stay design reviews. Costs are measured tokens, not quota; inspect quota windows and reset times before choosing a Provider. review_candidates is the routine order for older callers. No silent fallback after a failed call: diagnose before retrying. usedPercent is USED; resetsAt is epoch seconds. Large quota payloads: use cowboy.usage.read.";
 
 pub(super) fn family(model: &str) -> Option<&'static str> {
     // Signed presets may carry a context suffix such as `opus[1m]`.
@@ -244,12 +244,7 @@ pub(super) fn admit(
         }
         refused
     };
-    if high_risk
-        && request
-            .labels
-            .get("selection_reason")
-            .is_none_or(|reason| reason.trim().is_empty() || reason == "Session Tools selection")
-    {
+    if high_risk && missing_reason(request) {
         return Err(refuse(
             "risk_reason_required",
             "risk:'high' needs a reason naming the risk (for example persistence, permissions or a risk area in the review root's guidance)".into(),
@@ -325,6 +320,87 @@ pub(super) fn admit(
             Err(refuse(code, hint))
         }
     }
+}
+
+/// A continued review keeps its child's preset, but the round still has a
+/// tier: the risk it declares now (an undeclared confirmation round is
+/// routine). A known reviewer stronger than that tier is refused so the
+/// caller starts a fresh review on the tier's choice, which reuses the
+/// captured input; an unrouted or custom preset keeps running.
+pub(super) fn admit_continuation(
+    request: &crate::managed_calls::Request,
+    presets: &Value,
+    provider: &str,
+    preference: &super::super::agent_tools::ReviewPreferences,
+    child_preset: Option<&str>,
+    same_vendor: bool,
+) -> Result<(), Value> {
+    let risk = request
+        .labels
+        .get(crate::managed_calls::review::RISK)
+        .map_or("undeclared", String::as_str);
+    let high_risk = risk == "high";
+    let decided = |outcome: &str| {
+        tracing::info!(
+            event_name = "cowboy.review.routed",
+            request_id = %request.request_id,
+            purpose = ?request.purpose,
+            provider,
+            same_vendor,
+            risk,
+            explicit_preset = "",
+            preset = child_preset.unwrap_or(""),
+            outcome,
+            "review routed"
+        );
+    };
+    let refuse = |code: &str, hint: String| {
+        decided(code);
+        let mut refused = super::coordinator::error(code, "not_submitted");
+        refused["error"]["hint"] = json!(hint);
+        refused
+    };
+    if high_risk && missing_reason(request) {
+        return Err(refuse(
+            "risk_reason_required",
+            "risk:'high' needs a reason naming the risk (for example persistence, permissions or a risk area in the review root's guidance)".into(),
+        ));
+    }
+    let tier = candidates_for(
+        presets,
+        provider,
+        preference,
+        high_risk,
+        (false, Some(None)),
+    )
+    .list;
+    let named =
+        |list: &[Value], id: &str| list.iter().any(|choice| choice["id"].as_str() == Some(id));
+    if let Some(id) = child_preset
+        && !named(&tier, id)
+        && named(&reviewers(presets, provider, preference), id)
+    {
+        return Err(refuse(
+            "preset_outside_tier",
+            format!(
+                "this review child runs {id}, stronger than a routine confirmation round needs; start a fresh review on {} (the same task and base reuse the captured input), or continue with risk:'high' and a reason when the fixes changed a high-risk area",
+                tier.first()
+                    .and_then(|choice| choice["id"].as_str())
+                    .unwrap_or("the routine tier")
+            ),
+        ));
+    }
+    decided("continued");
+    Ok(())
+}
+
+/// A high tier needs a reason the caller wrote; the CLI fills an omitted
+/// reason with its own default, which is no reason.
+fn missing_reason(request: &crate::managed_calls::Request) -> bool {
+    request
+        .labels
+        .get("selection_reason")
+        .is_none_or(|reason| reason.trim().is_empty() || reason == "Session Tools selection")
 }
 
 /// Every reviewer preset the session's family lists admit, strongest first.
@@ -712,6 +788,52 @@ mod tests {
             .unwrap(),
             "astra-medium"
         );
+    }
+
+    #[test]
+    fn a_continued_review_round_stays_inside_its_declared_tier() {
+        let preference = super::super::super::agent_tools::ReviewPreferences::default();
+        let gpt = json!([
+            {"id":"astra-max","values":{"model":"gpt-6.2-astra","reasoning_effort":"max"}},
+            {"id":"astra-medium","values":{"model":"gpt-6.2-astra","reasoning_effort":"medium"}},
+            {"id":"sol-6-2-max","values":{"model":"gpt-6.2-sol","reasoning_effort":"max"}}
+        ]);
+        let round: crate::managed_calls::Request = serde_json::from_value(json!({
+            "schema":1,"request_id":"r","purpose":"review","instruction":"Confirm the fixes",
+            "context":{"scope":"current-worktree"},"access":"read-only",
+            "conversation":{"mode":"continue","child_session_id":"sess-child"}
+        }))
+        .unwrap();
+        let admit = |request: &crate::managed_calls::Request, preset: Option<&str>| {
+            admit_continuation(request, &gpt, "codex", &preference, preset, false)
+        };
+        // An undeclared confirmation round is routine: an Astra Max child is
+        // refused and pointed at a fresh routine review.
+        let refused = admit(&round, Some("astra-max")).unwrap_err();
+        assert_eq!(refused["error"]["code"], "preset_outside_tier");
+        assert!(
+            refused["error"]["hint"]
+                .as_str()
+                .unwrap()
+                .contains("sol-6-2-max")
+        );
+        assert!(admit(&round, Some("sol-6-2-max")).is_ok());
+        assert!(admit(&round, Some("astra-medium")).is_ok());
+        // A custom or unrouted preset keeps running.
+        assert!(admit(&round, Some("custom:model=x")).is_ok());
+        assert!(admit(&round, None).is_ok());
+        // High keeps the strong child, but only with a reason.
+        let mut high = round.clone();
+        high.labels.insert("review_risk".into(), "high".into());
+        assert_eq!(
+            admit(&high, Some("astra-max")).unwrap_err()["error"]["code"],
+            "risk_reason_required"
+        );
+        high.labels.insert(
+            "selection_reason".into(),
+            "the fixes rewrote the ledger CAS".into(),
+        );
+        assert!(admit(&high, Some("astra-max")).is_ok());
     }
 
     #[test]

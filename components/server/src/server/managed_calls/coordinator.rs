@@ -1021,25 +1021,20 @@ async fn start(
     }) {
         return error("preset_unavailable", "not_submitted");
     }
-    if continued.is_none()
-        && matches!(
-            request.purpose,
-            crate::managed_calls::Purpose::Review | crate::managed_calls::Purpose::DesignReview
-        )
-    {
-        // Review uses its tier's list (docs/review-routing.md), not Tools pins.
-        target.preset = match super::selection::admit(
+    if request.purpose.is_review()
+        && let Err(refused) = route_review(
+            state,
+            meta,
+            ledger,
             &request,
             &runnable,
-            &target.agent,
+            &mut target,
             &policy.review,
             preset,
-            caller_model(state, meta, &target.agent),
-        ) {
-            Ok(selected) => Some(selected),
-            Err(refused) => return refused,
-        };
-        target.options = None;
+        )
+        .await
+    {
+        return refused;
     }
     let call_id = random_id("call");
     let child_id = state.supervisor.reserve_session_id();
@@ -1111,6 +1106,48 @@ async fn start(
     super::runner::ensure_runner(state, &record);
     state.managed_calls.notify();
     envelope(&wait_started(state, ledger, &record, deadline).await)
+}
+
+/// A review's tier (docs/review-routing.md), not Tools pins: a fresh review
+/// gets the tier's preset; a continued round keeps its child's preset only
+/// when that preset fits the round's declared tier.
+#[allow(clippy::too_many_arguments)] // The admission inputs of one review.
+async fn route_review(
+    state: &AppState,
+    meta: &crate::core::SessionMeta,
+    ledger: &Ledger,
+    request: &Request,
+    runnable: &Value,
+    target: &mut agent_tools::CallTarget,
+    preference: &agent_tools::ReviewPreferences,
+    preset: Option<&str>,
+) -> Result<(), Value> {
+    let caller = caller_model(state, meta, &target.agent);
+    if let Conversation::Continue { child_session_id } = &request.conversation {
+        let child_preset = match ledger.child(child_session_id).await {
+            Ok(Some(previous)) => previous.preset,
+            Ok(None) => return Err(error("conversation_unavailable", "not_submitted")),
+            Err(_) => return Err(error("capacity", "not_submitted")),
+        };
+        return super::selection::admit_continuation(
+            request,
+            runnable,
+            &target.agent,
+            preference,
+            child_preset.as_deref(),
+            caller.0,
+        );
+    }
+    target.preset = Some(super::selection::admit(
+        request,
+        runnable,
+        &target.agent,
+        preference,
+        preset,
+        caller,
+    )?);
+    target.options = None;
+    Ok(())
 }
 
 /// A policy refusal becomes a question for the session's person: the agent

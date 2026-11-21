@@ -49,7 +49,8 @@ struct CallInput {
     fresh: bool,
     #[serde(default)]
     notify: bool,
-    /// review.start only: `routine` or `high`; orders automatic effort.
+    /// `routine` or `high` on review.start, or on a calls.start review or
+    /// design_review (a continued round declares its own tier).
     #[serde(default)]
     risk: Option<String>,
 }
@@ -143,6 +144,23 @@ fn context_fault(files: &[String], root: Option<&str>) -> Option<&'static str> {
 
 /// The request purpose. A context ask (`sessions`) is only ever a fresh
 /// analysis over recorded history.
+/// `routine` or `high`, on review.start or a calls.start review or design
+/// review (a continued round declares its own tier).
+fn check_risk(input: &CallInput, review: bool) -> Result<(), CallRefusal> {
+    let Some(risk) = input.risk.as_deref() else {
+        return Ok(());
+    };
+    if !review && !matches!(input.purpose.as_deref(), Some("review" | "design_review")) {
+        return Err(refuse(
+            "risk belongs to review.start or a calls.start review or design_review",
+        ));
+    }
+    if !matches!(risk, "routine" | "high") {
+        return Err(refuse("risk must be routine or high"));
+    }
+    Ok(())
+}
+
 fn call_purpose(input: &CallInput, review: bool) -> Result<String, CallRefusal> {
     if !input.sessions.is_empty()
         && (review
@@ -200,20 +218,13 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, Cal
             || input.design
             || input.task.is_some()
             || input.base.is_some()
-            || input.fresh
-            || input.risk.is_some())
+            || input.fresh)
     {
         return Err(refuse(
-            "focus, design, task, base, fresh and risk belong to review.start",
+            "focus, design, task, base and fresh belong to review.start",
         ));
     }
-    if input
-        .risk
-        .as_deref()
-        .is_some_and(|risk| !matches!(risk, "routine" | "high"))
-    {
-        return Err(refuse("risk must be routine or high"));
-    }
+    check_risk(&input, review)?;
     if input.task.is_some() != input.base.is_some() {
         return Err(refuse(TASK_NEEDS_BASE));
     }
@@ -1309,6 +1320,19 @@ mod tests {
                 "op"
             )
             .is_err()
+        );
+        // A continued review round declares its own tier.
+        let Action::Start { request, .. } = call_action(
+            "calls.start",
+            json!({"instruction":"Confirm the fixes","purpose":"review","child_session_id":"sess-1","risk":"routine"}),
+            "op",
+        )
+        .unwrap() else {
+            panic!("expected start");
+        };
+        assert_eq!(
+            request.labels[crate::managed_calls::review::RISK],
+            "routine"
         );
     }
 

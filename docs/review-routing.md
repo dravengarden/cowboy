@@ -120,8 +120,17 @@ today's family/effort order. For a fresh review:
 - The Settings family lists still **filter** eligibility (`Opus only`,
   `SOL only` keep excluding the other family) and order alternatives within a
   tier. Claim keeps its existing recheck against them.
-- A continuation keeps its child's preset, as today; changing strength needs
-  a fresh call.
+- A continuation keeps its child's preset; changing strength needs a fresh
+  call. Each continued round still has a tier: the risk it declares
+  (`calls.start` accepts `risk` for a review or design review), and an
+  undeclared fix-confirmation round is routine. A child whose preset is a
+  known reviewer stronger than that tier is refused `preset_outside_tier`;
+  the hint names the tier's choice, and a fresh review with the same task and
+  base reuses the captured input. `risk: "high"` with a reason keeps the
+  strong child. Custom or unrouted presets keep running. (Before this rule,
+  one routine review continued on Astra Max for 16 rounds on 2026-11-21;
+  18 of that day's 22 Astra Max runs after routing shipped were
+  continuations.)
 - Quota stays advisory evidence for the caller. There is no quota-based
   automatic fallback.
 
@@ -204,7 +213,7 @@ Every routing decision and every finished review leaves a journal record
 
 | Event | When | Fields |
 | --- | --- | --- |
-| `cowboy.review.routed` | admission picked or refused a reviewer preset | `request_id`, `purpose`, `provider`, `same_vendor`, `risk`, `explicit_preset`, `preset`, `outcome` (`automatic`, `explicit`, or the refusal code) |
+| `cowboy.review.routed` | admission picked or refused a reviewer preset | `request_id`, `purpose`, `provider`, `same_vendor`, `risk`, `explicit_preset`, `preset`, `outcome` (`automatic`, `explicit`, `continued` for an admitted continuation round, or the refusal code; a continuation logs its child's preset) |
 | `cowboy.review.finished` | a review or design review reached a terminal state | `call_id`, `parent_session_id`, `provider`, `purpose`, `state`, `error`, `preset`, `model`, `effort`, `risk`, `reused`, token counts (total, input, cached, uncached, output, reasoning), `duration_ms`, `verdict`, `review_complete`, `findings` and per-severity counts |
 
 Measurements a worker did not report are omitted, not zero; verdicts other

@@ -122,8 +122,13 @@ list and the affected paths, and give a reason for `high`.
   anything touching money or usage limits; large refactors.
 - **routine**: Web presentation and interaction (`web/`), docs, tests only,
   model evidence (`models/`), Plugin presets and copy, CLI help.
-- Confirm named fixes with a cheaper preset or a continued review child, not a
-  fresh full review.
+- A fix-confirmation round is routine. Continue the review child when it
+  runs a routine-tier preset; a child on Astra Max refuses a routine round, so
+  start a fresh routine review with the same task and base (it reuses the
+  captured input). Declare `risk: high` on the round, with a reason, only when
+  the fixes changed a high-risk area's design.
+- When three rounds keep finding the same class of high finding, stop and
+  redesign that mechanism instead of requesting another round.
 
 ## Architecture gotchas
 - **Structure ratchet** (`just structure-check`, part of `just check`): no

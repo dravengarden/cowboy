@@ -70,6 +70,13 @@ impl Ledger {
             .await
     }
 
+    /// The latest call on one of this parent's children.
+    pub async fn child(&self, child: &str) -> Result<Option<Record>> {
+        self.store
+            .managed_child(&self.placement.parent_session_id, child)
+            .await
+    }
+
     pub async fn list(&self, before: Option<&str>) -> Result<Vec<Record>> {
         self.store
             .managed_calls(&self.placement.parent_session_id, before)
