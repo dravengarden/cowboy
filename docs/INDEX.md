@@ -67,6 +67,7 @@ primary phone/desktop product path.
 - [`mcp-bindings.md`](mcp-bindings.md) — Signed MCP installation, explicit session policy, epoch/CAS revocation and remaining relay integration
 - [`mcp-plugin-authoring.md`](mcp-plugin-authoring.md) — Third-party MCP Plugin procedure: contract, sources, build/sign/publish, install and session grant
 - [`managed-agent-calls.md`](managed-agent-calls.md) — Parent-scoped cross-Provider Calls implementation, CLI and desktop/mobile lifecycle UI, with production acceptance boundaries
+- [`managed-delivery-ledger.md`](managed-delivery-ledger.md) — Rejected broker-tombstone design for managed prompt delivery, with the review findings that stopped it
 - [`review-generation-binding.md`](review-generation-binding.md) — Binding of review preset selection, claim, re-pin, configuration, recovery and reuse to one Provider generation
 - [`review-routing.md`](review-routing.md) — Review tiers (high, routine, verify), cost mode and project risk guidance that choose managed reviewer presets
 - [`managed-native-capabilities.md`](managed-native-capabilities.md) — General Calls extension contract, on-demand image generation/editing, isolated native profiles, verified cross-machine artifacts and token costs

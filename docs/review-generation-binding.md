@@ -186,6 +186,11 @@ and the preference write, so A, B and D share one validation.
     worker exited before delivery, waits for the next drain trigger.
   - A queued row drained by a replacement worker relies on its replay of the
     runner-written preferences.
+  A narrow Machine-side fix (broker tombstones) was designed and rejected
+  on 2026-11-21; see [`managed-delivery-ledger.md`](managed-delivery-ledger.md).
+  A withdrawn call's Stopping and Cancelled commit in one transaction, and a
+  recovery resubmission yields to a cancellation committed during its
+  reconfirmation.
   Controller-only attempts at these were reviewed and dropped (2026-11-19,
   five Astra Max rounds), because each traded one window for another:
   - stable runtime command ids: a duplicate acknowledgement cannot return a

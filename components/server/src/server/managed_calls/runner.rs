@@ -1361,17 +1361,16 @@ async fn withdraw_unstarted(state: &AppState, store: &Store, record: &Record) ->
         return Some(Step::Again);
     }
     // Running may only stop through Stopping. No native turn exists, so the
-    // stop completes at once instead of waiting out the grace period.
-    if advance(state, store, record, |next| next.state = State::Stopping).await
-        && let Ok(Some(stopping)) = store
-            .managed_call(&record.placement.parent_session_id, &record.call_id)
-            .await
-        && stopping.state == State::Stopping
+    // stop completes at once instead of waiting out the grace period. Both
+    // steps commit together: a crash after only Stopping would lose the
+    // withdrawal evidence and let the stop grace stop a retained child.
+    let steps = super::coordinator::unstarted_cancellation(record);
+    if store
+        .advance_managed_call_through(record, &steps)
+        .await
+        .unwrap_or(false)
     {
-        advance(state, store, &stopping, |next| {
-            next.state = State::Cancelled
-        })
-        .await;
+        state.managed_calls.notify();
     }
     Some(Step::Again)
 }
@@ -1397,13 +1396,30 @@ async fn reconfirm(
     request: &Request,
 ) -> Result<(), Step> {
     let Err(error) = configuration::ready(state, store, record).await else {
-        return Ok(());
+        // Reconfirmation can take long; a cancellation or another transition
+        // committed meanwhile wins over the resubmission.
+        return match store
+            .managed_call(&record.placement.parent_session_id, &record.call_id)
+            .await
+        {
+            Ok(Some(current))
+                if current.revision == record.revision
+                    && current.cancel_requested_at_ms.is_none() =>
+            {
+                Ok(())
+            }
+            Err(_) => Err(Step::Wait(POLL)),
+            _ => Err(Step::Again),
+        };
     };
     if error.code == RETRY {
         return Err(Step::Wait(POLL));
     }
-    release_refused_child(state, record, request);
-    advance(state, store, record, fail(error.code, error.detail)).await;
+    // Release the child only once this failure won: a cancellation committed
+    // meanwhile owns the call's ending.
+    if advance(state, store, record, fail(error.code, error.detail)).await {
+        release_refused_child(state, record, request);
+    }
     Err(Step::Again)
 }
 
