@@ -298,6 +298,56 @@ pub(super) fn portable_usage(
     });
 }
 
+/// Refresh-custody renewal (protocol 51); see
+/// `machine_plugins::native_usage::renewal`. Only a closed reason code or the
+/// renewal reply leaves the Machine.
+pub(super) fn portable_renewal(
+    command: MachineCommand,
+    context: MachineCommandContext,
+    execution: &PluginExecutionScope,
+) {
+    let MachineCommand::RenewPortableCredential {
+        request_id,
+        request,
+    } = command
+    else {
+        return;
+    };
+    let MachineCommandContext {
+        protocol,
+        events,
+        providers,
+        ..
+    } = context;
+    let account = request.usage.account_id.clone();
+    let provider = request.usage.plugin_id.clone();
+    let invocation = execution.portable_renewal(*request);
+    tokio::spawn(async move {
+        let result = if protocol >= crate::machine_protocol::REFRESH_CUSTODY_PROTOCOL_VERSION {
+            providers.renew_portable_credential(invocation).await
+        } else {
+            Err(anyhow::anyhow!("machine_usage_update_required"))
+        };
+        let detail = result.as_ref().err().map(|error| {
+            let text = error.to_string();
+            let code = if text == crate::machine_plugins::native_usage::RENEWAL_NOT_RETAINED {
+                crate::machine_plugins::native_usage::RENEWAL_NOT_RETAINED
+            } else {
+                crate::machine_protocol::portable_usage::portable_usage_error_code(&text)
+            };
+            tracing::warn!(account = account.as_str(), %provider, reason = code, "Portable credential renewal failed");
+            code.to_owned()
+        });
+        let _ = events.send(MachineEvent::PluginHostResponse {
+            request_id,
+            accepted: result.is_ok(),
+            started: true,
+            payload: result.ok(),
+            detail,
+        });
+    });
+}
+
 /// A named envelope carries an account vault's Service-held credential (an
 /// entered key or a subscription sign-in), applied into that account's own
 /// scope. Named credentials of a native-only Provider (Claude) live solely in

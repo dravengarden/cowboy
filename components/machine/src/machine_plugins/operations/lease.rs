@@ -48,6 +48,15 @@ impl PluginExecutionScope {
             Arc::clone(&self.connected),
         )
     }
+    pub fn portable_renewal(
+        &self,
+        request: crate::machine_protocol::refresh_custody::PortableRenewalRequest,
+    ) -> crate::machine_plugins::native_usage::RenewalInvocation {
+        crate::machine_plugins::native_usage::RenewalInvocation::new(
+            request,
+            Arc::clone(&self.connected),
+        )
+    }
     pub fn telemetry_export(
         &self,
         request: &crate::machine_protocol::telemetry_export::ExportAttempt,

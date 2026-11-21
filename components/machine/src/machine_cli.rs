@@ -2600,6 +2600,9 @@ fn handle_machine_command(
         command @ MachineCommand::CollectPortableUsage { .. } => {
             command_provider_auth::portable_usage(command, context, execution);
         }
+        command @ MachineCommand::RenewPortableCredential { .. } => {
+            command_provider_auth::portable_renewal(command, context, execution);
+        }
         MachineCommand::ProviderUsageAck { .. }
         | MachineCommand::ManagedCallReply { .. }
         | MachineCommand::MemoryRelay { .. }
