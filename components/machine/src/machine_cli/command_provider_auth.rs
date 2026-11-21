@@ -214,7 +214,7 @@ fn consume_native_reset(
     let generation = profile.generation;
     let invocation = execution.native_usage(*profile);
     tokio::spawn(async move {
-        let result = if protocol >= crate::machine_protocol::NATIVE_RESET_PROTOCOL_VERSION {
+        let result = if protocol >= crate::machine_protocol::NATIVE_RESET_SPACING_PROTOCOL_VERSION {
             providers
                 .consume_native_reset(invocation, &request, &dispatch)
                 .await

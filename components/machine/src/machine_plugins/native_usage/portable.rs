@@ -35,8 +35,10 @@ pub struct HostAdmission {
     /// before the collector starts, since a monotonic deadline cannot see
     /// the wall clock the Controller set it by.
     expires_at_unix_ms: Option<i64>,
-    /// Variables replacing the collector's (a private credential home).
-    environment: Option<BTreeMap<String, String>>,
+    /// Stage a private credential home of this replica generation for the
+    /// collector, under the lifecycle lock after the exact release resolved;
+    /// `true` when the invocation cannot run without one (a reset).
+    private_home: Option<(u64, bool)>,
 }
 
 impl HostAdmission {
@@ -46,8 +48,16 @@ impl HostAdmission {
             deadline: Instant::now() + DEADLINE,
             sidecars: None,
             expires_at_unix_ms: None,
-            environment: None,
+            private_home: None,
         }
+    }
+
+    /// An admission that stages a private home of `generation`.
+    #[cfg(test)]
+    pub(in crate::machine_plugins) fn with_private_home(generation: u64) -> Self {
+        let mut admission = Self::new(Arc::new(AtomicBool::new(true)));
+        admission.private_home = Some((generation, true));
+        admission
     }
 
     pub(in crate::machine_plugins) fn remaining(&self) -> Result<Duration> {
@@ -63,9 +73,27 @@ impl HostAdmission {
         Ok(remaining)
     }
 
-    /// Variables replacing the collector's (a private credential home).
-    pub(in crate::machine_plugins) fn environment(&self) -> Option<&BTreeMap<String, String>> {
-        self.environment.as_ref()
+    /// Stage this invocation's private credential home, if it uses one: the
+    /// caller holds the lifecycle lock and resolved the exact release, so an
+    /// uninstall either finished first or sees the copy and refuses.
+    ///
+    /// # Errors
+    /// A pre-start refusal: the replica cannot be staged, or a required home
+    /// does not apply to this Provider.
+    pub(in crate::machine_plugins) fn stage_private_home(
+        &self,
+        store: &MachinePluginStore,
+        plugin_id: &str,
+    ) -> std::result::Result<StagedHome, PluginHostInvocationFailure> {
+        let Some((generation, required)) = self.private_home else {
+            return Ok(None);
+        };
+        match store.private_credential_home(plugin_id, generation) {
+            Ok(Some(home)) => Ok(Some(home)),
+            Ok(None) if !required => Ok(None),
+            Ok(None) => Err(anyhow::anyhow!("native_reset_unsupported").into()),
+            Err(_) => Err(anyhow::anyhow!("portable_usage_replica_pending").into()),
+        }
     }
 
     /// The absolute instant after which nothing of this invocation starts.
@@ -78,6 +106,33 @@ impl HostAdmission {
         self.sidecars.as_ref()
     }
 }
+
+/// Remove an invocation's private credential copy once its command ended. A
+/// read fails if the copy outlives it (no observation is acknowledged while
+/// the credential is left behind); a reset's outcome is reported whatever
+/// happens to the copy, which is then removed at Machine start.
+///
+/// # Errors
+/// A read whose copy could not be removed.
+pub(in crate::machine_plugins) fn remove_private_home(
+    private: Option<PrivateHome>,
+    operation: PluginHostOperation,
+) -> std::result::Result<(), PluginHostInvocationFailure> {
+    match private.map(PrivateHome::remove) {
+        Some(Err(error)) if operation == PluginHostOperation::ResetUsage => {
+            tracing::error!(%error, "a private credential copy outlived its reset");
+            Ok(())
+        }
+        Some(Err(_)) => Err(PluginHostInvocationFailure {
+            started: true,
+            error: anyhow::anyhow!("portable_usage_collector_failed"),
+        }),
+        _ => Ok(()),
+    }
+}
+
+/// A staged private credential home and the variables pointing into it.
+type StagedHome = Option<(PrivateHome, BTreeMap<String, String>)>;
 
 /// One immediate banked reset of a named portable account; see
 /// [`MachinePluginStore::consume_portable_reset`].
@@ -252,12 +307,9 @@ impl MachinePluginStore {
         // Account-owned (removed with the account's credentials and at
         // Machine start), never the shared system temporary directory. Each
         // level is created parent-first and a symlink is refused.
-        let provider = self.auth_provider_root(plugin_id);
-        let parent = provider.join(PRIVATE_HOMES);
+        let parent = self.prepare_provider_root(plugin_id)?.join(PRIVATE_HOMES);
         let root = parent.join(format!("{:032x}", rand::random::<u128>()));
-        for directory in [self.auth_watch_root(), provider, parent] {
-            crate::provider_account::prepare_private_directory(&directory)?;
-        }
+        crate::provider_account::prepare_private_directory(&parent)?;
         fs::DirBuilder::new().mode(0o700).create(&root)?;
         let private = PrivateHome(Some(root));
         restore_projected_bundle(auth, private.path(), &bundle)?;
@@ -280,6 +332,24 @@ impl MachinePluginStore {
         Ok(Some((private, environment)))
     }
 
+    /// The account's real, private credential directory of `plugin_id`,
+    /// created parent-first; a symlink at either level is refused, so nothing
+    /// decrypted is ever written through a linked directory.
+    ///
+    /// # Errors
+    /// If a level is a symlink or not a directory, or cannot be created.
+    pub(in crate::machine_plugins) fn prepare_provider_root(
+        &self,
+        plugin_id: &str,
+    ) -> Result<PathBuf> {
+        let provider = self.auth_provider_root(plugin_id);
+        for directory in [self.auth_watch_root(), provider.clone()] {
+            crate::provider_account::prepare_private_directory(&directory)
+                .context("Provider credential directory must be a real private directory")?;
+        }
+        Ok(provider)
+    }
+
     /// Remove every named account's private credential copies left by an
     /// interrupted run. The Machine runs this before it accepts work. Only
     /// real named-account provider directories are traversed, from opened
@@ -300,8 +370,8 @@ impl MachinePluginStore {
                     |only| only == name,
                 )
             },
-            PRIVATE_HOMES,
-            None,
+            (PRIVATE_HOMES, None),
+            &|| Ok(()),
         )
         .context("removing private credential copies")
     }
@@ -374,18 +444,14 @@ impl MachinePluginStore {
             return Err(refuse("native_reset_unsupported"));
         }
         admission.sidecars = Some(BTreeMap::new());
-        let (private, environment) = scoped
-            .private_credential_home(&request.plugin_id, request.auth_generation)
-            .map_err(|_| refuse("portable_usage_replica_pending"))?
-            .ok_or_else(|| refuse("native_reset_unsupported"))?;
-        admission.environment = Some(environment);
+        admission.private_home = Some((request.auth_generation, true));
         let mut payload = serde_json::to_value(&request.reset).map_err(anyhow::Error::from)?;
         if let Some(object) = payload.as_object_mut() {
             object.insert("token_refresh".into(), serde_json::Value::Bool(false));
         }
         // The Service host path resolves exactly the selected release under
         // the lifecycle lock and keeps it through the reset.
-        let result = scoped
+        scoped
             .invoke_executable_host_admitted(
                 PluginHostRequest {
                     plugin_id: request.plugin_id,
@@ -406,13 +472,7 @@ impl MachinePluginStore {
                 } else {
                     pre_spend_code(&format!("{:#}", failure.error))
                 }),
-            });
-        // The reset's outcome is reported whatever happens to the copy; a copy
-        // that cannot be removed now is logged and removed at Machine start.
-        if let Err(error) = private.remove() {
-            tracing::error!(%error, "a private credential copy outlived its reset");
-        }
-        result
+            })
     }
 
     /// Collect one named portable account's usage. Errors are closed codes
@@ -439,19 +499,13 @@ impl MachinePluginStore {
         if let Some(payload) = request.payload.as_object_mut() {
             payload.insert("token_refresh".into(), serde_json::Value::Bool(false));
         }
-        let (private, environment) = scoped
-            .private_credential_home(&request.plugin_id, request.auth_generation)
-            .map_err(|error| anyhow::anyhow!(portable_usage_error_code(&format!("{error:#}"))))?
-            .map_or((None, None), |(private, environment)| {
-                (Some(private), Some(environment))
-            });
-        admission.environment = environment;
+        admission.private_home = Some((request.auth_generation, false));
         // The Service host path at account scope: it verifies the exact signed
         // generation and the account replica generation under the lifecycle
         // lock, launches the collector with the account's session environment
         // (only the checked sidecars) and refuses an observation whose
         // generation changed while it ran.
-        let result = scoped
+        scoped
             .invoke_executable_host_admitted(
                 PluginHostRequest {
                     plugin_id: request.plugin_id,
@@ -466,15 +520,7 @@ impl MachinePluginStore {
             .await
             .map_err(|failure| {
                 anyhow::anyhow!(portable_usage_error_code(&format!("{:#}", failure.error)))
-            });
-        // A copy that cannot be removed fails the read: no observation is
-        // acknowledged while the credential is left behind.
-        if let Some(private) = private {
-            private
-                .remove()
-                .map_err(|_| anyhow::anyhow!("portable_usage_collector_failed"))?;
-        }
-        result
+            })
     }
 }
 
@@ -551,7 +597,7 @@ mod tests {
             deadline: Instant::now(),
             sidecars: None,
             expires_at_unix_ms: None,
-            environment: None,
+            private_home: None,
         };
         assert_eq!(
             expired.remaining().unwrap_err().to_string(),

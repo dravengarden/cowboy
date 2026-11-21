@@ -1236,6 +1236,12 @@ impl MachinePluginStore {
             )
             .map_err(PluginHostInvocationFailure::from)?;
         let mut environment = resolved.environment;
+        // A private credential copy is staged only now, under the lifecycle
+        // lock and after the exact release resolved (see `uninstall`).
+        let private = match admission {
+            Some(admission) => admission.stage_private_home(self, &plugin_id)?,
+            None => None,
+        };
         let mut prepared_sidecars = if operation == PluginHostOperation::CollectUsage {
             self.prepare_usage_sidecars(&resolved.collector_sidecars, admission)
                 .await
@@ -1249,9 +1255,10 @@ impl MachinePluginStore {
         prepared_sidecars
             .configure_environment(&mut environment)
             .map_err(PluginHostInvocationFailure::from)?;
-        if let Some(private) = admission.and_then(native_usage::HostAdmission::environment) {
-            environment.extend(private.clone());
-        }
+        let private = private.map(|(home, variables)| {
+            environment.extend(variables);
+            home
+        });
         let (program, command_args) = resolved
             .command
             .split_first()
@@ -1292,6 +1299,7 @@ impl MachinePluginStore {
         for child in &mut prepared_sidecars.children {
             let _ = child.kill().await;
         }
+        native_usage::remove_private_home(private, operation)?;
         let output = output.map_err(|failure| PluginHostInvocationFailure {
             started: failure.started,
             error: failure.error,
@@ -1952,8 +1960,8 @@ impl MachinePluginStore {
             }
             _ => true,
         };
-        fs::create_dir_all(provider_auth_root.join("replicas"))?;
-        fs::set_permissions(&provider_auth_root, fs::Permissions::from_mode(0o700))?;
+        self.prepare_provider_root(&envelope.provider_id)?;
+        crate::provider_account::prepare_private_directory(&provider_auth_root.join("replicas"))?;
         atomic_write(
             &provider_auth_root
                 .join("replicas")
@@ -2072,7 +2080,7 @@ impl MachinePluginStore {
     ) -> Result<()> {
         let auth = &package.manifest.authentication;
         validate_portable_bundle(&portable_contract::contract(package), bundle)?;
-        let provider_auth_root = self.auth_provider_root(&package.manifest.id);
+        let provider_auth_root = self.prepare_provider_root(&package.manifest.id)?;
         let materialized_root = provider_auth_root.join("materialized");
         let previous_generation = read_link_name(&materialized_root.join("current"))
             .and_then(|value| value.parse::<u64>().ok());
@@ -6408,6 +6416,40 @@ mod tests {
         assert!(left_root.exists());
         store.remove_private_homes().unwrap();
         assert!(!left_root.exists());
+        // A host invocation stages its copy only under the lifecycle lock an
+        // uninstall holds, after the exact release resolved, and removes it.
+        let copies = || {
+            fs::read_dir(
+                scoped
+                    .auth_provider_root("grok")
+                    .join(native_usage::PRIVATE_HOMES),
+            )
+            .map_or(0, Iterator::count)
+        };
+        let held = store.lifecycle.lock().await;
+        let admission = native_usage::HostAdmission::with_private_home(1);
+        let invocation = scoped.invoke_executable_host_admitted(
+            PluginHostRequest {
+                plugin_id: "grok".into(),
+                plugin_version: package.manifest.version.clone(),
+                generation_digest: release.artifact_digest.clone(),
+                auth_generation: Some(1),
+                operation: PluginHostOperation::CollectUsage,
+                payload: serde_json::json!({ "operation": "collect" }),
+            },
+            Some(&admission),
+        );
+        tokio::pin!(invocation);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), &mut invocation)
+                .await
+                .is_err()
+        );
+        assert_eq!(copies(), 0, "nothing staged before the lifecycle lock");
+        drop(held);
+        invocation.await.unwrap();
+        assert_eq!(copies(), 0);
+        store.remove_private_homes().unwrap();
         // The sweep never follows a symlink: a symlinked providers directory
         // or private-homes directory leaves its target untouched, and staging
         // refuses a symlinked private-homes directory.
@@ -6427,9 +6469,23 @@ mod tests {
         let other_root = store.auth_base.join("accounts").join(other.as_str());
         fs::create_dir_all(&other_root).unwrap();
         symlink(&outside, other_root.join("providers")).unwrap();
-        store.remove_private_homes().unwrap();
+        // A linked enrolled root fails recovery (startup) without following it.
+        assert!(store.remove_private_homes().is_err());
         assert!(outside.join("grok/private-homes/copy").exists());
         fs::remove_file(other_root.join("providers")).unwrap();
+        // So does a linked Provider directory, and no envelope is ever
+        // applied through it: nothing decrypted reaches the link's target.
+        let linked = scoped.auth_provider_root("grok");
+        let held = root.join("held-grok");
+        fs::rename(&linked, &held).unwrap();
+        symlink(&outside, &linked).unwrap();
+        assert!(store.remove_private_homes().is_err());
+        let resealed = seal_auth_for_test(&scoped, &package, &service_signer, 2, &bundle);
+        assert!(scoped.apply_auth(&resealed).await.is_err());
+        assert!(!outside.join("replicas").exists() && !outside.join("materialized").exists());
+        fs::remove_file(&linked).unwrap();
+        fs::rename(&held, &linked).unwrap();
+        store.remove_private_homes().unwrap();
         // An unreadable accounts directory is never treated as empty.
         let accounts = store.auth_base.join("accounts");
         fs::set_permissions(&accounts, fs::Permissions::from_mode(0o000)).unwrap();
