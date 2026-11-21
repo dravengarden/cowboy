@@ -12,14 +12,11 @@ pub(in crate::server) async fn before_dispatch(
     session: &str,
     explicit: bool,
 ) -> Result<(), String> {
-    let info = state.hub.session_info(session);
     // A retired legacy card has no credential left anywhere to resume on.
-    if info.as_ref().is_some_and(|info| {
-        info.meta.provider_account_id.is_default()
-            && super::super::retirement::retired(state, &info.meta.provider)
-    }) {
-        return Err(wait(super::super::retirement::SESSION_RETIRED));
+    if let Some(refusal) = super::super::retirement::session_refusal(state, session) {
+        return Err(wait(refusal));
     }
+    let info = state.hub.session_info(session);
     let governed = info.is_some_and(|info| governed(&info.meta));
     if !governed {
         return Ok(());

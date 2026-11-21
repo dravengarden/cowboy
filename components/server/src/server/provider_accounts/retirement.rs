@@ -38,6 +38,9 @@ pub(in crate::server) fn open_provider_auth(
 /// Startup gate: refuse to run while a legacy card still holds a Service
 /// credential. The deleted code can neither adopt nor serve it; the previous
 /// Controller still can, and the component activator restores it.
+/// An adoption interrupted after its root wipe left its move journal
+/// unfinished; it is finished here, before anything can propose a rotation.
+/// From then on no root write reaches a card-family Provider.
 pub(in crate::server) fn admit_startup(auth: &ProviderAuthService) -> anyhow::Result<()> {
     let live = live(&auth.statuses());
     anyhow::ensure!(
@@ -45,6 +48,11 @@ pub(in crate::server) fn admit_startup(auth: &ProviderAuthService) -> anyhow::Re
         "legacy default cards still hold Service credentials ({}): adopt them into named accounts or sign them out with the previous Controller before installing this release",
         live.join(", ")
     );
+    let recovered = auth.recover_legacy_moves()?;
+    if !recovered.is_empty() {
+        tracing::warn!(providers = ?recovered, "finished interrupted legacy credential moves");
+    }
+    auth.retire_root_providers(legacy_cards::retired_provider);
     Ok(())
 }
 
@@ -54,6 +62,30 @@ pub(in crate::server) fn admit_startup(auth: &ProviderAuthService) -> anyhow::Re
 /// entry keeps its ordinary "not authenticated" failure.
 pub(in crate::server) fn retired(state: &AppState, provider: &str) -> bool {
     retired_entry(provider, state.provider_auth.status(provider).as_ref())
+}
+
+/// The refusal of any input to `session` (a queued prompt, a direct prompt
+/// or steering) when it ran on a retired card's `default` account.
+pub(in crate::server) fn session_refusal(state: &AppState, session: &str) -> Option<&'static str> {
+    session_retired(state, &state.hub.session_info(session)?.meta).then_some(SESSION_RETIRED)
+}
+
+/// Whether `meta` is a session of a retired card's `default` account. Its
+/// queue is parked for good: never retried, woken or counted as a waiter.
+pub(in crate::server) fn session_retired(state: &AppState, meta: &crate::core::SessionMeta) -> bool {
+    retired_session(
+        &meta.provider,
+        &meta.provider_account_id,
+        state.provider_auth.status(&meta.provider).as_ref(),
+    )
+}
+
+fn retired_session(
+    provider: &str,
+    account: &crate::provider_account::ProviderAccountId,
+    root: Option<&ProviderAuthenticationStatus>,
+) -> bool {
+    account.is_default() && retired_entry(provider, root)
 }
 
 fn retired_entry(provider: &str, root: Option<&ProviderAuthenticationStatus>) -> bool {
@@ -116,11 +148,24 @@ mod tests {
     }
 
     #[test]
+    fn only_a_default_session_of_a_wiped_card_is_parked_for_good() {
+        use ServiceAuthenticationState::{Ready, SignedOut};
+        let default = crate::provider_account::ProviderAccountId::default();
+        let named: crate::provider_account::ProviderAccountId =
+            uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let wiped = status("codex", SignedOut);
+        assert!(retired_session("codex", &default, Some(&wiped)));
+        assert!(!retired_session("codex", &named, Some(&wiped)));
+        assert!(!retired_session("codex", &default, Some(&status("codex", Ready))));
+        assert!(!retired_session("codex", &default, None));
+    }
+
+    #[test]
     fn startup_refuses_a_live_card_credential_until_it_is_signed_out() {
         use base64::Engine as _;
         let root = tempfile::tempdir().unwrap();
+        admit_startup(&ProviderAuthService::open(root.path()).unwrap()).unwrap();
         let auth = ProviderAuthService::open(root.path()).unwrap();
-        admit_startup(&auth).unwrap();
         let source: cowboy_provider_sdk::StandardProviderSource =
             serde_json::from_str(include_str!("../../../../../plugins/grok/provider.json"))
                 .unwrap();
@@ -140,5 +185,12 @@ mod tests {
         assert!(refusal.contains("(grok)"), "{refusal}");
         auth.logout("grok").unwrap();
         admit_startup(&auth).unwrap();
+        // Admitted: no root write can sign a card in again.
+        assert_eq!(
+            auth.commit(&package, &bundle, None, None)
+                .unwrap_err()
+                .to_string(),
+            crate::provider_service::ROOT_RETIRED
+        );
     }
 }

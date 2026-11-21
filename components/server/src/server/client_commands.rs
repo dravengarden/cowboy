@@ -436,6 +436,10 @@ pub(super) fn prompt_command(
     text: String,
     content: Vec<serde_json::Value>,
 ) -> ControlFlow<bool, Result<(), String>> {
+    // Never wake or feed a worker of a retired legacy card.
+    if let Some(refusal) = provider_accounts::retirement::session_refusal(state, &session_id) {
+        return ControlFlow::Continue(Err(refusal.to_owned()));
+    }
     ControlFlow::Continue({
         // Derive an auto-title from the first prompt before text/content are
         // consumed below. auto_title no-ops unless the title is still the
