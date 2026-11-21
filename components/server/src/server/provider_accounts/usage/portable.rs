@@ -148,6 +148,9 @@ struct Candidate {
     refresh_safe: bool,
 }
 
+/// One placement check a candidate must pass.
+type Check = fn(&Candidate) -> bool;
+
 /// Pick the Machine to collect on, or name why none can.
 ///
 /// The checks run in order — host policy, a collector release that can never
@@ -160,7 +163,7 @@ fn choose(candidates: &[Candidate]) -> Result<&str, &'static str> {
     if candidates.is_empty() {
         return Err("portable_usage_machine_unavailable");
     }
-    let checks: [(fn(&Candidate) -> bool, &'static str); 4] = [
+    let checks: [(Check, &'static str); 4] = [
         (|c| c.allowed, "runtime_not_allowed"),
         (|c| c.refresh_safe, "portable_usage_refresh_unsupported"),
         (|c| c.current, "machine_usage_update_required"),
