@@ -218,6 +218,13 @@ pub(super) async fn update_value(
     input: &Mutation,
 ) -> Result<Value, &'static str> {
     let store = state.store.as_ref().ok_or("unavailable")?;
+    // A retired legacy card can never become a default again.
+    if let crate::store::provider_accounts::Change::SetDefault { provider_id, id } = &input.change
+        && id.is_default()
+        && crate::store::provider_accounts::legacy_cards::retired_provider(provider_id)
+    {
+        return Err("named_account_required");
+    }
     // Metadata writes share one authority and receipt; no native login, usage
     // probe, credential access or worker activation happens here. Share
     // changes use the same writer, with families from the static table. Membership

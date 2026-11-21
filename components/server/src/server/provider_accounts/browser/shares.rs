@@ -183,7 +183,8 @@ pub(in crate::server) async fn list_value(
     let providers: BTreeMap<&str, &str> = browser_families::PROVIDERS.iter().copied().collect();
     Ok((
         Value::Array(listed),
-        json!({"version": browser_families::VERSION, "providers": providers}),
+        // `cards` stays, empty, for Web clients that predate the retirement.
+        json!({"version": browser_families::VERSION, "providers": providers, "cards": []}),
     ))
 }
 
