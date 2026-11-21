@@ -37,7 +37,10 @@ pub use challenge_proof::{challenge_proof_v1, challenge_proof_v2, challenge_proo
 /// banked usage limit (`ConsumeNativeReset`), sent only by that account's
 /// signed collector inside its verified native home.
 pub const NATIVE_RESET_PROTOCOL_VERSION: u16 = 49;
-pub const MACHINE_PROTOCOL_VERSION: u16 = 50;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 51;
+/// Refresh custody of named portable accounts (`RenewPortableCredential`,
+/// `PortableCredentialRenewalNeeded`); see [`refresh_custody`].
+pub const REFRESH_CUSTODY_PROTOCOL_VERSION: u16 = 51;
 /// Named portable accounts' usage (`CollectPortableUsage`): the signed
 /// collector runs in the account's vault replica scope, never the Service's.
 pub const PORTABLE_USAGE_PROTOCOL_VERSION: u16 = 50;
@@ -861,6 +864,13 @@ pub enum MachineCommand {
         request_id: String,
         request: Box<portable_usage::PortableUsageRequest>,
     },
+    /// One bounded refresh-custody renewal; answered only by
+    /// `PluginHostResponse` whose payload is a
+    /// [`refresh_custody::PortableRenewalReply`].
+    RenewPortableCredential {
+        request_id: String,
+        request: Box<refresh_custody::PortableRenewalRequest>,
+    },
     NativeLogout {
         request_id: String,
         logout: crate::provider_account::NativeLogoutRequest,
@@ -1367,6 +1377,13 @@ pub enum MachineEvent {
         portable_schema: String,
         auth_method: String,
         bundle: std::collections::BTreeMap<String, String>,
+    },
+    /// A custody-managed account's access-only replica expires soon (or has
+    /// expired) while this Machine runs a worker of it (protocol 51).
+    PortableCredentialRenewalNeeded {
+        account_id: crate::provider_account::ProviderAccountId,
+        provider_id: String,
+        auth_generation: u64,
     },
     CommandResult {
         request_id: String,

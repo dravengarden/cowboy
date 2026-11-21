@@ -3,6 +3,5 @@
   "bundle_key": "auth_json",
   "strip_entry_fields": ["refresh_token"],
   "expiry_entry_field": "expires_at",
-  "credential_path_env": "GROK_AUTH_PATH",
-  "renew_environment": { "GROK_AUTH_EARLY_INVALIDATION_SECS": "86400" }
+  "credential_path_env": "GROK_AUTH_PATH"
 }
