@@ -674,37 +674,30 @@ pub(in crate::server) async fn image_capabilities(
     value
 }
 
-/// Cached quota evidence for review selection: legacy Service collectors for
-/// legacy defaults, each named default account's own usage read otherwise.
+/// Cached quota evidence for review selection: each named default account's
+/// own usage read. The retired legacy cards have no Service collector, so a
+/// child on a `default` account has no quota evidence.
 async fn quota_evidence(
     state: &AppState,
     meta: &crate::core::SessionMeta,
-    accounts: &[String],
     named: &[crate::provider_account::ProviderAccountId],
 ) -> Value {
     if !state.product_auth_enabled || meta.owner_user_id.is_some() {
         let now = chrono::Utc::now().timestamp_millis();
-        let (mut quota, interval) = state
+        let interval = state
             .usage
-            .cached_view(|snapshot, _, _| {
-                (
-                    super::selection::quota(snapshot, accounts, now),
-                    snapshot.refresh_interval_ms,
-                )
-            })
+            .cached_view(|snapshot, _, _| snapshot.refresh_interval_ms)
             .await;
-        if let (Some(owner), Some(list)) = (
-            meta.owner_user_id.as_deref(),
-            quota["accounts"].as_array_mut(),
-        ) {
+        let mut accounts = Vec::new();
+        if let Some(owner) = meta.owner_user_id.as_deref() {
             for id in named {
                 let read = super::super::provider_accounts::usage::read_one(state, owner, id)
                     .await
                     .unwrap_or_else(|code| json!({"account_id":id,"reason":code}));
-                list.push(super::selection::named_quota(&read, now, interval));
+                accounts.push(super::selection::named_quota(&read, now, interval));
             }
         }
-        quota
+        json!({"observed_now_ms":now,"accounts":accounts,"unavailable_accounts":[]})
     } else {
         json!({"status":"permission_denied"})
     }
@@ -786,8 +779,8 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             "version": readiness.generation.as_ref().map(|generation| &generation.version),
             "preset": target.and_then(|target| target.preset.as_ref()),
             "options": target.and_then(|target| target.options.as_ref()),
-            // A named default's own usage, never the Provider-wide legacy card.
-            "quota_account": if readiness.account.is_default() { readiness.generation.as_ref().and_then(|generation| state.provider_catalog.account_usage_provider(provider, &generation.version, &generation.digest)) } else { named.push(readiness.account.clone()); Some(readiness.account.as_str().to_owned()) },
+            // A named default's own usage; a retired legacy card has none.
+            "quota_account": if readiness.account.is_default() { None } else { named.push(readiness.account.clone()); Some(readiness.account.as_str().to_owned()) },
             // `--preset` choices; the session's Tools choose otherwise.
             "presets": runnable_presets,
             "access": ["read-only"],
@@ -805,12 +798,7 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
         }
         providers.push(entry);
     }
-    let accounts: Vec<String> = providers
-        .iter()
-        .filter_map(|provider| provider["quota_account"].as_str().map(str::to_owned))
-        .filter(|account| !named.iter().any(|id| id.as_str() == account))
-        .collect();
-    let quota = quota_evidence(state, meta, &accounts, &named).await;
+    let quota = quota_evidence(state, meta, &named).await;
     // Account observations must not outlive the parent/user permission that
     // was checked before the readiness and cache awaits.
     if let Err(code) =

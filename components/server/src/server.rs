@@ -433,6 +433,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let provider_auth = Arc::new(crate::provider_service::ProviderAuthService::open(
         &args.data_dir,
     )?);
+    provider_accounts::retirement::admit_startup(&provider_auth)?;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     // Persistence closes only after dispatcher/runtime quiescence. Using the
     // HTTP shutdown signal directly would race a last-millisecond prompt
@@ -492,7 +493,8 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         Arc::clone(&machine_control),
     )
     .with_config(service_config.clone())
-    .with_runtime_restrictions(Arc::clone(&runtime_restrictions));
+    .with_runtime_restrictions(Arc::clone(&runtime_restrictions))
+    .with_retired_service_accounts(crate::store::provider_accounts::legacy_cards::CARDS);
     usage.restore_execution_settings().await?;
     let runtime_router = RuntimeRouter::new();
     // Usage collectors and authenticated Machine connections must share this

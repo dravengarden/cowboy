@@ -96,6 +96,13 @@ pub(super) async fn api_provider_auth_commit(
     Path(provider_id): Path<String>,
     Json(request): Json<ProviderAuthCommitRequest>,
 ) -> Response {
+    if crate::store::provider_accounts::legacy_cards::retired_provider(&provider_id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            provider_accounts::retirement::LOGIN_RETIRED,
+        )
+            .into_response();
+    }
     let Some((_provider_version, _generation_digest, package)) =
         state.provider_catalog.latest_package(&provider_id)
     else {
@@ -223,6 +230,9 @@ fn default_login_refusal(
 ) -> Option<&'static str> {
     if crate::provider_account::named_only(&package.manifest.id) {
         return Some("named_account_required: this Provider signs in only to named accounts");
+    }
+    if crate::store::provider_accounts::legacy_cards::retired_provider(&package.manifest.id) {
+        return Some(provider_accounts::retirement::LOGIN_RETIRED);
     }
     (!crate::provider_account::portable_contract::contract(package)
         .methods
@@ -1013,7 +1023,32 @@ mod default_login_tests {
                     .is_some_and(|refusal| refusal.starts_with("named_account_required"))
             );
         }
-        let grok = package(include_str!("../../../../plugins/grok/provider.json"));
-        assert_eq!(default_login_refusal(&grok, "xai-account"), None);
+    }
+
+    #[test]
+    fn a_retired_legacy_card_never_signs_in_at_service_scope() {
+        for (source, method) in [
+            (
+                include_str!("../../../../plugins/grok/provider.json"),
+                "xai-account",
+            ),
+            (
+                include_str!("../../../../plugins/codex/provider.json"),
+                "chatgpt",
+            ),
+            (
+                include_str!("../../../../plugins/claude-code/provider.json"),
+                "claude-account",
+            ),
+            (
+                include_str!("../../../../plugins/claude-deepseek/provider.json"),
+                "api-key",
+            ),
+        ] {
+            assert_eq!(
+                default_login_refusal(&package(source), method),
+                Some(super::provider_accounts::retirement::LOGIN_RETIRED)
+            );
+        }
     }
 }

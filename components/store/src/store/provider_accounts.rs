@@ -11,6 +11,7 @@ pub mod browser_shares;
 pub mod grants;
 pub mod legacy_adoption;
 pub mod legacy_browsers;
+pub mod legacy_cards;
 pub mod logins;
 pub mod portable;
 pub mod revocation;

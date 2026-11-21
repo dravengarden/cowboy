@@ -139,6 +139,9 @@ pub struct UsageService {
     warming: Arc<AtomicBool>,
     execution_machines: Arc<parking_lot::RwLock<BTreeMap<String, String>>>,
     runtime_restrictions: Arc<crate::project_placement::RuntimeRestrictions>,
+    /// Retired legacy default cards: accounts the Service no longer
+    /// collects, refreshes, resets or reports (`docs/legacy-card-retirement.md`).
+    retired: Arc<BTreeSet<String>>,
 }
 
 enum PluginCommandRoute {
@@ -248,7 +251,37 @@ impl UsageService {
             warming: Arc::new(AtomicBool::new(false)),
             execution_machines: Arc::default(),
             runtime_restrictions: Arc::default(),
+            retired: Arc::default(),
         }
+    }
+
+    /// Retire the Service collection of the legacy default card `accounts`:
+    /// no scheduled, manual or credential-triggered collection, no Service
+    /// reset and no row in the Service snapshot. Named accounts keep reading
+    /// the same presentation bindings through [`Self::plugin_bindings`].
+    #[must_use]
+    pub fn with_retired_service_accounts(mut self, accounts: &[&str]) -> Self {
+        self.retired = Arc::new(
+            accounts
+                .iter()
+                .map(|account| (*account).to_owned())
+                .collect(),
+        );
+        // Drop cached rows now: readers of the raw snapshot (`cached_view`)
+        // must not see a retired card before the next alignment.
+        if let Ok(mut snapshot) = self.snapshot.try_lock() {
+            snapshot
+                .providers
+                .retain(|usage| !self.retired.contains(usage.provider));
+        }
+        self
+    }
+
+    /// The bindings the Service itself collects: all but retired cards.
+    fn service_bindings(&self) -> Vec<PluginUsageSpec> {
+        let mut bindings = self.bindings.current();
+        bindings.retain(|binding| !self.retired.contains(&binding.account));
+        bindings
     }
 
     #[must_use]
@@ -428,8 +461,7 @@ impl UsageService {
 
     #[must_use]
     pub fn reset_provider_ids(&self) -> Vec<String> {
-        self.bindings
-            .current()
+        self.service_bindings()
             .iter()
             .filter_map(|binding| binding.reset.clone())
             .collect()
@@ -446,8 +478,7 @@ impl UsageService {
 
     #[must_use]
     pub fn reset_claims_before_attempt(&self, reset_id: &str) -> bool {
-        self.bindings
-            .current()
+        self.service_bindings()
             .iter()
             .find(|binding| binding.reset.as_deref() == Some(reset_id))
             .is_some_and(PluginUsageSpec::claims_reset_before_attempt)
@@ -476,7 +507,7 @@ impl UsageService {
     }
 
     pub async fn snapshot(&self) -> UsageSnapshot {
-        let bindings = self.bindings.current();
+        let bindings = self.service_bindings();
         let reset_schedules = self.reset_schedules.lock().await.clone();
         let mut snapshot = self.snapshot.lock().await.clone();
         align_snapshot_bindings(&mut snapshot, &bindings);
@@ -497,7 +528,7 @@ impl UsageService {
         &self,
         read: impl FnOnce(&UsageSnapshot, &[PluginUsageSpec], &BTreeSet<String>) -> T,
     ) -> T {
-        let bindings = self.bindings.current();
+        let bindings = self.service_bindings();
         let refreshing = self.in_flight.lock().clone();
         let snapshot = self.snapshot.lock().await;
         read(&snapshot, &bindings, &refreshing)
@@ -522,7 +553,7 @@ impl UsageService {
         candidates: Vec<PluginUsageSpec>,
         policy: RefreshPolicy,
     ) -> Vec<PluginUsageSpec> {
-        let bindings = self.bindings.current();
+        let bindings = self.service_bindings();
         let mut current = self.snapshot.lock().await;
         align_snapshot_bindings(&mut current, &bindings);
         let attempted_at_ms = now_ms();
@@ -622,7 +653,7 @@ impl UsageService {
         let failures = self.limiter.account_failures(&key);
         let quick_retry = outcome != limiter::Outcome::Authentication
             && (1..=limiter::QUICK_RETRIES).contains(&failures);
-        let bindings = self.bindings.current();
+        let bindings = self.service_bindings();
         {
             let mut snapshot = self.snapshot.lock().await;
             align_snapshot_bindings(&mut snapshot, &bindings);
@@ -661,7 +692,7 @@ impl UsageService {
     /// # Errors
     /// If `provider` names no usage account.
     pub async fn request_refresh(&self, provider: Option<&str>) -> Result<UsageSnapshot> {
-        let bindings = self.bindings.current();
+        let bindings = self.service_bindings();
         let candidates: Vec<PluginUsageSpec> = match provider {
             Some(provider) => vec![
                 bindings
@@ -729,7 +760,7 @@ impl UsageService {
         let mut released = false;
         {
             let mut snapshot = self.snapshot.lock().await;
-            for binding in self.bindings.current() {
+            for binding in self.service_bindings() {
                 if !runtime
                     .exact_usage_hosts(&binding.account)
                     .iter()
@@ -773,7 +804,7 @@ impl UsageService {
     }
 
     async fn refresh_with_policy(&self, low_peak: bool) -> UsageSnapshot {
-        let bindings = self.bindings.current();
+        let bindings = self.service_bindings();
         let policy = if low_peak {
             RefreshPolicy::Background
         } else {
@@ -819,7 +850,7 @@ impl UsageService {
             return;
         }
         let current_time_ms = now_ms();
-        if !self.bindings.current().iter().any(|binding| {
+        if !self.service_bindings().iter().any(|binding| {
             binding.refreshable()
                 && provider_refresh_due(
                     find_provider(snapshot, &binding.account),
@@ -863,7 +894,7 @@ impl UsageService {
         provider: &str,
         policy: RefreshPolicy,
     ) -> Result<UsageSnapshot> {
-        let bindings = self.bindings.current();
+        let bindings = self.service_bindings();
         let Some(binding) = bindings
             .iter()
             .find(|binding| binding.account == provider)
@@ -914,7 +945,7 @@ impl UsageService {
         provider: &str,
     ) -> std::result::Result<ResetReservation, ResetError> {
         let serial = Arc::clone(&self.reset_lock).lock_owned().await;
-        let bindings = self.bindings.current();
+        let bindings = self.service_bindings();
         let binding = bindings
             .iter()
             .find(|candidate| candidate.reset.as_deref() == Some(provider))
@@ -959,7 +990,7 @@ impl UsageService {
             Some(reservation) => reservation,
             None => self.reserve_reset(provider).await?,
         };
-        let bindings = self.bindings.current();
+        let bindings = self.service_bindings();
         let Some(binding) = bindings
             .iter()
             .find(|candidate| candidate.reset.as_deref() == Some(provider))
@@ -1552,6 +1583,46 @@ mod tests {
         assert!(!service.reset_claims_before_attempt("missing"));
         assert!(!service.exposes_activity("xai"));
         assert!(!service.exposes_activity("deepseek"));
+    }
+
+    #[tokio::test]
+    async fn retired_cards_leave_the_service_but_keep_their_presentation_binding() {
+        let service = UsageService::with_bindings(
+            None,
+            None,
+            vec![openai_usage_binding(), xai_like_binding("xai")],
+        )
+        .with_retired_service_accounts(&["openai"]);
+        // Named accounts still read the retired card's binding.
+        assert_eq!(service.plugin_bindings().len(), 2);
+        // The Service neither reports, refreshes nor resets it.
+        let snapshot = service.snapshot().await;
+        assert!(
+            snapshot
+                .providers
+                .iter()
+                .all(|usage| usage.provider != "openai")
+        );
+        assert!(
+            snapshot
+                .providers
+                .iter()
+                .any(|usage| usage.provider == "xai")
+        );
+        assert_eq!(service.reset_provider_ids(), ["xai"]);
+        assert!(service.reserve_reset("codex").await.is_err());
+        assert!(service.refresh_provider("openai").await.is_err());
+        assert!(
+            service
+                .cached_view(|snapshot, bindings, _| {
+                    snapshot
+                        .providers
+                        .iter()
+                        .all(|usage| usage.provider != "openai")
+                        && bindings.iter().all(|binding| binding.account != "openai")
+                })
+                .await
+        );
     }
 
     #[test]

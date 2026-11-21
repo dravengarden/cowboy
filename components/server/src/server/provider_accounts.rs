@@ -11,6 +11,7 @@ pub(super) mod login;
 pub(super) mod native_generation;
 pub(super) mod portable;
 pub(super) mod registration;
+pub(super) mod retirement;
 mod revocation;
 pub(super) mod transitions;
 pub(super) mod usage;
@@ -80,6 +81,9 @@ pub(super) async fn resolve_for_create(
     // Any number of sessions may run one account concurrently (design
     // "Revision 6"); the daemon's per-account bound is the only cap.
     named_only_admitted(state, provider, &id).await?;
+    if id.is_default() && retirement::retired(state, provider) {
+        return Err("named_account_required");
+    }
     if !id.is_default() {
         allow_named_creation(
             named_session_provider(state, provider),

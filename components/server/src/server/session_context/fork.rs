@@ -154,6 +154,13 @@ async fn fork_session(
         return Err("Restore this session from Trash before forking it".into());
     }
     let source = info.meta.clone();
+    // A native fork reads the source thread from its login's home, and a
+    // retired legacy card's login exists nowhere any more.
+    if source.provider_account_id.is_default()
+        && provider_accounts::retirement::retired(&state, &source.provider)
+    {
+        return Err("This conversation ran on a retired legacy default account and cannot be forked; use Continue in new agent on a named account".into());
+    }
     if !FORKABLE_PROVIDERS.contains(&source.provider.as_str()) {
         return Err(format!(
             "{} sessions cannot be forked yet; use Continue in new agent",
