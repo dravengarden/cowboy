@@ -36,6 +36,12 @@ impl MachinePluginStore {
                 .await
                 .map_err(|_| anyhow::anyhow!("portable_usage_busy"))?;
         admission.remaining()?;
+        // The lifecycle lock uninstall holds: the exact release is checked
+        // and the private copy staged and removed under it, so an uninstall
+        // either finished first or runs after the copy is gone.
+        let _lifecycle = tokio::time::timeout(admission.remaining()?, self.lifecycle.lock())
+            .await
+            .map_err(|_| anyhow::anyhow!("portable_usage_busy"))?;
         let (package, digest) = scoped
             .active_package(&request.plugin_id)?
             .context("portable_usage_collector_unavailable")?;
