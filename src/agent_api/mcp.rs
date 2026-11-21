@@ -163,7 +163,16 @@ fn action(name: &str, arguments: &Value) -> Result<Action, String> {
             ),
             language: Some("js".into()),
             format: None,
-            timeout_ms: None,
+            // The caller's deadline also bounds the Controller's slot wait.
+            timeout_ms: match tagged.get("timeout_ms") {
+                None | Some(Value::Null) => None,
+                Some(value) => Some(
+                    value
+                        .as_u64()
+                        .filter(|ms| (1..=MAX_WAIT_MS).contains(ms))
+                        .ok_or(HELP_USAGE)?,
+                ),
+            },
         });
     }
     if name == "cowboy_receipt" {
@@ -296,7 +305,7 @@ async fn handle(
         "resources/templates/list" => Ok(json!({"resourceTemplates":[]})),
         "resources/read" => {
             if enabled && params.get("uri").and_then(Value::as_str) == Some(SDK_URI) {
-                let reply = discover("read").await;
+                let reply = discover(&json!({"help":"read"})).await;
                 let types = reply
                     .pointer("/value/types")
                     .and_then(Value::as_str)
@@ -329,7 +338,7 @@ async fn handle(
             }
             if name == "cowboy_read" && params["arguments"].get("help").is_some() {
                 let mut reply = match help_topic(&params["arguments"]) {
-                    Some(topic) => discover(topic).await,
+                    Some(_) => discover(&params["arguments"]).await,
                     None => {
                         json!({"state":"error","error":{"code":"invalid_help","message":HELP_USAGE}})
                     }
@@ -366,8 +375,8 @@ async fn handle(
     }
 }
 
-async fn discover(topic: &str) -> Value {
-    let action = match action("cowboy_read", &json!({"help":topic})) {
+async fn discover(arguments: &Value) -> Value {
+    let action = match action("cowboy_read", arguments) {
         Ok(action) => action,
         Err(message) => {
             return json!({"state":"error","error":{"code":"invalid_help","message":message}});
@@ -534,6 +543,21 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_help_read_keeps_the_callers_deadline() {
+        let timeout = |args: Value| match action("cowboy_read", &args) {
+            Ok(Action::AgentRead { timeout_ms, .. }) => Ok(timeout_ms),
+            Ok(_) => panic!("not a read"),
+            Err(message) => Err(message),
+        };
+        assert_eq!(
+            timeout(json!({"help":"read","timeout_ms":100})),
+            Ok(Some(100))
+        );
+        assert_eq!(timeout(json!({"help":"read"})), Ok(None));
+        assert!(timeout(json!({"help":"read","timeout_ms":0})).is_err());
+    }
 
     #[test]
     fn startup_discovery_survives_pending_grants_without_ignoring_protocol_floors() {

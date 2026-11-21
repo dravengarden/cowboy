@@ -1814,10 +1814,11 @@ Programs run on the Controller host in a fresh process per call:
 - Bun as the TS/JS engine; it strips TypeScript without type-checking;
 - a wall-clock deadline (default 20 s, at most 60 s) that kills the process
   tree;
-- admission: at most six concurrent programs per Controller and two per
-  session. A program waits up to 5 s (never more than half its deadline, and
-  the wait is deducted from it) for a slot; if none frees it is refused before
-  running with `capacity`, `scope` (`controller` or `session`),
+- admission: at most six concurrent programs per Controller and two
+  outstanding (running or waiting) per session; at most six more may wait.
+  A program waits up to 5 s (never more than half its deadline, and the wait
+  is deducted from it) for a slot; a full queue or an expired wait is refused
+  before running with `capacity`, `scope` (`controller` or `session`),
   `retryable: true`, `retry_after_ms` and a message. Each refusal is logged
   with the current per-session holders. A `capacity` refusal is a transient
   admission result, never an empty search.

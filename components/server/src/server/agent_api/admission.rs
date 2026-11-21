@@ -8,6 +8,7 @@
 //! holders so a saturated Controller can be diagnosed afterwards.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
@@ -25,11 +26,18 @@ const MAX_WAIT: Duration = Duration::from_secs(5);
 const RETRY_AFTER_MS: u64 = 2000;
 
 pub(super) static ADMISSION: LazyLock<Admission> =
-    LazyLock::new(|| Admission::new(GLOBAL_SLOTS, SESSION_SLOTS));
+    LazyLock::new(|| Admission::new(GLOBAL_SLOTS, SESSION_SLOTS, MAX_QUEUED));
+
+/// Reads waiting beyond the running ones. Each waiting read holds one of the
+/// Machine connection's shared request permits, so the queue stays short.
+const MAX_QUEUED: usize = 6;
 
 pub(super) struct Admission {
     global: Arc<Semaphore>,
     per_session: usize,
+    /// Running plus waiting reads, capped at global slots + queue.
+    outstanding: AtomicUsize,
+    max_outstanding: usize,
     holders: Mutex<HashMap<String, usize>>,
     released: Notify,
 }
@@ -49,25 +57,36 @@ impl Scope {
     }
 }
 
-/// A held slot; dropping it releases both the session and global share.
-pub(super) struct Slot<'a> {
+/// One outstanding read. Dropping it (including when the caller's future is
+/// cancelled while waiting) returns everything it reserved.
+struct Ticket<'a> {
     admission: &'a Admission,
-    session: String,
+    session: Option<String>,
+}
+
+impl Drop for Ticket<'_> {
+    fn drop(&mut self) {
+        if let Some(session) = self.session.take() {
+            self.admission.release_session(&session);
+        }
+        self.admission.outstanding.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// A held slot; dropping it releases the session and global share.
+pub(super) struct Slot<'a> {
+    _ticket: Ticket<'a>,
     _global: OwnedSemaphorePermit,
     pub waited: Duration,
 }
 
-impl Drop for Slot<'_> {
-    fn drop(&mut self) {
-        self.admission.release_session(&self.session);
-    }
-}
-
 impl Admission {
-    pub(super) fn new(global: usize, per_session: usize) -> Self {
+    pub(super) fn new(global: usize, per_session: usize, queued: usize) -> Self {
         Self {
             global: Arc::new(Semaphore::new(global)),
             per_session,
+            outstanding: AtomicUsize::new(0),
+            max_outstanding: global + queued,
             holders: Mutex::new(HashMap::new()),
             released: Notify::new(),
         }
@@ -81,16 +100,27 @@ impl Admission {
     pub(super) async fn acquire(&self, session: &str, wait: Duration) -> Result<Slot<'_>, Scope> {
         let started = Instant::now();
         let deadline = started + wait;
+        if self.outstanding.fetch_add(1, Ordering::AcqRel) >= self.max_outstanding {
+            self.outstanding.fetch_sub(1, Ordering::AcqRel);
+            return Err(Scope::Controller);
+        }
+        let mut ticket = Ticket {
+            admission: self,
+            session: None,
+        };
         // Session share first, so a session at its limit never occupies a
-        // global slot while it waits for its own programs to finish.
+        // global slot while it waits for its own reads to finish.
         loop {
             let notified = self.released.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
             if self.reserve_session(session) {
+                ticket.session = Some(session.to_owned());
                 break;
             }
-            if tokio::time::timeout_at(deadline, notified).await.is_err() {
+            if Instant::now() >= deadline
+                || tokio::time::timeout_at(deadline, notified).await.is_err()
+            {
                 return Err(Scope::Session);
             }
         }
@@ -100,17 +130,14 @@ impl Admission {
                 match tokio::time::timeout_at(deadline, Arc::clone(&self.global).acquire_owned())
                     .await
                 {
-                    Ok(Ok(permit)) => permit,
-                    _ => {
-                        self.release_session(session);
-                        return Err(Scope::Controller);
-                    }
+                    // A late wake can deliver a permit after the deadline passed.
+                    Ok(Ok(permit)) if Instant::now() <= deadline => permit,
+                    _ => return Err(Scope::Controller),
                 }
             }
         };
         Ok(Slot {
-            admission: self,
-            session: session.to_owned(),
+            _ticket: ticket,
             _global: global,
             waited: started.elapsed(),
         })
@@ -139,7 +166,8 @@ impl Admission {
         self.released.notify_waiters();
     }
 
-    /// Current holders as `session=count`, sorted, for refusal logs.
+    /// Reads each session has running or queued for a slot, as
+    /// `session=count`, sorted, for refusal logs.
     pub(super) fn holders(&self) -> Vec<String> {
         let holders = self.holders.lock().unwrap_or_else(|e| e.into_inner());
         let mut listed: Vec<String> = holders
@@ -155,7 +183,8 @@ impl Admission {
             session = session,
             scope = scope.code(),
             waited_ms = u64::try_from(waited.as_millis()).unwrap_or(u64::MAX),
-            available = self.global.available_permits(),
+            free_slots = self.global.available_permits(),
+            outstanding = self.outstanding.load(Ordering::Acquire),
             holders = ?self.holders(),
             "agent read program refused: no slot"
         );
@@ -164,7 +193,7 @@ impl Admission {
                 "All Controller read slots are busy (shared by every session). The program did not run; retry after retry_after_ms, and avoid long paging loops in one program."
             }
             Scope::Session => {
-                "This session already runs the maximum concurrent read programs. The program did not run; wait for your other reads to finish, or combine them into one program."
+                "This session already has the maximum outstanding read programs (running or waiting for a slot). The program did not run; wait for your other reads to finish, or combine them into one program."
             }
         };
         json!({"schema":1,"state":"error","error":{
@@ -183,7 +212,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_session_cannot_hold_every_slot() {
-        let admission = Admission::new(3, 2);
+        let admission = Admission::new(3, 2, 4);
         let a = admission.acquire("s1", Duration::ZERO).await.unwrap();
         let b = admission.acquire("s1", Duration::ZERO).await.unwrap();
         assert_eq!(
@@ -205,7 +234,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_refused_global_wait_returns_the_session_share() {
-        let admission = Admission::new(1, 2);
+        let admission = Admission::new(1, 2, 4);
         let held = admission.acquire("s1", Duration::ZERO).await.unwrap();
         assert_eq!(
             admission
@@ -220,7 +249,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_waiter_is_admitted_when_a_slot_frees() {
-        let admission = Arc::new(Admission::new(1, 1));
+        let admission = Arc::new(Admission::new(1, 1, 4));
         let held = admission.acquire("s1", Duration::ZERO).await.unwrap();
         let waiter = {
             let admission = Arc::clone(&admission);
@@ -246,7 +275,7 @@ mod tests {
 
     #[test]
     fn a_refusal_explains_its_scope() {
-        let admission = Admission::new(1, 1);
+        let admission = Admission::new(1, 1, 4);
         let value = admission.refusal(Scope::Controller, "s1", Duration::ZERO);
         assert_eq!(value["error"]["code"], "capacity");
         assert_eq!(value["error"]["scope"], "controller");
@@ -257,5 +286,49 @@ mod tests {
                 .unwrap()
                 .contains("retry")
         );
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_waiter_returns_its_session_share() {
+        let admission = Admission::new(1, 2, 4);
+        let held = admission.acquire("s1", Duration::ZERO).await.unwrap();
+        for _ in 0..3 {
+            let pending = admission.acquire("s2", Duration::from_secs(5));
+            assert!(
+                tokio::time::timeout(Duration::from_millis(10), pending)
+                    .await
+                    .is_err()
+            );
+        }
+        assert_eq!(admission.holders(), vec!["s1=1".to_owned()]);
+        assert_eq!(admission.outstanding.load(Ordering::Acquire), 1);
+        drop(held);
+        assert!(admission.acquire("s2", Duration::ZERO).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn the_queue_is_bounded() {
+        let admission = Arc::new(Admission::new(1, 8, 1));
+        let held = admission.acquire("s1", Duration::ZERO).await.unwrap();
+        let queued = {
+            let admission = Arc::clone(&admission);
+            tokio::spawn(async move {
+                admission
+                    .acquire("s2", Duration::from_secs(5))
+                    .await
+                    .is_ok()
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        // Running + queued is full: refused at once, without waiting.
+        let started = Instant::now();
+        assert_eq!(
+            admission.acquire("s3", Duration::from_secs(5)).await.err(),
+            Some(Scope::Controller)
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+        drop(held);
+        assert!(queued.await.unwrap());
+        assert_eq!(admission.outstanding.load(Ordering::Acquire), 0);
     }
 }

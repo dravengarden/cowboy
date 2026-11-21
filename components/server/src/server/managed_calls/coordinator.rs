@@ -85,6 +85,15 @@ pub(super) fn error(code: &str, admission: &str) -> Value {
     json!({"schema":1,"state":"error","error":{"code":code,"admission":admission}})
 }
 
+/// A ledger read failure keeps the schema-1 `capacity` code existing callers
+/// retry on; `reason` tells it apart from a read-slot admission refusal.
+fn ledger_unavailable() -> Value {
+    let mut value = error("capacity", "not_submitted");
+    value["error"]["reason"] = json!("ledger_unavailable");
+    value["error"]["retryable"] = json!(true);
+    value
+}
+
 fn random_id(prefix: &str) -> String {
     let mut bytes = [0u8; 12];
     rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut bytes);
@@ -498,12 +507,12 @@ pub(in crate::server) async fn dispatch_calls_from(
         Action::Inspect { call_id } => match ledger.inspect(&call_id).await {
             Ok(Some(record)) => envelope(&record),
             Ok(None) => error("not_found", "not_submitted"),
-            Err(_) => error("unavailable", "not_submitted"),
+            Err(_) => ledger_unavailable(),
         },
         Action::Observe { request_id } => match ledger.observe(&request_id).await {
             Ok(Some(record)) => envelope(&record),
             Ok(None) => error("not_found", "not_submitted"),
-            Err(_) => error("unavailable", "not_submitted"),
+            Err(_) => ledger_unavailable(),
         },
         Action::Wait {
             call_id,
@@ -526,7 +535,7 @@ pub(in crate::server) async fn dispatch_calls_from(
                 value
             }
             Ok(None) => error("not_found", "not_submitted"),
-            Err(_) => error("unavailable", "not_submitted"),
+            Err(_) => ledger_unavailable(),
         },
         Action::Cancel { call_id } => cancel(state, ledger, &call_id).await,
         Action::Mcp { .. }
