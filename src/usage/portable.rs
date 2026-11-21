@@ -11,6 +11,7 @@ use crate::machine_protocol::{
     MachineCommand, PluginHostOperation, PluginInstallationState, PluginInventory,
 };
 use serde_json::Value;
+use std::future::Future;
 
 /// A little above the Machine's admission wait plus its collector timeout.
 const REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
@@ -28,6 +29,25 @@ pub struct PortableUsageHost {
 }
 
 impl UsageService {
+    /// The refresh-custody declaration of `plugin_id`'s current signed
+    /// release, read from its verified host bundle.
+    #[must_use]
+    pub fn refresh_custody(
+        &self,
+        plugin_id: &str,
+    ) -> Option<crate::machine_protocol::refresh_custody::RefreshCustody> {
+        let catalog = match &self.bindings {
+            super::UsageBindingSource::Catalog(catalog) => catalog,
+            #[cfg(any(test, feature = "test-support"))]
+            super::UsageBindingSource::Static(_) => return None,
+        };
+        catalog
+            .runtime()?
+            .default_host(plugin_id)?
+            .refresh_custody
+            .clone()
+    }
+
     /// The first scope member (in `members` order) whose released host
     /// declares a usage collector. Source-bundled bootstrap hosts never
     /// qualify: they would run on the Controller.
@@ -214,6 +234,64 @@ pub fn begin_collect<'a>(
         }
     })
 }
+
+/// The outcome of one renewal dispatch.
+#[derive(Debug)]
+pub enum RenewalDispatch {
+    /// The Machine answered with this reply payload.
+    Replied(Value),
+    /// The Machine refused before running anything (a closed code).
+    Refused(String),
+    /// No answer: the renewal may or may not have run.
+    Lost,
+}
+
+/// Enqueue one refresh-custody renewal; the future awaits its reply.
+///
+/// # Errors
+/// A closed code when the command never left the Controller.
+pub fn begin_renewal<'a>(
+    machine_control: &'a MachineControl,
+    machine_id: &str,
+    plugin: &PluginInventory,
+    request: crate::machine_protocol::refresh_custody::PortableRenewalRequest,
+) -> Result<impl Future<Output = RenewalDispatch> + 'a, &'static str> {
+    let binding = machine_control
+        .bind_plugin_host(machine_id, plugin, PluginHostOperation::CollectUsage)
+        .map_err(|_| "portable_usage_machine_unavailable")?;
+    let request_id = format!("portable-renewal-{}", uuid::Uuid::new_v4());
+    let (reply, pending) = machine_control
+        .begin_request(
+            machine_id,
+            &request_id,
+            MachineCommand::RenewPortableCredential {
+                request_id: request_id.clone(),
+                request: Box::new(request),
+            },
+            ReplyKind::PluginHost,
+            Some(RequestBinding::Plugin(&binding)),
+        )
+        .map_err(|error| dispatch_error(&error))?;
+    Ok(async move {
+        let _pending = pending;
+        match tokio::time::timeout(RENEWAL_REPLY_TIMEOUT, reply).await {
+            Ok(Ok(Reply::PluginHost {
+                accepted: true,
+                payload: Some(value),
+                ..
+            })) if !value.is_null() => RenewalDispatch::Replied(value),
+            Ok(Ok(Reply::PluginHost {
+                accepted: false,
+                detail: Some(code),
+                ..
+            })) => RenewalDispatch::Refused(code),
+            _ => RenewalDispatch::Lost,
+        }
+    })
+}
+
+/// Above the Machine's renewal deadline.
+const RENEWAL_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
 /// Closed codes for refusals before the command left the Controller.
 #[must_use]

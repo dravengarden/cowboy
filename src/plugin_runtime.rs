@@ -62,6 +62,8 @@ pub struct ActivatedHostPlugin {
     /// The signed collector declares it never redeems a refresh token when a
     /// request says so ([`crate::machine_protocol::portable_usage::REFRESH_FREE_DECLARATION`]).
     pub refresh_free_collector: bool,
+    /// The release's refresh-custody declaration, when it ships a valid one.
+    pub refresh_custody: Option<crate::machine_protocol::refresh_custody::RefreshCustody>,
 }
 
 /// Least-privilege projection served to Cowboy Web.
@@ -635,6 +637,10 @@ fn build_activated_host(
             .get(crate::machine_protocol::portable_usage::REFRESH_FREE_DECLARATION)
             .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
             .is_some_and(|value| value["token_refresh"] == "request"),
+        refresh_custody: crate::machine_protocol::refresh_custody::RefreshCustody::from_files(
+            files,
+        )
+        .map_err(|error| anyhow::anyhow!("invalid refresh custody declaration: {error}"))?,
     })
 }
 
@@ -887,6 +893,7 @@ mod tests {
             visual: None,
             native_capabilities: Vec::new(),
             refresh_free_collector: false,
+            refresh_custody: None,
         };
         let grok = ActivatedHostPlugin {
             id: "grok".to_owned(),
@@ -903,6 +910,7 @@ mod tests {
             visual: None,
             native_capabilities: Vec::new(),
             refresh_free_collector: false,
+            refresh_custody: None,
         };
         assert!(login.public_auth_surface());
         assert!(!grok.public_auth_surface());
@@ -1000,6 +1008,7 @@ mod tests {
             visual: spec.visual,
             native_capabilities: spec.native_capabilities,
             refresh_free_collector: false,
+            refresh_custody: None,
         };
 
         let public = serde_json::to_value(host.public_descriptor(true)).expect("public descriptor");

@@ -30,6 +30,7 @@ use crate::model::SessionMeta;
 use crate::plugin_host::PluginUsageSpec;
 use crate::plugin_process::run_plugin_command;
 
+pub mod custody;
 mod execution;
 pub mod limiter;
 pub mod native;
@@ -123,6 +124,8 @@ pub struct UsageSnapshot {
 #[derive(Clone)]
 pub struct UsageService {
     pub native: native::Cache,
+    /// Refresh custody of named portable accounts.
+    pub custody: custody::Custody,
     pub limiter: limiter::Limiter,
     bindings: UsageBindingSource,
     machine_control: Arc<crate::machine_control::MachineControl>,
@@ -230,6 +233,11 @@ impl UsageService {
                 .as_ref()
                 .map_or_else(native::Cache::default, |path| {
                     native::Cache::persistent(path.with_file_name("usage-named.json"))
+                }),
+            custody: cache_path
+                .as_ref()
+                .map_or_else(custody::Custody::default, |path| {
+                    custody::Custody::persistent(path.with_file_name("usage-refresh-custody.json"))
                 }),
             limiter: limiter::Limiter::new(
                 cache_path

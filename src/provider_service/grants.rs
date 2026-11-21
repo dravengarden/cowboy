@@ -127,6 +127,7 @@ impl ProviderAuthService {
             &intent.provider_id,
             admission.recipient(),
             Some((&hash, generation)),
+            None,
         )
     }
 
