@@ -29,7 +29,15 @@ pub struct NativeResetDispatch {
     /// The spend is the reset's second paced Provider start: the Machine runs
     /// the identity read first and never starts the spend before this.
     pub spend_not_before_ms: i64,
+    /// Protocol 51: the Provider spacing, which the Machine also keeps from
+    /// its actual identity-read start; it refuses (unsent) a spend that would
+    /// then start after `expires_at_ms`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_spacing_ms: Option<i64>,
 }
+
+/// Machines from which a named reset carries `min_spacing_ms`.
+pub const NATIVE_RESET_SPACING_PROTOCOL_VERSION: u16 = 51;
 
 /// The closed success outcomes of the signed Claude collector's
 /// `consume_reset`. Anything else is an unknown outcome.
@@ -59,6 +67,11 @@ pub fn project_native_reset_reply(reply: &serde_json::Value) -> serde_json::Valu
         serde_json::json!({"error": {"code": code,
             "call_may_have_reached_provider": reached, "credit_id": credit_id}})
     };
+    // A reply naming both a success and an error is malformed and may
+    // follow a spent reset.
+    if reply.get("error").is_some() && reply.get("outcome").is_some() {
+        return failure("reset_outcome_unknown", true, None);
+    }
     let Some(error) = reply.get("error") else {
         let credit_id = credit(reply.get("credit_id"));
         return match reply.get("outcome").and_then(serde_json::Value::as_str) {
@@ -110,6 +123,40 @@ impl NativeResetRequest {
     }
 }
 
+/// The exact raw codes a Machine reports only when a reset's spend never
+/// started: refusals and failures before the spend (the identity read or the
+/// spawn included). Nothing else, and no normalised or free-text detail, is
+/// evidence that nothing was sent.
+pub const PRE_START_RESET_REFUSALS: [&str; 19] = [
+    "native_reset_request_invalid",
+    "native_reset_expired",
+    "native_reset_unsupported",
+    "native_reset_preflight_failed",
+    "native_usage_busy",
+    "native_usage_admission_expired",
+    "native_usage_profile_changed",
+    "native_usage_installation_changed",
+    "native_usage_collector_unavailable",
+    "native_usage_home_unsupported",
+    "native_usage_authentication_required",
+    "machine_usage_update_required",
+    "machine_connection_changed",
+    "portable_usage_account_required",
+    "portable_usage_busy",
+    "portable_usage_replica_pending",
+    "portable_usage_collector_unavailable",
+    "portable_usage_refresh_unsupported",
+    "portable_reset_identity_required",
+];
+
+/// Whether a refused reset certainly never reached the Provider: an explicit
+/// `started: false` with the exact raw pre-start code (never a normalised or
+/// free-text detail). Anything else may follow a spent reset.
+#[must_use]
+pub fn reset_refusal_unsent(started: Option<bool>, raw_code: &str) -> bool {
+    started == Some(false) && PRE_START_RESET_REFUSALS.contains(&raw_code)
+}
+
 /// Closed diagnostics for native observations; arbitrary subprocess output is
 /// never an account API error or a log field.
 pub fn native_usage_error_code(value: &str) -> &'static str {
@@ -127,6 +174,7 @@ pub fn native_usage_error_code(value: &str) -> &'static str {
         "native_reset_request_invalid" => "native_reset_request_invalid",
         "native_reset_outcome_unknown" => "native_reset_outcome_unknown",
         "native_reset_expired" => "native_reset_expired",
+        "native_reset_preflight_failed" => "native_reset_preflight_failed",
         "machine_usage_update_required" => "machine_usage_update_required",
         "machine_connection_changed" => "machine_connection_changed",
         _ => "native_usage_unavailable",
@@ -150,9 +198,12 @@ mod tests {
             "dispatch":{"plugin_version":"3.0.0","generation_digest":"sha256:x",
                 "expires_at_ms":1,"spend_not_before_ms":1}});
         let command: MachineCommand = serde_json::from_value(value.clone()).unwrap();
-        assert_eq!(command.minimum_protocol(), NATIVE_RESET_PROTOCOL_VERSION);
+        assert_eq!(
+            command.minimum_protocol(),
+            NATIVE_RESET_SPACING_PROTOCOL_VERSION
+        );
         const {
-            assert!(NATIVE_RESET_PROTOCOL_VERSION <= MACHINE_PROTOCOL_VERSION);
+            assert!(NATIVE_RESET_SPACING_PROTOCOL_VERSION <= MACHINE_PROTOCOL_VERSION);
             assert!(NATIVE_RESET_PROTOCOL_VERSION > ACCOUNT_FENCE_PROTOCOL_VERSION);
         }
         assert_eq!(serde_json::to_value(&command).unwrap(), value);
@@ -225,6 +276,13 @@ mod tests {
                     "call_may_have_reached_provider": false}}),
                 error("reset_unavailable", false, json!(null)),
             ),
+            // A success and an error together are malformed.
+            (
+                json!({"outcome": "reset", "credit_id": "grant:1",
+                    "error": {"message": "No Claude reset is currently usable.",
+                    "call_may_have_reached_provider": false}}),
+                error("reset_outcome_unknown", true, json!(null)),
+            ),
             // Missing reached evidence is unknown; collector text never leaves.
             (
                 json!({"error": {"message": "{\"token\":\"secret\"}"}}),
@@ -244,5 +302,23 @@ mod tests {
         ] {
             assert_eq!(project_native_reset_reply(&reply), projected, "{reply}");
         }
+    }
+
+    #[test]
+    fn only_an_explicit_pre_start_refusal_is_unsent() {
+        assert!(reset_refusal_unsent(Some(false), "native_reset_expired"));
+        assert!(!reset_refusal_unsent(None, "native_reset_expired"));
+        assert!(!reset_refusal_unsent(Some(true), "native_reset_expired"));
+        assert!(!reset_refusal_unsent(
+            Some(false),
+            "native_reset_outcome_unknown"
+        ));
+        assert!(!reset_refusal_unsent(Some(false), "something new"));
+        // Free text is never normalised into a pre-start code.
+        assert!(!reset_refusal_unsent(Some(false), "HTTP 401"));
+        assert!(reset_refusal_unsent(
+            Some(false),
+            "native_reset_preflight_failed"
+        ));
     }
 }

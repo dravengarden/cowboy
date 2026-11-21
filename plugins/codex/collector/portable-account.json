@@ -1,4 +1,6 @@
 {
   "schema": 1,
-  "token_refresh": "request"
+  "token_refresh": "request",
+  "token_refresh_guard": "refresh_endpoint_refused",
+  "reset_token_refresh": "request"
 }

@@ -43,7 +43,7 @@ impl MachinePluginStore {
             plan.discover(self.auth_base.clone());
             plan.discover(self.auth_base.join("accounts"));
         }
-        for scope in self.existing_auth_scopes() {
+        for scope in self.existing_auth_scopes()? {
             plan.discover(scope.auth_root.clone());
             match scope.scoped_auth_watch_plan() {
                 Ok(scoped) => {
@@ -138,11 +138,11 @@ mod tests {
                 .all(|path| plan.relevant(std::slice::from_ref(path)))
         );
         assert!(!plan.directories.iter().any(|path| path.starts_with(&alias)));
-        assert_eq!(store.existing_auth_scopes().len(), 3);
+        assert_eq!(store.existing_auth_scopes().unwrap().len(), 3);
         let scoped = first.auth_watch_plan().unwrap();
         assert!(scoped.relevant(&[paths[1].clone()]));
         assert!(!scoped.relevant(&[paths[0].clone(), paths[2].clone()]));
-        assert_eq!(first.existing_auth_scopes().len(), 1);
+        assert_eq!(first.existing_auth_scopes().unwrap().len(), 1);
     }
 
     #[test]

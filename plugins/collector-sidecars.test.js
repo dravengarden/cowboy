@@ -4,7 +4,10 @@ import claudeCodeHost from "./claude-code/host.json" with { type: "json" };
 import { accountView, KNOWN_PLANS } from "./claude-code/collector/index.js";
 import { collectorTargets, group } from "./claude-deepseek/collector/index.js";
 import {
+  appServerOptions as codexAppServerOptions,
   collect as collectCodex,
+  REFRESH_REFUSED_URL as CODEX_REFRESH_REFUSED_URL,
+  reset as resetCodex,
   isTokenExpired as codexTokenExpired,
   nearestCredit as nearestCodexCredit,
   readLines as codexLines,
@@ -21,6 +24,7 @@ import {
   nearestCredit as nearestGrokCredit,
   readLines as grokLines,
 } from "./grok/collector/index.js";
+import codexDeclaration from "./codex/collector/portable-account.json" with { type: "json" };
 import grokDeclaration from "./grok/collector/portable-account.json" with { type: "json" };
 import grokHost from "./grok/host.json" with { type: "json" };
 import grokProvider from "./grok/provider.json" with { type: "json" };
@@ -422,7 +426,11 @@ test("Grok refresh-free usage reports authentication required and never retries"
 });
 
 test("Grok declares refresh-free usage and reaches only its read endpoints", () => {
-  equal(grokDeclaration, { schema: 1, token_refresh: "request" }, "declaration");
+  equal(
+    grokDeclaration,
+    { schema: 1, token_refresh: "request", token_refresh_guard: "cli_not_started" },
+    "declaration",
+  );
   for (const argv of [grokHost.usage.collector_argv, grokHost.usage.reset_argv]) {
     const net = argv.find((value) => value.startsWith("--allow-net="));
     equal(net, "--allow-net=grok.com:443,cli-chat-proxy.grok.com:443", "network grant");
@@ -451,4 +459,141 @@ test("Grok declares refresh-free usage and reaches only its read endpoints", () 
     1_800_000,
     "token expiry",
   );
+});
+
+/* The app-server refreshes an expired access token on its own
+ * (`proactive_expiry`, verified offline against 0.169.1), so a refresh-free
+ * request's app-server points its refresh endpoint at a port nothing listens
+ * on, and a rejected token is authentication required. */
+test("A refresh-free Codex request can reach no refresh endpoint", () => {
+  equal(codexAppServerOptions(true), {}, "Service account unchanged");
+  equal(
+    codexAppServerOptions(false),
+    { env: { CODEX_REFRESH_TOKEN_URL_OVERRIDE: CODEX_REFRESH_REFUSED_URL } },
+    "refresh refused",
+  );
+  equal(new URL(CODEX_REFRESH_REFUSED_URL).port, "0", "no listener");
+});
+
+test("A refresh-free Codex read and reset report authentication required", async () => {
+  const unauthorized = new Error(
+    'account/read: {"code":-32603,"message":"workspace routing discovery unauthorized (401)"}',
+  );
+  let message;
+  await collectCodex(fakeCodex({ "account/read": [unauthorized] }), {
+    token_refresh: false,
+  }).catch((error) => {
+    message = error.message;
+  });
+  equal(message.includes("authentication required"), true, "collect");
+  const reset = fakeCodex({ "account/rateLimits/read": [expired] });
+  let failure;
+  await resetCodex(reset, {
+    token_refresh: false,
+    idempotency_key: "cowboy-reset-1",
+    expected_credit_id: "credit-1",
+  }).catch((error) => {
+    failure = error;
+  });
+  equal(failure.message.includes("authentication required"), true, "reset");
+  equal(failure.callMayHaveReachedProvider, false, "nothing was spent");
+  equal(
+    reset.calls.map(([method]) => method),
+    ["account/rateLimits/read"],
+    "no consume, no refresh",
+  );
+  // A Service account's reset keeps its error.
+  let other;
+  await resetCodex(fakeCodex({ "account/rateLimits/read": [expired] }), {}).catch((error) => {
+    other = error;
+  });
+  equal(other === expired, true, "unchanged without token_refresh");
+});
+
+test("A refresh-free Codex rate-limit 401 and a consume rejection are authentication", async () => {
+  const unauthorized = new Error(
+    'account/rateLimits/read: {"code":-32603,"message":"failed to fetch codex rate limits: 401"}',
+  );
+  let message;
+  await collectCodex(
+    fakeCodex({
+      "account/read": [{ account: { type: "chatgpt" } }],
+      "account/rateLimits/read": [unauthorized],
+    }),
+    { token_refresh: false },
+  ).catch((error) => {
+    message = error.message;
+  });
+  equal(message.includes("authentication required"), true, "401-only rate limits");
+  const credits = {
+    rateLimitResetCredits: {
+      credits: [
+        { id: "later", status: "available", expiresAt: 20 },
+        { id: "first", status: "available", expiresAt: 10 },
+      ],
+    },
+  };
+  let failure;
+  await resetCodex(
+    fakeCodex({
+      "account/rateLimits/read": [credits],
+      "account/rateLimitResetCredit/consume": [new Error('{"code":"token_expired"}')],
+    }),
+    { token_refresh: false, idempotency_key: "cowboy-reset-1", expected_credit_id: "first" },
+  ).catch((error) => {
+    failure = error;
+  });
+  equal(failure.message.includes("authentication required"), true, "consume");
+  equal(failure.callMayHaveReachedProvider, true, "the consume call was sent");
+  equal(failure.creditId, "first", "credit");
+});
+
+test("A Codex observation names the grant consume_reset would spend", async () => {
+  const usage = await collectCodex(
+    fakeCodex({
+      "account/read": [{ account: { type: "chatgpt" } }],
+      "account/rateLimits/read": [
+        {
+          rateLimitResetCredits: {
+            credits: [
+              { id: "b", status: "available", expiresAt: 10, grantedAt: 2 },
+              { id: "a", status: "available", expiresAt: 10, grantedAt: 2 },
+              { id: "c", status: "available", expiresAt: 10, grantedAt: 1 },
+            ],
+          },
+        },
+      ],
+      "account/usage/read": [{}],
+    }),
+  );
+  equal(usage.rate_limits.rateLimitResetCredits.nearestCreditId, "c", "nearest");
+});
+
+/* components/wire/src/machine_protocol/portable_usage.rs tests the reader
+ * against copies of these exact declarations. */
+test("The refresh-free declarations match the wire crate's tested copies", () => {
+  equal(
+    codexDeclaration,
+    {
+      schema: 1,
+      token_refresh: "request",
+      token_refresh_guard: "refresh_endpoint_refused",
+      reset_token_refresh: "request",
+    },
+    "codex",
+  );
+  equal(
+    grokDeclaration,
+    { schema: 1, token_refresh: "request", token_refresh_guard: "cli_not_started" },
+    "grok",
+  );
+});
+
+test("Codex and Grok order equal-time grants by code units, not locale", () => {
+  const credits = [
+    { id: "b", status: "available", expiresAt: 1 },
+    { id: "B", status: "available", expiresAt: 1 },
+  ];
+  equal(nearestCodexCredit({ rateLimitResetCredits: { credits } }), "B", "codex");
+  equal(nearestGrokCredit(credits.map(({ id, expiresAt }) => ({ id, expiresAt }))).id, "B", "grok");
 });

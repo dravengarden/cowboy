@@ -18,6 +18,9 @@ use crate::config::{Config, Handle, Scope, schema};
 pub const QUICK_RETRIES: u32 = 2;
 const QUICK_RETRY_MS: i64 = 60_000;
 
+/// The latest a Machine may start a remote poll: its Plugin host reply bound.
+pub const REMOTE_POLL_START_BOUND_MS: i64 = 45_000;
+
 #[derive(Clone)]
 pub struct Limiter {
     inner: Arc<parking_lot::Mutex<State>>,
@@ -159,18 +162,18 @@ impl Limiter {
     }
 
     pub fn view(&self, provider: &str, account: &str, now: i64) -> Budget {
-        self.budget(&self.inner.lock(), provider, account, now, true)
+        let config = self.config.current();
+        Self::budget(&config, &self.inner.lock(), provider, account, now, true)
     }
 
     fn budget(
-        &self,
+        config: &Config,
         state: &State,
         provider: &str,
         account: &str,
         now: i64,
         polling: bool,
     ) -> Budget {
-        let config = self.config.current();
         let window = super::duration_ms(config.get(&schema::USAGE_PROVIDER_WINDOW));
         let count = config.get(&schema::USAGE_REQUESTS_PER_WINDOW);
         let spacing = (window + count - 1) / count;
@@ -221,7 +224,27 @@ impl Limiter {
 
     /// Charges failed and cancelled attempts too. Persist before dispatch.
     pub fn start(&self, provider: &str, account: &str, now: i64) -> Result<Permit, Budget> {
-        self.start_with(provider, account, now, true, 1)
+        self.start_with(provider, account, now, true, 1, (now, None))
+    }
+
+    /// [`Self::start`] for a poll a Machine runs at an unknown time no later
+    /// than `latest_start_ms` (its reply bound): the start is recorded there,
+    /// so the Provider spacing holds against the remote start.
+    pub fn start_bounded(
+        &self,
+        provider: &str,
+        account: &str,
+        now: i64,
+        latest_start_ms: i64,
+    ) -> Result<Permit, Budget> {
+        self.start_with(
+            provider,
+            account,
+            now,
+            true,
+            1,
+            (latest_start_ms.max(now), None),
+        )
     }
 
     /// A confirmed usage action (a reset) is a user write, not a poll. It
@@ -229,7 +252,7 @@ impl Limiter {
     /// collector, but not the account polling interval a preceding refresh
     /// just started. It still delays that account's next poll.
     pub fn start_action(&self, provider: &str, account: &str, now: i64) -> Result<Permit, Budget> {
-        self.start_with(provider, account, now, false, 1)
+        self.start_with(provider, account, now, false, 1, (now, None))
     }
 
     /// The configured minimum time between two starts of one Provider.
@@ -258,7 +281,31 @@ impl Limiter {
         now: i64,
         starts: usize,
     ) -> Result<Permit, Budget> {
-        self.start_with(provider, account, now, false, starts.max(1))
+        self.start_with(provider, account, now, false, starts.max(1), (now, None))
+    }
+
+    /// [`Self::start_action_counted`] for an action whose starts happen on a
+    /// Machine at an unknown time no later than `latest_start_ms` (a dispatch
+    /// expiry): the starts are recorded from that bound, so the Provider's
+    /// spacing holds against the remote starts whenever they ran, and even
+    /// if the reply is lost. The slots are `spacing_ms` apart: the spacing the
+    /// caller derived its bound and dispatch from (one config snapshot).
+    pub fn start_action_bounded(
+        &self,
+        provider: &str,
+        account: &str,
+        now: i64,
+        starts: usize,
+        (latest_start_ms, spacing_ms): (i64, i64),
+    ) -> Result<Permit, Budget> {
+        self.start_with(
+            provider,
+            account,
+            now,
+            false,
+            starts.max(1),
+            (latest_start_ms.max(now), Some(spacing_ms)),
+        )
     }
 
     fn start_with(
@@ -268,15 +315,18 @@ impl Limiter {
         now: i64,
         polling: bool,
         charged: usize,
+        (recorded_from, spacing): (i64, Option<i64>),
     ) -> Result<Permit, Budget> {
         let mut state = self.inner.lock();
-        let budget = self.budget(&state, provider, account, now, polling);
+        // One config snapshot for the budget, window, capacity and spacing.
+        let config = self.config.current();
+        let budget = Self::budget(&config, &state, provider, account, now, polling);
         if now < budget.next_allowed_ms {
             return Err(budget);
         }
-        let window = super::duration_ms(self.config.get(&schema::USAGE_PROVIDER_WINDOW));
-        let capacity =
-            usize::try_from(self.config.get(&schema::USAGE_REQUESTS_PER_WINDOW)).unwrap_or(1);
+        let window = super::duration_ms(config.get(&schema::USAGE_PROVIDER_WINDOW));
+        let count = config.get(&schema::USAGE_REQUESTS_PER_WINDOW);
+        let capacity = usize::try_from(count).unwrap_or(1);
         let recent = state.durable.providers.get(provider).map_or(0, |starts| {
             starts
                 .iter()
@@ -293,13 +343,12 @@ impl Limiter {
         let starts = next.providers.entry(provider.into()).or_default();
         // Retain the maximum configurable window, including across live edits.
         starts.retain(|time| time.saturating_add(3_600_000) > now);
-        let spacing = {
-            let config = self.config.current();
-            let count = config.get(&schema::USAGE_REQUESTS_PER_WINDOW).max(1);
+        let spacing = spacing.unwrap_or_else(|| {
+            let count = count.max(1);
             (window + count - 1) / count
-        };
+        });
         starts.extend((0..charged).map(|slot| {
-            now.saturating_add(spacing.saturating_mul(i64::try_from(slot).unwrap_or(0)))
+            recorded_from.saturating_add(spacing.saturating_mul(i64::try_from(slot).unwrap_or(0)))
         }));
         let slot = next.accounts.entry(account.into()).or_default();
         slot.last_attempt_ms = now;
@@ -492,6 +541,53 @@ impl Drop for Permit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A remote action recorded from its latest possible start keeps the
+    /// Provider spacing against it whenever the Machine actually ran it.
+    #[test]
+    fn a_remote_poll_paces_from_its_reply_bound() {
+        let limiter = Limiter::new(None);
+        let spacing = limiter.spacing_ms();
+        let permit = limiter
+            .start_bounded("openai", "a", 1_000, 1_000 + REMOTE_POLL_START_BOUND_MS)
+            .unwrap();
+        permit.finish(Outcome::Success, 2_000);
+        assert_eq!(
+            limiter.view("openai", "other", 2_000).next_allowed_ms,
+            1_000 + REMOTE_POLL_START_BOUND_MS + spacing
+        );
+    }
+
+    #[test]
+    fn a_bounded_action_paces_from_its_latest_possible_start() {
+        let limiter = Limiter::new(None);
+        let spacing = limiter.spacing_ms();
+        let permit = limiter
+            .start_action_bounded("openai", "a", 1_000, 1, (31_000, spacing))
+            .unwrap();
+        permit.finish(Outcome::Success, 2_000);
+        assert_eq!(
+            limiter.view("openai", "other", 2_000).next_allowed_ms,
+            31_000 + spacing,
+            "spacing counts from the dispatch expiry"
+        );
+    }
+
+    /// A multi-start bounded action records its slots with the spacing the
+    /// caller dispatched, not a later config read.
+    #[test]
+    fn a_bounded_action_records_slots_with_the_dispatched_spacing() {
+        let limiter = Limiter::new(None);
+        let spacing = limiter.spacing_ms();
+        let permit = limiter
+            .start_action_bounded("openai", "a", 1_000, 2, (31_000, spacing + 7))
+            .unwrap();
+        permit.finish(Outcome::Success, 2_000);
+        assert_eq!(
+            limiter.view("openai", "other", 2_000).next_allowed_ms,
+            31_000 + spacing + 7 + spacing
+        );
+    }
 
     #[test]
     fn a_counted_action_charges_every_collector_start() {

@@ -53,11 +53,13 @@ allowed to redeem is the sessions' existing refresh path. The Controller puts
 `"token_refresh": false` in every portable request and the Machine sets it
 again. For a Provider whose CLI rotates credentials (`compare_and_swap`) only a
 collector whose exact signed release declares (`collector/portable-account.json`,
-`token_refresh: "request"`) that it then reports authentication required runs;
-otherwise `portable_usage_refresh_unsupported`. Codex declares it from 3.6.16,
-so named Codex usage needs that release (or later) installed on the chosen
-Machine. Grok's CLI renews an expiring sign-in on start and after any 401, so
-from Grok 3.2.16 its collector never starts the CLI for such a request: it reads
+`token_refresh: "request"` with a `token_refresh_guard`) that it then reports
+authentication required runs; otherwise `portable_usage_refresh_unsupported`.
+The guarded minimums are **Codex 3.6.22** and **Grok 3.2.21**; earlier releases
+(Codex 3.6.16-3.6.19, Grok 3.2.16-3.2.18) carried an unguarded claim and are
+refused, so named Codex or Grok usage needs that release (or later) installed
+on the chosen Machine. Grok's CLI renews an expiring sign-in on start and after
+any 401, so its collector never starts the CLI for such a request: it reads
 the current token, reports authentication required when it has (nearly)
 expired or xAI rejects it, and otherwise reads billing
 (`cli-chat-proxy.grok.com/v1/billing?format=credits`, projected exactly as the
@@ -74,8 +76,43 @@ first unmet check (host policy, a refresh-free collector release, the Machine
 protocol, the exact sidecars) of the Machine that met the most of them, so a
 Machine already running a refresh-free release reports what it still lacks
 instead of an older release elsewhere. A cached placement refusal is no longer
-reported once a placement is possible again. Named portable accounts have no
+reported once a placement is possible again.
+
+**Named Codex resets.** A named Codex account spends a banked reset immediately
+(no schedules), like a named Claude account: typed `confirm`, the grant ID
+pinned when the dialog opened, the shared Provider pacing (one collector
+start), and only `reset`/`already_used` as outcomes; anything else is unknown
+and never retried. It runs on the Machine the account's usage placement selects
+(protocol 51, `ConsumePortableReset`), under the account lock with the exact
+vault generation and admission revision, with an absolute dispatch expiry, and
+only when the exact selected release declares resets and a refresh-free reset
+(`collector/portable-account.json` `"reset_token_refresh": "request"`, Codex
+3.6.22). Its `consume_reset` runs with `"token_refresh": false` from a private
+copy of the replica's sealed credential at the admitted generation (never the
+writable session home), and only for an account with a verified subscription
+identity (`portable_reset_identity_required` otherwise). The starts are reserved
+at admission from the dispatch expiry, so a preceding usage read never blocks a
+manual reset and the Provider spacing holds whenever the Machine ran it. A
+success must name the confirmed grant; a refusal is unsent only with an explicit
+`started: false` and a pre-start code. Grok and DeepSeek named accounts have no
 resets.
+
+Refresh-free usage needs a guarded declaration (`"token_refresh_guard"`):
+`refresh_endpoint_refused` (Codex 3.6.22) or `cli_not_started` (Grok 3.2.21).
+The unguarded claim of Codex 3.6.16-3.6.19 and Grok 3.2.16-3.2.18 no longer
+admits named usage, so named Codex usage stays off until 3.6.22 is installed on
+the chosen Machine, and Grok until 3.2.21. Rotating subscriptions (Codex, Grok)
+read usage from the same private sealed copy.
+
+The Codex app-server refreshes an expired access token on its own
+(`proactive_expiry`), whatever the collector asks: an offline check against the
+pinned 0.169.1 and a fake token endpoint showed the released 3.6.18 collector
+redeeming the refresh token under `token_refresh: false` (four token requests
+for a usage read, one for a reset, and a rewritten `auth.json`). From 3.6.22 a
+refresh-free request's app-server points its refresh endpoint at a port nothing
+listens on (`CODEX_REFRESH_TOKEN_URL_OVERRIDE`), and a rejected token reports
+authentication required: the same check then showed no token request and an
+unchanged `auth.json` for both.
 
 ## Operator CLI
 
@@ -173,7 +210,8 @@ authentication failure does.
 A named native Claude account's confirmed reset is immediate only (named
 accounts have no schedules) and runs on the Machine holding its native login,
 through the same signed collector, CLI identity and token as its quota read
-(Machine protocol 49), on the exact release the Controller selected and never
+(Machine protocol 51, which enforces the reset's spacing; older Machines are
+never selected or dispatched to), on the exact release the Controller selected and never
 after its dispatch expiry. It takes its start from the same Anthropic Provider
 window and spacing, on the account's own lane, and holds the account's
 collection lock, so a quota read and a reset of one account never overlap. A
@@ -181,11 +219,25 @@ reset that never reached the Machine's collector records no failure backoff;
 an authentication failure backs off even after the call was sent. A named reset
 runs two collector invocations (the identity read, then the spend with its own
 preflight). At admission the Controller reserves two starts one Provider
-spacing apart; the Machine runs the identity read, releases its lifecycle lock,
-waits for the second slot, rechecks the selected release and spends, all before
-the dispatch expiry measured from the original admission. When the Provider
+spacing apart, deriving the expiry, both reservations and the dispatched
+spacing from one configuration snapshot; the Machine runs the identity read,
+releases its lifecycle lock, waits for the second slot and a full spacing
+measured monotonically from the identity read's actual spawn, rechecks the
+selected release and spends, all before the dispatch expiry measured from the
+original admission. A spend that provably never spawned is an unsent
+`native_reset_preflight_failed`; a reply that carries both a success and an
+error, or a refusal with a result payload, is an unknown outcome. When the Provider
 window cannot hold two spaced starts, named resets are unsupported. A named
 reset therefore takes at least one spacing interval end to end.
+
+Known residuals, accepted for this release: a remote quota poll reserves its
+Provider start before the account's binding transaction, so a poll refused
+inside that transaction still consumes its paced slot (pacing only, never a
+Provider call); a named reset's audit insert that times out after the
+row was written leaves a `started` row with no terminal row (the permit settles
+unsent); and the Service Grok collector's equal-time reset tie-break is not
+aligned with the code-unit ordering of the named collectors (no Service Grok
+card is operated).
 
 Claude usage reads and resets (Service card and named accounts) contact
 Anthropic only from a Machine that host policy explicitly pins for

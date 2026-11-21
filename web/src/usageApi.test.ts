@@ -14,6 +14,7 @@ import {
 } from "./usageLimits.ts";
 import {
   consumeNearestReset,
+  readBoundedJson,
   readUsage,
   readUsageExecutors,
   ResetOutcomeUnknown,
@@ -292,7 +293,7 @@ test("reset actions address the card's own lane", async () => {
       method: options?.method ?? "GET",
       body: options?.body ? JSON.parse(String(options.body)) : null,
     });
-    return Promise.resolve(Response.json({}));
+    return Promise.resolve(Response.json({ outcome: "reset", credit_id: "g:1" }));
   };
   try {
     const account = { kind: "account", accountId: "11111111-1111-4111-8111-111111111111" } as const;
@@ -334,4 +335,39 @@ test("an unknown reset outcome is distinguishable from a refusal", async () => {
   } finally {
     globalThis.fetch = original;
   }
+});
+
+test("a named reset succeeds only for the confirmed grant with a closed outcome", async () => {
+  const original = globalThis.fetch;
+  const account = { kind: "account", accountId: "11111111-1111-4111-8111-111111111111" } as const;
+  try {
+    const replies: [string, unknown, boolean][] = [
+      ["reset", { outcome: "reset", credit_id: "g:1" }, false],
+      ["already used", { outcome: "already_used", credit_id: "g:1" }, false],
+      ["another grant", { outcome: "reset", credit_id: "g:2" }, true],
+      ["no grant", { outcome: "reset" }, true],
+      ["open outcome", { outcome: "consumed", credit_id: "g:1" }, true],
+      ["success with an error", { outcome: "reset", credit_id: "g:1", error: { code: "x" } }, true],
+      ["too large", { outcome: "reset", credit_id: "g:1", pad: "x".repeat(20_000) }, true],
+      ["unreadable", "<html>", true],
+    ];
+    for (const [name, body, unknown] of replies) {
+      globalThis.fetch = () =>
+        Promise.resolve(typeof body === "string" ? new Response(body) : Response.json(body));
+      let caught: unknown;
+      await consumeNearestReset(account, "g:1", "confirm").catch((error: unknown) => {
+        caught = error;
+      });
+      assertEquals(caught instanceof ResetOutcomeUnknown, unknown, name);
+    }
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("a named reset body that never finishes is unknown, not a busy dialog", async () => {
+  const stalled = new Response(new ReadableStream({ start() {} }));
+  assertEquals(await readBoundedJson(stalled, 1024, 20), undefined);
+  const ok = Response.json({ a: 1 });
+  assertEquals(await readBoundedJson(ok, 1024, 1000), { a: 1 });
 });

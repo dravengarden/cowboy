@@ -24,14 +24,15 @@ use crate::machine_protocol::portable_usage::PortableUsageRequest;
 use crate::store::provider_accounts::portable::Use;
 use crate::usage::native::{PortableScope, Scope, Slot};
 
+#[derive(Clone)]
 pub(super) struct Target {
     pub(super) scope: PortableScope,
     pub(super) binding: crate::plugin_host::PluginUsageSpec,
     /// Scope member whose signed host owns the collector.
-    plugin_id: String,
+    pub(super) plugin_id: String,
     members: Vec<String>,
     /// The vault's current Ready generation of `plugin_id`.
-    auth_generation: u64,
+    pub(super) auth_generation: u64,
 }
 
 /// `None` when the account's Provider keeps no named credential in a vault.
@@ -204,13 +205,13 @@ pub(super) fn placement_refusal(code: &str) -> bool {
 
 /// One placed collection: the Machine, the exact collector release and the
 /// exact sidecar Plugin generations checked for that Machine.
-type Placement = (
+pub(super) type Placement = (
     String,
     crate::machine_protocol::PluginInventory,
     Vec<crate::machine_protocol::portable_usage::PortableSidecar>,
 );
 
-fn placement(
+pub(super) fn placement(
     state: &AppState,
     owner: &str,
     id: &ProviderAccountId,
@@ -282,18 +283,6 @@ fn placement(
     Ok((machine.clone(), plugin.clone(), sidecars))
 }
 
-/// The Machine a collection would run on now, for the read model.
-pub(super) fn selected_machine(
-    state: &AppState,
-    owner: &str,
-    id: &ProviderAccountId,
-    target: &Target,
-) -> Option<String> {
-    placement(state, owner, id, target)
-        .ok()
-        .map(|(machine, _, _)| machine)
-}
-
 /// One budgeted, coalesced collection; the caller holds `collection`.
 pub(super) async fn refresh(
     state: &Arc<AppState>,
@@ -332,11 +321,12 @@ pub(super) async fn refresh(
         if !entry.due(now_ms()) {
             return Ok(());
         }
-        let Ok(permit) = state
-            .usage
-            .limiter
-            .start(&target.binding.account, &key, now_ms())
-        else {
+        let Ok(permit) = state.usage.limiter.start_bounded(
+            &target.binding.account,
+            &key,
+            now_ms(),
+            now_ms().saturating_add(crate::usage::limiter::REMOTE_POLL_START_BOUND_MS),
+        ) else {
             return Ok(());
         };
         entry.last_attempt_at_ms = now_ms();
@@ -364,7 +354,7 @@ pub(super) async fn refresh(
 /// account is available, still serves this Provider and its vault holds
 /// exactly the target's generations. What `enqueue` returned is kept even if
 /// the lock transaction then fails: an enqueued command's reply decides.
-async fn under_account_lock<T>(
+pub(super) async fn under_account_lock<T>(
     state: &AppState,
     owner: &str,
     id: &ProviderAccountId,
