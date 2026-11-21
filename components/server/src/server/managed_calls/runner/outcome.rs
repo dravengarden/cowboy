@@ -34,10 +34,10 @@ pub(in crate::server::managed_calls) fn record(record: &Record) {
             .and_then(|values| values.get(key))
             .map_or("", String::as_str)
     };
-    let duration_ms = match (record.started_at_ms, record.finished_at_ms) {
-        (Some(started), Some(finished)) => (finished - started).max(0),
-        _ => 0,
-    };
+    let duration_ms = record
+        .started_at_ms
+        .zip(record.finished_at_ms)
+        .map(|(started, finished)| (finished - started).max(0));
     tracing::info!(
         event_name = "cowboy.review.finished",
         call_id = %record.call_id,

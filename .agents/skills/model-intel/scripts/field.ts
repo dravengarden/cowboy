@@ -165,7 +165,8 @@ if (import.meta.main) {
       throw new Error("--out must not name the ledger database");
     }
     const staged = `${target}.tmp-${process.pid}`;
-    writeFileSync(staged, text);
+    // Exclusive creation: a pre-existing (possibly linked) staging path fails.
+    writeFileSync(staged, text, { flag: "wx" });
     renameSync(staged, target);
   } else {
     process.stdout.write(text);

@@ -92,7 +92,13 @@ pub(super) enum Level {
 /// The automatic preset first, then every other preset the tier admits, in
 /// `pool` (strongest-first) order. `None` when the table has no row for this
 /// Provider or generation; the caller then keeps the legacy order.
-pub(super) fn order(table: &Table, provider: &str, level: Level, pool: &[Value]) -> Option<Ranked> {
+pub(super) fn order(
+    table: &Table,
+    provider: &str,
+    level: Level,
+    pool: &[Value],
+    coverage: &[Value],
+) -> Option<Ranked> {
     let tiers = table.providers.get(provider)?;
     let tier = match level {
         Level::High => &tiers.high,
@@ -123,13 +129,16 @@ pub(super) fn order(table: &Table, provider: &str, level: Level, pool: &[Value])
     };
     // Rows naming an exact model bind the table to known generations; an
     // unknown generation keeps the legacy order.
-    // Coverage is by model identity alone, so excluding the caller's model
-    // or an effort never turns a known generation into an unknown one.
+    // Coverage is by model identity over the whole runnable generation, so
+    // excluding the caller's model, a family or an effort never turns a known
+    // generation into an unknown one.
     let known = !rows().any(|row| row.model.is_some())
         || rows().any(|row| {
-            row.model
-                .as_deref()
-                .is_some_and(|expected| pool.iter().any(|preset| model(preset) == Some(expected)))
+            row.model.as_deref().is_some_and(|expected| {
+                coverage
+                    .iter()
+                    .any(|preset| model(preset) == Some(expected))
+            })
         });
     if !known {
         return None;
@@ -162,9 +171,9 @@ pub(super) fn order(table: &Table, provider: &str, level: Level, pool: &[Value])
 
 /// A tier's presets, the automatic choice first when one exists. Without
 /// one, `list` holds only what a caller may name explicitly.
-pub(super) struct Ranked {
-    pub list: Vec<Value>,
-    pub automatic: bool,
+pub(in crate::server::managed_calls) struct Ranked {
+    pub(in crate::server::managed_calls) list: Vec<Value>,
+    pub(in crate::server::managed_calls) automatic: bool,
 }
 
 /// Measured cost of a preset's resolved model and effort, or `unknown`.

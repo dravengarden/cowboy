@@ -108,22 +108,20 @@ fn review_fields(
     meta: &crate::core::SessionMeta,
     provider: &str,
     runnable: &Value,
-    review: &agent_tools::ReviewPreferences,
-    own: bool,
+    policy: &agent_tools::CallsPolicy,
     available: bool,
 ) -> Value {
-    let presets = super::selection::exclude_caller_model(
-        runnable,
-        own,
-        caller_model(state, meta, provider).1,
-    );
-    let routine = super::selection::candidates(&presets, provider, review, false);
+    let caller = caller_model(state, meta, provider);
+    let routine =
+        super::selection::candidates_for(runnable, provider, &policy.review, false, caller);
+    let high = super::selection::candidates_for(runnable, provider, &policy.review, true, caller);
     json!({
-        "review_candidates": routine.iter().filter_map(|p| p["id"].as_str()).collect::<Vec<_>>(),
-        "review_routing": super::selection::routing_view(&presets, provider, review),
-        "same_vendor": own,
-        // Analysis may run where no reviewer is eligible.
-        "review_available": available && !routine.is_empty(),
+        "review_candidates": routine.list.iter().filter_map(|p| p["id"].as_str()).collect::<Vec<_>>(),
+        "review_routing": super::selection::routing_view(runnable, provider, &policy.review, caller),
+        "same_vendor": caller.0,
+        // Analysis may run where no reviewer is eligible; a high-risk review
+        // may still name an explicit-only reviewer.
+        "review_available": available && !(routine.list.is_empty() && high.list.is_empty()),
     })
 }
 
@@ -738,7 +736,7 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
         let own = agent_tools::same_family(provider, &meta.provider);
         let reason = if !policy.enabled {
             Some("calls_disabled")
-        } else if target.is_none() && !own {
+        } else if target.is_none() && !(own && !policy.targets.is_empty()) {
             Some("policy_denied")
         } else {
             readiness.reason
@@ -794,15 +792,7 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
         }));
         if let (Some(Value::Object(entry)), Value::Object(review)) = (
             providers.last_mut(),
-            review_fields(
-                state,
-                meta,
-                provider,
-                &runnable_presets,
-                &policy.review,
-                own,
-                available,
-            ),
+            review_fields(state, meta, provider, &runnable_presets, &policy, available),
         ) {
             entry.extend(review);
         }

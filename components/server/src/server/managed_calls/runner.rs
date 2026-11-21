@@ -339,9 +339,10 @@ async fn claim(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
     // if the admitted preset is no reviewer on the generation pinned now.
     if record.purpose.is_review()
         && let Err(code) = review_preset_on(state, record, &version, &digest).and_then(|family| {
-            // The parent may have switched model since admission.
-            let live = state.supervisor.observed_configuration(&parent.meta.id);
-            if super::selection::runs_now(live.as_ref(), family) {
+            let live = state.supervisor.observed_configuration(&parent.meta.id); // model may have changed
+            let unchecked = !fresh
+                && super::super::agent_tools::same_family(&record.provider, &parent.meta.provider);
+            if super::selection::runs_now(live.as_ref(), family, unchecked) {
                 return Err("same_model");
             }
             // Still queued, so still admission: a fresh review's family must

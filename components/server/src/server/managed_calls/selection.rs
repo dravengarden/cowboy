@@ -54,17 +54,32 @@ pub(super) fn review_preset(
 /// Fresh-review presets for a declared risk: the automatic choice first, then
 /// the other presets the tier admits (docs/review-routing.md). A Provider or
 /// generation the routing table does not cover keeps the legacy order.
+#[cfg(test)]
 pub(super) fn candidates(
     presets: &Value,
     provider: &str,
     preference: &super::super::agent_tools::ReviewPreferences,
     high_risk: bool,
 ) -> Vec<Value> {
-    ranked(presets, provider, preference, high_risk).list
+    ranked(presets, presets, provider, preference, high_risk).list
+}
+
+/// `candidates` for a caller: `runnable` is the whole generation (coverage),
+/// filtered here by the caller's own model.
+pub(super) fn candidates_for(
+    runnable: &Value,
+    provider: &str,
+    preference: &super::super::agent_tools::ReviewPreferences,
+    high_risk: bool,
+    (same_vendor, caller): (bool, Option<Option<&str>>),
+) -> routing::Ranked {
+    let presets = exclude_caller_model(runnable, same_vendor, caller);
+    ranked(&presets, runnable, provider, preference, high_risk)
 }
 
 fn ranked(
     presets: &Value,
+    coverage: &Value,
     provider: &str,
     preference: &super::super::agent_tools::ReviewPreferences,
     high_risk: bool,
@@ -83,9 +98,10 @@ fn ranked(
         routing::Level::Routine
     };
     let pool = legacy(presets, provider, preference, true);
+    let coverage = coverage.as_array().map_or(&[][..], Vec::as_slice);
     routing::TABLE
         .as_ref()
-        .and_then(|table| routing::order(table, provider, level, &pool))
+        .and_then(|table| routing::order(table, provider, level, &pool, coverage))
         .unwrap_or_else(|| {
             let list = legacy(presets, provider, preference, high_risk);
             routing::Ranked {
@@ -125,9 +141,18 @@ pub(super) fn same_model(
 }
 
 /// Whether a parent's live configuration shows it now runs `reviewer`'s
-/// model. Unknown (a hibernated parent) is no evidence either way.
-pub(super) fn runs_now(configuration: Option<&Value>, reviewer: Option<&str>) -> bool {
-    caller_family(configuration).is_some_and(|caller| same_model(false, Some(caller), reviewer))
+/// model. An unknown model is no evidence for a fresh review (admission
+/// checked it), but a same-vendor continuation was never checked, so there
+/// it counts as the same model.
+pub(super) fn runs_now(
+    configuration: Option<&Value>,
+    reviewer: Option<&str>,
+    unchecked_same_vendor: bool,
+) -> bool {
+    match caller_family(configuration) {
+        Some(caller) => same_model(false, Some(caller), reviewer),
+        None => unchecked_same_vendor,
+    }
 }
 
 /// Runnable presets without the caller's own model: a review by the same
@@ -162,7 +187,8 @@ pub(super) fn admit(
     explicit: Option<&str>,
     (same_vendor, caller): (bool, Option<Option<&str>>),
 ) -> Result<String, Value> {
-    let presets = &exclude_caller_model(presets, same_vendor, caller);
+    let runnable = presets;
+    let presets = &exclude_caller_model(runnable, same_vendor, caller);
     let risk = request
         .labels
         .get(crate::managed_calls::review::RISK)
@@ -203,7 +229,13 @@ pub(super) fn admit(
             "risk:'high' needs a reason naming the risk (for example persistence, permissions or a risk area in the review root's guidance)".into(),
         ));
     }
-    let tier = ranked(presets, provider, preference, high_risk);
+    let tier = candidates_for(
+        runnable,
+        provider,
+        preference,
+        high_risk,
+        (same_vendor, caller),
+    );
     let choices = tier.list;
     let all = reviewers(presets, provider, preference);
     let unnamed = explicit.is_none() && !tier.automatic;
@@ -257,22 +289,23 @@ pub(super) fn reviewers(
 /// What the caller sees of the tiers: each tier's automatic preset and the
 /// cheaper presets a routine review may name, with measured costs.
 pub(super) fn routing_view(
-    presets: &Value,
+    runnable: &Value,
     provider: &str,
     preference: &super::super::agent_tools::ReviewPreferences,
+    caller: (bool, Option<Option<&str>>),
 ) -> Value {
     let Some(table) = routing::TABLE.as_ref() else {
         return Value::Null;
     };
     let entry =
         |preset: &Value| json!({"preset": preset["id"], "cost": routing::cost(table, preset)});
-    let high = ranked(presets, provider, preference, true);
+    let high = candidates_for(runnable, provider, preference, true, caller);
     let high = if high.automatic {
         high.list
     } else {
         Vec::new()
     };
-    let routine = ranked(presets, provider, preference, false);
+    let routine = candidates_for(runnable, provider, preference, false, caller);
     let routine = if routine.automatic {
         routine.list
     } else {
@@ -490,7 +523,7 @@ mod tests {
         );
         assert_eq!(family("gpt-6-astra"), Some("astra"));
         assert_eq!(family("gpt-6-luna"), None);
-        let view = routing_view(&gpt, "codex", &preference);
+        let view = routing_view(&gpt, "codex", &preference, (false, Some(None)));
         assert_eq!(view["routine"]["preset"], "sol-max");
         assert_eq!(view["routine"]["cost"]["n"], 4);
         assert_eq!(view["high"]["preset"], "astra-max");
