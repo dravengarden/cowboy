@@ -1149,29 +1149,19 @@ pub(super) async fn cancel_call(state: &Arc<AppState>, parent: &str, call: &str)
 }
 
 /// Running → Stopping → Cancelled for a call whose prompt was withdrawn
-/// before any worker saw it. Returns the latest record written.
+/// before any worker saw it, committed in one transaction. Returns the latest
+/// record written.
 async fn finish_unstarted(store: &crate::store::Store, running: Record) -> Record {
-    let mut current = running;
-    for phase in [State::Stopping, State::Cancelled] {
-        let mut next = current.clone();
-        next.state = phase;
-        next.revision += 1;
-        next.updated_at_ms = chrono::Utc::now()
-            .timestamp_millis()
-            .max(current.updated_at_ms);
-        if phase.terminal() {
-            next.finished_at_ms = Some(next.updated_at_ms);
-        }
-        if !store
-            .advance_managed_call(&current, &next)
-            .await
-            .unwrap_or(false)
-        {
-            break;
-        }
-        current = next;
+    let steps = super::runner::unstarted_cancellation(&running);
+    if store
+        .advance_managed_call_through(&running, &steps)
+        .await
+        .unwrap_or(false)
+    {
+        steps.into_iter().last().unwrap_or(running)
+    } else {
+        running
     }
-    current
 }
 
 /// Where a managed child lives: its parent and the Machine holding its

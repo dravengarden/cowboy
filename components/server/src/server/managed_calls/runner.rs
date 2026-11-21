@@ -1331,6 +1331,17 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
         if let Err(step) = reconfirm(state, store, record, &request).await {
             return step;
         }
+        // Reconfirmation can take long; a cancellation or another transition
+        // committed meanwhile must win over this resubmission.
+        match store
+            .managed_call(&record.placement.parent_session_id, &record.call_id)
+            .await
+        {
+            Ok(Some(current))
+                if current.revision == record.revision
+                    && current.cancel_requested_at_ms.is_none() => {}
+            _ => return Step::Again,
+        }
         state
             .hub
             .submit_managed_prompt(child, &record.call_id, request.prompt());
@@ -1361,19 +1372,37 @@ async fn withdraw_unstarted(state: &AppState, store: &Store, record: &Record) ->
         return Some(Step::Again);
     }
     // Running may only stop through Stopping. No native turn exists, so the
-    // stop completes at once instead of waiting out the grace period.
-    if advance(state, store, record, |next| next.state = State::Stopping).await
-        && let Ok(Some(stopping)) = store
-            .managed_call(&record.placement.parent_session_id, &record.call_id)
-            .await
-        && stopping.state == State::Stopping
+    // stop completes at once instead of waiting out the grace period. Both
+    // steps commit together: a crash after only Stopping would lose the
+    // withdrawal evidence and let the stop grace stop a retained child.
+    let steps = unstarted_cancellation(record);
+    if store
+        .advance_managed_call_through(record, &steps)
+        .await
+        .unwrap_or(false)
     {
-        advance(state, store, &stopping, |next| {
-            next.state = State::Cancelled
-        })
-        .await;
+        state.managed_calls.notify();
     }
     Some(Step::Again)
+}
+
+/// The Stopping and Cancelled records of a running call whose prompt was
+/// withdrawn before any worker saw it.
+pub(super) fn unstarted_cancellation(running: &Record) -> Vec<Record> {
+    let mut steps = Vec::with_capacity(2);
+    let mut current = running.clone();
+    for phase in [State::Stopping, State::Cancelled] {
+        let mut next = current.clone();
+        next.state = phase;
+        next.revision = current.revision + 1;
+        next.updated_at_ms = now_ms().max(current.updated_at_ms);
+        if phase.terminal() {
+            next.finished_at_ms = Some(next.updated_at_ms);
+        }
+        steps.push(next.clone());
+        current = next;
+    }
+    steps
 }
 
 /// Stop a child whose call was refused before its prompt ran. A fresh child

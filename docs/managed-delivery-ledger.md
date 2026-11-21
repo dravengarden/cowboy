@@ -1,8 +1,47 @@
-# Managed prompt delivery ledger (broker tombstones)
+# Managed prompt delivery ledger (broker tombstones) — rejected
 
-Status: design for review (2026-11-21). Narrow scope chosen by the owner over
-a general exactly-once delivery protocol (compare the abandoned transport in
-[`widgets.md`](widgets.md) §1.9–§1.13).
+Status: **rejected, not implemented** (2026-11-21). The owner chose this
+narrow scope over a general exactly-once protocol (compare the abandoned
+transport in [`widgets.md`](widgets.md) §1.9–§1.13). The first Astra Max
+design review (call `call-f5c59c49ec773fae38b44b76`, verdict
+needs-attention, 15 high and 3 medium findings) showed that the narrow scope
+is not sound on its own; closing it would rebuild that general protocol, so
+the owner stopped it. The windows stay documented in
+[`review-generation-binding.md`](review-generation-binding.md).
+
+Why it fails (the review's blocking findings, grouped):
+
+- **No coverage of the past or of other builds.** A prompt routed by a
+  protocol-7 broker before the upgrade has no entry, so the first withdrawal
+  would certify a live turn as unseen. A Machine rollback, or a broker that
+  could not read the dataset, still forwards a late dispatch after a
+  committed withdrawal; the dataset is therefore safety-critical under
+  `plugin-state-dataset-design.md` and would need a reader floor. Eviction
+  at capacity can erase a running call's evidence.
+- **Epoch scoping is wrong both ways.** A replacement worker after a
+  generation cutover would run a restored row again, while a `routed` commit
+  followed by a lost channel write suppresses a prompt no worker received.
+- **The Controller cannot consume the answers safely.** A duplicate
+  acknowledgement plus a stale idle snapshot releases the dispatch guard
+  early; a pending copy's own Prompt command is left outstanding; each
+  Machine connection has its own runtime, so a pending withdrawal does not
+  survive a reconnect; worker outbox events are acknowledged before the Hub
+  persists them, so a terminal event can be lost; a `routed` withdrawal still
+  leaves later copies and a session-scoped Cancel eligible for delivery.
+- **Other fences are missing.** Terminal Session deletion does not refuse a
+  late Prompt; a client may submit an ordinary prompt with a `managed-call:`
+  cmid; both mixed-version directions change queue behaviour.
+- **Release cost.** The wire change forces a worker pin advance, and Hawk's
+  deletion and incarnation writers need the writer-host artifact built at
+  the advanced pin (`docs/machine-worker-pin-advance-runbook.md`).
+
+Two findings were independent, Controller-only defects and were fixed
+instead: a withdrawn call's `Stopping` and `Cancelled` now commit in one
+transaction (a crash between them used to leave `Stopping`, whose stop grace
+then stopped the child), and the recovery resubmission re-reads the call
+after its slow reconfirmation so a cancellation committed meanwhile wins.
+
+The original proposal follows for the record.
 
 ## Problem
 

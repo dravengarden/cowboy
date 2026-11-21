@@ -147,11 +147,30 @@ impl Store {
     }
 
     pub async fn advance_managed_call(&self, previous: &Record, next: &Record) -> Result<bool> {
-        ensure!(
-            previous.accepts(next) || previous.accepts_cancel_request(next),
-            "invalid managed call transition"
-        );
-        dispatch!(self, advance_managed_call(previous, next))
+        self.advance_managed_call_through(previous, std::slice::from_ref(next))
+            .await
+    }
+
+    /// Commit consecutive transitions of one call in a single transaction:
+    /// either every step lands or none does. A crash can therefore never
+    /// leave an intermediate state that recovery would read differently,
+    /// such as a withdrawn call left `Stopping` whose stop grace would then
+    /// stop its child.
+    pub async fn advance_managed_call_through(
+        &self,
+        previous: &Record,
+        steps: &[Record],
+    ) -> Result<bool> {
+        ensure!(!steps.is_empty(), "empty managed call transition");
+        let mut current = previous;
+        for next in steps {
+            ensure!(
+                current.accepts(next) || current.accepts_cancel_request(next),
+                "invalid managed call transition"
+            );
+            current = next;
+        }
+        dispatch!(self, advance_managed_call_through(previous, steps))
     }
 }
 
@@ -289,30 +308,37 @@ macro_rules! implementation {
                 Ok(existing)
             }
 
-            async fn advance_managed_call(&self, previous: &Record, next: &Record) -> Result<bool> {
-                let old_document = serde_json::to_string(previous)?;
-                let document = serde_json::to_string(next)?;
+            async fn advance_managed_call_through(&self, previous: &Record, steps: &[Record]) -> Result<bool> {
                 let mut tx = self.pool.begin().await?;
-                let result = sqlx::query("UPDATE managed_agent_calls SET revision = $1, document = $2, document_sha256 = $3, state = $8 WHERE call_id = $4 AND parent_session_id = $5 AND revision = $6 AND document_sha256 = $7")
-                    .bind(i64::try_from(next.revision)?).bind(&document).bind(checksum(&document))
-                    .bind(&previous.call_id).bind(&previous.placement.parent_session_id)
-                    .bind(i64::try_from(previous.revision)?).bind(checksum(&old_document))
-                    .bind(next.state.code())
-                    .execute(&mut *tx).await?;
-                let advanced = result.rows_affected() == 1;
-                if advanced && let Some(occurrence) = call_occurrence(next) {
-                    let now = chrono::Utc::now().timestamp_millis();
-                    let category = occurrence.category;
-                    sqlx::query(crate::store::task_notifications::INSERT_INTENT)
-                        .bind(&occurrence.dedupe_key).bind(category.code())
-                        .bind(&occurrence.destination).bind(&occurrence.marker)
-                        .bind(now.saturating_add(category.delay_ms()))
-                        .bind(now.saturating_add(category.ttl_ms()))
-                        .bind(now).bind(&occurrence.session_id)
+                let mut current = previous;
+                for next in steps {
+                    let old_document = serde_json::to_string(current)?;
+                    let document = serde_json::to_string(next)?;
+                    let result = sqlx::query("UPDATE managed_agent_calls SET revision = $1, document = $2, document_sha256 = $3, state = $8 WHERE call_id = $4 AND parent_session_id = $5 AND revision = $6 AND document_sha256 = $7")
+                        .bind(i64::try_from(next.revision)?).bind(&document).bind(checksum(&document))
+                        .bind(&current.call_id).bind(&current.placement.parent_session_id)
+                        .bind(i64::try_from(current.revision)?).bind(checksum(&old_document))
+                        .bind(next.state.code())
                         .execute(&mut *tx).await?;
+                    if result.rows_affected() != 1 {
+                        // Dropping the transaction rolls back every earlier step.
+                        return Ok(false);
+                    }
+                    if let Some(occurrence) = call_occurrence(next) {
+                        let now = chrono::Utc::now().timestamp_millis();
+                        let category = occurrence.category;
+                        sqlx::query(crate::store::task_notifications::INSERT_INTENT)
+                            .bind(&occurrence.dedupe_key).bind(category.code())
+                            .bind(&occurrence.destination).bind(&occurrence.marker)
+                            .bind(now.saturating_add(category.delay_ms()))
+                            .bind(now.saturating_add(category.ttl_ms()))
+                            .bind(now).bind(&occurrence.session_id)
+                            .execute(&mut *tx).await?;
+                    }
+                    current = next;
                 }
                 tx.commit().await?;
-                Ok(advanced)
+                Ok(true)
             }
         }
     };
@@ -394,8 +420,95 @@ mod tests {
         assert_image_retention(&store, &first, &request).await;
         assert_lifecycle(&store, &first, &overlapping, &overlapping_record).await;
         assert_review_reservations(&store, &first, &request).await;
+        assert_multi_step_advance(&store, &first, &request).await;
         drop(store);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Consecutive transitions commit together, or not at all.
+    async fn assert_multi_step_advance(store: &Store, template: &Record, input: &Request) {
+        let parent = serde_json::from_value(serde_json::json!({
+            "id":"multi-step-parent","provider":"codex","machine_id":"hawk","cwd":"/workspace",
+            "title":"Multi-step","origin":"api","status":"running"
+        }))
+        .unwrap();
+        store.insert_session(&parent).await.unwrap();
+        let mut request = input.clone();
+        request.request_id = "multi-step".into();
+        let mut record = template.clone();
+        record.placement.parent_session_id = "multi-step-parent".into();
+        record.call_id = "multi-step".into();
+        record.child_session_id = "multi-step-child".into();
+        record.request_id.clone_from(&request.request_id);
+        record.request_digest = request.digest();
+        store.admit_managed_call(&record, &request).await.unwrap();
+        let mut current = record;
+        for phase in [State::Starting, State::Running] {
+            let mut next = current.clone();
+            next.state = phase;
+            next.revision += 1;
+            assert!(store.advance_managed_call(&current, &next).await.unwrap());
+            current = next;
+        }
+        let chain = |from: &Record| {
+            let mut stopping = from.clone();
+            stopping.state = State::Stopping;
+            stopping.revision += 1;
+            let mut cancelled = stopping.clone();
+            cancelled.state = State::Cancelled;
+            cancelled.revision += 1;
+            cancelled.finished_at_ms = Some(cancelled.updated_at_ms);
+            [stopping, cancelled]
+        };
+        let stale_steps = chain(&current);
+        // A concurrent writer makes `current` stale: neither step commits.
+        let mut requested = current.clone();
+        requested.revision += 1;
+        requested.cancel_requested_at_ms = Some(requested.updated_at_ms);
+        assert!(
+            store
+                .advance_managed_call(&current, &requested)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !store
+                .advance_managed_call_through(&current, &stale_steps)
+                .await
+                .unwrap()
+        );
+        let stored = store
+            .managed_call("multi-step-parent", "multi-step")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (stored.state, stored.revision),
+            (State::Running, requested.revision)
+        );
+        let steps = chain(&requested);
+        // An invalid chain refuses before any write.
+        assert!(
+            store
+                .advance_managed_call_through(&requested, &[steps[1].clone()])
+                .await
+                .is_err()
+        );
+        assert!(
+            store
+                .advance_managed_call_through(&requested, &steps)
+                .await
+                .unwrap()
+        );
+        let stored = store
+            .managed_call("multi-step-parent", "multi-step")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (stored.state, stored.revision),
+            (State::Cancelled, requested.revision + 2)
+        );
     }
 
     #[allow(clippy::too_many_lines)] // One durable timeline covers concurrent owners, failure and retry.
