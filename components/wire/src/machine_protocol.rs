@@ -87,6 +87,7 @@ mod native_usage;
 mod portable_bundle;
 pub use portable_bundle::PortableCredentialBundle;
 pub mod portable_usage;
+pub mod refresh_custody;
 pub use native_usage::{
     NATIVE_RESET_OUTCOMES, NativeResetDispatch, NativeResetRequest, native_usage_error_code,
     project_native_reset_reply,
