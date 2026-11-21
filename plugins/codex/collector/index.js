@@ -128,18 +128,13 @@ export function isTokenExpired(error) {
  * the collector ask the native app-server to refresh it, once, and retry. The
  * Machine then promotes the rotated credential through its compare-and-swap
  * lineage. Cowboy's usage limiter bounds how often this can run. */
-export async function collect(rpc, request = {}) {
+export async function collect(rpc) {
   let account = await rpc.request("account/read", { refreshToken: false });
   let rateLimits;
   try {
     rateLimits = await rpc.request("account/rateLimits/read", {});
   } catch (error) {
     if (!isTokenExpired(error)) throw error;
-    // A named account's poll never redeems the refresh token: another
-    // Machine's session may be redeeming it. Its sessions renew the token.
-    if (request.token_refresh === false) {
-      throw new Error("Codex usage authentication required: the access token expired.");
-    }
     account = await rpc.request("account/read", { refreshToken: true });
     rateLimits = await rpc.request("account/rateLimits/read", {});
   }
@@ -190,9 +185,7 @@ async function main() {
     request = await input();
     rpc = await JsonRpcLines.start();
     const result =
-      request.operation === "consume_reset"
-        ? await reset(rpc, request)
-        : await collect(rpc, request);
+      request.operation === "consume_reset" ? await reset(rpc, request) : await collect(rpc);
     console.log(JSON.stringify(result));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

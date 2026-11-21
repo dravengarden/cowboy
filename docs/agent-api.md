@@ -398,8 +398,8 @@ the lowest Machine ID; `machine_id` reports the current choice. A usage query
 never redeems a refresh token: the Controller and the Machine both put
 `"token_refresh": false` in the request, and a Provider whose CLI rotates
 credentials runs only a collector release that declares it then reports
-authentication required instead (`collector/portable-account.json`; Codex from
-3.6.14), otherwise `portable_usage_refresh_unsupported`. Grok stays off. No
+authentication required instead (`collector/portable-account.json`; no released
+Codex collector declares it yet), otherwise `portable_usage_refresh_unsupported`. Grok stays off. No
 Machine speaking protocol 50 was ever released, so no further capability
 negotiation exists. Expired tokens are renewed by sessions. Activity
 attachments stay with the Service account because request telemetry has no
