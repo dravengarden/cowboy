@@ -14,8 +14,9 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
 - Run Rust, Bun, build, lint, and test commands from the repository root in
   the pinned shell, for example `nix develop -c just check-compact`. Ordinary
   interactive Cargo commands retain incremental state; the complete gate avoids
-  growing another incremental generation. Keep sccache opt-in until its
-  cross-worktree Rust hit rate is proven on the active host. Do not use host
+  growing another incremental generation. `check-compact` shares one sccache
+  across worktrees (2026-11-21 on Hawk: a fresh worktree's cold gate hit 56%,
+  996s to 893s); interactive Cargo commands keep incremental state instead. Do not use host
   `cargo` or `bun` as a preliminary check; a missing tool or stale Rustup linker
   wrapper is an environment failure, not a product-code failure.
 - Keep the gate cheap to rerun. A rerun without source changes must not

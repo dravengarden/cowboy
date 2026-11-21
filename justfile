@@ -832,10 +832,45 @@ logs-conformance:
     test -x "$fixture"
     python3 tools/logs_conformance.py --cowboy target/debug/cowboy --test-executable "$fixture" --receipt target/logs-conformance.json
 
-# Run the complete quality gate without growing workspace incremental caches.
-# sccache stays opt-in until cross-worktree Rust cache hits are proven locally.
+# Run the complete quality gate without growing workspace incremental caches,
+# through a compiler cache shared by every worktree of this user. The server is
+# private to this checkout (its own socket, started in the caller's cgroup and
+# stopped on exit), so one task's compiles never run in another task's process
+# tree. SCCACHE_BASEDIRS strips the checkout and build paths from cache keys,
+# which lets a fresh worktree reuse unchanged crates, not only registry deps.
+# Concurrent gates' servers share the disk cache; each evicts by its own size
+# accounting, which can cost hits but never yields a wrong artifact. A reused
+# rlib keeps its producer's debug paths; debug a gate build only after rebuilding.
 check-compact:
-    CARGO_INCREMENTAL=0 just check
+    #!/usr/bin/env bash
+    set -euo pipefail
+    build_dir() { (cd "$1" && cargo metadata --format-version 1 --no-deps --locked | jq -r '.build_directory // .target_directory'); }
+    root="$PWD"
+    main_build="$(build_dir .)"
+    zed_build="$(build_dir plugins/zed/adapter)"
+    export CARGO_INCREMENTAL=0 SCCACHE_IGNORE_SERVER_IO_ERROR=1
+    export SCCACHE_DIR="${SCCACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/cowboy-sccache}"
+    export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-40G}"
+    export SCCACHE_BASEDIRS="$root:$main_build:$zed_build"
+    # One server per invocation: a short private socket directory, so a second
+    # gate in the same checkout neither stops nor reuses this one.
+    unset RUSTC_WRAPPER
+    stop() {
+      sccache --show-stats --stats-format json 2>/dev/null | jq -c '{requests: .stats.compile_requests, hits: ([.stats.cache_hits.counts[]?] | add // 0), misses: ([.stats.cache_misses.counts[]?] | add // 0)}' || true
+      sccache --stop-server >/dev/null 2>&1 || true
+      rm -rf "$socket_dir"
+    }
+    # The cache only speeds the gate up: if its server cannot start, run the
+    # same gate uncached instead of failing it.
+    if socket_dir="$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/cowboy-sccache.XXXXXX" 2>/dev/null)" &&
+      SCCACHE_SERVER_UDS="$socket_dir/server.sock" sccache --start-server >/dev/null 2>&1; then
+      export SCCACHE_SERVER_UDS="$socket_dir/server.sock" RUSTC_WRAPPER=sccache
+      trap stop EXIT
+    else
+      echo "check-compact: sccache unavailable; running the gate uncached" >&2
+      if [[ -n "${socket_dir:-}" ]]; then rm -rf "$socket_dir"; fi
+    fi
+    just check
 
 # Exercise the actual private Operator CLI/Controller and enrolled Machine.
 # Only active entries write; other matrix entries are resolved, not reader-tested.
