@@ -1,5 +1,11 @@
 # cowboy — build + quality tasks. Run `just` to list.
 
+# The one all-feature Rust test graph. `test`, `composition-check` and
+# `test-postgres` share it, so each gate run compiles it once; a different
+# package or feature selection unifies dependency features differently and
+# recompiles the workspace.
+rust_test_args := "-p cowboy -p cowboy-server -p cowboy-machine --all-targets --all-features --locked"
+
 default:
     @just --list
 
@@ -606,7 +612,7 @@ claude-remote-check:
 
 # Cross-language package/linker conformance. This is also the Agent Plugin
 # payload gate used by the generic Plugin release workflow.
-provider-check: claude-remote-check plugin-check
+provider-check: plugin-check claude-remote-check
     bun test ./tools/mcp-bindings_test.ts
     node --import ./tools/register-memory-client.mjs --test tools/execution-probe_test.mjs
     bun x --no-install biome format components/provider-runtime/execution-connection.mjs components/provider-runtime/execution-probe.mjs tools/execution-probe_test.mjs plugins/codex/runtime/bindings.mjs
@@ -657,7 +663,7 @@ composition-check:
     bun test ./tools/generate-composition-contract_test.ts
     bun tools/generate-composition-contract.ts
     bun test ./contracts/composition.test.ts ./contracts/composition-check.test.ts ./contracts/widget-v1.test.ts
-    env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked --lib composition::
+    env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test {{rust_test_args}} composition::
     cargo build --locked --bin cowboy
     bun tools/composition-link-conformance.ts "$(realpath target/debug/cowboy)"
 
@@ -674,10 +680,10 @@ fmt-write:
     cd plugins/claude-code/relay && cargo fmt
 
 lint:
+    cd web && bun run lint
     cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
     cd plugins/zed/adapter && cargo clippy --all-targets --locked -- -D warnings
     cd plugins/claude-code/relay && cargo clippy --all-targets --locked -- -D warnings
-    cd web && bun run lint
 
 dependencies:
     #!/usr/bin/env bash
@@ -747,9 +753,14 @@ release-sources-check:
       local source tree
       source="$(readlink -f "$(nix build --no-link --print-out-paths ".#$output")")"
       tree="$scratch/$output"
-      rm -rf "$tree"
-      mkdir -p "$scratch"
-      cp -r --no-preserve=mode "$source" "$tree"
+      # The source is content-addressed: an unchanged store path means an
+      # unchanged tree, and keeping its mtimes keeps Cargo's fingerprints.
+      if test "$(cat "$tree.source" 2>/dev/null)" != "$source"; then
+        rm -rf "$tree" "$tree.source"
+        mkdir -p "$scratch"
+        cp -r --no-preserve=mode "$source" "$tree"
+        printf '%s\n' "$source" > "$tree.source"
+      fi
       echo "== $output"
       (cd "$tree" && CARGO_TARGET_DIR="$target" cargo check --locked "$@")
     }
@@ -762,12 +773,15 @@ release-sources-check:
 test:
     # The invoking Codex Plugin exports its own signed package path. Cowboy's
     # unit tests exercise embedded fixtures and must not inherit that runtime.
-    env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test -p cowboy -p cowboy-server -p cowboy-machine --all-targets --all-features --locked
+    # nextest builds the same `cargo test` executables but runs every test
+    # binary concurrently; libtest runs them one after another, so the slowest
+    # library suites used to add up (152s against 62s for the same 3553 tests).
+    env -u COWBOY_PROVIDER_PACKAGE_PATH cargo nextest run {{rust_test_args}}
     # The shared wire crate is a workspace member, so the root package does not run its tests.
     env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked -p cowboy-wire --features full,machine-host --all-targets
     # The standalone Machine ships without Controller modules. Compile and run
     # its test slice too; cargo check alone does not cover cfg(test) boundaries.
-    env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked --no-default-features --features machine-host -p cowboy -p cowboy-machine --lib
+    env -u COWBOY_PROVIDER_PACKAGE_PATH cargo nextest run --locked --no-default-features --features machine-host -p cowboy -p cowboy-machine --lib
     env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked --no-default-features --features code-adapter --lib
     cd plugins/zed/adapter && cargo test --all-targets --locked
     cd web && bun run test
@@ -776,7 +790,7 @@ test:
 # Ignored PostgreSQL tests each get a fresh database in a private, temporary
 # cluster. Never consumes a caller-provided database URL or starts a TCP listener.
 test-postgres:
-    bash tools/test-postgres.sh
+    COWBOY_RUST_TEST_ARGS="{{rust_test_args}}" bash tools/test-postgres.sh
 
 # Actual immutable private writer ELFs; no production writer or host namespace.
 session-deletion-writer-conformance OLD NEW READER RECEIPT:
@@ -795,7 +809,12 @@ session-deletion-production-conformance OLD NEW READER DEFAULT_READER RECEIPT:
       --default-reader-release "{{DEFAULT_READER}}" --receipt "{{RECEIPT}}" \
       --host-mount-ns "$host_mount" --host-net-ns "$host_net"
 
-check: toolchain-check native-shell-check provider-check site-check composition-check idb-conformance-check fmt lint dependencies typecheck feature-check release-sources-check structure-check docs-index-check protocol-contract-check test test-postgres logs-conformance build
+# Complete gate. Recipes run in order, so second-scale static checks come
+# first and a formatting, ratchet or lint failure surfaces within a minute
+# instead of after the Rust builds. Release binaries are not rebuilt here: the
+# debug graphs above compile the same code, and the Nix release packages are
+# the release build. `build-web` keeps the production frontend bundle covered.
+check: toolchain-check fmt structure-check docs-index-check protocol-contract-check typecheck idb-conformance-check site-check native-shell-check dependencies lint feature-check plugin-check composition-check provider-check release-sources-check test test-postgres logs-conformance build-web
 
 # Real diagnostic CLI, typed OTel fixture, query/metrics/tail/watch/RPC contracts.
 # An optional explicit --ssh in the standalone tool adds same-host SSH acceptance.

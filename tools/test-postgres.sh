@@ -28,17 +28,21 @@ export PGPASSFILE=/dev/null PGSERVICEFILE=/dev/null
 # assuming a target directory or choosing a stale executable from a glob. The
 # Cowboy library owns most storage contracts; the Controller crate owns the
 # store writer, whose transcript-anchor contract also runs on both databases.
+# `just test-postgres` passes the `just test` selection: the same package and
+# feature graph reuses those test executables instead of recompiling the
+# workspace under a different dependency feature unification.
+read -r -a fixture_cargo_args <<< "${COWBOY_RUST_TEST_ARGS:---all-features --locked -p cowboy -p cowboy-server --lib}"
+fixture_artifacts="$(cargo test "${fixture_cargo_args[@]}" --no-run \
+  --message-format=json-render-diagnostics)"
 fixture_binary_for() {
-  local package="$1" target="$2"
-  cargo test -p "$package" --lib --all-features --locked --no-run \
-    --message-format=json-render-diagnostics |
-    jq -r --arg target "$target" 'select(.reason == "compiler-artifact" and .target.name == $target
-      and .profile.test and (.target.kind | index("lib"))) | .executable // empty'
+  local target="$1"
+  jq -r --arg target "$target" 'select(.reason == "compiler-artifact" and .target.name == $target
+    and .profile.test and (.target.kind | index("lib"))) | .executable // empty' <<< "$fixture_artifacts"
 }
 fixture_binaries=()
 fixture_tests=()
 for fixture_crate in cowboy:cowboy cowboy-server:cowboy_server; do
-  fixture_binary="$(fixture_binary_for "${fixture_crate%%:*}" "${fixture_crate#*:}")"
+  fixture_binary="$(fixture_binary_for "${fixture_crate#*:}")"
   if [[ ! -f "$fixture_binary" || ! -x "$fixture_binary" ]]; then
     echo "Cargo did not produce exactly one ${fixture_crate%%:*} library test executable" >&2
     exit 1
