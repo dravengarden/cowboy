@@ -43,8 +43,10 @@ keys) replace every card.
   them. Managed-call `quota` reports named accounts only.
 - Service (`default`) sign-in for every Provider of a card family:
   `default_login_refusal` and the direct commit route refuse it with
-  `named_account_required`, and Settings → Providers shows no Service
-  credential row for them (named cards take their place, as for Antigravity).
+  `named_account_required`, `set_default` to `default` is refused, and
+  Settings → Providers shows no Service credential row for them (named cards
+  take their place, as for Antigravity; `accounts.list()` reports them as
+  `retired_default_providers`).
 
 ## What is kept
 
@@ -68,7 +70,12 @@ keys) replace every card.
   history and Provider activity decoration read them. Historical DeepSeek
   activity remains readable; the Service collector no longer extends it.
 - Service-level things unrelated to subscriptions (configuration, telemetry,
-  Plugins, Machine components).
+  Plugins, Machine components), and the generic Service usage engine: its
+  usage-Machine settings route and Service reset scheduler remain for any
+  future non-card binding but serve no card. The Web reset scheduling UI is
+  unreachable without a Service lane.
+- `browser_share_families.cards` stays as an empty list, so a Web release from
+  before the retirement still accepts the account snapshot.
 
 ## Existing data
 
@@ -126,7 +133,8 @@ gate cannot fail a later reboot.
 
 1. With the current Controller: adopt OpenAI · Pika (`accounts.adopt_legacy
    {card:"openai"}`), sign out Claude · Lynx at Service scope, and confirm
-   `GET /api/providers` shows every card-family Provider `signed_out`. Reset
+   the Service authentications (`GET /api/plugins` `authentications[]`) show
+   every card-family Provider `signed_out`. Reset
    (or stop) a Lynx Machine browser if one was enabled.
 2. Controller release (`.#cowboy-controller-release`): runs the migration and
    the gate.
