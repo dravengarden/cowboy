@@ -1,0 +1,88 @@
+{
+ "schema": 1,
+ "date": "2026-11-21",
+ "method": "GPT-6.2 Sol Max re-run of the four 2026-11-18 pilot inputs (same clean worktrees, input revisions, base and focus text). Findings were matched against the blind-verified serious clusters of models/pilots/2026-11-18-review-pilot.json by the orchestrating agent, not blind; new findings outside that set were not adjudicated and do not count.",
+ "arms": {
+  "keeper-idle-retire": {
+   "call": "call-518f2ff77e5bfa6303feecdc",
+   "tokens": 2564437,
+   "minutes": 7.2,
+   "serious_found": 4,
+   "serious_total": 5,
+   "matched": [
+    "K1",
+    "K2",
+    "K5",
+    "K7"
+   ],
+   "missed": [
+    "K8"
+   ]
+  },
+  "pr8818": {
+   "call": "call-14eb34025afb3e49fd18b975",
+   "tokens": 5292903,
+   "minutes": 8.7,
+   "serious_found": 5,
+   "serious_total": 5,
+   "matched": [
+    "P1",
+    "P2",
+    "P3",
+    "P4",
+    "P9"
+   ],
+   "missed": []
+  },
+  "pr8895": {
+   "call": "call-06c94c0541fd86730997b4ac",
+   "tokens": 3870987,
+   "minutes": 9.5,
+   "serious_found": 3,
+   "serious_total": 4,
+   "matched": [
+    "Q1",
+    "Q5",
+    "Q9"
+   ],
+   "missed": [
+    "Q2"
+   ]
+  },
+  "pr8874": {
+   "call": "call-c0c272943ff8753bf5edd40b",
+   "tokens": 1156949,
+   "minutes": 3.5,
+   "serious_found": 0,
+   "serious_total": 0,
+   "matched": [],
+   "missed": []
+  }
+ },
+ "totals": {
+  "gpt-6.2-sol:max": {
+   "serious_found": 12,
+   "serious_total": 14,
+   "tokens": 12885276,
+   "minutes": 28.9
+  },
+  "gpt-6.2-astra:max": {
+   "serious_found": 14,
+   "serious_total": 14,
+   "tokens": 23461333,
+   "minutes": 115.5
+  },
+  "gpt-6.2-astra:medium": {
+   "serious_found": 9,
+   "serious_total": 14,
+   "tokens": 2127013,
+   "minutes": 19.6
+  },
+  "gpt-6.2-sol:medium": {
+   "serious_found": 9,
+   "serious_total": 14,
+   "tokens": 3964312,
+   "minutes": 14.2
+  }
+ }
+}

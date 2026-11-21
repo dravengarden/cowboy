@@ -68,6 +68,7 @@ primary phone/desktop product path.
 - [`mcp-plugin-authoring.md`](mcp-plugin-authoring.md) — Third-party MCP Plugin procedure: contract, sources, build/sign/publish, install and session grant
 - [`managed-agent-calls.md`](managed-agent-calls.md) — Parent-scoped cross-Provider Calls implementation, CLI and desktop/mobile lifecycle UI, with production acceptance boundaries
 - [`review-generation-binding.md`](review-generation-binding.md) — Binding of review preset selection, claim, re-pin, configuration, recovery and reuse to one Provider generation
+- [`review-routing.md`](review-routing.md) — Review tiers (high, routine, verify), cost mode and project risk guidance that choose managed reviewer presets
 - [`managed-native-capabilities.md`](managed-native-capabilities.md) — General Calls extension contract, on-demand image generation/editing, isolated native profiles, verified cross-machine artifacts and token costs
 - [`releases/antigravity-3-113-rollout-2026-11-18.md`](releases/antigravity-3-113-rollout-2026-11-18.md) — Component release 3.113.0 fleet rollout — 2026-11-18
 - [`releases/antigravity-isolation-3-115-rollout-2026-11-18.md`](releases/antigravity-isolation-3-115-rollout-2026-11-18.md) — Component release 3.115.0 rollout (Antigravity account isolation) — 2026-11-18
