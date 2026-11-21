@@ -41,7 +41,9 @@ pub(super) fn remove_checked(path: &Path, checkpoint: &impl Fn() -> Result<()>) 
 /// symlink at any level. A symlinked or non-directory account, providers or
 /// provider level is refused (a later credential apply must never write
 /// through it); a symlinked `leaf` is only unlinked. Enumeration failures
-/// propagate; `checkpoint` runs before every removed entry.
+/// propagate; `checkpoint` runs before every removed entry. Each visited
+/// Provider directory is synced afterwards (also when `leaf` was already
+/// absent), so a removal is durable before the caller records it.
 pub(super) fn remove_below_named_providers(
     base: &Path,
     account: &dyn Fn(&str) -> bool,
@@ -50,7 +52,9 @@ pub(super) fn remove_below_named_providers(
 ) -> Result<()> {
     visit_named_providers(base, account, provider, &mut |directory| {
         let device = fstat(directory)?.st_dev;
-        remove_entry(directory, leaf, device, 0, &checkpoint)
+        remove_entry(directory, leaf, device, 0, &checkpoint)?;
+        rustix::fs::fsync(directory)?;
+        Ok(())
     })
 }
 
@@ -102,7 +106,8 @@ fn visit_named_providers(
         Err(Errno::NOENT) => return Ok(()),
         Err(error) => return Err(error.into()),
     };
-    let Some(accounts) = real_child(&base, "accounts")? else {
+    // A linked accounts root is refused, never treated as absent.
+    let Some(accounts) = enrolled_child(&base, "accounts")? else {
         return Ok(());
     };
     for name in entries(&accounts)? {
@@ -125,19 +130,6 @@ fn visit_named_providers(
         }
     }
     Ok(())
-}
-
-/// A real child directory, or `None` when it is absent, a symlink or not a
-/// directory.
-fn real_child(
-    parent: impl AsFd,
-    name: impl rustix::path::Arg,
-) -> Result<Option<rustix::fd::OwnedFd>> {
-    match openat(parent, name, DIRECTORY, Mode::empty()) {
-        Ok(directory) => Ok(Some(directory)),
-        Err(Errno::NOENT | Errno::NOTDIR | Errno::LOOP) => Ok(None),
-        Err(error) => Err(error.into()),
-    }
 }
 
 /// A real child directory or `None` when absent; a symlink or another file

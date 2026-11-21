@@ -190,3 +190,25 @@ fn offline_completion_removes_named_private_copies_first() {
     assert!(!account.join("victoria/private-homes").exists());
     assert!(!default_copy.exists());
 }
+
+/// A linked accounts root is refused, never read as absent: no completion
+/// record is written while copies behind it may remain reachable.
+#[test]
+fn offline_completion_refuses_a_linked_accounts_root() {
+    let root = tempfile::tempdir().unwrap();
+    let step = fixture(root.path());
+    let outside = root.path().join("outside");
+    let copy =
+        outside.join("11111111-1111-4111-8111-111111111111/providers/victoria/private-homes/0123");
+    fs::create_dir_all(&copy).unwrap();
+    symlink(&outside, root.path().join("provider-auth/accounts")).unwrap();
+    assert!(call(root.path(), &step, true).is_err());
+    assert!(copy.exists());
+    let journal = Journal::open(root.path()).unwrap();
+    assert!(
+        matches!(journal.query(&step), StepLookup::Found { receipt } if matches!(receipt.outcome, StepOutcome::Unknown { .. }))
+    );
+    drop(journal);
+    fs::remove_file(root.path().join("provider-auth/accounts")).unwrap();
+    assert_eq!(call(root.path(), &step, true).unwrap()["applied"], true);
+}
