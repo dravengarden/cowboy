@@ -154,7 +154,7 @@ authorizing a model, and is embedded in the Controller so a catalog refresh
 needs only a Controller release. The help index lists it.
 
 Resource `cowboy://sdk/v1` also obtains the current Controller's strict
-declaration ([`src/agent_api.rs`](../src/agent_api.rs) `SDK`). `cowboy_read`
+declaration ([`components/server/src/agent_api.rs`](../components/server/src/agent_api.rs) `SDK`). `cowboy_read`
 runs CODE as `async ({cowboy}) => { CODE }`, or a module exporting a default
 function with `format: "module"`; `language: "js"` selects JavaScript.
 

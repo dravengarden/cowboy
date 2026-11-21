@@ -184,8 +184,8 @@
           ./src/plugin_process
           ./src/plugin_runtime_args.rs
           ./src/legacy_provider_release.rs
-          ./src/agent_api.rs
-          ./src/agent_api
+          ./src/agent_mcp.rs
+          ./src/agent_mcp
           ./src/managed_calls.rs
           ./src/managed_calls
           ./src/component_proof.rs

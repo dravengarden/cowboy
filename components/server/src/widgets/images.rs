@@ -6,6 +6,7 @@
 //! every `event` source to an `artifact` before storing.
 use super::{Checked, Invalid, object};
 use base64::Engine as _;
+use cowboy::png;
 use serde_json::Value;
 
 /// Encoded bytes of a `data` image after base64 decoding.

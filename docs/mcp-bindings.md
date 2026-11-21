@@ -34,7 +34,7 @@ contract, policy or profile.
 ## Signed startup discovery
 
 Native MCP clients may request initialize/tools/list before their parent gateway
-is reconciled. `src/agent_api/mcp.rs::available` already handles this ordering for
+is reconciled. `src/agent_mcp.rs::available` already handles this ordering for
 Cowboy's fixed tools. A generic binding must not start an authorized remote
 process to obtain its initial tool schemas, which can deadlock worker startup.
 

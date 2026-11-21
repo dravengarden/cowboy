@@ -27,8 +27,8 @@ pub mod acp_bridge;
 pub mod acp_memory;
 #[cfg(feature = "full")]
 pub mod admin;
-#[cfg(any(feature = "full", feature = "machine-host"))]
-pub mod agent_api;
+#[cfg(all(unix, any(feature = "full", feature = "machine-host")))]
+pub mod agent_mcp;
 #[cfg(feature = "full")]
 pub mod agent_model;
 #[cfg(feature = "full")]
@@ -89,10 +89,19 @@ pub mod diff_snapshot;
 pub mod digest;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod durable_state;
+// Re-exports for code that moved to cowboy-server without a manifest edit:
+// Cargo.toml and Cargo.lock are worker-generation inputs, so a new server
+// dependency waits for a planned worker maintenance. Delete these and add
+// `png`/`cowboy-wire` to the server manifest in that maintenance.
+#[cfg(feature = "full")]
+pub use cowboy_wire::agent_api as agent_api_limits;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub use cowboy_wire::execution_environment;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub use cowboy_wire::execution_protocol;
+#[cfg(feature = "full")]
+#[doc(hidden)]
+pub use png;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod execution_target_environment;
 #[cfg(any(feature = "full", feature = "code-adapter"))]
@@ -185,8 +194,6 @@ pub mod provider;
 pub mod subagent_transcripts;
 #[cfg(feature = "full")]
 pub mod transcript_anchors;
-#[cfg(feature = "full")]
-pub mod widgets;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub use cowboy_wire::provider_account;
 #[cfg(any(feature = "full", feature = "machine-host"))]
