@@ -24359,7 +24359,7 @@
       "plugins": {
         "claude-code": "3.20.58",
         "claude-deepseek": "3.1.76",
-        "codex": "3.6.16",
+        "codex": "3.6.17",
         "codex-deepseek": "3.1.76",
         "grok": "3.2.15",
         "zed": "1.39.10",
@@ -24524,7 +24524,7 @@
                 "version": "0.2.2"
               }
             ],
-            "source_digest": "sha256:61b0eeb71225736275059b61638cce0b7f9afcfa1ecccb797a29984ef3cb1f43"
+            "source_digest": "sha256:17cf318feb18b1141c6a556a855efd6d5106d638b17945e3192e350207877c03"
           },
           "codex-deepseek": {
             "component_release": "3.128.0",
