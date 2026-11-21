@@ -27,6 +27,7 @@ fn activated(id: &str, source: &str) -> ActivatedHostPlugin {
         visual: spec.visual,
         native_capabilities: spec.native_capabilities,
         refresh_free_collector: false,
+        refresh_free_reset: false,
     }
 }
 

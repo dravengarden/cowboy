@@ -27,6 +27,15 @@ class ResetFailure extends Error {
   }
 }
 
+/** Port 0 accepts no connection: a refresh attempt fails locally. */
+export const REFRESH_REFUSED_URL = "http://127.0.0.1:0/cowboy-refresh-refused";
+
+/** The app-server's extra spawn options: a refresh-free request's
+ * app-server can reach no refresh endpoint. */
+export function appServerOptions(refreshable) {
+  return refreshable ? {} : { env: { CODEX_REFRESH_TOKEN_URL_OVERRIDE: REFRESH_REFUSED_URL } };
+}
+
 class JsonRpcLines {
   constructor(child) {
     this.child = child;
@@ -35,7 +44,12 @@ class JsonRpcLines {
     this.nextId = 1;
   }
 
-  static async start() {
+  /** `refreshable: false` (a named account's request with
+   * `token_refresh: false`) points the app-server's token refresh at an
+   * address nothing can listen on: the app-server refreshes an expired access
+   * token on its own (`proactive_expiry`, verified against 0.169.1), so the
+   * flag alone could not keep the refresh token from the vendor. */
+  static async start({ refreshable = true } = {}) {
     const command =
       process.env.COWBOY_PLUGIN_COMMAND_CODEX ??
       process.env.COWBOY_CODEX_COMMAND ??
@@ -50,6 +64,7 @@ class JsonRpcLines {
         "-c",
         "analytics.enabled=false",
       ],
+      ...appServerOptions(refreshable),
       stdin: "piped",
       stdout: "piped",
       stderr: "null",
@@ -111,7 +126,7 @@ export function nearestCredit(rateLimits) {
           (right.expiresAt ?? Number.MAX_SAFE_INTEGER) ||
         (left.grantedAt ?? Number.MAX_SAFE_INTEGER) -
           (right.grantedAt ?? Number.MAX_SAFE_INTEGER) ||
-        left.id.localeCompare(right.id),
+        (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
     )[0]?.id;
 }
 
@@ -128,20 +143,43 @@ export function isTokenExpired(error) {
  * the collector ask the native app-server to refresh it, once, and retry. The
  * Machine then promotes the rotated credential through its compare-and-swap
  * lineage. Cowboy's usage limiter bounds how often this can run. */
+/** A refresh-free request's (`token_refresh: false`) rejection by the
+ * backend: the expired access token cannot be renewed here. */
+export function isAuthenticationRejected(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return isTokenExpired(error) || /\b401\b|unauthori[sz]ed/i.test(message);
+}
+
+const AUTHENTICATION_REQUIRED = "Codex usage authentication required: the access token expired.";
+
 export async function collect(rpc, request = {}) {
-  let account = await rpc.request("account/read", { refreshToken: false });
+  let account;
+  try {
+    account = await rpc.request("account/read", { refreshToken: false });
+  } catch (error) {
+    if (request.token_refresh === false && isAuthenticationRejected(error)) {
+      throw new Error(AUTHENTICATION_REQUIRED);
+    }
+    throw error;
+  }
   let rateLimits;
   try {
     rateLimits = await rpc.request("account/rateLimits/read", {});
   } catch (error) {
-    if (!isTokenExpired(error)) throw error;
     // A named account's poll never redeems the refresh token: another
     // Machine's session may be redeeming it. Its sessions renew the token.
-    if (request.token_refresh === false) {
-      throw new Error("Codex usage authentication required: the access token expired.");
+    if (request.token_refresh === false && isAuthenticationRejected(error)) {
+      throw new Error(AUTHENTICATION_REQUIRED);
     }
+    if (!isTokenExpired(error)) throw error;
     account = await rpc.request("account/read", { refreshToken: true });
     rateLimits = await rpc.request("account/rateLimits/read", {});
+  }
+  // The canonical nearest grant, so the confirmation dialog pins exactly the
+  // credit consume_reset would spend.
+  const nearest = nearestCredit(rateLimits);
+  if (nearest && rateLimits?.rateLimitResetCredits) {
+    rateLimits.rateLimitResetCredits.nearestCreditId = nearest;
   }
   let activity;
   try {
@@ -160,8 +198,19 @@ export async function collect(rpc, request = {}) {
   };
 }
 
-async function reset(rpc, request) {
-  const rateLimits = await rpc.request("account/rateLimits/read", {});
+export async function reset(rpc, request) {
+  let rateLimits;
+  try {
+    rateLimits = await rpc.request("account/rateLimits/read", {});
+  } catch (error) {
+    // Like collect: a named account's reset never redeems the refresh token
+    // (the app-server cannot reach a refresh endpoint either); nothing was
+    // spent, so the reset reports authentication required, unsent.
+    if (request.token_refresh === false && isAuthenticationRejected(error)) {
+      throw new ResetFailure(AUTHENTICATION_REQUIRED);
+    }
+    throw error;
+  }
   const creditId = nearestCredit(rateLimits);
   if (!creditId) throw new ResetFailure("no available reset credit");
   if (request.expected_credit_id && request.expected_credit_id !== creditId) {
@@ -178,6 +227,11 @@ async function reset(rpc, request) {
       idempotencyKey: request.idempotency_key,
     });
   } catch (error) {
+    // Reached: the consume call may have been spent; its rejection is
+    // still an authentication failure the Service backs off on.
+    if (request.token_refresh === false && isAuthenticationRejected(error)) {
+      throw new ResetFailure(AUTHENTICATION_REQUIRED, true, creditId);
+    }
     throw new ResetFailure(error instanceof Error ? error.message : String(error), true, creditId);
   }
   return { outcome: result?.outcome ?? "unknown", credit_id: creditId };
@@ -188,7 +242,7 @@ async function main() {
   let request;
   try {
     request = await input();
-    rpc = await JsonRpcLines.start();
+    rpc = await JsonRpcLines.start({ refreshable: request.token_refresh !== false });
     const result =
       request.operation === "consume_reset"
         ? await reset(rpc, request)

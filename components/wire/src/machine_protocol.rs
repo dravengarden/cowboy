@@ -37,7 +37,12 @@ pub use challenge_proof::{challenge_proof_v1, challenge_proof_v2, challenge_proo
 /// banked usage limit (`ConsumeNativeReset`), sent only by that account's
 /// signed collector inside its verified native home.
 pub const NATIVE_RESET_PROTOCOL_VERSION: u16 = 49;
-pub const MACHINE_PROTOCOL_VERSION: u16 = 50;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 51;
+
+/// The conservative reading of a `PluginHostResponse` that omits `started`.
+const fn started_unless_proven() -> bool {
+    true
+}
 /// Named portable accounts' usage (`CollectPortableUsage`): the signed
 /// collector runs in the account's vault replica scope, never the Service's.
 pub const PORTABLE_USAGE_PROTOCOL_VERSION: u16 = 50;
@@ -88,8 +93,9 @@ mod portable_bundle;
 pub use portable_bundle::PortableCredentialBundle;
 pub mod portable_usage;
 pub use native_usage::{
-    NATIVE_RESET_OUTCOMES, NativeResetDispatch, NativeResetRequest, native_usage_error_code,
-    project_native_reset_reply,
+    NATIVE_RESET_OUTCOMES, NATIVE_RESET_SPACING_PROTOCOL_VERSION, NativeResetDispatch,
+    NativeResetRequest, PRE_START_RESET_REFUSALS, native_usage_error_code,
+    project_native_reset_reply, reset_refusal_unsent,
 };
 
 pub const CURRENT_TURN_PROTOCOL_VERSION: u16 = 34;
@@ -860,6 +866,12 @@ pub enum MachineCommand {
         request_id: String,
         request: Box<portable_usage::PortableUsageRequest>,
     },
+    /// Answered only by `PluginHostResponse`; see
+    /// [`portable_usage::PortableResetRequest`].
+    ConsumePortableReset {
+        request_id: String,
+        request: Box<portable_usage::PortableResetRequest>,
+    },
     NativeLogout {
         request_id: String,
         logout: crate::provider_account::NativeLogoutRequest,
@@ -1420,7 +1432,9 @@ pub enum MachineEvent {
         request_id: String,
         accepted: bool,
         /// False only when the Machine can prove no Plugin process started.
-        #[serde(default)]
+        /// A reply without the field may follow a started process: it reads
+        /// as started, never as proof that nothing ran.
+        #[serde(default = "started_unless_proven")]
         started: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         payload: Option<serde_json::Value>,

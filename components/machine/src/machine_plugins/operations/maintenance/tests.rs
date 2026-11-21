@@ -158,3 +158,57 @@ fn writable_packages_and_public_credential_directories_are_refused() {
     assert!(!root.path().join("plugin-maintenance").exists());
     super::super::super::remove_projection::remove(&auth.join("runtime")).unwrap();
 }
+
+/// Offline completion removes every named account's private credential
+/// copies of the Provider (and the default scope's) before it records the
+/// uninstall applied; a linked named Provider directory refuses it.
+#[test]
+fn offline_completion_removes_named_private_copies_first() {
+    let root = tempfile::tempdir().unwrap();
+    let step = fixture(root.path());
+    let account = root
+        .path()
+        .join("provider-auth/accounts/11111111-1111-4111-8111-111111111111/providers");
+    let copy = account.join("victoria/private-homes/0123/home");
+    fs::create_dir_all(&copy).unwrap();
+    fs::write(copy.join("auth.json"), b"fixture").unwrap();
+    let default_copy = root
+        .path()
+        .join("provider-auth/providers/victoria/private-homes/4567");
+    fs::create_dir_all(&default_copy).unwrap();
+    let outside = root.path().join("outside");
+    fs::create_dir_all(outside.join("private-homes/kept")).unwrap();
+    let other = root
+        .path()
+        .join("provider-auth/accounts/22222222-2222-4222-8222-222222222222/providers");
+    fs::create_dir_all(&other).unwrap();
+    symlink(&outside, other.join("victoria")).unwrap();
+    assert!(call(root.path(), &step, true).is_err());
+    assert!(outside.join("private-homes/kept").exists());
+    fs::remove_file(other.join("victoria")).unwrap();
+    assert_eq!(call(root.path(), &step, true).unwrap()["applied"], true);
+    assert!(!account.join("victoria/private-homes").exists());
+    assert!(!default_copy.exists());
+}
+
+/// A linked accounts root is refused, never read as absent: no completion
+/// record is written while copies behind it may remain reachable.
+#[test]
+fn offline_completion_refuses_a_linked_accounts_root() {
+    let root = tempfile::tempdir().unwrap();
+    let step = fixture(root.path());
+    let outside = root.path().join("outside");
+    let copy =
+        outside.join("11111111-1111-4111-8111-111111111111/providers/victoria/private-homes/0123");
+    fs::create_dir_all(&copy).unwrap();
+    symlink(&outside, root.path().join("provider-auth/accounts")).unwrap();
+    assert!(call(root.path(), &step, true).is_err());
+    assert!(copy.exists());
+    let journal = Journal::open(root.path()).unwrap();
+    assert!(
+        matches!(journal.query(&step), StepLookup::Found { receipt } if matches!(receipt.outcome, StepOutcome::Unknown { .. }))
+    );
+    drop(journal);
+    fs::remove_file(root.path().join("provider-auth/accounts")).unwrap();
+    assert_eq!(call(root.path(), &step, true).unwrap()["applied"], true);
+}

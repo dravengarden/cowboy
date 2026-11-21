@@ -214,7 +214,7 @@ fn consume_native_reset(
     let generation = profile.generation;
     let invocation = execution.native_usage(*profile);
     tokio::spawn(async move {
-        let result = if protocol >= crate::machine_protocol::NATIVE_RESET_PROTOCOL_VERSION {
+        let result = if protocol >= crate::machine_protocol::NATIVE_RESET_SPACING_PROTOCOL_VERSION {
             providers
                 .consume_native_reset(invocation, &request, &dispatch)
                 .await
@@ -295,6 +295,70 @@ pub(super) fn portable_usage(
             payload: result.ok(),
             detail,
         });
+    });
+}
+
+/// Immediate banked reset of a named portable account (protocol 51). Only
+/// the closed reset reply or a closed code leaves the Machine.
+pub(super) fn portable_reset(
+    command: MachineCommand,
+    context: MachineCommandContext,
+    execution: &PluginExecutionScope,
+) {
+    let MachineCommand::ConsumePortableReset {
+        request_id,
+        request,
+    } = command
+    else {
+        return;
+    };
+    let MachineCommandContext {
+        protocol,
+        events,
+        providers,
+        ..
+    } = context;
+    let account = request.account_id.clone();
+    let provider = request.plugin_id.clone();
+    let invocation = execution.portable_reset(*request);
+    tokio::spawn(async move {
+        let result = if protocol
+            >= crate::machine_protocol::portable_usage::PORTABLE_RESET_PROTOCOL_VERSION
+        {
+            providers.consume_portable_reset(invocation).await
+        } else {
+            Err(anyhow::anyhow!("machine_usage_update_required").into())
+        };
+        let event = match result {
+            Ok(payload) => MachineEvent::PluginHostResponse {
+                request_id,
+                accepted: true,
+                started: true,
+                payload: Some(payload),
+                detail: None,
+            },
+            Err(failure) => {
+                let code =
+                    crate::machine_protocol::native_usage_error_code(&failure.error.to_string());
+                let code = if code == "native_usage_unavailable" {
+                    crate::machine_protocol::portable_usage::portable_usage_error_code(
+                        &failure.error.to_string(),
+                    )
+                } else {
+                    code
+                };
+                tracing::warn!(account = account.as_str(), %provider, started = failure.started,
+                    reason = code, "Portable account reset failed");
+                MachineEvent::PluginHostResponse {
+                    request_id,
+                    accepted: false,
+                    started: failure.started,
+                    payload: None,
+                    detail: Some(code.to_owned()),
+                }
+            }
+        };
+        let _ = events.send(event);
     });
 }
 

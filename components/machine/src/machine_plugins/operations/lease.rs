@@ -48,6 +48,15 @@ impl PluginExecutionScope {
             Arc::clone(&self.connected),
         )
     }
+    pub fn portable_reset(
+        &self,
+        request: crate::machine_protocol::portable_usage::PortableResetRequest,
+    ) -> crate::machine_plugins::native_usage::PortableResetInvocation {
+        crate::machine_plugins::native_usage::PortableResetInvocation::new(
+            request,
+            Arc::clone(&self.connected),
+        )
+    }
     pub fn telemetry_export(
         &self,
         request: &crate::machine_protocol::telemetry_export::ExportAttempt,

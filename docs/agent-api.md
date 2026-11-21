@@ -371,8 +371,10 @@ keep their credential in the account's Service vault. Their usage is read-only:
 the same released signed collector as the Service account runs on one
 connected Machine inside the account's own vault replica (the credential, home
 and checked sidecars a session on that account launches with), never with the
-Machine's Service credential and never on the Controller. Portable accounts
-have no resets (`resets_supported` is false). The command is enqueued under the
+Machine's Service credential and never on the Controller. Of the portable
+accounts only Codex (3.6.22, Machine protocol 51, a verified subscription
+identity) spends banked resets, immediately, on its usage Machine; Grok and
+DeepSeek have none (`resets_supported` is false). The command is enqueued under the
 owner's account lock after availability, the reserved identity and admission
 revision, and the exact vault generation are rechecked. Every participant (the
 collector and each sidecar, such as the DeepSeek gateways) must hold one
@@ -398,9 +400,14 @@ the lowest Machine ID; `machine_id` reports the current choice. A usage query
 never redeems a refresh token: the Controller and the Machine both put
 `"token_refresh": false` in the request, and a Provider whose CLI rotates
 credentials runs only a collector release that declares it then reports
-authentication required instead (`collector/portable-account.json`; Codex from
-3.6.16, Grok from 3.2.16, which reads usage without starting its CLI), otherwise
-`portable_usage_refresh_unsupported`. No
+authentication required instead (`collector/portable-account.json` with a
+`token_refresh_guard`; minimums Codex 3.6.22 and Grok 3.2.21, which reads usage
+without starting its CLI), otherwise `portable_usage_refresh_unsupported`.
+Codex releases before 3.6.22 let the app-server refresh an expired access token
+on its own; 3.6.22 cannot reach a refresh endpoint for such a request (see
+[usage-execution](usage-execution.md#named-portable-accounts)). A named Codex
+account also spends banked resets immediately (`usage.account_reset`, Codex
+3.6.22, Machine protocol 51); Grok and DeepSeek named accounts have none. No
 Machine speaking protocol 50 was ever released, so no further capability
 negotiation exists. Expired tokens are renewed by sessions. Activity
 attachments stay with the Service account because request telemetry has no
@@ -431,7 +438,7 @@ link, and, when its own usage reports reset credits, an immediate reset only
 `confirm` and the confirmed `expected_credit_id`) or
 `control.apply("usage.account_reset", {account:account_id,...})`. Admission is
 the quota read's (owner, binding, identity, enabled account), but only logins on
-a Machine that speaks protocol 49 and that host policy pins for `claude-code`
+a Machine that speaks protocol 51 (it enforces the reset's spacing) and that host policy pins for `claude-code`
 (`--provider-runtime-machine claude-code=ovh`) are considered; another owner's
 account is `404 account_unavailable`. `resets_supported` in the usage read is
 derived from the same resolved login and the exact release installed on its

@@ -194,7 +194,7 @@ impl MachinePluginStore {
     /// remain untouched, even if they are older than a native login deadline.
     pub(super) fn recover_completed_auth_candidates(&self) -> Result<()> {
         let boot = current_boot_id();
-        for scope in self.existing_auth_scopes() {
+        for scope in self.existing_auth_scopes()? {
             let providers = scope.auth_watch_root();
             if !real_directory(&providers) {
                 continue;

@@ -51,6 +51,69 @@ pub struct PortableSidecar {
 /// session's refresh-token redemption.
 pub const REFRESH_FREE_DECLARATION: &str = "collector/portable-account.json";
 
+/// What the refresh-free declaration covers. A `"token_refresh": "request"`
+/// claim alone is not evidence: Codex 3.6.16-3.6.18 carried it while the
+/// app-server still refreshed an expired token on its own. Usage counts as
+/// refresh-free only with a guard the fixed collector names:
+/// `"refresh_endpoint_refused"` (Codex 3.6.22: the app-server can reach no
+/// refresh endpoint) or `"cli_not_started"` (Grok 3.2.21: the CLI never
+/// starts). The banked reset additionally needs `"reset_token_refresh":
+/// "request"`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RefreshFree {
+    pub usage: bool,
+    pub reset: bool,
+}
+
+/// The guards a refresh-free declaration may name.
+pub const REFRESH_FREE_GUARDS: [&str; 2] = ["refresh_endpoint_refused", "cli_not_started"];
+
+impl RefreshFree {
+    /// Read a signed host bundle's declaration file, if present.
+    #[must_use]
+    pub fn from_declaration(text: Option<&str>) -> Self {
+        let value = text.and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok());
+        let field = |name: &str| {
+            value
+                .as_ref()
+                .filter(|value| value["schema"] == 1)
+                .and_then(|value| value[name].as_str())
+                .map(str::to_owned)
+        };
+        let usage = field("token_refresh").as_deref() == Some("request")
+            && field("token_refresh_guard")
+                .is_some_and(|guard| REFRESH_FREE_GUARDS.contains(&guard.as_str()));
+        Self {
+            usage,
+            reset: usage && field("reset_token_refresh").as_deref() == Some("request"),
+        }
+    }
+}
+
+/// Machine protocol of `ConsumePortableReset`.
+pub const PORTABLE_RESET_PROTOCOL_VERSION: u16 = 51;
+
+/// One owner-confirmed immediate banked reset of a named portable account:
+/// the same signed collector (`consume_reset`), account replica scope and
+/// vault generation as its usage, with `"token_refresh": false`. Answered only
+/// by `MachineEvent::PluginHostResponse` carrying the closed reset reply
+/// (`project_native_reset_reply`); a failure after start keeps `started`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PortableResetRequest {
+    pub account_id: crate::provider_account::ProviderAccountId,
+    /// The exact selected release; the Machine refuses any other.
+    pub plugin_id: String,
+    pub plugin_version: String,
+    pub generation_digest: String,
+    /// The vault generation the Controller admitted under the account lock.
+    pub auth_generation: u64,
+    /// The bounded collector input (provider, idempotency key, pinned grant).
+    pub reset: super::NativeResetRequest,
+    /// Absolute Unix ms after which the Machine never starts the reset.
+    pub expires_at_ms: i64,
+}
+
 /// Message of a reset whose result is indeterminate.
 pub const RESET_UNKNOWN_MESSAGE: &str =
     "The reset outcome is unknown. Refresh usage before trying again.";
@@ -401,5 +464,65 @@ mod tests {
         let mut extra = value;
         extra["home"] = serde_json::json!("/tmp");
         assert!(serde_json::from_value::<PortableUsageRequest>(extra).is_err());
+    }
+
+    /// Copies of the shipped declarations; `plugins/collector-sidecars.test.js`
+    /// pins the files to these exact values (the wire crate's release source
+    /// does not carry Plugin files).
+    const CODEX_DECLARATION: &str = r#"{"schema":1,"token_refresh":"request","token_refresh_guard":"refresh_endpoint_refused","reset_token_refresh":"request"}"#;
+    const GROK_DECLARATION: &str =
+        r#"{"schema":1,"token_refresh":"request","token_refresh_guard":"cli_not_started"}"#;
+
+    #[test]
+    fn only_a_guarded_refresh_free_declaration_is_admitted() {
+        let free = |text: &str| RefreshFree::from_declaration(Some(text));
+        assert_eq!(RefreshFree::from_declaration(None), RefreshFree::default());
+        // Codex 3.6.16-3.6.18 (and Grok 3.2.16-3.2.17): an unguarded claim.
+        assert_eq!(
+            free(r#"{"schema":1,"token_refresh":"request"}"#),
+            RefreshFree::default()
+        );
+        assert_eq!(
+            free(CODEX_DECLARATION),
+            RefreshFree {
+                usage: true,
+                reset: true
+            }
+        );
+        assert_eq!(
+            free(GROK_DECLARATION),
+            RefreshFree {
+                usage: true,
+                reset: false
+            }
+        );
+        assert_eq!(
+            free(r#"{"schema":1,"token_refresh":"request","token_refresh_guard":"trust me"}"#),
+            RefreshFree::default()
+        );
+        // A reset is never refresh-free without refresh-free usage.
+        assert_eq!(
+            free(
+                r#"{"schema":1,"reset_token_refresh":"request","token_refresh_guard":"cli_not_started"}"#
+            ),
+            RefreshFree::default()
+        );
+        assert_eq!(free("not json"), RefreshFree::default());
+    }
+
+    #[test]
+    fn a_portable_reset_needs_protocol_51() {
+        let command: super::super::MachineCommand = serde_json::from_value(serde_json::json!({
+            "command": "consume_portable_reset", "request_id": "r",
+            "request": {"account_id": "11111111-1111-4111-8111-111111111111",
+                "plugin_id": "codex", "plugin_version": "3.6.20",
+                "generation_digest": "sha256:x", "auth_generation": 3,
+                "reset": {"provider": "openai", "idempotency_key": "cowboy-reset-1",
+                    "expected_credit_id": "credit-1"},
+                "expires_at_ms": 1},
+        }))
+        .unwrap();
+        assert_eq!(command.minimum_protocol(), PORTABLE_RESET_PROTOCOL_VERSION);
+        const { assert!(PORTABLE_RESET_PROTOCOL_VERSION <= super::super::MACHINE_PROTOCOL_VERSION) };
     }
 }

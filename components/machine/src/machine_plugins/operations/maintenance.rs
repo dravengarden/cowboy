@@ -131,10 +131,15 @@ pub fn complete_absent_uninstall(
     });
     atomic_write(&audit_path, &serde_json::to_vec(&audit)?, 0o600)?;
     fs::File::open(&audit_root)?.sync_all()?;
-    for name in ["materialized", "runtime"] {
+    for name in [
+        "materialized",
+        "runtime",
+        super::super::native_usage::PRIVATE_HOMES,
+    ] {
         checkpoint()?;
         super::super::remove_projection::remove_checked(&projection.join(name), &checkpoint)?;
     }
+    remove_named_private_homes(&auth, &step.plugin_id, &checkpoint)?;
     sync_removal(&plugin, &projection)?;
     checkpoint()?;
     // A failure after either write remains recoverable with a new explicit
@@ -151,4 +156,22 @@ pub fn complete_absent_uninstall(
     report["applied"] = true.into();
     report["audit_id"] = audit_id.into();
     Ok(report)
+}
+
+/// Every named account's private credential copies of `plugin_id`, under the
+/// maintenance deadline; completion is written only once none remain.
+fn remove_named_private_homes(
+    auth: &Path,
+    plugin_id: &str,
+    checkpoint: &dyn Fn() -> Result<()>,
+) -> Result<()> {
+    let named = (super::super::native_usage::PRIVATE_HOMES, Some(plugin_id));
+    let account = |name: &str| {
+        crate::provider_account::ProviderAccountId::try_from(name.to_owned())
+            .is_ok_and(|id| !id.is_default())
+    };
+    super::super::remove_projection::remove_below_named_providers(
+        auth, &account, named, checkpoint,
+    )?;
+    super::super::remove_projection::ensure_absent_below_named_providers(auth, &account, named)
 }

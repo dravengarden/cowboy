@@ -28,6 +28,26 @@ pub struct PortableUsageHost {
 }
 
 impl UsageService {
+    /// Whether exactly this installed release's collector declares that its
+    /// banked reset never redeems a refresh token.
+    #[must_use]
+    pub fn refresh_free_reset(&self, plugin: &PluginInventory) -> bool {
+        let catalog = match &self.bindings {
+            super::UsageBindingSource::Catalog(catalog) => catalog,
+            #[cfg(any(test, feature = "test-support"))]
+            super::UsageBindingSource::Static(_) => return false,
+        };
+        catalog.runtime().is_some_and(|runtime| {
+            runtime
+                .exact_host(
+                    &plugin.plugin_id,
+                    &plugin.plugin_version,
+                    &plugin.generation_digest,
+                )
+                .is_some_and(|host| host.refresh_free_reset)
+        })
+    }
+
     /// The first scope member (in `members` order) whose released host
     /// declares a usage collector. Source-bundled bootstrap hosts never
     /// qualify: they would run on the Controller.

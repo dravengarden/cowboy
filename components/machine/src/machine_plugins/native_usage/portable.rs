@@ -15,7 +15,8 @@
 //! starts.
 use super::*;
 use crate::machine_protocol::portable_usage::{
-    PortableUsageRequest, REFRESH_FREE_DECLARATION, portable_usage_error_code,
+    PortableResetRequest, PortableUsageRequest, REFRESH_FREE_DECLARATION, RefreshFree,
+    portable_usage_error_code,
 };
 
 /// Every portable invocation must start within this bound of its receipt: the
@@ -28,6 +29,14 @@ pub struct HostAdmission {
     connected: Arc<AtomicBool>,
     deadline: Instant,
     sidecars: Option<BTreeMap<String, String>>,
+    /// The Controller's absolute expiry (Unix ms): rechecked immediately
+    /// before the collector starts, since a monotonic deadline cannot see
+    /// the wall clock the Controller set it by.
+    expires_at_unix_ms: Option<i64>,
+    /// Stage a private credential home of this replica generation for the
+    /// collector, under the lifecycle lock after the exact release resolved;
+    /// `true` when the invocation cannot run without one (a reset).
+    private_home: Option<(u64, bool)>,
 }
 
 impl HostAdmission {
@@ -36,7 +45,17 @@ impl HostAdmission {
             connected,
             deadline: Instant::now() + DEADLINE,
             sidecars: None,
+            expires_at_unix_ms: None,
+            private_home: None,
         }
+    }
+
+    /// An admission that stages a private home of `generation`.
+    #[cfg(test)]
+    pub(in crate::machine_plugins) fn with_private_home(generation: u64) -> Self {
+        let mut admission = Self::new(Arc::new(AtomicBool::new(true)));
+        admission.private_home = Some((generation, true));
+        admission
     }
 
     pub(in crate::machine_plugins) fn remaining(&self) -> Result<Duration> {
@@ -46,7 +65,33 @@ impl HostAdmission {
         );
         let remaining = self.deadline.saturating_duration_since(Instant::now());
         ensure!(!remaining.is_zero(), "portable_usage_busy");
+        if let Some(expires) = self.expires_at_unix_ms {
+            ensure!(super::unix_ms() < expires, "native_reset_expired");
+        }
         Ok(remaining)
+    }
+
+    /// Stage this invocation's private credential home, if it uses one: the
+    /// caller holds the lifecycle lock and resolved the exact release, so an
+    /// uninstall either finished first or sees the copy and refuses.
+    ///
+    /// # Errors
+    /// A pre-start refusal: the replica cannot be staged, or a required home
+    /// does not apply to this Provider.
+    pub(in crate::machine_plugins) fn stage_private_home(
+        &self,
+        store: &MachinePluginStore,
+        plugin_id: &str,
+    ) -> std::result::Result<StagedHome, PluginHostInvocationFailure> {
+        let Some((generation, required)) = self.private_home else {
+            return Ok(None);
+        };
+        match store.private_credential_home(plugin_id, generation) {
+            Ok(Some(home)) => Ok(Some(home)),
+            Ok(None) if !required => Ok(None),
+            Ok(None) => Err(anyhow::anyhow!("native_reset_unsupported").into()),
+            Err(_) => Err(anyhow::anyhow!("portable_usage_replica_pending").into()),
+        }
     }
 
     /// The absolute instant after which nothing of this invocation starts.
@@ -57,6 +102,89 @@ impl HostAdmission {
     /// The only sidecar Plugin generations this invocation may start.
     pub(in crate::machine_plugins) fn sidecars(&self) -> Option<&BTreeMap<String, String>> {
         self.sidecars.as_ref()
+    }
+}
+
+/// Remove an invocation's private credential copy once its command ended. A
+/// read fails if the copy outlives it (no observation is acknowledged while
+/// the credential is left behind); a reset's outcome is reported whatever
+/// happens to the copy, which is then removed at Machine start.
+///
+/// # Errors
+/// A read whose copy could not be removed.
+pub(in crate::machine_plugins) fn remove_private_home(
+    private: Option<PrivateHome>,
+    operation: PluginHostOperation,
+) -> std::result::Result<(), PluginHostInvocationFailure> {
+    match private.map(PrivateHome::remove) {
+        Some(Err(error)) if operation == PluginHostOperation::ResetUsage => {
+            tracing::error!(%error, "a private credential copy outlived its reset");
+            Ok(())
+        }
+        Some(Err(_)) => Err(PluginHostInvocationFailure {
+            started: true,
+            error: anyhow::anyhow!("portable_usage_collector_failed"),
+        }),
+        _ => Ok(()),
+    }
+}
+
+/// A staged private credential home and the variables pointing into it.
+type StagedHome = Option<(PrivateHome, BTreeMap<String, String>)>;
+
+/// One immediate banked reset of a named portable account; see
+/// [`MachinePluginStore::consume_portable_reset`].
+pub struct PortableResetInvocation {
+    request: PortableResetRequest,
+    connected: Arc<AtomicBool>,
+}
+
+impl PortableResetInvocation {
+    pub fn new(request: PortableResetRequest, connected: Arc<AtomicBool>) -> Self {
+        Self { request, connected }
+    }
+}
+
+/// Directory, beside an account's replicas, of private credential copies.
+pub(in crate::machine_plugins) const PRIVATE_HOMES: &str = "private-homes";
+
+/// A private credential copy; [`Self::remove`] reports whether it is gone.
+pub(in crate::machine_plugins) struct PrivateHome(Option<PathBuf>);
+
+impl PrivateHome {
+    pub(in crate::machine_plugins) fn path(&self) -> &Path {
+        self.0.as_deref().unwrap_or(Path::new("/nonexistent"))
+    }
+
+    /// Remove the copy.
+    ///
+    /// # Errors
+    /// If it cannot be removed (it is then retried at Machine start).
+    pub(in crate::machine_plugins) fn remove(mut self) -> Result<()> {
+        match self.0.take() {
+            Some(path) => fs::remove_dir_all(&path)
+                .or_else(|error| {
+                    if error.kind() == std::io::ErrorKind::NotFound {
+                        Ok(())
+                    } else {
+                        Err(error)
+                    }
+                })
+                .with_context(|| format!("removing private credential copy {}", path.display())),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for PrivateHome {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take()
+            && let Err(error) = fs::remove_dir_all(&path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::error!(path = %path.display(), %error,
+                "a private credential copy could not be removed; it is removed at Machine start");
+        }
     }
 }
 
@@ -130,14 +258,219 @@ impl MachinePluginStore {
         {
             return Ok(());
         }
-        let declared = verified_plugin_host_bundle(&plugin, &release, &content)
+        let host = verified_plugin_host_bundle(&plugin, &release, &content)
             .ok()
-            .flatten()
-            .and_then(|host| host.files.get(REFRESH_FREE_DECLARATION).cloned())
-            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-            .is_some_and(|value| value["token_refresh"] == "request");
+            .flatten();
+        let declared = RefreshFree::from_declaration(
+            host.as_ref()
+                .and_then(|host| host.files.get(REFRESH_FREE_DECLARATION))
+                .map(String::as_str),
+        )
+        .usage;
         ensure!(declared, "portable_usage_refresh_unsupported");
         Ok(())
+    }
+
+    /// For a Provider whose CLI rotates credentials, a private home holding
+    /// exactly the account replica's sealed credential at `generation`: a
+    /// live session can rewrite its writable runtime home (even with another
+    /// sign-in) without advancing the sealed generation, so neither a read
+    /// nor a reset ever runs from it. `None` keeps the session environment
+    /// (a non-rotating key, such as a `DeepSeek` API key).
+    pub(in crate::machine_plugins) fn private_credential_home(
+        &self,
+        plugin_id: &str,
+        generation: u64,
+    ) -> Result<Option<(PrivateHome, BTreeMap<String, String>)>> {
+        let (package, _) = self
+            .active_package(plugin_id)?
+            .context("portable_usage_collector_unavailable")?;
+        let auth = &package.manifest.authentication;
+        if auth.refresh != cowboy_provider_sdk::RefreshOwnership::CompareAndSwap
+            || auth.credential_files.is_empty()
+        {
+            return Ok(None);
+        }
+        let envelope = self
+            .latest_auth_envelope(plugin_id)?
+            .filter(|replica| {
+                replica.auth_generation == generation && replica.action == ProviderAuthAction::Apply
+            })
+            .context("portable_usage_replica_pending")?;
+        let PreparedProviderAuth::Apply(bundle) =
+            self.prepare_auth_inner(&envelope, Some(&package))?
+        else {
+            anyhow::bail!("portable_usage_replica_pending");
+        };
+        // Account-owned (removed with the account's credentials and at
+        // Machine start), never the shared system temporary directory. Each
+        // level is created parent-first and a symlink is refused.
+        let parent = self.prepare_provider_root(plugin_id)?.join(PRIVATE_HOMES);
+        let root = parent.join(format!("{:032x}", rand::random::<u128>()));
+        crate::provider_account::prepare_private_directory(&parent)?;
+        fs::DirBuilder::new().mode(0o700).create(&root)?;
+        let private = PrivateHome(Some(root));
+        restore_projected_bundle(auth, private.path(), &bundle)?;
+        let home = private.path().join("home");
+        let environment = BTreeMap::from([
+            ("HOME".to_owned(), home.display().to_string()),
+            (
+                "XDG_CONFIG_HOME".to_owned(),
+                home.join(".config").display().to_string(),
+            ),
+            (
+                "XDG_DATA_HOME".to_owned(),
+                home.join(".local/share").display().to_string(),
+            ),
+            (
+                "XDG_CACHE_HOME".to_owned(),
+                home.join(".cache").display().to_string(),
+            ),
+        ]);
+        Ok(Some((private, environment)))
+    }
+
+    /// The account's real, private credential directory of `plugin_id`,
+    /// created parent-first; a symlink at either level is refused, so nothing
+    /// decrypted is ever written through a linked directory.
+    ///
+    /// # Errors
+    /// If a level is a symlink or not a directory, or cannot be created.
+    pub(in crate::machine_plugins) fn prepare_provider_root(
+        &self,
+        plugin_id: &str,
+    ) -> Result<PathBuf> {
+        let provider = self.auth_provider_root(plugin_id);
+        for directory in [self.auth_watch_root(), provider.clone()] {
+            crate::provider_account::prepare_private_directory(&directory)
+                .context("Provider credential directory must be a real private directory")?;
+        }
+        Ok(provider)
+    }
+
+    /// Remove every named account's private credential copies left by an
+    /// interrupted run. The Machine runs this before it accepts work. Only
+    /// real named-account provider directories are traversed, from opened
+    /// directory descriptors; a symlink at any level is never followed.
+    ///
+    /// # Errors
+    /// If a directory cannot be enumerated or any copy cannot be removed.
+    pub fn remove_private_homes(&self) -> Result<()> {
+        let scoped = (!self.account_id.is_default()).then(|| self.account_id.as_str());
+        remove_projection::remove_below_named_providers(
+            &self.auth_base,
+            &|name| {
+                scoped.map_or_else(
+                    || {
+                        crate::provider_account::ProviderAccountId::try_from(name.to_owned())
+                            .is_ok_and(|id| !id.is_default())
+                    },
+                    |only| only == name,
+                )
+            },
+            (PRIVATE_HOMES, None),
+            &|| Ok(()),
+        )
+        .context("removing private credential copies")
+    }
+
+    /// The refresh-free declaration of an exact verified generation.
+    fn refresh_free(&self, plugin_id: &str, digest: &str) -> RefreshFree {
+        let Ok((plugin, release, content)) = self.verified_plugin_generation(plugin_id, digest)
+        else {
+            return RefreshFree::default();
+        };
+        let host = verified_plugin_host_bundle(&plugin, &release, &content)
+            .ok()
+            .flatten();
+        RefreshFree::from_declaration(
+            host.as_ref()
+                .and_then(|host| host.files.get(REFRESH_FREE_DECLARATION))
+                .map(String::as_str),
+        )
+    }
+
+    /// Spend one owner-confirmed banked reset of a named portable account:
+    /// the exact selected release's collector runs `consume_reset` with
+    /// `"token_refresh": false` under the admission of its usage (account
+    /// scope, current replica generation, account credential guard), and the
+    /// release must declare that this path never redeems a refresh token.
+    /// Nothing starts after `expires_at_ms`. Only the closed reset reply
+    /// leaves the Machine; a failure after start is unknown, never retried.
+    pub async fn consume_portable_reset(
+        &self,
+        invocation: PortableResetInvocation,
+    ) -> std::result::Result<serde_json::Value, PluginHostInvocationFailure> {
+        let PortableResetInvocation { request, connected } = invocation;
+        let refuse = |code: &'static str| PluginHostInvocationFailure {
+            started: false,
+            error: anyhow::anyhow!(code),
+        };
+        let remaining = request.expires_at_ms.saturating_sub(super::unix_ms());
+        if !request.reset.valid() || remaining <= 0 {
+            return Err(refuse(if remaining <= 0 {
+                "native_reset_expired"
+            } else {
+                "native_reset_request_invalid"
+            }));
+        }
+        let mut admission = HostAdmission::new(connected);
+        admission.deadline = admission
+            .deadline
+            .min(Instant::now() + Duration::from_millis(u64::try_from(remaining).unwrap_or(0)));
+        admission.expires_at_unix_ms = Some(request.expires_at_ms);
+        let usage = PortableUsageRequest {
+            account_id: request.account_id.clone(),
+            plugin_id: request.plugin_id.clone(),
+            plugin_version: request.plugin_version.clone(),
+            generation_digest: request.generation_digest.clone(),
+            auth_generation: request.auth_generation,
+            payload: serde_json::Value::Null,
+            sidecars: Vec::new(),
+        };
+        let (scoped, _guard) = self
+            .admit_portable(&usage, &admission)
+            .await
+            .map_err(|error| PluginHostInvocationFailure {
+                started: false,
+                error: anyhow::anyhow!(pre_spend_code(&format!("{error:#}"))),
+            })?;
+        if !self
+            .refresh_free(&request.plugin_id, &request.generation_digest)
+            .reset
+        {
+            return Err(refuse("native_reset_unsupported"));
+        }
+        admission.sidecars = Some(BTreeMap::new());
+        admission.private_home = Some((request.auth_generation, true));
+        let mut payload = serde_json::to_value(&request.reset).map_err(anyhow::Error::from)?;
+        if let Some(object) = payload.as_object_mut() {
+            object.insert("token_refresh".into(), serde_json::Value::Bool(false));
+        }
+        // The Service host path resolves exactly the selected release under
+        // the lifecycle lock and keeps it through the reset.
+        scoped
+            .invoke_executable_host_admitted(
+                PluginHostRequest {
+                    plugin_id: request.plugin_id,
+                    plugin_version: request.plugin_version,
+                    generation_digest: request.generation_digest,
+                    auth_generation: Some(request.auth_generation),
+                    operation: PluginHostOperation::ResetUsage,
+                    payload,
+                },
+                Some(&admission),
+            )
+            .await
+            .map(|reply| crate::machine_protocol::project_native_reset_reply(&reply))
+            .map_err(|failure| PluginHostInvocationFailure {
+                started: failure.started,
+                error: anyhow::anyhow!(if failure.started {
+                    "native_reset_outcome_unknown"
+                } else {
+                    pre_spend_code(&format!("{:#}", failure.error))
+                }),
+            })
     }
 
     /// Collect one named portable account's usage. Errors are closed codes
@@ -164,6 +497,7 @@ impl MachinePluginStore {
         if let Some(payload) = request.payload.as_object_mut() {
             payload.insert("token_refresh".into(), serde_json::Value::Bool(false));
         }
+        admission.private_home = Some((request.auth_generation, false));
         // The Service host path at account scope: it verifies the exact signed
         // generation and the account replica generation under the lifecycle
         // lock, launches the collector with the account's session environment
@@ -185,6 +519,21 @@ impl MachinePluginStore {
             .map_err(|failure| {
                 anyhow::anyhow!(portable_usage_error_code(&format!("{:#}", failure.error)))
             })
+    }
+}
+
+/// The exact code of a reset that never started its spend: a native reset
+/// code (the expiry rechecked before spawn included), a portable admission
+/// code, or `native_reset_preflight_failed` for any other pre-spawn failure.
+fn pre_spend_code(detail: &str) -> &'static str {
+    match crate::machine_protocol::native_usage_error_code(detail) {
+        "native_usage_unavailable" => match portable_usage_error_code(detail) {
+            "portable_usage_collector_failed" | "portable_usage_temporarily_unavailable" => {
+                "native_reset_preflight_failed"
+            }
+            code => code,
+        },
+        code => code,
     }
 }
 
@@ -245,6 +594,8 @@ mod tests {
             connected: Arc::clone(&connected),
             deadline: Instant::now(),
             sidecars: None,
+            expires_at_unix_ms: None,
+            private_home: None,
         };
         assert_eq!(
             expired.remaining().unwrap_err().to_string(),
@@ -314,5 +665,40 @@ mod tests {
                 .expect("independent accounts never wait for each other")
                 .unwrap_err();
         assert_eq!(error.to_string(), "portable_usage_replica_pending");
+    }
+
+    /// A reset that is invalid, expired, not a vault account or without the
+    /// account's current replica never starts the collector.
+    #[tokio::test]
+    async fn a_portable_reset_that_cannot_be_admitted_never_starts() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MachinePluginStore::new(dir.path(), Platform::Linux, "x86_64".into()).unwrap();
+        let reset = |key: &str, expires_at_ms: i64| -> PortableResetRequest {
+            serde_json::from_value(serde_json::json!({
+                "account_id": "11111111-1111-4111-8111-111111111111", "plugin_id": "codex",
+                "plugin_version": "3.6.20", "generation_digest": "sha256:x", "auth_generation": 3,
+                "reset": {"provider": "openai", "idempotency_key": key,
+                    "expected_credit_id": "credit-1"},
+                "expires_at_ms": expires_at_ms,
+            }))
+            .unwrap()
+        };
+        let later = super::super::unix_ms() + 60_000;
+        let mut claude = reset("cowboy-reset-1", later);
+        claude.plugin_id = "claude-code".into();
+        for (request, code) in [
+            (reset("not a key", later), "native_reset_request_invalid"),
+            (reset("cowboy-reset-1", 1), "native_reset_expired"),
+            (claude, "portable_usage_account_required"),
+            (
+                reset("cowboy-reset-1", later),
+                "portable_usage_replica_pending",
+            ),
+        ] {
+            let invocation = PortableResetInvocation::new(request, Arc::new(AtomicBool::new(true)));
+            let failure = store.consume_portable_reset(invocation).await.unwrap_err();
+            assert!(!failure.started, "{code}");
+            assert_eq!(failure.error.to_string(), code);
+        }
     }
 }

@@ -35,6 +35,132 @@ pub(super) fn remove_checked(path: &Path, checkpoint: &impl Fn() -> Result<()>) 
     remove_entry(&parent, name, device, 0, checkpoint)
 }
 
+/// Remove `leaf` below every real `accounts/<account>/providers/<provider>`
+/// directory of `base` whose account name `account` admits (only `provider`
+/// when given). Traversal runs from opened descriptors and never follows a
+/// symlink at any level. A symlinked or non-directory account, providers or
+/// provider level is refused (a later credential apply must never write
+/// through it); a symlinked `leaf` is only unlinked. Enumeration failures
+/// propagate; `checkpoint` runs before every removed entry. Each visited
+/// Provider directory is synced afterwards (also when `leaf` was already
+/// absent), so a removal is durable before the caller records it.
+pub(super) fn remove_below_named_providers(
+    base: &Path,
+    account: &dyn Fn(&str) -> bool,
+    (leaf, provider): (&str, Option<&str>),
+    checkpoint: &dyn Fn() -> Result<()>,
+) -> Result<()> {
+    visit_named_providers(base, account, provider, &mut |directory| {
+        let device = fstat(directory)?.st_dev;
+        remove_entry(directory, leaf, device, 0, &checkpoint)?;
+        rustix::fs::fsync(directory)?;
+        Ok(())
+    })
+}
+
+/// Refuse while `leaf` exists below any provider directory
+/// [`remove_below_named_providers`] visits.
+pub(super) fn ensure_absent_below_named_providers(
+    base: &Path,
+    account: &dyn Fn(&str) -> bool,
+    (leaf, provider): (&str, Option<&str>),
+) -> Result<()> {
+    visit_named_providers(
+        base,
+        account,
+        provider,
+        &mut |directory| match rustix::fs::statat(directory, leaf, AtFlags::SYMLINK_NOFOLLOW) {
+            Err(Errno::NOENT) => Ok(()),
+            Ok(_) => anyhow::bail!("private credential copies remain"),
+            Err(error) => Err(error.into()),
+        },
+    )
+}
+
+/// Remove `leaf` below `base`'s own `providers/<provider>` directory from
+/// opened descriptors; a linked level is refused, a linked `leaf` unlinked.
+pub(super) fn remove_below_provider(base: &Path, provider: &str, leaf: &str) -> Result<()> {
+    let base = match open(base, DIRECTORY, Mode::empty()) {
+        Ok(base) => base,
+        Err(Errno::NOENT) => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let Some(providers) = enrolled_child(&base, "providers")? else {
+        return Ok(());
+    };
+    let Some(provider) = enrolled_child(&providers, provider)? else {
+        return Ok(());
+    };
+    let device = fstat(&provider)?.st_dev;
+    remove_entry(&provider, leaf, device, 0, &|| Ok(()))
+}
+
+fn visit_named_providers(
+    base: &Path,
+    account: &dyn Fn(&str) -> bool,
+    provider: Option<&str>,
+    visit: &mut dyn FnMut(&rustix::fd::OwnedFd) -> Result<()>,
+) -> Result<()> {
+    let base = match open(base, DIRECTORY, Mode::empty()) {
+        Ok(base) => base,
+        Err(Errno::NOENT) => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    // A linked accounts root is refused, never treated as absent.
+    let Some(accounts) = enrolled_child(&base, "accounts")? else {
+        return Ok(());
+    };
+    for name in entries(&accounts)? {
+        if !name.to_str().is_ok_and(account) {
+            continue;
+        }
+        let Some(root) = enrolled_child(&accounts, name.as_c_str())? else {
+            continue;
+        };
+        let Some(providers) = enrolled_child(&root, "providers")? else {
+            continue;
+        };
+        for name in entries(&providers)? {
+            if provider.is_some_and(|only| name.to_bytes() != only.as_bytes()) {
+                continue;
+            }
+            if let Some(directory) = enrolled_child(&providers, name.as_c_str())? {
+                visit(&directory)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A real child directory or `None` when absent; a symlink or another file
+/// type where an enrolled account directory belongs is refused.
+fn enrolled_child(
+    parent: impl AsFd,
+    name: impl rustix::path::Arg,
+) -> Result<Option<rustix::fd::OwnedFd>> {
+    match openat(parent, name, DIRECTORY, Mode::empty()) {
+        Ok(directory) => Ok(Some(directory)),
+        Err(Errno::NOENT) => Ok(None),
+        Err(Errno::NOTDIR | Errno::LOOP) => {
+            anyhow::bail!("a Provider account directory is a symlink or not a directory")
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// The names in a directory, excluding `.` and `..`.
+fn entries(directory: impl AsFd) -> Result<Vec<std::ffi::CString>> {
+    let mut names = Vec::new();
+    for entry in Dir::read_from(directory)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if name.to_bytes() != b"." && name.to_bytes() != b".." {
+            names.push(name.to_owned());
+        }
+    }
+    Ok(names)
+}
+
 fn remove_entry(
     parent: impl AsFd,
     name: impl rustix::path::Arg,

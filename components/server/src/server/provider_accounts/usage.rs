@@ -264,7 +264,8 @@ fn resets_on(state: &AppState, provider_id: &str, machine_id: &str) -> bool {
         .machine_control
         .connection_protocol(machine_id)
         .is_some_and(|(_, version)| {
-            version >= crate::machine_protocol::NATIVE_RESET_PROTOCOL_VERSION
+            // A two-start reset needs a Machine that enforces its spacing.
+            version >= crate::machine_protocol::NATIVE_RESET_SPACING_PROTOCOL_VERSION
         })
         && state
             .supervisor
@@ -286,9 +287,11 @@ fn machine_rank(state: &AppState, provider_id: &str, machine_id: &str) -> (bool,
 /// Placement rank of a native login's Machine: allowed by host policy and
 /// reset-capable first, then usage-capable, then connected, then offline.
 fn login_rank(protocol: Option<u16>, allowed: bool) -> (bool, u8) {
-    use crate::machine_protocol::{NATIVE_RESET_PROTOCOL_VERSION, NATIVE_USAGE_PROTOCOL_VERSION};
+    use crate::machine_protocol::{
+        NATIVE_RESET_SPACING_PROTOCOL_VERSION, NATIVE_USAGE_PROTOCOL_VERSION,
+    };
     let capability = match protocol {
-        Some(version) if version >= NATIVE_RESET_PROTOCOL_VERSION => 0,
+        Some(version) if version >= NATIVE_RESET_SPACING_PROTOCOL_VERSION => 0,
         Some(version) if version >= NATIVE_USAGE_PROTOCOL_VERSION => 1,
         Some(_) => 2,
         None => 3,
@@ -471,6 +474,9 @@ fn error_message(code: &str) -> &str {
         "reset_credit_invalid" => {
             "The confirmed reset is invalid. Refresh usage and confirm again."
         }
+        "portable_reset_identity_required" => {
+            "Sign in to this account again before using its resets: Cowboy has not verified which subscription it is."
+        }
         "reset_authentication_required" => {
             "This account's sign-in needs renewal before a reset can be used."
         }
@@ -509,9 +515,19 @@ pub(in crate::server) async fn read_one(
             return Ok(value);
         }
     };
-    let machine_id = match &target {
-        Resolved::Native(native) => Some(native.completion.machine_id.clone()),
-        Resolved::Portable(portable) => portable::selected_machine(state, owner, id, portable),
+    // One placement decides both the reported Machine and reset support.
+    let (machine_id, resets_supported) = match &target {
+        Resolved::Native(native) => (
+            Some(native.completion.machine_id.clone()),
+            reset::supported_for(state, &target),
+        ),
+        Resolved::Portable(portable) => match portable::placement(state, owner, id, portable) {
+            Ok(placed) => (
+                Some(placed.0.clone()),
+                reset::supported_placed(state, (**portable).clone(), placed),
+            ),
+            Err(_) => (None, false),
+        },
     };
     // A cached placement refusal describes the Machines as they were; once a
     // collection could be placed again it is no longer the reason.
@@ -520,7 +536,7 @@ pub(in crate::server) async fn read_one(
     value["available"] = json!(true);
     value["signed_in"] = json!(true);
     // Whether a reset of exactly this resolved binding can be spent now.
-    value["resets_supported"] = json!(reset::supported_for(state, &target));
+    value["resets_supported"] = json!(resets_supported);
     let cache = state.usage.native.entry(owner, id.as_str());
     value["refreshing"] = json!(cache.collection.try_lock().is_err());
     // A read neither takes the database admission write lock nor binds a cache
@@ -673,7 +689,12 @@ async fn refresh_owned(
             let mut entry = cache.data.lock();
             entry.bind(&scope);
             let due = entry.due(now_ms())
-                && match state.usage.limiter.start(&target.provider, &key, now_ms()) {
+                && match state.usage.limiter.start_bounded(
+                    &target.provider,
+                    &key,
+                    now_ms(),
+                    now_ms().saturating_add(crate::usage::limiter::REMOTE_POLL_START_BOUND_MS),
+                ) {
                     Ok(value) => {
                         permit = Some(value);
                         true
@@ -1059,12 +1080,16 @@ mod tests {
     #[test]
     fn an_old_or_disallowed_login_never_masks_an_eligible_one() {
         use crate::machine_protocol::{
-            NATIVE_RESET_PROTOCOL_VERSION, NATIVE_USAGE_PROTOCOL_VERSION,
+            NATIVE_RESET_PROTOCOL_VERSION, NATIVE_RESET_SPACING_PROTOCOL_VERSION,
+            NATIVE_USAGE_PROTOCOL_VERSION,
         };
-        let eligible = login_rank(Some(NATIVE_RESET_PROTOCOL_VERSION), true);
+        let eligible = login_rank(Some(NATIVE_RESET_SPACING_PROTOCOL_VERSION), true);
         for worse in [
+            // A Machine that cannot enforce the reset spacing never ranks
+            // as reset-capable.
+            login_rank(Some(NATIVE_RESET_PROTOCOL_VERSION), true),
             login_rank(Some(NATIVE_USAGE_PROTOCOL_VERSION), true),
-            login_rank(Some(NATIVE_RESET_PROTOCOL_VERSION), false),
+            login_rank(Some(NATIVE_RESET_SPACING_PROTOCOL_VERSION), false),
             login_rank(Some(1), true),
             login_rank(None, true),
         ] {
@@ -1072,7 +1097,7 @@ mod tests {
         }
         assert!(
             login_rank(Some(NATIVE_USAGE_PROTOCOL_VERSION), true)
-                < login_rank(Some(NATIVE_RESET_PROTOCOL_VERSION), false)
+                < login_rank(Some(NATIVE_RESET_SPACING_PROTOCOL_VERSION), false)
         );
     }
 
