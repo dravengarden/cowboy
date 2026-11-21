@@ -1,17 +1,11 @@
 # Portable refresh custody lease — design
 
-Status: design, revision 2, 2026-11-21. Not implemented. Approved for design
-by the owner ("续期许可"); every implementation step below still needs its own
-review and acceptance. Revision 2 records the
-[owner decisions](#owner-decisions-2026-11-21) and the
-[custodian lock verification](#custodian-lock-verification-2026-11-21), which
-blocks the Codex part of the design; those sections take precedence.
-
-Scope: named portable **subscription** accounts whose Provider declares
-`refresh: compare_and_swap` and a sign-in method with a portable twin —
-today Codex (ChatGPT) and Grok (xAI). Entered API keys (DeepSeek, OpenAI and
-xAI keys) have no refresh token and are out of scope. Native-only accounts
-(Claude, Antigravity) never enter the vault and are out of scope.
+Status: revision 3, 2026-11-21. Revision 3 adds the owner's choice **Grok
+first, Codex later** and the [Grok implementation
+design](#grok-implementation-design-revision-3), which takes precedence over
+the general design sections below for Grok; Codex keeps today's behaviour.
+Revision 2 recorded the [owner decisions](#owner-decisions-2026-11-21) and the
+[custodian lock verification](#custodian-lock-verification-2026-11-21).
 
 ## Owner decisions (2026-11-21)
 
@@ -77,6 +71,141 @@ Candidate fallbacks for Codex, for the owner to choose:
 - **Grok first, Codex later**: implement the lease for Grok (whose lock was
   verified) and keep Codex on today's behaviour until one of the above is
   chosen.
+
+## Grok implementation design (revision 3)
+
+The owner chose to implement the lease for **Grok** named subscription
+accounts only. Codex keeps today's behaviour; the two Codex fallbacks above
+remain the follow-up. The verification also shows that **concurrent Codex
+processes already double-redeem today**: two app-servers of one account on one
+Machine (or on two Machines) can present the same refresh token, so a Codex
+account can be signed out by its own sessions. That risk is unchanged by this
+work.
+
+Two further facts were verified offline, as above, against Grok 1.0.77:
+
+- `GROK_AUTH_PATH` relocates the credential file and its lock: two processes
+  with different `HOME`s and one `GROK_AUTH_PATH` redeemed exactly once in 3/3
+  runs, and the lock file is `<GROK_AUTH_PATH>.lock`.
+- The access-only copy keeps `oidc_issuer` and `oidc_client_id`: without them
+  the CLI does not treat the sign-in as a grok.com account (billing answers
+  "requires auth with grok.com"). Removing only `refresh_token` already
+  prevents every token-endpoint request.
+
+The general design keeps a resident custodian whose CLIs refresh in the
+background. Grok's sessions do not need one, so this revision is smaller:
+**the refresh token never rests on any Machine.** It exists in the Service
+vault and, briefly, inside one bounded renewal operation.
+
+### Declaration
+
+The Grok Plugin ships `collector/refresh-custody.json` in its signed host
+bundle (like `collector/portable-account.json`, no SDK change):
+
+```json
+{
+  "schema": 1,
+  "bundle_key": "auth_json",
+  "strip_entry_fields": ["refresh_token"],
+  "expiry_entry_field": "expires_at",
+  "credential_path_env": "GROK_AUTH_PATH",
+  "renew_environment": { "GROK_AUTH_EARLY_INVALIDATION_SECS": "86400" }
+}
+```
+
+A Provider is custody-managed only when the exact signed release the Service
+reads it from declares this file. Codex, DeepSeek, Claude and Antigravity do
+not, and none of their paths change.
+
+### Access-only distribution
+
+For a managed account the Service seals, to **every** Machine, the vault
+bundle with `strip_entry_fields` removed from each entry of the
+`bundle_key` JSON document. The generation is the vault's; same-generation
+re-sealing is already accepted by Machines (`validate_auth_replica_transition`,
+`components/machine/src/machine_plugins.rs:3649-3674`). Sessions, usage
+collectors and logins on any Machine therefore never see a refresh token.
+
+Because the CLI may rewrite an access-only `auth.json` (enrichment), every
+ordinary `ProviderAuthRefreshCandidate` for a managed account is refused and
+the vault generation is re-projected; only a renewal reply (below) can change
+the vault.
+
+### Renewal operation
+
+`RenewPortableCredential` (Machine protocol 51) carries the account, the
+exact collector Plugin generation, the vault generation, a fresh renewal ID
+and the full bundle sealed to that Machine. The Machine:
+
+1. refuses unless it runs that exact generation, the account replica is that
+   vault generation, and the declaration is present;
+2. restores the full bundle into a fresh private directory (mode 0700,
+   outside every credential watch);
+3. runs the collector's ordinary refresh-capable path (no `token_refresh`)
+   with `credential_path_env` pointing at that file and `renew_environment`
+   added, so the CLI renews at startup;
+4. kills the run at a local deadline of 60 s after receipt, reads the file,
+   removes the directory, and replies with the collector output and the
+   resulting bundle (or "unchanged").
+
+The Service keeps one durable renewal record per account
+(`{renewal_id, machine_id, vault_generation, started_at_ms, settled}`), written
+before dispatch, in the Controller data directory. A new renewal is dispatched
+only when the previous one settled or started more than 5 minutes ago (a lost
+reply on a live connection cannot outlast the Machine's 60 s deadline by that
+much). A reply is accepted only for the recorded renewal ID; its bundle goes
+through the unchanged generation compare-and-swap at the recorded generation
+and is then distributed access-only.
+
+### Who triggers a renewal
+
+- **Usage read.** When the refresh-free collector reports authentication
+  required on the placed Machine (protocol 51), the same budgeted collection
+  runs one renewal there and stores the renewal run's collector output. At
+  most one renewal per read; a refusal or failure stores
+  `portable_usage_authentication_required` and follows the existing backoff.
+  This is decision 5: the placed Machine is the temporary custodian.
+- **Sessions.** A protocol-51 Machine with a live worker of a managed account
+  sends `PortableCredentialRenewalNeeded { account, provider, generation }`
+  when the replica's `expiry_entry_field` is less than 4 minutes away, and when
+  it launches a worker on an already expired replica. The Service runs a
+  renewal on that Machine unless the vault generation already moved or a
+  renewal is in flight. No timer runs on the Service, and a Machine with no
+  live worker of the account sends nothing.
+
+### Enabling and old Machines
+
+An account becomes managed (persisted, never automatically reverted) when its
+Provider declares custody, the account has no live worker on any Machine, and
+none of its untrashed sessions sit on a disconnected Machine. The Service then
+re-seals access-only to every Machine. Until then it keeps today's behaviour.
+
+Machines below protocol 51 (Falcon, MacBook Air) get no new placement for a
+managed account: session admission and usage placement refuse them with
+`portable_refresh_custody_machine_update_required`, shown in Web and MCP.
+
+### Why this cannot double-redeem
+
+- Only a renewal process holds a refresh token, and the Service admits one
+  renewal per account at a time, durable across Controller restarts.
+- The Machine bounds the renewal (60 s) far below the Service's reuse window
+  (5 minutes).
+- Every other copy on every Machine, including old Machines, lacks the token
+  and cannot redeem (verified).
+- A late or foreign result cannot enter the vault: only the recorded renewal
+  ID is accepted, and ordinary candidates are refused.
+
+### Residual risks
+
+- A renewal command delayed in delivery by more than about four minutes on a
+  live connection could overlap the next renewal. Connection-bound delivery
+  makes this unlikely but not impossible.
+- An access-only worker in the middle of a turn when its access token expires
+  fails authentication if the renewal lands too late; whether a running Grok
+  CLI adopts a rewritten `auth.json` without a restart is not verified.
+- Sessions that started before the account became managed are not affected
+  (enabling waits for them), but a Machine bug that skips the strip or the
+  deadline would defeat the guarantee; the fake-vendor tests below target it.
 
 ## Goal
 
