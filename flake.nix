@@ -465,6 +465,11 @@
           "--bin"
           "cowboy-codex-app-server"
         ];
+        # Release outputs never rerun the Rust suite: the exact commit already
+        # passed `just check` (nextest over the same packages), and the check
+        # phase doubled the release build (about 8 of 12 minutes). The hermetic
+        # suite stays available as `checks.cowboy-tests` below.
+        doCheck = false;
         cargoTestFlags = [ "-p" "cowboy" "-p" "cowboy-server" "-p" "cowboy-wire" ];
         # cowboy-server dev-depends on cowboy-machine, which enables the
         # machine-host tests of the base crate in this build. This one runs a
@@ -1032,10 +1037,15 @@
         cowboy-web-release = cowboy-web-release;
       } // machine-releases;
 
-      # `cowboy`'s buildRustPackage check phase runs the Rust tests; cowboy-web's
-      # build runs TypeScript checking before Vite. Developer lint/test policy is
-      # additionally enforced by `just check` in CI.
+      # `cowboy-tests` runs the Rust tests hermetically in `nix flake check`;
+      # the release package itself skips them (see `cowboy`). cowboy-web's
+      # build runs TypeScript checking before Vite. Developer lint/test policy
+      # is enforced by `just check` before a commit reaches a release.
       checks.${system} = {
+        cowboy-tests = cowboy.overrideAttrs (_old: {
+          pname = "cowboy-tests";
+          doCheck = true;
+        });
         inherit cowboy cowboy-machine cowboy-code-adapter cowboy-source-boundary
           cowboy-web cowboy-controller-release cowboy-web-release
           cowboy-zed-integration cowboy-zed-adapter cowboy-zed-server;
