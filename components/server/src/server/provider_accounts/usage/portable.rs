@@ -148,25 +148,33 @@ struct Candidate {
     refresh_safe: bool,
 }
 
+/// Pick the Machine to collect on, or name why none can.
+///
+/// The checks run in order — host policy, a collector release that can never
+/// redeem a refresh token, the Machine protocol, the exact sidecars — and a
+/// refusal is the first unmet check of the candidate that met the most of them.
+/// A Machine already running a refresh-free release therefore reports why it
+/// cannot run yet (for example a Machine update) instead of being hidden behind
+/// an older release elsewhere that could never run.
 fn choose(candidates: &[Candidate]) -> Result<&str, &'static str> {
     if candidates.is_empty() {
         return Err("portable_usage_machine_unavailable");
     }
-    let allowed: Vec<_> = candidates.iter().filter(|c| c.allowed).collect();
-    if allowed.is_empty() {
-        return Err("runtime_not_allowed");
+    let checks: [(fn(&Candidate) -> bool, &'static str); 4] = [
+        (|c| c.allowed, "runtime_not_allowed"),
+        (|c| c.refresh_safe, "portable_usage_refresh_unsupported"),
+        (|c| c.current, "machine_usage_update_required"),
+        (|c| c.complete, "portable_usage_collector_unavailable"),
+    ];
+    let mut remaining: Vec<_> = candidates.iter().collect();
+    for (check, refusal) in checks {
+        remaining.retain(|candidate| check(candidate));
+        if remaining.is_empty() {
+            return Err(refusal);
+        }
     }
-    let current: Vec<_> = allowed.into_iter().filter(|c| c.current).collect();
-    if current.is_empty() {
-        return Err("machine_usage_update_required");
-    }
-    let complete: Vec<_> = current.into_iter().filter(|c| c.complete).collect();
-    if complete.is_empty() {
-        return Err("portable_usage_collector_unavailable");
-    }
-    complete
+    remaining
         .into_iter()
-        .filter(|candidate| candidate.refresh_safe)
         .min_by(|left, right| {
             right
                 .sessions
@@ -174,7 +182,21 @@ fn choose(candidates: &[Candidate]) -> Result<&str, &'static str> {
                 .then(left.machine_id.cmp(&right.machine_id))
         })
         .map(|candidate| candidate.machine_id.as_str())
-        .ok_or("portable_usage_refresh_unsupported")
+        .ok_or("portable_usage_machine_unavailable")
+}
+
+/// Whether `code` is a placement refusal: it describes the Machines that could
+/// run the collector, not an observation, so it is stale once placement
+/// succeeds again.
+pub(super) fn placement_refusal(code: &str) -> bool {
+    matches!(
+        code,
+        "portable_usage_machine_unavailable"
+            | "runtime_not_allowed"
+            | "portable_usage_refresh_unsupported"
+            | "machine_usage_update_required"
+            | "portable_usage_collector_unavailable"
+    )
 }
 
 /// One placed collection: the Machine, the exact collector release and the
@@ -530,6 +552,49 @@ mod tests {
             ]),
             Ok("hawk")
         );
+    }
+
+    #[test]
+    fn a_refusal_names_the_most_capable_candidate_not_an_older_release() {
+        // Hawk runs the refresh-free release but has not been updated; Falcon
+        // is current with an older collector that may renew the sign-in.
+        let mut older = candidate("falcon", true, true, 0);
+        older.refresh_safe = false;
+        let outdated = candidate("hawk", false, true, 0);
+        assert_eq!(
+            choose(&[older.clone(), outdated.clone()]),
+            Err("machine_usage_update_required")
+        );
+        // Its missing sidecar is named, not the older release elsewhere.
+        let mut partial = candidate("hawk", true, true, 0);
+        partial.complete = false;
+        assert_eq!(
+            choose(&[older.clone(), partial]),
+            Err("portable_usage_collector_unavailable")
+        );
+        // Only when no allowed Machine has a refresh-free release is that the
+        // cause, whatever else those Machines lack.
+        let mut older_outdated = older.clone();
+        older_outdated.current = false;
+        assert_eq!(
+            choose(&[older, older_outdated]),
+            Err("portable_usage_refresh_unsupported")
+        );
+        // Policy still comes first: a refresh-free release where the runtime
+        // may not run is no candidate.
+        let mut forbidden = candidate("hawk", true, false, 0);
+        forbidden.refresh_safe = true;
+        assert_eq!(choose(&[forbidden]), Err("runtime_not_allowed"));
+        for code in [
+            "portable_usage_machine_unavailable",
+            "runtime_not_allowed",
+            "portable_usage_refresh_unsupported",
+            "machine_usage_update_required",
+            "portable_usage_collector_unavailable",
+        ] {
+            assert!(placement_refusal(code), "{code}");
+        }
+        assert!(!placement_refusal("portable_usage_authentication_required"));
     }
 
     fn target() -> Target {

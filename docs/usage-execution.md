@@ -69,7 +69,13 @@ Placement: among Machines with an exact released active collector generation
 that host runtime policy admits for the collector and every sidecar Plugin it
 starts, Cowboy picks the one running most of the owner's live sessions on the
 account, then the lowest Machine ID, and never inherits the Service account's
-configured usage query Machine. Named portable accounts have no resets.
+configured usage query Machine. When no Machine qualifies, the reason is the
+first unmet check (host policy, a refresh-free collector release, the Machine
+protocol, the exact sidecars) of the Machine that met the most of them, so a
+Machine already running a refresh-free release reports what it still lacks
+instead of an older release elsewhere. A cached placement refusal is no longer
+reported once a placement is possible again. Named portable accounts have no
+resets.
 
 ## Operator CLI
 
