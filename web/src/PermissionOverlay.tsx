@@ -1,13 +1,6 @@
-import { desktopSize, glyphSize } from "./surface/desktopSize";
+import { glyphSize } from "./surface/desktopSize";
 import type { ReactNode } from "react";
-import {
-  alpha,
-  Box,
-  Button,
-  CircularProgress,
-  Stack,
-  Typography,
-} from "@mui/material";
+import { alpha, Box, Stack, Typography } from "@mui/material";
 import WarningAmberRounded from "@mui/icons-material/WarningAmberRounded";
 import HelpOutlineRounded from "@mui/icons-material/HelpOutlineRounded";
 import type { PendingPermission } from "./derive";
@@ -20,11 +13,9 @@ import {
 import { requestStickToBottom, useSticky } from "./stickyStore";
 import { frostedPanel, frostedPill } from "./frostedGlass";
 import { haptic } from "./haptic";
-import {
-  approvalButtonSx,
-  approvalChoicesInRow,
-  approvalProseSx,
-} from "./approvalCardStyle";
+import { approvalProseSx } from "./approvalCardStyle";
+import { ApprovalChoiceButtons } from "./ApprovalChoiceButtons";
+import { useAnswerKeyboardFocus } from "./answerKeyboardFocus";
 
 // The pending tool-permission overlay — a sticky frosted surface floating just
 // above the composer, in the SAME slot + material as TurnStatusOverlay (they
@@ -40,7 +31,11 @@ import {
 //     (`requestStickToBottom`), which re-expands it.
 //
 // It participates in the Composer stack's normal flow, so the single outer
-// geometry owner reserves its border box together with every other slot.
+// geometry owner reserves its border box together with every other slot. It
+// may shrink below its content when the stack is bounded (a tall form beside
+// a software keyboard): the heading and the buttons keep their size and the
+// form scrolls inside. While a text answer is typed, it owns the whole stack
+// (answerKeyboardFocus.ts).
 //
 // Desktop draws this only while the Conversation pane, whose dock normally
 // owns the answer, is folded (approvalDockStore). It then passes `desktop`:
@@ -74,6 +69,7 @@ export function PermissionOverlay({
   const accent = isQuestion ? "primary.main" : "warning.main";
   const label = isQuestion ? "Answer needed" : "Permission required";
   const response = usePermissionResponse(sessionId, item.requestId);
+  const answerKeyboard = useAnswerKeyboardFocus();
 
   const respond = (optionId: string): void => {
     haptic();
@@ -97,6 +93,7 @@ export function PermissionOverlay({
     <Box
       data-permission-overlay
       data-composer-stack-slot="status"
+      {...answerKeyboard.props}
       sx={{
         position: "relative",
         display: "flex",
@@ -104,6 +101,7 @@ export function PermissionOverlay({
         px: 2,
         width: "100%",
         minWidth: 0,
+        minHeight: 0,
         boxSizing: "border-box",
         pointerEvents: "none",
         zIndex: 3,
@@ -117,8 +115,11 @@ export function PermissionOverlay({
         <Box
           sx={(t) => ({
             pointerEvents: "auto",
+            display: "flex",
+            flexDirection: "column",
             width: "100%",
             maxWidth: 460,
+            minHeight: 0,
             p: 1.5,
             borderRadius: 2.5,
             ...frostedPanel(t),
@@ -141,7 +142,7 @@ export function PermissionOverlay({
             direction="row"
             spacing={1}
             alignItems="center"
-            sx={{ color: accent, mb: 1 }}
+            sx={{ color: accent, mb: 1, flexShrink: 0 }}
           >
             {isQuestion
               ? <HelpOutlineRounded fontSize="small" sx={{ flexShrink: 0 }} />
@@ -167,8 +168,9 @@ export function PermissionOverlay({
           </Stack>
           {item.elicitation
             ? (
-              <Box sx={{ mb: 1.5 }}>
+              <Box sx={{ mb: 1.5, display: "flex", flexDirection: "column", minHeight: 0, flex: "1 1 auto" }}>
                 <ElicitationFields
+                  shrinkable
                   elicitation={item.elicitation}
                   values={form.values}
                   setValue={form.setValue}
@@ -185,6 +187,9 @@ export function PermissionOverlay({
               mb: 1.5,
               px: 1,
               py: 0.75,
+              flex: "1 1 auto",
+              minHeight: 0,
+              overflow: "auto",
               borderRadius: 1,
               bgcolor: "action.hover",
               // A tool request names a command; a plain question is prose.
@@ -200,45 +205,19 @@ export function PermissionOverlay({
             {item.title}
           </Box>
             )}
-          <Stack
-            direction={approvalChoicesInRow(choices.map((choice) => choice.label))
-              ? "row"
-              : "column"}
-            spacing={1}
-            sx={{ "& > .MuiButton-root": { flex: 1, minWidth: 0 } }}
-          >
-            {choices.map((choice, index) => {
-              const reject = choice.reject;
-              // Only the first (narrowest) approval is the filled default;
-              // a broader grant such as "always allow" stays secondary.
-              const primary = !reject &&
-                choices.findIndex((other) => !other.reject) === index;
-              return (
-                <Button
-                  key={choice.id}
-                  fullWidth
-                  disableElevation
-                  disabled={response.busy || choice.disabled}
-                  variant={primary ? "contained" : "outlined"}
-                  color={reject ? "error" : "primary"}
-                  startIcon={response.busy && busyChoice === choice.id
-                    ? <CircularProgress size={desktopSize(14)} thickness={5} color="inherit" />
-                    : undefined}
-                  endIcon={desktop?.keycap(index, !response.busy)}
-                  onClick={choice.run}
-                  sx={approvalButtonSx}
-                >
-                  {choice.label}
-                </Button>
-              );
-            })}
-          </Stack>
+          <ApprovalChoiceButtons
+            choices={choices}
+            busy={response.busy}
+            busyChoice={busyChoice}
+            {...(desktop ? { keycap: desktop.keycap } : {})}
+          />
           {response.notice && (
             <Typography
               role="alert"
               variant="body2"
               sx={{
                 mt: 1,
+                flexShrink: 0,
                 color: response.phase === "unsent" ? "error.main" : "warning.main",
               }}
             >

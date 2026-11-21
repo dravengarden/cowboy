@@ -392,6 +392,7 @@ export function ElicitationFields({
   setValue,
   disabled,
   seenKey,
+  shrinkable = false,
 }: {
   elicitation: Elicitation;
   values: ElicitationValues;
@@ -400,12 +401,28 @@ export function ElicitationFields({
   /** Identifies this request across remounts (session, seq and request id);
    *  the auto-resolution countdown starts when a key is first drawn. */
   seenKey?: string;
+  /** Inside a bounded card: scroll within whatever height is left, never
+   *  more than half of the visible area (the viewport less the software
+   *  keyboard, which `--kb-inset` publishes). */
+  shrinkable?: boolean;
 }): React.JSX.Element {
   return (
     <Stack
       spacing={1.25}
       data-elicitation={elicitation.mode}
-      sx={{ maxHeight: "min(50vh, 420px)", overflow: "auto", pr: 0.5 }}
+      sx={{
+        maxHeight: shrinkable
+          ? "min(420px, max(120px, calc((100dvh - var(--kb-inset, 0px)) / 2)))"
+          : "min(50vh, 420px)",
+        overflow: "auto",
+        pr: 0.5,
+        // The card owns the whole stack while its keyboard is up: use all of it.
+        ...(shrinkable && {
+          flex: "1 1 auto",
+          minHeight: 0,
+          "[data-answer-keyboard='true'] &": { maxHeight: "none" },
+        }),
+      }}
     >
       <Typography
         variant="body2"

@@ -128,6 +128,23 @@ iOS acceptance (web/AGENTS.md pitfall #69).
   `text`, so the round trip does not guard the uncontrolled-editor reseed on
   collapse (`initialDraftText`); removing it still passes. Removing the picker's Stop transition, the popper's
   Escape close, the move entry or the toolbar options close fails it (checked).
+- 2026-11-21: a pending question's free-text answer owns the Mobile stack while
+  the software keyboard is up (`web/src/answerKeyboardFocus.ts`). With a long
+  form, Plan, the Composer and the session bar shared the visible half of the
+  screen with the card, which has no height of its own, so the card ran past
+  the top edge and its heading and answer were unreachable. The overlay now
+  marks itself `data-answer-keyboard` (a text field focused and the keyboard
+  open; only the keyboard closing releases it, so a button tap's blur cannot
+  move the layout first), the Composer stack hides its other slots, and the
+  app column tucks the session bar, like the Composer's own keyboard Focus
+  Mode. The card and its form also shrink inside a bounded stack and scroll
+  within it (half of the visible area when the keyboard is not up); while the
+  keyboard is up the stack is bounded in viewport units, less `--kb-inset` and
+  the status strip that floats over the column's top edge, so the heading
+  never runs under the clock. The
+  `composer-surfaces` suite drives a long question with a plan on a phone
+  layout whose keyboard is emulated through `visualViewport` and `--kb-inset`.
+  Physical iOS acceptance is still requested from the user.
   Synthetic Escape is not trusted input for the Desktop key dispatcher or the
   move sheet, so that suite dismisses those two by backdrop or Close.
 - `bun tools/cdp-keyboard-acceptance.ts <endpoint> <out> surfaces` (also part of

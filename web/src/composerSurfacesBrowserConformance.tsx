@@ -18,6 +18,8 @@ import { isMac } from "./platform";
 import type { SessionMeta } from "./protocol";
 
 const SESSION = "surface-session";
+/** The newest in-page socket, so a test can deliver a live transcript event. */
+let liveSocket: { publish(message: unknown): void } | null = null;
 const OTHER = "surface-destination";
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 async function until<T>(read: () => T | null | undefined | false, what: string): Promise<T> {
@@ -75,6 +77,7 @@ function installFakes(sent: { type: string; session_id?: string }[]): void {
     onclose = null;
     onerror = null;
     constructor() {
+      liveSocket = { publish: (message) => this.publish(message) };
       setTimeout(() => {
         this.onopen?.();
         this.publish({ type: "sessions", sessions: [session, other] });
@@ -171,6 +174,168 @@ async function typeDraft(container: HTMLElement, text: string): Promise<void> {
   document.execCommand("selectAll");
   document.execCommand("insertText", false, text);
   await until(() => draftText(container).includes(text), "typed draft");
+}
+
+// A pending question like a Codex `request_user_input` form: long option
+// descriptions and a free-text "Other" answer, beside a plan, so the bottom
+// stack is as tall as it gets on a phone.
+const QUESTION_OPTIONS = [
+  ["Stop the Machine plan (recommended)", "Record the broker tombstone review conclusion and the reason it was abandoned in the docs, matching the widgets decision. Fix only the small traps this review exposed that already exist in production and need only a Controller fix, such as Stopping and Cancelled being written in two steps."],
+  ["Keep building the full protocol", "Fill in the widgets section 8.3 ideas: reader floor, receiver checklist, per-command worker logs, terminal state persisted before the ACK, per-identity dedupe. Expect several review rounds and another Machine maintenance window."],
+  ["Stop here", "No code changes, only write the review conclusions into the docs."],
+] as const;
+
+function questionEvents(): unknown[] {
+  const properties: Record<string, unknown> = {
+    next: {
+      type: "string",
+      title: "Next step",
+      oneOf: QUESTION_OPTIONS.map(([title, description]) => ({ const: title, title, description })),
+    },
+    other: {
+      type: "string",
+      title: "Other",
+      description: "Type your own answer, or add a note to the option you chose above (optional).",
+    },
+  };
+  return [
+    {
+      session_id: SESSION,
+      seq: 1,
+      kind: "update",
+      update: {
+        sessionUpdate: "plan",
+        entries: [{ content: "Managed delivery broker tombstone", priority: "medium", status: "pending" }],
+      },
+    },
+    {
+      session_id: SESSION,
+      seq: 2,
+      kind: "permission_request",
+      request_id: "question-1",
+      tool_call: {
+        toolCallId: "question-tool-1",
+        title: "Which direction next?",
+        _cowboy: {
+          elicitation: {
+            mode: "form",
+            sessionId: SESSION,
+            toolCallId: "question-tool-1",
+            message: "Which direction should the remaining work take?",
+            requestedSchema: { type: "object", properties, required: ["next"] },
+          },
+        },
+      },
+      options: [
+        { optionId: "accept", name: "Submit", kind: "allow_once" },
+        { optionId: "decline", name: "Decline", kind: "reject_once" },
+      ],
+    },
+  ];
+}
+
+/** Pretend the software keyboard covers part of the page, the way iOS
+ *  reports it through visualViewport, so the app runs its keyboard layout. */
+function emulateSoftwareKeyboard(initialCoverPx: number): { cover: (px: number) => void; restore: () => void } {
+  const fake = Object.assign(new EventTarget(), {
+    height: globalThis.innerHeight - initialCoverPx,
+    width: globalThis.innerWidth,
+    offsetTop: 0,
+    offsetLeft: 0,
+    pageTop: 0,
+    pageLeft: 0,
+    scale: 1,
+  });
+  const original = Object.getOwnPropertyDescriptor(globalThis, "visualViewport");
+  Object.defineProperty(globalThis, "visualViewport", { configurable: true, value: fake });
+  // useKeyboardInset publishes the overlap in the product entry; the column
+  // pads itself by it, which is what shrinks the visible area.
+  const root = document.documentElement.style;
+  // The status strip floats over the top edge; the product publishes its height.
+  root.setProperty("--cowboy-mobile-status-material-height", "59px");
+  const cover = (px: number): void => {
+    fake.height = globalThis.innerHeight - px;
+    root.setProperty("--kb-inset", `${String(px)}px`);
+    fake.dispatchEvent(new Event("resize"));
+  };
+  cover(initialCoverPx);
+  return {
+    cover,
+    restore: () => {
+      root.removeProperty("--kb-inset");
+      root.removeProperty("--cowboy-mobile-status-material-height");
+      if (original) Object.defineProperty(globalThis, "visualViewport", original);
+      else delete (globalThis as { visualViewport?: unknown }).visualViewport;
+    },
+  };
+}
+
+/** The Mobile app with a long question and a plan pending, the keyboard up. */
+async function mountQuestionScenario(coverPx: number): Promise<{
+  container: HTMLElement;
+  card: HTMLElement;
+  keyboard: ReturnType<typeof emulateSoftwareKeyboard>;
+  teardown: () => void;
+}> {
+  const keyboard = emulateSoftwareKeyboard(coverPx);
+  const mobile = mount("touch", "390px");
+  await until(() => editorIn(mobile.container) && liveSocket, "the Mobile composer");
+  await delay(100);
+  for (const envelope of questionEvents()) liveSocket?.publish({ type: "event", envelope });
+  const card = await until(
+    () => mobile.container.querySelector<HTMLElement>("[data-permission-overlay]"),
+    "the pending question card",
+  );
+  return {
+    container: mobile.container,
+    card,
+    keyboard,
+    teardown: () => {
+      mobile.root.unmount();
+      mobile.container.remove();
+      keyboard.restore();
+    },
+  };
+}
+
+const box = (node: Element | null | undefined) => {
+  check(node, "a measured element is missing");
+  const rect = node.getBoundingClientRect();
+  return { top: Math.round(rect.top), bottom: Math.round(rect.bottom), shown: getComputedStyle(node).display !== "none" };
+};
+
+/** Where the answer card and its neighbours sit, in page pixels. */
+function questionGeometry(container: HTMLElement) {
+  const slot = (name: string) => container.querySelector(`[data-composer-stack-slot="${name}"]`);
+  const card = container.querySelector("[data-permission-overlay] > div");
+  const submit = [...container.querySelectorAll("[data-permission-overlay] button")]
+    .find((button) => button.textContent?.trim() === "Submit");
+  const heading = [...container.querySelectorAll("[data-permission-overlay] *")]
+    .find((node) => node.children.length === 0 && node.textContent === "Answer needed");
+  const kbInset = Number.parseFloat(document.documentElement.style.getPropertyValue("--kb-inset") || "0");
+  return {
+    visibleBottom: globalThis.innerHeight - kbInset,
+    card: box(card),
+    heading: box(heading),
+    submit: box(submit),
+    plan: box(slot("plan")),
+    primary: box(slot("primary")),
+  };
+}
+
+/** Leave the keyboard-up Mobile question on screen for a visual review. */
+export async function renderQuestionKeyboardPreview(coverPx = 268): Promise<unknown> {
+  installFakes([]);
+  resetProviderCatalog();
+  await loadProviderCatalog();
+  const scenario = await mountQuestionScenario(coverPx);
+  const other = await until(
+    () => scenario.card.querySelector<HTMLElement>("textarea:not([aria-hidden])"),
+    "the Other answer field",
+  );
+  other.focus();
+  await delay(600);
+  return questionGeometry(scenario.container);
 }
 
 /** Trusted-key flow (tools/cdp-keyboard-acceptance.ts `surfaces`): the same
@@ -309,5 +474,35 @@ export async function runComposerSurfacesBrowserConformance(): Promise<string[]>
   passed.push("Draft move picker: dismissing moves nothing, choosing a destination sends move_draft and closes it");
   mobile.root.unmount();
   mobile.container.remove();
+
+  // A long question beside a plan, answered on the software keyboard: the
+  // card owns the stack, stays whole inside the visible area, and the stack
+  // returns when the keyboard leaves.
+  const question = await mountQuestionScenario(300);
+  const inside = (g: ReturnType<typeof questionGeometry>, label: string, minTop: number) => {
+    check(g.card.top >= minTop, `${label}: the card starts below ${minTop}px (${g.card.top})`);
+    check(g.card.bottom <= g.visibleBottom + 1, `${label}: the card ends above the keyboard (${g.card.bottom} > ${g.visibleBottom})`);
+    check(g.heading.top >= g.card.top && g.heading.bottom <= g.card.bottom, `${label}: the heading is inside the card`);
+    check(g.submit.top >= g.card.top && g.submit.bottom <= g.card.bottom, `${label}: Submit is inside the card`);
+  };
+  const other = await until(
+    () => question.card.querySelector<HTMLElement>("textarea:not([aria-hidden])"),
+    "the Other answer field",
+  );
+  other.focus();
+  await until(() => question.card.getAttribute("data-answer-keyboard") === "true", "the answer keyboard layout");
+  await delay(100);
+  const typing = questionGeometry(question.container);
+  inside(typing, "typing an answer", 59); // the status strip floats over the top edge
+  check(!typing.plan.shown && !typing.primary.shown, "Plan and the Composer give way to the card while its answer is typed");
+  question.keyboard.cover(0);
+  other.blur();
+  await until(() => question.card.getAttribute("data-answer-keyboard") !== "true", "the answer keyboard layout to end");
+  await delay(100);
+  const resting = questionGeometry(question.container);
+  inside(resting, "keyboard closed", 0);
+  check(resting.plan.shown && resting.primary.shown, "Plan and the Composer return when the keyboard leaves");
+  question.teardown();
+  passed.push("A long question stays whole above the keyboard and owns the stack only while its answer is typed");
   return passed;
 }

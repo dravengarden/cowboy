@@ -1509,7 +1509,7 @@ export function App({
                     // Keyboard up: temporarily tuck the session nav so the
                     // compact composer sits on the keyboard. The two-track
                     // format dock stays edit-only; this only hides chrome.
-                    "&:has([data-mobile-focus-composer='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-session-nav='true']": {
+                    "&:has([data-mobile-focus-composer='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-session-nav='true'], &:has([data-answer-keyboard='true']) [data-mobile-session-nav='true']": {
                         minHeight: 0,
                         maxHeight: 0,
                         opacity: 0,
@@ -1521,7 +1521,7 @@ export function App({
                         transition:
                             `max-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, min-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, opacity 90ms ease, transform ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, padding ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
                     },
-                    "&:has([data-mobile-focus-composer='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-composer-shell-material='true']": {
+                    "&:has([data-mobile-focus-composer='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-composer-shell-material='true'], &:has([data-answer-keyboard='true']) [data-mobile-composer-shell-material='true']": {
                         opacity: "0 !important",
                     },
                 }}

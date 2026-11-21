@@ -23,6 +23,7 @@ import { useComposerFileDrop } from "./composer/composerFileDrop";
 
 import { didMobileSoftwareKeyboardClose, dismissMobileSoftwareKeyboard, beginMobileEditorFocusTransfer, isMobileEditorFocusTransferPending, releaseMobileComposerFocus, shouldPresentMobileKeyboardSurface, noteMobileKeyboardDismissed, clearMobileKeyboardDismissed } from "./composer/mobileComposerFocus";
 import { useKeyboardOpen } from "./keyboardInset";
+import { answerKeyboardStackSx } from "./answerKeyboardFocus";
 import { attachmentTrayForSurface } from "./composer/attachmentPresentation";
 
 import type { ComposerWorkspaceProps } from "./composer/contracts";
@@ -1191,6 +1192,8 @@ export function ComposerWorkspace({
             {
               display: "none",
             },
+          // A question's text answer on the keyboard owns the stack too.
+          ...answerKeyboardStackSx,
         }),
         // Column mode: a fill-height flex column (queued/drafts on top, the editor
         // card flex:1 below) instead of a bottom-floating stack. No safe-area
