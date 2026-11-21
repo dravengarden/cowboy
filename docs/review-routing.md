@@ -73,7 +73,7 @@ evidence = "2026-11-21"
 # Applies to review and design_review alike.
 
 [[tier.codex.high]]
-model = "gpt-6.2-astra"
+model = "gpt-6.2-sol"      # since 2026-11-21: Astra Max is explicit-only
 effort = "max"
 [[tier.codex.routine]]
 model = "gpt-6.2-sol"
@@ -139,6 +139,12 @@ today's family/effort order. For a fresh review:
   continuation decision.
 - Quota stays advisory evidence for the caller. There is no quota-based
   automatic fallback.
+- Astra Max is explicit-only (since 2026-11-21, OpenAI weekly quota pressure).
+  The Codex high tier chooses Sol Max like routine; a high-risk review still
+  admits `astra-max` by name, and the guidance tells callers to name it only
+  when the user asked for that model. Before this, 17 Astra Max reviews in
+  three days averaged about 5.3M tokens each, against about 2.9M for Sol Max,
+  and most were the caller's own choice under a broad reading of high.
 
 The chosen preset is already recorded on the call; generation binding, claim,
 recovery and reuse (`review-generation-binding.md`) are unchanged.
@@ -173,7 +179,7 @@ callers:
 ```json
 "review_routing": {"evidence": "2026-11-21", "cost_option": "balanced",
   "tiers": {
-    "high":    {"preset": "astra-max",   "tokens": {"median": 6070000, "n": 4, "source": "pilot"}},
+    "high":    {"preset": "sol-6-2-max", "tokens": {"median": 3220000, "n": 4, "source": "pilot"}},
     "routine": {"preset": "sol-6-2-max", "tokens": {"median": 3220000, "n": 4, "source": "pilot"}}},
   "cheaper": [{"preset": "astra-medium", "tokens": {"median": 580000, "n": 4, "source": "pilot"}}]}
 ```
@@ -201,8 +207,8 @@ family of the caller's current model, read from its live configuration, on
 A known non-reviewer caller model (Sonnet) excludes nothing; an unknown one
 offers no same-vendor reviewer. When the routine tier's own row is excluded
 the strongest preset the tier still admits is chosen (a Sol caller gets Astra
-Medium); the high tier never falls back automatically, so Fable still has to
-be named. Nothing left is refused `same_model`. The claim rechecks the parent's
+Medium); the high tier never falls back automatically, so Astra Max or Fable
+still has to be named. Nothing left is refused `same_model`. The claim rechecks the parent's
 live model for fresh reviews and continuations (a hibernated parent keeps
 admission's check). Capabilities mark the Provider `same_vendor: true`, report
 `review_available` apart from analysis availability, and publish its routing

@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 mod routing;
 
-pub(super) const GUIDANCE: &str = "For Review/Design Review, the Controller picks the reviewer from providers[].review_routing by declared risk; cost matters. Declare risk from the review root's own guidance (its AGENTS.md/CLAUDE.md Review risk section) and the affected paths: risk:'high' (a change that can lose or corrupt durable data, weaken credentials, authentication or account isolation, or touch money and usage limits, or a risk area that guidance names; size, concurrency or a wide refactor alone is routine) needs a reason and gets the strongest reviewer (Astra Max; Claude starts at Opus, Fable only by explicit preset with high risk). Everything else is routine (Sol Max; Claude Opus). Prefer another vendor's reviewer (an Auto call tries other vendors first); the caller's own vendor is allowed, but a review never runs the caller's own model (same_model). Omit preset unless the user named one; a routine review refuses a stronger preset (preset_outside_tier), and a user-named stronger preset is sent with risk:'high' and that request as its reason. A fix-confirmation round is routine: continue the same review child when it runs a routine-tier preset; a child on a stronger preset (for example Astra Max) refuses a routine round (preset_outside_tier), so start a fresh routine review with the same task and base (it reuses the captured input). Continue with risk:'high' only when the fixes themselves changed a high-risk design, not because the first round was high. A review child takes at most three completed rounds (review_rounds_exhausted): findings that survive them call for redesigning that mechanism, not another round. Evidence and test-run audits are analysis calls, not reviews; design and contract checks stay design reviews. Costs are measured tokens, not quota; inspect quota windows and reset times before choosing a Provider. review_candidates is the routine order for older callers. No silent fallback after a failed call: diagnose before retrying. usedPercent is USED; resetsAt is epoch seconds. Large quota payloads: use cowboy.usage.read.";
+pub(super) const GUIDANCE: &str = "For Review/Design Review, the Controller picks the reviewer from providers[].review_routing by declared risk; cost matters. Declare risk from the review root's own guidance (its AGENTS.md/CLAUDE.md Review risk section) and the affected paths: risk:'high' (a change that can lose or corrupt durable data, weaken credentials, authentication or account isolation, or touch money and usage limits, or a risk area that guidance names; size, concurrency or a wide refactor alone is routine) needs a reason and gets Sol Max (Claude Opus). Everything else is routine (Sol Max; Claude Opus). Astra Max and Fable cost about twice Sol Max and are never chosen automatically: name them only when the user asked for that model, with risk:'high' and that request as the reason; do not pick them yourself for a high-risk change. Prefer another vendor's reviewer (an Auto call tries other vendors first); the caller's own vendor is allowed, but a review never runs the caller's own model (same_model). Omit preset unless the user named one; a routine review refuses a stronger preset (preset_outside_tier), and a user-named stronger preset is sent with risk:'high' and that request as its reason. A fix-confirmation round is routine: continue the same review child when it runs a routine-tier preset; a child on a stronger preset (for example Astra Max) refuses a routine round (preset_outside_tier), so start a fresh routine review with the same task and base (it reuses the captured input). Continue with risk:'high' only when the fixes themselves changed a high-risk design, not because the first round was high. A review child takes at most three completed rounds (review_rounds_exhausted): findings that survive them call for redesigning that mechanism, not another round. Evidence and test-run audits are analysis calls, not reviews; design and contract checks stay design reviews. Costs are measured tokens, not quota; inspect quota windows and reset times before choosing a Provider. review_candidates is the routine order for older callers. No silent fallback after a failed call: diagnose before retrying. usedPercent is USED; resetsAt is epoch seconds. Large quota payloads: use cowboy.usage.read.";
 
 pub(super) fn family(model: &str) -> Option<&'static str> {
     // Signed presets may carry a context suffix such as `opus[1m]`.
@@ -649,9 +649,16 @@ mod tests {
             review_preset(&routine, &all, Some("astra-medium")).unwrap(),
             "astra-medium"
         );
+        // High risk also starts at Sol Max; Astra Max needs an explicit,
+        // high-risk request.
+        let high = candidates(&gpt, "codex", &preference, true);
         assert_eq!(
-            ids(candidates(&gpt, "codex", &preference, true)),
-            ["astra-max", "astra-medium", "sol-max", "sol-medium"]
+            ids(high.clone()),
+            ["sol-max", "astra-max", "astra-medium", "sol-medium"]
+        );
+        assert_eq!(
+            review_preset(&high, &all, Some("astra-max")).unwrap(),
+            "astra-max"
         );
         preference.gpt_effort = ReviewEffort::Standard;
         assert_eq!(
@@ -660,7 +667,7 @@ mod tests {
         );
         assert_eq!(
             ids(candidates(&gpt, "codex", &preference, true))[0],
-            "astra-max"
+            "sol-max"
         );
         // SOL only: the routine tier stays inside the list.
         preference.gpt = vec!["sol".into()];
@@ -688,7 +695,7 @@ mod tests {
         let view = routing_view(&gpt, "codex", &preference, (false, Some(None)));
         assert_eq!(view["routine"]["preset"], "sol-max");
         assert_eq!(view["routine"]["cost"]["n"], 4);
-        assert_eq!(view["high"]["preset"], "astra-max");
+        assert_eq!(view["high"]["preset"], "sol-max");
     }
 
     #[test]
