@@ -111,24 +111,30 @@ Managed reviews pick their reviewer by declared risk
 ([`docs/review-routing.md`](docs/review-routing.md)); declare it from this
 list and the affected paths, and give a reason for `high`.
 
-- **high**: Machine durable namespaces and their writers
-  (`components/machine/src/machine_broker/{deletions,incarnations,cleanups,namespace}.rs`);
-  store migrations and ledger CAS (`migrations/`, `src/store/`); managed-call
-  lifecycle, cancellation and recovery (`components/server/src/server/managed_calls/`);
-  authentication, permissions, Operator delegation and account isolation
-  (provider accounts, account sandboxes, credentials, browser profiles);
-  the Controller/Machine/worker wire and release, activation or recovery
-  pins (`components/wire/`, `flake.nix` release outputs); deletion paths;
-  anything touching money or usage limits; large refactors.
-- **routine**: Web presentation and interaction (`web/`), docs, tests only,
-  model evidence (`models/`), Plugin presets and copy, CLI help.
+- **high** keeps only what can lose or corrupt durable data, weaken
+  credentials or isolation, or touch money:
+  - Machine durable namespaces and their writers
+    (`components/machine/src/machine_broker/{deletions,incarnations,cleanups,namespace}.rs`),
+    store migrations and ledger CAS (`migrations/`, `src/store/`), and
+    deletion paths;
+  - authentication, permissions, Operator delegation and account isolation
+    (provider accounts, account sandboxes, credentials, browser profiles);
+  - anything touching money or usage limits.
+- **routine**: everything else, including managed-call lifecycle and
+  routing, the Controller/Machine/worker wire, release pins, large or
+  mechanical refactors, Web (`web/`), docs, tests, model evidence
+  (`models/`), Plugin presets and copy, and CLI help. Deterministic gates
+  (`just check`, the structure and layering ratchets, wire generation
+  checks) carry those areas; size alone is not risk.
 - A fix-confirmation round is routine. Continue the review child when it
   runs a routine-tier preset; a child on Astra Max refuses a routine round, so
   start a fresh routine review with the same task and base (it reuses the
-  captured input). Declare `risk: high` on the round, with a reason, only when
-  the fixes changed a high-risk area's design.
-- When three rounds keep finding the same class of high finding, stop and
-  redesign that mechanism instead of requesting another round.
+  captured input). Declare `risk: high` on a round, with a reason, only when
+  the fixes themselves changed a high-risk design, not because the first
+  round was high.
+- A review child takes at most three completed rounds
+  (`review_rounds_exhausted`). Findings that survive them call for
+  redesigning that mechanism, not another round.
 
 ## Architecture gotchas
 - **Structure ratchet** (`just structure-check`, part of `just check`): no

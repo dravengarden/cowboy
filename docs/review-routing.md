@@ -131,6 +131,12 @@ today's family/effort order. For a fresh review:
   one routine review continued on Astra Max for 16 rounds on 2026-11-21;
   18 of that day's 22 Astra Max runs after routing shipped were
   continuations.)
+- A review child takes at most three completed rounds. A further
+  continuation, at any tier, is refused `review_rounds_exhausted`: findings
+  that survive three rounds call for redesigning the mechanism, then a fresh
+  routine review of the redesign. Failed or cancelled rounds do not count.
+  `cowboy.review.routed` records the child's completed `rounds` on every
+  continuation decision.
 - Quota stays advisory evidence for the caller. There is no quota-based
   automatic fallback.
 

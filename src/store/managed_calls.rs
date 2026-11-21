@@ -97,6 +97,10 @@ impl Store {
     pub async fn managed_child(&self, parent: &str, child: &str) -> Result<Option<Record>> {
         dispatch!(self, managed_child(parent, child))
     }
+    /// How many review rounds one of this parent's children has completed.
+    pub async fn managed_child_rounds(&self, parent: &str, child: &str) -> Result<u64> {
+        dispatch!(self, managed_child_rounds(parent, child))
+    }
     pub async fn managed_call(&self, parent: &str, id: &str) -> Result<Option<Record>> {
         dispatch!(self, managed_call(parent, id))
     }
@@ -252,6 +256,11 @@ macro_rules! implementation {
                 sqlx::query_as::<_, Row>("SELECT call_id, parent_session_id, request_id, request_document, child_session_id, state, revision, document, document_sha256 FROM managed_agent_calls WHERE parent_session_id = $1 AND child_session_id = $2 ORDER BY admission_order DESC LIMIT 1")
                     .bind(parent).bind(child).fetch_optional(&self.pool).await?
                     .map(|row| row.decode().map(|(record, _)| record)).transpose()
+            }
+            async fn managed_child_rounds(&self, parent: &str, child: &str) -> Result<u64> {
+                let (rounds,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM managed_agent_calls WHERE parent_session_id = $1 AND child_session_id = $2 AND state = 'completed'")
+                    .bind(parent).bind(child).fetch_one(&self.pool).await?;
+                Ok(u64::try_from(rounds)?)
             }
             async fn managed_call(&self, parent: &str, id: &str) -> Result<Option<Record>> {
                 sqlx::query_as::<_, Row>("SELECT call_id, parent_session_id, request_id, request_document, child_session_id, state, revision, document, document_sha256 FROM managed_agent_calls WHERE parent_session_id = $1 AND call_id = $2")
@@ -953,6 +962,14 @@ mod tests {
                 .unwrap()
                 .call_id,
             "call-0"
+        );
+        // Only completed turns are review rounds; a failed or queued one is not.
+        assert_eq!(
+            store
+                .managed_child_rounds("parent-1", "child-1")
+                .await
+                .unwrap(),
+            0
         );
         assert_eq!(
             store.managed_calls("parent-1", None).await.unwrap()[0].call_id,

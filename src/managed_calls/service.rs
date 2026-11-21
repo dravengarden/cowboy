@@ -77,6 +77,13 @@ impl Ledger {
             .await
     }
 
+    /// How many rounds one of this parent's children has completed.
+    pub async fn child_rounds(&self, child: &str) -> Result<u64> {
+        self.store
+            .managed_child_rounds(&self.placement.parent_session_id, child)
+            .await
+    }
+
     pub async fn list(&self, before: Option<&str>) -> Result<Vec<Record>> {
         self.store
             .managed_calls(&self.placement.parent_session_id, before)

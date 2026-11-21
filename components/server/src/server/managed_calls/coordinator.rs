@@ -1129,12 +1129,15 @@ async fn route_review(
             Ok(None) => return Err(error("conversation_unavailable", "not_submitted")),
             Err(_) => return Err(error("capacity", "not_submitted")),
         };
+        let Ok(rounds) = ledger.child_rounds(child_session_id).await else {
+            return Err(error("capacity", "not_submitted"));
+        };
         return super::selection::admit_continuation(
             request,
             runnable,
             &target.agent,
             preference,
-            child_preset.as_deref(),
+            (child_preset.as_deref(), rounds),
             caller.0,
         );
     }

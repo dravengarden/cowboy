@@ -371,9 +371,9 @@ pub struct ReviewArgs {
     /// One of the reviewer's presets (model and reasoning) for this review.
     #[arg(long)]
     preset: Option<String>,
-    /// Declared risk. `high` (security, permissions, concurrency,
-    /// persistence, deletion, money, large refactors) makes an automatic
-    /// preset start at Max; `routine` follows the Settings review effort.
+    /// Declared risk. `high` (durable data loss or corruption, credentials,
+    /// authentication or account isolation, money and usage limits) makes an
+    /// automatic preset start at Max; `routine` follows the Settings review effort.
     #[arg(long, value_parser = ["routine", "high"])]
     risk: Option<String>,
     /// Return once the review is admitted. Cowboy queues one notice into
