@@ -425,7 +425,11 @@ test("Grok refresh-free usage reports authentication required and never retries"
 });
 
 test("Grok declares refresh-free usage and reaches only its read endpoints", () => {
-  equal(grokDeclaration, { schema: 1, token_refresh: "request" }, "declaration");
+  equal(
+    grokDeclaration,
+    { schema: 1, token_refresh: "request", token_refresh_guard: "cli_not_started" },
+    "declaration",
+  );
   for (const argv of [grokHost.usage.collector_argv, grokHost.usage.reset_argv]) {
     const net = argv.find((value) => value.startsWith("--allow-net="));
     equal(net, "--allow-net=grok.com:443,cli-chat-proxy.grok.com:443", "network grant");
@@ -503,4 +507,63 @@ test("A refresh-free Codex read and reset report authentication required", async
     other = error;
   });
   equal(other === expired, true, "unchanged without token_refresh");
+});
+
+test("A refresh-free Codex rate-limit 401 and a consume rejection are authentication", async () => {
+  const unauthorized = new Error(
+    'account/rateLimits/read: {"code":-32603,"message":"failed to fetch codex rate limits: 401"}',
+  );
+  let message;
+  await collectCodex(
+    fakeCodex({
+      "account/read": [{ account: { type: "chatgpt" } }],
+      "account/rateLimits/read": [unauthorized],
+    }),
+    { token_refresh: false },
+  ).catch((error) => {
+    message = error.message;
+  });
+  equal(message.includes("authentication required"), true, "401-only rate limits");
+  const credits = {
+    rateLimitResetCredits: {
+      credits: [
+        { id: "later", status: "available", expiresAt: 20 },
+        { id: "first", status: "available", expiresAt: 10 },
+      ],
+    },
+  };
+  let failure;
+  await resetCodex(
+    fakeCodex({
+      "account/rateLimits/read": [credits],
+      "account/rateLimitResetCredit/consume": [new Error('{"code":"token_expired"}')],
+    }),
+    { token_refresh: false, idempotency_key: "cowboy-reset-1", expected_credit_id: "first" },
+  ).catch((error) => {
+    failure = error;
+  });
+  equal(failure.message.includes("authentication required"), true, "consume");
+  equal(failure.callMayHaveReachedProvider, true, "the consume call was sent");
+  equal(failure.creditId, "first", "credit");
+});
+
+test("A Codex observation names the grant consume_reset would spend", async () => {
+  const usage = await collectCodex(
+    fakeCodex({
+      "account/read": [{ account: { type: "chatgpt" } }],
+      "account/rateLimits/read": [
+        {
+          rateLimitResetCredits: {
+            credits: [
+              { id: "b", status: "available", expiresAt: 10, grantedAt: 2 },
+              { id: "a", status: "available", expiresAt: 10, grantedAt: 2 },
+              { id: "c", status: "available", expiresAt: 10, grantedAt: 1 },
+            ],
+          },
+        },
+      ],
+      "account/usage/read": [{}],
+    }),
+  );
+  equal(usage.rate_limits.rateLimitResetCredits.nearestCreditId, "c", "nearest");
 });

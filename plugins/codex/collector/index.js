@@ -166,14 +166,20 @@ export async function collect(rpc, request = {}) {
   try {
     rateLimits = await rpc.request("account/rateLimits/read", {});
   } catch (error) {
-    if (!isTokenExpired(error)) throw error;
     // A named account's poll never redeems the refresh token: another
     // Machine's session may be redeeming it. Its sessions renew the token.
-    if (request.token_refresh === false) {
+    if (request.token_refresh === false && isAuthenticationRejected(error)) {
       throw new Error(AUTHENTICATION_REQUIRED);
     }
+    if (!isTokenExpired(error)) throw error;
     account = await rpc.request("account/read", { refreshToken: true });
     rateLimits = await rpc.request("account/rateLimits/read", {});
+  }
+  // The canonical nearest grant, so the confirmation dialog pins exactly the
+  // credit consume_reset would spend.
+  const nearest = nearestCredit(rateLimits);
+  if (nearest && rateLimits?.rateLimitResetCredits) {
+    rateLimits.rateLimitResetCredits.nearestCreditId = nearest;
   }
   let activity;
   try {
@@ -221,6 +227,11 @@ export async function reset(rpc, request) {
       idempotencyKey: request.idempotency_key,
     });
   } catch (error) {
+    // Reached: the consume call may have been spent; its rejection is
+    // still an authentication failure the Service backs off on.
+    if (request.token_refresh === false && isAuthenticationRejected(error)) {
+      throw new ResetFailure(AUTHENTICATION_REQUIRED, true, creditId);
+    }
     throw new ResetFailure(error instanceof Error ? error.message : String(error), true, creditId);
   }
   return { outcome: result?.outcome ?? "unknown", credit_id: creditId };

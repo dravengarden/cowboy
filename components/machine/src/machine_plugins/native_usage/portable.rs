@@ -29,6 +29,12 @@ pub struct HostAdmission {
     connected: Arc<AtomicBool>,
     deadline: Instant,
     sidecars: Option<BTreeMap<String, String>>,
+    /// The Controller's absolute expiry (Unix ms): rechecked immediately
+    /// before the collector starts, since a monotonic deadline cannot see
+    /// the wall clock the Controller set it by.
+    expires_at_unix_ms: Option<i64>,
+    /// Variables replacing the collector's (a private credential home).
+    environment: Option<BTreeMap<String, String>>,
 }
 
 impl HostAdmission {
@@ -37,6 +43,8 @@ impl HostAdmission {
             connected,
             deadline: Instant::now() + DEADLINE,
             sidecars: None,
+            expires_at_unix_ms: None,
+            environment: None,
         }
     }
 
@@ -47,7 +55,15 @@ impl HostAdmission {
         );
         let remaining = self.deadline.saturating_duration_since(Instant::now());
         ensure!(!remaining.is_zero(), "portable_usage_busy");
+        if let Some(expires) = self.expires_at_unix_ms {
+            ensure!(super::unix_ms() < expires, "native_reset_expired");
+        }
         Ok(remaining)
+    }
+
+    /// Variables replacing the collector's (a private credential home).
+    pub(in crate::machine_plugins) fn environment(&self) -> Option<&BTreeMap<String, String>> {
+        self.environment.as_ref()
     }
 
     /// The absolute instant after which nothing of this invocation starts.
@@ -144,14 +160,74 @@ impl MachinePluginStore {
         {
             return Ok(());
         }
-        let declared = verified_plugin_host_bundle(&plugin, &release, &content)
+        let host = verified_plugin_host_bundle(&plugin, &release, &content)
             .ok()
-            .flatten()
-            .and_then(|host| host.files.get(REFRESH_FREE_DECLARATION).cloned())
-            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-            .is_some_and(|value| value["token_refresh"] == "request");
+            .flatten();
+        let declared = RefreshFree::from_declaration(
+            host.as_ref()
+                .and_then(|host| host.files.get(REFRESH_FREE_DECLARATION))
+                .map(String::as_str),
+        )
+        .usage;
         ensure!(declared, "portable_usage_refresh_unsupported");
         Ok(())
+    }
+
+    /// For a Provider whose CLI rotates credentials, a private home holding
+    /// exactly the account replica's sealed credential at `generation`: a
+    /// live session can rewrite its writable runtime home (even with another
+    /// sign-in) without advancing the sealed generation, so neither a read
+    /// nor a reset ever runs from it. `None` keeps the session environment
+    /// (a non-rotating key, such as a `DeepSeek` API key).
+    pub(in crate::machine_plugins) fn private_credential_home(
+        &self,
+        plugin_id: &str,
+        generation: u64,
+    ) -> Result<Option<(StagedProbeHome, BTreeMap<String, String>)>> {
+        let (package, _) = self
+            .active_package(plugin_id)?
+            .context("portable_usage_collector_unavailable")?;
+        let auth = &package.manifest.authentication;
+        if auth.refresh != cowboy_provider_sdk::RefreshOwnership::CompareAndSwap
+            || auth.credential_files.is_empty()
+        {
+            return Ok(None);
+        }
+        let envelope = self
+            .latest_auth_envelope(plugin_id)?
+            .filter(|replica| {
+                replica.auth_generation == generation && replica.action == ProviderAuthAction::Apply
+            })
+            .context("portable_usage_replica_pending")?;
+        let PreparedProviderAuth::Apply(bundle) =
+            self.prepare_auth_inner(&envelope, Some(&package))?
+        else {
+            anyhow::bail!("portable_usage_replica_pending");
+        };
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-portable-home-{:032x}",
+            rand::random::<u128>()
+        ));
+        fs::DirBuilder::new().mode(0o700).create(&root)?;
+        let staged = StagedProbeHome(root);
+        restore_projected_bundle(auth, &staged.0, &bundle)?;
+        let home = staged.0.join("home");
+        let environment = BTreeMap::from([
+            ("HOME".to_owned(), home.display().to_string()),
+            (
+                "XDG_CONFIG_HOME".to_owned(),
+                home.join(".config").display().to_string(),
+            ),
+            (
+                "XDG_DATA_HOME".to_owned(),
+                home.join(".local/share").display().to_string(),
+            ),
+            (
+                "XDG_CACHE_HOME".to_owned(),
+                home.join(".cache").display().to_string(),
+            ),
+        ]);
+        Ok(Some((staged, environment)))
     }
 
     /// The refresh-free declaration of an exact verified generation.
@@ -198,6 +274,7 @@ impl MachinePluginStore {
         admission.deadline = admission
             .deadline
             .min(Instant::now() + Duration::from_millis(u64::try_from(remaining).unwrap_or(0)));
+        admission.expires_at_unix_ms = Some(request.expires_at_ms);
         let usage = PortableUsageRequest {
             account_id: request.account_id.clone(),
             plugin_id: request.plugin_id.clone(),
@@ -221,6 +298,11 @@ impl MachinePluginStore {
             return Err(refuse("native_reset_unsupported"));
         }
         admission.sidecars = Some(BTreeMap::new());
+        let private = scoped
+            .private_credential_home(&request.plugin_id, request.auth_generation)
+            .map_err(|_| refuse("portable_usage_replica_pending"))?
+            .ok_or_else(|| refuse("native_reset_unsupported"))?;
+        admission.environment = Some(private.1.clone());
         let mut payload = serde_json::to_value(&request.reset).map_err(anyhow::Error::from)?;
         if let Some(object) = payload.as_object_mut() {
             object.insert("token_refresh".into(), serde_json::Value::Bool(false));
@@ -275,6 +357,10 @@ impl MachinePluginStore {
         if let Some(payload) = request.payload.as_object_mut() {
             payload.insert("token_refresh".into(), serde_json::Value::Bool(false));
         }
+        let private = scoped
+            .private_credential_home(&request.plugin_id, request.auth_generation)
+            .map_err(|error| anyhow::anyhow!(portable_usage_error_code(&format!("{error:#}"))))?;
+        admission.environment = private.as_ref().map(|(_, environment)| environment.clone());
         // The Service host path at account scope: it verifies the exact signed
         // generation and the account replica generation under the lifecycle
         // lock, launches the collector with the account's session environment
@@ -356,6 +442,8 @@ mod tests {
             connected: Arc::clone(&connected),
             deadline: Instant::now(),
             sidecars: None,
+            expires_at_unix_ms: None,
+            environment: None,
         };
         assert_eq!(
             expired.remaining().unwrap_err().to_string(),

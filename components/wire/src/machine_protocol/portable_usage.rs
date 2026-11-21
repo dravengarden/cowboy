@@ -51,29 +51,41 @@ pub struct PortableSidecar {
 /// session's refresh-token redemption.
 pub const REFRESH_FREE_DECLARATION: &str = "collector/portable-account.json";
 
-/// What the refresh-free declaration covers: usage (`token_refresh`) and, from
-/// Codex 3.6.19, the banked reset (`reset_token_refresh`), each `"request"`
-/// when that operation reports authentication required instead of redeeming
-/// a refresh token under `"token_refresh": false`.
+/// What the refresh-free declaration covers. A `"token_refresh": "request"`
+/// claim alone is not evidence: Codex 3.6.16-3.6.18 carried it while the
+/// app-server still refreshed an expired token on its own. Usage counts as
+/// refresh-free only with a guard the fixed collector names:
+/// `"refresh_endpoint_refused"` (Codex 3.6.19: the app-server can reach no
+/// refresh endpoint) or `"cli_not_started"` (Grok 3.2.18: the CLI never
+/// starts). The banked reset additionally needs `"reset_token_refresh":
+/// "request"`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RefreshFree {
     pub usage: bool,
     pub reset: bool,
 }
 
+/// The guards a refresh-free declaration may name.
+pub const REFRESH_FREE_GUARDS: [&str; 2] = ["refresh_endpoint_refused", "cli_not_started"];
+
 impl RefreshFree {
     /// Read a signed host bundle's declaration file, if present.
     #[must_use]
     pub fn from_declaration(text: Option<&str>) -> Self {
         let value = text.and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok());
-        let declared = |field: &str| {
+        let field = |name: &str| {
             value
                 .as_ref()
-                .is_some_and(|value| value["schema"] == 1 && value[field] == "request")
+                .filter(|value| value["schema"] == 1)
+                .and_then(|value| value[name].as_str())
+                .map(str::to_owned)
         };
+        let usage = field("token_refresh").as_deref() == Some("request")
+            && field("token_refresh_guard")
+                .is_some_and(|guard| REFRESH_FREE_GUARDS.contains(&guard.as_str()));
         Self {
-            usage: declared("token_refresh"),
-            reset: declared("token_refresh") && declared("reset_token_refresh"),
+            usage,
+            reset: usage && field("reset_token_refresh").as_deref() == Some("request"),
         }
     }
 }
@@ -455,30 +467,41 @@ mod tests {
     }
 
     #[test]
-    fn only_a_declared_refresh_free_reset_is_admitted() {
+    fn only_a_guarded_refresh_free_declaration_is_admitted() {
         let free = |text: &str| RefreshFree::from_declaration(Some(text));
         assert_eq!(RefreshFree::from_declaration(None), RefreshFree::default());
+        // Codex 3.6.16-3.6.18 (and Grok 3.2.16-3.2.17): an unguarded claim.
         assert_eq!(
             free(r#"{"schema":1,"token_refresh":"request"}"#),
+            RefreshFree::default()
+        );
+        assert_eq!(
+            free(include_str!(
+                "../../../../plugins/codex/collector/portable-account.json"
+            )),
+            RefreshFree {
+                usage: true,
+                reset: true
+            }
+        );
+        assert_eq!(
+            free(include_str!(
+                "../../../../plugins/grok/collector/portable-account.json"
+            )),
             RefreshFree {
                 usage: true,
                 reset: false
             }
         );
         assert_eq!(
-            free(r#"{"schema":1,"token_refresh":"request","reset_token_refresh":"request"}"#),
-            RefreshFree {
-                usage: true,
-                reset: true
-            }
+            free(r#"{"schema":1,"token_refresh":"request","token_refresh_guard":"trust me"}"#),
+            RefreshFree::default()
         );
         // A reset is never refresh-free without refresh-free usage.
         assert_eq!(
-            free(r#"{"schema":1,"reset_token_refresh":"request"}"#),
-            RefreshFree::default()
-        );
-        assert_eq!(
-            free(r#"{"schema":2,"token_refresh":"request"}"#),
+            free(
+                r#"{"schema":1,"reset_token_refresh":"request","token_refresh_guard":"cli_not_started"}"#
+            ),
             RefreshFree::default()
         );
         assert_eq!(free("not json"), RefreshFree::default());
