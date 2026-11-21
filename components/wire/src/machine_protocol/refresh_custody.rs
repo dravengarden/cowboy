@@ -217,7 +217,7 @@ mod tests {
 
     const GROK: &str = include_str!("../../../../plugins/grok/collector/refresh-custody.json");
 
-    fn bundle(entry: serde_json::Value) -> PortableCredentialBundle {
+    fn bundle(entry: &serde_json::Value) -> PortableCredentialBundle {
         let document = serde_json::json!({ "https://auth.x.ai::client": entry });
         PortableCredentialBundle {
             portable_schema: "grok-auth-v1".into(),
@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn the_grok_declaration_strips_only_the_refresh_token() {
         let custody = RefreshCustody::parse(GROK).unwrap();
-        let full = bundle(serde_json::json!({
+        let full = bundle(&serde_json::json!({
             "auth_mode": "oidc", "key": "access", "user_id": "user",
             "refresh_token": "single-use", "expires_at": "2026-11-21T03:00:00Z",
             "oidc_issuer": "https://auth.x.ai", "oidc_client_id": "client",
@@ -276,10 +276,10 @@ mod tests {
     #[test]
     fn an_unstrippable_bundle_is_refused_and_declarations_are_closed() {
         let custody = RefreshCustody::parse(GROK).unwrap();
-        let mut missing = bundle(serde_json::json!({}));
+        let mut missing = bundle(&serde_json::json!({}));
         missing.values.clear();
         assert!(custody.strip(&missing).is_err());
-        let mut array = bundle(serde_json::json!({}));
+        let mut array = bundle(&serde_json::json!({}));
         array.values.insert(
             "auth_json".into(),
             base64::engine::general_purpose::STANDARD.encode(b"[1]"),
@@ -320,7 +320,7 @@ mod tests {
             super::super::REFRESH_CUSTODY_PROTOCOL_VERSION
         );
         assert_eq!(super::super::REFRESH_CUSTODY_PROTOCOL_VERSION, 51);
-        assert!(super::super::MACHINE_PROTOCOL_VERSION >= 51);
+        const { assert!(super::super::MACHINE_PROTOCOL_VERSION >= 51) };
     }
 
     /// Only Grok declares custody; every other first-party Provider keeps
