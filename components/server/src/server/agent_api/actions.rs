@@ -296,6 +296,11 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, Cal
         );
         output =
             json!({"format":"json_schema","schema":crate::managed_calls::review::output_schema()});
+    } else if review && input.provider == "antigravity" {
+        // Antigravity reviews only with the checked review schema; an
+        // unscoped review still carries it.
+        output =
+            json!({"format":"json_schema","schema":crate::managed_calls::review::output_schema()});
     }
     let conversation = match input.child_session_id {
         Some(child) => json!({"mode":"continue","child_session_id":child}),
@@ -1112,6 +1117,21 @@ mod tests {
         assert_eq!(request.labels["title"], "Ownership review");
         assert_eq!(request.labels["selection_reason"], "Ample model quota");
         assert!(!request.labels.contains_key("notify"));
+        assert!(request.output.is_text());
+        // An Antigravity review carries the checked review schema unscoped too.
+        let Action::Start { request, .. } = call_action(
+            "review.start",
+            json!({"focus":"check","provider":"antigravity","root":"/tasks/example"}),
+            "op",
+        )
+        .unwrap() else {
+            panic!()
+        };
+        assert!(matches!(
+            &request.output,
+            crate::managed_calls::OutputFormat::JsonSchema { schema }
+                if *schema == crate::managed_calls::review::output_schema()
+        ));
         let Action::Start { request, .. } = call_action(
             "calls.start",
             json!({"instruction":"inspect","notify":true}),

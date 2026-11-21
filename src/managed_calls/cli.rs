@@ -430,6 +430,11 @@ fn review_request(args: &ReviewArgs, focus: &str) -> Result<Request, String> {
         "access": "read-only",
         "conversation": {"mode": "fresh"},
     });
+    // Antigravity reviews only with the checked review schema; an unscoped
+    // review still carries it.
+    if args.agent == "antigravity" {
+        request["output"] = json!({"format":"json_schema","schema":super::review::output_schema()});
+    }
     if let (Some(task), Some(base)) = (&args.task, &args.base) {
         if base.starts_with('-') {
             return Err("invalid base".into());
