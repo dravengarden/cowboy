@@ -166,6 +166,10 @@ the existing permission and elicitation handlers still own every decision.
   New session here (opens New Session with the bound project preselected),
   New folder inside, Rename, Move to…, Bind project…, Delete folder (confirm
   names the destination of its contents).
+  Every item that opens a text field closes the menu first, in the tap:
+  the menu's focus restore would otherwise blur the keyboard claim the opener
+  takes (`claimKeyboard`), and the field would focus with a caret but no
+  keyboard. The `composer-surfaces` suite checks this for New session here.
 - Session kebab gains **Move to folder…**: a picker sheet listing Root and every
   folder as an indented tree, with the current folder marked and a trailing
   "New folder…" row; a search field appears above eight folders (Obsidian's
