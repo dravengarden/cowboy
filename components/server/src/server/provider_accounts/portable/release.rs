@@ -51,6 +51,10 @@ pub(in crate::server) async fn register(
     if !super::machine_ready(state, &registration.machine_id, &provider) {
         return Err(super::super::registration::MACHINE_UPDATE_REQUIRED.into());
     }
+    if super::custody::machine_admits(state, &account, &registration.machine_id, &provider).is_err()
+    {
+        return Err(super::super::registration::CUSTODY_MACHINE_UPDATE_REQUIRED.into());
+    }
     let (connection, _) = state
         .machine_control
         .connection_protocol(&registration.machine_id)

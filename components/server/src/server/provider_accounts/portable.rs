@@ -9,6 +9,7 @@ use crate::provider_account::ProviderAccountId;
 use crate::provider_service::{ProviderAuthService, ProviderAuthenticationStatus};
 use crate::store::provider_accounts::portable::Use;
 
+pub(in crate::server) mod custody;
 mod refresh;
 mod release;
 pub(in crate::server) mod revocation;

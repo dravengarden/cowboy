@@ -24,6 +24,9 @@ use crate::machine_protocol::portable_usage::PortableUsageRequest;
 use crate::store::provider_accounts::portable::Use;
 use crate::usage::native::{PortableScope, Scope, Slot};
 
+mod renewal;
+pub(in crate::server) use renewal::needed as renewal_needed;
+
 pub(super) struct Target {
     pub(super) scope: PortableScope,
     pub(super) binding: crate::plugin_host::PluginUsageSpec,
@@ -59,7 +62,16 @@ pub(super) fn target(
         .filter(|plugin| **plugin != host.plugin_id)
         .map(|plugin| status(plugin))
         .collect::<Vec<_>>();
-    let collector = status(&host.plugin_id);
+    let mut collector = status(&host.plugin_id);
+    // A session's rejection marks the generation Expired. A custody-managed
+    // account still collects (and so may renew) at that generation.
+    if super::super::portable::custody::managed(state, &account.id, &host.plugin_id)
+        && let Some(status) = collector.as_mut()
+        && status.authentication_state
+            == crate::provider_service::ServiceAuthenticationState::Expired
+    {
+        status.authentication_state = crate::provider_service::ServiceAuthenticationState::Ready;
+    }
     Some(
         ready_target(
             account,
@@ -143,6 +155,8 @@ struct Candidate {
     sessions: usize,
     /// Every sidecar Plugin has an exact active generation there.
     complete: bool,
+    /// A refresh-custody managed account runs only on protocol 51.
+    custody_current: bool,
     /// The collector there can never redeem a refresh token (its release
     /// declares it, or the Provider CLI does not rotate credentials).
     refresh_safe: bool,
@@ -163,10 +177,14 @@ fn choose(candidates: &[Candidate]) -> Result<&str, &'static str> {
     if candidates.is_empty() {
         return Err("portable_usage_machine_unavailable");
     }
-    let checks: [(Check, &'static str); 4] = [
+    let checks: [(Check, &'static str); 5] = [
         (|c| c.allowed, "runtime_not_allowed"),
         (|c| c.refresh_safe, "portable_usage_refresh_unsupported"),
         (|c| c.current, "machine_usage_update_required"),
+        (
+            |c| c.custody_current,
+            super::super::portable::custody::CUSTODY_MACHINE_UPDATE_REQUIRED,
+        ),
         (|c| c.complete, "portable_usage_collector_unavailable"),
     ];
     let mut remaining: Vec<_> = candidates.iter().collect();
@@ -199,6 +217,7 @@ pub(super) fn placement_refusal(code: &str) -> bool {
             | "portable_usage_refresh_unsupported"
             | "machine_usage_update_required"
             | "portable_usage_collector_unavailable"
+            | "portable_refresh_custody_machine_update_required"
     )
 }
 
@@ -246,6 +265,13 @@ fn placement(
         .map(|((machine, _, refresh_free), sidecars)| Candidate {
             refresh_safe: *refresh_free || !rotates,
             complete: sidecars.is_some(),
+            custody_current: super::super::portable::custody::machine_admits(
+                state,
+                id,
+                machine,
+                &target.plugin_id,
+            )
+            .is_ok(),
             machine_id: machine.clone(),
             current: state.machine_control.machine_supports(
                 machine,
@@ -309,6 +335,9 @@ pub(super) async fn refresh(
     // as Grok's) is resolved before the shared Provider window is charged:
     // it never displaces the Service account's queries, and the card keeps
     // its reason.
+    // A declaring Provider's idle account becomes custody-managed here, so
+    // its Machines hold no refresh token before any renewal can run.
+    super::super::portable::custody::ensure_managed(state, id, &target.plugin_id).await;
     let placed = match placement(state, owner, id, target) {
         Ok(placed) => placed,
         Err(code) => {
@@ -417,7 +446,7 @@ async fn under_account_lock<T>(
 }
 
 async fn collect(
-    state: &AppState,
+    state: &Arc<AppState>,
     owner: &str,
     id: &ProviderAccountId,
     target: &Target,
@@ -442,11 +471,22 @@ async fn collect(
         }),
         sidecars,
     };
+    let renewal_request = request.clone();
     let (pending, code) = under_account_lock(state, owner, id, target, || {
         crate::usage::portable::begin_collect(&state.machine_control, &machine, &plugin, request)
     })
     .await;
-    let raw = pending.ok_or(code)?.await.inspect_err(|code| {
+    let raw = match pending.ok_or(code)?.await {
+        // A custody-managed account's expired access token: renew once,
+        // inside this same budgeted collection, and keep that run's output.
+        Err("portable_usage_authentication_required")
+            if renewal::eligible(state, id, target, &machine) =>
+        {
+            renewal::renew(state, owner, id, target, &machine, &plugin, renewal_request).await
+        }
+        other => other,
+    }
+    .inspect_err(|code| {
         tracing::info!(account_id = id.as_str(), %machine, reason = code, "portable account usage refused");
     })?;
     // A disabled, revoked or re-signed account never receives the result.
@@ -491,6 +531,7 @@ mod tests {
             sessions,
             refresh_safe: true,
             complete: true,
+            custody_current: true,
         }
     }
 
@@ -555,6 +596,23 @@ mod tests {
             ]),
             Ok("hawk")
         );
+    }
+
+    #[test]
+    fn a_custody_managed_account_is_never_placed_on_an_older_machine() {
+        let mut older = candidate("falcon", true, true, 9);
+        older.custody_current = false;
+        assert_eq!(
+            choose(&[older.clone()]),
+            Err("portable_refresh_custody_machine_update_required")
+        );
+        assert_eq!(
+            choose(&[older, candidate("hawk", true, true, 0)]),
+            Ok("hawk")
+        );
+        assert!(placement_refusal(
+            "portable_refresh_custody_machine_update_required"
+        ));
     }
 
     #[test]

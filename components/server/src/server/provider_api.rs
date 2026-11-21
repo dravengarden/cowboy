@@ -572,9 +572,15 @@ pub(super) async fn provider_account_auth_envelope_for_machine(
         if !provider_accounts::portable::machine_ready(state, machine_id, provider_id) {
             return Err("machine_update_required".into());
         }
-        return scope
-            .seal_for_machine(provider_id, &public_key)
-            .map_err(|error| error.to_string());
+        // A refresh-custody managed account is sealed access-only to every
+        // Machine, including older ones.
+        return provider_accounts::portable::custody::seal_for_machine(
+            state,
+            &scope,
+            account_id,
+            provider_id,
+            &public_key,
+        );
     }
     let scope = provider_auth_scope_for_machine(state, machine_id, account_id).await?;
     if account_id.is_default()

@@ -22,6 +22,9 @@ pub(in crate::server) async fn generation(
         if !portable::machine_ready(state, machine, provider) {
             return Err(MACHINE_UPDATE_REQUIRED.into());
         }
+        if portable::custody::machine_admits(state, account, machine, provider).is_err() {
+            return Err(CUSTODY_MACHINE_UPDATE_REQUIRED.into());
+        }
         // Never falls back to the default account or a native login.
         let status = portable::admitted_status(state, owner, account, provider).await?;
         return resolve_provider_generation_with_auth(
@@ -66,6 +69,9 @@ pub(in crate::server) async fn generation(
 /// A vault subscription session needs a Machine that runs account replicas.
 pub(in crate::server) const MACHINE_UPDATE_REQUIRED: &str =
     "The selected Machine needs a Cowboy update to run this subscription.";
+
+/// A refresh-custody managed account needs a Machine on protocol 51.
+pub(in crate::server) const CUSTODY_MACHINE_UPDATE_REQUIRED: &str = "This subscription now keeps its sign-in renewal on the Service; the selected Machine needs a Cowboy update to run it.";
 
 /// Creation errors are shown to people; keep other codes for diagnostics.
 fn login_message(code: &str) -> String {
