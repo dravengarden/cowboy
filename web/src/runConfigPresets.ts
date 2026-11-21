@@ -143,6 +143,21 @@ export function withRunConfigDraft(
   );
 }
 
+/** The draft value for an edit. A value the live option already holds
+ *  through the Provider's exact equivalence keeps the live spelling: a
+ *  resumed session may not advertise the preset's spelling, so staging it
+ *  would ask the Provider for a value it does not offer. */
+export function runConfigDraftValue(
+  options: readonly ConfigOption[],
+  id: string,
+  value: string | boolean,
+): string | boolean {
+  const live = options.find((option) => option.id === id);
+  return typeof value === "string" && live && optionHolds(live, value)
+    ? live.currentValue
+    : value;
+}
+
 /** What saving the draft sends: only values that differ from the agent's,
  *  the model first because effort choices depend on it. */
 export function runConfigDraftChanges(

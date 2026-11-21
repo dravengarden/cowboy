@@ -268,6 +268,7 @@
         ./src/acp_subagents.rs
         ./src/agent_model.rs
         ./src/agent_sink.rs
+        ./src/native_configuration.rs
         ./src/bin/cowboy-codex-app-server.rs
         ./src/cgroup.rs
         # src/cgroup/containment is gated by machine-host and is not worker code.

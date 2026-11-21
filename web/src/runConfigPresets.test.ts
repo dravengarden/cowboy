@@ -12,6 +12,7 @@ import {
   activeRunConfigPreset,
   runConfigCurrentTitle,
   runConfigDraftChanges,
+  runConfigDraftValue,
   runConfigPresetChanges,
   runConfigPresets,
   runConfigSummary,
@@ -363,4 +364,15 @@ test("a resumed Fable 5.2 session keeps its preset under the Provider's exact eq
     resumed[1]!,
   ];
   assertEquals(activeRunConfigPreset(presets, stale), undefined);
+
+  // Staging another model then choosing the card keeps the live alias, so
+  // Apply never asks for a spelling the resumed session does not offer.
+  const staged = withRunConfigDraft(resumed, { model: "opus" });
+  const draft: Record<string, string | boolean> = { model: "opus" };
+  for (const change of runConfigPresetChanges(presets[0]!, staged)) {
+    draft[change.configId] = runConfigDraftValue(resumed, change.configId, change.value);
+  }
+  assertEquals(draft.model, "fable");
+  assertEquals(runConfigDraftChanges(resumed, draft), []);
+  assertEquals(runConfigDraftValue(resumed, "model", "opus"), "opus");
 });
