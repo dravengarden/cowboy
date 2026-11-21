@@ -99,10 +99,7 @@ impl MachinePluginStore {
         &self,
         invocation: RenewalInvocation,
     ) -> Result<serde_json::Value> {
-        let RenewalInvocation {
-            request,
-            mut admission,
-        } = invocation;
+        let RenewalInvocation { request, admission } = invocation;
         // A renewal ID runs at most once on this Machine.
         if let Some(reply) = retained(&request.renewal_id) {
             return Ok(serde_json::to_value(reply)?);
@@ -137,7 +134,40 @@ impl MachinePluginStore {
             custody.holds_refresh_material(&full),
             "portable_usage_authentication_required"
         );
-        let (package, _) = scoped
+        let Some((usage_value, after)) = scoped
+            .run_with_full_credential(&custody, &full, usage, admission)
+            .await?
+        else {
+            // The CLI may have renewed and left an unreadable file: the
+            // outcome is unknown, never "unchanged".
+            let reply = PortableRenewalReply {
+                renewal_id: request.renewal_id.clone(),
+                usage: serde_json::json!({"error": RENEWAL_UNREADABLE}),
+                bundle: None,
+            };
+            retain(&reply);
+            return Ok(serde_json::to_value(reply)?);
+        };
+        let reply = PortableRenewalReply {
+            renewal_id: request.renewal_id.clone(),
+            usage: usage_value,
+            bundle: after,
+        };
+        retain(&reply);
+        Ok(serde_json::to_value(reply)?)
+    }
+
+    /// Restore `full` privately, run the collector's refresh-capable path
+    /// against it, and read it back. `None` when the file is unreadable after
+    /// the run (unknown outcome).
+    async fn run_with_full_credential(
+        &self,
+        custody: &RefreshCustody,
+        full: &PortableCredentialBundle,
+        usage: &crate::machine_protocol::portable_usage::PortableUsageRequest,
+        mut admission: HostAdmission,
+    ) -> Result<Option<(serde_json::Value, Option<PortableCredentialBundle>)>> {
+        let (package, _) = self
             .active_package(&usage.plugin_id)?
             .context("portable_usage_collector_unavailable")?;
         let auth = &package.manifest.authentication;
@@ -152,7 +182,7 @@ impl MachinePluginStore {
             std::env::temp_dir().join(format!("cowboy-custody-{:032x}", rand::random::<u128>()));
         fs::DirBuilder::new().mode(0o700).create(&root)?;
         let staged = StagedProbeHome(root);
-        restore_projected_bundle(auth, &staged.0, &full)?;
+        restore_projected_bundle(auth, &staged.0, full)?;
         let credential = staged.0.join("home").join(&relative);
         let mut environment = custody.renew_environment.clone();
         environment.insert(
@@ -172,7 +202,7 @@ impl MachinePluginStore {
             // The ordinary refresh-capable path: the CLI renews at start.
             payload.remove("token_refresh");
         }
-        let run = scoped.invoke_executable_host_admitted(
+        let run = self.invoke_executable_host_admitted(
             PluginHostRequest {
                 plugin_id: usage.plugin_id.clone(),
                 plugin_version: usage.plugin_version.clone(),
@@ -190,15 +220,7 @@ impl MachinePluginStore {
         let after = projected_credential_bundle(auth, &staged.0, &full.method_id);
         drop(staged);
         let Ok(after) = after else {
-            // The CLI may have renewed and left an unreadable file: the
-            // outcome is unknown, never "unchanged".
-            let reply = PortableRenewalReply {
-                renewal_id: request.renewal_id.clone(),
-                usage: serde_json::json!({"error": RENEWAL_UNREADABLE}),
-                bundle: None,
-            };
-            retain(&reply);
-            return Ok(serde_json::to_value(reply)?);
+            return Ok(None);
         };
         let after = Some(after);
         let usage_value = match output {
@@ -208,13 +230,7 @@ impl MachinePluginStore {
             }),
             Err(_) => serde_json::json!({"error": "portable_usage_temporarily_unavailable"}),
         };
-        let reply = PortableRenewalReply {
-            renewal_id: request.renewal_id.clone(),
-            usage: usage_value,
-            bundle: after.filter(|after| *after != full),
-        };
-        retain(&reply);
-        Ok(serde_json::to_value(reply)?)
+        Ok(Some((usage_value, after.filter(|after| after != full))))
     }
 
     /// Verify and open the renewal's sealed full credential: the Service's

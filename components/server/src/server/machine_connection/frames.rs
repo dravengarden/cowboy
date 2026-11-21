@@ -222,35 +222,6 @@ impl MachineLink<'_> {
             }
             MachineFrame::Event {
                 event:
-                    MachineEvent::PortableCredentialRenewalNeeded {
-                        account_id,
-                        provider_id,
-                        auth_generation,
-                    },
-            } => {
-                // Only a Machine on protocol 51 sends it; the renewal itself
-                // is recorded and deduplicated by the Service.
-                if state.machine_control.machine_supports(
-                    &hello.machine_id,
-                    crate::machine_protocol::REFRESH_CUSTODY_PROTOCOL_VERSION,
-                ) {
-                    let state = Arc::clone(state);
-                    let machine = hello.machine_id.clone();
-                    tokio::spawn(async move {
-                        super::provider_accounts::usage::renewal_needed(
-                            &state,
-                            &machine,
-                            &account_id,
-                            &provider_id,
-                            auth_generation,
-                        )
-                        .await;
-                    });
-                }
-                return ControlFlow::Continue(());
-            }
-            MachineFrame::Event {
-                event:
                     MachineEvent::ManagedCall {
                         request_id,
                         grant,
@@ -284,7 +255,7 @@ impl MachineLink<'_> {
                 return ControlFlow::Continue(());
             }
             MachineFrame::Event { event } => {
-                self.fail_signed_out_login(&event);
+                self.observe_account_event(&event);
                 state.machine_control.record_remote(connection, event);
                 store
                     .machine_seen(&hello.machine_id, challenge_id, None)
@@ -519,6 +490,36 @@ impl MachineLink<'_> {
 
     /// A terminal login state from this Machine fails the matching pending
     /// Provider authentication it was executing.
+    /// Account-related side effects of an ordinary Machine event.
+    fn observe_account_event(&self, event: &MachineEvent) {
+        self.fail_signed_out_login(event);
+        let MachineEvent::PortableCredentialRenewalNeeded {
+            account_id,
+            provider_id,
+            auth_generation,
+        } = event
+        else {
+            return;
+        };
+        // Only a Machine on protocol 51 sends it; the renewal itself is
+        // recorded and deduplicated by the Service.
+        if !self.state.machine_control.machine_supports(
+            &self.hello.machine_id,
+            crate::machine_protocol::REFRESH_CUSTODY_PROTOCOL_VERSION,
+        ) {
+            return;
+        }
+        let (state, machine) = (Arc::clone(self.state), self.hello.machine_id.clone());
+        let (account, provider, generation) =
+            (account_id.clone(), provider_id.clone(), *auth_generation);
+        tokio::spawn(async move {
+            super::provider_accounts::usage::renewal_needed(
+                &state, &machine, &account, &provider, generation,
+            )
+            .await;
+        });
+    }
+
     fn fail_signed_out_login(&self, event: &MachineEvent) {
         let state = self.state;
         if let MachineEvent::LoginState {

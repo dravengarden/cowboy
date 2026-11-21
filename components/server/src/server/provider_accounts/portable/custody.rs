@@ -106,8 +106,7 @@ fn quiescent(state: &AppState, account: &ProviderAccountId) -> bool {
     state.hub.session_list().iter().all(|meta| {
         meta.provider_account_id != *account
             || meta.trashed_at_ms.is_some()
-            || (!state.supervisor.has_live_worker(&meta.id)
-                && connected.iter().any(|machine| *machine == meta.machine_id))
+            || (!state.supervisor.has_live_worker(&meta.id) && connected.contains(&meta.machine_id))
     })
 }
 
