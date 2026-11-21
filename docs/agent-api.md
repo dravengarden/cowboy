@@ -400,7 +400,12 @@ never redeems a refresh token: the Controller and the Machine both put
 credentials runs only a collector release that declares it then reports
 authentication required instead (`collector/portable-account.json`; Codex from
 3.6.16, Grok from 3.2.16, which reads usage without starting its CLI), otherwise
-`portable_usage_refresh_unsupported`. No
+`portable_usage_refresh_unsupported`. Codex releases before 3.6.19 still let the
+app-server refresh an expired access token on its own; 3.6.19 cannot reach a
+refresh endpoint for such a request (see
+[usage-execution](usage-execution.md#named-portable-accounts)). A named Codex
+account also spends banked resets immediately (`usage.account_reset`, Codex
+3.6.19, Machine protocol 51); Grok and DeepSeek named accounts have none. No
 Machine speaking protocol 50 was ever released, so no further capability
 negotiation exists. Expired tokens are renewed by sessions. Activity
 attachments stay with the Service account because request telemetry has no

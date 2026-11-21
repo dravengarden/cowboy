@@ -74,8 +74,29 @@ first unmet check (host policy, a refresh-free collector release, the Machine
 protocol, the exact sidecars) of the Machine that met the most of them, so a
 Machine already running a refresh-free release reports what it still lacks
 instead of an older release elsewhere. A cached placement refusal is no longer
-reported once a placement is possible again. Named portable accounts have no
-resets.
+reported once a placement is possible again.
+
+**Named Codex resets.** A named Codex account spends a banked reset immediately
+(no schedules), like a named Claude account: typed `confirm`, the grant ID
+pinned when the dialog opened, the shared Provider pacing (one collector
+start), and only `reset`/`already_used` as outcomes; anything else is unknown
+and never retried. It runs on the Machine the account's usage placement selects
+(protocol 51, `ConsumePortableReset`), under the account lock with the exact
+vault generation and admission revision, with an absolute dispatch expiry, and
+only when the exact selected release declares resets and a refresh-free reset
+(`collector/portable-account.json` `"reset_token_refresh": "request"`, Codex
+3.6.19). Its `consume_reset` runs with `"token_refresh": false`. Grok and
+DeepSeek named accounts have no resets.
+
+The Codex app-server refreshes an expired access token on its own
+(`proactive_expiry`), whatever the collector asks: an offline check against the
+pinned 0.169.1 and a fake token endpoint showed the released 3.6.18 collector
+redeeming the refresh token under `token_refresh: false` (four token requests
+for a usage read, one for a reset, and a rewritten `auth.json`). From 3.6.19 a
+refresh-free request's app-server points its refresh endpoint at a port nothing
+listens on (`CODEX_REFRESH_TOKEN_URL_OVERRIDE`), and a rejected token reports
+authentication required: the same check then showed no token request and an
+unchanged `auth.json` for both.
 
 ## Operator CLI
 
