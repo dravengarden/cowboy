@@ -229,6 +229,8 @@
           ./src/telemetry_plugin/writer_admission.rs
           ./src/telemetry_plugin/writer_admission
           ./src/otlp.rs
+          ./src/metrics_egress.rs
+          ./src/metrics_egress
           ./src/provider/deepseek_cache.rs
           ./src/provider/deepseek_context.rs
           ./components/store/src/provider_behavior.rs

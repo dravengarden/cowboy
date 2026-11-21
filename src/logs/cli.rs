@@ -71,6 +71,15 @@ enum Command {
     Metrics(QueryArgs),
     /// Compare with the preceding equal time window and return evidence-linked findings.
     Analyze(QueryArgs),
+    /// Read compact UTC wait/cache cohorts retained after detail expires.
+    WaitCacheDaily(DailyArgs),
+    /// Write a closed UTC day's allowlisted wait/cache counters as OTLP protobuf.
+    #[cfg(any(feature = "full", feature = "machine-host"))]
+    WaitCacheMetrics {
+        /// Date in UTC (YYYY-MM-DD).
+        #[arg(long)]
+        day: chrono::NaiveDate,
+    },
     /// Poll recent records as JSONL; every frame reports gaps and truncation.
     Tail(WatchArgs),
     /// Periodic, read-only analysis. Use a native scheduler to persist execution.
@@ -90,6 +99,15 @@ enum Command {
     },
     /// Bounded read-only JSON RPC over stdin/stdout, used by the SSH source adapter.
     Rpc,
+}
+
+#[derive(Args)]
+struct DailyArgs {
+    /// Relative lookback, RFC3339 timestamp, or Unix milliseconds.
+    #[arg(long, default_value = "30d")]
+    from: String,
+    #[arg(long, default_value = "now")]
+    to: String,
 }
 
 #[derive(Clone, Args)]
@@ -308,6 +326,31 @@ impl LogsArgs {
                     self.allow_partial,
                 )
                 .await
+            }
+            Command::WaitCacheDaily(args) => {
+                let now = super::data::now_ms();
+                report(
+                    &sources,
+                    Operation::WaitCacheDaily {
+                        from_ms: timestamp(&args.from, now)?,
+                        to_ms: timestamp(&args.to, now)?,
+                    },
+                    self.allow_partial,
+                )
+                .await
+            }
+            #[cfg(any(feature = "full", feature = "machine-host"))]
+            Command::WaitCacheMetrics { day } => {
+                let source = single_local(&sources)?;
+                let day = day
+                    .and_hms_opt(0, 0, 0)
+                    .expect("midnight")
+                    .and_utc()
+                    .timestamp_millis();
+                let store = SqliteStore::open(source.directory.clone(), false)?;
+                let bytes = store.wait_cache_otlp(day, now_ms(), false)?;
+                std::io::stdout().lock().write_all(&bytes)?;
+                Ok(())
             }
             Command::Status => report(&sources, Operation::Status, self.allow_partial).await,
             Command::Configure(args) => {

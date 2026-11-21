@@ -24,6 +24,18 @@ macro_rules! dispatch {
 }
 
 impl Store {
+    /// The latest committed rollover observation, including a newer Clear
+    /// that invalidated it. Reads one row through the context-boundary index.
+    pub async fn latest_context_rollover(&self, session_id: &str) -> Result<Option<u64>> {
+        let row: Option<serde_json::Value> = dispatch!(self, latest_context_boundary(session_id))?;
+        Ok(row.and_then(|payload| {
+            let update = payload.get("update")?;
+            (update["sessionUpdate"] == crate::context_rollover::MARKER)
+                .then(|| update["before"].as_u64())
+                .flatten()
+        }))
+    }
+
     /// The first user prompt rows, oldest first, of the native context that
     /// is current at `before_seq`: after the newest Clear or renewal boundary
     /// before it, or from the session's start.
@@ -51,8 +63,25 @@ impl Store {
 }
 
 macro_rules! implementation {
-    ($backend:ty, $update_kind:literal) => {
+    ($backend:ty, $update_kind:literal, $index:literal) => {
         impl $backend {
+            async fn latest_context_boundary(
+                &self,
+                session_id: &str,
+            ) -> Result<Option<serde_json::Value>> {
+                sqlx::query_scalar(concat!(
+                    "SELECT payload FROM events ",
+                    $index,
+                    " WHERE session_id = $1 AND ",
+                    $update_kind,
+                    " IN ('context_cleared', 'context_rolled_over') ORDER BY seq DESC LIMIT 1"
+                ))
+                .bind(session_id)
+                .fetch_optional(&self.pool)
+                .await
+                .context("SELECT newest context boundary observation")
+            }
+
             async fn context_opening_prompt_rows(
                 &self,
                 session_id: &str,
@@ -86,8 +115,9 @@ macro_rules! implementation {
     };
 }
 
-implementation!(PostgresStorage, "payload->'update'->>'sessionUpdate'");
+implementation!(PostgresStorage, "payload->'update'->>'sessionUpdate'", "");
 implementation!(
     SqliteStorage,
-    "json_extract(payload, '$.update.sessionUpdate')"
+    "json_extract(payload, '$.update.sessionUpdate')",
+    "INDEXED BY events_context_boundary_idx"
 );

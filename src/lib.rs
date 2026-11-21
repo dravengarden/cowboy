@@ -140,6 +140,8 @@ pub use cowboy_store::managed_calls;
 pub mod managed_config;
 #[cfg(feature = "full")]
 pub mod memory_observability;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+mod metrics_egress;
 #[cfg(feature = "full")]
 pub use cowboy_store::model;
 #[cfg(feature = "full")]

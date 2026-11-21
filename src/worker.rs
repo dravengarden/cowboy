@@ -29,8 +29,11 @@ use crate::runtime_wire::{
 const BROKER_RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(100);
 mod execution_launch;
 mod mcp_launch;
+mod request_observation;
 mod sandbox_extensions;
 pub mod startup_gate;
+mod workspace;
+use workspace::{WorkspaceIdentity, workspace_identity};
 const BROKER_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
 const BROKER_CONNECTION_STABLE_AFTER: Duration = Duration::from_secs(10);
 
@@ -67,6 +70,7 @@ pub struct Shared {
     outbox: Mutex<BTreeMap<u64, RuntimeEvent>>,
     pub trace_outbox: Mutex<BTreeMap<u64, Vec<crate::runtime_trace::SpanRecord>>>,
     telemetry: Mutex<crate::worker_telemetry::WorkerTelemetry>,
+    request_observer: Option<request_observation::Observer>,
     notify: mpsc::UnboundedSender<()>,
     seen_commands: Mutex<HashSet<String>>,
     /// Digests of prompt images Cowboy stored before dispatch, newest last.
@@ -111,24 +115,10 @@ struct ManagedRound {
     marker: Arc<Mutex<Option<crate::managed_calls::round::RoundMarker>>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct WorkspaceIdentity {
-    device: u64,
-    inode: u64,
-}
-
 fn current_executable() -> Option<String> {
     std::env::current_exe()
         .ok()
         .map(|path| path.display().to_string())
-}
-
-fn workspace_identity(path: &std::path::Path) -> Option<WorkspaceIdentity> {
-    let metadata = std::fs::metadata(path).ok()?;
-    Some(WorkspaceIdentity {
-        device: metadata.dev(),
-        inode: metadata.ino(),
-    })
 }
 
 impl Shared {
@@ -140,28 +130,6 @@ impl Shared {
             .and_then(|launch| launch.execution_binding.as_ref())
             .and_then(crate::execution_environment::ExecutionBinding::managed)
             .is_some()
-    }
-
-    /// The workspace was replaced or removed: report the crash it means and
-    /// return why a prompt cannot run.
-    fn workspace_replaced(&self) -> Option<String> {
-        if self.workspace_is_current() {
-            return None;
-        }
-        let message = format!(
-            "session workspace was replaced or removed: {}; retry after Cowboy recycles this worker",
-            self.workspace_path.display()
-        );
-        self.emit(RuntimeEvent::Status {
-            state: WorkerState::Crashed,
-            detail: Some(message.clone()),
-        });
-        Some(message)
-    }
-
-    fn workspace_is_current(&self) -> bool {
-        self.workspace_identity.is_some()
-            && workspace_identity(&self.workspace_path) == self.workspace_identity
     }
 
     fn emit(&self, event: RuntimeEvent) -> u64 {
@@ -384,6 +352,12 @@ impl RemoteSink {
     fn emit_event(&self, event: Event, cmid: Option<String>) {
         let runtime = match event {
             Event::Update { mut update } => {
+                if update["sessionUpdate"] == "compaction_update"
+                    && update["status"] == "completed"
+                    && let Some(observer) = &self.shared.request_observer
+                {
+                    observer.compacted(crate::logs::now_ms());
+                }
                 let mut stored = self.shared.echo_artifacts.lock();
                 crate::artifacts::reference_echoed_image(&mut update, stored.make_contiguous());
                 drop(stored);
@@ -496,6 +470,9 @@ impl AgentSink for RemoteSink {
     }
 
     fn prompt_completed(&self, _session_id: &str, cmid: Option<&str>, outcome: &str) {
+        if let Some(cmid) = cmid {
+            crate::logs::wait_cache::record_notice_receipt(&self.shared.session_id, cmid, outcome);
+        }
         self.shared.telemetry.lock().completed(cmid, outcome);
     }
 
@@ -531,6 +508,9 @@ impl AgentSink for RemoteSink {
     }
 
     fn set_agent_session_id(&self, _session_id: &str, agent_session_id: String) {
+        if let Some(observer) = &self.shared.request_observer {
+            observer.native_id(&agent_session_id);
+        }
         self.shared.emit(RuntimeEvent::AgentSessionId {
             agent_session_id,
             materialized: false,
@@ -538,6 +518,9 @@ impl AgentSink for RemoteSink {
     }
 
     fn set_forked_agent_session_id(&self, _session_id: &str, agent_session_id: String) {
+        if let Some(observer) = &self.shared.request_observer {
+            observer.native_id(&agent_session_id);
+        }
         self.shared.emit(RuntimeEvent::AgentSessionId {
             agent_session_id,
             materialized: true,
@@ -789,6 +772,8 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
     )
     .await?;
     let expected_workspace_identity = workspace_identity(&args.cwd);
+    let collector =
+        request_observation::Collector::start(&mut spec, &args, &prepared, &epoch).await;
     let shared = Arc::new(Shared {
         session_id: args.session_id.clone(),
         worker_epoch: epoch.clone(),
@@ -834,6 +819,9 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         outbox: Mutex::new(BTreeMap::new()),
         trace_outbox: Mutex::default(),
         telemetry: Mutex::default(),
+        request_observer: collector
+            .as_ref()
+            .map(|collector| collector.observer.clone()),
         notify: notify_tx,
         seen_commands: Mutex::new(HashSet::new()),
         echo_artifacts: Mutex::new(VecDeque::new()),
@@ -1269,13 +1257,7 @@ pub fn handle_command(
                 if !shared.mark_command(&command_id) {
                     return command_ack(shared, command_id, true, Some("duplicate".to_owned()));
                 }
-                if echo_artifacts {
-                    shared.remember_echo_artifacts(&content);
-                }
-                let blocks: Vec<ContentBlock> = content
-                    .into_iter()
-                    .filter_map(|value| serde_json::from_value(value).ok())
-                    .collect();
+                let blocks = decoded_prompt(shared, content, echo_artifacts);
                 if blocks.is_empty() {
                     return command_ack(
                         shared,
@@ -1411,6 +1393,23 @@ pub fn handle_command(
     }
 }
 
+fn decoded_prompt(
+    shared: &Shared,
+    content: Vec<serde_json::Value>,
+    echo_artifacts: bool,
+) -> Vec<ContentBlock> {
+    if echo_artifacts {
+        shared.remember_echo_artifacts(&content);
+    }
+    if let Some(observer) = &shared.request_observer {
+        observer.prompt(&content);
+    }
+    content
+        .into_iter()
+        .filter_map(|value| serde_json::from_value(value).ok())
+        .collect()
+}
+
 fn command_ack(
     shared: &Shared,
     command_id: String,
@@ -1469,6 +1468,7 @@ pub fn shared() -> (Arc<Shared>, mpsc::UnboundedReceiver<()>) {
             outbox: Mutex::new(BTreeMap::new()),
             trace_outbox: Mutex::default(),
             telemetry: Mutex::default(),
+            request_observer: None,
             notify: tx,
             seen_commands: Mutex::new(HashSet::new()),
             echo_artifacts: Mutex::new(VecDeque::new()),

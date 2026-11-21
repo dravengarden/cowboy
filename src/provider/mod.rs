@@ -20,6 +20,7 @@ use cowboy_provider_sdk::{
 pub use crate::provider_behavior::legacy_behavior;
 
 pub const DEEPSEEK_SESSION_ID_ENV: &str = "COWBOY_DEEPSEEK_SESSION_ID";
+pub(crate) const CODEX_REQUEST_OBSERVATION_ENV: &str = "COWBOY_PRIVATE_CODEX_REQUEST_OBSERVATION";
 
 /// How to spawn one provider's ACP adapter as a subprocess.
 #[derive(Debug, Clone)]
@@ -56,6 +57,7 @@ pub struct PreparedLaunch {
     pub sidecars: Vec<tokio::process::Child>,
     pub execution_jsonrpc: bool,
     pub mcp_bindings: bool,
+    pub(crate) codex_request_observation: bool,
     /// Configuration options the signed package's presets set (model,
     /// reasoning). A managed child accepts only these from Cowboy.
     pub preset_options: std::collections::BTreeSet<String>,
@@ -429,6 +431,7 @@ pub async fn prepare(
             sidecars: Vec::new(),
             execution_jsonrpc: false,
             mcp_bindings: false,
+            codex_request_observation: false,
             preset_options: std::collections::BTreeSet::new(),
         });
     }
@@ -557,6 +560,10 @@ async fn prepare_package_launch(
         &sidecar_auth,
         |name| std::env::var(name).ok(),
     ));
+    let codex_request_observation = codex_observation_opt_in(&package.manifest);
+    if id == "codex" {
+        environment.remove(CODEX_REQUEST_OBSERVATION_ENV);
+    }
     let arguments = launch_arguments
         .iter()
         .map(|value| {
@@ -570,6 +577,7 @@ async fn prepare_package_launch(
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(PreparedLaunch {
+        codex_request_observation,
         mcp_bindings: package
             .manifest
             .runtime
@@ -601,6 +609,15 @@ async fn prepare_package_launch(
         },
         sidecars,
     })
+}
+
+fn codex_observation_opt_in(manifest: &cowboy_provider_sdk::ProviderManifest) -> bool {
+    manifest.id == "codex"
+        && manifest.publisher == "cowboy-first-party"
+        && matches!(
+            manifest.runtime.environment.get(CODEX_REQUEST_OBSERVATION_ENV),
+            Some(RuntimeValue::Literal(value)) if value == "codex-otlp-http-v1"
+        )
 }
 
 /// A Provider whose signed manifest requires the account sandbox runs only
@@ -1399,6 +1416,25 @@ mod tests {
                 .sdk_version,
             "2.4.0"
         );
+    }
+
+    #[test]
+    fn codex_observation_requires_an_explicit_first_party_adapter_contract() {
+        let source: StandardProviderSource =
+            serde_json::from_str(include_str!("../../plugins/codex/provider.json")).unwrap();
+        let mut manifest = source.compile().unwrap();
+        manifest
+            .runtime
+            .environment
+            .remove(super::CODEX_REQUEST_OBSERVATION_ENV);
+        assert!(!super::codex_observation_opt_in(&manifest));
+        manifest.runtime.environment.insert(
+            super::CODEX_REQUEST_OBSERVATION_ENV.into(),
+            cowboy_provider_sdk::RuntimeValue::Literal("codex-otlp-http-v1".into()),
+        );
+        assert!(super::codex_observation_opt_in(&manifest));
+        manifest.publisher = "another-publisher".into();
+        assert!(!super::codex_observation_opt_in(&manifest));
     }
 
     #[test]

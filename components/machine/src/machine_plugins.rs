@@ -5430,7 +5430,8 @@ mod tests {
         );
         assert_eq!(installed.auth_generation, None);
         assert!(!store.auth_provider_root("victoria").exists());
-        let payload = || serde_json::json!({"logs": "{\"timestamp\":\"2026-09-08T00:00:00Z\",\"message\":\"fixture\",\"component\":\"cowboy-client\",\"platform\":\"web\"}\n", "metrics": "cowboy_client_fixture{platform=\"web\"} 1 1788825600000\n"});
+        let metrics_body = "cowboy_client_long_task_count{platform=\"web\"} 1 1788825600000\n";
+        let payload = || serde_json::json!({"logs": "{\"timestamp\":\"2026-09-08T00:00:00Z\",\"message\":\"fixture\",\"component\":\"cowboy-client\",\"platform\":\"web\"}\n", "metrics": metrics_body});
         // Installation alone never authorizes network egress.
         assert!(
             store
@@ -5522,8 +5523,25 @@ mod tests {
                 .find(|(path, _, _)| path.ends_with("/api/v1/import/prometheus"))
                 .unwrap();
             assert_eq!(metrics.1["content-type"], "text/plain; version=0.0.4");
-            assert!(metrics.2.ends_with("1788825600000\n"));
+            assert_eq!(metrics.2, metrics_body);
         }
+        let denied = store
+            .invoke_host_for_test(
+                "victoria",
+                "1.0.0",
+                &installed.generation_digest,
+                None,
+                PluginHostOperation::ExportTelemetry,
+                serde_json::json!({
+                    "logs": "",
+                    "metrics": metrics_body.replace("platform=\"web\"", "call_id=\"private-value\""),
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied["legacy_metrics_rejected"], true);
+        assert_eq!(denied["metrics_delivered"], false);
+        assert_eq!(received.lock().len(), 3);
         assert!(
             store
                 .invoke_host_for_test(
@@ -5698,7 +5716,7 @@ mod tests {
         let server = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
-        let fixtures = crate::otlp::client_fixtures();
+        let fixtures = crate::otlp::client_export_fixtures();
         let payload = |signal, bytes: &[u8]| serde_json::json!({"signal":signal,"protobuf":base64::engine::general_purpose::STANDARD.encode(bytes)});
         assert!(
             store
@@ -5752,6 +5770,17 @@ mod tests {
                 .filter(|(p, _)| p.ends_with("/logs"))
                 .collect();
             assert_eq!(logs[0].1, logs[1].1);
+            let metrics: Vec<_> = requests
+                .iter()
+                .filter(|(path, _)| path.ends_with("/metrics"))
+                .map(|(_, body)| body)
+                .collect();
+            let expected: Vec<_> = fixtures
+                .iter()
+                .filter(|(signal, _)| *signal == crate::otlp::Signal::Metrics)
+                .map(|(_, bytes)| bytes)
+                .collect();
+            assert_eq!(metrics, expected);
         }
         assert!(!store.auth_provider_root("victoria").exists());
         let next = store

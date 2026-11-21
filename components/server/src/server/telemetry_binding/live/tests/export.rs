@@ -129,7 +129,7 @@ impl Approval {
 }
 
 fn attempt(fixture: &Fixture, index: usize) -> ExportAttempt {
-    let (signal, bytes) = crate::otlp::client_fixtures().remove(index);
+    let (signal, bytes) = crate::otlp::client_export_fixtures().remove(index);
     ExportAttempt {
         schema: 1,
         attempt_id: format!("managed-export-fixture-{index}"),

@@ -175,6 +175,23 @@ pub struct Entry {
 }
 
 impl Entry {
+    /// Add a derived observation to the local log and its portable protobuf.
+    pub(super) fn add_log_attributes(&mut self, attributes: Vec<KeyValue>) -> Result<()> {
+        let mut request = ExportLogsServiceRequest::decode(self.protobuf.as_slice())?;
+        let record = request
+            .resource_logs
+            .first_mut()
+            .and_then(|resource| resource.scope_logs.first_mut())
+            .and_then(|scope| scope.log_records.first_mut())
+            .ok_or_else(|| anyhow::anyhow!("local evidence is missing its log record"))?;
+        record
+            .attributes
+            .retain(|current| !attributes.iter().any(|added| current.key == added.key));
+        record.attributes.extend(attributes);
+        self.protobuf = request.encode_to_vec();
+        self.project_attributes()
+    }
+
     pub fn log(resource: Resource, scope: InstrumentationScope, log: LogRecord, now: i64) -> Self {
         let mut entry = Self::base(&resource, &log.attributes, now);
         entry.timestamp_ms = i64::try_from(log.time_unix_nano / 1_000_000).unwrap_or(now);

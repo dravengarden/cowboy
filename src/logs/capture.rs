@@ -154,6 +154,16 @@ impl Capture {
         }
     }
     fn entry(&self, name: &str, severity: i32, attributes: Vec<KeyValue>) -> Entry {
+        self.entry_at(name, severity, None, attributes)
+    }
+
+    fn entry_at(
+        &self,
+        name: &str,
+        severity: i32,
+        source_ms: Option<i64>,
+        attributes: Vec<KeyValue>,
+    ) -> Entry {
         let now = now_ms();
         let context = self.context.read();
         let mut attrs = vec![
@@ -172,7 +182,9 @@ impl Capture {
                 ..Default::default()
             },
             LogRecord {
-                time_unix_nano: now.max(0) as u64 * 1_000_000,
+                time_unix_nano: u64::try_from(source_ms.unwrap_or(now))
+                    .unwrap_or_default()
+                    .saturating_mul(1_000_000),
                 observed_time_unix_nano: now.max(0) as u64 * 1_000_000,
                 severity_number: severity,
                 event_name: name.into(),
@@ -185,6 +197,28 @@ impl Capture {
             now,
         )
     }
+}
+
+pub(super) fn wait_cache_record(
+    name: &str,
+    identity: &[&str],
+    source_ms: Option<i64>,
+    attributes: Vec<KeyValue>,
+) {
+    let Some(capture) = CAPTURE.get() else {
+        return;
+    };
+    let mut entry = capture.entry_at(name, 9, source_ms, attributes);
+    if !identity.is_empty() {
+        use sha2::{Digest as _, Sha256};
+        let mut hash = Sha256::new();
+        for part in std::iter::once(&name).chain(identity) {
+            hash.update(part.len().to_le_bytes());
+            hash.update(part.as_bytes());
+        }
+        entry.id = format!("{:x}", hash.finalize())[..32].to_owned();
+    }
+    capture.submit(entry);
 }
 
 /// Holds a bounded flush lifetime; SIGKILL can still lose queued records. The
@@ -383,6 +417,7 @@ fn run(
     let mut maintenance = Instant::now() - Duration::from_secs(30);
     let mut health_time = maintenance;
     let mut reported = (0, 0);
+    let mut rolled_up = (0, 0);
     let mut shutdown = None;
     loop {
         if capture.stopping.load(Ordering::Acquire) {
@@ -473,6 +508,13 @@ fn run(
             || (troubled != reported && health_time.elapsed() >= Duration::from_secs(5))
         {
             reported = troubled;
+            if rolled_up != troubled
+                && store
+                    .append(&[loss_record(&capture, rolled_up, troubled)], now_ms())
+                    .is_ok()
+            {
+                rolled_up = troubled;
+            }
             let health = Health {
                 schema: 1,
                 instance: capture.instance.clone(),
@@ -501,6 +543,18 @@ fn run(
             break;
         }
     }
+}
+
+fn loss_record(capture: &Capture, old: (u64, u64), new: (u64, u64)) -> Entry {
+    use super::wait_cache::{Fields, LOSS};
+    capture.entry(
+        LOSS,
+        9,
+        Fields::default()
+            .integer("local_dropped_records", new.0.saturating_sub(old.0))
+            .integer("local_write_failures", new.1.saturating_sub(old.1))
+            .0,
+    )
 }
 fn health_paths(directory: &Path, limit: usize) -> Result<(Vec<PathBuf>, bool)> {
     let mut paths = Vec::new();
@@ -877,8 +931,7 @@ pub fn provider_usage(event: &crate::machine_protocol::ProviderUsageEvent) {
     let Some(capture) = CAPTURE.get() else {
         return;
     };
-    // Typed, validated accounting metadata only. No URL, headers, request,
-    // response, account identity or prefix material crosses this projection.
+    // Preserve the existing gateway diagnostic and its error classification.
     let mut attributes = vec![
         text("cowboy.provider.name", &event.provider),
         text("cowboy.provider.model", &event.model),

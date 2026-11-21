@@ -4571,3 +4571,53 @@ async fn antigravity_drafts_are_never_scheduled_or_fired() {
     assert!(rx.try_recv().is_err());
     assert_eq!(hub.queue_and_drafts("agy", |_| true).unwrap().1.len(), 3);
 }
+
+#[test]
+fn wait_cache_context_sample_requires_the_same_native_id_and_provider_generation() {
+    let id = "wait-cache-context";
+    let hub = hub_with_session(id);
+    {
+        let mut sessions = hub.inner.sessions.lock();
+        let session = sessions.get_mut(id).unwrap();
+        session.meta.provider_generation_digest = "generation-1".into();
+        session.meta.agent_session_id = Some("native-1".into());
+    }
+    let meta = || hub.session_info(id).unwrap().meta;
+    let report = |used, size| {
+        hub.set_session_usage(
+            id,
+            crate::agent_model::SessionUsage {
+                used,
+                size,
+                raw: serde_json::Value::Null,
+                observed_at_ms: 1,
+            },
+        )
+    };
+
+    report(0, 0);
+    assert_eq!(hub.verified_context_usage(&meta()), None);
+    report(190_000, 1_000_000);
+    assert_eq!(hub.verified_context_usage(&meta()), Some(190_000));
+    report(0, 0);
+    assert_eq!(hub.verified_context_usage(&meta()), Some(190_000));
+    report(0, 1_000_000);
+    assert_eq!(hub.verified_context_usage(&meta()), Some(0));
+
+    let stale = meta();
+    hub.inner
+        .sessions
+        .lock()
+        .get_mut(id)
+        .unwrap()
+        .meta
+        .provider_generation_digest = "generation-2".into();
+    assert_eq!(hub.verified_context_usage(&meta()), None);
+    assert_eq!(hub.verified_context_usage(&stale), None);
+    hub.set_agent_session_id(id, "native-2".into());
+    assert_eq!(hub.verified_context_usage(&meta()), None);
+    report(175_000, 1_000_000);
+    assert_eq!(hub.verified_context_usage(&meta()), Some(175_000));
+    hub.prepare_context_reset(id);
+    assert_eq!(hub.verified_context_usage(&meta()), None);
+}

@@ -32,6 +32,7 @@ pub(super) async fn transcript(
     if target.as_deref() == Some(parent.id.as_str())
         && let Ok(context) = crate::session_context::read(hub, &parent.id)
         && let Some(rollover) = context.rollover
+        && observed_rollover(hub, store, &parent.id, rollover.before).await
     {
         record_read(
             &parent.id,
@@ -43,6 +44,28 @@ pub(super) async fn transcript(
         );
     }
     result
+}
+
+async fn observed_rollover(
+    hub: &crate::core::Hub,
+    store: Option<&crate::store::Store>,
+    session: &str,
+    before: u64,
+) -> bool {
+    if let Some(matches) = hub.observes_rollover_boundary(session, before) {
+        return matches;
+    }
+    let Some(store) = store else {
+        return false;
+    };
+    let lookup = store.latest_context_rollover(session);
+    if let Ok(Ok(committed)) =
+        tokio::time::timeout(std::time::Duration::from_millis(150), lookup).await
+    {
+        hub.restore_observed_rollover_boundary(session, committed, before)
+    } else {
+        false
+    }
 }
 
 /// The bounded shape of a read request: sizes and positions, never the

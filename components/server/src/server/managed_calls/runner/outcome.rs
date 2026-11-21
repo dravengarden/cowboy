@@ -76,11 +76,7 @@ pub(in crate::server::managed_calls) fn record(record: &Record) {
 /// Queue the parent's opted-in completion notice. A parent that is gone or
 /// closing gets none; the Hub's call-scoped id absorbs a repeated notice.
 pub(super) fn notify_parent(state: &super::AppState, record: &Record) {
-    if record
-        .labels
-        .get(crate::managed_calls::review::NOTIFY)
-        .is_none_or(|value| value != "parent")
-    {
+    if !super::super::wait_observation::wants_notice(record) {
         return;
     }
     let parent = &record.placement.parent_session_id;
@@ -89,6 +85,12 @@ pub(super) fn notify_parent(state: &super::AppState, record: &Record) {
         .session_info(parent)
         .is_none_or(|info| info.meta.closing)
     {
+        let cmid = format!(
+            "{}{}",
+            crate::agent_model::CALL_NOTICE_PREFIX,
+            record.call_id
+        );
+        crate::logs::wait_cache::record_notice_admission(parent, Some(&cmid), "parent_unavailable");
         return;
     }
     state

@@ -17,7 +17,6 @@
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use base64::Engine as _;
@@ -38,6 +37,7 @@ pub use session_fork::{FORK_ORIGIN_UPDATE, ForkPoint, ForkRecord, ForkState};
 mod hub_config;
 use hub_config::{ConfigPreviews, add_config_choices};
 mod hub_events;
+pub use hub_events::FanoutFrame;
 mod hub_managed_calls;
 mod hub_peer_notice;
 pub use hub_peer_notice::PromptProgress;
@@ -547,6 +547,8 @@ struct DispatchedPrompt {
 struct Session {
     pending_actions: session_attention::PendingActions,
     meta: SessionMeta,
+    usage_evidence: Option<context_rollover::UsageEvidence>,
+    history_boundary: context_rollover::HistoryBoundary,
     // A Controller-local observation lifetime, not the native worker lifetime.
     code_incarnation: code_scope::CodeIncarnation,
     /// The durable Session lineage the owning Machine last reported. `None`
@@ -1120,47 +1122,6 @@ pub enum CommandOutcome {
     Stale,
 }
 
-/// One immutable live frame shared by every WebSocket and the Web Push observer.
-/// Structured `Outbound` stays available for observers; JSON is serialized at
-/// most once and reused for every socket write.
-#[derive(Debug)]
-pub struct FanoutFrame {
-    outbound: Outbound,
-    json: OnceLock<String>,
-}
-
-impl FanoutFrame {
-    fn new(outbound: Outbound) -> Arc<Self> {
-        Arc::new(Self {
-            outbound,
-            json: OnceLock::new(),
-        })
-    }
-
-    #[must_use]
-    pub fn outbound(&self) -> &Outbound {
-        &self.outbound
-    }
-
-    /// Cached JSON for this frame. Concurrent first writers may serialize twice;
-    /// `OnceLock` keeps one buffer for the ring's lifetime.
-    pub fn json(&self) -> Result<&str, serde_json::Error> {
-        if let Some(json) = self.json.get() {
-            return Ok(json);
-        }
-        let encoded = serde_json::to_string(&self.outbound)?;
-        Ok(self.json.get_or_init(|| encoded))
-    }
-}
-
-impl std::ops::Deref for FanoutFrame {
-    type Target = Outbound;
-
-    fn deref(&self) -> &Self::Target {
-        &self.outbound
-    }
-}
-
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HubMemoryStats {
     pub session_count: usize,
@@ -1627,9 +1588,12 @@ struct BackgroundLedger {
 /// Where an accepted subagent snapshot leaves its terminal occurrence.
 #[derive(Debug, Clone, Copy)]
 enum SubagentEnding {
-    Working,
+    Working {
+        first_snapshot: bool,
+        after_idle: bool,
+    },
     /// A new terminal occurrence starts at this snapshot.
-    Ended,
+    Ended(u64),
     /// Metadata of an occurrence that already ended, with its identity.
     AlreadyEnded(Option<u64>),
 }
@@ -1787,19 +1751,6 @@ impl Hub {
             hot_log_bytes: sessions.values().map(|session| session.log_bytes).sum(),
             broadcast_last_bytes: self.inner.broadcast_last_bytes.load(Ordering::Relaxed),
         }
-    }
-
-    fn fanout(&self, outbound: Outbound) {
-        // A send error just means no clients or internal observers are
-        // connected. The canonical hot tail remains authoritative.
-        let bytes = match &outbound {
-            Outbound::Event { envelope } => estimated_envelope_bytes(envelope),
-            _ => 256,
-        };
-        self.inner
-            .broadcast_last_bytes
-            .store(bytes, Ordering::Relaxed);
-        let _ = self.inner.tx.send(FanoutFrame::new(outbound));
     }
 
     /// Publish a session's pending agent-call approval to its viewers.
@@ -2052,21 +2003,7 @@ impl Hub {
             .filter(|worker| worker.has_connected_owner())
             .map(|worker| (worker.session_id.as_str(), worker))
             .collect();
-        // Seed the qid counter PAST every restored id. The counter (`next_qid`)
-        // is in-memory and resets to 1 on each daemon restart, so without this a
-        // draft/queued message created after a restart reuses q1, q2, … and
-        // collides with a pre-restart one — duplicate ids, which the client keys
-        // rows by, so a "3 Drafts" header renders only 2 distinct rows. Done
-        // before the loop so the dedup below can mint fresh ids past the max.
-        let mut max_qid = 0u64;
-        for r in &sessions {
-            for m in r.queue.iter().chain(r.drafts.iter()) {
-                if let Some(n) = m.id.strip_prefix('q').and_then(|s| s.parse::<u64>().ok()) {
-                    max_qid = max_qid.max(n);
-                }
-            }
-        }
-        self.inner.next_qid.store(max_qid + 1, Ordering::Relaxed);
+        self.seed_restored_queue_ids(&sessions);
 
         // Sessions whose turn was cut off by the restart (persisted `Busy`).
         // Collected under the lock, marked after it's released — `push` below
@@ -2180,6 +2117,8 @@ impl Hub {
                 if healed || removed_legacy_continuation {
                     pending_dirty.push(id.clone());
                 }
+                let history_boundary =
+                    context_rollover::HistoryBoundary::from_log(&log, reached_start);
                 let log_bytes = session_attention::prepare_restored_log(
                     &mut log,
                     meta.status,
@@ -2197,6 +2136,8 @@ impl Hub {
                         ),
                         meta,
                         code_incarnation: code_scope::CodeIncarnation::default(),
+                        usage_evidence: None,
+                        history_boundary,
                         machine_lineage: None,
                         log,
                         log_bytes,
@@ -2511,6 +2452,7 @@ impl Hub {
     /// human-paced session parks it as a draft for an explicit send instead.
     pub fn submit_automatic(&self, session_id: &str, text: String, cmid: String) {
         if self.human_paced(session_id) {
+            crate::logs::wait_cache::record_notice_admission(session_id, Some(&cmid), "draft_path");
             return self.add_draft(session_id, text, Vec::new(), Some(cmid));
         }
         self.submit_inner(session_id, text, Vec::new(), Some(cmid), false, false);
@@ -3011,6 +2953,8 @@ impl Hub {
                     pending_actions: session_attention::PendingActions::default(),
                     meta: meta.clone(),
                     code_incarnation: code_scope::CodeIncarnation::default(),
+                    usage_evidence: None,
+                    history_boundary: context_rollover::HistoryBoundary::Known(None),
                     machine_lineage: None,
                     log: Vec::new(),
                     log_bytes: 0,
@@ -3329,57 +3273,6 @@ impl Hub {
         }
     }
 
-    /// Record the agent-reported context-window usage (ACP `usage_update`):
-    /// `used` tokens of a `size`-token window. Broadcast, and persisted as the
-    /// session's last reading so a dormant session still shows it after a
-    /// Controller restart. Deduped — the agent re-emits identical usage several times per
-    /// turn, so we only broadcast when the numbers actually move, keeping the
-    /// session-list churn (and mobile bandwidth) down.
-    ///
-    /// A `0`/`0` reading carries no observation: a freshly launched worker
-    /// seeds its snapshot that way before the agent reports anything. Applying
-    /// it after a resume (Provider update, reload, crash recovery) would erase
-    /// the resumed context's real size, so idle hibernation and context
-    /// rollover would treat a large expired context as empty. Only Clear and
-    /// renewal, which discard the native context, reset the reading.
-    pub fn set_session_usage(&self, session_id: &str, usage: crate::agent_model::SessionUsage) {
-        if usage.used == 0 && usage.size == 0 {
-            return;
-        }
-        let changed = {
-            let mut sessions = self.inner.sessions.lock();
-            match sessions.get_mut(session_id) {
-                // A counter-only snapshot repeating the stored counters is no
-                // newer observation; replacing the reading would drop its raw
-                // Provider fields (an Antigravity account plan, for one).
-                Some(s)
-                    if usage.raw.is_null()
-                        && s.meta.usage.as_ref().is_some_and(|stored| {
-                            (stored.used, stored.size) == (usage.used, usage.size)
-                        }) =>
-                {
-                    false
-                }
-                Some(s) if s.meta.usage.as_ref() != Some(&usage) => {
-                    s.meta.context_used = usage.used;
-                    s.meta.context_size = usage.size;
-                    s.meta.usage = Some(usage.clone());
-                    true
-                }
-                _ => false,
-            }
-        };
-        if changed {
-            if let Some(tx) = self.inner.store_tx.as_ref() {
-                let _ = tx.send(StoreWrite::UpdateSessionUsage {
-                    session_id: session_id.to_owned(),
-                    usage: Some(usage),
-                });
-            }
-            self.broadcast_sessions();
-        }
-    }
-
     /// Record support from the exact live worker, without adding transcript rows.
     pub fn set_current_turn_support(&self, session_id: &str, supported: bool) {
         let changed = {
@@ -3618,6 +3511,7 @@ impl Hub {
                 s.meta.context_used = 0;
                 s.meta.context_size = 0;
                 s.meta.usage = None;
+                s.usage_evidence = None;
                 s.meta.background_tasks = 0;
                 changed
             })
@@ -3648,6 +3542,7 @@ impl Hub {
                 return;
             };
             session.log.clear();
+            session.history_boundary = context_rollover::HistoryBoundary::Known(None);
             session.log_bytes = 0;
             session.event_count = 0;
             session.reached_start = true;
@@ -3837,25 +3732,40 @@ impl Hub {
         true
     }
 
-    /// I4: decide whether a subagent snapshot is a new observation, and whether
-    /// it starts a terminal occurrence. `None` drops it.
+    /// I4: decide whether a subagent snapshot is a new observation, and
+    /// atomically record its terminal occurrence identity. `None` drops it.
     fn accept_subagent_snapshot(
         &self,
         session_id: &str,
         child: &str,
         update: &serde_json::Value,
+        seq: u64,
     ) -> Option<SubagentEnding> {
         use crate::transcript_anchors::{METRICS, SnapshotVerdict, judge_snapshot, mark_of};
-        let mark = mark_of(update);
+        let mut mark = mark_of(update);
         let mut background = self.inner.background.lock();
         let ledger = background.entry(session_id.to_owned()).or_default();
         let previous = ledger.marks.get(child);
         let ending = match (mark.terminal, previous) {
-            (false, _) => SubagentEnding::Working,
+            (false, previous) => {
+                mark.terminal_seq = None;
+                SubagentEnding::Working {
+                    first_snapshot: previous.is_none(),
+                    after_idle: previous.is_some_and(|previous| {
+                        previous.terminal
+                            && mark.incarnation.is_some()
+                            && previous.incarnation == mark.incarnation
+                    }),
+                }
+            }
             (true, Some(previous)) if previous.terminal => {
+                mark.terminal_seq = previous.terminal_seq;
                 SubagentEnding::AlreadyEnded(previous.terminal_seq)
             }
-            (true, _) => SubagentEnding::Ended,
+            (true, _) => {
+                mark.terminal_seq = Some(seq);
+                SubagentEnding::Ended(seq)
+            }
         };
         match judge_snapshot(previous, &mark) {
             SnapshotVerdict::Duplicate => {
@@ -3876,19 +3786,6 @@ impl Hub {
         }
         ledger.marks.insert(child.to_owned(), mark);
         Some(ending)
-    }
-
-    /// Keep the terminal identity the Hub stamped on the accepted snapshot.
-    fn settle_subagent_mark(&self, session_id: &str, child: &str, update: &serde_json::Value) {
-        let mut background = self.inner.background.lock();
-        if let Some(mark) = background
-            .get_mut(session_id)
-            .and_then(|ledger| ledger.marks.get_mut(child))
-        {
-            mark.terminal_seq = update
-                .get("terminalSeq")
-                .and_then(serde_json::Value::as_u64);
-        }
     }
 
     fn record_subagent_observation(

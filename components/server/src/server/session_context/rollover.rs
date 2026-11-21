@@ -12,6 +12,7 @@
 //! to be bound in advance.
 use super::*;
 use crate::context_rollover::{Policy, Rollover};
+use crate::logs::wait_cache::{self, Fields};
 
 /// Prompts after at least this much idle are measured, renewed or not, so a
 /// renewal's first turn can be compared with ordinary cold resumes.
@@ -213,6 +214,9 @@ async fn hibernate_expired(state: &AppState) {
 /// Record the first turn after a measured prompt (what the resume or renewal
 /// actually cost) and periodically hibernate workers past their cache.
 pub(in crate::server) async fn observe(state: Arc<AppState>) {
+    tokio::spawn(super::super::background_tasks::wait_observation::observe(
+        Arc::clone(&state),
+    ));
     let mut events = state.hub.subscribe();
     let mut pass = tokio::time::interval(HIBERNATE_PASS);
     pass.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -260,6 +264,21 @@ pub(in crate::server) async fn before_dispatch(
     text: &str,
     cmid: Option<&str>,
 ) {
+    if let Some(cmid) = cmid
+        && cmid.starts_with(crate::agent_model::CALL_NOTICE_PREFIX)
+        && let Some(info) = state.hub.session_info(id)
+    {
+        let used = state.hub.verified_context_usage(&info.meta);
+        observe_decision(
+            &info.meta,
+            cmid,
+            "notify_held",
+            "notify_held",
+            None,
+            used,
+            None,
+        );
+    }
     let Some(cmid) = cmid.filter(|cmid| Hub::is_authored_cmid(cmid)) else {
         return;
     };
@@ -273,15 +292,42 @@ pub(in crate::server) async fn before_dispatch(
     let lock = write_lock(id);
     let _write = lock.lock().await;
     let Ok(context) = crate::session_context::read(&state.hub, id) else {
+        observe_decision(
+            &meta,
+            cmid,
+            "context_unavailable",
+            "context_unavailable",
+            None,
+            None,
+            None,
+        );
         return;
     };
     let idle = state.hub.session_idle_for(id).unwrap_or_default();
     let idle_ms = u64::try_from(idle.as_millis()).unwrap_or(u64::MAX);
     let measured = idle >= MEASURED_IDLE;
     let policy = policy(state, &meta).await;
-    let skip = |outcome: &str| {
+    let verified = state.hub.verified_context_usage(&meta);
+    let observe = |outcome: &'static str| {
+        let shadow = if outcome == "usage_unknown" {
+            shadow_preflight(state, &meta, policy.as_ref(), verified)
+        } else {
+            outcome
+        };
+        observe_decision(
+            &meta,
+            cmid,
+            outcome,
+            shadow,
+            policy.as_ref(),
+            verified,
+            Some(idle_ms),
+        );
+    };
+    let skip = |outcome: &'static str| {
         if measured {
             measure(&meta, cmid, policy.as_ref(), idle_ms, outcome);
+            observe(outcome);
         }
     };
     let Some(policy) = policy.as_ref() else {
@@ -350,9 +396,83 @@ pub(in crate::server) async fn before_dispatch(
     );
     // Every renewal is evidence, whatever its idle time.
     measure(&meta, cmid, Some(policy), idle_ms, "renewed");
+    observe("renewed");
     if let Some(rollover) = &renewed.rollover {
         measure_digest(id, rollover, opening);
     }
+}
+
+/// Compare only the token gate. Passing it says nothing about dormancy,
+/// permissions, policy or a lifecycle race. No dispatch reads these fields.
+fn shadow_gate(used: Option<u64>, min: Option<u64>) -> &'static str {
+    match used.zip(min) {
+        Some((used, min)) if used >= min => "passes",
+        Some(_) => "small_context",
+        None => "usage_unknown",
+    }
+}
+
+fn observe_decision(
+    meta: &crate::core::SessionMeta,
+    cmid: &str,
+    outcome: &str,
+    shadow_outcome: &str,
+    policy: Option<&Policy>,
+    verified: Option<u64>,
+    idle_ms: Option<u64>,
+) {
+    let min = policy.map(|p| p.min_context_tokens);
+    let current =
+        (meta.context_used != 0 || meta.agent_session_id.is_none()).then_some(meta.context_used);
+    let shadow = current.or(verified);
+    wait_cache::record(
+        wait_cache::DECISION,
+        &[&meta.id, cmid],
+        None,
+        Fields::default()
+            .string("cowboy.session.id", &meta.id)
+            .string("provider", wait_cache::provider(&meta.provider))
+            .string("outcome", outcome)
+            .string("shadow_outcome", shadow_outcome)
+            .integer("idle_ms", idle_ms)
+            .integer("current_context_used", meta.context_used)
+            .integer("verified_context_used", verified)
+            .boolean("current_usage_reported", meta.usage.is_some())
+            .integer(
+                "threshold_ms",
+                policy
+                    .and_then(|p| p.idle_minutes)
+                    .map(|minutes| minutes.saturating_mul(60_000)),
+            )
+            .integer("min_context_tokens", min)
+            .string("current_context_gate", shadow_gate(current, min))
+            .string("shadow_context_gate", shadow_gate(shadow, min)),
+    );
+}
+
+fn shadow_preflight(
+    state: &AppState,
+    meta: &crate::core::SessionMeta,
+    policy: Option<&Policy>,
+    verified: Option<u64>,
+) -> &'static str {
+    let gate = shadow_gate(verified, policy.map(|p| p.min_context_tokens));
+    if gate != "passes" {
+        return gate;
+    }
+    if !ordinary(state, meta) {
+        return "not_eligible";
+    }
+    if meta.status != Status::Exited || state.supervisor.has_live_worker(&meta.id) {
+        return "live_worker";
+    }
+    if crate::session_context::pending(&state.hub, &meta.id) {
+        return "context_pending";
+    }
+    if state.hub.last_event_seq(&meta.id).is_none() {
+        return "no_history";
+    }
+    "would_pass_preflight"
 }
 
 /// What the fresh context was handed in place of its history: the preamble
@@ -458,4 +578,16 @@ pub(in crate::server) async fn set(
             .map_or(serde_json::Value::Null, serde_json::Value::Bool),
     );
     view(&state, &id).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shadow_gate;
+
+    #[test]
+    fn a_verified_zero_is_small_in_shadow_and_missing_stays_unknown() {
+        assert_eq!(shadow_gate(None, Some(80_000)), "usage_unknown");
+        assert_eq!(shadow_gate(Some(0), Some(80_000)), "small_context");
+        assert_eq!(shadow_gate(Some(80_000), Some(80_000)), "passes");
+    }
 }

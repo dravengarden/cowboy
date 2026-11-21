@@ -140,6 +140,8 @@ pub struct ExportResult {
     pub metrics_delivered: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub otlp: Option<OtlpResult>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub legacy_metrics_rejected: bool,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -242,6 +244,7 @@ pub fn controller_exporter(
             crate::observability::ExportReceipt {
                 logs_delivered: receipt.logs_delivered,
                 metrics_delivered: receipt.metrics_delivered,
+                rejected_items: u64::from(receipt.legacy_metrics_rejected),
                 ..Default::default()
             }
         })
@@ -450,6 +453,11 @@ mod machine {
             }
             Payload::Legacy(payload) => payload,
         };
+        let metrics_route = contract.metrics.as_ref();
+        let legacy_metrics_rejected = metrics_route.is_some_and(|route| {
+            route.encoding == TelemetryEncoding::PrometheusText
+                && !crate::metrics_egress::legacy::admitted(&payload.metrics)
+        });
         let (logs_delivered, metrics_delivered) = tokio::join!(
             post(
                 &client,
@@ -458,18 +466,23 @@ mod machine {
                 payload.logs,
                 admit
             ),
-            post(
-                &client,
-                contract.metrics.as_ref(),
-                config.metrics.as_ref(),
-                payload.metrics,
-                admit
-            ),
+            async {
+                !legacy_metrics_rejected
+                    && post(
+                        &client,
+                        metrics_route,
+                        config.metrics.as_ref(),
+                        payload.metrics,
+                        admit,
+                    )
+                    .await
+            },
         );
         ExportResult {
             logs_delivered,
             metrics_delivered,
             otlp: None,
+            legacy_metrics_rejected,
         }
     }
 
@@ -563,6 +576,13 @@ mod machine {
         let Ok((body, count)) = payload.decode() else {
             return failed();
         };
+        if payload.signal == crate::otlp::Signal::Metrics && !crate::metrics_egress::admitted(&body)
+        {
+            return OtlpResult {
+                rejected_items: count as u64,
+                ..failed()
+            };
+        }
         let Ok(mut url) = url::Url::parse(&endpoint.base_url) else {
             return failed();
         };
@@ -628,6 +648,106 @@ mod machine {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[tokio::test]
+        #[cfg(feature = "full")]
+        async fn custom_backend_checks_both_metrics_encodings_before_http() {
+            use axum::{body::Bytes, extract::OriginalUri, http::StatusCode};
+            use base64::Engine as _;
+            use cowboy_provider_sdk::{Architecture, OperatingSystem, PlatformTarget};
+            use serde_json::json;
+
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            let (sent, mut received) = tokio::sync::mpsc::unbounded_channel();
+            let app = axum::Router::new().fallback(move |uri: OriginalUri, body: Bytes| {
+                let sent = sent.clone();
+                async move {
+                    sent.send((uri.path().to_owned(), body.to_vec())).unwrap();
+                    StatusCode::OK
+                }
+            });
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("telemetry.json");
+            let selection = PluginSelection {
+                plugin_id: "custom-metrics".into(),
+                plugin_version: "1.0.0".into(),
+                generation_digest: format!("sha256:{}", "a".repeat(64)),
+            };
+            crate::logs::storage::atomic_json(&path, &json!({
+                "plugin": {"plugin_id": selection.plugin_id, "plugin_version": selection.plugin_version,
+                           "generation_digest": selection.generation_digest},
+                "metrics": {"base_url": endpoint},
+            })).unwrap();
+
+            let legacy = "cowboy_client_long_task_count{platform=\"web\"} 1 1788825600000\n";
+            let signal = crate::otlp::Signal::Metrics;
+            let (_, canonical) = crate::otlp::client_export_fixtures()
+                .into_iter()
+                .find(|(lane, _)| *lane == signal)
+                .unwrap();
+            let mut noncanonical = canonical.clone();
+            // Append a length-delimited field unknown to the metrics envelope.
+            noncanonical.extend_from_slice(b"\x7a\x01x");
+            for (schema_version, encoding) in [
+                (1, TelemetryEncoding::PrometheusText),
+                (2, TelemetryEncoding::OtlpHttpProtobuf),
+            ] {
+                let contract = TelemetryBackendContract {
+                    schema_version,
+                    id: selection.plugin_id.clone(),
+                    version: selection.plugin_version.clone(),
+                    display_name: "Custom metrics".into(),
+                    supported_platforms: vec![PlatformTarget {
+                        os: OperatingSystem::Linux,
+                        architecture: Architecture::X86_64,
+                    }],
+                    logs: None,
+                    metrics: Some(TelemetryRoute {
+                        encoding,
+                        path: "/metrics".into(),
+                        query: Default::default(),
+                    }),
+                    traces: None,
+                };
+                contract.validate().unwrap();
+                for valid in [false, true] {
+                    let (value, expected) = if schema_version == 1 {
+                        let metrics = if valid {
+                            legacy.to_owned()
+                        } else {
+                            legacy.replace("platform", "session_id")
+                        };
+                        (json!({"logs":"", "metrics": metrics}), metrics.into_bytes())
+                    } else {
+                        let body = if valid { &canonical } else { &noncanonical };
+                        (
+                            json!({"signal":signal,"protobuf":base64::engine::general_purpose::STANDARD.encode(body)}),
+                            body.clone(),
+                        )
+                    };
+                    let (policy, payload) =
+                        prepare(&path, &selection, value, schema_version == 2).unwrap();
+                    let result = export(&contract, &policy, payload, &|| async { true }).await;
+                    if let Some(otlp) = result.otlp {
+                        assert!(otlp.enabled);
+                        assert_eq!(otlp.delivered, valid);
+                        assert_eq!(otlp.rejected_items > 0, !valid);
+                    } else {
+                        assert_eq!(result.metrics_delivered, valid);
+                        assert_eq!(result.legacy_metrics_rejected, !valid);
+                    }
+                    if valid {
+                        assert_eq!(received.try_recv().unwrap(), ("/metrics".into(), expected));
+                    } else {
+                        assert!(received.try_recv().is_err());
+                    }
+                }
+            }
+            server.abort();
+        }
 
         #[test]
         fn endpoint_policy_rejects_secret_urls_and_non_loopback_plaintext() {
