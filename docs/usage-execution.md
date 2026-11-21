@@ -61,7 +61,7 @@ from Grok 3.2.16 its collector never starts the CLI for such a request: it reads
 the current token, reports authentication required when it has (nearly)
 expired or xAI rejects it, and otherwise reads billing
 (`cli-chat-proxy.grok.com/v1/billing?format=credits`, projected exactly as the
-pinned CLI's `_x.ai/billing`), plan and resets directly. From Grok 3.2.17
+pinned CLI's `_x.ai/billing`), plan and resets directly. From Grok 3.2.18
 (Machine protocol 51) a named Grok account is custody-managed
 ([design](portable-refresh-lease.md)): every Machine receives an access-only
 copy without the refresh token, and when the refresh-free collection reports

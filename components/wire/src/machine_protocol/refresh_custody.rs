@@ -306,7 +306,7 @@ mod tests {
             "renewal_id": "renewal-1",
             "usage": {
                 "account_id": "11111111-1111-4111-8111-111111111111", "plugin_id": "grok",
-                "plugin_version": "3.2.17", "generation_digest": "sha256:x",
+                "plugin_version": "3.2.18", "generation_digest": "sha256:x",
                 "auth_generation": 3, "payload": {},
             },
         }))

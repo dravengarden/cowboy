@@ -212,12 +212,37 @@ test (`usage::custody::tests::racing_renewals_never_reuse_a_refresh_token`):
   30 s, `HOME` holding the access-only copy) redeemed exactly once, rotated only
   the custody file and left the access-only copy untouched. (Its billing call
   then failed only because the fixture's loopback issuer is not grok.com.)
-- The Machine-side sender of `PortableCredentialRenewalNeeded` is **not
-  implemented yet**: the event, its protocol gate and the Controller handler
-  exist, but sessions currently rely on the usage path (including the existing
-  background collection) to renew an expired token. Until the sender ships, a
-  session may fail authentication between its access token's expiry and the
-  next usage collection.
+- **Proactive renewal while sessions run.** A running access-only Grok CLI
+  was checked offline (pinned 1.0.77, `agent ... stdio` exactly as the ACP
+  session worker runs it, loopback fake chat proxy, `auth.json` without a
+  refresh token):
+  - a credential file rewritten while the old access token is still valid
+    (by atomic rename or in place) is adopted when the in-memory token
+    expires: the next request after expiry carried the new token, no
+    restart;
+  - while the old token is still valid the CLI keeps using it;
+  - once the CLI has sent an expired token and received a 401 (no
+    refresher), it keeps the rejected token even after the file is rewritten.
+
+  So a renewal must land before expiry. The Controller therefore renews
+  ahead: every 30 s it checks each managed account that has a live session
+  worker, reads the vault token's expiry with the declaration, and when it is
+  within `RENEWAL_LEAD_MS` (240 s, inside the CLI's 300 s early window, so the
+  renewal run itself renews) it runs one renewal on a protocol-51 Machine of
+  those sessions, through the same recorded admission (once per generation;
+  never a fresh run while one is pending). This reads only Service state and
+  contacts the vendor only through the renewal. Each new generation is
+  distributed access-only to every Machine; the existing generation rollover
+  also drains workers at their next idle boundary, which is the handoff for
+  a CLI that already hit a 401 (late renewal, for example after a Controller
+  outage). The decision lives on the Controller rather than as a Machine
+  sender because only the Controller sees every Machine's live workers of an
+  account and its custody record; the `PortableCredentialRenewalNeeded`
+  event and handler remain for a Machine that later wants to ask.
+  `sessions_on_several_machines_never_outlive_their_access_token` checks, with
+  the fake single-use vendor, sessions on three Machines across ten token
+  lifetimes racing usage-read renewals: no token is presented twice and no
+  session sends an expired token.
 
 ### Why this cannot double-redeem
 

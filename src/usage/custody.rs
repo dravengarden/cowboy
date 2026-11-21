@@ -182,6 +182,18 @@ impl Custody {
             .is_some_and(|custody| custody.managed)
     }
 
+    /// Every account recorded as managed.
+    #[must_use]
+    pub fn managed_accounts(&self) -> Vec<String> {
+        self.inner
+            .lock()
+            .accounts
+            .iter()
+            .filter(|(_, custody)| custody.managed)
+            .map(|(account, _)| account.clone())
+            .collect()
+    }
+
     /// Whether a renewal of `account` at `generation` settled within the
     /// reuse window: a session's repeated request does not renew again.
     #[must_use]
@@ -673,6 +685,78 @@ mod tests {
                 blocked || vault.lock().token == vendor.lock().current,
                 "seed {seed}"
             );
+        }
+    }
+
+    /// Sessions on three Machines run across many access-token lifetimes.
+    /// The proactive scheduler (every 30 s, renewing within the lead before
+    /// expiry) races usage-read renewals from other Machines. With replies
+    /// delivered, no refresh token is ever presented twice and no session
+    /// ever sends an expired access token: each new token reaches every
+    /// Machine's access-only copy before the old one expires, which a running
+    /// Grok CLI adopts at expiry.
+    #[test]
+    fn sessions_on_several_machines_never_outlive_their_access_token() {
+        use crate::machine_protocol::refresh_custody::RENEWAL_LEAD_MS;
+        const LIFETIME_MS: i64 = 3_600_000;
+        for seed in 0..50_u64 {
+            let dir = tempfile::tempdir().unwrap();
+            let custody = Custody::persistent(dir.path().join("custody.json"));
+            assert!(custody.enable(ACCOUNT));
+            let vault = parking_lot::Mutex::new(Vault {
+                generation: 1,
+                token: 0,
+            });
+            let vendor = parking_lot::Mutex::new(Vendor::default());
+            let retained = parking_lot::Mutex::new(BTreeMap::new());
+            // Expiry of each generation's access token, by generation.
+            let expiry = parking_lot::Mutex::new(BTreeMap::from([(1_u64, LIFETIME_MS)]));
+            let mut state = seed.wrapping_add(17);
+            let mut next = |bound: u64| {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                (state >> 33) % bound
+            };
+            let machines = ["hawk", "ovh", "falcon"];
+            let mut now = 0_i64;
+            while now < 10 * LIFETIME_MS {
+                now += 30_000;
+                let current = *vault.lock();
+                let expires = expiry.lock()[&current.generation];
+                // Every session's copy is the vault's current generation (it
+                // is distributed with the reply); a session sending a token
+                // after its expiry is the regression this test forbids.
+                assert!(
+                    now < expires,
+                    "seed {seed}: a session outlived its access token at {now}"
+                );
+                let due = expires - now <= RENEWAL_LEAD_MS;
+                let usage_read = next(6) == 0;
+                std::thread::scope(|scope| {
+                    for (index, machine) in machines.iter().enumerate() {
+                        let scheduler = due && index == 0;
+                        let usage = usage_read && expires - now <= 60_000 && index == 1;
+                        if !(scheduler || usage || next(20) == 0) {
+                            continue;
+                        }
+                        let (custody, vault, vendor, retained, expiry) =
+                            (&custody, &vault, &vendor, &retained, &expiry);
+                        scope.spawn(move || {
+                            let before = vault.lock().generation;
+                            renew(custody, vault, vendor, retained, machine, true, false, now);
+                            let after = vault.lock().generation;
+                            if after != before {
+                                expiry.lock().insert(after, now + LIFETIME_MS);
+                            }
+                        });
+                    }
+                });
+                assert!(
+                    !vendor.lock().reused,
+                    "seed {seed}: a refresh token was presented twice"
+                );
+            }
         }
     }
 }

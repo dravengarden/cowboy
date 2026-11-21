@@ -197,6 +197,84 @@ pub(in crate::server) async fn apply_renewal(
     }
 }
 
+/// When a running session's access-only copy needs a renewal: the
+/// renewal must land on disk before the token expires, because a running
+/// Grok CLI without a refresh token adopts a rewritten credential file only
+/// when its in-memory token expires and keeps a rejected one after a 401
+/// (verified offline against Grok 1.0.77). The lead also sits inside the
+/// CLI's default 300 s early window, so the renewal run itself renews.
+#[must_use]
+pub(in crate::server) fn renewal_due(expires_at_ms: Option<i64>, now_ms: i64) -> bool {
+    expires_at_ms.is_some_and(|expiry| {
+        expiry.saturating_sub(now_ms) <= crate::machine_protocol::refresh_custody::RENEWAL_LEAD_MS
+    })
+}
+
+/// Live sessions' Machines per managed account and Provider: the Machines
+/// whose running workers need the next access token in time. Sorted, so
+/// the choice is deterministic.
+fn live_placements(state: &AppState) -> BTreeMap<(ProviderAccountId, String), Vec<String>> {
+    let managed = state.usage.custody.managed_accounts();
+    let mut placements: BTreeMap<(ProviderAccountId, String), Vec<String>> = BTreeMap::new();
+    for meta in state.hub.session_list() {
+        if meta.provider_account_id.is_default()
+            || meta.trashed_at_ms.is_some()
+            || !managed
+                .iter()
+                .any(|account| account == meta.provider_account_id.as_str())
+            || !state.supervisor.has_live_worker(&meta.id)
+        {
+            continue;
+        }
+        let machines = placements
+            .entry((meta.provider_account_id.clone(), meta.provider.clone()))
+            .or_default();
+        if !machines.contains(&meta.machine_id) {
+            machines.push(meta.machine_id.clone());
+            machines.sort();
+        }
+    }
+    placements
+}
+
+/// Renew every managed account whose running sessions' token expires within
+/// the lead, on one of those sessions' Machines. Reads only Service state;
+/// each renewal goes through the recorded single-renewal admission, so a
+/// due account renews once per generation however often this runs.
+pub(in crate::server) async fn renew_ahead(state: &Arc<AppState>) {
+    for ((account, provider), machines) in live_placements(state) {
+        let Some(declaration) = state.usage.refresh_custody(&provider) else {
+            continue;
+        };
+        if !managed(state, &account, &provider) {
+            continue;
+        }
+        let Some((generation, bundle)) = scope(state, &account, &provider)
+            .and_then(|vault| vault.current_bundle(&provider).ok())
+        else {
+            continue;
+        };
+        if !renewal_due(declaration.expiry_ms(&bundle), now_ms()) {
+            continue;
+        }
+        let Some(machine) = machines
+            .iter()
+            .find(|machine| machine_admits(state, &account, machine, &provider).is_ok())
+        else {
+            continue;
+        };
+        super::super::usage::renewal_needed(state, machine, &account, &provider, generation).await;
+    }
+}
+
+/// Run [`renew_ahead`] for the Controller's lifetime.
+pub(in crate::server) async fn run(state: Arc<AppState>) {
+    loop {
+        renew_ahead(&state).await;
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,6 +309,17 @@ mod tests {
             mode(None, true, true),
             Err("refresh_custody_declaration_missing")
         );
+    }
+
+    #[test]
+    fn renewal_is_due_inside_the_lead_and_after_expiry() {
+        let lead = crate::machine_protocol::refresh_custody::RENEWAL_LEAD_MS;
+        assert!(!renewal_due(None, 0));
+        assert!(!renewal_due(Some(lead + 1), 0));
+        assert!(renewal_due(Some(lead), 0));
+        assert!(renewal_due(Some(-1), 0), "an expired token still renews");
+        // The lead stays inside the CLI's 300 s early-refresh window.
+        const { assert!(crate::machine_protocol::refresh_custody::RENEWAL_LEAD_MS < 300_000) };
     }
 
     #[test]

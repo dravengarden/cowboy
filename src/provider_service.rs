@@ -949,6 +949,29 @@ impl ProviderAuthService {
         self.seal_for_machine_with_admission(provider_id, machine_public_key, None, None)
     }
 
+    /// The current Ready (or session-rejected) credential of `provider`, for
+    /// the Service's own refresh-custody decisions; it never leaves the
+    /// Service except sealed to one Machine.
+    pub fn current_bundle(&self, provider_id: &str) -> Result<(u64, PortableCredentialBundle)> {
+        let stored = self
+            .providers
+            .read()
+            .get(provider_id)
+            .cloned()
+            .context("Provider is not authenticated at Cowboy Service scope")?;
+        ensure!(
+            stored.action == ProviderAuthAction::Apply
+                && matches!(
+                    stored.authentication_state,
+                    ServiceAuthenticationState::Ready | ServiceAuthenticationState::Expired
+                ),
+            "Provider credential is not available"
+        );
+        let bundle = serde_json::from_slice(&self.open_vault(&stored)?)
+            .context("decoding Provider credential bundle")?;
+        Ok((stored.auth_generation, bundle))
+    }
+
     /// Seal the access-only copy of a refresh-custody managed account: the
     /// declared refresh fields are removed before encryption, so the Machine
     /// never receives them. An unstrippable bundle is refused.
