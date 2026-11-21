@@ -108,8 +108,7 @@ bundle (like `collector/portable-account.json`, no SDK change):
   "bundle_key": "auth_json",
   "strip_entry_fields": ["refresh_token"],
   "expiry_entry_field": "expires_at",
-  "credential_path_env": "GROK_AUTH_PATH",
-  "renew_environment": { "GROK_AUTH_EARLY_INVALIDATION_SECS": "86400" }
+  "credential_path_env": "GROK_AUTH_PATH"
 }
 ```
 
@@ -142,18 +141,16 @@ and the full bundle sealed to that Machine. The Machine:
 2. restores the full bundle into a fresh private directory (mode 0700,
    outside every credential watch);
 3. runs the collector's ordinary refresh-capable path (no `token_refresh`)
-   with `credential_path_env` pointing at that file and `renew_environment`
-   added, so the CLI renews at startup;
+   with `credential_path_env` pointing at that file (plus any declared
+   `renew_environment`), so the CLI renews an expiring token at startup;
 4. kills the run at a local deadline of 60 s after receipt, reads the file,
    removes the directory, and replies with the collector output and the
    resulting bundle (or "unchanged").
 
 The Service keeps one durable renewal record per account
 (`{renewal_id, machine_id, vault_generation, started_at_ms, settled}`), written
-before dispatch, in the Controller data directory. A new renewal is dispatched
-only when the previous one settled or started more than 5 minutes ago (a lost
-reply on a live connection cannot outlast the Machine's 60 s deadline by that
-much). A reply is accepted only for the recorded renewal ID; its bundle goes
+before dispatch, in the Controller data directory. A pending renewal is never
+followed by a fresh one at the same generation (see Implementation below). A reply is accepted only for the recorded renewal ID; its bundle goes
 through the unchanged generation compare-and-swap at the recorded generation
 and is then distributed access-only.
 
@@ -183,6 +180,44 @@ re-seals access-only to every Machine. Until then it keeps today's behaviour.
 Machines below protocol 51 (Falcon, MacBook Air) get no new placement for a
 managed account: session admission and usage placement refuse them with
 `portable_refresh_custody_machine_update_required`, shown in Web and MCP.
+
+### Implementation (2026-11-21, branch `task/portable-refresh-lease-20261121`)
+
+Implemented as above, with these refinements found by the fake-vendor race
+test (`usage::custody::tests::racing_renewals_never_reuse_a_refresh_token`):
+
+- The renewal record has four states: `pending`, `settled` (provably did not
+  redeem), `rotated` (redeemed its generation's token) and `unknown`. A
+  pending renewal is never followed by a fresh one at its generation; it only
+  **resumes** on its own Machine, which returns its retained reply (kept in
+  memory for 15 minutes) and never runs twice. A resume the Machine no longer
+  retains, an unreadable credential after the run, or a Machine gone for
+  longer than 5 minutes makes it `unknown`, which blocks renewal until the
+  vault moves on (a new sign-in). A `rotated` renewal blocks its generation
+  even if this process still believes the vault holds it; the test failed on
+  exactly that interleaving before the state existed.
+- The custody state file is `usage-refresh-custody.json` in the Controller
+  data directory, written atomically before every change takes effect. An
+  unreadable file poisons the store: every declaring account is treated as
+  managed (access-only) and no renewal runs.
+- A Provider that stops declaring custody leaves its recorded accounts
+  unsealable rather than sealing a refresh token again.
+- A session's rejection marks the generation Expired; for a managed account
+  usage still collects at that generation, so the next budgeted read renews.
+- The declaration carries no `renew_environment`: with
+  `GROK_AUTH_EARLY_INVALIDATION_SECS=86400` the CLI redeemed six times in one
+  run (each new one-hour token was again "early"). With the default 300 s
+  window, an offline end-to-end run of the real collector and the pinned CLI
+  against a fake single-use IdP (custody file restored from a token expiring in
+  30 s, `HOME` holding the access-only copy) redeemed exactly once, rotated only
+  the custody file and left the access-only copy untouched. (Its billing call
+  then failed only because the fixture's loopback issuer is not grok.com.)
+- The Machine-side sender of `PortableCredentialRenewalNeeded` is **not
+  implemented yet**: the event, its protocol gate and the Controller handler
+  exist, but sessions currently rely on the usage path (including the existing
+  background collection) to renew an expired token. Until the sender ships, a
+  session may fail authentication between its access token's expiry and the
+  next usage collection.
 
 ### Why this cannot double-redeem
 

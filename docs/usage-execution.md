@@ -61,7 +61,14 @@ from Grok 3.2.16 its collector never starts the CLI for such a request: it reads
 the current token, reports authentication required when it has (nearly)
 expired or xAI rejects it, and otherwise reads billing
 (`cli-chat-proxy.grok.com/v1/billing?format=credits`, projected exactly as the
-pinned CLI's `_x.ai/billing`), plan and resets directly. No
+pinned CLI's `_x.ai/billing`), plan and resets directly. From Grok 3.2.17
+(Machine protocol 51) a named Grok account is custody-managed
+([design](portable-refresh-lease.md)): every Machine receives an access-only
+copy without the refresh token, and when the refresh-free collection reports
+authentication required, the same budgeted collection runs one recorded
+renewal on that Machine and keeps its output. Machines below protocol 51 get no
+new placement for such an account
+(`portable_refresh_custody_machine_update_required`). No
 Machine speaking protocol 50 was released before this, so no other capability
 negotiation is needed. An entered DeepSeek key is never refreshed.
 
