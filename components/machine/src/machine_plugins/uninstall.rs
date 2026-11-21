@@ -114,19 +114,18 @@ impl MachinePluginStore {
         // Private credential copies: this scope's, then every named account's
         // (the guard proved them empty). The uninstall completes only once
         // all are gone.
-        let homes = self
-            .auth_provider_root(provider_id)
-            .join(native_usage::PRIVATE_HOMES);
-        remove_projection::remove(&homes)
-            .with_context(|| format!("removing private credential copies {}", homes.display()))?;
-        remove_projection::remove_below_named_providers(
-            &self.auth_base,
-            &|_| true,
+        remove_projection::remove_below_provider(
+            &self.auth_root,
+            provider_id,
             native_usage::PRIVATE_HOMES,
-            Some(provider_id),
         )
+        .context("removing private credential copies")?;
+        let named = (native_usage::PRIVATE_HOMES, Some(provider_id));
+        remove_projection::remove_below_named_providers(&self.auth_base, &|_| true, named, &|| {
+            Ok(())
+        })
         .context("removing named private credential copies")?;
-        Ok(())
+        remove_projection::ensure_absent_below_named_providers(&self.auth_base, &|_| true, named)
     }
 
     pub(super) fn ensure_no_named_auth_materializations(&self, provider_id: &str) -> Result<()> {

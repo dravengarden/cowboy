@@ -198,9 +198,12 @@ mod tests {
             "dispatch":{"plugin_version":"3.0.0","generation_digest":"sha256:x",
                 "expires_at_ms":1,"spend_not_before_ms":1}});
         let command: MachineCommand = serde_json::from_value(value.clone()).unwrap();
-        assert_eq!(command.minimum_protocol(), NATIVE_RESET_PROTOCOL_VERSION);
+        assert_eq!(
+            command.minimum_protocol(),
+            NATIVE_RESET_SPACING_PROTOCOL_VERSION
+        );
         const {
-            assert!(NATIVE_RESET_PROTOCOL_VERSION <= MACHINE_PROTOCOL_VERSION);
+            assert!(NATIVE_RESET_SPACING_PROTOCOL_VERSION <= MACHINE_PROTOCOL_VERSION);
             assert!(NATIVE_RESET_PROTOCOL_VERSION > ACCOUNT_FENCE_PROTOCOL_VERSION);
         }
         assert_eq!(serde_json::to_value(&command).unwrap(), value);

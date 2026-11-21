@@ -162,18 +162,18 @@ impl Limiter {
     }
 
     pub fn view(&self, provider: &str, account: &str, now: i64) -> Budget {
-        self.budget(&self.inner.lock(), provider, account, now, true)
+        let config = self.config.current();
+        Self::budget(&config, &self.inner.lock(), provider, account, now, true)
     }
 
     fn budget(
-        &self,
+        config: &Config,
         state: &State,
         provider: &str,
         account: &str,
         now: i64,
         polling: bool,
     ) -> Budget {
-        let config = self.config.current();
         let window = super::duration_ms(config.get(&schema::USAGE_PROVIDER_WINDOW));
         let count = config.get(&schema::USAGE_REQUESTS_PER_WINDOW);
         let spacing = (window + count - 1) / count;
@@ -318,12 +318,12 @@ impl Limiter {
         (recorded_from, spacing): (i64, Option<i64>),
     ) -> Result<Permit, Budget> {
         let mut state = self.inner.lock();
-        let budget = self.budget(&state, provider, account, now, polling);
+        // One config snapshot for the budget, window, capacity and spacing.
+        let config = self.config.current();
+        let budget = Self::budget(&config, &state, provider, account, now, polling);
         if now < budget.next_allowed_ms {
             return Err(budget);
         }
-        // One config snapshot for the window, capacity and slot spacing.
-        let config = self.config.current();
         let window = super::duration_ms(config.get(&schema::USAGE_PROVIDER_WINDOW));
         let count = config.get(&schema::USAGE_REQUESTS_PER_WINDOW);
         let capacity = usize::try_from(count).unwrap_or(1);

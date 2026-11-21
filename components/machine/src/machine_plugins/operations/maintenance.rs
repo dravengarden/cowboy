@@ -131,10 +131,31 @@ pub fn complete_absent_uninstall(
     });
     atomic_write(&audit_path, &serde_json::to_vec(&audit)?, 0o600)?;
     fs::File::open(&audit_root)?.sync_all()?;
-    for name in ["materialized", "runtime"] {
+    for name in [
+        "materialized",
+        "runtime",
+        super::super::native_usage::PRIVATE_HOMES,
+    ] {
         checkpoint()?;
         super::super::remove_projection::remove_checked(&projection.join(name), &checkpoint)?;
     }
+    // Every named account's private credential copies of this Provider, under
+    // the same deadline; completion is written only once none remain.
+    let named = (
+        super::super::native_usage::PRIVATE_HOMES,
+        Some(step.plugin_id.as_str()),
+    );
+    let account = |name: &str| {
+        crate::provider_account::ProviderAccountId::try_from(name.to_owned())
+            .is_ok_and(|id| !id.is_default())
+    };
+    super::super::remove_projection::remove_below_named_providers(
+        &auth,
+        &account,
+        named,
+        &checkpoint,
+    )?;
+    super::super::remove_projection::ensure_absent_below_named_providers(&auth, &account, named)?;
     sync_removal(&plugin, &projection)?;
     checkpoint()?;
     // A failure after either write remains recoverable with a new explicit
