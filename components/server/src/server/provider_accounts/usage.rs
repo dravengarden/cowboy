@@ -857,6 +857,8 @@ fn response(result: Result<Value, &'static str>) -> Response {
 
 /// Bounded serial collection avoids simultaneously launching one CLI per account.
 pub(in crate::server) async fn run(state: Arc<AppState>) {
+    // Custody renewals run beside collections, never queued behind them.
+    tokio::spawn(super::portable::custody::run(Arc::clone(&state)));
     loop {
         let mut candidates = Vec::new();
         if let Some(store) = &state.store
