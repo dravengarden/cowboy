@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "antigravity",
-  "version": "0.2.15",
+  "version": "0.2.16",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.7.0",
   "display": {
@@ -249,9 +249,9 @@
       },
       {
         "id": "cowboy-antigravity-acp",
-        "version": "1.0.13",
+        "version": "1.0.14",
         "source": "cowboy:components/provider-runtime/packages/antigravity-acp",
-        "integrity": "sha256:6851feb4a1d6ff561f3de23dee17548e62d8934cc36d963e6428c49075092293",
+        "integrity": "sha256:0317e601b4e761b3e2c4c056ef2491e1548afafd8996318a65ba167ec855e6b1",
         "private": true
       },
       {

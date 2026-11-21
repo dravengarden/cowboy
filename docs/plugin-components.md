@@ -83,6 +83,15 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.132.0 records provider-runtime 1.3.16, whose
+`cowboy-antigravity-acp` 1.0.14 adds a "Gemini models" group to an
+Antigravity account's quota report from Cloud Code's model catalogue
+(`fetchAvailableModels`), because the quota summary covers only the Claude
+and GPT models ([Gemini quota](antigravity-real-accounts-design.md)).
+Antigravity 0.2.16 pins it. The other six Providers pinning provider-runtime
+advance one patch version (claude-code 3.20.61, claude-deepseek 3.1.79,
+codex 3.6.20, codex-deepseek 3.1.79, deepseek-harness 1.0.37, grok 3.2.19).
+
 Component release 3.131.0 records provider-runtime 1.3.15, whose
 `cowboy-antigravity-acp` 1.0.13 answers Cowboy's review schema through a
 stated contract, an exact check and at most two nonce-bound corrections,
