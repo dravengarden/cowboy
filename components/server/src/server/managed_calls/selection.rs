@@ -126,8 +126,9 @@ pub(super) fn admit(
     provider: &str,
     preference: &super::super::agent_tools::ReviewPreferences,
     explicit: Option<&str>,
-    same_vendor: bool,
+    (same_vendor, caller): (bool, Option<&str>),
 ) -> Result<String, Value> {
+    let presets = &exclude_caller_model(presets, same_vendor, caller);
     let risk = request
         .labels
         .get(crate::managed_calls::review::RISK)
@@ -484,7 +485,15 @@ mod tests {
             "context":{"scope":"current-worktree"},"access":"read-only","conversation":{"mode":"fresh"}
         })).unwrap();
         let none = exclude_caller_model(&json!([claude[1].clone()]), true, Some("opus"));
-        let refused = admit(&request, &none, "claude-code", &preference, None, true).unwrap_err();
+        let refused = admit(
+            &request,
+            &none,
+            "claude-code",
+            &preference,
+            None,
+            (true, Some("opus")),
+        )
+        .unwrap_err();
         assert_eq!(refused["error"]["code"], "same_model");
         let fable_only = exclude_caller_model(&claude, true, Some("opus"));
         // Fable is not a routine Claude reviewer, so routine refuses it...
@@ -495,7 +504,7 @@ mod tests {
                 "claude-code",
                 &preference,
                 Some("fable-max"),
-                true
+                (true, Some("opus"))
             )
             .unwrap_err()["error"]["code"],
             "same_model"
@@ -506,7 +515,15 @@ mod tests {
         high.labels
             .insert("selection_reason".into(), "persistence".into());
         assert_eq!(
-            admit(&high, &fable_only, "claude-code", &preference, None, true).unwrap(),
+            admit(
+                &high,
+                &fable_only,
+                "claude-code",
+                &preference,
+                None,
+                (true, Some("opus"))
+            )
+            .unwrap(),
             "fable-max"
         );
         // A Sol caller's routine GPT review falls to the cheaper Astra preset.
@@ -517,7 +534,15 @@ mod tests {
         ]);
         let without_sol = exclude_caller_model(&gpt, true, Some("sol"));
         assert_eq!(
-            admit(&request, &without_sol, "codex", &preference, None, true).unwrap(),
+            admit(
+                &request,
+                &without_sol,
+                "codex",
+                &preference,
+                None,
+                (true, Some("sol"))
+            )
+            .unwrap(),
             "astra-medium"
         );
     }

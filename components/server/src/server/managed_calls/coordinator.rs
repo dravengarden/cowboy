@@ -81,6 +81,19 @@ pub(in crate::server) struct Coordinator {
     pub(super) retiring: Mutex<HashSet<String>>,
 }
 
+/// Whether `agent` is the caller's own vendor, and the reviewer family of the
+/// model the caller currently runs.
+fn caller_model(
+    state: &AppState,
+    meta: &crate::core::SessionMeta,
+    agent: &str,
+) -> (bool, Option<&'static str>) {
+    (
+        agent_tools::same_family(agent, &meta.provider),
+        super::selection::caller_family(state.supervisor.observed_configuration(&meta.id).as_ref()),
+    )
+}
+
 pub(super) fn error(code: &str, admission: &str) -> Value {
     json!({"schema":1,"state":"error","error":{"code":code,"admission":admission}})
 }
@@ -971,21 +984,13 @@ async fn start(
     {
         // Generic Tools pins apply to ordinary calls. Review uses its tier's
         // ordered list; an explicit signed preset must be one the tier admits.
-        let own = agent_tools::same_family(&target.agent, &meta.provider);
-        let reviewers = super::selection::exclude_caller_model(
-            &runnable,
-            own,
-            super::selection::caller_family(
-                state.supervisor.observed_configuration(&meta.id).as_ref(),
-            ),
-        );
         target.preset = match super::selection::admit(
             &request,
-            &reviewers,
+            &runnable,
             &target.agent,
             &policy.review,
             preset,
-            own,
+            caller_model(state, meta, &target.agent),
         ) {
             Ok(selected) => Some(selected),
             Err(refused) => return refused,
