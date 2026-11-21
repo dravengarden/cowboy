@@ -280,3 +280,109 @@ async fn postgres_legacy_adoption_reuses_the_card_identity() {
     let dir = tempfile::tempdir().unwrap();
     contract(&postgres_store(&dir).await).await;
 }
+
+fn subscriber(subject: &str) -> crate::provider_account::NativeIdentity {
+    crate::provider_account::NativeIdentity {
+        authority: "chatgpt".into(),
+        subject: subject.into(),
+        tenant: Some("org".into()),
+    }
+}
+
+async fn mark(
+    store: &Store,
+    id: &ProviderAccountId,
+    identity: Option<&crate::provider_account::NativeIdentity>,
+) {
+    let usage = identity.map_or(
+        super::super::portable::Use::Commit,
+        super::super::portable::Use::SignIn,
+    );
+    store
+        .with_portable_account(OWNER, id, usage, |_| true, || async { Ok(()) })
+        .await
+        .unwrap();
+}
+
+/// An adopted account binds the identity read from its own vault credential
+/// once, with the sign-in rules, and only while that credential is current.
+#[tokio::test]
+async fn an_adopted_account_binds_its_credential_identity_with_the_sign_in_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = sqlite_store(&dir).await;
+    let lark = change(
+        &store,
+        OWNER,
+        "lark",
+        Change::Create {
+            provider_id: "codex".into(),
+            label: "Lark".into(),
+        },
+    )
+    .await
+    .account_id;
+    mark(&store, &lark, Some(&subscriber("lark"))).await;
+    let pika = adopted(&store, OWNER, "adopt-create", &pika())
+        .await
+        .account_id;
+    let bind = |operation: &'static str, who: &'static str, current: bool| {
+        let (store, pika) = (&store, pika.clone());
+        async move {
+            store
+                .bind_adopted_identity(OWNER, operation, &pika, &subscriber(who), |_| current)
+                .await
+                .unwrap()
+        }
+    };
+    let invalid = |result: MutationResult| match result {
+        MutationResult::Invalid(code) => code,
+        other => panic!("{other:?}"),
+    };
+    // No vault credential was moved into the account yet.
+    assert_eq!(
+        invalid(bind("bind-0", "pika", true).await),
+        "portable_credentials_required"
+    );
+    mark(&store, &pika, None).await;
+    // The vault moved on since the Machine read it.
+    assert_eq!(
+        invalid(bind("bind-1", "pika", false).await),
+        "portable_usage_replica_pending"
+    );
+    // Another account already holds this subscription.
+    assert_eq!(
+        invalid(bind("bind-2", "lark", true).await),
+        "native_identity_already_bound"
+    );
+    let MutationResult::Applied(bound) = bind("bind-3", "pika", true).await else {
+        panic!("not bound")
+    };
+    let account = bound
+        .registry
+        .accounts
+        .iter()
+        .find(|a| a.id == pika)
+        .unwrap();
+    assert_eq!(
+        account.identity_fingerprint,
+        Some(subscriber("pika").fingerprint("codex").unwrap())
+    );
+    // Idempotent: the same operation replays, the same identity is a no-op,
+    // a different one is refused, and an operation is never reused.
+    assert_eq!(
+        bind("bind-3", "pika", true).await,
+        MutationResult::Applied(bound.clone())
+    );
+    assert!(matches!(
+        bind("bind-4", "pika", true).await,
+        MutationResult::Applied(_)
+    ));
+    assert_eq!(
+        invalid(bind("bind-5", "other", true).await),
+        "native_identity_mismatch"
+    );
+    assert_eq!(
+        invalid(bind("bind-3", "other", true).await),
+        "operation_reused"
+    );
+}

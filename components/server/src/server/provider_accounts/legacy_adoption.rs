@@ -236,10 +236,67 @@ pub(in crate::server) async fn adopt(
         .await
         .map_err(|_| "outcome_unknown")?;
     applied(state, owner, completed)?;
+    establish_identity_later(state, owner, &format!("{operation}-identity"), &id);
     Ok(
         json!({"status":"completed","account_id":id,"card":card,"provider_id":provider,"label":label,
         "defaults":members}),
     )
+}
+
+/// A transient refusal of an adopted account's identity read (the moved
+/// credential may not have reached a Machine yet); anything else is final.
+fn identity_retryable(code: &str) -> bool {
+    !matches!(
+        code,
+        "account_identity_unsupported"
+            | "account_unavailable"
+            | "portable_credentials_required"
+            | "native_identity_already_bound"
+            | "native_identity_mismatch"
+            | "native_identity_contract_mismatch"
+            | "native_identity_evidence_required"
+            | "operation_reused"
+            | "invalid_argument"
+    )
+}
+
+/// Establish an adopted subscription account's identity from the moved
+/// credential, in the background and bounded: the account vault reaches its
+/// usage Machine asynchronously. A failure leaves the account adopted; the
+/// owner can run `accounts.establish_identity` later.
+fn establish_identity_later(
+    state: &Arc<AppState>,
+    owner: &str,
+    operation: &str,
+    id: &ProviderAccountId,
+) {
+    let (state, owner, operation, id) = (
+        Arc::clone(state),
+        owner.to_owned(),
+        operation.to_owned(),
+        id.clone(),
+    );
+    tokio::spawn(async move {
+        for delay in [5, 30, 120, 600] {
+            tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+            match super::usage::adopted_identity::establish(&state, &owner, &operation, &id).await {
+                Ok(_) => return,
+                Err(code) if identity_retryable(code) => {}
+                Err(code) => {
+                    tracing::warn!(
+                        account = id.as_str(),
+                        reason = code,
+                        "adopted account identity not established"
+                    );
+                    return;
+                }
+            }
+        }
+        tracing::warn!(
+            account = id.as_str(),
+            "adopted account identity still pending"
+        );
+    });
 }
 
 /// The adoption `operation` started, without starting anything.

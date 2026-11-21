@@ -201,6 +201,58 @@ impl Store {
             StorageBackend::Sqlite(db) => write!(db),
         })
     }
+
+    /// Bind an adopted subscription account's `identity`, read by a Machine
+    /// with the signed recipe from exactly the vault generation `current`
+    /// still confirms under the owner lock. The same rules as a sign-in: a
+    /// matching bound identity is a no-op, another one is
+    /// `native_identity_mismatch`, and an identity bound to another account
+    /// of the Provider is `native_identity_already_bound`.
+    pub async fn bind_adopted_identity(
+        &self,
+        owner: &str,
+        operation: &str,
+        id: &crate::provider_account::ProviderAccountId,
+        identity: &crate::provider_account::NativeIdentity,
+        current: impl FnOnce(&Account) -> bool,
+    ) -> Result<MutationResult> {
+        if !crate::managed_calls::valid_id(operation) || id.is_default() {
+            return Ok(MutationResult::Invalid("invalid_argument"));
+        }
+        let hash = crate::digest::hex_sha256(&serde_json::to_vec(&("identity", id, identity))?);
+        macro_rules! write {
+            ($db:expr) => {{
+                let mut tx = $db.pool.begin().await?;
+                let mut registry = locked_replay!(tx, owner, operation, hash);
+                let Some(account) = registry
+                    .accounts
+                    .iter()
+                    .find(|account| &account.id == id && account.available())
+                else {
+                    return Ok(MutationResult::Invalid("account_unavailable"));
+                };
+                if !account.portable_credentials {
+                    return Ok(MutationResult::Invalid("portable_credentials_required"));
+                }
+                if !current(account) {
+                    return Ok(MutationResult::Invalid("portable_usage_replica_pending"));
+                }
+                let change = super::Change::BindIdentity {
+                    id: id.clone(),
+                    provider_id: account.provider_id.clone(),
+                    identity: identity.clone(),
+                };
+                if let Err(code) = registry.apply(&change) {
+                    return Ok(MutationResult::Invalid(code));
+                }
+                commit_receipt!(tx, owner, operation, hash, registry, id.clone())
+            }};
+        }
+        Ok(match &self.backend {
+            StorageBackend::Postgres(db) => write!(db),
+            StorageBackend::Sqlite(db) => write!(db),
+        })
+    }
 }
 
 #[cfg(test)]

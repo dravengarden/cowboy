@@ -59,6 +59,60 @@ pub(super) async fn adopt_legacy(
     ))
 }
 
+/// Establish an adopted subscription account's identity from its existing
+/// vault credential (no sign-in); the same operation replays its result.
+pub(super) async fn establish_identity(
+    state: &Arc<AppState>,
+    meta: &SessionMeta,
+    args: Value,
+    operation: &str,
+) -> Result<Value, &'static str> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Input {
+        account_id: crate::provider_account::ProviderAccountId,
+    }
+    let input: Input = serde_json::from_value(args).map_err(|_| "invalid_argument")?;
+    let owner = account_owner(state, meta).await?;
+    Ok(success(
+        super::super::provider_accounts::usage::adopted_identity::establish(
+            state,
+            &owner,
+            &identity_operation(&document_operation(&meta.id, operation)),
+            &input.account_id,
+        )
+        .await?,
+    ))
+}
+
+/// The receipt of an identity establishment started under `operation`.
+pub(super) async fn identity_receipt(
+    state: &Arc<AppState>,
+    meta: &SessionMeta,
+    operation: &str,
+) -> Result<Value, &'static str> {
+    let owner = account_owner(state, meta).await?;
+    let receipt = state
+        .store
+        .as_ref()
+        .ok_or("unavailable")?
+        .provider_account_receipt(
+            &owner,
+            &identity_operation(&document_operation(&meta.id, operation)),
+        )
+        .await
+        .map_err(|_| "unavailable")?;
+    Ok(success(receipt.map_or_else(
+        || json!({"status":"unknown"}),
+        |receipt| json!({"status":"bound","account_id":receipt.account_id}),
+    )))
+}
+
+/// An identity operation's own receipt namespace.
+fn identity_operation(operation: &str) -> String {
+    format!("{operation}-identity")
+}
+
 /// The receipt of an adoption started under `operation`.
 pub(super) async fn adoption_receipt(
     state: &Arc<AppState>,

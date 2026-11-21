@@ -114,6 +114,36 @@ pub struct PortableResetRequest {
     pub expires_at_ms: i64,
 }
 
+/// Machine protocol of `ReadPortableIdentity`.
+pub const PORTABLE_IDENTITY_PROTOCOL_VERSION: u16 = 52;
+
+/// Read the subscription identity of a named portable account (an adopted
+/// legacy credential) from its replica at exactly `auth_generation`, with the
+/// exact release's signed native identity recipe. Read-only: no collector or
+/// Provider CLI starts and nothing contacts the Provider. Answered only by
+/// `MachineEvent::PluginHostResponse` carrying [`PortableIdentityReply`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PortableIdentityRequest {
+    pub account_id: crate::provider_account::ProviderAccountId,
+    /// The exact release whose recipe reads the identity.
+    pub plugin_id: String,
+    pub plugin_version: String,
+    pub generation_digest: String,
+    /// The vault generation the Controller admitted under the account lock.
+    pub auth_generation: u64,
+}
+
+/// The identity a replica's credential names, and the portable method of the
+/// credential it was read from (the Service checks the recipe of that
+/// method's native twin).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PortableIdentityReply {
+    pub method_id: String,
+    pub identity: crate::provider_account::NativeIdentity,
+}
+
 /// Message of a reset whose result is indeterminate.
 pub const RESET_UNKNOWN_MESSAGE: &str =
     "The reset outcome is unknown. Refresh usage before trying again.";
@@ -245,6 +275,26 @@ pub fn portable_usage_error_code(detail: &str) -> &'static str {
         UsageFailureKind::Transient => "portable_usage_temporarily_unavailable",
         UsageFailureKind::Other => "portable_usage_collector_failed",
     }
+}
+
+/// A portable identity read's failure as a closed code; collector or
+/// credential text never leaves the Machine.
+#[must_use]
+pub fn portable_identity_error_code(detail: &str) -> &'static str {
+    const CLOSED: [&str; 7] = [
+        "machine_usage_update_required",
+        "portable_usage_account_required",
+        "portable_usage_busy",
+        "portable_usage_replica_pending",
+        "portable_usage_collector_unavailable",
+        "native_usage_installation_changed",
+        "portable_identity_unsupported",
+    ];
+    CLOSED
+        .iter()
+        .find(|code| **code == detail)
+        .copied()
+        .unwrap_or("portable_identity_unreadable")
 }
 
 /// The Provider itself asked us to slow down: never retry quickly.
@@ -524,5 +574,23 @@ mod tests {
         .unwrap();
         assert_eq!(command.minimum_protocol(), PORTABLE_RESET_PROTOCOL_VERSION);
         const { assert!(PORTABLE_RESET_PROTOCOL_VERSION <= super::super::MACHINE_PROTOCOL_VERSION) };
+    }
+
+    #[test]
+    fn a_portable_identity_read_needs_protocol_52() {
+        let command: super::super::MachineCommand = serde_json::from_value(serde_json::json!({
+            "command": "read_portable_identity", "request_id": "r",
+            "request": {"account_id": "11111111-1111-4111-8111-111111111111",
+                "plugin_id": "codex", "plugin_version": "3.6.20",
+                "generation_digest": "sha256:x", "auth_generation": 3},
+        }))
+        .unwrap();
+        assert_eq!(
+            command.minimum_protocol(),
+            PORTABLE_IDENTITY_PROTOCOL_VERSION
+        );
+        const {
+            assert!(PORTABLE_IDENTITY_PROTOCOL_VERSION <= super::super::MACHINE_PROTOCOL_VERSION);
+        };
     }
 }

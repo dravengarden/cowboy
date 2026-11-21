@@ -298,13 +298,77 @@ pub(super) fn portable_usage(
     });
 }
 
+/// Read-only identity of a named portable account's replica (protocol 52).
+/// Only the identity reply or a closed code leaves the Machine.
+fn portable_identity(
+    command: MachineCommand,
+    context: MachineCommandContext,
+    execution: &PluginExecutionScope,
+) {
+    let MachineCommand::ReadPortableIdentity {
+        request_id,
+        request,
+    } = command
+    else {
+        return;
+    };
+    let MachineCommandContext {
+        protocol,
+        events,
+        providers,
+        ..
+    } = context;
+    let connected = execution.connected();
+    tokio::spawn(async move {
+        use crate::machine_protocol::portable_usage::{
+            PORTABLE_IDENTITY_PROTOCOL_VERSION, portable_identity_error_code,
+        };
+        let account = request.account_id.clone();
+        let result = if protocol >= PORTABLE_IDENTITY_PROTOCOL_VERSION {
+            providers.read_portable_identity(*request, connected).await
+        } else {
+            Err(anyhow::anyhow!("machine_usage_update_required"))
+        };
+        let event = match result.and_then(|reply| Ok(serde_json::to_value(reply)?)) {
+            Ok(payload) => MachineEvent::PluginHostResponse {
+                request_id,
+                accepted: true,
+                started: false,
+                payload: Some(payload),
+                detail: None,
+            },
+            Err(error) => {
+                let code = portable_identity_error_code(&error.to_string());
+                tracing::warn!(
+                    account = account.as_str(),
+                    reason = code,
+                    "Portable account identity read failed"
+                );
+                MachineEvent::PluginHostResponse {
+                    request_id,
+                    accepted: false,
+                    started: false,
+                    payload: None,
+                    detail: Some(code.to_owned()),
+                }
+            }
+        };
+        let _ = events.send(event);
+    });
+}
+
 /// Immediate banked reset of a named portable account (protocol 51). Only
-/// the closed reset reply or a closed code leaves the Machine.
+/// the closed reset reply or a closed code leaves the Machine. A portable
+/// identity read shares this dispatch.
 pub(super) fn portable_reset(
     command: MachineCommand,
     context: MachineCommandContext,
     execution: &PluginExecutionScope,
 ) {
+    if matches!(command, MachineCommand::ReadPortableIdentity { .. }) {
+        portable_identity(command, context, execution);
+        return;
+    }
     let MachineCommand::ConsumePortableReset {
         request_id,
         request,

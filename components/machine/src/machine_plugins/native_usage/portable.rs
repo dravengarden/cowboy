@@ -13,6 +13,8 @@
 //! authentication required instead of refreshing; renewal stays with the
 //! sessions' coordinated path. A collector without that declaration never
 //! starts.
+mod identity;
+
 use super::*;
 use crate::machine_protocol::portable_usage::{
     PortableResetRequest, PortableUsageRequest, REFRESH_FREE_DECLARATION, RefreshFree,

@@ -1,6 +1,17 @@
 //! Mixed-generation command admission.
 use crate::machine_protocol::*;
 
+/// A Machine browser command: opening with a network policy needs the
+/// network-aware browser protocol.
+fn browser_protocol(browser: &machine_browser::Command) -> u16 {
+    match browser {
+        machine_browser::Command::Open {
+            network: Some(_), ..
+        } => MACHINE_BROWSER_NETWORK_PROTOCOL_VERSION,
+        _ => MACHINE_BROWSER_PROTOCOL_VERSION,
+    }
+}
+
 impl MachineCommand {
     /// Old Machines may still negotiate an earlier wire version. Keep the
     /// capability check beside the tagged command so the Controller never
@@ -17,18 +28,12 @@ impl MachineCommand {
                 ..
             } => MCP_NATIVE_CONFIRMATION_PROTOCOL_VERSION,
             Self::McpTransport { .. } => MCP_TRANSPORT_PROTOCOL_VERSION,
-            Self::Browser {
-                browser:
-                    machine_browser::Command::Open {
-                        network: Some(_), ..
-                    },
-                ..
-            } => MACHINE_BROWSER_NETWORK_PROTOCOL_VERSION,
-            Self::Browser { .. } => MACHINE_BROWSER_PROTOCOL_VERSION,
+            Self::Browser { browser, .. } => browser_protocol(browser),
             Self::CollectNativeUsage { .. }
             | Self::ConsumeNativeReset { .. }
             | Self::CollectPortableUsage { .. }
             | Self::ConsumePortableReset { .. }
+            | Self::ReadPortableIdentity { .. }
             | Self::AccountSandboxFence { .. }
             | Self::AccountSandboxRemove { .. }
             | Self::BeginNativeLogin { .. }
@@ -167,6 +172,7 @@ impl MachineCommand {
             Self::ConsumeNativeReset { .. } => NATIVE_RESET_PROTOCOL_VERSION,
             Self::CollectPortableUsage { .. } => PORTABLE_USAGE_PROTOCOL_VERSION,
             Self::ConsumePortableReset { .. } => portable_usage::PORTABLE_RESET_PROTOCOL_VERSION,
+            Self::ReadPortableIdentity { .. } => portable_usage::PORTABLE_IDENTITY_PROTOCOL_VERSION,
             Self::AccountSandboxFence { .. } | Self::AccountSandboxRemove { .. } => {
                 ACCOUNT_FENCE_PROTOCOL_VERSION
             }

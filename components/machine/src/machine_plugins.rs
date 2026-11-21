@@ -6441,6 +6441,69 @@ mod tests {
             assert!(swept.is_err());
             assert!(enumerated.is_err());
         }
+        // An adopted subscription credential names its identity: the signed
+        // sign-in recipe reads it read-only from the replica's exact
+        // generation (an entered key has none, another generation waits).
+        let identity_request =
+            |auth_generation| crate::machine_protocol::portable_usage::PortableIdentityRequest {
+                account_id: named.clone(),
+                plugin_id: "grok".into(),
+                plugin_version: package.manifest.version.clone(),
+                generation_digest: release.artifact_digest.clone(),
+                auth_generation,
+            };
+        let connected = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let read = |auth_generation| {
+            store.read_portable_identity(
+                identity_request(auth_generation),
+                std::sync::Arc::clone(&connected),
+            )
+        };
+        assert_eq!(
+            read(1).await.unwrap_err().to_string(),
+            "portable_identity_unsupported"
+        );
+        let subscription = PortableCredentialBundle {
+            portable_schema: package.manifest.authentication.portable_schema.clone(),
+            method_id: "xai-account".to_owned(),
+            values: BTreeMap::from([(
+                "auth_json".to_owned(),
+                base64::engine::general_purpose::STANDARD.encode(
+                    br#"{"https://auth.x.ai":{"user_id":"user-1","team_id":"team-1","key":"fixture"}}"#,
+                ),
+            )]),
+        };
+        let sealed = seal_auth_for_test(&scoped, &package, &service_signer, 2, &subscription);
+        scoped.apply_auth(&sealed).await.unwrap();
+        assert_eq!(
+            read(1).await.unwrap_err().to_string(),
+            "portable_usage_replica_pending"
+        );
+        let reply = read(2).await.unwrap();
+        assert_eq!(reply.method_id, "xai-account");
+        assert_eq!(
+            reply.identity,
+            crate::provider_account::NativeIdentity {
+                authority: "x-ai".into(),
+                subject: "user-1".into(),
+                tenant: Some("team-1".into()),
+            }
+        );
+        // The private copy it read from is gone.
+        let homes = scoped
+            .auth_provider_root("grok")
+            .join(native_usage::PRIVATE_HOMES);
+        assert_eq!(fs::read_dir(&homes).unwrap().count(), 0);
+        let mut moved = identity_request(2);
+        moved.generation_digest = "sha256:other".into();
+        assert_eq!(
+            store
+                .read_portable_identity(moved, std::sync::Arc::clone(&connected))
+                .await
+                .unwrap_err()
+                .to_string(),
+            "native_usage_installation_changed"
+        );
         for account in [named.as_str(), other.as_str()] {
             fs::remove_dir_all(store.auth_base.join("accounts").join(account)).unwrap();
         }

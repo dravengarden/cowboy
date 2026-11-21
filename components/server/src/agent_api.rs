@@ -115,6 +115,7 @@ pub const INVOKE_OPERATIONS: &[&str] = &[
     "accounts.login_cancel",
     "accounts.login_cancel_request",
     "accounts.adopt_legacy",
+    "accounts.establish_identity",
     "accounts.reconcile",
     "accounts.transition_plan",
     "accounts.transition_reconcile",
@@ -204,6 +205,10 @@ pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login.
 // card's browser key; label, browser and share move; it becomes the default of its scope.
 // list().legacy_adoption is {card:{provider_id,state:available|resumable|completed,account_id}}.
 // Replay the SAME operation to resume. Receipt: cowboy_receipt({domain:"adoptions",operation}).
+// An adopted Codex/Grok account has no subscription identity (resets need one): establish it once
+// from its vault credential, no sign-in: cowboy_execute({action:"accounts.establish_identity",
+// operation,arguments:{account_id}}); the usage Machine reads it read-only with the signed sign-in
+// recipe (protocol 52). native_identity_already_bound: another account holds it. Receipt domain "identities".
 // Antigravity (named-only) accounts: list().account_controls.accounts[] is {account_id,provider_id,admitted,
 // state:ok|verification_required|location_unsupported|rate_limited|suspended|blocked|unknown_refusal|needs_attention,
 // reason,until_ms,revision,turn:{session_id,turn_id,state:reserved|may_have_dispatched}|null,

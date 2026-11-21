@@ -907,6 +907,20 @@ refresh of exactly the moved legacy generation is promoted into the account.
 `anthropic` refuses with `legacy_credential_expired`. Sessions created before
 keep `provider_account_id: "default"` and lose their credential with the wipe.
 
+An adopted Codex or Grok account has no subscription identity, and a named
+reset requires one. `accounts.establish_identity {account_id}` (receipt domain
+`identities`) establishes it once from the account's existing vault credential,
+without a sign-in. The account's usage Machine (protocol 52) reads it with the
+exact release's signed sign-in identity recipe from the replica at exactly the
+vault's current generation (`ReadPortableIdentity`). That read is read-only: no
+collector or Provider CLI starts, and no token is redeemed or refreshed. The
+Service checks the evidence against the same recipe, then binds it under the
+owner lock with the sign-in rules. A matching identity is a no-op, a different
+one is `native_identity_mismatch`, and one already bound to another account of
+the Provider is `native_identity_already_bound`; the bind is refused if the
+vault moved on since the read. A new adoption runs the same step in the
+background once the moved credential reaches a Machine.
+
 Login and receipt responses include a relative `continue_url`. Resolve it
 against the Cowboy origin and give it to the user to continue the same login on
 Desktop or Mobile. The fragment contains only account and request IDs, not

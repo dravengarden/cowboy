@@ -8,6 +8,7 @@ use crate::usage::native::Scope;
 
 mod portable;
 
+pub(in crate::server) mod adopted_identity;
 pub(in crate::server) mod reset;
 
 #[derive(Clone)]

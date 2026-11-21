@@ -129,6 +129,68 @@ impl MachineControl {
             )
         })
     }
+
+    /// Enqueue a read-only identity read of a named portable account's
+    /// replica on `machine_id` (`ReadPortableIdentity`); the future yields
+    /// the identity reply or a closed code. Nothing it runs contacts the
+    /// Provider, so every failure is a plain refusal.
+    ///
+    /// # Errors
+    /// When the command never left the Controller.
+    pub fn begin_portable_identity<'a>(
+        &'a self,
+        machine_id: &str,
+        plugin: &crate::machine_protocol::PluginInventory,
+        request: crate::machine_protocol::portable_usage::PortableIdentityRequest,
+    ) -> Result<
+        impl Future<
+            Output = Result<
+                crate::machine_protocol::portable_usage::PortableIdentityReply,
+                &'static str,
+            >,
+        > + 'a,
+        String,
+    > {
+        use crate::machine_protocol::portable_usage::portable_identity_error_code;
+        if request.account_id.is_default() || request.auth_generation == 0 {
+            return Err("invalid_argument".into());
+        }
+        let binding = self
+            .bind_plugin_host(
+                machine_id,
+                plugin,
+                crate::machine_protocol::PluginHostOperation::CollectUsage,
+            )
+            .map_err(|_| "portable_usage_machine_unavailable".to_owned())?;
+        let request_id = self.request_id("portable-identity")?;
+        let (rx, pending) = self.begin_request(
+            machine_id,
+            &request_id,
+            MachineCommand::ReadPortableIdentity {
+                request_id: request_id.clone(),
+                request: Box::new(request),
+            },
+            ReplyKind::PluginHost,
+            Some(RequestBinding::Plugin(&binding)),
+        )?;
+        Ok(async move {
+            let _pending = pending;
+            match tokio::time::timeout(RESET_TIMEOUT, rx).await {
+                Ok(Ok(Reply::PluginHost {
+                    accepted: true,
+                    payload: Some(value),
+                    ..
+                })) => serde_json::from_value(value).map_err(|_| "portable_identity_unreadable"),
+                Ok(Ok(Reply::PluginHost {
+                    accepted: false,
+                    detail: Some(detail),
+                    payload: None,
+                    ..
+                })) => Err(portable_identity_error_code(&detail)),
+                _ => Err("portable_identity_unavailable"),
+            }
+        })
+    }
 }
 
 /// Decode a reset reply: a result, or a refusal that is unsent only with an

@@ -57,6 +57,10 @@ impl PluginExecutionScope {
             Arc::clone(&self.connected),
         )
     }
+    /// The Controller connection flag a read-only invocation stops on.
+    pub fn connected(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.connected)
+    }
     pub fn telemetry_export(
         &self,
         request: &crate::machine_protocol::telemetry_export::ExportAttempt,
