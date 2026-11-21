@@ -540,7 +540,7 @@ impl Hub {
                     text,
                     content,
                     cmid,
-                    explicit: true,
+                    explicit: !managed, // never an owner send (account gates)
                 });
             } else {
                 let id = self.next_qid();

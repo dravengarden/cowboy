@@ -269,8 +269,9 @@ pin advance and OVH maintenance.
 - `plugins/antigravity`: `agy acp`, isolated environment, reused behaviour
   profiles where Phase 1 allows, OAuth method only.
 - Risk controls from the requirements section: per-account placement and
-  concurrency caps, backoff, suspension error rule, exclusion from managed and
-  unattended work.
+  concurrency caps, backoff, suspension error rule, exclusion from unattended
+  work and from every managed call except read-only context asks (see
+  [Managed read-only context asks](#managed-read-only-context-asks)).
 - Kill switch: admission fence, confirmed worker termination, native logout,
   offline-Machine handling, conversations and worktrees preserved.
 - UI: picker, account cards and Session Settings on mobile and desktop.
@@ -308,8 +309,10 @@ restart, logout, kill switch, and two-account isolation if Phase 1.3 passed.
   mode); the launcher sends ACP `initialize` and `logout` and succeeds only if
   the token file is gone afterwards.
 - Configuration: ACP `configOptions` ids `model` and `thought_level`; default
-  preset Gemini 3.8 Flash · High. Not offered to managed calls (no
-  `managed_profiles`, not a `CALL_TARGETS` member).
+  preset Gemini 3.8 Flash · High. Not offered to managed calls at the time
+  (no `managed_profiles`, not a `CALL_TARGETS` member); since 2026-11-21 it
+  is a target of read-only context asks only (see
+  [Managed read-only context asks](#managed-read-only-context-asks)).
 - Codex Astra Max review (call `call-0c43947387086ddb8138f08d`) findings and
   fixes: older SDK 3.4.0 readers would have treated the logins as portable, so
   the manifest now signs `provider.native-custody.v1` (provider-sdk 3.5.0);
@@ -352,8 +355,84 @@ declaration").
 
 ### Phase 5 — Extras
 
-Usage card only from a documented surface; fork; Matrix memory bridge. Managed
-calls are out of scope.
+Usage card only from a documented surface; fork; Matrix memory bridge.
+Managed calls other than read-only context asks stay out of scope.
+
+### Managed read-only context asks
+
+Owner decision 2026-11-21: Antigravity (Gemini 4 Hydrogen) may answer
+managed `analysis` and `sessions` context asks, accepting the account risk;
+reviews, design reviews, image calls and every call that could write stay
+unavailable. The Controller admits only those asks and advertises text-only
+output for Antigravity.
+
+- The manifest declares `provider.managed-profiles.v1` with one
+  `read_only_v1` profile (`acp`, `--disable-telemetry`,
+  `--cowboy-managed-profile=read-only-v1`); there is no `image_v1`. An
+  account-sandbox runtime unit starts `bin/agy-proxy` with the command line
+  the daemon fixes, so these arguments are a declaration there: the proxy
+  learns managed mode from its execution binding (`binding.managed`) and the
+  target keeper's `cowboyManaged` announcement, which must name the same
+  profile; one without the other refuses `initialize`. `agy-launch` refuses
+  every `--cowboy-managed-profile` value because it would start `agy` without
+  the facade and gate; `agy-proxy` refuses any value but `read-only-v1`.
+- The keeper enforces the profile on every native request: process starts
+  are read-only and network-free, and file writes and HTTP are refused. That
+  is not a history-only or workspace-only boundary: `ReadFile`, `SearchFiles`
+  and `RunCommand` can read any file the execution user can read on the
+  target (host-wide reads, no writes, no network), as for Claude's managed
+  `Bash`. The facade lists only `ReadFile`, `ListDirectory`, `SearchFiles`,
+  `RunCommand` and `UpdatePlan`, and refuses every other name; `StopCommand`
+  is not offered (the turn's end stops its commands). The surface a managed
+  child must never reach is the Cowboy Agent API: no Cowboy MCP, folder MCP
+  or Matrix memory is attached, so it cannot start calls, read sessions or
+  change Cowboy. The system prompt carries the managed routing instead of the
+  session one.
+  Repository skills are neither discovered nor listed, and no slash command
+  (agy's or a skill's) is offered or expanded.
+- The proxy starts `agy` with `COWBOY_HOOK_PROFILE` in its closed
+  environment: `ordinary` for an ordinary session, `read-only-v1` for a
+  managed child. The daemon binds `policy/hooks.json` read-only over the
+  home; its gate runs the command `agy-hook` from the `PATH` the proxy gives
+  `agy` (the runtime's `bin`), whose entry script execs the bundled Node on
+  `proxy/app/hook.mjs`, which reads the marker from the environment `agy`
+  passes on. Only the exact `ordinary` marker gets the ordinary policy; a
+  missing, empty or unknown marker gets the managed allow-list, so a hook
+  that does not see the marker can only narrow a session. Under the managed
+  allow-list `ask_question`, `search_web`, `read_url_content`, every Cowboy
+  MCP or extension tool, subagents, schedules and swarms are denied.
+- The proxy validates everything it can check locally before it starts
+  `agy`, and chooses the marker from that validated binding only: the
+  descriptor itself, a managed record naming exactly `read_only_v1` and a
+  nonempty parent session, and agreement with the launch flag (an
+  unsupported profile flag, or the managed flag with an ordinary binding, is
+  refused). Any failure starts no `agy` at all, and every request of the
+  worker is refused with that error. The target's announcement is checked
+  once the execution connection is open.
+- Until its runtime settles the proxy allows nothing `agy` asks for: every
+  permission request is rejected and no command list or session update is
+  forwarded. A managed
+  child then rejects permission requests for any tool outside its list
+  without asking anyone, and a tool outside the list that still runs ends
+  the turn as `antigravity_policy_violation`.
+- Each turn must carry the Machine-written round as prompt
+  `_meta["cowboy.dev/managedCall"]`; the proxy strips it before `agy`. A
+  prompt without it, a prompt that is not a nonempty list of text blocks
+  (images, resources or mixed content), a round with a non-null
+  `outputSchema` (Antigravity cannot apply structured output), a slash
+  command, `session/set_mode` and any `session/set_config_option` other than
+  `model` and `thought_level` are refused. A managed child has exactly one
+  native session, the one its own `session/new` created: a second
+  `session/new`, and a prompt, load, resume or configuration request naming
+  any other session, are refused; a `session/cancel` for another session is
+  dropped, and `agy`'s permission requests and session updates for another
+  session (or before the child's session exists) are rejected or dropped
+  before anything is granted, recorded or forwarded. Nothing trusted names
+  the child's native session id to a replacement proxy (the binding, the
+  keeper's announcement and the round carry none), so a managed context ask
+  is single-round: a proxy replaced by a worker reload refuses every load or
+  resume, the call fails, and its caller retries. An ordinary session
+  refuses a prompt that carries a round.
 
 ## Rollout
 

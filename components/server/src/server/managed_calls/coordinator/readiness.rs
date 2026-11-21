@@ -62,11 +62,16 @@ pub(in crate::server::managed_calls) async fn child_runtime(
         );
     }
     let local = provider_readiness(state, owner, execution_machine, provider, profile).await;
-    if local.available
-        || !matches!(
-            local.reason,
-            Some("runtime_policy" | "provider_unavailable" | "unsupported_capability")
-        )
+    // A context-only adapter starts only with a keeper-backed execution
+    // descriptor, which only a split child supplies: never run it locally,
+    // and never let a missing local login hide a remote one.
+    let split_only = super::super::super::agent_tools::context_only(provider);
+    if !split_only
+        && (local.available
+            || !matches!(
+                local.reason,
+                Some("runtime_policy" | "provider_unavailable" | "unsupported_capability")
+            ))
     {
         return (execution_machine.to_owned(), local);
     }
@@ -86,7 +91,12 @@ pub(in crate::server::managed_calls) async fn child_runtime(
     candidates.retain(|machine| machine != execution_machine && seen.insert(machine.clone()));
     let mut remote_reason = None;
     for runtime in candidates {
-        if !state.supervisor.runtime_allowed(provider, &runtime) {
+        if !state.supervisor.runtime_allowed(provider, &runtime)
+            || !state
+                .project_placement
+                .snapshot()
+                .allows(&runtime, execution_machine)
+        {
             continue;
         }
         let readiness =
@@ -100,6 +110,13 @@ pub(in crate::server::managed_calls) async fn child_runtime(
         Some(reason) => ProviderReadiness {
             available: false,
             reason: Some(reason),
+            generation: None,
+            structured_output: false,
+            account: Default::default(),
+        },
+        None if split_only => ProviderReadiness {
+            available: false,
+            reason: Some("runtime_policy"),
             generation: None,
             structured_output: false,
             account: Default::default(),

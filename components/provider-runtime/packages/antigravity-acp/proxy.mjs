@@ -5,6 +5,12 @@
 // system prompt, and settles each turn with backend refusal evidence.
 import { Compaction, compactionStatus } from "./compaction.mjs";
 import { allowedTool } from "./hook.mjs";
+import {
+  hasManagedRound,
+  managedAllowedTool,
+  managedConfigAllowed,
+  managedPrompt,
+} from "./managed.mjs";
 import { EVIDENCE_LIMITS, promptText, recall, updateObservation } from "./memory.mjs";
 import {
   agyNotice,
@@ -245,15 +251,69 @@ export class AcpProxy {
     this.skills = [];
     /** The slash commands `agy` itself offers (after the denied ones). */
     this.agyCommands = [];
+    /**
+     * Whether this unit serves a managed child; `undefined` until the
+     * runtime settles, when nothing `agy` asks for is allowed.
+     */
+    this.managed = undefined;
+    /** A managed child's one native session, from its `session/new`. */
+    this.managedSession = undefined;
+    /** Whether that `session/new` is still waiting for `agy`'s answer. */
+    this.managedOpening = false;
     Promise.resolve(runtime).then(
       (ready) => {
         this.root = ready?.facade?.root;
         this.facade = ready?.facade;
         this.memory = ready?.memory ?? null;
+        /** A managed read-only child (`managed.mjs`): its own allow-list. */
+        this.managed = ready?.managed === true;
       },
       () => {},
     );
     this.queue = Promise.resolve();
+  }
+
+  /**
+   * Whether `agy` may run the tool named `name` in this unit. Nothing is
+   * allowed before the runtime established the unit's policy.
+   */
+  allows(name) {
+    if (this.managed === undefined) return false;
+    return this.managed ? managedAllowedTool(name) : allowedTool(name);
+  }
+
+  /**
+   * Whether a managed child's message names a session other than its own
+   * (or arrives before it has one): such messages are never granted,
+   * recorded or forwarded. Always false outside managed mode, and true
+   * while the unit's policy is still unknown.
+   */
+  foreignSession(params) {
+    if (this.managed === false) return false;
+    return this.managedSession === undefined || params?.sessionId !== this.managedSession;
+  }
+
+  /**
+   * Why a managed child's request for `sessionId` is refused, if it is: it
+   * has exactly one native session, the one its own `session/new` created.
+   * Nothing trusted names that native id to a replacement proxy (the
+   * binding, the keeper's announcement and the round carry none), so a
+   * replacement refuses every `session/load` and `session/resume`: a
+   * managed context ask is single-round, and a replaced proxy fails the
+   * call, which its caller retries.
+   */
+  managedSessionRefusal(method, params) {
+    if (method === "session/new") {
+      return this.managedSession !== undefined || this.managedOpening
+        ? "A Cowboy managed call has one Antigravity session"
+        : undefined;
+    }
+    if (method === "initialize") return undefined;
+    const sessionId = params?.sessionId;
+    if (this.managedSession === undefined || sessionId !== this.managedSession) {
+      return "A Cowboy managed call may use only its own Antigravity session";
+    }
+    return undefined;
   }
 
   /**
@@ -325,6 +385,9 @@ export class AcpProxy {
   presentUpdate(message) {
     const update = message.params?.update;
     if (update?.sessionUpdate === "available_commands_update") {
+      // A managed turn's instruction is never a native command or skill,
+      // and nothing is offered before the unit's policy is known.
+      if (this.managed !== false) return undefined;
       const kept = availableCommands(update);
       const offered = Array.isArray(kept.availableCommands) ? kept.availableCommands : [];
       this.agyCommands = offered.map((command) => command?.name);
@@ -458,6 +521,7 @@ export class AcpProxy {
     }
     if (id === undefined) {
       if (!RUNTIME_NOTIFICATIONS.includes(method)) return this.log(`dropped ${method}`);
+      if (this.foreignSession(message.params)) return this.log(`dropped ${method}`);
       return await this.cancel(message);
     }
     if (!RUNTIME_REQUESTS.includes(method)) {
@@ -468,6 +532,14 @@ export class AcpProxy {
       runtime = await this.runtime;
     } catch (error) {
       return this.refuse(id, `cowboy_antigravity_unavailable: ${error.message}`, -32603);
+    }
+    if (runtime.managed) {
+      if (!managedConfigAllowed(method, message.params)) {
+        return this.refuse(id, `${method} is not available in a Cowboy managed call`, -32602);
+      }
+      const refusal = this.managedSessionRefusal(method, message.params);
+      if (refusal) return this.refuse(id, refusal, -32602);
+      if (method === "session/new") this.managedOpening = true;
     }
     const forwarded = structuredClone(message);
     const requested = this.requestedMode(method, forwarded.params);
@@ -507,6 +579,7 @@ export class AcpProxy {
         params._meta = { antigravity: { systemPrompt: { append: projection } } };
         forwarded.params = params;
       } catch (error) {
+        if (method === "session/new") this.managedOpening = false;
         return this.refuse(id, `cowboy_antigravity_unavailable: ${error.message}`, -32603);
       }
     } else if (method === "session/prompt") {
@@ -515,13 +588,25 @@ export class AcpProxy {
       if (this.turns.has(sessionId)) {
         return this.refuse(id, "A turn is already running in this session", -32603);
       }
+      // A managed turn carries its Machine-written round; nothing else
+      // does. Its metadata never reaches `agy`.
+      if (runtime.managed) {
+        const admitted = managedPrompt(forwarded.params);
+        if (admitted.error) return this.refuse(id, admitted.error, -32602);
+        forwarded.params = admitted.params;
+      } else if (hasManagedRound(forwarded.params)) {
+        return this.refuse(id, "This Antigravity session is not a Cowboy managed call", -32602);
+      }
       record.sessionId = sessionId;
       record.cursor = await runtime.evidence.mark();
       const prompt = forwarded.params?.prompt;
       // Memory recalls for the owner's words, as for Claude and Codex.
       const text = promptText(prompt);
-      // A repository skill's slash command becomes the instruction to use it.
-      forwarded.params.prompt = expandSkillCommand(prompt, this.skills, this.agyCommands);
+      // A repository skill's slash command becomes the instruction to use it
+      // (a managed turn never runs one; `managedPrompt` refused it above).
+      if (!runtime.managed) {
+        forwarded.params.prompt = expandSkillCommand(prompt, this.skills, this.agyCommands);
+      }
       if (runtime.memory) {
         const context = await recall(runtime.memory, text);
         if (context) {
@@ -597,7 +682,7 @@ export class AcpProxy {
     // A tool that ran must be attributable to a facade tool. One without a
     // name, with an unknown call ID or past the per-turn name bound cannot
     // be, so it is a violation like a named built-in.
-    if (allowedTool(name)) return;
+    if (this.allows(name)) return;
     if (turn.violation !== undefined) return;
     turn.violation = name === undefined ? "unknown" : toolCode(name);
     this.log(`built-in tool ${turn.violation} executed; ending the turn`);
@@ -680,6 +765,10 @@ export class AcpProxy {
     if (typeof method === "string") {
       if (id === undefined) {
         if (method === "session/update") {
+          // A managed child hears only its own session.
+          if (this.managed !== false && this.foreignSession(message.params)) {
+            return this.log("dropped a session/update for another session");
+          }
           const update = message.params?.update;
           if (update?.sessionUpdate === "current_mode_update") {
             this.reportMode(message.params.sessionId, update);
@@ -708,9 +797,10 @@ export class AcpProxy {
         });
       }
       // Defense in depth beside the PreToolUse hook: a permission request
-      // for any tool but the facade's is rejected here, never shown.
+      // for any tool but the facade's is rejected here, never shown; so is
+      // a managed child's request for any session but its own.
       const name = message.params?.toolCall?.name;
-      if (!allowedTool(name)) {
+      if (!this.allows(name) || this.foreignSession(message.params)) {
         const options = Array.isArray(message.params?.options) ? message.params.options : [];
         const reject =
           options.find((option) => option?.kind === "reject_once") ??
@@ -732,7 +822,12 @@ export class AcpProxy {
       const mode = this.modes.get(sessionId);
       // `UpdatePlan` only shows a checklist, in every mode.
       const planning = name === "mcp_cowboy_UpdatePlan";
-      if (planning || (name !== "ask_question" && mode !== undefined && mode !== "plan")) {
+      // A managed call has nobody to ask: its read tools run, nothing else.
+      if (
+        this.managed ||
+        planning ||
+        (name !== "ask_question" && mode !== undefined && mode !== "plan")
+      ) {
         const options = Array.isArray(message.params?.options) ? message.params.options : [];
         // Never a standing grant: each request is decided in its mode.
         const allow = options.find((option) => option?.kind === "allow_once");
@@ -742,6 +837,9 @@ export class AcpProxy {
             id,
             result: { outcome: { outcome: "selected", optionId: allow.optionId } },
           });
+        }
+        if (this.managed) {
+          return this.agent({ jsonrpc: "2.0", id, result: { outcome: { outcome: "cancelled" } } });
         }
       }
       this.agentRequests.add(id);
@@ -786,6 +884,13 @@ export class AcpProxy {
     }
     if (record.channel && typeof message.result?.sessionId === "string") {
       runtime.bindChannel(record.channel, message.result.sessionId);
+    }
+    // A managed child's session is the one `agy` just created for it.
+    if (runtime.managed && record.method === "session/new") {
+      this.managedOpening = false;
+      if (typeof message.result?.sessionId === "string") {
+        this.managedSession = message.result.sessionId;
+      }
     }
     // Nothing is awaited before a non-prompt reply is forwarded, so it
     // reaches the worker before any notification read after it (the worker

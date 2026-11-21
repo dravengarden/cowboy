@@ -497,6 +497,28 @@ reads history for the caller rather than giving a second opinion, the caller's
 own agent family is admitted (for example a Codex parent asking
 `codex`/`luna-6-max`).
 
+`provider:"antigravity"` (for example preset `gemini-hydrogen-high`) is a
+context-only target: it is admitted only for an explicit, fresh, text-output
+context ask, never for reviews, plain analysis, images, Auto, Tools targets or
+approvals. It runs on the owner's admitted named default Antigravity account
+(`authentication_required` otherwise), guarded by that account's controls
+(rate-limit back-off, suspension) and the parent's call budget; a managed
+prompt never counts as an owner send, so it cannot clear an ended rate limit.
+It needs a signed Antigravity package declaring the read-only managed profile.
+`calls.capabilities` lists it under `context_ask` (with the Codex and Claude
+agents a context ask may use) with no review candidates, and marks it
+`machine_upgrade_required` when the execution Machine cannot receive history.
+Its child always runs split, on a Machine allowed by Provider and project
+placement policy whose keeper supplies the execution descriptor the adapter
+requires; a parent executing on that Machine itself gets `runtime_policy`.
+Placement policy is checked when the call is admitted; a later policy change
+applies to new calls. Enabling calls for a session (including "Allow for this
+session" on another agent's request) is the owner's consent to these asks;
+there is no separate Antigravity approval. Rollback floor: a Controller older
+than this release cannot decode a call record whose provider is
+`antigravity`, so roll back only after such calls are terminal and their
+parents' listings are no longer needed, or not at all.
+
 Design, following the measured weaknesses of one-shot summaries:
 
 - **History is data, not authority.** When the round launches, the Controller

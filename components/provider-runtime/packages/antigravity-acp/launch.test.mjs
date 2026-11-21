@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -26,7 +28,7 @@ import { fakeEndpoint } from "./test-endpoint.mjs";
 const here = dirname(fileURLToPath(import.meta.url));
 
 /** A runtime archive layout, an account home with read-only policy and a target. */
-function layout(t, { writablePolicy = false } = {}) {
+function layout(t, { writablePolicy = false, managed = false } = {}) {
   // Unix socket paths must stay short; the nix shell TMPDIR is long.
   const base = realpathSync(mkdtempSync("/tmp/agy-proxy-"));
   t.after(() => rmSync(base, { recursive: true, force: true }));
@@ -73,6 +75,7 @@ function layout(t, { writablePolicy = false } = {}) {
         runtime: { machine_id: "ovh", cwd: runtimeCwd },
         environment: { id: "env-1" },
         workspace: { cwd: virtual },
+        ...(managed ? { managed: { parent_session_id: "parent-1", profile: "read_only_v1" } } : {}),
       },
     }),
     { mode: 0o600 },
@@ -90,7 +93,7 @@ function layout(t, { writablePolicy = false } = {}) {
   return { base, archive, home, target, virtual, runtimeCwd, credentials, socket, paths, tmp };
 }
 
-function session(t, setup, environment = {}) {
+function session(t, setup, environment = {}, args = []) {
   const input = new PassThrough();
   const output = new PassThrough();
   const replies = new Map();
@@ -116,6 +119,7 @@ function session(t, setup, environment = {}) {
     },
     input,
     output,
+    args,
   });
   t.after(async () => {
     input.end();
@@ -155,6 +159,7 @@ test("the proxy relays ACP through the facade over one execution connection", as
   const created = await call("session/new", { cwd: setup.runtimeCwd, mcpServers: [] });
   assert.equal(created.result.sessionId, "fake-session");
   assert.equal(created.result.seen.params.cwd, setup.virtual);
+  assert.equal(created.result.seen.hookProfile, "ordinary");
   assert.deepEqual(created.result.seen.tools, [
     "ReadFile",
     "ListDirectory",
@@ -294,6 +299,7 @@ test("descriptor, policy, mirror and environment checks", async (t) => {
       TMPDIR: "/t",
       AGY_CLI_DISABLE_AUTO_UPDATE: "true",
       DBUS_SESSION_BUS_ADDRESS: "unix:path=/nonexistent",
+      COWBOY_HOOK_PROFILE: "ordinary",
     },
   );
   assert.deepEqual(AGY_ARGUMENTS, [
@@ -307,4 +313,185 @@ test("the relay refuses to start without a valid channel", async () => {
   const child = spawn(process.execPath, [join(here, "facade-relay.mjs"), "/nonexistent", "bad"]);
   const [code] = await new Promise((done) => child.once("exit", (...result) => done(result)));
   assert.equal(code, 2);
+});
+
+const ANNOUNCED = { schema: 1, profile: "read_only_v1", roundPath: "/m/child/round.json" };
+const ROUND = { callId: "call-1", inputRevision: "rev-1", outputSchema: null };
+
+test("a managed child gets only the read tools, no extensions, and its hook policy", async (t) => {
+  const setup = layout(t, { managed: true });
+  mkdirSync(join(setup.target, ".agents/skills/deploy"), { recursive: true });
+  writeFileSync(
+    join(setup.target, ".agents/skills/deploy/SKILL.md"),
+    "---\nname: deploy\ndescription: Ship\n---\n",
+  );
+  const endpoint = await fakeEndpoint(setup.socket, setup.target, {
+    virtual: setup.virtual,
+    managed: ANNOUNCED,
+  });
+  t.after(() => endpoint.close());
+  const { call } = session(t, setup);
+  await call("initialize", { protocolVersion: 1 });
+  const created = await call("session/new", { cwd: setup.runtimeCwd, mcpServers: [] });
+  assert.deepEqual(created.result.seen.tools, [
+    "ReadFile",
+    "ListDirectory",
+    "SearchFiles",
+    "RunCommand",
+    "UpdatePlan",
+  ]);
+  assert.equal(created.result.seen.hookProfile, "read-only-v1");
+  const append = created.result.seen.params._meta.antigravity.systemPrompt.append;
+  assert.match(append, /read-only Cowboy managed call/);
+  assert.doesNotMatch(append, /WriteFile|cowboy_extensions|repository_skills/);
+  // No extension or memory request reached the worker's endpoint.
+  assert.equal(
+    endpoint.calls.some((entry) => entry.method.startsWith("cowboy/")),
+    false,
+  );
+  const bare = await call("session/prompt", {
+    sessionId: "fake-session",
+    prompt: [{ type: "text", text: "read hello.txt" }],
+  });
+  assert.match(bare.error.message, /requires its Cowboy managed-call round/);
+  const structured = await call("session/prompt", {
+    sessionId: "fake-session",
+    prompt: [{ type: "text", text: "read hello.txt" }],
+    _meta: { "cowboy.dev/managedCall": { ...ROUND, outputSchema: { type: "object" } } },
+  });
+  assert.match(structured.error.message, /text only.*outputSchema/);
+  const prompt = await call("session/prompt", {
+    sessionId: "fake-session",
+    prompt: [{ type: "text", text: "read hello.txt" }],
+    _meta: { "cowboy.dev/managedCall": ROUND },
+  });
+  assert.equal(prompt.result.stopReason, "end_turn");
+  assert.equal(prompt.result.seenMeta, null);
+  const mode = await call("session/set_mode", { sessionId: "fake-session", modeId: "plan" });
+  assert.match(mode.error.message, /not available in a Cowboy managed call/);
+});
+
+test("a managed binding, its target and the launch profile must agree", async (t) => {
+  // The binding is managed, the target enforces nothing.
+  const unenforced = layout(t, { managed: true });
+  const plain = await fakeEndpoint(unenforced.socket, unenforced.target, {
+    virtual: unenforced.virtual,
+  });
+  t.after(() => plain.close());
+  const first = session(t, unenforced);
+  assert.match(
+    (await first.call("initialize", { protocolVersion: 1 })).error.message,
+    /requires its read-only execution environment/,
+  );
+  // The target enforces a profile the binding does not name.
+  const unbound = layout(t);
+  const announcing = await fakeEndpoint(unbound.socket, unbound.target, {
+    virtual: unbound.virtual,
+    managed: ANNOUNCED,
+  });
+  t.after(() => announcing.close());
+  const second = session(t, unbound);
+  assert.match(
+    (await second.call("initialize", { protocolVersion: 1 })).error.message,
+    /requires its read-only execution environment/,
+  );
+  // A launch flag or binding that disagrees before connecting starts no
+  // agy ("a descriptor that does not validate starts no agy").
+  assert.equal(
+    agyEnvironment({ HOME: "/h" }, "/rt", { managed: true }).COWBOY_HOOK_PROFILE,
+    "read-only-v1",
+  );
+});
+
+test("the launcher refuses every managed profile", () => {
+  const launcher = join(here, "..", "antigravity-launch", "launch.sh");
+  for (const profile of ["read-only-v1", "image-v1"]) {
+    const result = spawnSync("/bin/sh", [launcher, "acp", `--cowboy-managed-profile=${profile}`], {
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 64, profile);
+    assert.match(result.stderr, /account-sandbox runtime unit/);
+  }
+});
+
+test("a descriptor that does not validate starts no agy", async (t) => {
+  const cases = [
+    ["missing", () => ({ CREDENTIALS_DIRECTORY: undefined }), /no execution descriptor/],
+    [
+      "malformed",
+      (setup) => {
+        writeFileSync(join(setup.credentials, "descriptor"), "{not json");
+        return {};
+      },
+      /JSON/,
+    ],
+    [
+      "not private",
+      (setup) => {
+        chmodSync(join(setup.credentials, "descriptor"), 0o644);
+        return {};
+      },
+      /private regular file/,
+    ],
+  ];
+  const rewrite = (change) => (setup) => {
+    const path = join(setup.credentials, "descriptor");
+    const descriptor = JSON.parse(readFileSync(path, "utf8"));
+    change(descriptor.binding);
+    writeFileSync(path, JSON.stringify(descriptor));
+    return {};
+  };
+  cases.push(
+    [
+      "managed without its parent",
+      rewrite((binding) => {
+        delete binding.managed.parent_session_id;
+      }),
+      /requires its read-only execution environment/,
+    ],
+    [
+      "managed with an empty parent",
+      rewrite((binding) => {
+        binding.managed.parent_session_id = "";
+      }),
+      /requires its read-only execution environment/,
+    ],
+    [
+      "managed with another profile",
+      rewrite((binding) => {
+        binding.managed.profile = "image_v1";
+      }),
+      /requires its read-only execution environment/,
+    ],
+    [
+      "the managed flag with an ordinary binding",
+      rewrite((binding) => {
+        delete binding.managed;
+      }),
+      /requires a managed execution binding/,
+      ["--cowboy-managed-profile=read-only-v1"],
+    ],
+    [
+      "an unsupported profile flag",
+      () => ({}),
+      /Unsupported Cowboy managed profile/,
+      ["--cowboy-managed-profile=image-v1"],
+    ],
+  );
+  for (const [name, prepare, expected, args = []] of cases) {
+    const setup = layout(t, { managed: true });
+    // An agy that records that it ran.
+    writeFileSync(
+      setup.paths.agy,
+      `#!/bin/sh\ntouch ${JSON.stringify(join(setup.base, "agy-started"))}\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(join(here, "testdata/fake-agy.mjs"))} "$@"\n`,
+      { mode: 0o755 },
+    );
+    const { call } = session(t, setup, prepare(setup), args);
+    const refused = await call("initialize", { protocolVersion: 1 });
+    assert.match(refused.error.message, /^cowboy_antigravity_unavailable: /, name);
+    assert.match(refused.error.message, expected, name);
+    const opened = await call("session/new", { cwd: setup.virtual, mcpServers: [] });
+    assert.match(opened.error.message, expected, name);
+    assert.equal(existsSync(join(setup.base, "agy-started")), false, name);
+  }
 });

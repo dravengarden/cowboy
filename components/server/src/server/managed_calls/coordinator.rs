@@ -43,6 +43,7 @@ struct GrantEntry {
     retry_after: Option<Instant>,
 }
 
+mod context_only;
 mod observation;
 mod readiness;
 pub(in crate::server) use observation::touch as touch_code_observation;
@@ -714,9 +715,11 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
     let policy = agent_tools::effective(state, meta).calls;
     let mut providers = Vec::new();
     let mut read_only_providers = Vec::new();
+    let mut context_providers = Vec::new();
+    let history_capable = context_only::history_capable(state, &placement.machine_id);
     let mut image_providers = Vec::new();
     let mut named = Vec::new();
-    for provider in agent_tools::CALL_TARGETS {
+    for provider in context_only::discoverable() {
         let target = policy
             .targets
             .iter()
@@ -731,16 +734,9 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
         )
         .await;
         // The session's policy decides first; readiness explains the rest.
-        // The caller's own family is callable after other vendors; reviews
-        // exclude its own model below.
-        let own = agent_tools::same_family(provider, &meta.provider);
-        let reason = if !policy.enabled {
-            Some("calls_disabled")
-        } else if target.is_none() && !(own && !policy.targets.is_empty()) {
-            Some("policy_denied")
-        } else {
-            readiness.reason
-        };
+        let targeted = target.is_some();
+        let reason = context_only::policy_reason(&policy, &meta.provider, provider, targeted)
+            .or(context_only::history_reason(provider, history_capable).or(readiness.reason));
         let available = reason.is_none() && readiness.available;
         let native_capabilities: Vec<&str> = readiness
             .generation
@@ -759,12 +755,20 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
                     .collect()
             })
             .unwrap_or_default();
-        if available {
+        let context = agent_tools::context_only(provider);
+        if available && !context {
             read_only_providers.push(provider);
+        }
+        if readiness.available
+            && history_capable
+            && context_only::serves_context_asks(&policy, &meta.provider, provider, targeted)
+        {
+            context_providers.push(provider);
         }
         // Through the image profile, as scoped discovery and admission do: a
         // Machine can run read-only work and still refuse images.
-        if native_capabilities.contains(&"image.generate")
+        if !context
+            && native_capabilities.contains(&"image.generate")
             && agent_tools::image_refusal(&policy, &meta.provider, provider).is_none()
             && images_run(state, meta, &placement.machine_id, provider).await
         {
@@ -772,9 +776,9 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
         }
         // What admission ranks: the generation this runtime would launch.
         let runnable_presets = readiness.presets(state, provider);
-        providers.push(json!({
+        let mut entry = json!({
             "id": provider,
-            "alias": if provider == "codex" { "codex" } else { "claude" },
+            "alias": match provider { "codex" => "codex", "claude-code" => "claude", other => other },
             "available": available,
             "native_capabilities":native_capabilities,
             "runtime_machine_id": available.then_some(runtime),
@@ -789,13 +793,16 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             "access": ["read-only"],
             "output": if readiness.structured_output { json!(["text","json_schema"]) } else { json!(["text"]) },
             "conversation": ["fresh","continue"],
-        }));
-        if let (Some(Value::Object(entry)), Value::Object(review)) = (
-            providers.last_mut(),
+        });
+        if context {
+            context_only::restrict(&mut entry);
+        } else if let (Value::Object(fields), Value::Object(review)) = (
+            &mut entry,
             review_fields(state, meta, provider, &runnable_presets, &policy, available),
         ) {
-            entry.extend(review);
+            fields.extend(review);
         }
+        providers.push(entry);
     }
     let accounts: Vec<String> = providers
         .iter()
@@ -823,6 +830,7 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
         "capabilities": [
             {"id": "read_only", "tasks": ["review", "design_review", "analysis"],
              "enabled": policy.enabled, "providers": read_only_providers},
+            context_only::capability(&policy, &context_providers),
             {"id": "image", "tasks": ["image.generate", "image.edit"],
              "enabled": policy.enabled && policy.images, "self": policy.self_images,
              "providers": image_providers},
@@ -942,19 +950,21 @@ async fn start(
         Some(_) => return error("conversation_unavailable", "not_submitted"),
         None => requested,
     };
-    let (mut targets, selection) =
-        match agent_tools::choose(&policy, &meta.provider, requested, own_family) {
-            agent_tools::Choice::Candidates { targets, selection } => (targets, selection),
-            agent_tools::Choice::Refused(code @ ("calls_disabled" | "policy_denied")) => {
-                match await_approval(state, meta, &policy, requested, &request, code) {
-                    Ok(admitted) => admitted,
-                    Err(refusal) => return refusal,
-                }
+    let choice = context_only::resolve(state, ledger, &policy, requested, &request, &continued);
+    let (mut targets, selection) = match choice
+        .unwrap_or_else(|| agent_tools::choose(&policy, &meta.provider, requested, own_family))
+    {
+        agent_tools::Choice::Candidates { targets, selection } => (targets, selection),
+        agent_tools::Choice::Refused(code @ ("calls_disabled" | "policy_denied")) => {
+            match await_approval(state, meta, &policy, requested, &request, code) {
+                Ok(admitted) => admitted,
+                Err(refusal) => return refusal,
             }
-            agent_tools::Choice::Refused(code) | agent_tools::Choice::Closed(code) => {
-                return error(code, "not_submitted");
-            }
-        };
+        }
+        agent_tools::Choice::Refused(code) | agent_tools::Choice::Closed(code) => {
+            return error(code, "not_submitted");
+        }
+    };
     if continued.is_some() {
         targets.truncate(1);
     }

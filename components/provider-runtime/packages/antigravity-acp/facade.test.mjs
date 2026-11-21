@@ -34,7 +34,7 @@ const hasRg = (() => {
   }
 })();
 
-async function fixture(t, options = {}) {
+async function fixture(t, options = {}, facadeOptions = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "agy-facade-")));
   const root = join(base, "workspace");
   mkdirSync(join(root, "src"), { recursive: true });
@@ -60,6 +60,7 @@ async function fixture(t, options = {}) {
     onUncertain: (session, method) => uncertain.push([session, method]),
     onResult: (call, result) => results.push([call, result]),
     onProgress: (call, text) => progress.push([call, text]),
+    ...facadeOptions,
   });
   t.after(() => {
     connection.close();
@@ -545,4 +546,32 @@ test("the readiness probe is exactly the script the worker's ledger admits", () 
   const admitted = ledger.match(/READINESS_SCRIPT: &str = r#"([\s\S]*?)"#;/)?.[1];
   assert.equal(admitted, READINESS_PROBE);
   assert.match(READINESS_PROBE, new RegExp(`head -n ${PROJECTION_LIMITS.statusLines + 1} `));
+});
+
+test("a managed facade offers no write tools and refuses every other name", async (t) => {
+  const { root, facade, call } = await fixture(t, {}, { managed: true });
+  facade.extensions = {
+    tools: () => [{ name: "cowboy_execute", inputSchema: { type: "object" } }],
+    has: () => true,
+    call: async () => ({ content: [{ type: "text", text: "EXTENSION_RAN" }] }),
+  };
+  const tools = facade.tools();
+  assert.deepEqual(
+    tools.map((tool) => tool.name),
+    ["ReadFile", "ListDirectory", "SearchFiles", "RunCommand", "UpdatePlan"],
+  );
+  assert.doesNotMatch(tools.find((tool) => tool.name === "RunCommand").description, /StopCommand/);
+  assert.match((await call("ReadFile", { path: "hello.txt" })).text, /hello target/);
+  for (const [name, args] of [
+    ["WriteFile", { path: "new.txt", content: "x" }],
+    ["EditFile", { path: "hello.txt", old_string: "hello", new_string: "bye" }],
+    ["StopCommand", { command_id: "x" }],
+    ["cowboy_execute", {}],
+  ]) {
+    const answer = await call(name, args);
+    assert.equal(answer.error, true, name);
+    assert.match(answer.text, /not available in a read-only Cowboy managed call/, name);
+  }
+  assert.equal(readFileSync(join(root, "hello.txt"), "utf8"), "hello target\n");
+  assert.match((await call("RunCommand", { command: "echo managed" })).text, /managed/);
 });

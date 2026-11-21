@@ -14,6 +14,7 @@ function harness({
   ready = true,
   backend = { class: "ok", successes: 1, barrier: true, refusals: [] },
   memory = null,
+  managed = false,
 } = {}) {
   const agent = [];
   const client = [];
@@ -21,6 +22,7 @@ function harness({
   const channels = new Map();
   const runtime = {
     memory,
+    managed,
     facade: {
       beginTurn: (id) => turns.push(["begin", id]),
       endTurn: async (id, options) => turns.push(["end", id, options?.cancelled === true]),
@@ -610,6 +612,8 @@ test("no ACP message leaves the proxy with the raw tier", async () => {
     result: { _meta: { inner: { _meta: stripped } } },
   });
   const { proxy, client } = harness();
+  // Updates reach the worker once the unit's policy is known.
+  await proxy.runtime;
   // A non-usage update, with the tier on the update and on its params.
   await proxy.fromAgent({
     jsonrpc: "2.0",
@@ -726,6 +730,8 @@ test("a usage reading right behind a session result carries its new plan", async
 
 test("usage readings carry the plan agy reported, never its upgrade link", async () => {
   const { proxy, client } = harness();
+  // Updates reach the worker once the unit's policy is known.
+  await proxy.runtime;
   // Before any session reports a tier, a reading passes unchanged, minus
   // anything agy put under Cowboy's namespace.
   await proxy.fromAgent(update("usage_update", { used: 0, size: 1048576 }));
@@ -936,7 +942,8 @@ test("permissions auto-approve only in a mode agy confirmed", async () => {
         options,
       }),
     );
-  // Unknown mode: the owner decides.
+  // Unknown mode, once the runtime set the unit's policy: the owner decides.
+  await proxy.runtime;
   await ask(70);
   assert.equal(client.at(-1).id, 70);
   // A session result reports its mode.
@@ -1275,4 +1282,330 @@ test("slash commands that need a denied tool are not offered", async () => {
     }),
   );
   assert.deepEqual(client.at(-1).params.update.availableCommands, [{ name: "compact" }]);
+});
+
+const ROUND = { callId: "call-1", inputRevision: "rev-1", outputSchema: null };
+const managedTurn = (id, text = "Summarise src/", round = ROUND) =>
+  request(id, "session/prompt", {
+    sessionId: "s",
+    prompt: [{ type: "text", text }],
+    _meta: { "cowboy.dev/managedCall": round },
+  });
+
+test("a managed turn needs its round, is text-only and never reaches agy with it", async () => {
+  const { proxy, agent, client } = harness({ managed: true });
+  await openedSession(proxy);
+  const before = agent.length;
+  await proxy.fromClient(
+    request(10, "session/prompt", { sessionId: "s", prompt: [{ type: "text", text: "hi" }] }),
+  );
+  assert.match(client.at(-1).error.message, /managed-call round/);
+  await proxy.fromClient(managedTurn(11, "hi", { ...ROUND, outputSchema: { type: "object" } }));
+  assert.match(client.at(-1).error.message, /text only/);
+  await proxy.fromClient(managedTurn(12, "/compact"));
+  assert.match(client.at(-1).error.message, /slash command/);
+  assert.equal(agent.length, before);
+  await proxy.fromClient(managedTurn(13));
+  assert.deepEqual(agent.at(-1).params, {
+    sessionId: "s",
+    prompt: [{ type: "text", text: "Summarise src/" }],
+  });
+  // An ordinary session refuses a managed round.
+  const ordinary = harness();
+  await openedSession(ordinary.proxy);
+  await ordinary.proxy.fromClient(managedTurn(10));
+  assert.match(ordinary.client.at(-1).error.message, /not a Cowboy managed call/);
+});
+
+test("a managed child changes no mode and is offered no commands", async () => {
+  const { proxy, agent, client } = harness({ managed: true });
+  await openedSession(proxy);
+  const before = agent.length;
+  await proxy.fromClient(request(20, "session/set_mode", { sessionId: "s", modeId: "default" }));
+  await proxy.fromClient(
+    request(21, "session/set_config_option", { sessionId: "s", configId: "mode", value: "x" }),
+  );
+  assert.deepEqual(
+    client.slice(-2).map((message) => [message.id, message.error.code]),
+    [
+      [20, -32602],
+      [21, -32602],
+    ],
+  );
+  assert.equal(agent.length, before);
+  await proxy.fromClient(
+    request(22, "session/set_config_option", {
+      sessionId: "s",
+      configId: "thought_level",
+      value: "high",
+    }),
+  );
+  await proxy.fromClient(request(23, "session/set_model", { sessionId: "s", modelId: "m" }));
+  assert.deepEqual(
+    agent.slice(-2).map((message) => message.method),
+    ["session/set_config_option", "session/set_model"],
+  );
+  // Neither agy's commands nor repository skills are offered, and a skill
+  // command is refused rather than expanded.
+  proxy.skills = [{ name: "deploy", description: "Ship", path: "/work/repo/SKILL.md" }];
+  const shown = client.length;
+  await proxy.fromAgent(
+    updateIn("available_commands_update", { availableCommands: [{ name: "compact" }] }),
+  );
+  assert.equal(client.length, shown);
+  await proxy.fromClient(managedTurn(24, "/deploy now"));
+  assert.match(client.at(-1).error.message, /slash command/);
+});
+
+test("a managed child's permissions: read tools run, nothing else, nobody is asked", async () => {
+  const { proxy, agent, client } = harness({ managed: true });
+  await openedSession(proxy);
+  const options = [
+    { optionId: "allow", name: "Allow", kind: "allow_once" },
+    { optionId: "deny", name: "Deny", kind: "reject_once" },
+  ];
+  const ask = (id, name, choices = options) =>
+    proxy.fromAgent(
+      request(id, "session/request_permission", {
+        sessionId: "s",
+        toolCall: { name },
+        options: choices,
+      }),
+    );
+  await ask(80, "mcp_cowboy_RunCommand");
+  assert.deepEqual(agent.at(-1).result, { outcome: { outcome: "selected", optionId: "allow" } });
+  for (const [id, name] of [
+    [81, "mcp_cowboy_WriteFile"],
+    [82, "ask_question"],
+    [83, "mcp_cowboy_cowboy_execute"],
+    [84, "search_web"],
+  ]) {
+    await ask(id, name);
+    assert.deepEqual(
+      agent.at(-1).result,
+      { outcome: { outcome: "selected", optionId: "deny" } },
+      name,
+    );
+  }
+  await ask(85, "mcp_cowboy_ReadFile", [options[1]]);
+  assert.deepEqual(agent.at(-1).result, { outcome: { outcome: "cancelled" } });
+  assert.equal(
+    client.filter((message) => message.method === "session/request_permission").length,
+    0,
+  );
+});
+
+test("in a managed child, a web or extension tool that runs is a violation", async () => {
+  const { proxy, agent, client } = harness({ managed: true });
+  await openedSession(proxy);
+  await proxy.fromClient(managedTurn(9));
+  await proxy.fromAgent(
+    toolUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "r",
+      name: "mcp_cowboy_ReadFile",
+      status: "completed",
+    }),
+  );
+  assert.equal(agent.filter((message) => message.method === "session/cancel").length, 0);
+  await proxy.fromAgent(
+    toolUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "q",
+      name: "search_web",
+      status: "in_progress",
+    }),
+  );
+  await proxy.fromAgent(
+    toolUpdate({ sessionUpdate: "tool_call_update", toolCallId: "q", status: "completed" }),
+  );
+  assert.equal(agent.filter((message) => message.method === "session/cancel").length, 1);
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 9, result: { stopReason: "cancelled" } });
+  assert.equal(client.at(-1).error.message, `${VIOLATION_PREFIX}search_web`);
+});
+
+test("nothing agy asks for is allowed or offered before the runtime settles", async () => {
+  let ready;
+  const agent = [];
+  const client = [];
+  const proxy = new AcpProxy({
+    agent: (message) => agent.push(message),
+    client: (message) => client.push(message),
+    runtime: new Promise((resolve) => {
+      ready = resolve;
+    }),
+  });
+  await proxy.fromAgent(
+    request(1, "session/request_permission", {
+      sessionId: "s",
+      toolCall: { name: "mcp_cowboy_ReadFile" },
+      options: [
+        { optionId: "allow", name: "Allow", kind: "allow_once" },
+        { optionId: "deny", name: "Deny", kind: "reject_once" },
+      ],
+    }),
+  );
+  assert.deepEqual(agent.at(-1).result, { outcome: { outcome: "selected", optionId: "deny" } });
+  await proxy.fromAgent(
+    updateIn("available_commands_update", { availableCommands: [{ name: "compact" }] }),
+  );
+  assert.deepEqual(client, []);
+  ready({ managed: false, facade: {} });
+  await proxy.runtime;
+  await proxy.fromAgent(
+    updateIn("available_commands_update", { availableCommands: [{ name: "compact" }] }),
+  );
+  assert.deepEqual(client.at(-1).params.update.availableCommands, [{ name: "compact" }]);
+});
+
+test("a managed child uses only the one session its session/new created", async () => {
+  const { proxy, agent, client } = harness({ managed: true });
+  // Nothing before its session exists.
+  await proxy.fromClient(
+    request(3, "session/load", { sessionId: "other", cwd: "/work/repo", mcpServers: [] }),
+  );
+  assert.match(client.at(-1).error.message, /only its own Antigravity session/);
+  await openedSession(proxy);
+  const before = agent.length;
+  for (const [id, method, params] of [
+    [4, "session/load", { sessionId: "other", cwd: "/work/repo", mcpServers: [] }],
+    [5, "session/resume", { sessionId: "other", cwd: "/work/repo", mcpServers: [] }],
+    [6, "session/new", { cwd: "/work/repo", mcpServers: [] }],
+    [7, "session/set_model", { sessionId: "other", modelId: "m" }],
+  ]) {
+    await proxy.fromClient(request(id, method, params));
+    assert.equal(client.at(-1).id, id, method);
+    assert.equal(client.at(-1).error.code, -32602, method);
+  }
+  await proxy.fromClient({
+    ...managedTurn(8),
+    params: { ...managedTurn(8).params, sessionId: "x" },
+  });
+  assert.match(client.at(-1).error.message, /only its own Antigravity session/);
+  assert.equal(agent.length, before);
+  // Its own session may be loaded again and prompted.
+  await proxy.fromClient(
+    request(9, "session/load", { sessionId: "s", cwd: "/work/repo", mcpServers: [] }),
+  );
+  await proxy.fromClient(managedTurn(10));
+  assert.deepEqual(
+    agent.slice(before).map((message) => message.method),
+    ["session/load", "session/prompt"],
+  );
+});
+
+test("a managed turn takes a nonempty list of text blocks only", async () => {
+  const { proxy, agent, client } = harness({ managed: true });
+  await openedSession(proxy);
+  const before = agent.length;
+  for (const [id, prompt] of [
+    [11, []],
+    [12, [{ type: "image", data: "AAAA", mimeType: "image/png" }]],
+    [
+      13,
+      [
+        { type: "text", text: "look" },
+        { type: "resource_link", uri: "file:///etc/passwd", name: "p" },
+      ],
+    ],
+    [14, "text"],
+  ]) {
+    await proxy.fromClient({
+      ...managedTurn(id),
+      params: { ...managedTurn(id).params, prompt },
+    });
+    assert.match(client.at(-1).error.message, /text blocks only/, String(id));
+  }
+  assert.equal(agent.length, before);
+});
+
+test("a managed child's cancels, permissions and updates are bound to its session", async () => {
+  const { proxy, agent, client } = harness({ managed: true });
+  const options = [
+    { optionId: "allow", name: "Allow", kind: "allow_once" },
+    { optionId: "deny", name: "Deny", kind: "reject_once" },
+  ];
+  const ask = (id, sessionId) =>
+    proxy.fromAgent(
+      request(id, "session/request_permission", {
+        sessionId,
+        toolCall: { name: "mcp_cowboy_ReadFile" },
+        options,
+      }),
+    );
+  const said = (sessionId, text) => ({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId,
+      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
+    },
+  });
+  // Before the child has its session nothing is granted or forwarded.
+  await proxy.runtime;
+  await ask(60, "s");
+  assert.deepEqual(agent.at(-1).result, { outcome: { outcome: "selected", optionId: "deny" } });
+  await proxy.fromAgent(said("s", "early"));
+  assert.deepEqual(client, []);
+  await openedSession(proxy);
+  await proxy.fromClient(managedTurn(9));
+  const cancels = () => agent.filter((message) => message.method === "session/cancel").length;
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    method: "session/cancel",
+    params: { sessionId: "other" },
+  });
+  assert.equal(cancels(), 0);
+  await proxy.fromClient({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId: "s" } });
+  assert.equal(cancels(), 1);
+  await ask(61, "other");
+  assert.deepEqual(agent.at(-1).result, { outcome: { outcome: "selected", optionId: "deny" } });
+  await ask(62, "s");
+  assert.deepEqual(agent.at(-1).result, { outcome: { outcome: "selected", optionId: "allow" } });
+  const shown = client.length;
+  await proxy.fromAgent(said("other", "elsewhere"));
+  assert.equal(client.length, shown);
+  await proxy.fromAgent(said("s", "here"));
+  assert.equal(client.at(-1).params.update.content.text, "here");
+  assert.equal(
+    client.filter((message) => message.method === "session/request_permission").length,
+    0,
+  );
+});
+
+test("a replacement managed proxy restores no session: the call fails closed", async () => {
+  // A worker reload starts a new proxy; nothing trusted names the child's
+  // native session to it, so even the child's own id is refused.
+  const { proxy, agent, client } = harness({ managed: true });
+  await proxy.fromClient(request(1, "initialize", { protocolVersion: 1 }));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 1, result: { protocolVersion: 1 } });
+  const before = agent.length;
+  for (const [id, method] of [
+    [2, "session/load"],
+    [3, "session/resume"],
+  ]) {
+    await proxy.fromClient(
+      request(id, method, { sessionId: "s", cwd: "/work/repo", mcpServers: [] }),
+    );
+    assert.match(client.at(-1).error.message, /only its own Antigravity session/, method);
+  }
+  await proxy.fromClient(managedTurn(4));
+  assert.match(client.at(-1).error.message, /only its own Antigravity session/);
+  assert.equal(agent.length, before);
+});
+
+test("an ordinary session is not bound to one session id", async () => {
+  const { proxy, agent, client } = harness();
+  await openedSession(proxy);
+  await proxy.fromClient({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId: "t" } });
+  assert.equal(agent.at(-1).method, "session/cancel");
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "t",
+      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "t" } },
+    },
+  });
+  assert.equal(client.at(-1).params.sessionId, "t");
 });

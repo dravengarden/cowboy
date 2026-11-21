@@ -34,6 +34,7 @@ import {
   unknownOutcome,
   url,
 } from "./facade-tools.mjs";
+import { MANAGED_FACADE_TOOLS } from "./managed.mjs";
 import { planUpdate } from "./presentation.mjs";
 
 /** The worker endpoint's own request recording an uncertain effect the
@@ -64,12 +65,22 @@ export class Facade {
    *   one object per call, so a presentation can correlate it)
    * @param onProgress called with (call, text) while `RunCommand` runs: the
    *   output retained so far, at most every `LIMITS.progressMs`
+   * @param managed a managed read-only child: only `MANAGED_FACADE_TOOLS`
+   *   exist and no extension is ever attached
    */
   constructor(
     connection,
-    { root, shell, onUncertain = () => {}, onResult = () => {}, onProgress = () => {} },
+    {
+      root,
+      shell,
+      onUncertain = () => {},
+      onResult = () => {},
+      onProgress = () => {},
+      managed = false,
+    },
   ) {
     this.connection = connection;
+    this.managed = managed;
     this.root = root;
     this.shell = shell;
     this.onUncertain = onUncertain;
@@ -93,6 +104,21 @@ export class Facade {
   }
 
   tools() {
+    if (this.managed) {
+      // The keeper refuses writes anyway; a managed child is never offered
+      // them, and RunCommand's description names no StopCommand.
+      return structuredClone(TOOLS)
+        .filter((tool) => MANAGED_FACADE_TOOLS.includes(tool.name))
+        .map((tool) =>
+          tool.name === "RunCommand"
+            ? {
+                ...tool,
+                description:
+                  "Run a read-only shell command without network in the workspace root (commands cannot change files). Waits up to wait_seconds (default: until it ends); a command still running returns its command_id, which RunCommand continues. Output keeps at most 256 KiB (head and tail).",
+              }
+            : tool,
+        );
+    }
     return [...structuredClone(TOOLS), ...(this.extensions?.tools() ?? [])];
   }
 
@@ -172,6 +198,9 @@ export class Facade {
     }
     if (turn.cancelled || turn.ended) return failure("The turn was cancelled.");
     if (args === null || typeof args !== "object" || Array.isArray(args)) args = {};
+    if (this.managed && !MANAGED_FACADE_TOOLS.includes(name)) {
+      return failure(`${String(name)} is not available in a read-only Cowboy managed call.`);
+    }
     const handlers = {
       ReadFile: () => this.readFile(session, args),
       ListDirectory: () => this.listDirectory(args),

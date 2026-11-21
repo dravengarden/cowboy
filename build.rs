@@ -17,8 +17,8 @@ struct BundledHost {
 fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=examples/authentication");
-    println!("cargo:rerun-if-changed=plugins");
+    watch_source_tree(&manifest, &manifest.join("examples/authentication"));
+    watch_source_tree(&manifest, &manifest.join("plugins"));
 
     let mut hosts = Vec::new();
     collect_hosts(&manifest.join("examples/authentication"), &mut hosts);
@@ -122,6 +122,70 @@ fn collect_payload_sources(
             );
         }
     }
+}
+
+/// Watch a Plugin source tree without its build outputs.
+///
+/// Cargo scans a `rerun-if-changed` directory recursively, so watching
+/// `plugins` directly also watched the nested Zed adapter and Claude relay
+/// Cargo targets. Building either one then reran this script and recompiled
+/// every `cowboy` configuration, even when no source had changed. Here, a
+/// subtree that can hold no build output is still watched as a whole, so any
+/// added file is noticed. A directory holding a nested Cargo or npm package,
+/// or an existing output (`CACHEDIR.TAG`, `node_modules`), is watched entry by
+/// entry instead, whether or not that package was built yet, so the watched
+/// set never changes between runs. Adding a direct child to such a
+/// directory, for example a new top-level Plugin, is noticed on the next edit
+/// to a watched file or to this script. A missing root is not watched: Cargo
+/// treats a missing path as permanently stale, and Machine source closures
+/// omit both roots.
+fn watch_source_tree(manifest: &Path, path: &Path) {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return;
+    };
+    if metadata.is_dir() {
+        if is_build_output(path) {
+            return;
+        }
+        if may_hold_build_output(path) {
+            let mut children: Vec<PathBuf> = fs::read_dir(path)
+                .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()))
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .collect();
+            children.sort();
+            for child in children {
+                watch_source_tree(manifest, &child);
+            }
+            return;
+        }
+    }
+    let relative = path.strip_prefix(manifest).unwrap_or(path);
+    println!("cargo:rerun-if-changed={}", relative.display());
+}
+
+fn is_build_output(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| {
+        name == "node_modules" || name == "target" && is_package_root(path.parent().unwrap_or(path))
+    }) || path.join("CACHEDIR.TAG").is_file()
+}
+
+fn is_package_root(path: &Path) -> bool {
+    path.join("Cargo.toml").is_file() || path.join("package.json").is_file()
+}
+
+fn may_hold_build_output(path: &Path) -> bool {
+    if is_package_root(path) {
+        return true;
+    }
+    let Ok(entries) = fs::read_dir(path) else {
+        return false;
+    };
+    entries.filter_map(Result::ok).any(|entry| {
+        let child = entry.path();
+        entry.file_type().is_ok_and(|kind| kind.is_dir())
+            && (is_build_output(&child) || may_hold_build_output(&child))
+    })
 }
 
 fn write_source_array(

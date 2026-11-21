@@ -36,6 +36,7 @@ export async function fakeEndpoint(
     shell = "/bin/sh",
     virtual = root,
     fileHelper = FILE_HELPER,
+    managed = undefined,
   } = {},
 ) {
   const toReal = (path) => (path.startsWith(virtual) ? root + path.slice(virtual.length) : path);
@@ -56,6 +57,8 @@ export async function fakeEndpoint(
         cwd: pathToFileURL(virtual).href,
         shell: { path: shell },
       },
+      // A managed keeper's announcement of the constraint it enforces.
+      ...(managed ? { cowboyManaged: managed } : {}),
     }),
     "fs/canonicalize": (params) => ({
       path: pathToFileURL(toVirtual(realpathSync(path(params)))).href,
