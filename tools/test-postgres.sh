@@ -102,22 +102,56 @@ initdb -D "$fixture_root/data" -U cowboy_test --auth-local=trust \
     exit 1
   }
 pg_ctl -D "$fixture_root/data" -l "$fixture_root/postgres.log" \
-  -o "-F -c port=5432 -c listen_addresses='' -c unix_socket_directories='$fixture_root/socket' -c unix_socket_permissions=0700" \
+  -o "-F -c port=5432 -c listen_addresses='' -c unix_socket_directories='$fixture_root/socket' -c unix_socket_permissions=0700 -c max_connections=400" \
   -w -t 30 start || {
     sed -n '1,160p' "$fixture_root/postgres.log" >&2
     exit 1
   }
 
-echo "Running ${#fixture_tests[@]} PostgreSQL tests, each in an isolated empty database"
-fixture_index=0
-for fixture_position in "${!fixture_tests[@]}"; do
-  fixture_test="${fixture_tests[$fixture_position]}"
-  fixture_binary="${fixture_binaries[$fixture_position]}"
-  fixture_index=$((fixture_index + 1))
-  fixture_database="cowboy_test_$fixture_index"
+# Each test owns an empty database and a process, so tests run concurrently.
+# A test's output is printed whole when it finishes, never interleaved.
+fixture_jobs="${COWBOY_POSTGRES_TEST_JOBS:-8}"
+if [[ ! "$fixture_jobs" =~ ^[1-9][0-9]*$ ]]; then
+  echo "COWBOY_POSTGRES_TEST_JOBS must be a positive integer" >&2
+  exit 2
+fi
+mkdir "$fixture_root/logs"
+run_fixture() {
+  local fixture_index="$1" fixture_binary="$2" fixture_test="$3"
+  local fixture_database="cowboy_test_$fixture_index"
   createdb --host="$fixture_root/socket" --port=5432 --username=cowboy_test \
     --maintenance-db=postgres --template=template0 "$fixture_database"
   TMPDIR="$fixture_root/tmp" \
     COWBOY_TEST_POSTGRES_URL="postgresql://cowboy_test@localhost/$fixture_database?host=$fixture_root/socket&sslmode=disable" \
     "$fixture_binary" "$fixture_test" --exact --ignored --nocapture
+}
+declare -A fixture_running=()
+fixture_failed=()
+reap_fixture() {
+  local fixture_pid fixture_status=0
+  wait -n -p fixture_pid || fixture_status=$?
+  local fixture_index="${fixture_running[$fixture_pid]}"
+  unset "fixture_running[$fixture_pid]"
+  cat "$fixture_root/logs/$fixture_index.log"
+  if ((fixture_status != 0)); then
+    fixture_failed+=("${fixture_tests[fixture_index - 1]}")
+  fi
+}
+
+echo "Running ${#fixture_tests[@]} PostgreSQL tests, each in an isolated empty database, $fixture_jobs at a time"
+for fixture_position in "${!fixture_tests[@]}"; do
+  while ((${#fixture_running[@]} >= fixture_jobs)); do
+    reap_fixture
+  done
+  fixture_index=$((fixture_position + 1))
+  run_fixture "$fixture_index" "${fixture_binaries[$fixture_position]}" "${fixture_tests[$fixture_position]}" \
+    >"$fixture_root/logs/$fixture_index.log" 2>&1 &
+  fixture_running[$!]="$fixture_index"
 done
+while ((${#fixture_running[@]} > 0)); do
+  reap_fixture
+done
+if ((${#fixture_failed[@]} != 0)); then
+  printf 'failed PostgreSQL test: %s\n' "${fixture_failed[@]}" >&2
+  exit 1
+fi
