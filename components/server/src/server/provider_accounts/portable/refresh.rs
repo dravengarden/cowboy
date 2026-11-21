@@ -147,6 +147,15 @@ pub(in crate::server) async fn refresh(
 ) -> Result<(), String> {
     let provider = package.manifest.id.as_str();
     let vault = scope(state, account, provider).ok_or("account_credentials_unavailable")?;
+    // A refresh-custody managed account changes only through a recorded
+    // renewal: an ordinary candidate comes from an access-only copy (a CLI
+    // rewrite) and would drop the vault's refresh token. Restore it instead.
+    if super::custody::managed(state, account, provider) {
+        tracing::info!(%machine_id, %provider, account = account.as_str(), expected_generation,
+            "refusing an ordinary credential refresh of a custody-managed account");
+        sync_provider_account_auth_to_machine(state, machine_id, provider, account).await?;
+        return Err("refresh_custody_managed".into());
+    }
     // A subscription refresh must prove it is still the account's identity:
     // without evidence it could carry another user's sign-in into the vault.
     require_evidence(subscription(state, provider), identity)?;

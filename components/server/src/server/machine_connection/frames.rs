@@ -222,6 +222,35 @@ impl MachineLink<'_> {
             }
             MachineFrame::Event {
                 event:
+                    MachineEvent::PortableCredentialRenewalNeeded {
+                        account_id,
+                        provider_id,
+                        auth_generation,
+                    },
+            } => {
+                // Only a Machine on protocol 51 sends it; the renewal itself
+                // is recorded and deduplicated by the Service.
+                if state.machine_control.machine_supports(
+                    &hello.machine_id,
+                    crate::machine_protocol::REFRESH_CUSTODY_PROTOCOL_VERSION,
+                ) {
+                    let state = Arc::clone(state);
+                    let machine = hello.machine_id.clone();
+                    tokio::spawn(async move {
+                        super::provider_accounts::usage::renewal_needed(
+                            &state,
+                            &machine,
+                            &account_id,
+                            &provider_id,
+                            auth_generation,
+                        )
+                        .await;
+                    });
+                }
+                return ControlFlow::Continue(());
+            }
+            MachineFrame::Event {
+                event:
                     MachineEvent::ManagedCall {
                         request_id,
                         grant,

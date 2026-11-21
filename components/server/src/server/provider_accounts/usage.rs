@@ -7,6 +7,7 @@ use crate::store::provider_accounts::logins::NativeCompletion;
 use crate::usage::native::Scope;
 
 mod portable;
+pub(in crate::server) use portable::renewal_needed;
 
 pub(in crate::server) mod reset;
 
@@ -445,6 +446,9 @@ fn error_message(code: &str) -> &str {
         "portable_usage_refresh_unsupported" => {
             "This Provider's installed usage collector could renew the account's sign-in, so it is not run for this account. A Provider update that never renews during usage queries enables it."
         }
+        "portable_refresh_custody_machine_update_required" => {
+            "This account's sign-in is now renewed only by the Service. Its Machines need a Cowboy update; older Machines no longer run it."
+        }
         "portable_usage_collector_unavailable" | "portable_usage_account_required" => {
             "The installed Provider cannot query this account's usage. Check its Machine installation."
         }
@@ -746,6 +750,7 @@ fn collection_outcome(error: Option<&str>) -> crate::usage::limiter::Outcome {
             | "portable_usage_account_required"
             | "portable_usage_collector_unavailable"
             | "portable_usage_refresh_unsupported"
+            | "portable_refresh_custody_machine_update_required"
             | "portable_usage_dispatch_failed",
         ) => Outcome::LocalFailure,
         Some(_) => Outcome::Failure,
