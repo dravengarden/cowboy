@@ -34,6 +34,9 @@ const CHILD_ENV_KEYS = [
   "XDG_CACHE_HOME",
   "SSL_CERT_FILE",
   "NIX_SSL_CERT_FILE",
+  // A refresh-custody renewal points the CLI at its private credential file
+  // (collector/refresh-custody.json); the CLI renews an expiring token at start.
+  "GROK_AUTH_PATH",
 ];
 
 async function input() {

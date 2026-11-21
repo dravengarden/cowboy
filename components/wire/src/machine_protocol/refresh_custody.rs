@@ -182,6 +182,35 @@ impl RefreshCustody {
     }
 }
 
+/// One renewal: the ordinary portable collection of `usage`, run with the
+/// full credential that `envelope` seals to this Machine only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PortableRenewalRequest {
+    pub renewal_id: String,
+    pub usage: super::portable_usage::PortableUsageRequest,
+    /// The vault's full bundle at `usage.auth_generation`, sealed to this
+    /// Machine; it is restored into a private file and never persisted.
+    /// Absent when `resume_only`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub envelope: Option<super::SealedProviderAuth>,
+    /// Return the retained reply of `renewal_id` (a lost reply); never run.
+    #[serde(default)]
+    pub resume_only: bool,
+}
+
+/// `PluginHostResponse` payload of a renewal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PortableRenewalReply {
+    pub renewal_id: String,
+    /// The collector's output, as for `CollectPortableUsage`.
+    pub usage: serde_json::Value,
+    /// The credential after the run, when it differs from the restored one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle: Option<PortableCredentialBundle>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,10 +268,8 @@ mod tests {
                     .timestamp_millis()
             )
         );
-        assert_eq!(
-            custody.renew_environment["GROK_AUTH_EARLY_INVALIDATION_SECS"],
-            "86400"
-        );
+        // An "always early" window made the CLI redeem repeatedly in one run.
+        assert!(custody.renew_environment.is_empty());
         assert_eq!(custody.credential_path_env, "GROK_AUTH_PATH");
     }
 
@@ -270,6 +297,30 @@ mod tests {
         }
         let files = std::collections::BTreeMap::new();
         assert_eq!(RefreshCustody::from_files(&files), Ok(None));
+    }
+
+    /// No Machine below protocol 51 is ever sent a renewal.
+    #[test]
+    fn a_renewal_requires_protocol_51() {
+        let request: PortableRenewalRequest = serde_json::from_value(serde_json::json!({
+            "renewal_id": "renewal-1",
+            "usage": {
+                "account_id": "11111111-1111-4111-8111-111111111111", "plugin_id": "grok",
+                "plugin_version": "3.2.17", "generation_digest": "sha256:x",
+                "auth_generation": 3, "payload": {},
+            },
+        }))
+        .unwrap();
+        let command = super::super::MachineCommand::RenewPortableCredential {
+            request_id: "request-1".into(),
+            request: Box::new(request),
+        };
+        assert_eq!(
+            command.minimum_protocol(),
+            super::super::REFRESH_CUSTODY_PROTOCOL_VERSION
+        );
+        assert_eq!(super::super::REFRESH_CUSTODY_PROTOCOL_VERSION, 51);
+        assert!(super::super::MACHINE_PROTOCOL_VERSION >= 51);
     }
 
     /// Only Grok declares custody; every other first-party Provider keeps
