@@ -66,6 +66,7 @@ primary phone/desktop product path.
 - [`machine-browser.md`](machine-browser.md) — Design: optional `machine_browser` Plugin, owner-operated Chromium on a Machine for account sign-in, core instance manager, stream channel, viewer and acceptance matrix
 - [`mcp-bindings.md`](mcp-bindings.md) — Signed MCP installation, explicit session policy, epoch/CAS revocation and remaining relay integration
 - [`mcp-plugin-authoring.md`](mcp-plugin-authoring.md) — Third-party MCP Plugin procedure: contract, sources, build/sign/publish, install and session grant
+- [`managed-delivery-ledger.md`](managed-delivery-ledger.md) — Broker tombstones that deduplicate managed prompts and prove a withdrawn prompt never reached a worker
 - [`managed-agent-calls.md`](managed-agent-calls.md) — Parent-scoped cross-Provider Calls implementation, CLI and desktop/mobile lifecycle UI, with production acceptance boundaries
 - [`review-generation-binding.md`](review-generation-binding.md) — Binding of review preset selection, claim, re-pin, configuration, recovery and reuse to one Provider generation
 - [`managed-native-capabilities.md`](managed-native-capabilities.md) — General Calls extension contract, on-demand image generation/editing, isolated native profiles, verified cross-machine artifacts and token costs
