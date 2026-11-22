@@ -1541,3 +1541,41 @@ async fn rerun_cleanup(store: &Store, share: &str, (registry, revision): (i64, i
     assert_eq!(shares.shares[0].revision, revision + 1);
     assert_eq!(shares.members.len(), 1);
 }
+
+#[tokio::test]
+async fn retired_reset_schedules_are_cancelled_with_their_audit() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = sqlite_store(&dir).await;
+    for lane in ["codex", "account-keep"] {
+        store
+            .upsert_provider_reset(lane, 10, &format!("{lane}-key"))
+            .await
+            .unwrap();
+    }
+    let lanes = ["codex".to_owned(), "xai".to_owned()];
+    assert_eq!(
+        store.cancel_retired_resets(&lanes, 42).await.unwrap(),
+        ["codex"]
+    );
+    assert!(store.load_provider_reset("codex").await.unwrap().is_none());
+    // Named-account lanes are untouched.
+    assert!(
+        store
+            .load_provider_reset("account-keep")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let logs = store.provider_action_logs(10).await.unwrap();
+    assert!(logs.iter().any(|log| log.provider == "codex"
+        && log.status == "cancelled"
+        && log.created_at_ms == 42));
+    // Idempotent.
+    assert!(
+        store
+            .cancel_retired_resets(&lanes, 43)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}

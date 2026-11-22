@@ -132,9 +132,12 @@ keys) replace every card.
   can still read it; the stored `subscriptions` preference is no longer
   written, but `accounts.list()` still returns it as `display_preferences`, a
   read-only projection a Web client from before the retirement compares.
-- **Scheduled resets.** A pending Service reset of a retired card's collector
-  is cancelled and audited (`cancelled`, "the legacy default card is
-  retired") at startup, so a rolled-back Controller cannot fire it later.
+- **Scheduled resets.** A pending Service reset on a retired card lane (the
+  closed set `anthropic`, `codex`, `deepseek`, `openai`, `xai`, plus any reset
+  id of a retired binding) is cancelled at startup together with its audit
+  row (`cancelled`, "the legacy default card is retired") in one
+  transaction, also when its Plugin binding is absent, so a rolled-back
+  Controller cannot fire it later.
   Named account resets are untouched. The usage executor settings neither list
   nor accept a retired card's collector.
 - **Credentials.** Nothing is wiped implicitly by this release. Every legacy

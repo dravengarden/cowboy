@@ -18,6 +18,11 @@ const DOMAIN: &[u8] = b"cowboy-legacy-browser-account-v1\0";
 /// Card ids (account-usage families). Closed: no card can appear again.
 pub const CARDS: &[&str] = &["anthropic", "deepseek", "openai", "xai"];
 
+/// The Service reset lanes the cards' collectors used (their Plugins' reset
+/// ids and the card ids), closed like [`CARDS`]: a schedule persisted on one
+/// is cancelled at startup even when its Plugin binding is absent.
+pub const RETIRED_RESET_LANES: &[&str] = &["anthropic", "codex", "deepseek", "openai", "xai"];
+
 /// Whether `provider_id` belongs to a card family, so its `default` account
 /// was a legacy card and is retired. A named-only Provider (Antigravity) has
 /// no card.

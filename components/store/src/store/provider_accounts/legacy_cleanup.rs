@@ -97,4 +97,48 @@ impl Store {
         }
         Ok(owners)
     }
+
+    /// Cancel every pending Service reset of a retired card lane, each with
+    /// its audit row in the same transaction, so a rolled-back Controller can
+    /// never fire one. Returns the lanes it cancelled. Idempotent.
+    pub async fn cancel_retired_resets(
+        &self,
+        lanes: &[String],
+        now_ms: i64,
+    ) -> Result<Vec<String>> {
+        macro_rules! cancel {
+            ($db:expr, $lane:expr) => {{
+                let mut tx = $db.pool.begin().await?;
+                let deleted = sqlx::query("DELETE FROM scheduled_provider_actions WHERE provider=$1")
+                    .bind($lane)
+                    .execute(&mut *tx)
+                    .await?
+                    .rows_affected();
+                if deleted > 0 {
+                    sqlx::query(
+                        "INSERT INTO provider_action_logs (provider,action,trigger,status,phase,message,created_at_ms) \
+                         VALUES ($1,'rate_limit_reset','scheduled','cancelled','timer',$2,$3)",
+                    )
+                    .bind($lane)
+                    .bind("Scheduled reset cancelled: the legacy default card is retired")
+                    .bind(now_ms)
+                    .execute(&mut *tx)
+                    .await?;
+                }
+                tx.commit().await?;
+                deleted > 0
+            }};
+        }
+        let mut cancelled = Vec::new();
+        for lane in lanes {
+            let done = match &self.backend {
+                StorageBackend::Postgres(db) => cancel!(db, lane),
+                StorageBackend::Sqlite(db) => cancel!(db, lane),
+            };
+            if done {
+                cancelled.push(lane.clone());
+            }
+        }
+        Ok(cancelled)
+    }
 }

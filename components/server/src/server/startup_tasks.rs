@@ -69,32 +69,23 @@ pub(super) async fn restore_provider_reset_schedules(usage: &UsageService, store
     };
     // A retired card's pending Service reset would fire again after a
     // rollback, spending a credit of whatever credential is active then.
-    for provider in &usage.retired_reset_provider_ids() {
-        match store.load_provider_reset(provider).await {
-            Ok(Some(_)) => {
-                if let Err(error) = store.delete_provider_reset(provider).await {
-                    tracing::warn!(%error, %provider, "cancelling a retired card's scheduled reset");
-                    continue;
-                }
-                let _ = store
-                    .append_provider_action_log(
-                        provider,
-                        "scheduled",
-                        "cancelled",
-                        "timer",
-                        "Scheduled reset cancelled: the legacy default card is retired",
-                        None,
-                        None,
-                        now_ms(),
-                    )
-                    .await;
-                tracing::info!(%provider, "cancelled a retired card's scheduled reset");
-            }
-            Ok(None) => {}
-            Err(error) => {
-                tracing::warn!(%error, %provider, "loading a retired card's scheduled reset")
-            }
+    // Matched by the retired lanes, also when their Plugin binding is absent.
+    let live = usage.reset_provider_ids();
+    let mut lanes: Vec<String> = usage.retired_reset_provider_ids();
+    lanes.extend(
+        crate::store::provider_accounts::legacy_cards::RETIRED_RESET_LANES
+            .iter()
+            .map(|lane| (*lane).to_owned()),
+    );
+    lanes.sort();
+    lanes.dedup();
+    lanes.retain(|lane| !live.contains(lane));
+    match store.cancel_retired_resets(&lanes, now_ms()).await {
+        Ok(cancelled) if !cancelled.is_empty() => {
+            tracing::info!(lanes = ?cancelled, "cancelled retired cards' scheduled resets");
         }
+        Ok(_) => {}
+        Err(error) => tracing::warn!(%error, "cancelling retired cards' scheduled resets"),
     }
     for provider in &usage.reset_provider_ids() {
         match store.load_provider_reset(provider).await {
