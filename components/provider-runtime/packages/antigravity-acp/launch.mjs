@@ -263,6 +263,7 @@ async function connectedRuntime({
   let proxy;
   const facade = await Facade.create(connection, {
     onUncertain: (sessionId, method) => proxy?.uncertain(sessionId, method),
+    onLost: (sessionId, method) => proxy?.lost(sessionId, method),
     onResult: (call, result) => proxy?.toolResult(call, result),
     onProgress: (call, text) => proxy?.toolProgress(call, text),
     managed,
@@ -478,7 +479,13 @@ export async function runProxy({
     () => agy.stdin.end(),
   );
   agy.stdin.on("error", () => {});
-  const [code, signal] = await new Promise((done) => agy.once("exit", (...result) => done(result)));
+  // `close`: after agy's last output was read, so nothing it said is lost.
+  const [code, signal] = await new Promise((done) =>
+    agy.once("close", (...result) => done(result)),
+  );
+  // An `agy` the proxy ended answers each prompt still open with what it
+  // already knows, before this process goes: the account's signals survive.
+  proxy.settleExit();
   const ready = await runtime.catch(() => undefined);
   ready?.server.close();
   ready?.connection.close();

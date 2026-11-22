@@ -27,7 +27,11 @@ function unit({
     ignore: new Set(),
     fail: new Map(),
     mark: 7,
+    markDelay: 0,
+    settleDelay: 0,
+    endTurnDelay: 0,
     afterNew: () => [],
+    beforeNew: () => [],
   };
   const terminated = [];
   const unbound = [];
@@ -46,7 +50,12 @@ function unit({
     managed: false,
     facade: {
       beginTurn: (id) => turns.push(["begin", id]),
-      endTurn: async (id, options) => turns.push(["end", id, options?.cancelled === true]),
+      endTurn: async (id, options) => {
+        turns.push(["end", id, options?.cancelled === true]);
+        if (control.endTurnDelay && options?.cancelled) {
+          await new Promise((done) => setTimeout(done, control.endTurnDelay));
+        }
+      },
       session: (id) => ({
         turn: { id, uncertain: undefined, mark: (value) => uncertain.push([id, value]) },
       }),
@@ -66,8 +75,14 @@ function unit({
       env: [],
     }),
     evidence: {
-      mark: async () => control.mark,
+      mark: async () => {
+        if (control.markDelay) await new Promise((done) => setTimeout(done, control.markDelay));
+        return control.mark;
+      },
       settle: async (cursor, sessionId, stopReason) => ({
+        ...(control.settleDelay
+          ? await new Promise((done) => setTimeout(done, control.settleDelay))
+          : {}),
         ...backend(sessionId),
         cursor,
         sessionId,
@@ -92,6 +107,8 @@ function unit({
       } else if (message.method === "session/new") {
         opened += 1;
         const sessionId = `child-${opened}`;
+        // Frames read before the reply, naming the session about to be opened.
+        for (const frame of control.beforeNew(sessionId)) proxy.fromAgent(frame);
         proxy.fromAgent({ jsonrpc: "2.0", id: message.id, result: { sessionId } });
         // Frames read in the same chunk as the reply, with no await between.
         for (const frame of control.afterNew(sessionId)) proxy.fromAgent(frame);
@@ -1036,4 +1053,313 @@ test("a lost effect of a child latches on the parent's facade turn at once", asy
   await facade.endTurn("child");
   facade.forgetSession("child");
   assert.equal(facade.sessions.has("child"), false);
+});
+
+test("an answered prompt disarms the stop watchdog before its settlement completes", async () => {
+  const made = await parent();
+  const { proxy, control } = made;
+  const id = await startChild(made);
+  control.settleDelay = 120;
+  await proxy.fromClient({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId: id } });
+  await endPrompt(made, id, "cancelled");
+  await new Promise((done) => setTimeout(done, 160));
+  assert.deepEqual(made.terminated, []);
+  assert.equal((await proxy.subagents.wait("s", id, 0)).state, "cancelled");
+});
+
+test("the stop watchdog starts when the cancel reaches agy, not before", async () => {
+  const made = await parent();
+  const { proxy, agent, control } = made;
+  const id = await startChild(made);
+  control.endTurnDelay = 90;
+  agent.length = 0;
+  const stopping = proxy.fromClient({
+    jsonrpc: "2.0",
+    method: "session/cancel",
+    params: { sessionId: id },
+  });
+  await new Promise((done) => setTimeout(done, 60));
+  // Cleanup is still running: agy has not been asked, so nothing is overdue.
+  assert.equal(sent(agent, "session/cancel").length, 0);
+  assert.deepEqual(made.terminated, []);
+  await stopping;
+  assert.equal(sent(agent, "session/cancel").length, 1);
+  await endPrompt(made, id, "cancelled");
+  await new Promise((done) => setTimeout(done, 80));
+  assert.deepEqual(made.terminated, []);
+});
+
+test("a stopped or answered child admits no more permissions at once", async () => {
+  const made = await parent();
+  const { proxy, agent, client } = made;
+  const options = [
+    { optionId: "yes", kind: "allow_once" },
+    { optionId: "no", kind: "reject_once" },
+  ];
+  const ask = (requestId, sessionId) => ({
+    jsonrpc: "2.0",
+    id: requestId,
+    method: "session/request_permission",
+    params: {
+      sessionId,
+      toolCall: { toolCallId: requestId, name: "mcp_cowboy_RunCommand" },
+      options,
+    },
+  });
+  const stopped = await startChild(made, { prompt: "a" });
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    method: "session/cancel",
+    params: { sessionId: stopped },
+  });
+  agent.length = 0;
+  await proxy.fromAgent(ask("p1", stopped));
+  assert.deepEqual(agent.at(-1).result.outcome, { outcome: "selected", optionId: "no" });
+  // A permission frame in the same read as the child's prompt reply.
+  const answered = await startChild(made, { prompt: "b" });
+  const prompt = made.everything.find(
+    (message) => message.method === "session/prompt" && message.params.sessionId === answered,
+  );
+  agent.length = 0;
+  client.length = 0;
+  const reply = proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: prompt.id,
+    result: { stopReason: "end_turn" },
+  });
+  const permission = proxy.fromAgent(ask("p2", answered));
+  await Promise.all([reply, permission]);
+  assert.deepEqual(agent.find((message) => message.id === "p2").result.outcome, {
+    outcome: "selected",
+    optionId: "no",
+  });
+  assert.equal(
+    client.some((message) => message.method === "session/request_permission"),
+    false,
+  );
+});
+
+test("a late approval of a stopped child grants nothing, even once the child was pruned", async () => {
+  const made = await parent();
+  const { proxy, agent } = made;
+  const id = await startChild(made);
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "ask-9",
+    method: "session/request_permission",
+    params: {
+      sessionId: id,
+      toolCall: { toolCallId: "q", name: "ask_question" },
+      options: [{ optionId: "yes", kind: "allow_once" }],
+    },
+  });
+  await proxy.fromClient({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId: id } });
+  proxy.subagents.children.delete(id);
+  agent.length = 0;
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: "ask-9",
+    result: { outcome: { outcome: "selected", optionId: "yes" } },
+  });
+  assert.deepEqual(agent.at(-1).result, { outcome: { outcome: "cancelled" } });
+});
+
+test("a mode switch while a start is opening stops the prompt from being sent", async () => {
+  const made = await parent();
+  const { proxy, agent, control } = made;
+  control.markDelay = 80;
+  const starting = proxy.subagents.start("s", { prompt: "x" }).then(
+    () => undefined,
+    (error) => error,
+  );
+  await new Promise((done) => setTimeout(done, 30));
+  await proxy.fromClient(request(40, "session/set_mode", { sessionId: "s", modeId: "plan" }));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 40, result: {} });
+  assert.match((await starting).message, /mode changed before the subagent started/);
+  assert.equal(sent(agent, "session/prompt").length, 0);
+  assert.equal(sent(agent, "session/close").length, 1);
+});
+
+test("frames naming a session before agy answers its creation are held too", async () => {
+  const made = await parent();
+  const { proxy, client, control } = made;
+  control.beforeNew = (sessionId) => [
+    childUpdate(sessionId, { sessionUpdate: "config_option_update", configOptions: [] }),
+  ];
+  const id = await startChild(made);
+  await flush();
+  const announced = client.findIndex(
+    (message) => message.params?.update?.sessionUpdate === "subagent_update",
+  );
+  const config = client.findIndex(
+    (message) =>
+      message.params?.sessionId === id &&
+      message.params?.update?.sessionUpdate === "config_option_update",
+  );
+  assert.equal(announced >= 0 && config > announced, true);
+  // A frame of a known session is not held while no start is opening one.
+  assert.equal(proxy.subagents.holds("s"), false);
+  assert.equal(proxy.subagents.quarantine.length, 0);
+});
+
+test("a timed-out ordinary request leaves no handler, and a late session that will not close ends the unit", async () => {
+  const made = await parent();
+  const { proxy, agent, control } = made;
+  await proxy.fromClient(request(20, "session/set_model", { sessionId: "s", modelId: "m" }));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 20, result: {} });
+  control.ignore.add("session/set_model");
+  const before = proxy.pending.size;
+  await assert.rejects(startChild(made), /timed out/);
+  assert.equal(proxy.pending.size <= before + 1, true);
+  assert.equal(
+    [...proxy.pending.values()].some((record) => record.method === "session/set_model"),
+    false,
+  );
+  // A session agy opens late whose close is refused: the unit is ended.
+  const late = await parent();
+  late.control.ignore.add("session/new");
+  late.control.fail.set("session/close", "no");
+  const starting = late.proxy.subagents.start("s", { prompt: "x" }).then(
+    () => undefined,
+    (error) => error,
+  );
+  await flush(1);
+  const [created] = sent(late.agent, "session/new");
+  assert.match((await starting).message, /timed out/);
+  await late.proxy.fromAgent({ jsonrpc: "2.0", id: created.id, result: { sessionId: "late-5" } });
+  await flush();
+  assert.deepEqual(late.terminated, ["a late subagent session could not be closed"]);
+  assert.equal(sent(agent, "session/prompt").length, 0);
+});
+
+test("the parent's reply carries the worst class among itself and its children", async () => {
+  const made = await parent({
+    backend: (sessionId) =>
+      sessionId === "child-1"
+        ? { class: "unknown_refusal", successes: 0, barrier: false, refusals: [] }
+        : {
+            class: "rate_limited",
+            successes: 1,
+            barrier: true,
+            refusals: [{ status: "RESOURCE_EXHAUSTED" }],
+          },
+  });
+  const { proxy } = made;
+  const id = await startChild(made);
+  await endPrompt(made, id);
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 9, result: { stopReason: "cancelled" } });
+  const reply = made.client.at(-1);
+  assert.equal(reply.id, 9);
+  assert.match(reply.error.message, /antigravity_backend_refusal:unknown_refusal/);
+});
+
+test("an agy the proxy ended answers the open prompt with what it knows", async () => {
+  const made = await parent();
+  const { proxy, client } = made;
+  const id = await startChild(made);
+  await proxy.fromAgent(
+    childUpdate(id, {
+      sessionUpdate: "tool_call",
+      toolCallId: "b",
+      name: "run_command",
+      status: "in_progress",
+    }),
+  );
+  await proxy.fromAgent(
+    childUpdate(id, { sessionUpdate: "tool_call_update", toolCallId: "b", status: "completed" }),
+  );
+  // Another exit leaves the worker to see the disconnect.
+  client.length = 0;
+  proxy.settleExit();
+  assert.equal(client.length, 0);
+  proxy.terminate("a subagent did not confirm it stopped");
+  proxy.settleExit();
+  const error = client.at(-1);
+  assert.equal(error.id, 9);
+  assert.equal(error.error.message, `${VIOLATION_PREFIX}run_command`);
+  assert.equal(error.error.data.cowboy.policy_violation, "run_command");
+  assert.equal(error.error.data.cowboy.antigravity_backend.class, "unknown_refusal");
+  // Said once.
+  client.length = 0;
+  proxy.settleExit();
+  assert.equal(client.length, 0);
+});
+
+test("a lost effect latches on the exact parent turn, before the ledger report", async () => {
+  const lost = [];
+  let release;
+  const reported = new Promise((done) => {
+    release = done;
+  });
+  const connection = {
+    descriptor: { binding: { workspace: { cwd: "/w" } } },
+    call: async (method) => {
+      if (method === "process/start") throw { remote: { data: { outcome: "unknown" } } };
+      if (method === "cowboy/uncertainEffect") await reported;
+      return {};
+    },
+  };
+  const facade = new Facade(connection, {
+    root: "/w",
+    shell: "/bin/sh",
+    onLost: (sessionId, method) => lost.push([sessionId, method]),
+  });
+  facade.beginTurn("parent");
+  const firstTurn = facade.session("parent").turn;
+  facade.beginTurn("child");
+  facade.link("child", "parent");
+  const pending = facade.call("child", "RunCommand", { command: "touch x" });
+  await flush();
+  // Fenced and announced while the ledger report is still outstanding.
+  assert.deepEqual(lost, [["child", "process/start"]]);
+  assert.equal(firstTurn.uncertain, "process/start");
+  // The parent's end waits for its child's call, report included.
+  let ended = false;
+  const ending = facade.endTurn("parent").then(() => {
+    ended = true;
+  });
+  await flush();
+  assert.equal(ended, false);
+  release();
+  await pending;
+  await ending;
+  assert.equal(ended, true);
+  // A new parent turn is not the one that started the child.
+  facade.beginTurn("parent");
+  const second = facade.session("parent").turn;
+  facade.beginTurn("child");
+  await facade.call("child", "RunCommand", { command: "touch y" });
+  assert.equal(second.uncertain, undefined);
+});
+
+test("the turn's end waits for a running publish helper", async () => {
+  let closeAt = 0;
+  const connection = {
+    descriptor: { binding: { workspace: { cwd: "/w" } } },
+    call: async (method, params) => {
+      if (method === "process/start") return { processId: params.processId };
+      if (method === "process/read") {
+        await new Promise((done) => setTimeout(done, 20));
+        if (Date.now() >= closeAt) return { chunks: [], exited: true, exitCode: 0, closed: true };
+        return { chunks: [] };
+      }
+      return {};
+    },
+  };
+  const facade = new Facade(connection, { root: "/w", shell: "/bin/sh" });
+  facade.beginTurn("s");
+  const turn = facade.session("s").turn;
+  closeAt = Date.now() + 120;
+  const running = facade.runBounded(turn, ["helper"], { timeoutMs: 2000, maxBytes: 100 });
+  await flush(2);
+  assert.equal(turn.inflight.size >= 1, true);
+  let ended = false;
+  const ending = facade.endTurn("s").then(() => {
+    ended = true;
+  });
+  await new Promise((done) => setTimeout(done, 40));
+  assert.equal(ended, false);
+  await running;
+  await ending;
+  assert.equal(ended, true);
 });

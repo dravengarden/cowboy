@@ -1475,13 +1475,24 @@ waiting, so a model can run two at once and collect both.
   proxy keeps a turn record per child so a built-in tool that ran is seen. A
   child approves facade tools in its parent's *current* mode (a parent that
   moves to plan mode, or whose mode is unconfirmed, makes its children ask the
-  owner), and a request of a child that ended is rejected, a late approval
-  answered as cancelled. A child's violation, unknown effect or backend
+  owner); a child's permission admission closes in the same tick it is
+  stopped or its prompt is answered, a request after that is rejected and a
+  late approval answered as cancelled. The mode is rechecked right before the
+  child's prompt is sent, so a switch to plan mode during the start stops it. A child's violation, unknown effect or backend
   refusal ends the parent's turn the same way: the parent's facade turn, its
   other children and any start still opening are fenced in the same tick,
   then `agy` is cancelled; the child's settled backend class is merged into
-  the parent's reply (its backend lines also lie inside the parent's
-  evidence window), and a child starts only with a log cursor.
+  the parent's reply (the worst class among the parent and every child by
+  the classifier's precedence; their backend lines also lie inside the
+  parent's evidence window), and a child starts only with a log cursor. A lost
+  effect is announced the moment it is lost, before the ledger report is
+  awaited, and latches on the exact parent turn that started the child;
+  the parent's end waits for its children's calls, and for any running
+  publish helper (an admitted effect, at most 30 s).
+  Backend evidence is account-scoped: `agy`'s success lines carry no session
+  id, so a child is `ok` with its own barrier, no refusal in its window and a
+  success in the window (its own or a sibling's), and a sibling's refusal
+  fails it too.
 - **Bounded.** One level only (a child's `Subagent` call fails), at most 2
   running at once and 8 started per turn, a prompt of at most 64 KiB, a report
   of at most 64 K characters, nothing in plan mode or before the mode is known.
@@ -1489,10 +1500,15 @@ waiting, so a model can run two at once and collect both.
   ending, its cancel or its Stop cancels every child (their facade turns are
   fenced and `agy` is asked to stop in the same tick) after the parent's own
   fence; a child's own Stop (its row) cancels only that child. `agy` has 10 s
-  to confirm a stopped child by ending its prompt; if it does not, the unit's
-  `agy` process is killed (nothing could show the native work stopped) and the
-  row is failed, never reported stopped. A settled child's native session is
-  closed (also one `agy` opens after its request timed out), its facade
+  from the moment the cancel reached it to confirm a stopped child by ending
+  its prompt (an answer disarms the watchdog at once, whatever its
+  settlement still takes); if it does not, the unit's `agy` process is killed
+  (nothing could show the native work stopped), every parent prompt still open
+  is answered with what is already known (a latched violation, a child's
+  refusal, a lost effect, else an unproven outcome) before the process exits,
+  and the row is failed, never reported stopped. A settled child's native session is
+  closed (also one `agy` opens after its request timed out; if that cannot be
+  closed, or never answers within 2 minutes, the unit's `agy` is ended), its facade
   channel revoked and its facade session forgotten; `agy` keeps its
   conversation on disk. The frames of a session still opening are held until
   the worker has been told of the child, so its setup traffic is never read as

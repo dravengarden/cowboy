@@ -60,6 +60,9 @@ export class Facade {
    * @param root the canonical workspace root on the target
    * @param shell the target user's shell
    * @param onUncertain called with (sessionId, method) when a turn must end
+   * @param onLost called with (sessionId, method) at the moment an effect is
+   *   lost, before anything is awaited, so a subagent's parent turn and its
+   *   other children are fenced at once
    * @param onResult called with (call, result) once a tool call is answered,
    *   before `agy` receives the answer (`call` is `{ sessionId, name, args }`,
    *   one object per call, so a presentation can correlate it)
@@ -74,6 +77,7 @@ export class Facade {
       root,
       shell,
       onUncertain = () => {},
+      onLost = () => {},
       onResult = () => {},
       onProgress = () => {},
       managed = false,
@@ -84,6 +88,7 @@ export class Facade {
     this.root = root;
     this.shell = shell;
     this.onUncertain = onUncertain;
+    this.onLost = onLost;
     this.onResult = onResult;
     this.onProgress = onProgress;
     this.sessions = new Map();
@@ -131,7 +136,14 @@ export class Facade {
   session(sessionId) {
     let session = this.sessions.get(sessionId);
     if (!session) {
-      session = { turn: undefined, observed: new Map(), commands: new Map(), parent: undefined };
+      session = {
+        turn: undefined,
+        observed: new Map(),
+        commands: new Map(),
+        parent: undefined,
+        // The parent's turn that was open when the child started.
+        parentTurn: undefined,
+      };
       this.sessions.set(sessionId, session);
     }
     return session;
@@ -139,7 +151,9 @@ export class Facade {
 
   /** `childId` is a subagent of `parentId`: its lost effects end the parent's turn too. */
   link(childId, parentId) {
-    this.session(childId).parent = parentId;
+    const session = this.session(childId);
+    session.parent = parentId;
+    session.parentTurn = this.session(parentId).turn;
   }
 
   /**
@@ -200,7 +214,19 @@ export class Facade {
   /** One MCP `tools/call`, answered as an MCP tool result. */
   async call(sessionId, name, args) {
     const call = { sessionId, name, args };
-    const result = await this.answer(call);
+    const running = this.answer(call);
+    // A subagent's call is part of its parent's turn: the parent's end waits
+    // for it, and for the report of an effect it lost.
+    const parentTurn =
+      sessionId === undefined ? undefined : this.sessions.get(sessionId)?.parentTurn;
+    const tracked = parentTurn?.inflight ? running.catch(() => {}) : undefined;
+    if (tracked) parentTurn.inflight.add(tracked);
+    let result;
+    try {
+      result = await running;
+    } finally {
+      if (tracked) parentTurn.inflight.delete(tracked);
+    }
     // Presentation only: it never changes the answer `agy` receives.
     try {
       this.onResult(call, result);
@@ -274,9 +300,12 @@ export class Facade {
         turn.uncertain ??= error.method;
         // Latched before anything is awaited, on the parent turn that was
         // open when the child's effect was lost.
-        const parentTurn =
-          session?.parent === undefined ? undefined : this.sessions.get(session.parent)?.turn;
-        if (parentTurn) parentTurn.uncertain ??= error.method;
+        if (session?.parentTurn) session.parentTurn.uncertain ??= error.method;
+        try {
+          this.onLost(sessionId, error.method);
+        } catch {
+          // The fence below still ends this session's turn.
+        }
         // The worker's trusted ledger records it before this tool answers
         // (so before the turn can end), also when every transport call was
         // answered (a timed-out publish): the session parks until the owner
@@ -655,7 +684,20 @@ export class Facade {
   }
 
   /** Run a process to its end within bounds; stdout and stderr apart. */
-  async runBounded(
+  async runBounded(turn, argv, options) {
+    // The turn's end waits for the process to finish (a publish helper is an
+    // admitted effect like any request), within the call's own timeout.
+    const run = this.runUntracked(turn, argv, options);
+    const tracked = turn?.inflight ? run.catch(() => {}) : undefined;
+    if (tracked) turn.inflight.add(tracked);
+    try {
+      return await run;
+    } finally {
+      if (tracked) turn.inflight.delete(tracked);
+    }
+  }
+
+  async runUntracked(
     turn,
     argv,
     { timeoutMs, maxBytes, maxLines, lostIsUncertain = true, readiness = false },

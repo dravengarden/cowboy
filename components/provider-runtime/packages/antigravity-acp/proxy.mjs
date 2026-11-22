@@ -12,6 +12,7 @@ import {
   managedConfigAllowed,
   managedPrompt,
 } from "./managed.mjs";
+import { PRECEDENCE } from "./evidence.mjs";
 import { EVIDENCE_LIMITS, promptText, recall, updateObservation } from "./memory.mjs";
 import {
   agyNotice,
@@ -241,8 +242,13 @@ export class AcpProxy {
     this.client = client;
     this.runtime = runtime;
     this.log = log;
+    /** Set once this proxy ended `agy` (a stop it never confirmed). */
+    this.killed = undefined;
     /** Ends the unit's `agy` (a stop `agy` never confirmed leaves nothing running unseen). */
-    this.terminate = terminate;
+    this.terminate = (reason) => {
+      this.killed ??= reason;
+      terminate(reason);
+    };
     this.pending = new Map();
     /** Permission requests forwarded to the worker, with their session. */
     this.agentRequests = new Map();
@@ -554,10 +560,12 @@ export class AcpProxy {
     const { id, method } = message;
     if (typeof method !== "string") {
       if (this.agentRequests.has(id)) {
-        const sessionId = this.agentRequests.get(id);
+        const { child } = this.agentRequests.get(id);
         this.agentRequests.delete(id);
-        // An answer that arrives after its subagent ended grants nothing.
-        if (this.subagents.owns(sessionId) && !this.subagents.active(sessionId)) {
+        // An answer that arrives after its subagent stopped or answered
+        // grants nothing (the entry holds the child itself, so pruning it
+        // from the host changes nothing).
+        if (child !== undefined && !this.subagents.isOpen(child)) {
           return this.agent({ jsonrpc: "2.0", id, result: { outcome: { outcome: "cancelled" } } });
         }
         this.agent(message);
@@ -741,6 +749,8 @@ export class AcpProxy {
       await Promise.all([runtime.facade.endTurn(sessionId, { cancelled: true }), children]);
     }
     this.agent(message);
+    // From here `agy` has the cancel: a child it does not answer ends the unit.
+    this.subagents.nativeCancelled(message.params?.sessionId);
   }
 
   /**
@@ -852,6 +862,55 @@ export class AcpProxy {
     this.agent({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });
   }
 
+  /** A subagent's effect was just lost: fence its turn's family at once. */
+  lost(sessionId, method) {
+    this.subagents.lost(sessionId, method);
+  }
+
+  /**
+   * `agy` is gone and this proxy ended it: every parent prompt still open is
+   * answered with what is already known (a latched violation, a child's
+   * refusal, a lost effect, else an unproven outcome), so the Controller still
+   * receives the account's signal. Another exit changes nothing.
+   */
+  settleExit() {
+    if (this.killed === undefined) return;
+    for (const [id, record] of [...this.pending]) {
+      if (record.method !== "session/prompt" || record.internal) continue;
+      this.pending.delete(id);
+      const turn = this.turns.get(record.sessionId);
+      const backend = turn?.childBackends?.length
+        ? withChildren(turn, {
+            class: "ok",
+            successes: 0,
+            barrier: false,
+            transient: 0,
+            refusals: [],
+          })
+        : { class: "unknown_refusal", successes: 0, barrier: false, transient: 0, refusals: [] };
+      const cowboy = { antigravity_backend: backend };
+      if (turn?.uncertain !== undefined) cowboy.uncertain_effect = turn.uncertain;
+      const violation = turn?.violation;
+      if (violation !== undefined) cowboy.policy_violation = violation;
+      const text =
+        violation !== undefined
+          ? TURN_ERROR_TEXT.violation
+          : (TURN_ERROR_TEXT[backend.class] ?? TURN_ERROR_TEXT.unknown_refusal);
+      this.client({
+        jsonrpc: "2.0",
+        id: record.replyId ?? id,
+        error: {
+          code: TURN_ERROR_CODE,
+          message:
+            violation !== undefined
+              ? `${VIOLATION_PREFIX}${violation}`
+              : `${REFUSAL_PREFIX}${backend.class}`,
+          data: { message: text, cowboy },
+        },
+      });
+    }
+  }
+
   async fromAgent(message) {
     if (message === null || typeof message !== "object" || Array.isArray(message)) return;
     const { id, method } = message;
@@ -919,7 +978,7 @@ export class AcpProxy {
       // for any tool but the facade's is rejected here, never shown; so is
       // a managed child's request for any session but its own.
       const name = message.params?.toolCall?.name;
-      // A subagent that ended asks for nothing more.
+      // A subagent that was stopped or answered asks for nothing more.
       const ended =
         this.subagents.owns(message.params?.sessionId) &&
         !this.subagents.active(message.params.sessionId);
@@ -967,7 +1026,7 @@ export class AcpProxy {
           return this.agent({ jsonrpc: "2.0", id, result: { outcome: { outcome: "cancelled" } } });
         }
       }
-      this.agentRequests.set(id, sessionId);
+      this.agentRequests.set(id, { sessionId, child: this.subagents.childOf(sessionId) });
       const asked = stripTier(message);
       return this.client({
         ...asked,
@@ -1325,14 +1384,22 @@ function attempts(turn, settled) {
 }
 
 /**
- * A turn's backend evidence with what its subagents settled to: a child's
- * refusal (or an outcome its log could not prove) is the turn's too, even
- * when the parent's own window reads clean.
+ * A turn's backend evidence with what its subagents settled to: the worst
+ * class among the parent and every child by the classifier's precedence, so a
+ * child's refusal (or an outcome its log could not prove) is the turn's too,
+ * even when the parent's own window reads clean or milder. The parent's own
+ * evidence counts stay; every refusal seen is listed.
  */
 function withChildren(turn, backend) {
-  const child = turn?.childBackend;
-  if (child === undefined || backend.class !== "ok") return backend;
-  return { ...backend, ...child };
+  const children = turn?.childBackends;
+  if (!children?.length) return backend;
+  const all = [backend, ...children].filter((item) => item.class !== "ok");
+  if (!all.length) return backend;
+  const rank = (item) => PRECEDENCE.indexOf(item.class);
+  const worst = all.reduce((best, item) => (rank(item) < rank(best) ? item : best));
+  if (worst === backend) return backend;
+  const refusals = all.flatMap((item) => (Array.isArray(item.refusals) ? item.refusals : []));
+  return { ...backend, class: worst.class, refusals };
 }
 
 /** Optional ACP usage counters, published only when every attempt has one. */
