@@ -899,6 +899,11 @@ test-rust:
     {{rust_slice_env}} cargo test {{rust_slice_dirs}} {{rust_code_adapter_args}}
     python3 -m unittest discover -s tools -p ovh_machine_idle_sessions_test.py
 
+# Compiles the shared test graph, so `check` can start it before the static
+# checks rather than after them.
+test-graph-build:
+    {{rust_test_env}} cargo test {{rust_test_args}} --no-run
+
 # Compiles the test slices `test-rust` runs, so `check` can build them beside
 # the main graph; `test-rust` then only runs them. The execution host shares
 # their directory and comes first: the script suites wait for it.
@@ -934,11 +939,13 @@ session-deletion-production-conformance OLD NEW READER DEFAULT_READER RECEIPT:
 # `build-web` keeps the production frontend bundle covered. `feature-check` is
 # not repeated: `release-sources-check` checks the same packages, features and
 # binaries inside the exact release source closures.
-# Workspace Clippy, the feature-sliced Rust tests, the release-source slices
-# and the Zed adapter have Cargo build directories of their own, and the script
-# suites and the frontend build share none, so they start first and run beside
-# the rest of the gate: the main graph's compile is a long single-crate chain
-# that leaves most cores idle. The second-scale static checks then run in the
+# The shared test graph's compile starts first: on a fresh worktree it is the
+# longest chain, and Cargo's build lock makes later main-directory steps wait for
+# it rather than compete. Workspace Clippy, the feature-sliced Rust tests, the
+# release-source slices and the Zed adapter have Cargo build directories of
+# their own, and the script suites and the frontend build share none, so they
+# start with it and run beside the rest of the gate: the main graph's compile is
+# a long single-crate chain that leaves most cores idle. The second-scale static checks then run in the
 # foreground, so a formatting, ratchet or lint failure still surfaces within
 # seconds. A failed background job stops the gate at the next foreground step
 # instead of after the Rust builds. Each background log prints once it is
@@ -981,6 +988,9 @@ check: toolchain-check
         if [[ -n "$status" && "$status" != 0 ]]; then collect "$job"; fi
       done
     }
+    # The shared test graph is the longest chain on a fresh worktree, so it
+    # starts first; composition-check later finds it built.
+    background test-graph-build
     # The Node suites resolve `ws` from the prepared Claude ACP packages.
     just claude-source-deps
     # These three each start with `claude-remote-prepare`: whichever builds the

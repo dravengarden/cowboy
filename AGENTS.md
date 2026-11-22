@@ -26,8 +26,8 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   workspace; a recipe that needs a built CLI takes the shared graph's
   executable (`test-graph-bin`) instead of a separate `cargo build`. A build
   script must not watch build outputs such as nested Cargo `target`
-  directories or `node_modules`. `check` first starts workspace Clippy, the
-  feature-sliced Rust test builds, `release-sources-check` and the Zed adapter
+  directories or `node_modules`. `check` first starts the shared test graph's
+  compile, workspace Clippy, the feature-sliced Rust test builds, `release-sources-check` and the Zed adapter
   (each in its own build directory), the script suites and the frontend build
   in the background, then runs the second-scale static checks and the rest in
   the foreground; a failed background job stops the gate at the next
