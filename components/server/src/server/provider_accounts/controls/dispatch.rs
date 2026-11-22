@@ -75,8 +75,13 @@ impl Controls {
                     false,
                 )
                 .await
-                .map(drop)
-                .map_err(|_| wait("the account's state changed; send again"))
+                .map_err(|_| wait("the account's state changed; send again"))?;
+                // The clear awaited a store write: recheck admission, account
+                // state and pending signals before this dispatch proceeds.
+                match self.gate(&meta) {
+                    Gate::Park(reason) => Err(wait(&reason)),
+                    Gate::Proceed { .. } => Ok(()),
+                }
             }
             Gate::Proceed { .. } => Ok(()),
         }
