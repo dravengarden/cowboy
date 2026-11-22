@@ -1528,9 +1528,10 @@ waiting, so a model can run two at once and collect both.
 Accepted with real traffic on 2026-11-22 ([rollout](releases/antigravity-subagents-3-134-rollout-2026-11-22.md)):
 `agy` 1.5.9 runs the child session while the parent's tool call is open, sends a
 per-child `model` configuration (the row shows "Gemini 4 Hydrogen"), and
-answers a cancelled child prompt. Not covered: a child's token usage (`agy`
-reports none per session), and real-traffic runs of row Stop, two children at
-once and the fail-closed paths (unit tests only).
+answers a cancelled child prompt; two children ran at once and a row Stop
+stopped one of them. Not covered: a child's token usage (`agy` reports none per
+session), and real-traffic runs of a parent Stop with children and the
+fail-closed paths (unit tests only).
 
 ### Remaining (needs work outside this adapter)
 

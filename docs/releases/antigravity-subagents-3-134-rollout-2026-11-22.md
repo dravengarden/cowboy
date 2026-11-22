@@ -62,6 +62,13 @@ Session `sess-1795305711880` (Provider 0.2.18, runtime OVH, workspace Hawk):
   `agy` was not ended (the watchdog was disarmed by the answered prompt).
 - The parent turn ended normally (`EndTurn`).
 
-Not exercised with real traffic: a row Stop from the Web while a child runs, two
-children at once, a parent Stop with children running, plan mode and the
-fail-closed paths (unit tests only).
+A second session, `sess-1795305711881`, ran two children at once (both
+`wait_seconds: 0`, then each waited for). Alpha finished (`idle`/`end_turn`, 6
+tool calls, `alpha-done`). Beta was stopped from its row
+(`sessions.cancel_subagent`, the Web's Stop) while Alpha ran: `idle`/`cancelled`
+after 4 tool calls, the parent's wait returned the stopped outcome and the
+turn ended normally; the unit's `agy` was not ended.
+
+Not exercised with real traffic: a parent Stop with children running, plan mode
+and the fail-closed paths (a child `agy` does not confirm stopped, forced exit,
+violations and refusals): unit tests only.
