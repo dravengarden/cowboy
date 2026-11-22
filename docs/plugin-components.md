@@ -83,6 +83,11 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Zed 1.39.11 changes only its Plugin source on component release 3.121.0: the
+adapter's lock moves `url` to 2.5.9 for RUSTSEC-2026-0592 (unbounded
+recursion in `Url::origin()` on nested `blob:` URLs). Native pins and its
+component release are unchanged.
+
 Component release 3.142.0 records provider-runtime 1.3.26, whose
 `cowboy-antigravity-acp` 1.0.22 lets `SearchFiles` find files by name with only
 a glob and a directory path (Claude's Glob), and measures the home discovery
