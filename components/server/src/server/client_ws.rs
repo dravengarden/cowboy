@@ -892,13 +892,9 @@ pub(super) fn handle_command(
         } => session_trash::purge(state, principal, &folder_ids, &session_ids),
         Inbound::RenameSession { session_id, title } => {
             // Empty title is a UI bug; reject server-side so the toast lands.
-            let trimmed = title.trim().to_owned();
-            if trimmed.is_empty() {
-                Err("title cannot be empty".to_owned())
-            } else {
-                state.hub.rename_session(&session_id, trimmed);
-                Ok(())
-            }
+            crate::core::Hub::clean_title(&title).map(|title| {
+                state.hub.rename_session(&session_id, title);
+            })
         }
         Inbound::Sync {
             state: sync_state,
