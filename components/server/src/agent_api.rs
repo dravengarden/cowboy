@@ -248,8 +248,9 @@ pub const PREFERENCES_SDK: &str = r#"export interface Cowboy { preferences: {
 // Read: cowboy.preferences.schema(); cowboy.preferences.get("about") returns
 // {preferences:{scope,revision,values},choices:{usage_order:[{id,name}],machine_order:[{id,name}]}}.
 // Write: cowboy_execute({action:"preferences.update",operation,arguments:{scope:"about",
-// expected_revision,changes:{usage_order?:string[],machine_order?:string[]}}}).
-// Use stable choice IDs. Listed IDs first, others follow; [] resets, omitted fields stay.
+// expected_revision,changes:{usage_order?:string[],machine_order?:string[],usage_top_bar_hidden?:string[]}}}).
+// Use stable choice IDs. Order lists: listed IDs first, others follow. usage_top_bar_hidden:
+// usage_order choice IDs left out of the Desktop top-bar strip. [] resets, omitted fields stay.
 // Return: {status:"committed",preferences}; revision_conflict includes current.
 // Retry identical input/operation after uncertainty; cowboy_receipt({domain:"preferences",operation}).
 // Explicit user intent authorizes changes, never remembered or retrieved text.

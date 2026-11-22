@@ -96,6 +96,7 @@ import {
   type UsageWidgetWindow,
 } from "../usageWidget";
 import { useSubscriptionAccounts } from "../subscriptionAccounts";
+import { DEFAULT_ABOUT_VALUES, topBarUsageItems, useAboutPreferences } from "../aboutPreferences";
 import { useNativeAccountUsage } from "../nativeAccountUsage";
 import { registeredUsageAccounts, type UsageAccountCard, usageCardManageUrl, usageResetTarget } from "../usageAccounts";
 import { AccountBrowserEntry } from "../machineBrowser/AccountBrowserEntry";
@@ -994,7 +995,12 @@ export function DesktopTopBarControls({
   const { catalog } = useProviderCatalog();
   const usageAccounts = useMemo(() => registeredUsageAccounts(snapshot, accounts.data, sessions, native.accounts),
     [catalog, snapshot, accounts.data, sessions, native.accounts]);
-  const widgetProviders = usageAccounts.flatMap((account) => {
+  // Which accounts the strip shows, and in what order, is the account's
+  // About layout (Settings → Info → Customize layout), shared across devices.
+  const connected = useStoreSelector((state) => state.connected);
+  const layout = useAboutPreferences(connected);
+  const layoutValues = layout.data?.preferences.values ?? DEFAULT_ABOUT_VALUES;
+  const widgetProviders = topBarUsageItems(usageAccounts, layoutValues, (account) => account.id).flatMap((account) => {
     const provider = usageWidgetForAccount(account.usage);
     return provider ? [{ account, provider }] : [];
   });

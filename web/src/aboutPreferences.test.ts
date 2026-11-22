@@ -1,10 +1,22 @@
 import { test } from "bun:test";
 import { assertEquals } from "../../tools/test-assert.ts";
-import { orderedItems } from "./aboutPreferences";
+import { DEFAULT_ABOUT_VALUES, orderedItems, topBarUsageItems, withAboutDefaults } from "./aboutPreferences";
 
 test("layout order survives renamed/offline items and appends newly available items", () => {
   const items = [{ id: "hawk", name: "Renamed", online: false }, { id: "ovh", name: "OVH", online: true }, { id: "new", name: "New", online: true }];
   assertEquals(orderedItems(items, ["gone", "ovh", "hawk"], (item) => item.id).map((item) => item.id), ["ovh", "hawk", "new"]);
   assertEquals(orderedItems(items, [], (item) => item.id), items);
   assertEquals(items.map((item) => item.id), ["hawk", "ovh", "new"]);
+});
+
+test("top-bar usage follows the Usage order and leaves out hidden accounts", () => {
+  const items = [{ id: "husky" }, { id: "lark" }, { id: "claude" }, { id: "codex" }, { id: "new" }];
+  const values = { ...DEFAULT_ABOUT_VALUES, usage_order: ["codex", "husky"], usage_top_bar_hidden: ["lark", "gone"] };
+  assertEquals(topBarUsageItems(items, values, (item) => item.id).map((item) => item.id), ["codex", "husky", "claude", "new"]);
+  assertEquals(topBarUsageItems(items, DEFAULT_ABOUT_VALUES, (item) => item.id), items);
+});
+
+test("a stored about value from before the top-bar field reads with its default", () => {
+  const stored = { scope: "about" as const, revision: 3, values: { usage_order: ["a"], machine_order: [] } as never };
+  assertEquals(withAboutDefaults(stored).values, { usage_order: ["a"], machine_order: [], usage_top_bar_hidden: [] });
 });

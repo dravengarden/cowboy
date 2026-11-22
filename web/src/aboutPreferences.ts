@@ -3,7 +3,12 @@ import { productSessionSignal } from "./productSessionEnd";
 import { productSyncPrincipal } from "./productSyncIdentity";
 
 export type OrderKey = "usage_order" | "machine_order";
-export interface AboutValues { usage_order: string[]; machine_order: string[] }
+export interface AboutValues {
+  usage_order: string[];
+  machine_order: string[];
+  /** Usage account IDs left out of the Desktop top-bar strip. */
+  usage_top_bar_hidden: string[];
+}
 export interface PreferenceSnapshot { scope: "about"; revision: number; values: AboutValues }
 export interface OrderChoice { id: string; name: string }
 export interface AboutPreferences {
@@ -12,12 +17,24 @@ export interface AboutPreferences {
   dataset: { dataset_id: string; user_id: string };
 }
 export const PREFERENCES_CHANGED = "cowboy:preferences-changed";
-export const DEFAULT_ABOUT_VALUES: AboutValues = { usage_order: [], machine_order: [] };
+export const DEFAULT_ABOUT_VALUES: AboutValues = { usage_order: [], machine_order: [], usage_top_bar_hidden: [] };
+
+/** A value stored before a field existed reads without it; fill the default. */
+export function withAboutDefaults(snapshot: PreferenceSnapshot): PreferenceSnapshot {
+  return { ...snapshot, values: { ...DEFAULT_ABOUT_VALUES, ...snapshot.values } };
+}
 
 /** Unknown IDs stay dormant; new items append in their original default order. */
 export function orderedItems<T>(items: readonly T[], order: readonly string[], id: (item: T) => string): T[] {
   const rank = new Map(order.map((key, index) => [key, index]));
   return [...items].sort((a, b) => (rank.get(id(a)) ?? Infinity) - (rank.get(id(b)) ?? Infinity));
+}
+
+/** The Desktop top-bar usage strip: the Usage order without hidden accounts.
+ *  New accounts are not in the hidden list, so they appear until hidden. */
+export function topBarUsageItems<T>(items: readonly T[], values: AboutValues, id: (item: T) => string): T[] {
+  const hidden = new Set(values.usage_top_bar_hidden);
+  return orderedItems(items, values.usage_order, id).filter((item) => !hidden.has(id(item)));
 }
 
 export function useAboutPreferences(connected: boolean) {
@@ -39,7 +56,8 @@ export function useAboutPreferences(connected: boolean) {
       const next = await response.json() as AboutPreferences;
       if (!alive.current || sequence !== loading.current || productSessionSignal().aborted) return;
       if (next.dataset.user_id !== productSyncPrincipal()) throw new Error("Account changed. Reload before editing the layout.");
-      setData((old) => !old || next.preferences.revision >= old.preferences.revision ? next : old);
+      const normalized = { ...next, preferences: withAboutDefaults(next.preferences) };
+      setData((old) => !old || next.preferences.revision >= old.preferences.revision ? normalized : old);
       setLoadError(undefined);
     } catch (cause) { if (alive.current) setLoadError(String(cause)); }
   }, []);
@@ -71,14 +89,14 @@ export function useAboutPreferences(connected: boolean) {
       const result = await response.json() as { preferences?: PreferenceSnapshot; current?: PreferenceSnapshot; error?: { code: string } };
       if (!alive.current || productSessionSignal().aborted) return;
       if (response.status === 409 && result.current) {
-        setData((old) => old && result.current!.revision >= old.preferences.revision ? { ...old, preferences: result.current! } : old);
+        setData((old) => old && result.current!.revision >= old.preferences.revision ? { ...old, preferences: withAboutDefaults(result.current!) } : old);
         setError("Layout changed elsewhere. Your proposed order is kept below. Apply it again to replace the latest order, or discard it.");
         // A rejected CAS has no receipt. Only an explicit retry may use a fresh revision.
         setPending({ ...input, operation: crypto.randomUUID(), expected_revision: result.current.revision });
         return;
       }
       if (!response.ok || !result.preferences) throw new Error(result.error?.code ?? "Could not save layout");
-      setData((old) => old && result.preferences!.revision >= old.preferences.revision ? { ...old, preferences: result.preferences! } : old);
+      setData((old) => old && result.preferences!.revision >= old.preferences.revision ? { ...old, preferences: withAboutDefaults(result.preferences!) } : old);
       setPending(undefined);
     } catch (cause) {
       if (alive.current) setError(`${String(cause)}. Your order is kept; retry uses the same operation.`);

@@ -23,7 +23,7 @@ const ENTRIES: Readonly<Record<string, [string, number]>> = {
   "review-context": ["runReviewContextBrowserConformance", 8],
   "review-compare": ["runReviewCompareBrowserConformance", 4],
   "info-metrics": ["runInfoMetricsBrowserConformance", 38],
-  "about-layout": ["runAboutLayoutBrowserConformance", 10],
+  "about-layout": ["runAboutLayoutBrowserConformance", 13],
   "desktop-composer": ["runDesktopComposerBrowserConformance", 19],
   "draft-documents": ["runDraftDocumentsBrowserConformance", 12],
   "editor-plugin-sandbox": ["runEditorPluginSandboxBrowserConformance", 4],

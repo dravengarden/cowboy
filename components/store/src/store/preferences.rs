@@ -43,7 +43,7 @@ pub fn trash_retention_days(preferences: Option<&Preferences>) -> i64 {
 
 pub fn defaults(scope: &str) -> Option<Preferences> {
     let values = match scope {
-        "about" => json!({"usage_order":[],"machine_order":[]}),
+        "about" => json!({"usage_order":[],"machine_order":[],"usage_top_bar_hidden":[]}),
         "trash" => json!({"retention_days": TRASH_RETENTION_DEFAULT_DAYS}),
         crate::superagent::SCOPE => json!({"configuration":crate::superagent::Settings::default()}),
         crate::context_rollover::PREFERENCE_SCOPE => crate::context_rollover::default_preferences(),
@@ -75,9 +75,10 @@ pub fn schema() -> Value {
         "semantics":"Days a session or folder stays in Trash before the Controller deletes it permanently. Applies to items already in Trash: each deadline is trashed_at + retention_days. Move items with sessions.trash, bring them back with sessions.restore."},
         "about":{"storage":"database","ownership":"current_user",
         "fields":{"usage_order":{"type":"unique_id_array","default":[]},
-                  "machine_order":{"type":"unique_id_array","default":[]}},
+                  "machine_order":{"type":"unique_id_array","default":[]},
+                  "usage_top_bar_hidden":{"type":"unique_id_array","default":[],"meaning":"Usage choice IDs hidden from the Desktop top-bar usage strip; every other account is shown in usage_order"}},
         "unique_id_array":{"max_items":256,"id_pattern":"^[A-Za-z0-9_.:-]{1,128}$"},
-        "semantics":"Listed IDs first; unlisted items retain default order. Empty arrays restore defaults. Omitted fields are unchanged."}}})
+        "semantics":"Order fields: listed IDs first; unlisted items retain default order. usage_top_bar_hidden: listed IDs are hidden; new accounts are shown. Empty arrays restore defaults. Omitted fields are unchanged. A stored value written before a field existed reads without it; treat it as the default."}}})
 }
 
 fn valid(change: &PreferenceChange) -> bool {
@@ -102,7 +103,10 @@ fn valid(change: &PreferenceChange) -> bool {
                                 (1..=TRASH_RETENTION_MAX_DAYS).contains(&days)
                             });
                     }
-                    matches!(key.as_str(), "usage_order" | "machine_order")
+                    matches!(
+                        key.as_str(),
+                        "usage_order" | "machine_order" | "usage_top_bar_hidden"
+                    )
                         && value.as_array().is_some_and(|ids| {
                             let mut unique = std::collections::HashSet::new();
                             ids.len() <= 256
@@ -489,6 +493,8 @@ mod tests {
             json!({"secret":"x"}),
             json!({"usage_order":["bad\n"]}),
             json!({"usage_order":["x".repeat(129)]}),
+            json!({"usage_top_bar_hidden":["a","a"]}),
+            json!({"usage_top_bar_hidden":"a"}),
         ] {
             assert!(!valid(&PreferenceChange {
                 scope: "about".into(),
@@ -496,6 +502,15 @@ mod tests {
                 changes
             }));
         }
+        assert!(valid(&PreferenceChange {
+            scope: "about".into(),
+            expected_revision: 0,
+            changes: json!({"usage_top_bar_hidden":["acct-lark","acct.pika"]})
+        }));
+        assert_eq!(
+            defaults("about").unwrap().values["usage_top_bar_hidden"],
+            json!([])
+        );
         assert!(defaults("service").is_none());
         assert!(serde_json::from_value::<PreferenceChange>(json!({"scope":"about","expected_revision":0,"changes":{"usage_order":[]},"owner":"other"})).is_err());
     }
