@@ -851,11 +851,17 @@ test("home reads stop at their deadline and at the discovery budget", async (t) 
   // Stalled: nothing more is sent.
   await assert.rejects(reads.call("fs/getMetadata", {}), /did not answer in time/);
   assert.equal(sent.length, 1);
-  // A budget spent by answered reads stops further ones too.
+  // Time between home reads (repository reads) does not use the budget.
   const quick = async () => ({ path: "file:///x" });
-  const budgeted = HomeReads.for(quick, "/h", "/r", { deadlineMs: 50, budgetMs: 80 });
-  await budgeted.call("fs/getMetadata", {});
+  const idle = HomeReads.for(quick, "/h", "/r", { deadlineMs: 50, budgetMs: 80 });
+  await idle.call("fs/getMetadata", {});
   await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.deepEqual(await idle.call("fs/getMetadata", {}), { path: "file:///x" });
+  // Time spent waiting on home reads does: a slow home exhausts it.
+  const slow = () => new Promise((resolve) => setTimeout(() => resolve({ path: "file:///x" }), 45));
+  const budgeted = HomeReads.for(slow, "/h", "/r", { deadlineMs: 100, budgetMs: 80 });
+  await budgeted.call("fs/getMetadata", {});
+  await assert.rejects(budgeted.call("fs/getMetadata", {}), /did not answer in time/);
   await assert.rejects(budgeted.call("fs/getMetadata", {}), /did not answer in time/);
 });
 

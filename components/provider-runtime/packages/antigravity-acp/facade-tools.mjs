@@ -342,7 +342,7 @@ export const HOME_BUDGET_MS = 10_000;
  *   cannot inject content through the home.
  *
  * Each request races a `HOME_READ_MS` timer, and the whole discovery a
- * `HOME_BUDGET_MS` budget from its first request, without cancelling the
+ * `HOME_BUDGET_MS` budget of time spent waiting on home requests, without cancelling the
  * request (the connection has no per-request cancel); a late answer is
  * ignored, and once one read timed out or the budget is spent no further
  * home request is sent.
@@ -359,7 +359,7 @@ export class HomeReads {
 
   constructor(call, home, root, deadlineMs, budgetMs) {
     this.budgetMs = budgetMs;
-    this.until = undefined;
+    this.spent = 0;
     this.send = call;
     this.home = home;
     this.root = root;
@@ -397,12 +397,15 @@ export class HomeReads {
 
   /** One request within the deadline; rejects when the home stalled. */
   async call(method, params) {
-    this.until ??= Date.now() + this.budgetMs;
-    const wait = Math.min(this.deadlineMs, this.until - Date.now());
+    // The budget counts only time spent waiting on home requests, so
+    // repository reads interleaved with them (guidance, skills) never use
+    // it up.
+    const wait = Math.min(this.deadlineMs, this.budgetMs - this.spent);
     if (this.stalled || wait <= 0) {
       this.stalled = true;
       throw new Error("The home did not answer in time");
     }
+    const started = Date.now();
     // The connection rejects only this request at its deadline and ignores
     // a late reply, so a stalled home never ends the shared connection.
     const request = this.send(method, params, { timeoutMs: wait });
@@ -419,6 +422,7 @@ export class HomeReads {
       return await Promise.race([request, timeout]);
     } finally {
       clearTimeout(timer);
+      this.spent += Date.now() - started;
     }
   }
 
