@@ -14,12 +14,15 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
 - Run Rust, Bun, build, lint, and test commands from the repository root in
   the pinned shell, for example `nix develop -c just check-compact`. Ordinary
   interactive Cargo commands retain incremental state. The complete gate keeps
-  it only for the shared test graph, where an edit's rebuild drops from about
-  114s to 25s, and otherwise compiles through one sccache shared across
-  worktrees (2026-11-21 on Hawk: a fresh worktree's cold gate hit 56%, 996s to
-  893s). Do not use host
-  `cargo` or `bun` as a preliminary check; a missing tool or stale Rustup linker
-  wrapper is an environment failure, not a product-code failure.
+  it for the shared test graph, its feature slices and Clippy, where an edit's
+  rebuild drops from about 114s to 25s for the graph, and compiles everything
+  else through one sccache shared across worktrees. Only registry dependencies
+  hit that cache across worktrees: workspace crates and crates with build
+  scripts carry checkout paths in their keys, and so does any `CARGO_*`
+  variable holding one, so pass directories as Cargo flags or profiles, never
+  as `CARGO_TARGET_DIR`/`CARGO_BUILD_BUILD_DIR`. Do not use host `cargo` or
+  `bun` as a preliminary check; a missing tool or stale Rustup linker wrapper
+  is an environment failure, not a product-code failure.
 - Keep the gate cheap to rerun. A rerun without source changes must not
   recompile the Rust graphs. Rust test recipes share `rust_test_args` and
   `rust_test_env` because another package or feature selection recompiles the
@@ -27,16 +30,16 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   executable (`test-graph-bin`) instead of a separate `cargo build`. A build
   script must not watch build outputs such as nested Cargo `target`
   directories or `node_modules`. `check` first starts the shared test graph's
-  compile, workspace Clippy, the feature-sliced Rust test builds, `release-sources-check` and the Zed adapter
-  (each in its own build directory), the script suites and the frontend build
-  in the background, then runs the second-scale static checks and the rest in
-  the foreground; a failed background job stops the gate at the next
-  foreground step. The shared test graph links its binaries into
-  `target/test-graph`; `target/debug/cowboy-execution-host` is the
-  Machine-feature host that `claude-remote-prepare` links for the script
-  suites, and nothing else in the gate rewrites it. While iterating on one
-  failure, rerun that recipe first, then run the complete gate once before
-  handing off.
+  compile, workspace Clippy, the feature-sliced Rust test builds,
+  `release-sources-check` and the Zed adapter (each with a Cargo profile or
+  build directory of its own), the script suites and the frontend build in the
+  background, then runs the second-scale static checks and the rest in the
+  foreground; a failed background job stops the gate at the next foreground
+  step. The shared test graph links its binaries into `target/test-graph`;
+  `target/debug/cowboy-execution-host` is the Machine-feature host that
+  `claude-remote-prepare` links for the script suites, and nothing else in the
+  gate rewrites it. While iterating on one failure, rerun that recipe first,
+  then run the complete gate once before handing off.
 - Iterate on Rust tests with `nix develop -c just test-rust-filter <filter>`
   (nextest name filters or `-E` expressions) and on lints with `just clippy`.
   Do not run ad-hoc `cargo test -p …`, `cargo nextest run -p …` or

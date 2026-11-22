@@ -134,6 +134,16 @@ dbg_macro = "deny"
 todo = "deny"
 unimplemented = "deny"
 
+# Lanes `just check` compiles beside the shared test graph. A profile of their
+# own gives each its own directory and build lock inside the workspace's build
+# directory: they run concurrently with the graph, and the host's build cache
+# retention still manages their state. Neither changes any setting.
+[profile.gate-clippy]
+inherits = "dev"
+
+[profile.gate-slices]
+inherits = "dev"
+
 [profile.dev]
 debug = "line-tables-only"
 
