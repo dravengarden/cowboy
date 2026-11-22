@@ -39,6 +39,10 @@ function unit({
     endTurnDelay: 0,
     afterNew: () => [],
     beforeNew: () => [],
+    /** Fields agy adds to a new session's result. */
+    newResult: () => ({}),
+    /** What agy answers a settings replay with. */
+    replyResult: () => ({}),
   };
   const terminated = [];
   const unbound = [];
@@ -116,13 +120,21 @@ function unit({
         const sessionId = `child-${opened}`;
         // Frames read before the reply, naming the session about to be opened.
         for (const frame of control.beforeNew(sessionId)) proxy.fromAgent(frame);
-        proxy.fromAgent({ jsonrpc: "2.0", id: message.id, result: { sessionId } });
+        proxy.fromAgent({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: { sessionId, ...control.newResult(sessionId) },
+        });
         // Frames read in the same chunk as the reply, with no await between.
         for (const frame of control.afterNew(sessionId)) proxy.fromAgent(frame);
       } else if (
         ["session/set_model", "session/set_config_option", "session/close"].includes(message.method)
       ) {
-        proxy.fromAgent({ jsonrpc: "2.0", id: message.id, result: {} });
+        proxy.fromAgent({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: message.method === "session/close" ? {} : control.replyResult(message),
+        });
       }
     });
   };
@@ -1001,6 +1013,141 @@ test("a startup failure of an earlier turn does not refund the next turn's budge
   await proxy.fromAgent({ jsonrpc: "2.0", id: created.id, error: { code: -32603, message: "no" } });
   await starting;
   assert.equal(proxy.subagents.group("s").started, 0);
+});
+
+/** A full `configOptions` set naming `model` (and an unrelated effort option). */
+const configOptions = (model, { withModel = true } = {}) => ({
+  configOptions: [
+    ...(withModel
+      ? [
+          {
+            id: "model",
+            name: "Model",
+            category: "model",
+            type: "select",
+            currentValue: model,
+            options: [
+              { value: "default-model", name: "Default" },
+              { value: model, name: `Name of ${model}` },
+            ],
+          },
+        ]
+      : []),
+    { id: "thought_level", name: "Effort", type: "select", currentValue: "low", options: [] },
+  ],
+});
+const configUpdates = (client, sessionId) => updates(client, sessionId, "config_option_update");
+const labelled = (message) =>
+  message.params.update.configOptions
+    .filter((option) => option.id === "model")
+    .map((option) => option.currentValue);
+
+test("a child's model label is the new session's confirmed configuration", async () => {
+  const made = await parent();
+  made.control.newResult = () => configOptions("m-new");
+  const id = await startChild(made);
+  await flush();
+  assert.deepEqual(configUpdates(made.client, id).map(labelled), [["m-new"]]);
+  // Only the model option is forwarded, never the rest of the set.
+  assert.deepEqual(configUpdates(made.client, id)[0].params.update.configOptions.length, 1);
+  assert.equal(made.proxy.subagents.configUpdateIgnored(id), false);
+});
+
+test("a child that got no replays still shows agy's own updates", async () => {
+  const made = await parent();
+  made.control.afterNew = (sessionId) => [
+    childUpdate(sessionId, { sessionUpdate: "config_option_update", ...configOptions("m-own") }),
+  ];
+  const id = await startChild(made);
+  await flush();
+  assert.deepEqual(configUpdates(made.client, id).map(labelled), [["m-own"]]);
+  await made.proxy.fromAgent(
+    childUpdate(id, { sessionUpdate: "config_option_update", ...configOptions("m-later") }),
+  );
+  await flush();
+  assert.deepEqual(configUpdates(made.client, id).map(labelled), [["m-own"], ["m-later"]]);
+});
+
+test("a replayed child is labelled by the last replay's full configuration only", async () => {
+  const made = await parent();
+  const { proxy, client, control } = made;
+  await proxy.fromClient(request(20, "session/set_model", { sessionId: "s", modelId: "m-set" }));
+  await proxy.fromClient(
+    request(21, "session/set_config_option", {
+      sessionId: "s",
+      configId: "thought_level",
+      value: "high",
+    }),
+  );
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 20, result: {} });
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 21, result: {} });
+  client.length = 0;
+  // The session opens on the account default, and agy says so while opening.
+  control.newResult = () => configOptions("default-model");
+  control.afterNew = (sessionId) => [
+    childUpdate(sessionId, {
+      sessionUpdate: "config_option_update",
+      ...configOptions("default-model"),
+    }),
+  ];
+  // The model replay's answer names the new model; the effort replay's, the
+  // full set at the end.
+  control.replyResult = (message) =>
+    message.method === "session/set_config_option" ? configOptions("m-set") : {};
+  const id = await startChild(made);
+  await flush();
+  // agy's own opening update (the default) is withheld, the confirmed one sent.
+  assert.deepEqual(configUpdates(client, id).map(labelled), [["m-set"]]);
+  assert.equal(proxy.subagents.configUpdateIgnored(id), true);
+  // A later update cannot be ordered against the replays: withheld too.
+  await proxy.fromAgent(
+    childUpdate(id, { sessionUpdate: "config_option_update", ...configOptions("default-model") }),
+  );
+  await flush();
+  assert.deepEqual(configUpdates(client, id).map(labelled), [["m-set"]]);
+});
+
+test("a replayed child whose model is not confirmed gets no label", async () => {
+  for (const [name, replyResult] of [
+    ["an answer that lists no configuration", () => ({})],
+    ["an answer with no model option", () => configOptions("m-set", { withModel: false })],
+    [
+      "an answer whose model has no value",
+      () => ({ configOptions: [{ id: "model", currentValue: "" }] }),
+    ],
+  ]) {
+    const made = await parent();
+    const { proxy, client, control } = made;
+    await proxy.fromClient(request(20, "session/set_model", { sessionId: "s", modelId: "m-set" }));
+    await proxy.fromAgent({ jsonrpc: "2.0", id: 20, result: {} });
+    client.length = 0;
+    // The new session did name a model, but the replay changed it afterwards.
+    control.newResult = () => configOptions("default-model");
+    control.afterNew = (sessionId) => [
+      childUpdate(sessionId, {
+        sessionUpdate: "config_option_update",
+        ...configOptions("default-model"),
+      }),
+    ];
+    control.replyResult = replyResult;
+    const id = await startChild(made);
+    await flush();
+    assert.deepEqual(configUpdates(client, id), [], name);
+    // The child still runs and is announced; only its label is missing.
+    assert.equal(updates(client, "s", "subagent_update").length >= 1, true, name);
+  }
+});
+
+test("a model name list too large to forward is dropped, the current value stays", async () => {
+  const made = await parent();
+  const big = configOptions("m-new");
+  big.configOptions[0].options = [{ value: "x", name: "y".repeat(40 * 1024) }];
+  made.control.newResult = () => big;
+  const id = await startChild(made);
+  await flush();
+  const [update] = configUpdates(made.client, id);
+  assert.deepEqual(labelled(update), ["m-new"]);
+  assert.equal(update.params.update.configOptions[0].options, undefined);
 });
 
 test("a refused model setting fails the start and leaves nothing behind", async () => {

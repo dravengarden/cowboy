@@ -957,6 +957,12 @@ export class AcpProxy {
             return this.log("dropped a session/update for another session");
           }
           const update = message.params?.update;
+          if (
+            update?.sessionUpdate === "config_option_update" &&
+            this.subagents.configUpdateIgnored(message.params.sessionId)
+          ) {
+            return this.log("dropped a config_option_update of a child with replayed settings");
+          }
           if (update?.sessionUpdate === "current_mode_update") {
             this.reportMode(message.params.sessionId, update);
           } else if (update?.sessionUpdate === "config_option_update") {

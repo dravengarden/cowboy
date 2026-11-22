@@ -32,8 +32,20 @@ proxy sends this same form (`subagent_update` before child traffic, the
 delegation prompt as a linked `session_message`, the child's own updates and
 permission requests under its session id, `idle` with a stop reason at the
 end; `session/cancel` of the child id stops only that child, and a parent
-cancel or turn end stops all). The child's reply is its last message once idle;
-neither a model label nor usage is reported.
+cancel or turn end stops all). The child's reply is its last message once idle.
+A model label is reported only when agy confirms the child's model, and usage
+is not reported: the proxy has no per-child token counts, and adding them waits
+for a probe of what the pinned agy reports on a child's prompt result.
+
+The label comes from the child's configuration as agy confirmed it: the new
+session's `configOptions`, then the full set the last replayed parent setting
+(`session/set_model`, `session/set_config_option`) answered with. The proxy sends
+the worker exactly one `config_option_update` with that `model` option. Once
+settings were replayed onto a child, agy's own `config_option_update` frames for
+it are withheld, since none can be ordered against the replays; and a replay
+whose answer lists no model leaves the model unknown, so the child has no label
+(and no model attribution) rather than the default's. A child nothing was
+replayed onto keeps agy's own updates.
 
 ## Routing (worker)
 

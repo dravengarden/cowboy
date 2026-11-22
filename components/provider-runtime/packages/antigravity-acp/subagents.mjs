@@ -44,6 +44,10 @@ const MAX_KEPT = 64;
 const MAX_CONFIG = 16;
 /** Frames of a child held until the worker knows it (bounded). */
 const MAX_HELD = 256;
+/** The most configuration options a reply may list before it is not trusted. */
+const MAX_OPTIONS = 64;
+/** The largest choice list of the model option that is forwarded. */
+const MODEL_CHOICES_BYTES = 32 * 1024;
 
 const TURN_ENDED = "The turn ended before the subagent started.";
 const MODE_CHANGED = "The session's mode changed before the subagent started.";
@@ -52,6 +56,30 @@ const LATE_REPLY_MS = 120_000;
 
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const RUNNING = new Set(["starting", "running"]);
+
+/**
+ * The `model` option of a reply's full `configOptions` set (a `session/new`
+ * result, or the answer to a `session/set_config_option`), reduced to what
+ * names the model; `undefined` when the reply does not carry one with a
+ * current value. A reply that lists no model proves nothing about it.
+ */
+export function modelOption(result) {
+  const options = result?.configOptions;
+  if (!Array.isArray(options) || options.length > MAX_OPTIONS) return undefined;
+  const option = options.find(
+    (candidate) =>
+      isObject(candidate) && (candidate.id === "model" || candidate.category === "model"),
+  );
+  if (!option || typeof option.currentValue !== "string" || option.currentValue === "") {
+    return undefined;
+  }
+  const { id, name, category, type, currentValue, options: choices } = option;
+  const kept = { id, name, category, type, currentValue };
+  if (Array.isArray(choices) && JSON.stringify(choices).length <= MODEL_CHOICES_BYTES) {
+    kept.options = choices;
+  }
+  return kept;
+}
 
 /** `text` cut to `limit` characters, marked when it was. */
 function bounded(text, limit) {
@@ -151,6 +179,16 @@ export class Subagents {
   /** Whether `sessionId` is a child whose turn is open. */
   active(sessionId) {
     return this.isOpen(this.children.get(sessionId));
+  }
+
+  /**
+   * Whether agy's own `config_option_update` for `sessionId` is withheld: the
+   * child's parent settings were replayed onto it, and no such update can be
+   * ordered against those replays (a delayed one may still describe the model
+   * from before them). Its label is the confirmed one `start` sent, or none.
+   */
+  configUpdateIgnored(sessionId) {
+    return this.children.get(sessionId)?.replayed === true;
   }
 
   /** The child of `sessionId`, if it is one. */
@@ -370,6 +408,9 @@ export class Subagents {
       cancelled: false,
       replied: false,
       closed: false,
+      // The parent's settings were replayed onto it: its model is then known
+      // only from the last replay's answer (see `configUpdateIgnored`).
+      replayed: false,
       channel: undefined,
       cursor: undefined,
       killTimer: undefined,
@@ -432,13 +473,20 @@ export class Subagents {
       this.children.set(nativeId, child);
       runtime.bindChannel(child.channel, nativeId);
       runtime.facade.link?.(nativeId, parentId);
+      // The child's model as agy itself confirmed it: the new session's
+      // configuration, then the full configuration the last replay answered
+      // with. A replay whose answer lists no model leaves it unknown.
+      let confirmed = modelOption(created.result);
       for (const replay of setup.config.values()) {
+        child.replayed = true;
+        confirmed = undefined;
         const reply = await this.request(replay.method, { sessionId: nativeId, ...replay.params });
         if (reply.error !== undefined) {
           throw new ToolError(
             "Antigravity refused the session's model settings for the subagent; nothing was started.",
           );
         }
+        confirmed = modelOption(reply.result);
         check();
       }
       child.cursor = await runtime.evidence.mark();
@@ -472,6 +520,19 @@ export class Subagents {
       });
       proxy.turns.set(nativeId, this.childTurn(nativeId, prompt));
       runtime.facade.beginTurn(nativeId);
+      // The one model label the worker gets for a replayed child, and only
+      // when it is confirmed. A child nothing was replayed onto also gets
+      // agy's own updates (below), which describe the unchanged default.
+      if (confirmed !== undefined) {
+        proxy.client({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: nativeId,
+            update: { sessionUpdate: "config_option_update", configOptions: [confirmed] },
+          },
+        });
+      }
       // The worker knows the child now: what `agy` sent while it opened.
       this.release(nativeId);
       // A prompt has no timeout of its own: it ends when the turn does.
