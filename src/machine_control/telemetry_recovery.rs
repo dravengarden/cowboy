@@ -124,7 +124,12 @@ impl MachineControl {
                     "binding recovery channel unavailable",
                 )
             })?;
-        match tokio::time::timeout(std::time::Duration::from_secs(15), rx).await {
+        match tokio::time::timeout(
+            self.telemetry_commit_wait(super::TELEMETRY_RECOVERY_COMMIT_TIMEOUT),
+            rx,
+        )
+        .await
+        {
             Ok(Ok(Reply::TelemetryRecoveryCommit(result))) => match *result {
                 RecoveryResult::Observed { observation } if observation.matches(request) => {
                     Ok(observation)

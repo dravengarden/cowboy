@@ -348,31 +348,38 @@ async fn concurrent_export_is_rejected_and_legacy_lanes_each_recheck_before_retr
 
 #[tokio::test]
 async fn deadline_stops_retry_for_every_otlp_signal_without_cancelling_the_first_attempt() {
-    for (signal, bytes) in crate::otlp::client_export_fixtures() {
-        let fixture = Fixture::new(false).await;
-        let mut destination = Destination::new(StatusCode::SERVICE_UNAVAILABLE).await;
-        fixture.configure(&destination.endpoint);
-        let scope = Fixture::scope();
-        let mut request = fixture.request();
-        request.payload = serde_json::json!({"signal":signal,
-            "protobuf":base64::engine::general_purpose::STANDARD.encode(bytes)});
-        let mut invocation = scope.host(request);
-        // One HTTP attempt is acknowledged only after this deadline. The
-        // subsequent retry must use the original budget, not renew 15 seconds.
-        // The budget must outlast admission and the plugin process's start,
-        // which precede the attempt and fail closed once it is spent: 100 ms
-        // expired before the first attempt on a loaded host, so the fixture
-        // never saw a request however long it waited.
-        invocation.telemetry.as_mut().unwrap().deadline = Instant::now() + Duration::from_secs(3);
-        let deadline = invocation.telemetry.as_ref().unwrap().deadline;
-        let store = Arc::clone(&fixture.store);
-        let task = tokio::spawn(async move { store.invoke_host(invocation).await });
-        destination.started().await;
-        tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
-        destination.release();
-        assert_eq!(finish(task).await["otlp"]["delivered"], false);
-        assert_eq!(destination.count(), 1);
-    }
+    // Each signal has its own fixture and destination; run them concurrently
+    // so the gate waits for one deadline, not one per signal.
+    let cases =
+        crate::otlp::client_export_fixtures()
+            .into_iter()
+            .map(|(signal, bytes)| async move {
+                let fixture = Fixture::new(false).await;
+                let mut destination = Destination::new(StatusCode::SERVICE_UNAVAILABLE).await;
+                fixture.configure(&destination.endpoint);
+                let scope = Fixture::scope();
+                let mut request = fixture.request();
+                request.payload = serde_json::json!({"signal":signal,
+                "protobuf":base64::engine::general_purpose::STANDARD.encode(bytes)});
+                let mut invocation = scope.host(request);
+                // One HTTP attempt is acknowledged only after this deadline. The
+                // subsequent retry must use the original budget, not renew 15
+                // seconds. The budget must outlast admission and the plugin
+                // process's start, which precede the attempt and fail closed once
+                // it is spent: 100 ms expired before the first attempt on a loaded
+                // host, so the fixture never saw a request however long it waited.
+                invocation.telemetry.as_mut().unwrap().deadline =
+                    Instant::now() + Duration::from_secs(3);
+                let deadline = invocation.telemetry.as_ref().unwrap().deadline;
+                let store = Arc::clone(&fixture.store);
+                let task = tokio::spawn(async move { store.invoke_host(invocation).await });
+                destination.started().await;
+                tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
+                destination.release();
+                assert_eq!(finish(task).await["otlp"]["delivered"], false, "{signal:?}");
+                assert_eq!(destination.count(), 1, "{signal:?}");
+            });
+    futures::future::join_all(cases).await;
 }
 
 #[tokio::test]

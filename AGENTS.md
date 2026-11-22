@@ -13,18 +13,21 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   Node's built-in assertions; retain type checking as a separate gate.
 - Run Rust, Bun, build, lint, and test commands from the repository root in
   the pinned shell, for example `nix develop -c just check-compact`. Ordinary
-  interactive Cargo commands retain incremental state; the complete gate avoids
-  growing another incremental generation. `check-compact` shares one sccache
-  across worktrees (2026-11-21 on Hawk: a fresh worktree's cold gate hit 56%,
-  996s to 893s); interactive Cargo commands keep incremental state instead. Do not use host
+  interactive Cargo commands retain incremental state. The complete gate keeps
+  it only for the shared test graph, where an edit's rebuild drops from about
+  114s to 25s, and otherwise compiles through one sccache shared across
+  worktrees (2026-11-21 on Hawk: a fresh worktree's cold gate hit 56%, 996s to
+  893s). Do not use host
   `cargo` or `bun` as a preliminary check; a missing tool or stale Rustup linker
   wrapper is an environment failure, not a product-code failure.
 - Keep the gate cheap to rerun. A rerun without source changes must not
-  recompile the Rust graphs. Rust test recipes share `rust_test_args` because
+  recompile the Rust graphs. Rust test recipes share `rust_test_args` and
+  `rust_test_env` because
   another package or feature selection recompiles the workspace. A build
   script must not watch build outputs such as nested Cargo `target`
   directories or `node_modules`. `check` runs the second-scale static checks
-  first. While iterating on one failure, rerun that recipe first, then run the
+  first, then workspace Clippy and `release-sources-check` in the background
+  (each in its own build directory) beside the rest. While iterating on one failure, rerun that recipe first, then run the
   complete gate once before handing off.
 - JavaScript and TypeScript run on the pinned Bun. The
   repository root is one Bun workspace (`web` plus the `components/*` packages

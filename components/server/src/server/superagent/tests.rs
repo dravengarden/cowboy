@@ -38,10 +38,10 @@ async fn superagent_long_turn_recovers_human_anchor_from_durable_history() {
             }
         };
         hub.push("worker", event.clone());
-        let (tail, _) = hub.snapshot("worker").unwrap();
         rows.push(Envelope {
             session_id: "worker".into(),
-            seq: tail.last().unwrap().seq,
+            // A snapshot per push re-serializes the whole tail (quadratic).
+            seq: hub.last_event_seq("worker").unwrap(),
             event,
             cmid: None,
         });
