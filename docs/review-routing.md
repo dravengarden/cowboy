@@ -73,7 +73,7 @@ evidence = "2026-11-21"
 # Applies to review and design_review alike.
 
 [[tier.codex.high]]
-model = "gpt-6.2-sol"      # since 2026-11-21: Astra Max is explicit-only
+model = "gpt-6.2-sol"      # since 2026-11-21: Astra Max is named only
 effort = "max"
 [[tier.codex.routine]]
 model = "gpt-6.2-sol"
@@ -141,10 +141,14 @@ today's family/effort order. For a fresh review:
   automatic fallback.
 - Astra Max is explicit-only (since 2026-11-21, OpenAI weekly quota pressure).
   The Codex high tier chooses Sol Max like routine; a high-risk review still
-  admits `astra-max` by name, and the guidance tells callers to name it only
-  when the user asked for that model. Before this, 17 Astra Max reviews in
-  three days averaged about 5.3M tokens each, against about 2.9M for Sol Max,
-  and most were the caller's own choice under a broad reading of high.
+  admits `astra-max` by name. Before this, 17 Astra Max reviews in three days
+  averaged about 5.3M tokens each, against about 2.9M for Sol Max, and most
+  were the caller's own choice under a broad reading of high.
+- Callers name Astra Max or Fable only when the user asked for it or the
+  review root's `AGENTS.md` Review risk section lists the change's area for
+  the strongest reviewer (since 2026-11-22); the reason cites the request or
+  that entry. A repository without such a list keeps them user-requested
+  only.
 
 The chosen preset is already recorded on the call; generation binding, claim,
 recovery and reuse (`review-generation-binding.md`) are unchanged.

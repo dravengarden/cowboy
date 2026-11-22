@@ -792,6 +792,15 @@ const EVENT_KINDS: &[&str] = &[
     "lifecycle",
 ];
 
+/// Accepts the Provider-transcript names agents guess (`assistant`,
+/// `user_message`) for Cowboy's kinds; six sessions failed on them.
+fn normalize_event_kind(kind: &str) -> &str {
+    match kind.strip_suffix("_message").unwrap_or(kind) {
+        "assistant" => "agent",
+        kind => kind,
+    }
+}
+
 struct EventQuery {
     after: Option<u64>,
     before: Option<u64>,
@@ -809,9 +818,9 @@ impl EventQuery {
                 .map(Some)
                 .ok_or_else(|| format!("invalid_argument: {key} must be an event seq integer")),
         };
-        let invalid_kinds = || {
+        let invalid_kinds = |kind: &Value| {
             format!(
-                "invalid_argument: kinds must be an array of {}",
+                "invalid_argument: kinds must be an array of {}; {kind} is not one",
                 EVENT_KINDS.join(", ")
             )
         };
@@ -825,12 +834,13 @@ impl EventQuery {
                 .iter()
                 .map(|kind| {
                     kind.as_str()
+                        .map(normalize_event_kind)
                         .filter(|kind| EVENT_KINDS.contains(kind))
                         .map(str::to_owned)
-                        .ok_or_else(invalid_kinds)
+                        .ok_or_else(|| invalid_kinds(kind))
                 })
                 .collect::<Result<_, _>>()?,
-            Some(_) => return Err(invalid_kinds()),
+            Some(other) => return Err(invalid_kinds(other)),
         };
         Ok(Self {
             after: optional("after")?,

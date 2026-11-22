@@ -91,9 +91,13 @@ one process run one at a time, so a stop's drain keeps the final output, and a
 quiet wait leaves one second for a last read before the deadline), `ReadFile`
 reuses the metadata it read, and a projection reads guidance and skills a few
 at a time, reading nothing once its guidance budget is spent. Antigravity
-0.2.19 pins it. The other six Providers pinning provider-runtime advance one
+0.2.20 pins it. The other six Providers pinning provider-runtime advance one
 patch version (claude-code 3.20.65, claude-deepseek 3.1.82, codex 3.6.24,
 codex-deepseek 3.1.82, deepseek-harness 1.0.40, grok 3.2.23).
+
+Antigravity 0.2.19 changes only its host data: it declares the `percent`
+desktop widget shape, so the Desktop top bar shows its per-group quotas (one
+column per group, each at its binding window) without a component release.
 
 Component release 3.134.0 records provider-runtime 1.3.18, whose
 `cowboy-antigravity-acp` 1.0.16 hosts subagents in the proxy: the facade's
