@@ -1505,11 +1505,16 @@ async fn rerun_cleanup(store: &Store, share: &str, (registry, revision): (i64, i
     .unwrap();
     assert_eq!(stored.0, registry);
     assert_eq!(
-        serde_json::from_str::<Registry>(&stored.1).unwrap().revision,
+        serde_json::from_str::<Registry>(&stored.1)
+            .unwrap()
+            .revision,
         registry
     );
     assert_eq!(store.retire_legacy_card_rows().await.unwrap(), 0);
-    assert_eq!(store.provider_accounts(OWNER).await.unwrap().revision, registry);
+    assert_eq!(
+        store.provider_accounts(OWNER).await.unwrap().revision,
+        registry
+    );
     sqlx::query(
         "INSERT INTO provider_browser_share_members (owner_user_id,member,share_id,family) VALUES ($1,'card:anthropic',$2,'anthropic')",
     )

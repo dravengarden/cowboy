@@ -13,9 +13,9 @@ use super::BrowserAccount;
 use crate::machine_protocol::MACHINE_BROWSER_PROTOCOL_VERSION;
 use crate::machine_protocol::machine_browser::{Command, Reason, State as BrowserState};
 use crate::provider_account::ProviderAccountId;
-use crate::store::provider_accounts::{browser_families, legacy_cards};
 use crate::store::provider_accounts::browser_shares::{self, Member, Shares, families_distinct};
 use crate::store::provider_accounts::{Change, Mutation, MutationResult, Registry};
+use crate::store::provider_accounts::{browser_families, legacy_cards};
 use serde_json::{Value, json};
 
 const REVOKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);

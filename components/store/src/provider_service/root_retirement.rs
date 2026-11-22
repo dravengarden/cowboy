@@ -221,7 +221,10 @@ mod tests {
             2
         );
         assert_eq!(
-            service.logout("claude-deepseek").unwrap().authentication_state,
+            service
+                .logout("claude-deepseek")
+                .unwrap()
+                .authentication_state,
             ServiceAuthenticationState::SignedOut
         );
     }

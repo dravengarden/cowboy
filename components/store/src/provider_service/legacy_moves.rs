@@ -52,7 +52,10 @@ impl ProviderAuthService {
                     .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'),
             "invalid Provider id"
         );
-        Ok(self.root.join(LEGACY_MOVES).join(format!("{provider_id}.json")))
+        Ok(self
+            .root
+            .join(LEGACY_MOVES)
+            .join(format!("{provider_id}.json")))
     }
 
     pub(super) fn read_move(&self, provider_id: &str) -> Option<LegacyMove> {

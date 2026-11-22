@@ -91,7 +91,9 @@ pub(super) async fn restore_provider_reset_schedules(usage: &UsageService, store
                 tracing::info!(%provider, "cancelled a retired card's scheduled reset");
             }
             Ok(None) => {}
-            Err(error) => tracing::warn!(%error, %provider, "loading a retired card's scheduled reset"),
+            Err(error) => {
+                tracing::warn!(%error, %provider, "loading a retired card's scheduled reset")
+            }
         }
     }
     for provider in &usage.reset_provider_ids() {
