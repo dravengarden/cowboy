@@ -26,6 +26,14 @@ import {
 } from "./projection.mjs";
 import { fakeEndpoint } from "./test-endpoint.mjs";
 
+const hasFish = (() => {
+  try {
+    return execFileSync("sh", ["-c", "command -v fish"]).toString().trim() || false;
+  } catch {
+    return false;
+  }
+})();
+
 const hasRg = (() => {
   try {
     execFileSync("rg", ["--version"], { stdio: "ignore" });
@@ -191,6 +199,18 @@ test("ReadFile returns a whole image as an MCP image block", async (t) => {
   const big = await facade.call("s1", "ReadFile", { path: "big.png" });
   assert.equal(big.content.length, 1);
   assert.match(big.content[0].text, /^\[binary content, 262144 bytes\]/);
+  // An explicit length keeps the byte range.
+  const ranged = await facade.call("s1", "ReadFile", { path: "shot.png", length: 4 });
+  assert.deepEqual(ranged.content.length, 1);
+  // The type follows the name asked for, not a symlink target's.
+  symlinkSync(join(root, "shot.png"), join(root, "shot-link.png"));
+  symlinkSync(join(root, "shot.png"), join(root, "shot.bin"));
+  writeFileSync(join(root, "target.dat"), PNG);
+  symlinkSync(join(root, "target.dat"), join(root, "named.png"));
+  assert.equal((await facade.call("s1", "ReadFile", { path: "shot.bin" })).content.length, 1);
+  const named = await facade.call("s1", "ReadFile", { path: "named.png" });
+  assert.equal(named.content[1]?.mimeType, "image/png");
+  assert.equal(facade.session("s1").observed.has(join(root, "target.dat")), true);
   // An image is readable before an edit like any file it read.
   assert.equal(facade.session("s1").observed.has(join(root, "shot.png")), true);
 });
@@ -277,6 +297,14 @@ test("WriteFile and EditFile are conditional on what was read", async (t) => {
   assert.equal(readFileSync(join(root, "e.txt"), "utf8"), "a B a\n");
   await call("EditFile", { path: "e.txt", old_string: "a", new_string: "z", replace_all: true });
   assert.equal(readFileSync(join(root, "e.txt"), "utf8"), "z B z\n");
+  // A dangling symlink is never a missing directory to create through.
+  symlinkSync(join(base, "outside", "gone"), join(root, "dangling"));
+  for (const path of ["dangling/x.txt", "dangling"]) {
+    const refused = await call("WriteFile", { path, content: "x" });
+    assert.match(refused.text, /symlink whose target does not exist/, path);
+  }
+  assert.throws(() => readFileSync(join(base, "outside", "gone", "x.txt")));
+  assert.throws(() => readFileSync(join(base, "outside", "gone")));
   // Writes stay inside the workspace root, also for a file read outside it.
   const secret = join(base, "outside", "secret.txt");
   await call("ReadFile", { path: secret });
@@ -315,15 +343,60 @@ test("RunCommand bounds output and time; StopCommand stops a running command", a
 });
 
 test("RunCommand runs the user's shell as a login shell; internal helpers do not", async (t) => {
-  const { call, endpoint, facade } = await fixture(t);
-  assert.match((await call("RunCommand", { command: "echo login" })).text, /Exit code: 0\nlogin/);
+  const { root, call, endpoint, facade } = await fixture(t);
+  const ran = await call("RunCommand", { command: 'echo "login $#"' });
+  assert.match(ran.text, /Exit code: 0\nlogin 0/);
   await call("WriteFile", { path: "helper.txt", content: "x\n" });
   const starts = endpoint.calls
     .filter((entry) => entry.method === "process/start")
     .map((entry) => entry.params.argv);
-  assert.deepEqual(starts[0], [facade.shell, "-l", "-c", "echo login"]);
+  assert.deepEqual(starts[0], [
+    facade.shell,
+    "-l",
+    "-c",
+    `cd -- '${root}' || exit 1\necho "login $#"`,
+  ]);
   const helper = starts.find((argv) => argv[2]?.includes("apply"));
   assert.deepEqual(helper.slice(0, 2), ["/bin/sh", "-c"]);
+  // Quotes in the directory stay one word; fish has its own syntax; an
+  // unknown shell and a managed call stay plain.
+  facade.root = "/w/it's";
+  assert.equal(facade.commandArgv("ls")[3], "cd -- '/w/it'\\''s' || exit 1\nls");
+  facade.shell = "/usr/bin/fish";
+  facade.root = "/w/it's \\";
+  assert.deepEqual(facade.commandArgv("ls"), [
+    "/usr/bin/fish",
+    "-l",
+    "-c",
+    "cd -- '/w/it\\'s \\\\'; or exit 1\nls",
+  ]);
+  facade.shell = "/usr/bin/nu";
+  assert.deepEqual(facade.commandArgv("ls"), ["/usr/bin/nu", "-c", "ls"]);
+  facade.shell = "/bin/bash";
+  facade.managed = true;
+  assert.deepEqual(facade.commandArgv("ls"), ["/bin/bash", "-c", "ls"]);
+});
+
+test("a login profile that changes directory does not move the command", async (t) => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "agy-shell-")));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  // A "bash" whose startup leaves the directory, as a profile's `cd` does.
+  mkdirSync(join(base, "bin"));
+  writeFileSync(join(base, "bin", "bash"), `#!/bin/sh\ncd ${base}\nexec /bin/sh "$@"\n`, {
+    mode: 0o755,
+  });
+  const { root, call } = await fixture(t, { shell: join(base, "bin", "bash") });
+  assert.equal((await call("RunCommand", { command: "pwd" })).text, `Exit code: 0\n${root}\n`);
+  const status = await call("RunCommand", { command: "exit 7" });
+  assert.match(status.text, /^Exit code: 7/);
+});
+
+test("fish runs the login command in its own syntax", { skip: !hasFish }, async (t) => {
+  const { root, call } = await fixture(t, { shell: hasFish });
+  assert.equal(
+    (await call("RunCommand", { command: "pwd; echo (count $argv)" })).text,
+    `Exit code: 0\n${root}\n0\n`,
+  );
 });
 
 test("a quiet command stops polling and ends on the executor's exit notification", async (t) => {

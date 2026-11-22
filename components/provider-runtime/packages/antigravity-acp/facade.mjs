@@ -49,6 +49,13 @@ export const UNCERTAIN_REPORT = "cowboy/uncertainEffect";
  * authorizes the probe from its own state, never from this id). */
 export const READINESS_PREFIX = "cowboy-agy-readiness-";
 
+/** Shells whose `-c` script is POSIX shell syntax. */
+const POSIX_SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "mksh"]);
+/** `value` as one single-quoted POSIX shell word. */
+const posixLiteral = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+/** `value` as one single-quoted fish word. */
+const fishLiteral = (value) => `'${value.replaceAll("\\", "\\\\").replaceAll("'", "\\'")}'`;
+
 export {
   inside,
   LIMITS,
@@ -401,10 +408,25 @@ export class Facade {
       }
     }
     const full = posix.join(canonical, ...rest);
+    if (rest.length) await this.refuseDangling(canonical, rest[0], path);
     if (!outside && !inside(this.root, full)) {
       throw new ToolError(`${path} is outside the workspace root ${this.root}`);
     }
     return full;
+  }
+
+  /**
+   * A missing component that is listed in its (existing, canonical) parent is
+   * a dangling symlink: its target cannot be canonicalized, so nothing shows
+   * it stays inside the root, and creating through it could write anywhere.
+   */
+  async refuseDangling(parent, name, path) {
+    const listing = await this.rpc("fs/readDirectory", { path: url(parent) });
+    if ((listing.entries ?? []).some((entry) => entry?.fileName === name)) {
+      throw new ToolError(
+        `${path} passes through ${posix.join(parent, name)}, a symlink whose target does not exist; refused`,
+      );
+    }
   }
 
   /**
@@ -424,7 +446,8 @@ export class Facade {
     return Buffer.from(read.dataBase64, "base64");
   }
 
-  async readFile(session, { path, offset = 0, length = LIMITS.readBytes }) {
+  async readFile(session, { path, offset = 0, length: asked }) {
+    const length = asked ?? LIMITS.readBytes;
     if (!Number.isInteger(offset) || offset < 0) throw new ToolError("Invalid offset");
     if (!Number.isInteger(length) || length < 1 || length > LIMITS.readBytes) {
       throw new ToolError(`length must be between 1 and ${LIMITS.readBytes}`);
@@ -438,9 +461,13 @@ export class Facade {
       const data = (await this.current(file, metadata)) ?? Buffer.alloc(0);
       session.observed.set(file, sha256(data));
       size = data.length;
-      // A whole image the model can see, as Claude's Read shows one.
+      // A whole image the model can see, as Claude's Read shows one, for an
+      // unpaged read; its type follows the name asked for (a symlink's
+      // target may be named otherwise), its bytes the canonical file.
       const mimeType =
-        offset === 0 && size <= LIMITS.imageBytes ? imageType(file, data) : undefined;
+        offset === 0 && asked === undefined && size <= LIMITS.imageBytes
+          ? imageType(path, data)
+          : undefined;
       if (mimeType) {
         return {
           content: [
@@ -900,10 +927,7 @@ export class Facade {
       if (!Number.isInteger(seconds) || seconds < 1 || seconds > LIMITS.commandMaxSeconds) {
         throw new ToolError(`timeout_seconds must be between 1 and ${LIMITS.commandMaxSeconds}`);
       }
-      // A login shell, so /etc/profile and the user's profile set PATH
-      // (Nix profiles, user tools) as in the user's own terminal and as
-      // Claude's login-shell snapshot does; internal helpers stay `/bin/sh`.
-      running = await this.start(turn, [this.shell, "-l", "-c", command]);
+      running = await this.start(turn, this.commandArgv(command));
       running.deadline = Date.now() + seconds * 1000;
       // Every reader's chunks land here (see `read`).
       running.output = new Retained(LIMITS.commandOutput);
@@ -950,6 +974,28 @@ export class Facade {
     } finally {
       running.busy = false;
     }
+  }
+
+  /**
+   * The argv of one RunCommand. A login shell, so /etc/profile and the
+   * user's profile set PATH (Nix profiles, user tools) as in the user's own
+   * terminal and as Claude's login-shell snapshot does; a profile that
+   * changes directory is undone before the command runs. A managed
+   * (read-only) call, and a shell whose syntax is unknown, keeps a plain
+   * `-c`. Internal helpers stay `/bin/sh`.
+   */
+  commandArgv(command) {
+    const name = posix.basename(this.shell);
+    if (this.managed) return [this.shell, "-c", command];
+    // The `cd` is part of the script, not an `eval` around it: the shell
+    // still execs the command's last simple command, so a stop reaches it.
+    if (name === "fish") {
+      return [this.shell, "-l", "-c", `cd -- ${fishLiteral(this.root)}; or exit 1\n${command}`];
+    }
+    if (POSIX_SHELLS.has(name)) {
+      return [this.shell, "-l", "-c", `cd -- ${posixLiteral(this.root)} || exit 1\n${command}`];
+    }
+    return [this.shell, "-c", command];
   }
 
   /**
