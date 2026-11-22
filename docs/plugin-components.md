@@ -83,6 +83,11 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Codex 3.6.28 changes only its Plugin source on component release 3.138.0: the
+`cowboy-prompt-suggestions` codex-acp delta and `COWBOY_CODEX_PROMPT_SUGGESTIONS=1`
+let the composer offer Codex's predicted next prompt
+([Codex runtime notes](../plugins/codex/runtime/README.md)).
+
 Component release 3.138.0 records provider-runtime 1.3.22, which pins `agy`
 1.5.9 again: 1.5.14 ends its turns without the stream barrier Antigravity's
 backend evidence needs, so its first real turn settled `unknown_refusal`
