@@ -192,7 +192,10 @@ export function toolStatusTone(
 ): string {
   if (status === "completed") return theme.palette.success.main;
   if (status === "failed") return theme.palette.error.main;
-  if (status === "in_progress" || status === "interrupted") return theme.palette.warning.main;
+  // Running work takes the accent, not amber: an amber wash beside red
+  // failures read as "something went wrong" (see ToolStatusChip).
+  if (status === "in_progress") return theme.palette.primary.main;
+  if (status === "interrupted") return theme.palette.warning.main;
   return theme.palette.text.disabled;
 }
 
