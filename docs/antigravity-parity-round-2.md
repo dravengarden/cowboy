@@ -67,7 +67,7 @@ General invariants that every item keeps:
 | 3 | Pure `cowboy_read`/`cowboy_receipt`, then a read-only exemption | implement; memory tools deferred | P1 | Controller, worker |
 | 4 | Post-edit diagnostics | implement, Controller-observed | P1 | Controller (needs 1) |
 | 5 | Repository hooks | implement (PreToolUse, PostToolUse, UserPromptSubmit, SessionStart at first turn) | P1 | proxy |
-| 6 | Background commands that outlive a turn | implement; idle wake deferred to an owner decision | P1 | worker, proxy (uses 1) |
+| 6 | Background commands that outlive a turn | implement, including idle wake (owner decision) | P1 | worker, proxy (uses 1) |
 | 7 | Plan-mode behaviour | implement read auto-approval and acceptance | P2 | proxy |
 | 8 | Per-subagent model and usage labels | implement | P2 | proxy |
 | 9 | Built-in `swarm`/`run-workflow` skills advertised to the model | implement guidance; verify live | P2 | proxy |
@@ -453,9 +453,12 @@ message. The UserPromptSubmit hook's context appears.
     block at the next boundary (item 1 machinery, proxy-internal).
   - While idle, it is held and prepended to the next owner turn as
     `<cowboy_background_update>`.
-  - Waking an idle agy on completion is a new agent-started turn category.
-    `requirements.md` does not list it, so it is deferred to an explicit owner
-    decision.
+  - While idle, the completion is also submitted as an automatic notice
+    (`submit_automatic`, a background-notice cmid), which starts agy's next
+    turn exactly as call and peer notices do. Owner decision 2026-11-22: this is
+    covered by the owner-paced rule (agent-started notices start Antigravity
+    turns); `requirements.md` is updated to name background-command
+    completions beside call, peer and scheduled notices.
 - **Presentation.** A new ACP extension update `cowboy_background_tasks
   {count}` is folded by the worker into `native_background_tasks`. The Web
   shows the existing background row, and a long-lived command never holds the
