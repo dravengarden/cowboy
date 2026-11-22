@@ -401,7 +401,9 @@ export class HomeReads {
       this.stalled = true;
       throw new Error("The home did not answer in time");
     }
-    const request = this.send(method, params);
+    // The connection rejects only this request at its deadline and ignores
+    // a late reply, so a stalled home never ends the shared connection.
+    const request = this.send(method, params, { timeoutMs: wait });
     request.catch(() => {});
     let timer;
     const timeout = new Promise((_, reject) => {

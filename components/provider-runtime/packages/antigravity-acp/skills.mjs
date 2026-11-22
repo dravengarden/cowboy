@@ -118,7 +118,7 @@ async function frontmatterOf(call, file, root, home) {
  * found. Unreadable entries are skipped. Never throws.
  */
 export async function discoverSkills(facade, directories, root, home) {
-  const send = (method, params) => facade.connection.call(method, params);
+  const send = (method, params, options) => facade.connection.call(method, params, options);
   const homeReads = typeof home === "string" ? HomeReads.for(send, home, root) : home;
   const repository = [...directories].reverse().flatMap((directory) =>
     [...SKILL_DIRECTORIES].reverse().map((relative) => ({

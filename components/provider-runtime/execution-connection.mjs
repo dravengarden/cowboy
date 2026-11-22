@@ -7,6 +7,9 @@ import WebSocket from "ws";
 // the same executor session. A lost reply is never resubmitted here.
 export class Connection {
   pending = new Map();
+  // Requests given up by their own `timeoutMs`: the executor may still
+  // answer, and that late reply is consumed instead of failing the socket.
+  abandoned = new Map();
   closed = true;
   stopped = false;
   connecting = null;
@@ -60,6 +63,11 @@ export class Connection {
           return;
         }
         const call = connection.pending.get(frame.id);
+        if (!call && connection.abandoned.has(frame.id)) {
+          clearTimeout(connection.abandoned.get(frame.id));
+          connection.abandoned.delete(frame.id);
+          return;
+        }
         if (!call) throw new Error("Unexpected execution reply");
         connection.pending.delete(frame.id);
         clearTimeout(call.timer);
@@ -132,21 +140,41 @@ export class Connection {
     }
   }
 
-  async call(method, params) {
+  async call(method, params, options) {
     await this.ensureConnected();
-    return await this.request(method, params);
+    return await this.request(method, params, options);
   }
 
-  request(method, params) {
+  /**
+   * One request. Without `timeoutMs` a request unanswered within the
+   * connection's `requestTimeoutMs` ends the connection (its outcome is
+   * unknown). An optional read may pass a shorter `timeoutMs`: only that
+   * request is rejected then, and its late reply is ignored. Use it only for
+   * reads whose outcome does not matter.
+   */
+  request(method, params, { timeoutMs } = {}) {
     if (this.closed || this.stopped) {
       return Promise.reject(new Error("Execution unavailable; no replay"));
     }
-    if (this.pending.size >= 15) {
+    // Abandoned requests may still run on the executor, so they count.
+    if (this.pending.size + this.abandoned.size >= 15) {
       return Promise.reject(new Error("Too many execution requests"));
     }
     return new Promise((resolve, reject) => {
       const id = randomUUID();
-      const timer = setTimeout(() => this.disconnect(), this.requestTimeoutMs);
+      const local =
+        Number.isInteger(timeoutMs) && timeoutMs > 0 && timeoutMs < this.requestTimeoutMs;
+      const timer = local
+        ? setTimeout(() => {
+            if (!this.pending.delete(id)) return;
+            // Forgotten after the connection's own bound, as an unanswered
+            // request would have ended the connection by then.
+            const forget = setTimeout(() => this.abandoned.delete(id), this.requestTimeoutMs);
+            forget.unref?.();
+            this.abandoned.set(id, forget);
+            reject(new Error("Target request timed out"));
+          }, timeoutMs)
+        : setTimeout(() => this.disconnect(), this.requestTimeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       try {
         this.socket.send(JSON.stringify({ id, method, params }));
@@ -169,6 +197,8 @@ export class Connection {
       reject(new Error("Execution unavailable or result unknown; no local fallback and no replay"));
     }
     this.pending.clear();
+    for (const forget of this.abandoned.values()) clearTimeout(forget);
+    this.abandoned.clear();
     for (const listener of this.listeners) listener({ method: "closed" });
     this.socket?.terminate();
   }

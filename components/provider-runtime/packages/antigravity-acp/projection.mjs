@@ -223,7 +223,7 @@ export async function buildProjection(
   // The user's home, unless it overlaps the repository (`HomeReads`).
   const home = useHome
     ? HomeReads.for(
-        (method, params) => facade.connection.call(method, params),
+        (method, params, options) => facade.connection.call(method, params, options),
         targetHome(facade),
         root,
       )

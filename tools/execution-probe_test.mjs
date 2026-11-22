@@ -79,6 +79,10 @@ async function fixture(t, mode = "success") {
       if (frame.method === "process/terminate") return reply({});
       if (frame.method === "process/read") {
         if (mode === "hang-read") return;
+        if (mode === "late-read") {
+          setTimeout(() => reply({ closed: true, exited: true, exitCode: 0, chunks: [] }), 300);
+          return;
+        }
         const index = reads++;
         if (index === 0) {
           const output = mode === "oversize" ? "x".repeat(4097) : JSON.stringify(capabilities);
@@ -286,6 +290,22 @@ test("a unix: endpoint connects over the named socket with the bearer token", as
     Connection.open({ ...descriptor, bearer_token: "c".repeat(64) }, { requestTimeoutMs: 2000 }),
   );
   assert.deepEqual(seen, [`Bearer ${"b".repeat(64)}`, `Bearer ${"c".repeat(64)}`]);
+});
+
+test("a request's own timeout rejects only it and ignores its late reply", async (t) => {
+  const { descriptor } = await fixture(t, "late-read");
+  const connection = await Connection.open(descriptor, { requestTimeoutMs: 5000 });
+  t.after(() => connection.close());
+  await assert.rejects(
+    connection.call("process/read", { processId: "p" }, { timeoutMs: 50 }),
+    /timed out/,
+  );
+  assert.equal(connection.abandoned.size, 1);
+  // The late reply arrives and is consumed; the connection stays usable.
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  assert.equal(connection.closed, false);
+  assert.equal(connection.abandoned.size, 0);
+  assert.deepEqual(await connection.call("process/terminate", { processId: "p" }), {});
 });
 
 test("execution endpoints keep ws:// unchanged and validate unix: paths", () => {
