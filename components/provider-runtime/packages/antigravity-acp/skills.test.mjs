@@ -17,12 +17,12 @@ import {
 } from "./skills.mjs";
 import { fakeEndpoint } from "./test-endpoint.mjs";
 
-async function fixture(t) {
+async function fixture(t, options = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "agy-skills-")));
   const root = join(base, "workspace");
   mkdirSync(join(root, "sub"), { recursive: true });
   const socket = join(base, "exec.sock");
-  const endpoint = await fakeEndpoint(socket, root, {});
+  const endpoint = await fakeEndpoint(socket, root, options);
   const connection = await Connection.open(
     {
       schema: 1,
@@ -107,13 +107,78 @@ test("skills are read from the target; the nearest definition wins and symlinks 
     },
   });
   assert.deepEqual(reported, skills);
-  assert.match(projection, /<repository_skills>/);
+  assert.match(projection, /<skills>/);
   assert.match(projection, /- deploy: Sub deploy \(/);
   assert.ok(!projection.includes("SECRET_BODY"), "only the frontmatter is projected");
   const fence = /(COWBOY_UNTRUSTED_[a-f0-9]{32})/.exec(projection)[1];
-  const listed = projection.slice(projection.indexOf("<repository_skills>"));
+  const listed = projection.slice(projection.indexOf("<skills>"));
   // The intro names the fence once; the list sits between two more markers.
   assert.equal(listed.split(fence).length, 4, "the list is fenced");
+});
+
+test("the user's home skills are listed through their symlinks; the repository's win", async (t) => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "agy-home-skills-")));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const home = join(base, "home");
+  const store = join(base, "store");
+  // ~/.agents/skills is a symlinked directory; ~/.claude/skills a real one
+  // whose entry is a symlinked skill directory.
+  skill(join(store, "skills"), "shared", "---\nname: shared\ndescription: Shared\n---");
+  skill(join(store, "skills"), "deploy", "---\nname: deploy\ndescription: Home deploy\n---");
+  skill(store, "linked", "---\nname: linked\ndescription: Linked\n---");
+  mkdirSync(join(home, ".agents"), { recursive: true });
+  symlinkSync(join(store, "skills"), join(home, ".agents", "skills"));
+  mkdirSync(join(home, ".claude", "skills"), { recursive: true });
+  symlinkSync(join(store, "linked"), join(home, ".claude", "skills", "linked"));
+  const { root, facade } = await fixture(t, { home });
+  skill(join(root, ".agents", "skills"), "deploy", "---\nname: deploy\ndescription: Repo\n---");
+  let reported;
+  const projection = await buildProjection(facade, root, {
+    onSkills: (value) => {
+      reported = value;
+    },
+  });
+  assert.deepEqual(reported, [
+    {
+      name: "deploy",
+      description: "Repo",
+      path: join(root, ".agents", "skills", "deploy", "SKILL.md"),
+    },
+    {
+      name: "linked",
+      description: "Linked",
+      path: join(home, ".claude", "skills", "linked", "SKILL.md"),
+      user: true,
+    },
+    {
+      name: "shared",
+      description: "Shared",
+      path: join(home, ".agents", "skills", "shared", "SKILL.md"),
+      user: true,
+    },
+  ]);
+  assert.match(projection, /<skills>\nThese skills are available/);
+  assert.ok(!projection.includes(store), "user skills keep their home paths");
+  assert.match(
+    expandSkillCommand([{ type: "text", text: "/shared" }], reported)[0].text,
+    /^Use the user skill "shared"/,
+  );
+});
+
+test("repository skills are kept first when the list is cut", async (t) => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "agy-home-skills-")));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const home = join(base, "home");
+  for (let index = 0; index < SKILL_LIMITS.skills + 6; index++) {
+    const name = `h${String(index).padStart(2, "0")}`;
+    skill(join(home, ".codex", "skills"), name, `---\nname: ${name}\n---`);
+  }
+  const { root, facade } = await fixture(t, { home });
+  skill(join(root, ".claude", "skills"), "zz-repo", "---\nname: zz-repo\n---");
+  const skills = await discoverSkills(facade, [root], root, home);
+  assert.equal(skills.length, SKILL_LIMITS.skills);
+  assert.equal(skills.at(-1).name, "zz-repo");
+  assert.equal(skills.filter((entry) => entry.user).length, SKILL_LIMITS.skills - 1);
 });
 
 test("a repository without skills adds no section", async (t) => {
@@ -125,7 +190,7 @@ test("a repository without skills adds no section", async (t) => {
     },
   });
   assert.deepEqual(reported, []);
-  assert.ok(!projection.includes("<repository_skills>"));
+  assert.ok(!projection.includes("<skills>"));
   assert.equal(skillsSection([], "F"), undefined);
 });
 
@@ -181,6 +246,6 @@ test("a managed projection lists no repository skills", async (t) => {
   });
   assert.deepEqual(reported, []);
   assert.match(projection, /<cowboy_routing>\nMANAGED ROUTING\n<\/cowboy_routing>/);
-  assert.ok(!projection.includes("<repository_skills>"));
+  assert.ok(!projection.includes("<skills>"));
   assert.ok(!projection.includes("deploy"));
 });

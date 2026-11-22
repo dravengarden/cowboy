@@ -345,7 +345,7 @@ test("a managed child gets only the read tools, no extensions, and its hook poli
   assert.equal(created.result.seen.hookProfile, "read-only-v1");
   const append = created.result.seen.params._meta.antigravity.systemPrompt.append;
   assert.match(append, /read-only Cowboy managed call/);
-  assert.doesNotMatch(append, /WriteFile|cowboy_extensions|repository_skills/);
+  assert.doesNotMatch(append, /WriteFile|cowboy_extensions|<skills>/);
   // No extension or memory request reached the worker's endpoint.
   assert.equal(
     endpoint.calls.some((entry) => entry.method.startsWith("cowboy/")),

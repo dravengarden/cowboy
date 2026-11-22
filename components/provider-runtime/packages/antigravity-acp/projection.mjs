@@ -209,7 +209,7 @@ export async function buildProjection(
   // A home file that is one of the repository's (the home is the
   // repository, or links into it) is shown once, as the repository's.
   const seen = new Set(repository);
-  const skilled = listSkills ? discoverSkills(facade, directories, git.top ?? cwd) : [];
+  const skilled = listSkills ? discoverSkills(facade, directories, git.top ?? cwd, home) : [];
   const guidance = [];
   let room = PROJECTION_LIMITS.guidanceTotal;
   for (let start = 0; start < files.length; start += PROJECTION_LIMITS.concurrency) {
