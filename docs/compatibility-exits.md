@@ -71,6 +71,7 @@ Controller release, **W** ordinary Web release.
 | Legacy Draft directory import | `components/store/src/store/workspace_documents.rs` | One-time import | No legacy Draft directory remains | Host scan | C |
 | Legacy JSONL log reader | `src/logs/cli.rs` | Retained JSONL logs | Retained directories aged out | Host scan | C |
 | Machine native-profile and runtime-state migration | `components/machine/src/machine_plugins.rs`, `native_profile.rs`, `extensions.rs`, `operations/installations.rs`, `account_stop/worker_exit.rs` | Legacy on-disk Machine state | No legacy slot or home remains | Machine-side scan | M |
+| Lifetime call cap `max_per_session` | `components/server/src/server/agent_tools.rs` (`CallsPolicyWire`, `legacy_turn_limit`), `agent_tools/effort_store.rs` (`split_budget`, `merge_budget`) | Stored Tools defaults and stale-Web saves that carry the cap (read as a per-turn limit), and a predecessor Controller that still parses the stored document (it keeps a `max_per_session`; the limit lives under `agent_turn_budget:<agent>`) | No release before per-turn call budgets is a rollback target and no PWA older than it is installed | Deployment history; service-worker `VERSION` past the release | C+W |
 
 ## Plugins and releases
 
