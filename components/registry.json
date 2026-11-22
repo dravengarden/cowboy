@@ -28185,7 +28185,7 @@
                 "version": "0.2.2"
               }
             ],
-            "source_digest": "sha256:87bc1cb3632f2c0abffe63c30de5adcc0ea50b3367e115fa310705080dd48433"
+            "source_digest": "sha256:9a5c6dc9088214bf743cb4bf38bab789e41f59224bec4f13626762b7bdf9b148"
           },
           "codex-deepseek": {
             "component_release": "3.135.0",
