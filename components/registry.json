@@ -27967,7 +27967,7 @@
           "sources": [
             "components/provider-runtime"
           ],
-          "digest": "sha256:06dc65d584148ec4a18b1d0686e594799dea23595a049d82c1ea5e956f290c03",
+          "digest": "sha256:e9e28e5dbb5fba766edd4bb7a9b834a342bb6116056cfc4127b99f1d9a920d91",
           "package": {
             "kind": "npm",
             "name": "@cowboy/provider-runtime",
@@ -28018,18 +28018,18 @@
         }
       ],
       "plugins": {
-        "antigravity": "0.2.20",
         "claude-code": "3.20.65",
         "claude-deepseek": "3.1.82",
         "codex": "3.6.24",
         "codex-deepseek": "3.1.82",
-        "deepseek-harness": "1.0.40",
-        "github": "0.2.15",
         "grok": "3.2.23",
-        "machine-browser": "1.0.12",
+        "zed": "1.39.10",
+        "github": "0.2.15",
         "matrix": "1.0.13",
         "review": "1.0.16",
-        "zed": "1.39.10"
+        "deepseek-harness": "1.0.40",
+        "machine-browser": "1.0.12",
+        "antigravity": "0.2.20"
       },
       "closure": {
         "component_dependencies": {
@@ -28087,7 +28087,7 @@
                 "version": "1.3.19"
               }
             ],
-            "source_digest": "sha256:f929696be3b26341bff1c40f07df9fb2df3d770f34d89c1720e504d8aba11a25"
+            "source_digest": "sha256:2896d53cfb3f69a09233c7319fa38076e88bf5372b17dd9162e5a393c4d06d17"
           },
           "claude-code": {
             "component_release": "3.135.0",
@@ -28121,7 +28121,7 @@
                 "version": "0.2.2"
               }
             ],
-            "source_digest": "sha256:52c2055933877b5a30bac758e05221c20ced939ae16bc930e2218d5cebe506ae"
+            "source_digest": "sha256:205f3974c6d307b3bcb6094ddb9f9480f508706852d483429dd98b6d73e94a79"
           },
           "claude-deepseek": {
             "component_release": "3.135.0",
@@ -28151,7 +28151,7 @@
                 "version": "1.3.19"
               }
             ],
-            "source_digest": "sha256:c1d02b456fa1293a9967fd994963554da910b3c542ac1d261e11591291e5223d"
+            "source_digest": "sha256:98f3aefdf46fd51674f63aea60835b8ead42294f3adc676adb6c0608d21c5b71"
           },
           "codex": {
             "component_release": "3.135.0",
@@ -28185,7 +28185,7 @@
                 "version": "0.2.2"
               }
             ],
-            "source_digest": "sha256:9a5c6dc9088214bf743cb4bf38bab789e41f59224bec4f13626762b7bdf9b148"
+            "source_digest": "sha256:b81018ef3fb6dcee4d117895822773a291a1acabb7a11c261bfc7cf19f572cf8"
           },
           "codex-deepseek": {
             "component_release": "3.135.0",
@@ -28215,7 +28215,7 @@
                 "version": "1.3.19"
               }
             ],
-            "source_digest": "sha256:d030ea136735b12885ef0bcfcaa33f0ff07dcfa1740e31cfd0bb56bba2d08413"
+            "source_digest": "sha256:44654bb68e7dc8af0a56c9f27b16495855f537f0b9b8d8ae37a171de28014ea9"
           },
           "deepseek-harness": {
             "component_release": "3.135.0",
@@ -28289,7 +28289,7 @@
                 "version": "1.3.19"
               }
             ],
-            "source_digest": "sha256:3077735e27f9f376680cc69ca347a0bdce0e3f3c626aaf3ab33a2f2b06fd54cd"
+            "source_digest": "sha256:32ce73711f87e1c4db0322c4cefaccc4f9989cfb72e188046499bda6bfc1ee77"
           },
           "machine-browser": {
             "component_release": "3.121.0",

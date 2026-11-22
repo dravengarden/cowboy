@@ -32,6 +32,7 @@ import {
   ToolError,
   UncertainEffect,
   unknownOutcome,
+  unreachable,
   url,
 } from "./facade-tools.mjs";
 import { MANAGED_FACADE_TOOLS } from "./managed.mjs";
@@ -167,6 +168,7 @@ export class Facade {
 
   beginTurn(sessionId) {
     this.session(sessionId).turn = {
+      sessionId,
       cancelled: false,
       ended: false,
       uncertain: undefined,
@@ -297,15 +299,7 @@ export class Facade {
       return { content: [{ type: "text", text: await handlers[name]() }] };
     } catch (error) {
       if (error instanceof UncertainEffect) {
-        turn.uncertain ??= error.method;
-        // Latched before anything is awaited, on the parent turn that was
-        // open when the child's effect was lost.
-        if (session?.parentTurn) session.parentTurn.uncertain ??= error.method;
-        try {
-          this.onLost(sessionId, error.method);
-        } catch {
-          // The fence below still ends this session's turn.
-        }
+        this.fenceLost(turn, error.method);
         // The worker's trusted ledger records it before this tool answers
         // (so before the turn can end), also when every transport call was
         // answered (a timed-out publish): the session parks until the owner
@@ -329,6 +323,24 @@ export class Facade {
       if (missing(error))
         throw new ToolError(`No such file or directory: ${fileURLToPath(params.path)}`);
       throw error;
+    }
+  }
+
+  /**
+   * An effect of `turn` has an unknown outcome: fence the turn, the parent
+   * turn that was open when a child's effect was lost, and (through
+   * `onLost`) its other children, before anything is awaited. Repeating it
+   * changes nothing.
+   */
+  fenceLost(turn, method) {
+    turn.uncertain ??= method;
+    if (turn.sessionId === undefined) return;
+    const session = this.sessions.get(turn.sessionId);
+    if (session?.parentTurn) session.parentTurn.uncertain ??= method;
+    try {
+      this.onLost(turn.sessionId, method);
+    } catch {
+      // The turn's own fence still ends it.
     }
   }
 
@@ -387,11 +399,13 @@ export class Facade {
     return full;
   }
 
-  /** The whole content of a file, or undefined when it does not exist. */
-  async current(file) {
-    let metadata;
+  /**
+   * The whole content of a file, or undefined when it does not exist. A
+   * caller that has just read its `metadata` passes it, saving a round trip.
+   */
+  async current(file, metadata) {
     try {
-      metadata = await this.connection.call("fs/getMetadata", { path: url(file) });
+      metadata ??= await this.connection.call("fs/getMetadata", { path: url(file) });
     } catch (error) {
       if (missing(error)) return undefined;
       throw error;
@@ -413,7 +427,7 @@ export class Facade {
     let size = metadata.size;
     let bytes;
     if (size <= LIMITS.wholeFile) {
-      const data = (await this.current(file)) ?? Buffer.alloc(0);
+      const data = (await this.current(file, metadata)) ?? Buffer.alloc(0);
       session.observed.set(file, sha256(data));
       size = data.length;
       bytes = data.subarray(offset, offset + length);
@@ -645,8 +659,29 @@ export class Facade {
     return { processId, afterSeq: null, exitCode: null, closed: false };
   }
 
-  /** One `process/read`; returns the chunks and updates the cursor. */
-  async read(process, waitMs, { lostIsUncertain = true } = {}) {
+  /**
+   * One `process/read`; returns the chunks and updates the cursor. Reads of
+   * one process run one at a time, so a stop's drain and a waiting reader
+   * never share a cursor, and a command's chunks land in its retained
+   * output whichever reader took them.
+   */
+  read(process, waitMs, options) {
+    const read = (process.reading ?? Promise.resolve()).then(() =>
+      this.readOnce(process, waitMs, options),
+    );
+    process.reading = read.catch(() => {});
+    return read;
+  }
+
+  async readOnce(process, waitMs, { lostIsUncertain = true, deadline } = {}) {
+    // Checked when this read's turn in the chain comes: a reader ahead of
+    // it may have confirmed the close or used the caller's remaining time.
+    if (process.closed) return [];
+    if (deadline !== undefined) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return [];
+      waitMs = Math.min(waitMs, remaining);
+    }
     let result;
     try {
       result = await this.connection.call("process/read", {
@@ -656,7 +691,13 @@ export class Facade {
         waitMs,
       });
     } catch (error) {
-      if (lostIsUncertain && unknownOutcome(error)) throw new UncertainEffect("process/read");
+      // A started process whose state cannot be read, because the reply was
+      // lost or the connection could not be opened again, has an unknown
+      // outcome: a quiet reader waits with no read in flight, so a close
+      // reaches it as a reconnect failure rather than a lost reply.
+      if (lostIsUncertain && (unknownOutcome(error) || unreachable(error))) {
+        throw new UncertainEffect("process/read");
+      }
       throw error;
     }
     const chunks = [];
@@ -665,11 +706,78 @@ export class Facade {
         throw new ToolError("Repeated process output");
       }
       process.afterSeq = chunk.seq;
-      chunks.push({ stream: chunk.stream, bytes: Buffer.from(chunk.chunk, "base64") });
+      const bytes = Buffer.from(chunk.chunk, "base64");
+      process.output?.push(bytes);
+      chunks.push({ stream: chunk.stream, bytes });
     }
     if (result.exited) process.exitCode = result.exitCode;
-    if (result.closed) process.closed = true;
+    if (result.closed) {
+      process.closed = true;
+      // Another reader (StopCommand, expiry, cleanup) confirmed the close:
+      // a quiet reader waiting on this process ends its wait.
+      process.wake?.();
+    }
     return chunks;
+  }
+
+  /**
+   * Read `process` once within `remaining` ms: a one-second read while it
+   * produces output, and after `LIMITS.quietReads` empty reads in a row a
+   * read that waits for a notification naming the process instead. A quiet
+   * wait ends one second before the deadline, so a one-second read still
+   * sees an exit whose notification was lost.
+   */
+  async poll(process, remaining, options) {
+    const listeners = this.connection.listeners;
+    const deadline = Date.now() + remaining;
+    options = { ...options, deadline };
+    const chunks =
+      (process.quiet ?? 0) >= LIMITS.quietReads && listeners && remaining > 2000
+        ? await this.notifiedRead(
+            process,
+            Math.min(LIMITS.quietWaitMs, remaining - 1000),
+            deadline,
+            options,
+          )
+        : await this.read(process, Math.max(1, Math.min(1000, remaining)), options);
+    process.quiet = chunks.length || process.closed ? 0 : (process.quiet ?? 0) + 1;
+    return chunks;
+  }
+
+  /**
+   * Read without waiting; with nothing new, wait up to `waitMs` for an
+   * executor notification naming the process (or the connection's close,
+   * or another reader confirming its close) and read once more. It listens
+   * before reading, so output arriving in between still ends the wait, and
+   * no read is in flight while it waits. A wait that ends with no
+   * notification returns nothing: the caller reads first on its next poll
+   * if its deadline leaves time, so a lost notification costs one read per
+   * `waitMs` and a reader never starts a read past its deadline.
+   */
+  async notifiedRead(process, waitMs, deadline, options) {
+    const listeners = this.connection.listeners;
+    let listener;
+    let timer;
+    const notified = new Promise((resolve) => {
+      listener = (frame) => {
+        if (frame.method === "closed" || frame.params?.processId === process.processId) {
+          resolve(true);
+        }
+      };
+      process.wake = () => resolve(true);
+      timer = setTimeout(() => resolve(false), waitMs);
+      listeners.add(listener);
+    });
+    try {
+      const chunks = await this.read(process, 0, options);
+      if (chunks.length || process.closed) return chunks;
+      if (!(await notified) || process.closed || Date.now() >= deadline) return [];
+      return await this.read(process, 0, options);
+    } finally {
+      clearTimeout(timer);
+      listeners.delete(listener);
+      process.wake = undefined;
+    }
   }
 
   /** Terminate `process`; `true` only once the target confirmed it closed. */
@@ -715,7 +823,7 @@ export class Facade {
           timedOut = true;
           break;
         }
-        for (const { stream, bytes } of await this.read(process, Math.min(1000, remaining), {
+        for (const { stream, bytes } of await this.poll(process, remaining, {
           lostIsUncertain,
         })) {
           const room = Math.max(0, maxBytes - out.size);
@@ -729,6 +837,9 @@ export class Facade {
       }
     } catch (error) {
       failure = error;
+      // Fenced before cleanup is awaited: a concurrent call of the turn
+      // admits no mutation while this helper's outcome is unknown.
+      if (error instanceof UncertainEffect && turn) this.fenceLost(turn, error.method);
     }
     // Whatever ended the loop, the process is not left running unconfirmed: a
     // helper that may still publish is an effect of unknown outcome.
@@ -770,6 +881,7 @@ export class Facade {
       }
       running = await this.start(turn, [this.shell, "-c", command]);
       running.deadline = Date.now() + seconds * 1000;
+      // Every reader's chunks land here (see `read`).
       running.output = new Retained(LIMITS.commandOutput);
       session.commands.set(running.processId, running);
       // The deadline holds even when nobody reads the command again.
@@ -786,9 +898,7 @@ export class Facade {
       let shown = Date.now();
       let changed = false;
       while (!running.closed && Date.now() < until) {
-        const waitMs = Math.max(1, Math.min(1000, until - Date.now()));
-        for (const { bytes } of await this.read(running, waitMs)) {
-          running.output.push(bytes);
+        for (const { bytes } of await this.poll(running, until - Date.now())) {
           changed ||= bytes.length > 0;
         }
         if (changed && !running.closed && Date.now() - shown >= LIMITS.progressMs) {
