@@ -139,16 +139,21 @@ export const TOOLS = [
   {
     name: "SearchFiles",
     description:
-      "Search file contents with ripgrep, in the workspace or any absolute path the user can read. Returns at most 500 matching lines and 512 KiB; stops after 30 s.",
+      'Search file contents with ripgrep, or find files by name: give pattern to search contents (optionally limited by glob), or only glob (e.g. "**/*.png") to list matching file paths. Works in the workspace or any absolute path the user can read; honors .gitignore. Returns at most 500 lines and 512 KiB; stops after 30 s.',
     inputSchema: {
       type: "object",
       properties: {
-        pattern: { type: "string", description: "Regular expression (ripgrep syntax)" },
+        pattern: {
+          type: "string",
+          description: "Regular expression (ripgrep syntax); omit to list files matching glob",
+        },
         path: { type: "string", description: "File or directory to search; default the root" },
-        glob: { type: "string", description: "Only search files matching this glob" },
+        glob: {
+          type: "string",
+          description: "Only files matching this glob; alone, lists the matching file paths",
+        },
         ignore_case: { type: "boolean" },
       },
-      required: ["pattern"],
       additionalProperties: false,
     },
   },
@@ -342,7 +347,7 @@ export const HOME_BUDGET_MS = 10_000;
  *   cannot inject content through the home.
  *
  * Each request races a `HOME_READ_MS` timer, and the whole discovery a
- * `HOME_BUDGET_MS` budget of time spent waiting on home requests, without cancelling the
+ * `HOME_BUDGET_MS` budget of wall time with a home request in flight, without cancelling the
  * request (the connection has no per-request cancel); a late answer is
  * ignored, and once one read timed out or the budget is spent no further
  * home request is sent.
@@ -359,7 +364,11 @@ export class HomeReads {
 
   constructor(call, home, root, deadlineMs, budgetMs) {
     this.budgetMs = budgetMs;
+    // Wall time with at least one home request in flight: concurrent home
+    // reads share it instead of each adding its own wait.
     this.spent = 0;
+    this.inFlight = 0;
+    this.since = 0;
     this.send = call;
     this.home = home;
     this.root = root;
@@ -391,6 +400,10 @@ export class HomeReads {
     return this.ready;
   }
 
+  elapsed() {
+    return this.spent + (this.inFlight > 0 ? Date.now() - this.since : 0);
+  }
+
   inRepository(path) {
     return this.roots.some((root) => inside(root, path));
   }
@@ -400,12 +413,12 @@ export class HomeReads {
     // The budget counts only time spent waiting on home requests, so
     // repository reads interleaved with them (guidance, skills) never use
     // it up.
-    const wait = Math.min(this.deadlineMs, this.budgetMs - this.spent);
+    const wait = Math.min(this.deadlineMs, this.budgetMs - this.elapsed());
     if (this.stalled || wait <= 0) {
       this.stalled = true;
       throw new Error("The home did not answer in time");
     }
-    const started = Date.now();
+    if (this.inFlight++ === 0) this.since = Date.now();
     // The connection rejects only this request at its deadline and ignores
     // a late reply, so a stalled home never ends the shared connection.
     const request = this.send(method, params, { timeoutMs: wait });
@@ -422,7 +435,7 @@ export class HomeReads {
       return await Promise.race([request, timeout]);
     } finally {
       clearTimeout(timer);
-      this.spent += Date.now() - started;
+      if (--this.inFlight === 0) this.spent += Date.now() - this.since;
     }
   }
 
