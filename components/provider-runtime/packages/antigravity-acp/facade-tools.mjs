@@ -7,6 +7,8 @@ import { pathToFileURL } from "node:url";
 export const LIMITS = Object.freeze({
   readBytes: 256 * 1024,
   wholeFile: 8 * 1024 * 1024,
+  // An image ReadFile returns as an MCP image block, as Claude's Read does.
+  imageBytes: 5 * 1024 * 1024,
   listEntries: 2000,
   searchMatches: 500,
   searchBytes: 512 * 1024,
@@ -108,7 +110,7 @@ export const TOOLS = [
   {
     name: "ReadFile",
     description:
-      "Read a file: a path relative to the workspace root, or an absolute path anywhere the user can read. Returns at most 256 KiB per call; use offset to page through larger files.",
+      "Read a file: a path relative to the workspace root, or an absolute path anywhere the user can read. Returns at most 256 KiB per call; use offset to page through larger files. A PNG, JPEG, GIF or WebP image up to 5 MiB is returned as an image.",
     inputSchema: {
       type: "object",
       properties: {
@@ -293,6 +295,27 @@ export function decodeText(bytes) {
   } catch {
     return undefined;
   }
+}
+
+/** Image types by extension, with the signature their bytes must start with. */
+const IMAGES = {
+  png: ["image/png", (b) => b.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"))],
+  jpg: ["image/jpeg", (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff],
+  jpeg: ["image/jpeg", (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff],
+  gif: ["image/gif", (b) => /^GIF8[79]a$/.test(b.subarray(0, 6).toString("latin1"))],
+  webp: [
+    "image/webp",
+    (b) =>
+      b.subarray(0, 4).toString("latin1") === "RIFF" &&
+      b.subarray(8, 12).toString("latin1") === "WEBP",
+  ],
+};
+
+/** The MIME type of an image file whose name and bytes agree, else `undefined`. */
+export function imageType(path, bytes) {
+  const extension = /\.([A-Za-z]+)$/.exec(path)?.[1]?.toLowerCase();
+  const image = extension && Object.hasOwn(IMAGES, extension) ? IMAGES[extension] : undefined;
+  return image?.[1](bytes) ? image[0] : undefined;
 }
 
 export function inside(root, path) {

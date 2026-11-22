@@ -233,6 +233,17 @@ export function resultContent(tool, input, result, root) {
       .filter(Boolean)
       .join("\n");
     const content = answer ? [textBlock(answer)] : [];
+    // An image ReadFile returned is shown too, within the shown-result bound.
+    for (const block of blocks) {
+      if (
+        block?.type === "image" &&
+        typeof block.data === "string" &&
+        typeof block.mimeType === "string" &&
+        block.data.length <= RESULT_BYTES
+      ) {
+        content.push({ type: "content", content: block });
+      }
+    }
     if (result?.isError !== true && isObject(input)) {
       const { toolSummary: _summary, ...rest } = input;
       const described = describe(tool, rest, root);

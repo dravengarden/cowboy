@@ -16,7 +16,7 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { Connection } from "../../execution-connection.mjs";
 import { Facade, LIMITS, Retained, ToolError } from "./facade.mjs";
-import { decodeText, splice } from "./facade-tools.mjs";
+import { decodeText, imageType, splice } from "./facade-tools.mjs";
 import {
   buildProjection,
   guidanceDirectories,
@@ -162,6 +162,48 @@ test("ReadFile pages at 256 KiB and reads anywhere the user can read", async (t)
   }
   assert.match((await call("ReadFile", { path: "missing.txt" })).text, /No such file/);
   assert.equal((await call("ReadFile", { path: "a\0b" })).error, true);
+});
+
+const PNG = Buffer.concat([
+  Buffer.from("89504e470d0a1a0a", "hex"),
+  Buffer.from("0000000d49484452000000010000000108060000001f15c489", "hex"),
+  Buffer.from([0]),
+]);
+
+test("ReadFile returns a whole image as an MCP image block", async (t) => {
+  const { root, facade } = await fixture(t);
+  writeFileSync(join(root, "shot.png"), PNG);
+  const read = await facade.call("s1", "ReadFile", { path: "shot.png" });
+  assert.equal(read.isError, undefined);
+  assert.deepEqual(read.content, [
+    { type: "text", text: `Image ${join(root, "shot.png")} (image/png, ${PNG.length} bytes)` },
+    { type: "image", data: PNG.toString("base64"), mimeType: "image/png" },
+  ]);
+  // Bytes that are not the named type, a page past the start and an image
+  // over 5 MiB stay binary text.
+  writeFileSync(join(root, "fake.png"), Buffer.from([0, 1, 2, 3]));
+  const fake = await facade.call("s1", "ReadFile", { path: "fake.png" });
+  assert.deepEqual(fake.content, [{ type: "text", text: "[binary content, 4 bytes]" }]);
+  const paged = await facade.call("s1", "ReadFile", { path: "shot.png", offset: 8 });
+  assert.equal(paged.content.length, 1);
+  assert.match(paged.content[0].text, /^\[binary content/);
+  writeFileSync(join(root, "big.png"), Buffer.concat([PNG, Buffer.alloc(LIMITS.imageBytes)]));
+  const big = await facade.call("s1", "ReadFile", { path: "big.png" });
+  assert.equal(big.content.length, 1);
+  assert.match(big.content[0].text, /^\[binary content, 262144 bytes\]/);
+  // An image is readable before an edit like any file it read.
+  assert.equal(facade.session("s1").observed.has(join(root, "shot.png")), true);
+});
+
+test("image types follow both the name and the bytes", () => {
+  assert.equal(imageType("/a/b.PNG", PNG), "image/png");
+  assert.equal(imageType("/a/b.jpg", Buffer.from([0xff, 0xd8, 0xff, 0xe0])), "image/jpeg");
+  assert.equal(imageType("/a/b.jpeg", Buffer.from([0xff, 0xd8, 0xff, 0xdb])), "image/jpeg");
+  assert.equal(imageType("/a/b.gif", Buffer.from("GIF89a....")), "image/gif");
+  assert.equal(imageType("/a/b.webp", Buffer.from("RIFF\0\0\0\0WEBPVP8 ")), "image/webp");
+  assert.equal(imageType("/a/b.gif", PNG), undefined);
+  assert.equal(imageType("/a/b.svg", Buffer.from("<svg/>")), undefined);
+  assert.equal(imageType("/a/png", PNG), undefined);
 });
 
 test("ListDirectory is bounded to 2000 entries", async (t) => {

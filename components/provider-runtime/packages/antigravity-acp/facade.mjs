@@ -20,6 +20,7 @@ import {
   APPLY,
   decodeText,
   ENV_POLICY,
+  imageType,
   INLINE_APPLY,
   inside,
   LIMITS,
@@ -298,7 +299,9 @@ export class Facade {
           turn.inflight?.delete(call);
         }
       }
-      return { content: [{ type: "text", text: await handlers[name]() }] };
+      // A handler answers text, or (an image ReadFile) its own content blocks.
+      const answer = await handlers[name]();
+      return typeof answer === "string" ? { content: [{ type: "text", text: answer }] } : answer;
     } catch (error) {
       if (error instanceof UncertainEffect) {
         this.fenceLost(turn, error.method);
@@ -435,6 +438,17 @@ export class Facade {
       const data = (await this.current(file, metadata)) ?? Buffer.alloc(0);
       session.observed.set(file, sha256(data));
       size = data.length;
+      // A whole image the model can see, as Claude's Read shows one.
+      const mimeType =
+        offset === 0 && size <= LIMITS.imageBytes ? imageType(file, data) : undefined;
+      if (mimeType) {
+        return {
+          content: [
+            { type: "text", text: `Image ${file} (${mimeType}, ${size} bytes)` },
+            { type: "image", data: data.toString("base64"), mimeType },
+          ],
+        };
+      }
       bytes = data.subarray(offset, offset + length);
     } else {
       bytes = await this.readBlock(file, offset, length);
