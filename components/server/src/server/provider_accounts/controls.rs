@@ -36,7 +36,7 @@ pub(in crate::server) mod http;
 mod logout;
 mod plan;
 mod reconcile;
-pub(in crate::server) use dispatch::{before_dispatch, handoff, owner_send};
+pub(in crate::server) use dispatch::{before_dispatch, handoff};
 pub(in crate::server) use reconcile::{start, turn_end_listener};
 
 /// What the controls observe of the rest of the Controller. [`AppEnv`] is
@@ -407,7 +407,7 @@ impl Controls {
             .is_some_and(|pending| *pending > 0)
     }
 
-    fn gate(&self, meta: &SessionMeta, explicit: bool) -> Gate {
+    fn gate(&self, meta: &SessionMeta) -> Gate {
         if self.signal_pending(&meta.provider_account_id) {
             return Gate::Park(SIGNAL_PENDING.into());
         }
@@ -419,7 +419,6 @@ impl Controls {
             uncertain: uncertain
                 .as_ref()
                 .map(|(method, sequence)| (method.as_str(), *sequence)),
-            explicit,
             now_ms: now_ms(),
         })
     }
@@ -433,7 +432,7 @@ impl Controls {
         if !self.cache.loaded.load(Ordering::Acquire) {
             return Some("account controls are loading".into());
         }
-        match self.gate(meta, false) {
+        match self.gate(meta) {
             Gate::Park(reason) => Some(reason),
             Gate::Proceed { .. } => None,
         }

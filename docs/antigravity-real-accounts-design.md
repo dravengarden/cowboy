@@ -333,8 +333,9 @@ login completion, session creation **and every dispatch and worker revival**
 **Account state.** Durable per account on the Controller: `ok`,
 `verification_required`, `location_unsupported`, `rate_limited_until`,
 `suspended`, `blocked` (kill switch), `unknown_refusal`. Any state other than
-`ok` parks the account's queues; `rate_limited_until` additionally requires a
-new owner send after the time; `suspended` and `blocked` stop the account's
+`ok` parks the account's queues; `rate_limited_until` parks them until that
+time, and the next dispatch after it resumes the account (owner-paced since
+2026-11-22; earlier only a new owner send did); `suspended` and `blocked` stop the account's
 units and need an explicit owner action to clear.
 
 **One active turn per account [R1-8, R2-11].** The Controller reserves the
@@ -543,8 +544,8 @@ R3-4, R3-9, R3-10, R3-13 and R3-16, with these concrete choices:
   cached controls before draining again. Any state but `ok`, a missing
   admission, another session's turn or an unacknowledged uncertain effect
   parks. A rate limit (default one hour; the proxy reports no reset time)
-  parks until `until_ms`; after it only an explicit owner send (send, send
-  now) resumes the account, an automatic drain does not. Admission and the
+  parks until `until_ms`; the first dispatch after it, owner or automatic,
+  resumes the account. Admission and the
   kill switch at login and session creation are read from the store, never
   from the cache; a failed reload marks the cache unloaded, which parks.
 - **One active turn.** Every dispatch of a governed session, user prompts
@@ -862,8 +863,8 @@ query and force release of "Controller account controls (step 5a)" and the
   arrives as `unknown_refusal`. The raise is one transaction compared with
   the stored state: it never lowers a more severe state and never replaces
   `blocked`. `suspended`, `blocked` and `needs_attention` write stop fences.
-  A rate limit holds one hour and only an explicit owner send resumes it,
-  and only the expired rate limit that authorized that send (compared by
+  A rate limit holds one hour and the first dispatch after it resumes it,
+  and only the expired rate limit that admitted that dispatch (compared by
   revision in the write) is cleared. A signal is registered before the
   turn ending is acknowledged; the account's dispatches and revivals park
   until it commits, and a failed write is retried, never dropped.
@@ -1030,8 +1031,8 @@ part of the "Daemon" decision; everything else in Revision 5 holds.
   concurrent writers to shared state is the vendor's, and an `agy` failure
   there would surface as an ordinary turn error (`unknown_refusal`, owner
   clears it).
-- A rate limit is account-wide: an explicit owner send in any session of the
-  account resumes all of them.
+- A rate limit is account-wide: the first dispatch after it ends, in any
+  session of the account, resumes all of them.
 
 ## Antigravity features (0.2.1)
 

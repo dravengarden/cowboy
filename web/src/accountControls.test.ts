@@ -34,7 +34,7 @@ test("the account card names every state, its reason and the rate-limit end", ()
   const until = Date.UTC(2026, 10, 18, 15, 0);
   const limited = accountStateBadge(control({ state: "rate_limited", until_ms: until }), "signed_in", until - 1000);
   assertStringIncludes(limited.label, "Rate limited until");
-  assertStringIncludes(accountStateBadge(control({ state: "rate_limited", until_ms: until }), undefined, until + 1).label, "send again");
+  assertStringIncludes(accountStateBadge(control({ state: "rate_limited", until_ms: until }), undefined, until + 1).label, "resumes with the next prompt");
   assertEquals(accountStateBadge(control({ state: "needs_attention", reason: "policy_violation:read_file" }), undefined).detail,
     "A built-in tool ran (read_file)");
   assertEquals(signInObservation({ reason: "native_login_required" }), "not_signed_in");

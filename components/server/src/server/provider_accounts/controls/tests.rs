@@ -207,11 +207,11 @@ async fn control(controls: &Controls) -> Control {
 async fn admission_and_account_state_gate_dispatch_and_revival() {
     let (fake, controls, _root) = fixture().await;
     fake.admitted.lock().clear();
-    parked(controls.before_dispatch("s1", true).await, "not admitted");
+    parked(controls.before_dispatch("s1").await, "not admitted");
     assert!(controls.revival_gate(&meta(&fake, "s1")).is_err());
     fake.admitted.lock().insert(ACCOUNT.into());
     assert!(controls.revival_gate(&meta(&fake, "s1")).is_ok());
-    controls.before_dispatch("s1", true).await.unwrap();
+    controls.before_dispatch("s1").await.unwrap();
     let current = control(&controls).await;
     controls
         .enter(
@@ -224,7 +224,7 @@ async fn admission_and_account_state_gate_dispatch_and_revival() {
         )
         .await
         .unwrap();
-    parked(controls.before_dispatch("s1", true).await, "verify");
+    parked(controls.before_dispatch("s1").await, "verify");
     assert!(controls.revival_gate(&meta(&fake, "s1")).is_err());
     assert!(
         controls
@@ -249,7 +249,7 @@ async fn sessions_of_one_account_start_and_dispatch_concurrently() {
     for session in ["s1", "s2", "s3"] {
         assert!(controls.revival_gate(&meta(&fake, session)).is_ok());
         assert!(controls.parked_reason(&meta(&fake, session)).is_none());
-        controls.before_dispatch(session, false).await.unwrap();
+        controls.before_dispatch(session).await.unwrap();
     }
     let account: ProviderAccountId = ACCOUNT.parse().unwrap();
     let value = controls.read_value(&[(account, "antigravity".into())]);
@@ -269,7 +269,7 @@ async fn sessions_of_one_account_start_and_dispatch_concurrently() {
         .unwrap();
     for session in ["s1", "s2", "s3"] {
         assert!(controls.revival_gate(&meta(&fake, session)).is_err());
-        parked(controls.before_dispatch(session, true).await, "verify");
+        parked(controls.before_dispatch(session).await, "verify");
     }
 }
 
@@ -324,7 +324,7 @@ async fn backend_signals_set_the_account_state_and_stop_its_units() {
     );
     // The daemon orders fences by the revision that wrote them.
     assert_eq!(sent[0].1.revision, u64::try_from(suspended.revision).ok());
-    parked(controls.before_dispatch("s2", true).await, "suspended");
+    parked(controls.before_dispatch("s2").await, "suspended");
     // The owner clears it; the units are admitted again.
     controls
         .enter(
@@ -389,7 +389,7 @@ async fn backend_signals_set_the_account_state_and_stop_its_units() {
     let limited = control(&controls).await;
     assert_eq!(limited.state, AccountState::RateLimited);
     assert!(limited.until_ms.is_some_and(|until| until > now_ms()));
-    parked(controls.before_dispatch("s1", true).await, "until");
+    parked(controls.before_dispatch("s1").await, "until");
 }
 
 #[tokio::test]
@@ -512,7 +512,7 @@ async fn the_kill_switch_fences_durably_before_any_machine() {
         (fences[0].state, fences[0].action),
         (FenceState::Pending, AccountFenceAction::Stop)
     );
-    parked(controls.before_dispatch("s2", true).await, "blocked");
+    parked(controls.before_dispatch("s2").await, "blocked");
     assert!(controls.revival_gate(&meta(&fake, "s2")).is_err());
     fake.connected.lock().insert("ovh".into());
     controls.run_fences();
@@ -629,7 +629,7 @@ async fn a_failed_machine_lookup_never_writes_an_unfenced_block() {
 async fn an_observed_backend_signal_parks_the_account_until_it_commits() {
     let (fake, controls, _root) = fixture().await;
     controls.begin_signal(&meta(&fake, "s1"));
-    parked(controls.before_dispatch("s2", true).await, "backend signal");
+    parked(controls.before_dispatch("s2").await, "backend signal");
     assert!(controls.revival_gate(&meta(&fake, "s2")).is_err());
     end(
         &controls,
@@ -649,7 +649,7 @@ async fn an_observed_backend_signal_parks_the_account_until_it_commits() {
 async fn an_uncertain_effect_parks_the_session_until_acknowledged() {
     let (fake, controls, _root) = fixture().await;
     fake.uncertain("s1", 2);
-    parked(controls.before_dispatch("s1", true).await, "fs/writeFile");
+    parked(controls.before_dispatch("s1").await, "fs/writeFile");
     // Other sessions of the account are not parked by it.
     assert!(controls.parked_reason(&meta(&fake, "s2")).is_none());
     // Observed durably: still parked when the worker is gone.
@@ -668,7 +668,7 @@ async fn an_uncertain_effect_parks_the_session_until_acknowledged() {
     // Published by the acknowledgement itself, under the writer lock.
     controls.acknowledge("s1", 2).await.unwrap();
     assert!(controls.parked_reason(&meta(&fake, "s1")).is_none());
-    controls.before_dispatch("s1", true).await.unwrap();
+    controls.before_dispatch("s1").await.unwrap();
     // A newer lost reply parks it again, and acknowledging the older one
     // never erases it.
     fake.uncertain("s1", 3);
@@ -691,25 +691,8 @@ async fn an_uncertain_effect_parks_the_session_until_acknowledged() {
     assert_eq!(record["observed"], json!(3));
 }
 
-#[test]
-fn only_a_human_send_is_an_owner_send() {
-    assert!(owner_send(true, None));
-    assert!(owner_send(true, Some("composer-cmid")));
-    assert!(!owner_send(false, Some("composer-cmid")));
-    let agent = format!("agent-{}", "a".repeat(64));
-    for cmid in [
-        agent.as_str(),
-        "call-notice:call-1",
-        "session-notice:peer:op-1",
-        "__sched__draft-1",
-        "__wake__s",
-    ] {
-        assert!(!owner_send(true, Some(cmid)), "{cmid}");
-    }
-}
-
 #[tokio::test]
-async fn a_rate_limit_resumes_only_on_an_owner_send_after_it_ends() {
+async fn the_first_dispatch_after_a_rate_limit_ends_resumes_the_account() {
     let (_fake, controls, _root) = fixture().await;
     let current = control(&controls).await;
     controls
@@ -723,9 +706,10 @@ async fn a_rate_limit_resumes_only_on_an_owner_send_after_it_ends() {
         )
         .await
         .unwrap();
-    parked(controls.before_dispatch("s1", false).await, "send again");
-    controls.before_dispatch("s1", true).await.unwrap();
-    assert_eq!(control(&controls).await.state, AccountState::Ok);
+    controls.before_dispatch("s1").await.unwrap();
+    let resumed = control(&controls).await;
+    assert_eq!(resumed.state, AccountState::Ok);
+    assert_eq!(resumed.reason, "rate_limit_ended");
 }
 
 mod logout_tests;

@@ -888,7 +888,8 @@ These boundaries are mandatory and fail closed:
   owner turn. Antigravity is still not offered to background jobs, Cowboy's
   auto-continue, automatic rollover turns (enforced in the shared rollover
   policy whatever the stored preference), Auto selection or Tools call
-  targets, and only the owner's own send clears an ended rate limit. Its
+  targets. A rate limit parks every dispatch until it ends; the next
+  dispatch then resumes the account (no new owner send is needed). Its
   managed-call use is an explicitly requested, fresh read-only round: a
   context ask (a text-only `analysis` over recorded session history) or,
   as the owner extended it the same day ("other sessions can call

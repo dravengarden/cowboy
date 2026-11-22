@@ -1130,8 +1130,7 @@ pub(super) async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
     }
     // Named-only accounts: admission, account state and uncertain effects,
     // before anything can revive a worker.
-    let owner_send = provider_accounts::controls::owner_send(req.explicit, req.cmid.as_deref());
-    let gate = provider_accounts::controls::before_dispatch(&state, &req.session_id, owner_send);
+    let gate = provider_accounts::controls::before_dispatch(&state, &req.session_id);
     match gate.await {
         Ok(()) => dispatch_admitted(state, req).await,
         Err(reason) => {
