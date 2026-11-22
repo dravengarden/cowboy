@@ -81,6 +81,20 @@ declared consumer (`bun tools/third-party.ts check` enforces this) and run the
 consumer's source build, which executes upstream's type check and complete
 test suite.
 
+## Collector checks follow native pins
+
+Signed usage collectors reproduce native behavior for named portable accounts,
+so a native pin change re-measures it offline (fake logins, loopback-only
+namespace, no model request):
+
+- Grok: `nix develop -c just grok-billing-capture <absolute grok>` rewrites
+  `plugins/grok-billing-cli.fixture.json` from the candidate CLI; commit it with
+  `GROK_CLI_VERSION` in `plugins/grok/collector/index.js`. A changed projection
+  fails the capture until it is reviewed (`--accept-changes`).
+- Codex: `nix develop -c just codex-refresh-guard-probe <absolute codex>` must
+  report a refresh against the fake endpoint and none, with `auth.json`
+  unchanged, for the collector's refusal URL.
+
 ## Configure Recommended without product code
 
 The source of truth is `plugins/<id>/provider.json` → `configuration_presets`.

@@ -20,7 +20,7 @@ const WEB_BASE = "https://grok.com";
 // The chat proxy the pinned CLI reads billing from (its default base URL).
 const CHAT_PROXY_BASE = "https://cli-chat-proxy.grok.com/v1";
 // The client headers the pinned Grok CLI sends with its billing request.
-export const GROK_CLI_VERSION = "1.0.77";
+export const GROK_CLI_VERSION = "1.0.92";
 // A token this close to expiry would be renewed by the CLI; without the CLI
 // the collector reports authentication required instead.
 const EXPIRY_MARGIN_MS = 60_000;

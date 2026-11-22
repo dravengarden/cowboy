@@ -469,6 +469,15 @@ plugin-runtime-probe RELEASE ARTIFACTS *ARGS:
 agent-worker-conformance RELEASE ARTIFACTS WORKER *ARGS:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec python3 tools/plugin_runtime_conformance.py "$@"' conformance "{{RELEASE}}" "{{ARTIFACTS}}" --worker "{{WORKER}}" {{ARGS}}
 
+# Collector checks for a Grok or native Codex pin change, offline in a loopback-only
+# namespace with fake logins: re-capture the Grok billing fixture the collector
+# reproduces, and show that a refresh-free Codex read reaches no token endpoint.
+grok-billing-capture GROK:
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec python3 tools/grok_billing_capture.py "$@"' capture --grok "{{GROK}}" --fixture plugins/grok-billing-cli.fixture.json --write plugins/grok-billing-cli.fixture.json
+
+codex-refresh-guard-probe CODEX:
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec python3 tools/codex_refresh_guard_probe.py "$@"' probe --codex "{{CODEX}}"
+
 # Native execution interfaces only: closed homes, loopback scripted API, no
 # production credentials/model inference/Provider install or Machine activation.
 execution-codex-turn-conformance CLI VERSION SHA256 RECEIPT:
