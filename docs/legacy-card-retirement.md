@@ -185,6 +185,12 @@ journal (the root entries are wiped and the account holds the copy), so a
 Machine's later rotation of the moved generation is still promoted into the
 account; it refuses a journal whose root entry still holds a credential, and
 leaves unrouted one whose account no longer holds a copy (a revoked account).
+A journal without the copy's account generation (the previous writer stopped
+before recording it, possibly before copying) is never routed: an account
+status cannot prove it is the move's copy rather than an independent
+sign-in. Startup logs it at error level for an explicit repair. Production
+had none at release time (every journal completed with account generation
+1).
 
 ## Release order and operations
 

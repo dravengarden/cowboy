@@ -69,7 +69,9 @@ impl ProviderAuthService {
     /// The completed move of `provider_id`'s root credential, if any: the
     /// target of a rotation of its moved root generation.
     pub fn legacy_move(&self, provider_id: &str) -> Option<LegacyMove> {
-        self.read_move(provider_id).filter(|moved| moved.completed)
+        // A journal without the copy's account generation routes nothing.
+        self.read_move(provider_id)
+            .filter(|moved| moved.completed && moved.account_generation > 0)
     }
 
     /// Called under the vault write lock by every root commit and refresh:
@@ -325,7 +327,7 @@ mod tests {
         let pending = LegacyMove {
             account_id: id.clone(),
             root_generation: 1,
-            account_generation: 0,
+            account_generation: 1,
             completed: false,
         };
         service.write_move(&["codex".to_owned()], &pending).unwrap();

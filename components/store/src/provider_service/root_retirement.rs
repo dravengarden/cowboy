@@ -77,8 +77,9 @@ impl ProviderAuthService {
     /// completion a Machine's rotation of the moved generation could not be
     /// promoted into its account. Refuses a journal whose root entry still
     /// holds a credential (the previous Controller must finish that move).
-    /// A journal that lost the copy's account generation (completed or not)
-    /// gets it back. Returns the Providers it changed. Idempotent.
+    /// A journal without the copy's account generation (completed or not) is
+    /// left unrouted and reported for explicit repair. Returns the Providers
+    /// it completed. Idempotent.
     pub fn recover_legacy_moves(&self) -> Result<Vec<String>> {
         if !self.account_id.is_default() || self.recipient_key.is_some() {
             return Ok(Vec::new());
@@ -133,14 +134,15 @@ impl ProviderAuthService {
                     "legacy move has no account copy; left unrouted");
                 continue;
             }
-            // The previous writer could stop after the copy but before it
-            // journaled the copy's generation, and its replay then completed
-            // the journal with generation zero. A move copies into an empty
-            // account vault, whose first commit is always generation 1.
+            // The previous writer could stop before it journaled the copy's
+            // generation, possibly before copying at all; an account status
+            // then proves nothing (it may be an independent sign-in). Fail
+            // closed: route nothing and ask for an explicit repair.
             if moved.account_generation == 0 {
-                tracing::warn!(account = account_id.as_str(), providers = ?journaled,
-                    "recovered a legacy move's account generation from its empty-vault copy");
-                moved.account_generation = 1;
+                tracing::error!(account = account_id.as_str(), providers = ?journaled,
+                    root_generation = moved.root_generation,
+                    "legacy move journal lost its account generation: Machine rotations of the moved root generation are not promoted; repair the journal explicitly (docs/legacy-card-retirement.md)");
+                continue;
             }
             moved.completed = true;
             self.write_move(&journaled, &moved)?;
@@ -304,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn a_move_that_lost_its_account_generation_gets_it_back() {
+    fn a_move_that_lost_its_account_generation_stays_unrouted() {
         let root = tempfile::tempdir().unwrap();
         let service = ProviderAuthService::open(root.path()).unwrap();
         let [claude, codex] = scope();
@@ -312,29 +314,23 @@ mod tests {
         let providers = ["claude-deepseek".to_owned(), "codex-deepseek".to_owned()];
         for completed in [true, false] {
             let id: ProviderAccountId = uuid::Uuid::new_v4().to_string().try_into().unwrap();
-            let account = service.account(&id).unwrap();
-            // Copied, then stopped before journaling the copy's generation;
-            // a replay may have completed it with generation zero.
-            account
+            // The account holds a credential, but nothing proves it is the
+            // move's copy rather than an independent sign-in.
+            service
+                .account(&id)
+                .unwrap()
                 .commit_shared(&both, &bundle(), None, "claude-deepseek", None)
                 .unwrap();
-            service
-                .write_move(
-                    &providers,
-                    &LegacyMove {
-                        account_id: id.clone(),
-                        root_generation: 1,
-                        account_generation: 0,
-                        completed,
-                    },
-                )
-                .unwrap();
-            let mut recovered = service.recover_legacy_moves().unwrap();
-            recovered.sort();
-            assert_eq!(recovered, providers);
-            let moved = service.legacy_move("codex-deepseek").unwrap();
-            assert_eq!((moved.account_generation, moved.completed), (1, true));
+            let journal = LegacyMove {
+                account_id: id.clone(),
+                root_generation: 1,
+                account_generation: 0,
+                completed,
+            };
+            service.write_move(&providers, &journal).unwrap();
             assert!(service.recover_legacy_moves().unwrap().is_empty());
+            assert_eq!(service.read_move("codex-deepseek"), Some(journal));
+            assert!(service.legacy_move("codex-deepseek").is_none());
         }
     }
 }
