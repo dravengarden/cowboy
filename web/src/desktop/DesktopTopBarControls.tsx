@@ -96,7 +96,7 @@ import {
   type UsageWidgetWindow,
 } from "../usageWidget";
 import { useSubscriptionAccounts } from "../subscriptionAccounts";
-import { DEFAULT_ABOUT_VALUES, topBarUsageGroups, topBarUsageItems, useAboutPreferences } from "../aboutPreferences";
+import { type AboutValues, DEFAULT_ABOUT_VALUES, topBarUsageGroups, topBarUsageItems, useAboutPreferences } from "../aboutPreferences";
 import { useNativeAccountUsage } from "../nativeAccountUsage";
 import { registeredUsageAccounts, type UsageAccountCard, usageCardManageUrl, usageResetTarget } from "../usageAccounts";
 import { AccountBrowserEntry } from "../machineBrowser/AccountBrowserEntry";
@@ -271,6 +271,22 @@ type UsageColumn = {
   /** The first column of a group after the first: a little more room. */
   groupStart?: boolean;
 };
+
+/** The strip's segments: the Usage order without hidden accounts, and each
+ *  account without its hidden quota groups (Antigravity `Gemini 4 Argon`).
+ *  An account with every group hidden leaves the strip. */
+function topBarWidgetProviders(
+  accounts: readonly UsageAccountCard[],
+  values: AboutValues,
+): { account: UsageAccountCard; provider: UsageWidgetProvider }[] {
+  return topBarUsageItems(accounts, values, (account) => account.id).flatMap((account) => {
+    const provider = usageWidgetForAccount(account.usage);
+    if (!provider) return [];
+    if (usageWidgetHasBalance(provider) || !provider.groups) return [{ account, provider }];
+    const groups = topBarUsageGroups(account.id, provider.groups, values);
+    return groups.length > 0 ? [{ account, provider: { ...provider, groups } }] : [];
+  });
+}
 
 export function usageColumns(
   provider: UsageWidgetProvider,
@@ -1006,20 +1022,10 @@ export function DesktopTopBarControls({
   const { catalog } = useProviderCatalog();
   const usageAccounts = useMemo(() => registeredUsageAccounts(snapshot, accounts.data, sessions, native.accounts),
     [catalog, snapshot, accounts.data, sessions, native.accounts]);
-  // Which accounts the strip shows, and in what order, is the account's
-  // About layout (Settings → Info → Customize layout), shared across devices.
-  const connected = useStoreSelector((state) => state.connected);
-  const layout = useAboutPreferences(connected);
+  // The strip follows the About layout (Settings → Info → Customize layout).
+  const layout = useAboutPreferences(useStoreSelector((state) => state.connected));
   const layoutValues = layout.data?.preferences.values ?? DEFAULT_ABOUT_VALUES;
-  const widgetProviders = topBarUsageItems(usageAccounts, layoutValues, (account) => account.id).flatMap((account) => {
-    const provider = usageWidgetForAccount(account.usage);
-    if (!provider) return [];
-    if (usageWidgetHasBalance(provider) || !provider.groups) return [{ account, provider }];
-    // Hidden quota groups (Antigravity `Gemini 4 Argon`) leave the strip;
-    // an account with every group hidden leaves with them.
-    const groups = topBarUsageGroups(account.id, provider.groups, layoutValues);
-    return groups.length > 0 ? [{ account, provider: { ...provider, groups } }] : [];
-  });
+  const widgetProviders = topBarWidgetProviders(usageAccounts, layoutValues);
   const updatedAgo = relativeUpdateTime(snapshot?.refreshed_at_ms ?? 0, clock);
   const topbarCommands = useMemo<DesktopCommand[]>(() => [
     {
