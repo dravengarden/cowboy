@@ -15,7 +15,7 @@ pages on 2026-11-22 with
 | Claude Agent ACP | 0.107.3 | 0.109.1 | Agent SDK 0.3.330, ACP SDK 2.9.1; the launcher's extension points are unchanged |
 | Codex ACP / Codex | 2.7.0 / 0.169.1 | 2.9.0 / 0.171.0 | ACP 2.9.0 declares `@openai/codex ^0.171.0`; the `native-codex-version` delta is dropped |
 | Grok | 1.0.77 | 1.0.92 | npm `latest` and `x.ai/cli/stable` |
-| agy | 1.5.9 | 1.5.14 | The install manifest is `manifests/linux_amd64.json`; `linux_x64.json` answers 404 |
+| agy | 1.5.9 | 1.5.9 (1.5.14 withdrawn in 3.138.0) | The install manifest is `manifests/linux_amd64.json`; `linux_x64.json` answers 404. 1.5.14 ends its turns without the stream barrier the backend evidence needs; see below |
 | dsh | 0.2.2-rc.1 | unchanged | `latest` is 0.2.2-rc.5; not part of this upgrade |
 | Claude/Codex DeepSeek gateways | — | unchanged | No change requested |
 
@@ -96,7 +96,25 @@ which `--no-leader` keeps off.
 
 agy's `acp --help` and unauthenticated `initialize` are identical to 1.5.9's
 apart from the version, and the log formats the backend evidence reads are all
-still present.
+still present. That was not enough:
+
+1. Antigravity 0.2.22 (3.137.0) on OVH: the account sandbox refused the runtime
+   (`runtime_rejected`), because its allow-list
+   (Columbus `machines/ovh/account-sandbox/agy-sha512.allow`) lists only the
+   1.5.9 executable. OVH went back to 0.2.21.
+2. With the 1.5.14 executable admitted (allow-list file only, daemon not
+   restarted), one analysis prompt on the Husky account succeeded natively:
+   four backend successes and no refusal in the unit's log. But no
+   `Stream goroutine exited for <session>, sending completion signal` barrier
+   followed, so the turn settled `unknown_refusal` and parked the account.
+   (1.5.10 keeps the session stream open after a turn to push autonomous
+   replies.) OVH went back to 0.2.21 and the allow-list to 1.5.9 only, so 0.2.22
+   fails closed at startup instead of parking an account.
+
+Component release 3.138.0 pins 1.5.9 again (Antigravity 0.2.23, the other
+Providers a patch each, their runtime bytes unchanged). 1.5.14 needs the
+proxy's evidence to recognise its turn end, a real-account acceptance and the
+allow-list entry together.
 
 ## Verification
 

@@ -83,10 +83,19 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.138.0 records provider-runtime 1.3.22, which pins `agy`
+1.5.9 again: 1.5.14 ends its turns without the stream barrier Antigravity's
+backend evidence needs, so its first real turn settled `unknown_refusal`
+([release record](releases/agent-runtimes-2026-11-22.md)). Antigravity 0.2.23
+pins it. The other six Providers pinning provider-runtime advance one patch
+version with unchanged runtime bytes (claude-code 3.20.68, claude-deepseek
+3.1.85, codex 3.6.27, codex-deepseek 3.1.85, deepseek-harness 1.0.43, grok
+3.2.26).
+
 Component release 3.137.0 records provider-runtime 1.3.21: Claude Code 2.1.330
 with Claude Agent ACP 0.109.1, native Codex 0.171.0 with Codex ACP 2.9.0 (whose
 declared range now covers it, so the `native-codex-version` delta is gone),
-Grok 1.0.92 and agy 1.5.14
+Grok 1.0.92 and agy 1.5.14 (withdrawn in 3.138.0)
 ([release record](releases/agent-runtimes-2026-11-22.md)). Every Plugin that
 pins it advances one patch version: antigravity 0.2.22, claude-code 3.20.67,
 claude-deepseek 3.1.84, codex 3.6.26, codex-deepseek 3.1.84, deepseek-harness
