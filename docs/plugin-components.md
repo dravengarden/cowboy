@@ -83,6 +83,18 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.135.0 records provider-runtime 1.3.19, whose
+`cowboy-antigravity-acp` 1.0.17 cuts the round trips of Antigravity's tool
+facade across the Machine link: a command quiet for three one-second reads
+waits for the executor's notification naming it instead of polling (reads of
+one process run one at a time, so a stop's drain keeps the final output, and a
+quiet wait leaves one second for a last read before the deadline), `ReadFile`
+reuses the metadata it read, and a projection reads guidance and skills a few
+at a time, reading nothing once its guidance budget is spent. Antigravity
+0.2.19 pins it. The other six Providers pinning provider-runtime advance one
+patch version (claude-code 3.20.65, claude-deepseek 3.1.82, codex 3.6.24,
+codex-deepseek 3.1.82, deepseek-harness 1.0.40, grok 3.2.23).
+
 Component release 3.134.0 records provider-runtime 1.3.18, whose
 `cowboy-antigravity-acp` 1.0.16 hosts subagents in the proxy: the facade's
 `Subagent` and `StopSubagent` tools start another native `agy` session inside
