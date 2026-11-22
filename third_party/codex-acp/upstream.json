@@ -2,12 +2,12 @@
   "schema_version": 1,
   "name": "codex-acp",
   "repository": "https://github.com/agentclientprotocol/codex-acp",
-  "version": "2.7.0",
-  "tag": "v2.7.0",
-  "commit": "7c98a1608022cbb2b7e425ae7a1df5fde86c6ff2",
-  "archive_sha256": "6a29806c8a21f5e1c048fae34b70e2cf0d8e088859f8c6482f33eb27370d2397",
+  "version": "2.9.0",
+  "tag": "v2.9.0",
+  "commit": "e3a679f193458f8d4825803a4744063e7d4a5e80",
+  "archive_sha256": "a16c8c771ca7e17c2ceb4bec58e07bf42ea34848ecce71e1267d0dea525887c3",
   "pinned_files": {
-    "package-lock.json": "ef6dc0f6e1236f98aad9439af214751a7412dbae032f0ba654ca399fb71fd2bb"
+    "package-lock.json": "35bc23181ef075291763538b47dfafe0b505d6c6479dfbf485b42df46991dad5"
   },
   "release_tag_pattern": "^v\\d+\\.\\d+\\.\\d+$",
   "consumers": [

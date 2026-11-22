@@ -227,16 +227,16 @@
     "dependencies": [
       {
         "id": "codex-acp",
-        "version": "2.7.0",
-        "source": "https://registry.npmjs.org/@agentclientprotocol/codex-acp/-/codex-acp-2.7.0.tgz",
-        "integrity": "sha512-fFFU/tV5DltBzN4cZIh5tJEWGTZFXbwHU7I5RxPkmrGraw3jhAIuvTeudYwK3wAbV311WgIi7qONl2I8uRV2jw==",
+        "version": "2.9.0",
+        "source": "https://registry.npmjs.org/@agentclientprotocol/codex-acp/-/codex-acp-2.9.0.tgz",
+        "integrity": "sha512-2w0hyqz/8a4N6U+4ysE9zeINfpZzrrRtBjusNkQ5gCx4j5GTknPlVcIhq/ULmFNmb8DIvfI0dDHVO8dSI4h+7Q==",
         "private": true
       },
       {
         "id": "openai-codex",
-        "version": "0.169.1",
-        "source": "https://registry.npmjs.org/@openai/codex/-/codex-0.169.1.tgz",
-        "integrity": "sha512-2ZP53HuNspqL1lCX9Xc2XfoSq26VjjQ7XC08dTnkpetzH0kkAN1TTM3K1YOSwzAqikCdjQUzMV0haZmdxhPhjg==",
+        "version": "0.171.0",
+        "source": "https://registry.npmjs.org/@openai/codex/-/codex-0.171.0.tgz",
+        "integrity": "sha512-1IOFzL2Xg86tLdw6kDo3GoKbkQENgQi7TI6rlEvN132R7ngSw7SNOIQoTcnKzSZZ8kf9N9GynCweSoaFbqk2Eg==",
         "private": true
       },
       {

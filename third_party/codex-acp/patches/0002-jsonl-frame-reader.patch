@@ -17,7 +17,7 @@ Drop-When: upstream treats malformed or oversized app-server frames as fatal wit
 Tests: src/__tests__/CowboyStdUtils.test.ts src/__tests__/CodexJsonRpcConnection.test.ts src/__tests__/StdUtils.test.ts
 
 diff --git a/src/CodexJsonRpcConnection.ts b/src/CodexJsonRpcConnection.ts
-index 2c3ef07e83e893d147ddee59f65638672b6bbca9..6c94c14767b9b5a3bbd2b497c30b471e2d91da77 100644
+index b70f286e0303dd5fcda47460be1c06dcd2274e3f..7e3b6ebf5f2fe6614ad997ca0d81cf5e09ddbc26 100644
 --- a/src/CodexJsonRpcConnection.ts
 +++ b/src/CodexJsonRpcConnection.ts
 @@ -80,6 +80,13 @@ export function startCodexConnection(

@@ -17,7 +17,7 @@ Drop-When: Cowboy managed calls stop launching codex-acp with a managed profile
 Tests: src/__tests__/CowboyManagedProfile.test.ts src/__tests__/CowboyManagedPermissionProfiles.test.ts
 
 diff --git a/src/CodexAcpClient.ts b/src/CodexAcpClient.ts
-index b7271800b7dadd73eb8a5b1e244ffabefe93ec4c..4e96e0d64fdb5f5de40116917944f3b2663907c0 100644
+index bd4e99d3f8313e8360a055173b3f23942d747a60..eaa11cb93a813820e048c2db7f91e0dd73059e23 100644
 --- a/src/CodexAcpClient.ts
 +++ b/src/CodexAcpClient.ts
 @@ -27,6 +27,7 @@ import type {ServiceTier} from "./app-server/ServiceTier";
@@ -28,16 +28,16 @@ index b7271800b7dadd73eb8a5b1e244ffabefe93ec4c..4e96e0d64fdb5f5de40116917944f3b2
  import path from "node:path";
  import {isDeepStrictEqual} from "node:util";
  import {logger} from "./Logger";
-@@ -1155,12 +1156,28 @@ export class CodexAcpClient {
-             apiType: activeProvider.apiType,
+@@ -1205,12 +1206,28 @@ export class CodexAcpClient {
              baseUrl: activeProvider.baseUrl,
          });
+         const overrides = mcpServers.length ? expandConfigTables(this.config, "mcp_servers", "features") : this.config;
 +        // A managed snapshot is never trusted: its project config, rules,
 +        // hooks and MCP servers stay disabled, and client MCP servers are
 +        // not configured for it.
 +        const managed = managedProfileActive();
          const mergedConfig = {
-             ...disableUnsupportedSkills(forceGitRootTurnDiffPaths(mergeGatewayConfig(this.config, this.gatewayConfig))),
+             ...disableUnsupportedSkills(forceGitRootTurnDiffPaths(mergeGatewayConfig(overrides, this.gatewayConfig))),
 -            projects: Object.fromEntries(sessionRoots.map(root => [root, {
 -                trust_level: "trusted",
 -            }])),
@@ -60,7 +60,7 @@ index b7271800b7dadd73eb8a5b1e244ffabefe93ec4c..4e96e0d64fdb5f5de40116917944f3b2
          const configWithWorkspaceRoots = mergeSandboxWorkspaceWriteRoots(mergedConfig, additionalDirectories);
          const permissionProfiles = await this.fetchPermissionProfiles(projectPath);
          const effectiveConfig = await this.codexClient.configRead({includeLayers: true, cwd: projectPath});
-@@ -1397,6 +1414,9 @@ export class CodexAcpClient {
+@@ -1463,6 +1480,9 @@ export class CodexAcpClient {
      ): Promise<TurnCompletedNotification | null> {
          const input = buildPromptItems(request.prompt);
          const effort = modelId.effort as ReasoningEffort | null; //TODO remove unsafe conversion
@@ -70,7 +70,7 @@ index b7271800b7dadd73eb8a5b1e244ffabefe93ec4c..4e96e0d64fdb5f5de40116917944f3b2
          await this.refreshSkills(cwd, additionalDirectories);
          if (shouldCancel?.()) {
              return null;
-@@ -1405,19 +1425,22 @@ export class CodexAcpClient {
+@@ -1471,19 +1491,22 @@ export class CodexAcpClient {
          return await this.codexClient.runTurn({
              threadId: request.sessionId,
              input: input,
@@ -102,10 +102,10 @@ index b7271800b7dadd73eb8a5b1e244ffabefe93ec4c..4e96e0d64fdb5f5de40116917944f3b2
      }
  
 diff --git a/src/CodexAcpServer.ts b/src/CodexAcpServer.ts
-index 1b2f01dda136316b70008ce58d83db7741656a22..82df355a795699d5eff5eaa2d69d2cad46e12de3 100644
+index b8559b1abb1d914f410d282066d9cad5e315cda7..866964e3294c54214bd68afea297f4cb0f74b45b 100644
 --- a/src/CodexAcpServer.ts
 +++ b/src/CodexAcpServer.ts
-@@ -86,6 +86,7 @@ import type {RateLimitsMap} from "./RateLimitsMap";
+@@ -92,6 +92,7 @@ import type {RateLimitsMap} from "./RateLimitsMap";
  import {ModelId} from "./ModelId";
  import {normalizeSessionTitle} from "./SessionTitle";
  import {AgentMode, MODE_CONFIG_ID} from "./AgentMode";
@@ -113,7 +113,7 @@ index 1b2f01dda136316b70008ce58d83db7741656a22..82df355a795699d5eff5eaa2d69d2cad
  import {
      COLLABORATION_MODE_CONFIG_ID,
      createCollaborationModeConfigOption,
-@@ -2826,6 +2827,7 @@ export class CodexAcpServer {
+@@ -2980,6 +2981,7 @@ export class CodexAcpServer {
              modeId: _params.modeId
          });
          const sessionState = this.getSessionState(_params.sessionId);
@@ -121,7 +121,7 @@ index 1b2f01dda136316b70008ce58d83db7741656a22..82df355a795699d5eff5eaa2d69d2cad
  
          await this.applySessionConfigOption(sessionState, {
              sessionId: _params.sessionId,
-@@ -2842,6 +2844,9 @@ export class CodexAcpServer {
+@@ -2996,6 +2998,9 @@ export class CodexAcpServer {
              configId: params.configId,
          });
          const sessionState = this.getSessionState(params.sessionId);
@@ -131,7 +131,7 @@ index 1b2f01dda136316b70008ce58d83db7741656a22..82df355a795699d5eff5eaa2d69d2cad
  
          await this.applySessionConfigOption(sessionState, params);
  
-@@ -5447,7 +5452,9 @@ export class CodexAcpServer {
+@@ -5623,7 +5628,9 @@ export class CodexAcpServer {
                  .map(b => b.text)
                  .join(" ")
                  .trim();
@@ -245,7 +245,7 @@ index 0000000000000000000000000000000000000000..1a123d739e8631d7483490e13621ac56
 +}
 diff --git a/src/__tests__/CowboyManagedPermissionProfiles.test.ts b/src/__tests__/CowboyManagedPermissionProfiles.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..911aa752699eda26697bbdc4bc17c54082f977b5
+index 0000000000000000000000000000000000000000..08a1103e984c40cc5c9b34808cd14b3e8622fe27
 --- /dev/null
 +++ b/src/__tests__/CowboyManagedPermissionProfiles.test.ts
 @@ -0,0 +1,44 @@
@@ -266,7 +266,7 @@ index 0000000000000000000000000000000000000000..911aa752699eda26697bbdc4bc17c540
 +        const codexAcpClient = fixture.getCodexAcpClient();
 +        const appServer = fixture.getCodexAppServerClient();
 +        vi.spyOn(codexAcpClient, "readAuthRequirement").mockResolvedValue({required: false, account: null});
-+        vi.spyOn(codexAcpClient, "getAccount").mockResolvedValue({account: null, requiresOpenaiAuth: false});
++        vi.spyOn(codexAcpClient, "getAccount").mockResolvedValue({account: null, userId: null, requiresOpenaiAuth: false});
 +        vi.spyOn(appServer, "listSkills").mockResolvedValue({data: []});
 +        const configRead = vi.spyOn(appServer, "configRead").mockResolvedValue({config: {}} as any);
 +        const listProfiles = vi.spyOn(appServer, "listPermissionProfiles").mockResolvedValue({

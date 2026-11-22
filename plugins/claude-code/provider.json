@@ -299,16 +299,16 @@
     "dependencies": [
       {
         "id": "claude-agent-acp",
-        "version": "0.107.3",
-        "source": "https://registry.npmjs.org/@agentclientprotocol/claude-agent-acp/-/claude-agent-acp-0.107.3.tgz",
-        "integrity": "sha512-GrDLX0wOcvTGsQwJgUpEp8PLERByV6/e25VioqRTg41JUkvATE1VOImg5L62mF8e78p+ODrvr5CfMU8ySVzbMA==",
+        "version": "0.109.1",
+        "source": "https://registry.npmjs.org/@agentclientprotocol/claude-agent-acp/-/claude-agent-acp-0.109.1.tgz",
+        "integrity": "sha512-tGT3IH6ey3V7wvFRhxK+1XLYDC6FBUyIehvNBm06/as/HG2MWhC6r8hRffSpS7osnMjARZMfDeLyQB0Wjjm0uQ==",
         "private": true
       },
       {
         "id": "anthropic-claude-code",
-        "version": "2.1.326",
-        "source": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.326.tgz",
-        "integrity": "sha512-F7OqxXKogQYUs+RN1903IWlXGuxn8iwAykx+umRbDKvoBeK0Xm6cdgQx9auu5dtsB+DczN58/EFrlaU8pLfgJg==",
+        "version": "2.1.330",
+        "source": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.330.tgz",
+        "integrity": "sha512-KQMl6kixLMGHRCDUhkUPebuBhw13MpxlH3+17QzHQx40FNVd1z3uFKUSqQXB5zF9vLQGcpoC/8wWe5R35lsWvQ==",
         "private": true
       }
     ],

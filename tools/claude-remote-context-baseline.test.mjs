@@ -8,7 +8,11 @@ import {
   instructionFiles,
   nestedInstructions,
 } from "../plugins/claude-code/runtime/instructions.mjs";
-import { UNTRUSTED_DOWNLOADS, WorkspaceTools } from "../plugins/claude-code/runtime/tools.mjs";
+import {
+  UNTRUSTED_CURL_VALUES,
+  UNTRUSTED_DOWNLOADS,
+  WorkspaceTools,
+} from "../plugins/claude-code/runtime/tools.mjs";
 import { unlabeledContext } from "../plugins/claude-code/runtime/context-mod.js";
 
 const baseline = JSON.parse(
@@ -144,6 +148,7 @@ test("the environment block has native's lines", () => {
       " - Shell: SHELL",
       " - OS Version: OS",
       ` - ${UNTRUSTED_DOWNLOADS}`,
+      ` - ${UNTRUSTED_CURL_VALUES}`,
     ]);
   }
   assert.ok(
@@ -153,7 +158,7 @@ test("the environment block has native's lines", () => {
   );
   assert.ok(source.includes("}\\n - Platform: linux\\n - Shell: ${"));
   assert.ok(source.includes("}\\n - OS Version: ${"));
-  assert.ok(source.includes("}\\n - ${UNTRUSTED_DOWNLOADS}`"));
+  assert.ok(source.includes("}\\n - ${UNTRUSTED_DOWNLOADS}\\n - ${UNTRUSTED_CURL_VALUES}`"));
 });
 
 test("native labels a Mod's tool context, and the plugin removes the label", () => {
