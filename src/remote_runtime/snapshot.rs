@@ -110,3 +110,23 @@ pub(super) fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
     );
     true
 }
+
+impl super::RemoteRuntime {
+    /// The epoch of the worker still attached to `session_id` after it
+    /// reported the session crashed. The Controller treats such a worker as
+    /// absent ([`Self::has_worker`]) and never reuses it, yet nothing stops
+    /// it: the next prompt recycles the session, a generation rollout or a
+    /// credential roll drains only running workers. Read-only evidence for
+    /// operators; nothing acts on it automatically.
+    pub fn attached_crashed_worker(&self, session_id: &str) -> Option<String> {
+        if !self.connected() {
+            return None;
+        }
+        self.shared
+            .workers
+            .lock()
+            .get(session_id)
+            .filter(|worker| worker.has_connected_owner() && worker.state == WorkerState::Crashed)
+            .map(|worker| worker.worker_epoch.clone())
+    }
+}

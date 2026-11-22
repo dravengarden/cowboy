@@ -28,6 +28,10 @@ export async function runSessionMaintenanceBrowserConformance(keepFixture = fals
     policy: { memory_reclaim: true, reclaim_on_capacity: true, auto_update_idle_sessions: true },
     sessions: 32, working: 2, warm: 6, sleeping: 24, starting: 0, updating: 0,
     waiting: [{ id: "waiting", title: "Pending task", reason: "all worker slots are occupied", paused: false }],
+    crashed_workers: [{
+      id: "crashed", title: "Refused turn", provider: "claude-code", account: "default",
+      worker_epoch: "epoch-1", attached_for_ms: 11 * 60_000,
+    }],
   };
   let reject = false;
   const writes: Record<string, boolean>[] = [];
@@ -59,6 +63,9 @@ export async function runSessionMaintenanceBrowserConformance(keepFixture = fals
     const text = container.textContent ?? "";
     check(text.includes("32 sessions") && text.includes("24 sleeping") && text.includes("all worker slots"),
       "record counts and durable resource wait are distinct from worker capacity");
+    check(text.includes("1 crashed sessions still hold a worker") && text.includes("Refused turn")
+      && text.includes("default account") && text.includes("11 min"),
+      "a crashed session's still-attached worker is reported, not acted on");
     check(container.scrollWidth <= container.clientWidth, "phone width has no horizontal overflow");
     const inputs = () => [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
     for (const [index, key] of ["memory_reclaim", "reclaim_on_capacity", "auto_update_idle_sessions"].entries()) {

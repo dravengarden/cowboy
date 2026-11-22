@@ -5254,6 +5254,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_crashed_worker_still_attached_is_detected_but_counts_as_absent() {
+        let hub = hub_with_stale_spark_preferences();
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        runtime.ensure(snapshot("s").launch.unwrap());
+        let mut worker = snapshot("s");
+        worker.state = WorkerState::Crashed;
+        worker.current_turn_id = None;
+        project_snapshot(&runtime.shared, &worker);
+        // Not connected: nothing is claimed about the Machine.
+        assert_eq!(runtime.attached_crashed_worker("s"), None);
+        runtime.shared.connected.store(true, Ordering::Release);
+        assert!(!runtime.has_worker("s"));
+        assert_eq!(
+            runtime.attached_crashed_worker("s").as_deref(),
+            Some(worker.worker_epoch.as_str())
+        );
+        // The broker's registry placeholder is no attached worker.
+        let mut placeholder = worker.clone();
+        placeholder.worker_epoch = "broker-placeholder".to_owned();
+        project_snapshot(&runtime.shared, &placeholder);
+        assert_eq!(runtime.attached_crashed_worker("s"), None);
+        // A running worker is no crashed one.
+        worker.state = WorkerState::Running;
+        project_snapshot(&runtime.shared, &worker);
+        assert_eq!(runtime.attached_crashed_worker("s"), None);
+    }
+
+    #[tokio::test]
     async fn broker_exit_detail_explains_a_crashed_worker_snapshot() {
         let hub = hub_with_stale_spark_preferences();
         let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());

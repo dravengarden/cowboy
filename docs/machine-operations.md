@@ -393,6 +393,73 @@ remains. `lsof +L1` must show no deleted Cowboy log held open before the agent i
 started again. Do not delete Machine state, session worktrees, or enrollment
 identity as part of this containment.
 
+## Crashed sessions with a live worker
+
+A non-recoverable turn failure (a vendor account refusal, an expired
+credential, a lost execution environment) records the session as crashed
+while its worker, and the Provider runtime under it, can stay alive. The
+Controller never reuses that worker: the next prompt or Retry replaces it.
+Until then nothing stops it, not a worker generation rollout and not a
+credential roll or wipe, so it keeps holding memory, a slot and the
+credentials it started with (on 2026-11-22 five such workers had run on OVH
+for up to eleven days).
+
+The Controller reports them; it never stops them. A crashed session whose
+worker is still attached after ten minutes logs one warning per session and
+worker epoch (`crashed session still holds a live worker`, with session,
+Machine, Provider, `default` or `named` account and age), and is listed per
+Machine under `crashed_workers` in `GET /api/session-maintenance`, shown in
+Settings → Resources & automatic maintenance.
+
+To release one:
+
+1. Prefer the session's own recovery when it should run again: **Retry**
+   (`POST /api/sessions/{id}/reload`) replaces the crashed worker with a fresh
+   one on the current Provider release and credentials, keeping the
+   transcript and resuming the native thread. Do not use it for a session
+   whose account was retired (for example a legacy `default` card account);
+   the replacement would fail the same way.
+2. Otherwise stop only that worker by hand. First confirm in Cowboy that the
+   session is crashed and idle: its crash detail is shown (so the crash
+   reached the Controller), no turn, permission request or background task
+   is active, and the Machine has been connected for a few minutes. The
+   worker exits on `TERM` without flushing events it has not yet delivered,
+   which is why the crash must already be visible.
+   - Linux (user-systemd workers): as the Machine's service user, find the
+     unit and stop it:
+
+     ```sh
+     systemctl --user list-units --no-legend 'cowboy-worker-*-<session-id>.service'
+     systemctl --user stop cowboy-worker-<socket-hash>-<session-id>.service
+     ```
+
+     On OVH the service user is `ubuntu`:
+
+     ```sh
+     sudo -u ubuntu XDG_RUNTIME_DIR=/run/user/$(id -u ubuntu) \
+       systemctl --user stop cowboy-worker-<socket-hash>-<session-id>.service
+     ```
+
+   - macOS (direct child workers of the LaunchAgent, not launchd jobs): find
+     the worker by its session argument and send it `TERM`; its process group
+     holds the Provider subtree:
+
+     ```sh
+     pgrep -f -- '--session-id <session-id> ' | while read -r pid; do
+       ps -o pid=,pgid=,args= -p "$pid"
+     done
+     kill -TERM -- -<pgid>
+     ```
+
+3. Verify: the unit or process is gone
+   (`systemctl --user is-active <unit>` reports `inactive` or the unit is not
+   found; `pgrep -f -- '--session-id <session-id> '` prints nothing), the
+   Machine logs `declared worker has no running unit; reporting it stopped`
+   or the worker's `worker stopped by SIGTERM`, and the session is still
+   crashed in Cowboy with its history and crash detail. It leaves the
+   `crashed_workers` list within a minute. The next prompt or Retry starts a
+   new worker as usual.
+
 ## Component publication
 
 The controller manifest is a JSON array of `DesiredComponent`. Each artifact

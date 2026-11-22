@@ -23,6 +23,22 @@ export interface MaintenanceMachine {
   starting: number;
   updating: number;
   waiting: { id: string; title: string; reason: string; paused: boolean }[];
+  /** Crashed sessions whose worker is still attached (detection only). */
+  crashed_workers?: CrashedWorker[];
+}
+
+export interface CrashedWorker {
+  id: string;
+  title: string;
+  provider: string;
+  account: "default" | "named";
+  worker_epoch: string;
+  attached_for_ms: number;
+}
+
+function attachedFor(ms: number): string {
+  const minutes = Math.floor(ms / 60_000);
+  return minutes < 120 ? `${minutes} min` : `${Math.floor(minutes / 60)} h`;
 }
 
 const controls: [keyof MaintenancePolicy, string][] = [
@@ -103,6 +119,15 @@ export function SessionMaintenancePanel({ order = [] }: { order?: string[] } = {
               </Typography>
             ))}
             <Typography variant="caption" color="text.secondary">Pause or cancel in the session queue.</Typography>
+          </Box>}
+          {(row.crashed_workers?.length ?? 0) > 0 && <Box data-crashed-workers sx={{ borderLeft: 2, borderColor: "error.main", pl: 1 }}>
+            <Typography variant="caption" fontWeight={650}>{row.crashed_workers!.length} crashed sessions still hold a worker</Typography>
+            {row.crashed_workers!.map((item) => (
+              <Typography key={item.id} variant="caption" color="text.secondary" display="block" sx={{ overflowWrap: "anywhere" }}>
+                {item.title} · {item.provider} ({item.account} account) · {attachedFor(item.attached_for_ms)}
+              </Typography>
+            ))}
+            <Typography variant="caption" color="text.secondary">Nothing stops these automatically; an operator stops each worker (Machine operations guide).</Typography>
           </Box>}
           <Divider />
           <Box>

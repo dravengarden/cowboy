@@ -1257,6 +1257,7 @@ async fn serve_axum(
 ) -> anyhow::Result<()> {
     provider_accounts::browser::install_observer(&state);
     session_maintenance::start(&state);
+    session_maintenance::crashed_workers::start(&state);
     session_reclaim::listen_for_wakes(&state);
     memory_reclaim::start(&state);
     let secure_transport = Arc::new(secure_transport::SecureTransport::new(

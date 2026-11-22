@@ -259,19 +259,101 @@ the cutover only verifies them before releasing:
    - no session on a card's `default` account is starting, running or busy;
    - on every enrolled Machine, no worker process of a card family's
      `default` account is alive (a `default` worker is launched without
-     `--provider-account-id`). Run on each Machine, read-only; the output
-     must be empty:
+     the `--provider-account-id` option). Run on each Linux Machine (macOS
+     below), read-only; the output must be empty and the exit status zero. It
+     reads each worker's actual argument vector (NUL-delimited
+     `/proc/<pid>/cmdline`), so a path or value that contains the option
+     text cannot hide a `default` worker, and it fails instead of passing
+     when a worker's arguments (or `/proc`) cannot be read. Save it as
+     `default-workers.sh` and run `sh default-workers.sh` as the Machine's
+     user:
 
      ```sh
-     ps -eo pid,args | grep '[c]owboy-acp-worker ' \
-       | grep -E -- '--provider (claude-code|codex|grok|claude-deepseek|codex-deepseek|deepseek-harness)( |$)' \
-       | grep -v -- '--provider-account-id'
+     status=0
+     [ -r /proc/self/cmdline ] || { echo 'no /proc; the check is inconclusive' >&2; exit 1; }
+     for proc in /proc/[0-9]*; do
+       comm=$(cat "$proc/comm" 2>/dev/null) || continue
+       case $comm in cowboy-acp-work*) ;; *) continue ;; esac
+       # NUL-delimited argv, one argument per line (an embedded newline is kept
+       # inside its argument as \001, so it cannot forge another argument).
+       if ! args=$(tr '\n\0' '\001\n' < "$proc/cmdline" 2>/dev/null) || [ -z "$args" ]; then
+         [ -e "$proc" ] || continue
+         echo "${proc#/proc/}: worker arguments unreadable; the check is inconclusive" >&2
+         status=1
+         continue
+       fi
+       printf '%s\n' "$args" | awk -v pid="${proc#/proc/}" '
+         NR == 1 { worker = $0 ~ /(^|\/)cowboy-acp-worker$/ }
+         worker && prev == "--provider" { provider = $0 }
+         worker && $0 == "--provider-account-id" { named = 1 }
+         { prev = $0 }
+         END {
+           if (worker && provider ~ /^(claude-code|codex|grok|claude-deepseek|codex-deepseek|deepseek-harness)$/ && !named)
+             print pid, provider
+         }'
+     done
+     exit "$status"
      ```
 
-     A listed process is such a worker: stop its session with the current
-     Controller (or the Machine's own stop), then run the check again. The
-     Controller's status rows cannot prove this on their own (a worker can
-     outlive a session recorded as crashed).
+     On a macOS Machine (such as macbook-air), `ps` cannot show where one
+     argument ends; the same check reads each worker's argument vector from
+     the kernel (`sysctl` `KERN_PROCARGS2`) with the system Perl, and fails
+     when `ps`, or a live worker's arguments, cannot be read. Save it as
+     `default-workers.pl` and run `perl default-workers.pl` as the Machine's
+     user:
+
+     ```perl
+     use strict; use warnings;
+     my %card = map { $_ => 1 } qw(claude-code codex grok claude-deepseek codex-deepseek deepseek-harness);
+     my $status = 0;
+     my @ps = `ps -ax -o pid=,comm=`;
+     $? == 0 && @ps or die "ps failed; the check is inconclusive\n";
+     sub argv_of {
+         my ($pid) = @_;
+         my $name = pack("i3", 1, 49, $pid);  # CTL_KERN, KERN_PROCARGS2
+         my $size = 1 << 20;
+         my $buf = "\0" x $size;
+         my $len = pack("Q", $size);
+         my $rc = syscall(202, $name, 3, $buf, $len, 0, 0);  # __sysctl
+         return undef if $rc != 0;
+         $buf = substr($buf, 0, unpack("Q", $len));
+         my $argc = unpack("i", $buf);
+         my $rest = substr($buf, 4);
+         $rest =~ s/^[^\0]*\0+//;            # executable path and its padding
+         my @argv;
+         for (1 .. $argc) {
+             $rest =~ s/^([^\0]*)\0// or return undef;
+             push @argv, $1;
+         }
+         return \@argv;
+     }
+     for my $line (@ps) {
+         my ($pid, $comm) = $line =~ /^\s*(\d+)\s+(.*?)\s*$/ or next;
+         next unless $comm =~ m{(^|/)cowboy-acp-worker$};
+         my $argv = argv_of($pid);
+         if (!$argv) {
+             next unless kill 0, $pid;
+             warn "$pid: worker arguments unreadable; the check is inconclusive\n";
+             $status = 1;
+             next;
+         }
+         next unless $argv->[0] =~ m{(^|/)cowboy-acp-worker$};
+         my ($provider, $named) = ('', 0);
+         for my $i (1 .. $#$argv) {
+             $provider = $argv->[$i + 1] // '' if $argv->[$i] eq '--provider';
+             $named = 1 if $argv->[$i] eq '--provider-account-id';
+         }
+         print "$pid $provider\n" if $card{$provider} && !$named;
+     }
+     exit $status;
+     ```
+
+     A listed process is such a worker. The Controller's status rows cannot
+     prove this on their own: a worker can outlive a session recorded as
+     crashed (Settings → Resources lists those after ten minutes). Stop it as
+     described in
+     [crashed sessions with a live worker](machine-operations.md#crashed-sessions-with-a-live-worker),
+     not with Retry, then run the check again.
 2. **Web release** (`.#cowboy-web-release`): the new Web works with the old
    Controller and never opens a retired card's sign-in on the device.
 3. **Close or reload every open Cowboy tab**, so no older tab still holds a

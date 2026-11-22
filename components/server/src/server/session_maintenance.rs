@@ -7,6 +7,8 @@ use crate::config::schema::{
 use crate::core::settings_keys::{MACHINE_MAINTENANCE_PREFIX, SESSION_RESOURCE_WAIT_PREFIX};
 use crate::machine_protocol::MachineCapacity;
 
+pub(super) mod crashed_workers;
+
 pub(super) const WAIT_PREFIX: &str = "Waiting for resources: ";
 pub(super) const MACHINE_CONNECTION_WAIT: &str = "waiting for Machine connection";
 /// The wait of an admitted prompt whose execution Machine is offline or booting.
@@ -17,6 +19,8 @@ const WAKE_HEADROOM: u64 = 1 << 30;
 pub(super) struct Coordinator {
     capacities: parking_lot::RwLock<HashMap<String, MachineCapacity>>,
     reclaiming: parking_lot::Mutex<std::collections::HashSet<String>>,
+    /// Crashed sessions whose worker is still attached (detection only).
+    pub(super) crashed_workers: crashed_workers::Observed,
 }
 
 impl Coordinator {
@@ -417,6 +421,7 @@ pub(super) async fn inventory(
             "starting": rows.iter().filter(|s| s.status == Status::Starting).count(),
             "updating": rows.iter().filter(|s| s.provider_update.is_some()).count(),
             "waiting": waiting,
+            "crashed_workers": state.session_maintenance.crashed_workers.report(&rows),
             // The resource panel does not need Plugin or workspace inventories.
             "machine": {
                 "id": machine.id, "display_name": machine.display_name,
