@@ -485,6 +485,11 @@ grok-billing-capture GROK:
 codex-refresh-guard-probe CODEX:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec python3 tools/codex_refresh_guard_probe.py "$@"' probe --codex "{{CODEX}}"
 
+# An `agy` pin must still log the Antigravity proxy's turn-barrier request
+# (unauthenticated, closed HOME, no network; see tools/agy-barrier-probe.mjs).
+agy-barrier-probe AGY RECEIPT: claude-remote-prepare
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec node --import ./tools/register-memory-client.mjs tools/agy-barrier-probe.mjs "$@"' probe --agy "{{AGY}}" --receipt "{{RECEIPT}}"
+
 # Native execution interfaces only: closed homes, loopback scripted API, no
 # production credentials/model inference/Provider install or Machine activation.
 execution-codex-turn-conformance CLI VERSION SHA256 RECEIPT:

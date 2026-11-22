@@ -23,6 +23,11 @@ const mcpCall = (method, params) =>
   });
 for await (const line of createInterface({ input: process.stdin })) {
   const message = JSON.parse(line);
+  // Like agy (1.5.9 and 1.5.14), every request and notification is logged
+  // as it is read, before it is handled.
+  if (typeof message.method === "string") {
+    appendFileSync(logFile, `${stamp()}server.go:213] ACP Request received: ${message.method}\n`);
+  }
   if (message.method === "initialize") {
     send({ id: message.id, result: { protocolVersion: 1, seen: message.params } });
   } else if (message.method === "session/new") {
@@ -97,14 +102,18 @@ for await (const line of createInterface({ input: process.stdin })) {
         `E1118 00:00:00.000000     1 errorreport.go:307] generating and executing: RESOURCE_EXHAUSTED (code 429): quota\n`,
       );
     }
-    appendFileSync(
-      logFile,
-      `${stamp()}server.go:1323] Stream goroutine exited for ${sessionId}, sending completion signal\n`,
-    );
+    // From agy 1.5.10 the conversation stream outlives the turn: no stream
+    // barrier follows its last backend step.
     // What agy saw of the prompt's `_meta` (Cowboy's managed round never).
     send({
       id: message.id,
       result: { stopReason: "end_turn", seenMeta: message.params._meta ?? null },
+    });
+  } else if (message.id !== undefined && message.method?.startsWith("_")) {
+    // An extension request agy does not know, as the proxy's barrier.
+    send({
+      id: message.id,
+      error: { code: -32601, message: `Method not found: ${message.method}` },
     });
   }
 }

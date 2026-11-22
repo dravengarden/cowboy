@@ -4,6 +4,7 @@
 // outcome is read from the unit's own `agy` log instead: only backend status
 // fields (HTTP code, `google.rpc` status and `ErrorInfo.reason`), never model
 // or message text. The exact lines are documented in this package's README.
+import { randomUUID } from "node:crypto";
 import { open, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -49,10 +50,31 @@ const REQUEST_FAILURE = new RegExp(
   `${PREFIX}http_helpers\\.go:\\d+\\] Failed to make code assist backend request \\((https://[^)\\s]+)\\): \\{$`,
 );
 
-/** The barrier line `agy` writes after the last backend step of a turn. */
+/**
+ * The stream barrier `agy` 1.5.9 writes after the last backend step of a
+ * turn. From 1.5.10 the conversation stream outlives the turn (it carries a
+ * woken agent's replies between turns), so the line no longer marks a turn's
+ * end; it is read only by an `AgyLog` without a barrier request.
+ */
 export function barrierPattern(sessionId) {
   return new RegExp(
     `${PREFIX}server\\.go:\\d+\\] Stream goroutine exited for ${escape(sessionId)}, sending completion signal$`,
+  );
+}
+
+/**
+ * The request the proxy sends `agy` once a turn has replied, as
+ * `<method>/<nonce>`. `agy` answers it "Method not found", but it logs every
+ * request it reads before handling it (`ACP Request received: <method>`, in
+ * 1.5.9 and 1.5.14 alike), so that line follows every line the turn logged
+ * before its reply: the turn's barrier.
+ */
+export const BARRIER_METHOD = "_cowboy/evidence_barrier";
+
+/** The line `agy` writes when it reads the barrier request `nonce` names. */
+export function requestBarrierPattern(nonce) {
+  return new RegExp(
+    `${PREFIX}server\\.go:\\d+\\] ACP Request received: ${escape(`${BARRIER_METHOD}/${nonce}`)}$`,
   );
 }
 
@@ -64,11 +86,17 @@ function escape(value) {
  * Parse log text into backend records: `success`, `step_failure` (status,
  * code) and `request_failure` (status, code, reasons). Structured JSON is
  * read only from a request failure's own block and only for its `code`,
- * `status` and `details[].reason` fields.
+ * `status` and `details[].reason` fields. The barrier is the request
+ * barrier `nonce` names when given, else the session's stream barrier.
  */
-export function parseRecords(text, sessionId) {
+export function parseRecords(text, sessionId, nonce) {
   const lines = text.split("\n");
-  const barrier = sessionId === undefined ? undefined : barrierPattern(sessionId);
+  const barrier =
+    nonce !== undefined
+      ? requestBarrierPattern(nonce)
+      : sessionId === undefined
+        ? undefined
+        : barrierPattern(sessionId);
   const records = [];
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
@@ -188,14 +216,18 @@ export function classify(records, { prior = [], stopReason } = {}) {
 
 /**
  * The log of one `agy acp` process (`acp-server-<time>-<pid>.log` in its
- * HOME) read with a per-turn byte cursor and a bounded reader.
+ * HOME) read with a per-turn byte cursor and a bounded reader. `request`
+ * sends `agy` one JSON-RPC message: with it every turn settles on its own
+ * barrier request (see `BARRIER_METHOD`); without it, on the 1.5.9 stream
+ * barrier.
  */
 export class AgyLog {
-  constructor(directory, pid, { pollMs = 100, barrierTimeoutMs = 10000 } = {}) {
+  constructor(directory, pid, { pollMs = 100, barrierTimeoutMs = 10000, request } = {}) {
     this.directory = directory;
     this.pid = pid;
     this.pollMs = pollMs;
     this.barrierTimeoutMs = barrierTimeoutMs;
+    this.request = request;
     this.path = undefined;
   }
 
@@ -233,16 +265,33 @@ export class AgyLog {
 
   /**
    * Settle a finished turn: wait for its barrier line (bounded), then
-   * classify. Missing or unreadable evidence is `unknown_refusal`.
+   * classify. Missing or unreadable evidence is `unknown_refusal`. Called
+   * only after the turn's reply has arrived: its barrier request is sent
+   * now, with a nonce no earlier line can carry.
    */
   async settle(cursor, sessionId, stopReason) {
     if (cursor === undefined) return classify([]);
+    let nonce;
+    if (this.request) {
+      nonce = randomUUID();
+      try {
+        // Its reply answers nothing the proxy waits for and is dropped.
+        this.request({
+          jsonrpc: "2.0",
+          id: `cowboy-evidence-${nonce}`,
+          method: `${BARRIER_METHOD}/${nonce}`,
+          params: {},
+        });
+      } catch {
+        return classify([], {});
+      }
+    }
     const deadline = Date.now() + this.barrierTimeoutMs;
     try {
       for (;;) {
         const size = (await stat(await this.locate())).size;
         if (size - cursor > MAX_WINDOW) return classify([], {});
-        const records = parseRecords(await this.read(cursor, size), sessionId);
+        const records = parseRecords(await this.read(cursor, size), sessionId, nonce);
         if (records.some((record) => record.kind === "barrier") || Date.now() >= deadline) {
           const prior = parseRecords(
             await this.read(Math.max(0, cursor - MAX_WINDOW), cursor),

@@ -94,6 +94,12 @@ namespace, no model request):
 - Codex: `nix develop -c just codex-refresh-guard-probe <absolute codex>` must
   report a refresh against the fake endpoint and none, with `auth.json`
   unchanged, for the collector's refusal URL.
+- agy: `nix develop -c just agy-barrier-probe <absolute agy> <receipt>` must
+  settle a turn on the Antigravity proxy's barrier request and see it answered
+  `-32601` (unauthenticated, no network). A failing pin would settle every turn
+  `unknown_refusal` and park its account. A new executable also needs its
+  SHA-512 in Columbus `machines/ovh/account-sandbox/agy-sha512.allow` before
+  OVH can run it, and one real turn's acceptance after installation.
 
 ## Configure Recommended without product code
 

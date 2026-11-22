@@ -193,15 +193,29 @@ violation `unknown`.
 The proxy reads only its own `agy` process's log
 (`$HOME/.gemini/antigravity-cli/log/acp-server-<time>-<pid>.log`) from the
 byte offset at the turn's start (window ≤ 4 MiB). Lines matched, observed with
-`agy` 1.5.9 and the dedicated test account (`testdata/`):
+`agy` 1.5.9 and the dedicated test account (`testdata/`); the barrier with
+1.5.9 and 1.5.14 (`just agy-barrier-probe`):
 
 | Record                         | Line (glog prefix `I1117 05:11:38.187128     363 ` omitted)                                                                                           |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | success (one per backend step) | `http_helpers.go:709] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x… ResponseID: …`               |
-| barrier (turn end)             | `server.go:1323] Stream goroutine exited for <sessionId>, sending completion signal`                                                                  |
+| barrier (turn end)             | `server.go:213] ACP Request received: _cowboy/evidence_barrier/<nonce>` (1.5.9: `server.go:988]`)                                                     |
 | step failure                   | `errorreport.go:307] agent executor error: generating and executing: PERMISSION_DENIED (code 403): …` (and the same without `agent executor error: `) |
 | retried attempt                | `run.go:316] Run: attempt 1 failed (UNAVAILABLE (code 503): …), retrying in 4s`                                                                       |
 | request failure                | `http_helpers.go:876] Failed to make code assist backend request (<url>): {` followed by the `google.rpc` JSON error ending in a line `}`             |
+
+The barrier is a request only the proxy sends, once the turn's reply has
+arrived: `_cowboy/evidence_barrier/<nonce>` with a fresh random nonce, which
+`agy` answers `-32601` (its reply answers no pending request and is dropped).
+`agy` logs every request it reads before handling it, so that line follows
+every line the turn logged before its reply, and another turn's barrier (a
+subagent settling alongside) never settles this one. The worker cannot send
+it: only the runtime requests above reach `agy`. `agy` 1.5.9 also ended each
+turn's conversation stream (`server.go:1323] Stream goroutine exited for
+<sessionId>, sending completion signal`), the barrier until Antigravity
+0.2.23; from 1.5.10 the stream outlives the turn (it carries a woken agent's
+replies between turns), so the line no longer marks a turn's end and is not
+read. A new `agy` pin passes `just agy-barrier-probe <agy> <receipt>` first.
 
 Only `code`, `status` and `ErrorInfo.reason` are read; message text never is.
 Rules: a turn is `ok` only with its barrier and at least one success record
@@ -231,4 +245,7 @@ nix develop -c node --import ./tools/register-memory-client.mjs --test component
 ```
 
 `test-endpoint.mjs` is a fake execution endpoint (Unix socket, WebSocket)
-and `testdata/fake-agy.mjs` a stand-in for `agy acp`; neither is shipped.
+and `testdata/fake-agy.mjs` a stand-in for `agy acp` (it logs every request it
+reads, and from 1.5.10 no stream barrier); neither is shipped.
+`tools/agy-barrier-probe.mjs` runs a real `agy` executable, unauthenticated and
+without network, through this package's `AgyLog`.
