@@ -439,9 +439,23 @@ async fn refused_fresh_agent_records_failure_and_releases_its_destination_fence(
     let mut fixture = Fixture::new().await;
     let (_controller, base) = fixture.start().await;
     let context_url = format!("{base}/api/sessions/source/context");
-    let saved = fixture.request(reqwest::Method::PUT, &context_url).json(&json!({
+    // A retired legacy card's default never becomes a next agent.
+    let retired = fixture.request(reqwest::Method::PUT, &context_url).json(&json!({
         "revision":0,"sources":["source"],"next_agent":{
             "provider":"codex","provider_account_id":"default","machine_id":"offline-fixture","cwd":"missing-project","inherit_settings":false
+        }
+    })).send().await.unwrap();
+    assert_eq!(retired.status(), 409);
+    assert!(
+        retired
+            .text()
+            .await
+            .unwrap()
+            .contains("named_account_required")
+    );
+    let saved = fixture.request(reqwest::Method::PUT, &context_url).json(&json!({
+        "revision":0,"sources":["source"],"next_agent":{
+            "provider":"fixture-agent","provider_account_id":"default","machine_id":"offline-fixture","cwd":"missing-project","inherit_settings":false
         }
     })).send().await.unwrap();
     assert_eq!(saved.status(), 200, "{}", saved.text().await.unwrap());
@@ -498,7 +512,7 @@ async fn legacy_draft_send_cannot_strand_a_message_behind_a_staged_agent() {
         )
         .json(&json!({
             "revision":0,"sources":["source"],"next_agent":{
-                "provider":"codex","provider_account_id":"default",
+                "provider":"fixture-agent","provider_account_id":"default",
                 "machine_id":"offline-fixture","cwd":"missing-project","inherit_settings":false
             }
         }))
@@ -587,7 +601,7 @@ async fn inheritance_preflight_refusal_creates_no_destination_or_context_reserva
     let context_url = format!("{base}/api/sessions/source/context");
     let saved = fixture.request(reqwest::Method::PUT, &context_url).json(&json!({
         "revision":0,"sources":["source"],"next_agent":{
-            "provider":"codex","provider_account_id":"default","machine_id":"offline-fixture","cwd":"missing-project"
+            "provider":"fixture-agent","provider_account_id":"default","machine_id":"offline-fixture","cwd":"missing-project"
         }
     })).send().await.unwrap();
     assert_eq!(saved.status(), 200);
