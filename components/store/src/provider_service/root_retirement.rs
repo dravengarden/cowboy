@@ -77,7 +77,8 @@ impl ProviderAuthService {
     /// completion a Machine's rotation of the moved generation could not be
     /// promoted into its account. Refuses a journal whose root entry still
     /// holds a credential (the previous Controller must finish that move).
-    /// Returns the Providers it completed. Idempotent.
+    /// A journal that lost the copy's account generation (completed or not)
+    /// gets it back. Returns the Providers it changed. Idempotent.
     pub fn recover_legacy_moves(&self) -> Result<Vec<String>> {
         if !self.account_id.is_default() || self.recipient_key.is_some() {
             return Ok(Vec::new());
@@ -98,7 +99,9 @@ impl ProviderAuthService {
             let Some(moved) = self.read_move(provider_id) else {
                 anyhow::bail!("legacy move journal of {provider_id} is unreadable");
             };
-            if moved.completed {
+            // A completed journal is final unless it lost its account
+            // generation (see below).
+            if moved.completed && moved.account_generation > 0 {
                 continue;
             }
             pending
@@ -111,7 +114,7 @@ impl ProviderAuthService {
         let mut completed = Vec::new();
         for (account_id, (mut moved, journaled)) in pending {
             let account = self.account(&account_id)?;
-            for provider_id in &journaled {
+            for provider_id in journaled.iter().filter(|_| !moved.completed) {
                 ensure!(
                     providers.get(provider_id).is_none_or(|stored| {
                         stored.authentication_state == ServiceAuthenticationState::SignedOut
@@ -121,15 +124,23 @@ impl ProviderAuthService {
                 );
             }
             // Revoking the account deleted its copy: no rotation can land
-            // there, so the journal stays unfinished and routes nothing.
-            if moved.account_generation == 0
-                || !journaled
-                    .iter()
-                    .any(|provider_id| account.status(provider_id).is_some())
+            // there, so the journal stays as it is and routes nothing.
+            if !journaled
+                .iter()
+                .any(|provider_id| account.status(provider_id).is_some())
             {
                 tracing::warn!(account = account_id.as_str(), providers = ?journaled,
-                    "unfinished legacy move has no account copy; left unrouted");
+                    "legacy move has no account copy; left unrouted");
                 continue;
+            }
+            // The previous writer could stop after the copy but before it
+            // journaled the copy's generation, and its replay then completed
+            // the journal with generation zero. A move copies into an empty
+            // account vault, whose first commit is always generation 1.
+            if moved.account_generation == 0 {
+                tracing::warn!(account = account_id.as_str(), providers = ?journaled,
+                    "recovered a legacy move's account generation from its empty-vault copy");
+                moved.account_generation = 1;
             }
             moved.completed = true;
             self.write_move(&journaled, &moved)?;
@@ -290,5 +301,40 @@ mod tests {
             .unwrap();
         assert!(service.recover_legacy_moves().unwrap().is_empty());
         assert!(service.legacy_move("codex-deepseek").is_none());
+    }
+
+    #[test]
+    fn a_move_that_lost_its_account_generation_gets_it_back() {
+        let root = tempfile::tempdir().unwrap();
+        let service = ProviderAuthService::open(root.path()).unwrap();
+        let [claude, codex] = scope();
+        let both = [claude, codex];
+        let providers = ["claude-deepseek".to_owned(), "codex-deepseek".to_owned()];
+        for completed in [true, false] {
+            let id: ProviderAccountId = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+            let account = service.account(&id).unwrap();
+            // Copied, then stopped before journaling the copy's generation;
+            // a replay may have completed it with generation zero.
+            account
+                .commit_shared(&both, &bundle(), None, "claude-deepseek", None)
+                .unwrap();
+            service
+                .write_move(
+                    &providers,
+                    &LegacyMove {
+                        account_id: id.clone(),
+                        root_generation: 1,
+                        account_generation: 0,
+                        completed,
+                    },
+                )
+                .unwrap();
+            let mut recovered = service.recover_legacy_moves().unwrap();
+            recovered.sort();
+            assert_eq!(recovered, providers);
+            let moved = service.legacy_move("codex-deepseek").unwrap();
+            assert_eq!((moved.account_generation, moved.completed), (1, true));
+            assert!(service.recover_legacy_moves().unwrap().is_empty());
+        }
     }
 }
