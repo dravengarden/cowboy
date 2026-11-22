@@ -1069,7 +1069,41 @@ test-graph-bin NAME:
 # Concurrent gates' servers share the disk cache; each evicts by its own size
 # accounting, which can cost hits but never yields a wrong artifact. A reused
 # rlib keeps its producer's debug paths; debug a gate build only after rebuilding.
-check-compact:
+check-compact: (compact "check")
+
+# Prepare a fresh worktree while reading the task: install the dependencies and
+# compile every Rust lane of the gate (the shared test graph, Clippy, the
+# feature slices with the execution host, the release-source slices, the Zed
+# adapter and the MCP relay) through the same compiler cache, so the first
+# `check-compact` starts warm instead of spending minutes compiling. A lane
+# that fails only stays cold; the gate reports the failure itself.
+warm: install (compact "warm-lanes")
+
+[private]
+warm-lanes:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    lane() {
+      local log status
+      log="$(mktemp "${TMPDIR:-/tmp}/cowboy-warm.XXXXXX")"
+      SECONDS=0
+      just "$1" >"$log" 2>&1
+      status=$?
+      echo "warm: $1 exit $status after ${SECONDS}s"
+      if ((status != 0)); then tail -n 20 "$log"; fi
+      rm -f "$log"
+    }
+    lane test-graph-build &
+    lane clippy &
+    lane test-rust-slices-build &
+    lane release-sources-check &
+    lane zed-check &
+    lane claude-remote-relay &
+    wait
+
+# Run RECIPE through the private compiler cache described above.
+[private]
+compact RECIPE:
     #!/usr/bin/env bash
     set -euo pipefail
     build_dir() { (cd "$1" && cargo metadata --format-version 1 --no-deps --locked | jq -r '.build_directory // .target_directory'); }
@@ -1095,10 +1129,10 @@ check-compact:
       export SCCACHE_SERVER_UDS="$socket_dir/server.sock" RUSTC_WRAPPER=sccache
       trap stop EXIT
     else
-      echo "check-compact: sccache unavailable; running the gate uncached" >&2
+      echo "{{RECIPE}}: sccache unavailable; running uncached" >&2
       if [[ -n "${socket_dir:-}" ]]; then rm -rf "$socket_dir"; fi
     fi
-    just check
+    just {{RECIPE}}
 
 # Exercise the actual private Operator CLI/Controller and enrolled Machine.
 # Only active entries write; other matrix entries are resolved, not reader-tested.

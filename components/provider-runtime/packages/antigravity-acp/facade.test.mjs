@@ -266,6 +266,26 @@ test("SearchFiles runs the target's rg with match and byte bounds", { skip: !has
   );
 });
 
+test("SearchFiles with only a glob finds files by name", { skip: !hasRg }, async (t) => {
+  const { root, call } = await fixture(t);
+  mkdirSync(join(root, "img", "deep"), { recursive: true });
+  writeFileSync(join(root, "img", "deep", "logo.PNG"), "");
+  writeFileSync(join(root, "img", "icon.png"), "");
+  writeFileSync(join(root, "img", "notes.txt"), "png");
+  const found = (await call("SearchFiles", { glob: "**/*.png" })).text.split("\n").sort();
+  assert.deepEqual(found, ["img/icon.png"]);
+  const folded = (await call("SearchFiles", { glob: "**/*.png", ignore_case: true })).text
+    .split("\n")
+    .sort();
+  assert.deepEqual(folded, ["img/deep/logo.PNG", "img/icon.png"]);
+  assert.equal((await call("SearchFiles", { glob: "**/*.gif" })).text, "No matches.");
+  assert.match((await call("SearchFiles", {})).text, /Give pattern, glob or both/);
+  assert.match(
+    (await call("SearchFiles", { glob: "*.png", path: "img/notes.txt" })).text,
+    /give a directory as path/,
+  );
+});
+
 test("WriteFile and EditFile are conditional on what was read", async (t) => {
   const { base, root, call } = await fixture(t);
   assert.match(
@@ -857,6 +877,11 @@ test("home reads stop at their deadline and at the discovery budget", async (t) 
   await idle.call("fs/getMetadata", {});
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.deepEqual(await idle.call("fs/getMetadata", {}), { path: "file:///x" });
+  // Concurrent home reads share the wall time instead of each adding theirs.
+  const pair = () => new Promise((resolve) => setTimeout(() => resolve({ path: "file:///x" }), 45));
+  const shared = HomeReads.for(pair, "/h", "/r", { deadlineMs: 100, budgetMs: 80 });
+  await Promise.all([shared.call("fs/getMetadata", {}), shared.call("fs/getMetadata", {})]);
+  assert.ok(shared.elapsed() < 80, `${shared.elapsed()} ms`);
   // Time spent waiting on home reads does: a slow home exhausts it.
   const slow = () => new Promise((resolve) => setTimeout(() => resolve({ path: "file:///x" }), 45));
   const budgeted = HomeReads.for(slow, "/h", "/r", { deadlineMs: 100, budgetMs: 80 });

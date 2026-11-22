@@ -107,10 +107,15 @@ function describe(tool, input, root) {
     case "ListDirectory":
       return { title: `List ${where}`, path: absolute(root, path) };
     case "SearchFiles": {
-      const pattern = text(input.pattern) ?? "";
+      const pattern = text(input.pattern);
+      const glob = text(input.glob);
       const scope = path ? ` in ${path}` : "";
       return {
-        title: line(`Search ${JSON.stringify(pattern)}${scope}`),
+        title: line(
+          pattern === undefined && glob !== undefined
+            ? `Find ${JSON.stringify(glob)}${scope}`
+            : `Search ${JSON.stringify(pattern ?? "")}${scope}`,
+        ),
         path: absolute(root, path),
       };
     }

@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "claude-code",
-  "version": "3.20.71",
+  "version": "3.20.72",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.7.0",
   "display": {

@@ -11,11 +11,14 @@
     inputs.nixpkgs.follows = "nixpkgs";
   };
 
+  # Release Rust builds cache their dependency graph apart from the workspace.
+  inputs.crane.url = "github:ipetkov/crane";
+
   # Machine host fixes retain the separately accepted detached-worker bundle.
   # Advance this exact source only with worker/adapter maintenance acceptance.
   inputs.cowboy-workers.url = "git+ssh://git@github.com/dravengarden/cowboy.git?rev=1da02869af1ce471c1052b4e4bc76f790989f530";
 
-  outputs = { self, nixpkgs, rust-overlay, cowboy-workers }:
+  outputs = { self, nixpkgs, rust-overlay, crane, cowboy-workers }:
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs {
@@ -472,19 +475,31 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-N/epDo3LNduRzTqUJH63ZexeJEGkmn61aNiKD/VVk0U=";
+        hash = "sha256-TgHVnwNVU2AGEOKS4NDKN3QMOiosyjxNefgkxdaizCo=";
         preBuild = staticCratesVendorPatch + ''
           export PATH="${cardeaVendorGit}/bin:$PATH"
         '';
       };
 
-      # API/control plane + detached ACP worker. The SPA is served from a
-      # runtime path and is intentionally absent from this derivation.
-      cowboy = rustPlatform.buildRustPackage {
-        pname = "cowboy";
-        version = "0.1.0";
-        src = cowboy-src;
-        cargoDeps = cowboy-cargo-deps;
+      # Release Rust packages split their dependency graph from the workspace
+      # with crane, as the Hawk Rust standard recommends: each release
+      # otherwise compiled about 400 crates and jemalloc before Cowboy's own
+      # crates could start (85s of a 226s Controller build, 2026-11-22 on
+      # Hawk). A deps derivation depends only on the lockfile, the manifests
+      # and the environment its build scripts read, so an ordinary source
+      # change rebuilds the workspace crates alone. It reads the same
+      # fetchCargoVendor tree, private SDK pin included, through crane's
+      # vendor-directory contract.
+      craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
+      cowboy-crane-vendor = pkgs.runCommand "cowboy-crane-vendor" { } ''
+        mkdir -p "$out"
+        for source in ${cowboy-cargo-deps}/source-*; do ln -s "$source" "$out/"; done
+        substitute ${cowboy-cargo-deps}/.cargo/config.toml "$out/config.toml" \
+          --replace-fail "@vendor@" "$out"
+      '';
+      # What the dependencies' build scripts read. A deps derivation and the
+      # package built from it must agree, or Cargo rebuilds the whole graph.
+      cowboy-release-cenv = {
         # jemalloc's configure probes use -Werror while Nix enables
         # _FORTIFY_SOURCE; keep C probes optimized so glibc does not reject
         # that valid combination during debug test builds.
@@ -493,33 +508,76 @@
         # allocations. Prefer promptly releasing memory over allocator
         # throughput: one arena, no thread cache, no dirty/muzzy decay, and no
         # retained virtual mappings. abort_conf makes a typo fail the build/run
-        # instead of silently falling back to a higher-residency default.
+        # instead of silently falling back to a higher-residency default. The
+        # resident Machine and the CLI share the policy: they are low-throughput
+        # relays whose freed pages should return to the host promptly.
         JEMALLOC_SYS_WITH_MALLOC_CONF =
           "abort_conf:true,background_thread:true,narenas:1,tcache:false,dirty_decay_ms:0,muzzy_decay_ms:0,retain:false,metadata_thp:disabled,thp:never";
-        # The Agent API's contained program runtime (src/server/agent_api.rs).
-        # Pinned at build time; the Controller has no unsandboxed fallback.
+      };
+
+      # API/control plane + detached ACP worker. The SPA is served from a
+      # runtime path and is intentionally absent from this derivation. The
+      # Controller lives in the cowboy-server package; the release keeps
+      # shipping it as bin/cowboy so ExecStart paths and the CLI do not move.
+      cowboy-controller-cargo-args =
+        "--locked -p cowboy-server --bin cowboy-controller -p cowboy --bin cowboy-acp-worker --bin cowboy-codex-app-server";
+      cowboy-controller-common = cowboy-release-cenv // {
+        pname = "cowboy";
+        version = "0.1.0";
+        src = cowboy-src;
+        strictDeps = true;
+        nativeBuildInputs = [ pkgs.pkg-config ];
+        buildInputs = [ pkgs.openssl ];
+      };
+      # The Agent API's contained program runtime (src/server/agent_api.rs).
+      # Pinned at build time; the Controller has no unsandboxed fallback.
+      cowboy-agent-sandbox = {
         COWBOY_AGENT_SANDBOX_BWRAP = "${pkgs.bubblewrap}/bin/bwrap";
         COWBOY_AGENT_SANDBOX_PRLIMIT = "${pkgs.util-linux}/bin/prlimit";
         COWBOY_AGENT_SANDBOX_BUN = "${bun}/bin/bun";
-        # The Controller lives in the cowboy-server package; the release keeps
-        # shipping it as bin/cowboy so ExecStart paths and the CLI do not move.
-        cargoBuildFlags = [
-          "-p"
-          "cowboy-server"
-          "--bin"
-          "cowboy-controller"
-          "-p"
-          "cowboy"
-          "--bin"
-          "cowboy-acp-worker"
-          "--bin"
-          "cowboy-codex-app-server"
-        ];
+      };
+      # This derived digest must never become a stale worker-generation pin.
+      # Enforce it inside the immutable worker build as well as the root gate.
+      cowboy-controller-preBuild = ''
+        test -e ${worker-registry-check}
+      '';
+      # current_exe resolves the release symlink to this package, so the
+      # closed Plugin runtime must be beside the real executable too.
+      cowboy-controller-postInstall = ''
+        mv "$out/bin/cowboy-controller" "$out/bin/cowboy"
+        ln -s ${bun}/bin/bun "$out/bin/cowboy-plugin-js"
+      '';
+      cowboy-controller-deps = craneLib.buildDepsOnly (cowboy-controller-common // {
+        cargoVendorDir = cowboy-crane-vendor;
+        cargoExtraArgs = cowboy-controller-cargo-args;
+        # Only the release graph: no check-mode or test dependencies.
+        cargoCheckCommand = "true";
+        doCheck = false;
+      });
+      cowboy = craneLib.buildPackage (cowboy-controller-common // cowboy-agent-sandbox // {
+        cargoVendorDir = cowboy-crane-vendor;
+        cargoArtifacts = cowboy-controller-deps;
+        cargoExtraArgs = cowboy-controller-cargo-args;
         # Release outputs never rerun the Rust suite: the exact commit already
         # passed `just check` (nextest over the same packages), and the check
         # phase doubled the release build (about 8 of 12 minutes). The hermetic
         # suite stays available as `checks.cowboy-tests` below.
         doCheck = false;
+        preBuild = cowboy-controller-preBuild;
+        postInstall = cowboy-controller-postInstall;
+        passthru.workerGeneration = worker-generation;
+        meta = {
+          description = "Drive coding-agent CLIs from anywhere over ACP";
+          mainProgram = "cowboy";
+        };
+      });
+      # The hermetic suite keeps nixpkgs' builder and the release's flags.
+      cowboy-tests = rustPlatform.buildRustPackage (cowboy-release-cenv // cowboy-agent-sandbox // {
+        pname = "cowboy-tests";
+        version = "0.1.0";
+        src = cowboy-src;
+        cargoDeps = cowboy-cargo-deps;
+        cargoBuildFlags = builtins.tail (pkgs.lib.splitString " " cowboy-controller-cargo-args);
         cargoTestFlags = [ "-p" "cowboy" "-p" "cowboy-store" "-p" "cowboy-server" "-p" "cowboy-wire" ];
         # cowboy-server dev-depends on cowboy-machine, which enables the
         # machine-host tests of the base crate in this build. This one runs a
@@ -530,59 +588,32 @@
           "session_workspace::storage::tests::routed_git_worktree_can_be_reused_and_captured_for_cleanup"
         ];
         nativeBuildInputs = [ pkgs.pkg-config ];
-        # This derived digest must never become a stale worker-generation pin.
-        # Enforce it inside the immutable worker build as well as the root gate.
-        preBuild = ''
-          test -e ${worker-registry-check}
-        '';
         buildInputs = [ pkgs.openssl ];
         nativeCheckInputs = [ pkgs.cacert pkgs.gitMinimal pkgs.openssh bun ];
+        preBuild = cowboy-controller-preBuild;
         preCheck = ''
           export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
         '';
-        # current_exe resolves the release symlink to this package, so the
-        # closed Plugin runtime must be beside the real executable too.
-        postInstall = ''
-          mv "$out/bin/cowboy-controller" "$out/bin/cowboy"
-          ln -s ${bun}/bin/bun "$out/bin/cowboy-plugin-js"
-        '';
-        passthru.workerGeneration = worker-generation;
-        meta = {
-          description = "Drive coding-agent CLIs from anywhere over ACP";
-          mainProgram = "cowboy";
-        };
-      };
+        postInstall = cowboy-controller-postInstall;
+      });
 
-      cowboy-machine = rustPlatform.buildRustPackage {
+      cowboy-machine-common = cowboy-release-cenv // {
         pname = "cowboy-machine";
         version = "0.1.0";
         src = machine-src;
-        cargoDeps = cowboy-cargo-deps;
-        cargoBuildFlags = [
-          "--no-default-features"
-          "--features"
-          "machine-host"
-          "-p"
-          "cowboy"
-          "--bin"
-          "cowboy"
-          "-p"
-          "cowboy-machine"
-          "--bin"
-          "cowboy-machine"
-          "--bin"
-          "cowboy-machine-install"
-          "--bin"
-          "cowboy-execution-host"
-        ];
-        # The same memory-first jemalloc policy as the controller package
-        # (see its note): the resident Machine and the CLI are low-throughput
-        # relays whose freed pages should return to the host promptly.
-        CFLAGS = "-O1";
-        JEMALLOC_SYS_WITH_MALLOC_CONF =
-          "abort_conf:true,background_thread:true,narenas:1,tcache:false,dirty_decay_ms:0,muzzy_decay_ms:0,retain:false,metadata_thp:disabled,thp:never";
+        strictDeps = true;
         nativeBuildInputs = [ pkgs.makeWrapper pkgs.pkg-config ];
         buildInputs = [ pkgs.openssl ];
+        cargoVendorDir = cowboy-crane-vendor;
+        cargoExtraArgs =
+          "--locked --no-default-features --features machine-host -p cowboy --bin cowboy -p cowboy-machine --bin cowboy-machine --bin cowboy-machine-install --bin cowboy-execution-host";
+        doCheck = false;
+      };
+      cowboy-machine-deps = craneLib.buildDepsOnly (cowboy-machine-common // {
+        cargoCheckCommand = "true";
+      });
+      cowboy-machine = craneLib.buildPackage (cowboy-machine-common // {
+        cargoArtifacts = cowboy-machine-deps;
         postInstall = ''
           ln -s ${bun}/bin/bun "$out/bin/cowboy-plugin-js"
           # User services have a closed PATH. Supply the connection tool while
@@ -592,12 +623,11 @@
           wrapProgram $out/bin/cowboy-machine \
             --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh pkgs.gh bun ]}
         '';
-        doCheck = false;
         meta = {
           description = "Stable Cowboy Machine host for detached ACP workers";
           mainProgram = "cowboy-machine";
         };
-      };
+      });
 
       # Runtime environment cannot enable this writer. Its native build binds
       # the exact clean revision and still requires root profile/floor admission.
@@ -1096,10 +1126,7 @@
       # build runs TypeScript checking before Vite. Developer lint/test policy
       # is enforced by `just check` before a commit reaches a release.
       checks.${system} = {
-        cowboy-tests = cowboy.overrideAttrs (_old: {
-          pname = "cowboy-tests";
-          doCheck = true;
-        });
+        inherit cowboy-tests;
         inherit cowboy cowboy-machine cowboy-code-adapter cowboy-source-boundary
           cowboy-web cowboy-controller-release cowboy-web-release
           cowboy-zed-integration cowboy-zed-adapter cowboy-zed-server;

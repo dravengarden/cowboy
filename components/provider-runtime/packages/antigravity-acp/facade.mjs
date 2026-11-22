@@ -569,20 +569,36 @@ export class Facade {
   }
 
   async searchFiles(turn, { pattern, path, glob, ignore_case: ignoreCase }) {
-    if (typeof pattern !== "string" || !pattern || pattern.length > 4096) {
+    // Only a glob: list the matching file paths (find by name), as Claude's
+    // Glob does. A pattern searches contents.
+    const names = pattern === undefined;
+    if (!names && (typeof pattern !== "string" || !pattern || pattern.length > 4096)) {
       throw new ToolError("Invalid pattern");
     }
     if (glob !== undefined && (typeof glob !== "string" || !glob || glob.length > 1024)) {
       throw new ToolError("Invalid glob");
     }
+    if (names && glob === undefined) throw new ToolError("Give pattern, glob or both");
     const target = await this.resolve(path, { outside: true });
-    const argv = ["rg", "--line-number", "--no-heading", "--with-filename", "--color=never"];
-    argv.push("--max-columns=1000", "--max-columns-preview");
-    if (ignoreCase === true) argv.push("--ignore-case");
-    if (glob !== undefined) argv.push("--glob", glob);
+    if (names) {
+      // ripgrep lists an explicitly named file whatever the glob says, so a
+      // name search needs a directory.
+      const metadata = await this.rpc("fs/getMetadata", { path: url(target) });
+      if (!metadata?.isDirectory) {
+        throw new ToolError("To find files by name, give a directory as path");
+      }
+    }
     // Inside the root, matches are named relative to it (the command's cwd).
     const searched = inside(this.root, target) ? posix.relative(this.root, target) || "." : target;
-    argv.push("-e", pattern, "--", searched);
+    const argv = names
+      ? ["rg", "--files", "--color=never"]
+      : ["rg", "--line-number", "--no-heading", "--with-filename", "--color=never"];
+    if (!names) argv.push("--max-columns=1000", "--max-columns-preview");
+    if (ignoreCase === true) argv.push(names ? "--glob-case-insensitive" : "--ignore-case");
+    if (glob !== undefined) argv.push("--glob", glob);
+    // The root is the command's cwd: listed without a path, names carry no "./".
+    if (names) argv.push(...(searched === "." ? [] : ["--", searched]));
+    else argv.push("-e", pattern, "--", searched);
     const result = await this.runBounded(turn, argv, {
       timeoutMs: LIMITS.searchTimeoutMs,
       maxBytes: LIMITS.searchBytes,

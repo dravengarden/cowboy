@@ -128,10 +128,10 @@ import {
   usageGroupSegmentWidth,
   usagePercentSegmentWidth,
   usageRemainingTone,
-  type UsageTone,
 } from "./topBarDensity";
 import { lowPriorityInterval } from "../network/bandwidth";
 import { usageWidgetBalanceLabel } from "../usageHostMap";
+import { USAGE_TONE_COLOR, UsageGroupedSegment } from "./UsageGroupedSegment";
 
 const EMPTY_CONFIG_OPTIONS: ConfigOption[] = [];
 
@@ -198,11 +198,6 @@ function SessionActionLabel({
 /** Same cadence as the session quota notice (ProviderQuotaStatus). */
 const USAGE_POLL_MS = 60_000;
 
-const USAGE_TONE_COLOR: Record<UsageTone, string> = {
-  critical: "error.main",
-  low: "warning.main",
-  normal: "text.primary",
-};
 
 // Only facts that need attention earn space: partial pricing and blocking
 // errors appear when they exist, never as "100% priced" or "0 blocked". An
@@ -234,8 +229,7 @@ function usageSegmentWidth(provider: UsageWidgetProvider): number {
   if (usageWidgetHasBalance(provider)) return USAGE_BALANCE_SEGMENT_WIDTH_PX;
   if (provider.groups) {
     return usageGroupSegmentWidth(
-      provider.groups.length,
-      provider.groups.reduce((count, group) => count + group.windows.length, 0),
+      Math.max(0, ...provider.groups.map((group) => group.windows.length)),
     );
   }
   return usagePercentSegmentWidth(provider.windows?.length ?? 1);
@@ -264,12 +258,6 @@ type UsageColumn = {
   primary: string;
   secondary: string;
   remaining?: number;
-  /** A quota group's name, set before its percentage. */
-  group?: string;
-  /** Every window of a group, for the hover. */
-  detail?: string;
-  /** The first column of a group after the first: a little more room. */
-  groupStart?: boolean;
 };
 
 /** The strip's segments: the Usage order without hidden accounts, and each
@@ -299,29 +287,6 @@ export function usageColumns(
       secondary: balanceUsageSummary(provider, usageProvider),
     }];
   }
-  if (provider.groups) {
-    // One column per window, the group named over its first: `Gemini 33%`
-    // `71%` over `5h · 57m` `Weekly · 5d`. A group's 5h and its week block
-    // independently, so neither hides behind the other. The hover keeps the
-    // complete list.
-    return provider.groups.flatMap((group, groupIndex) => {
-      const detail = `${group.label}: ${
-        group.windows.map((window) =>
-          `${window.periodLabel} ${String(window.remaining)}%${
-            usageCountdown(window.resetsAt, now) === undefined
-              ? ""
-              : ` (${usageCountdown(window.resetsAt, now) ?? ""})`
-          }`
-        ).join(" · ")
-      }`;
-      return group.windows.map((window, index): UsageColumn => ({
-        ...usageWindowColumn(window, now),
-        ...(index === 0
-          ? { group: group.label, detail, ...(groupIndex > 0 ? { groupStart: true } : {}) }
-          : {}),
-      }));
-    });
-  }
   return (provider.windows ?? [provider]).map((window) =>
     usageWindowColumn(window, now)
   );
@@ -339,16 +304,6 @@ function UsageProviderSummary(
     now: number;
   },
 ): React.JSX.Element {
-  // An account with several windows (Anthropic 5h + Weekly) keeps ONE
-  // segment: the provider name heads the first column only and column
-  // alignment, not a divider, ties each number to its window. Each column
-  // reads like a single-window segment, so the eye learns one pattern.
-  const columns = usageColumns(provider, account.usage.provider, now);
-  // Per-group quotas name each column, so the account name moves out of the
-  // first column into its own cell spanning both rows; otherwise it would
-  // read `Husky Gemini 81%`.
-  const grouped = !usageWidgetHasBalance(provider) &&
-    provider.groups !== undefined;
   const name = account.title.split(" · ").at(-1);
   const nameText = (
     <Typography
@@ -363,71 +318,67 @@ function UsageProviderSummary(
   const spinner = refreshing
     ? <CircularProgress size={10} aria-label="Refreshing usage" />
     : null;
+  const segmentSx = {
+    // Every segment hugs its own text. The density decision still reserves
+    // each kind's budget, so a segment may use less but never more; past
+    // it the text truncates rather than pushing the toolbar.
+    maxWidth: usageSegmentWidth(provider),
+    px: 0.75,
+    py: 0.25,
+    textAlign: "left",
+    display: "grid",
+    // One segmented control, not three floating chips: the group paints the
+    // surface and 1px rules separate the accounts, which reads calmer and
+    // returns the per-card gutters to the toolbar.
+    ...(first ? {} : { borderLeft: 1, borderColor: "divider" }),
+  } as const;
+  const label = `${account.title}${refreshing ? " · Refreshing" : ""}`;
+
+  if (!usageWidgetHasBalance(provider) && provider.groups !== undefined) {
+    return (
+      <UsageGroupedSegment
+        groups={provider.groups}
+        kind={provider.kind}
+        account={account}
+        refreshing={refreshing}
+        now={now}
+        nameCell={<>{nameText}{spinner}</>}
+        label={label}
+        sx={segmentSx}
+      />
+    );
+  }
+
+  // An account with several windows (Anthropic 5h + Weekly) keeps ONE
+  // segment: the provider name heads the first column only and column
+  // alignment, not a divider, ties each number to its window. Each column
+  // reads like a single-window segment, so the eye learns one pattern.
+  const columns = usageColumns(provider, account.usage.provider, now);
   return (
     <Box
       data-usage-provider={provider.kind}
       data-usage-account={account.id}
-      {...(grouped ? { "data-usage-grouped": "" } : {})}
-      title={`${account.title}${refreshing ? " · Refreshing…" : ""}${
-        grouped
-          ? `\n${columns.flatMap((column) => column.detail ?? []).join("\n")}`
-          : ""
-      }`}
-      aria-label={`${account.title}${refreshing ? " · Refreshing" : ""}`}
+      title={`${account.title}${refreshing ? " · Refreshing…" : ""}`}
+      aria-label={label}
       sx={{
-        // Every segment hugs its own text. The density decision still reserves
-        // each kind's budget, so a segment may use less but never more; past
-        // it the text truncates rather than pushing the toolbar.
-        maxWidth: usageSegmentWidth(provider),
-        px: 0.75,
-        py: 0.25,
-        textAlign: "left",
-        display: "grid",
+        ...segmentSx,
         // Row-major: every primary, then every secondary, so each window's
         // percentage sits directly over its own `5h · 30m`. That alignment is
         // the grouping; a rule between windows would split one account into
         // what reads as two segments. Rules mean "next account" only.
-        gridTemplateColumns: `${grouped ? "auto " : ""}repeat(${
-          String(columns.length)
-        }, auto)`,
+        gridTemplateColumns: `repeat(${String(columns.length)}, auto)`,
         columnGap: 1.25,
-        // One segmented control, not three floating chips: the group paints the
-        // surface and 1px rules separate the accounts, which reads calmer and
-        // returns the per-card gutters to the toolbar.
-        ...(first ? {} : { borderLeft: 1, borderColor: "divider" }),
       }}
     >
-      {grouped && (
-        <Stack
-          direction="row"
-          spacing={0.55}
-          alignItems="center"
-          sx={{ gridRow: "1 / span 2", minWidth: 0 }}
-        >
-          {nameText}
-          {spinner}
-        </Stack>
-      )}
       {columns.map((column, index) => (
         <Stack
           key={`primary-${String(index)}`}
           direction="row"
           spacing={0.55}
-          sx={{ minWidth: 0, ...(column.groupStart ? { pl: 0.75 } : {}) }}
+          sx={{ minWidth: 0 }}
         >
-          {!grouped && index === 0 && nameText}
-          {!grouped && index === 0 && spinner}
-          {column.group !== undefined && (
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              fontWeight={500}
-              noWrap
-              sx={{ minWidth: 0 }}
-            >
-              {column.group}
-            </Typography>
-          )}
+          {index === 0 && nameText}
+          {index === 0 && spinner}
           <Typography
             variant="caption"
             fontWeight={800}
