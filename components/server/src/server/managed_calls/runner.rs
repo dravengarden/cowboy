@@ -473,11 +473,9 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
             advance(state, store, record, fail("identity_mismatch", None)).await;
             return Step::Again;
         }
-        // A retired card's child can never run its prompt.
-        if existing.as_ref().is_some_and(|existing| {
-            crate::server::provider_accounts::retirement::session_retired(state, &existing.meta)
-        }) {
-            advance(state, store, record, fail("named_account_required", None)).await;
+        if let Some(code) = super::super::provider_accounts::retirement::call_refusal(state, child)
+        {
+            advance(state, store, record, fail(code, None)).await;
             return Step::Again;
         }
         if let Err(code) = quiesce(state, child).await {
@@ -1369,14 +1367,10 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
 /// across a restart), or a continued child of a retired legacy card.
 async fn withdraw_unstarted(state: &AppState, store: &Store, record: &Record) -> Option<Step> {
     let cancelled = record.cancel_requested_at_ms.is_some();
-    let retired = state
-        .hub
-        .session_info(&record.child_session_id)
-        .is_some_and(|child| {
-            crate::server::provider_accounts::retirement::session_retired(state, &child.meta)
-        });
+    let retired =
+        super::super::provider_accounts::retirement::call_refusal(state, &record.child_session_id);
     if record.state != State::Running
-        || !(cancelled || retired || review_admissible(state, record).is_err())
+        || !(cancelled || retired.is_some() || review_admissible(state, record).is_err())
     {
         return None;
     }
@@ -1389,11 +1383,7 @@ async fn withdraw_unstarted(state: &AppState, store: &Store, record: &Record) ->
         return None;
     }
     if !cancelled {
-        let code = if retired {
-            "named_account_required"
-        } else {
-            "review_model_not_allowed"
-        };
+        let code = retired.unwrap_or("review_model_not_allowed");
         advance(state, store, record, fail(code, None)).await;
         return Some(Step::Again);
     }

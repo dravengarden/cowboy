@@ -70,9 +70,18 @@ pub(in crate::server) fn session_refusal(state: &AppState, session: &str) -> Opt
     session_retired(state, &state.hub.session_info(session)?.meta).then_some(SESSION_RETIRED)
 }
 
+/// The managed-call failure of a child session of a retired card: it can
+/// never run its prompt, so neither a launch nor a queued round waits for it.
+pub(in crate::server) fn call_refusal(state: &AppState, child: &str) -> Option<&'static str> {
+    session_refusal(state, child).map(|_| "named_account_required")
+}
+
 /// Whether `meta` is a session of a retired card's `default` account. Its
 /// queue is parked for good: never retried, woken or counted as a waiter.
-pub(in crate::server) fn session_retired(state: &AppState, meta: &crate::core::SessionMeta) -> bool {
+pub(in crate::server) fn session_retired(
+    state: &AppState,
+    meta: &crate::core::SessionMeta,
+) -> bool {
     retired_session(
         &meta.provider,
         &meta.provider_account_id,
@@ -156,7 +165,11 @@ mod tests {
         let wiped = status("codex", SignedOut);
         assert!(retired_session("codex", &default, Some(&wiped)));
         assert!(!retired_session("codex", &named, Some(&wiped)));
-        assert!(!retired_session("codex", &default, Some(&status("codex", Ready))));
+        assert!(!retired_session(
+            "codex",
+            &default,
+            Some(&status("codex", Ready))
+        ));
         assert!(!retired_session("codex", &default, None));
     }
 
