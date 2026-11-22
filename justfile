@@ -12,6 +12,15 @@ rust_test_args := "-p cowboy -p cowboy-store -p cowboy-server -p cowboy-machine 
 # 114s without (2026-11-21 on Hawk), for about 9G of incremental cache. Each
 # invocation must agree, since the setting is part of Cargo's fingerprint.
 rust_test_env := "env -u COWBOY_PROVIDER_PACKAGE_PATH -u CARGO_INCREMENTAL"
+# The wire, standalone Machine and code-adapter test slices select features of
+# their own, so they share no workspace artifacts with the main graph. They
+# compile in their own target directory: Cargo locks the artifact directory for
+# any build that links, so only a separate one lets `check` build them beside
+# the main graph instead of after it.
+rust_slice_env := 'env -u COWBOY_PROVIDER_PACKAGE_PATH CARGO_TARGET_DIR="$PWD/target/check-slices" CARGO_BUILD_BUILD_DIR="$PWD/target/check-slices"'
+rust_wire_args := "--locked -p cowboy-wire --features full,machine-host --all-targets"
+rust_machine_args := "--locked --no-default-features --features machine-host -p cowboy -p cowboy-store -p cowboy-machine --lib"
+rust_code_adapter_args := "--locked --no-default-features --features code-adapter --lib"
 
 default:
     @just --list
@@ -732,10 +741,12 @@ lint: clippy zed-lint lint-plugins
 
 # Clippy checks the same crates as the test graph but in check mode, which
 # shares no artifacts with it: in the main build directory it would wait for the
-# build lock and grow another incremental cache. Its own directory lives and dies
-# with the checkout, so `check` and an interactive `just clippy` reuse each other.
+# build lock. Its own directory lives and dies with the checkout, so `check` and
+# an interactive `just clippy` reuse each other. It keeps rustc incremental state
+# even inside `check-compact`: after a one-file edit it rechecks the workspace
+# in about 13s against 47s without (2026-11-21 on Hawk), for about 3.7G.
 clippy:
-    CARGO_BUILD_BUILD_DIR="$PWD/target/check-clippy" CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+    CARGO_BUILD_BUILD_DIR="$PWD/target/check-clippy" env -u CARGO_INCREMENTAL cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
 # The Zed adapter is its own Cargo workspace with its own build directory.
 zed-lint:
@@ -848,12 +859,19 @@ test-rust:
     # library suites used to add up (152s against 62s for the same 3553 tests).
     {{rust_test_env}} cargo nextest run {{rust_test_args}}
     # The shared wire crate is a workspace member, so the root package does not run its tests.
-    env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked -p cowboy-wire --features full,machine-host --all-targets
+    {{rust_slice_env}} cargo test {{rust_wire_args}}
     # The standalone Machine ships without Controller modules. Compile and run
     # its test slice too; cargo check alone does not cover cfg(test) boundaries.
-    env -u COWBOY_PROVIDER_PACKAGE_PATH cargo nextest run --locked --no-default-features --features machine-host -p cowboy -p cowboy-store -p cowboy-machine --lib
-    env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked --no-default-features --features code-adapter --lib
+    {{rust_slice_env}} cargo nextest run {{rust_machine_args}}
+    {{rust_slice_env}} cargo test {{rust_code_adapter_args}}
     python3 -m unittest discover -s tools -p ovh_machine_idle_sessions_test.py
+
+# Compiles the test slices `test-rust` runs, so `check` can build them beside
+# the main graph; `test-rust` then only runs them.
+test-rust-slices-build:
+    {{rust_slice_env}} cargo test {{rust_wire_args}} --no-run
+    {{rust_slice_env}} cargo test {{rust_machine_args}} --no-run
+    {{rust_slice_env}} cargo test {{rust_code_adapter_args}} --no-run
 
 # Ignored PostgreSQL tests each get a fresh database in a private, temporary
 # cluster. Never consumes a caller-provided database URL or starts a TCP listener.
@@ -882,15 +900,15 @@ session-deletion-production-conformance OLD NEW READER DEFAULT_READER RECEIPT:
 # `build-web` keeps the production frontend bundle covered. `feature-check` is
 # not repeated: `release-sources-check` checks the same packages, features and
 # binaries inside the exact release source closures.
-# Workspace Clippy, the release-source slices and the Zed adapter have Cargo
-# build directories of their own, and the script suites and the frontend build
-# share none, so they start first and run beside the rest of the gate: the main
-# graph's compile is a long single-crate chain that leaves most cores idle. The
-# second-scale static checks then run in the foreground, so a formatting,
-# ratchet or lint failure still surfaces within seconds. A failed background
-# job stops the gate at the next foreground step instead of after the Rust
-# builds. Each background log prints once it is collected, before the main Rust
-# tests run.
+# Workspace Clippy, the feature-sliced Rust tests, the release-source slices
+# and the Zed adapter have Cargo build directories of their own, and the script
+# suites and the frontend build share none, so they start first and run beside
+# the rest of the gate: the main graph's compile is a long single-crate chain
+# that leaves most cores idle. The second-scale static checks then run in the
+# foreground, so a formatting, ratchet or lint failure still surfaces within
+# seconds. A failed background job stops the gate at the next foreground step
+# instead of after the Rust builds. Each background log prints once it is
+# collected, before the main Rust tests run.
 check: toolchain-check
     #!/usr/bin/env bash
     set -euo pipefail
@@ -933,6 +951,7 @@ check: toolchain-check
     just claude-source-deps
     background provider-antigravity-check
     background clippy
+    background test-rust-slices-build
     background release-sources-check
     background zed-check
     background provider-runtime-scripts
@@ -983,8 +1002,9 @@ test-graph-bin NAME:
     printf '%s\n' "$executable"
 
 # Run the complete quality gate through a compiler cache shared by every
-# worktree of this user. Only the shared test graph (`rust_test_env`) keeps
-# incremental state; every other selection compiles without growing one. The server is
+# worktree of this user. Only the shared test graph (`rust_test_env`) and
+# Clippy keep incremental state; every other selection compiles without growing
+# one. The server is
 # private to this checkout (its own socket, started in the caller's cgroup and
 # stopped on exit), so one task's compiles never run in another task's process
 # tree. SCCACHE_BASEDIRS strips the checkout and build paths from cache keys,
