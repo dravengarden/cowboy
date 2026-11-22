@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 import { Connection } from "../../execution-connection.mjs";
 import { Facade, LIMITS, Retained, ToolError } from "./facade.mjs";
 import { decodeText, splice } from "./facade-tools.mjs";
@@ -481,6 +482,75 @@ test("projection fences repository guidance and bounds Git status", async (t) =>
     branch: "dev",
     status: [" M a"],
   });
+});
+
+/** A target home beside the workspace, its guidance symlinked into a store. */
+function homeFixture(base) {
+  const home = join(base, "home");
+  const store = join(base, "store");
+  mkdirSync(join(home, ".gemini"), { recursive: true });
+  mkdirSync(store);
+  return { home, store };
+}
+
+test("projection reads the user's home guidance first, through its symlinks", async (t) => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "agy-home-")));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const { home, store } = homeFixture(base);
+  writeFileSync(join(store, "AGENTS.md"), "HOME_AGENTS\n");
+  symlinkSync(join(store, "AGENTS.md"), join(home, "AGENTS.md"));
+  writeFileSync(join(home, ".gemini", "GEMINI.md"), "HOME_GEMINI\n");
+  const { root, facade } = await fixture(t, { home });
+  execFileSync("git", ["-C", root, "init", "-q", "-b", "main"], { stdio: "pipe" });
+  writeFileSync(join(root, "AGENTS.md"), "ROOT_GUIDANCE\n");
+  const projection = await buildProjection(facade, root);
+  const order = [
+    `--- ${join(home, "AGENTS.md")} ---\nHOME_AGENTS`,
+    `--- ${join(home, ".gemini", "GEMINI.md")} ---\nHOME_GEMINI`,
+    `--- ${join(root, "AGENTS.md")} ---\nROOT_GUIDANCE`,
+  ].map((text) => projection.indexOf(text));
+  assert.ok(
+    order.every((index, at) => index > 0 && (at === 0 || index > order[at - 1])),
+    order,
+  );
+  assert.doesNotMatch(projection, new RegExp(join(store, "AGENTS.md")));
+  assert.match(projection, /the user's home guidance/);
+});
+
+test("a missing home or one that is the repository adds nothing twice", async (t) => {
+  const missingHome = await fixture(t, { home: "/nonexistent/cowboy-home" });
+  writeFileSync(join(missingHome.root, "AGENTS.md"), "ROOT_GUIDANCE\n");
+  const plain = await buildProjection(missingHome.facade, missingHome.root);
+  assert.match(plain, /ROOT_GUIDANCE/);
+  assert.doesNotMatch(plain, /cowboy-home/);
+  // The workspace is the home: its AGENTS.md is shown once, as the repository's.
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "agy-home-")));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const { root, facade } = await fixture(t, { home: join(base, "unused") });
+  facade.connection.info.userHomeDir = pathToFileURL(root).href;
+  writeFileSync(join(root, "AGENTS.md"), "ROOT_GUIDANCE\n");
+  const projection = await buildProjection(facade, root);
+  assert.equal(projection.split("ROOT_GUIDANCE").length, 2);
+});
+
+test("home guidance shares the guidance budget", async (t) => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "agy-home-")));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const { home } = homeFixture(base);
+  const big = "h".repeat(PROJECTION_LIMITS.guidanceFile + 10);
+  writeFileSync(join(home, "AGENTS.md"), big);
+  writeFileSync(join(home, ".gemini", "GEMINI.md"), big);
+  const { root, facade } = await fixture(t, { home });
+  execFileSync("git", ["-C", root, "init", "-q", "-b", "main"], { stdio: "pipe" });
+  writeFileSync(join(root, "AGENTS.md"), "r".repeat(PROJECTION_LIMITS.guidanceFile + 10));
+  writeFileSync(join(root, "GEMINI.md"), "LATE_GUIDANCE\n");
+  const projection = await buildProjection(facade, root);
+  assert.ok(!projection.includes("LATE_GUIDANCE"));
+  assert.match(projection, /GEMINI\.md ---\n\[truncated: guidance limit reached\]/);
+  const fence = /(COWBOY_UNTRUSTED_[a-f0-9]{32})/.exec(projection)[1];
+  const fenced = projection.split(fence)[2];
+  assert.ok(fenced.length < PROJECTION_LIMITS.guidanceTotal + 4096, `${fenced.length}`);
+  assert.equal(fenced.split("\n[truncated]").length, 4);
 });
 
 test("guidance is read through fs/readFile even when the executor has no handles", async (t) => {

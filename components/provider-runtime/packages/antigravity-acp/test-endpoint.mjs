@@ -42,6 +42,8 @@ export async function fakeEndpoint(
     notifications = true,
     // Milliseconds each request waits before it is served.
     delay = () => 0,
+    // The target user's home directory the executor reports, if any.
+    home = undefined,
   } = {},
 ) {
   const toReal = (path) => (path.startsWith(virtual) ? root + path.slice(virtual.length) : path);
@@ -69,6 +71,7 @@ export async function fakeEndpoint(
         platformOs: "linux",
         cwd: pathToFileURL(virtual).href,
         shell: { path: shell },
+        ...(home ? { userHomeDir: pathToFileURL(home).href } : {}),
       },
       // A managed keeper's announcement of the constraint it enforces.
       ...(managed ? { cowboyManaged: managed } : {}),
