@@ -112,6 +112,13 @@ pub(super) async fn open_persistence(
             .await
             .context("connecting database")?;
         store.migrate().await.context("running migrations")?;
+        // After the credential admission gate (opened before this), before
+        // anything is served: never from a CLI that may share a database
+        // with a Controller from before the retirement.
+        store
+            .retire_legacy_card_rows()
+            .await
+            .context("removing retired legacy card rows")?;
         store
             .initialize_core_security(core_security, plugin_dir)
             .await

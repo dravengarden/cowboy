@@ -108,8 +108,12 @@ keys) replace every card.
   refused with `named_account_required`, by Provider family and whether or not
   a root entry exists; managed readiness reports the same code. Folder and
   registry defaults that name a named account are unaffected.
-- **Database rows.** No migration: `Store::retire_legacy_card_rows` runs after
-  every `Store::migrate`, before anything is served, and is idempotent. It
+- **Database rows.** No migration: the Controller runs
+  `Store::retire_legacy_card_rows` at every start, after the credential
+  admission gate and its migrations, before anything is served (never a CLI
+  such as Machine enrollment, which may share a database with a Controller
+  from before the retirement). It is idempotent and takes the account
+  writer's owner lock before reading each registry. It
   removes every `card:<card>` browser share member and clears
   `provider_legacy_browsers`, and in the same transaction advances each
   affected share's revision and the owner's account registry revision (column

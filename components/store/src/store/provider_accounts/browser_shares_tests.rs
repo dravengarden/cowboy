@@ -1447,9 +1447,9 @@ async fn the_retirement_cleanup_drops_card_members_and_keeps_their_bindings() {
     .execute(&db.pool)
     .await
     .unwrap();
-    // Every migration run (an upgrade, a re-upgrade after a rollback, a
-    // copied store) ends with the cleanup.
-    store.migrate().await.unwrap();
+    // Every Controller start (an upgrade, a re-upgrade after a rollback, a
+    // copied store) runs the cleanup.
+    assert_eq!(store.retire_legacy_card_rows().await.unwrap(), 1);
     let members: Vec<String> = sqlx::query_scalar(
         "SELECT member FROM provider_browser_share_members WHERE owner_user_id=$1 ORDER BY member",
     )
@@ -1523,7 +1523,16 @@ async fn rerun_cleanup(store: &Store, share: &str, (registry, revision): (i64, i
     .execute(&db.pool)
     .await
     .unwrap();
+    // A migration alone (a CLI) leaves it; the next Controller start removes it.
     store.migrate().await.unwrap();
+    let cards: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM provider_browser_share_members WHERE member LIKE 'card:%'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(cards, 1);
+    assert_eq!(store.retire_legacy_card_rows().await.unwrap(), 1);
     assert_eq!(
         store.provider_accounts(OWNER).await.unwrap().revision,
         registry + 1

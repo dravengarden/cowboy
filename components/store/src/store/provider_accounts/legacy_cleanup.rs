@@ -2,11 +2,13 @@
 //! (`docs/legacy-card-retirement.md`): every `card:<card>` browser share
 //! member and every card browser enablement.
 //!
-//! It runs after every migration, before anything is served, and is
+//! The Controller runs it at every start, after the credential admission
+//! gate and its migrations, before anything is served (never a CLI that may
+//! share the database with a Controller from before the retirement). It is
 //! idempotent. That covers the first upgrade, a re-upgrade after a rollback
 //! (the previous Controller may have added card members again; `SQLx` would not
-//! rerun a recorded migration) and a store copy (which migrates an empty
-//! destination before importing the rows). Each affected owner's share
+//! rerun a recorded migration) and a store copy (migrated empty, imported,
+//! then opened by a Controller). Each affected owner's share
 //! revision and account registry revision (column and serialized value) move
 //! in the same transaction, so a share reset or an account mutation captured
 //! against the earlier membership fails its compare. Family bindings a card
@@ -25,6 +27,13 @@ macro_rules! retire_rows {
         .fetch_all(&mut *tx)
         .await?;
         for owner in &owners {
+            // The account writer's owner lock (`locked_replay`): a write to
+            // the registry row first, so a concurrent mutation either
+            // commits before this read or waits for this transaction.
+            sqlx::query("UPDATE provider_account_registries SET revision=revision WHERE owner_user_id=$1")
+                .bind(owner)
+                .execute(&mut *tx)
+                .await?;
             let value: Option<String> = sqlx::query_scalar(
                 "SELECT value FROM provider_account_registries WHERE owner_user_id=$1",
             )
