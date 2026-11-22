@@ -43,6 +43,7 @@ const AUTH_SEAL_DOMAIN: &[u8] = b"cowboy-provider-auth-seal-v1\0";
 const VAULT_DOMAIN: &[u8] = b"cowboy-provider-auth-vault-v1\0";
 static ATOMIC_WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+mod deliveries;
 pub mod grants;
 mod legacy_moves;
 use legacy_moves::LEGACY_MOVES;

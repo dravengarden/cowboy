@@ -481,18 +481,23 @@ pub(super) async fn sync_provider_account_auth_to_machine(
     let envelope =
         provider_account_auth_envelope_for_machine(state, machine_id, provider_id, account_id)
             .await?;
-    // The one boundary every delivery passes: a held root wipe is refused
-    // (a failed delivery, retried) whoever sends it.
-    if account_id.is_default()
-        && envelope.action == crate::machine_protocol::ProviderAuthAction::Wipe
-        && provider_accounts::retirement::reconnect::held(machine_id, provider_id, &connection)
-    {
-        return Err(provider_accounts::retirement::reconnect::HELD.to_owned());
-    }
-    state
+    let generation = state
         .provider_auth_sync
         .apply(&state.machine_control, &connection, envelope)
-        .await
+        .await?;
+    // The durable per-Machine acknowledgement the reconciler and the
+    // retirement's startup gate read.
+    let scope = if account_id.is_default() {
+        Some(Arc::clone(&state.provider_auth))
+    } else {
+        state.provider_auth.existing_account(account_id)
+    };
+    if let Some(scope) = scope
+        && let Err(error) = scope.record_delivery(provider_id, machine_id, generation)
+    {
+        tracing::warn!(%error, %machine_id, %provider_id, "recording a credential delivery acknowledgement");
+    }
+    Ok(generation)
 }
 
 pub(super) async fn reconcile_machine_account_grants(
@@ -1202,33 +1207,10 @@ fn spawn_machine_reconnect_sync(
         hello.machine_id.clone(),
         connection.clone(),
     ));
+    provider_auth_flow::reconciler::nudge(Some(&hello.machine_id));
     for authentication in state.provider_auth.replica_statuses() {
         let sync_state = Arc::clone(state);
         let machine_id = hello.machine_id.clone();
-        // No root wipe reaches this Machine while it may hold an unreported
-        // rotation of the moved generation (held at the send boundary).
-        if let Some(moved) = state
-            .provider_auth
-            .legacy_move(&authentication.provider_id)
-            .filter(|moved| {
-                let reported = hello
-                    .plugins
-                    .iter()
-                    .find(|plugin| plugin.plugin_id == authentication.provider_id)
-                    .and_then(|plugin| plugin.auth_generation);
-                provider_accounts::retirement::reconnect::holds_moved_generation(
-                    reported,
-                    moved.root_generation,
-                )
-            })
-        {
-            provider_accounts::retirement::reconnect::hold(
-                &machine_id,
-                &authentication.provider_id,
-                connection,
-                moved.root_generation,
-            );
-        }
         tokio::spawn(async move {
             let outcome = distribute_provider_auth(&sync_state, &authentication.provider_id).await;
             match sync_state.provider_auth.mark_distribution(

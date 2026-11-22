@@ -148,24 +148,21 @@ keys) replace every card.
   /api/providers/claude-code/auth`, "Sign out" on the Service Provider row) for
   `anthropic`. Both publish a wipe generation that the existing Provider auth
   synchronisation delivers to every enrolled Machine.
-  A wipe is retried until the Machine confirms it: the Machine's removal
+  A wipe is retried until the Machine confirms it. The Machine's removal
   lists a directory again when a live process (a still-running `default`
-  worker whose home it is) added entries meanwhile; a Machine whose wipe still
-  left a projection reports it as `failed` (so every inventory report and
-  reconnect sends the wipe again); and the Controller delivers a generation a
-  connected Machine failed again, to that Machine only, with backoff (5 s to
-  1 h, then hourly): one retry owner per recipient, account, Provider and
-  generation, ending when the Machine acknowledges it, the generation is
-  superseded or the Machine's connection is replaced (its reconnect
-  reconciles again). The Machine's periodic credential scan reports an
-  incomplete wipe as failed too. A reconnecting Machine that still holds a
-  moved root generation gets no root wipe of that Provider on that
-  connection, from any sender, until the generation is settled there: an
-  inventory reporting no pending refresh of it, or the promotion of its
-  refresh candidate, or 5 minutes for a Machine that reports nothing (older
-  Machines). A held delivery fails and is retried like any other. On 2026-11-21 Pika's root wipe on Hawk failed with
-  `ENOTEMPTY` because a resumed `default` Codex session kept writing into its
-  generation home, and nothing retried it until a later sign-out.
+  worker whose home it is) added entries meanwhile, and a Machine whose wipe
+  left a projection reports the Provider as `failed` in every inventory and
+  credential scan. Every successful delivery records a durable per-Machine
+  acknowledgement in its credential scope (`deliveries.json` beside the
+  vault). One Controller loop (every 10 s, and at once when a Machine
+  connects or reports its inventory) sends the current generation of every
+  Service-held credential to each connected, enrolled Machine whose
+  acknowledgement is missing, and recomputes the distribution state from the
+  acknowledgements. A failing recipient backs off in memory by Machine id
+  (5 s to 1 h); its next connect or inventory report retries it at once.
+  On 2026-11-21 Pika's root wipe on Hawk failed with `ENOTEMPTY` because a
+  resumed `default` Codex session kept writing into its generation home, and
+  nothing retried it until a later sign-out.
 
 ## Startup gate
 
@@ -197,6 +194,28 @@ sign-in. Startup logs it at error level for an explicit repair. Production
 had none at release time (every journal completed with account generation
 1).
 
+### Delivery gate
+
+Once the store is open, the first start of this release also requires every
+enrolled, non-revoked Machine to have applied every card Provider's latest
+root wipe: its durable acknowledgement, or a distribution the previous
+Controller recorded as `current` (it reached every Machine enrolled then; it
+kept no per-Machine record). Then no Machine can still hold, and later
+rotate, a moved root generation, so nothing has to hold a wipe back for an
+offline rotation. A Machine enrolled later never held the root credential.
+The refusal names each Provider and Machine:
+
+```text
+legacy default card wipes are not acknowledged by every enrolled Machine
+(codex: falcon): connect those Machines to the previous Controller until the
+wipes are delivered, or revoke an unreachable Machine, before installing this
+release
+```
+
+Passing it once is recorded (`retirement-admitted` beside the vault); later
+starts (a reboot with a Machine offline) skip it, since no root write can
+reach a card Provider any more.
+
 ## Release order and operations
 
 1. With the current Controller: adopt OpenAI · Pika (`accounts.adopt_legacy
@@ -204,8 +223,12 @@ had none at release time (every journal completed with account generation
    the Service authentications (`GET /api/plugins` `authentications[]`) show
    every card-family Provider `signed_out`. Reset
    (or stop) a Lynx Machine browser if one was enabled.
-2. Controller release (`.#cowboy-controller-release`): runs the migration and
-   the gate.
+   Every enrolled Machine must have received those wipes: each card-family
+   Provider's Service authentication shows distribution `current`. Connect
+   an offline Machine until it does, or revoke a Machine that will not come
+   back; otherwise the new Controller refuses to start.
+2. Controller release (`.#cowboy-controller-release`): runs the cleanup and
+   both gates.
 3. Web release (`.#cowboy-web-release`). A Web shipped first only hides the
    cards early; it breaks nothing.
 4. No Machine release is needed; Machines keep the `default` identity.

@@ -10,6 +10,8 @@
 use super::*;
 use std::borrow::Cow;
 
+const RETIREMENT_ADMITTED: &str = "retirement-admitted";
+
 /// Refusal of a root write whose requested Provider is retired.
 pub const ROOT_RETIRED: &str = "named_account_required";
 
@@ -69,6 +71,18 @@ impl ProviderAuthService {
         Some(ProviderAuthRefreshResult::Stale {
             current_generation: maximum_auth_generation(packages, &providers),
         })
+    }
+
+    /// Whether the retirement's startup gate passed once on this Service:
+    /// from then on no root write reaches a card Provider and Machines
+    /// enrolled later never held a card credential, so later starts (a
+    /// reboot) need not wait for every Machine again.
+    pub fn retirement_admitted(&self) -> bool {
+        self.root.join(RETIREMENT_ADMITTED).is_file()
+    }
+
+    pub fn mark_retirement_admitted(&self) -> Result<()> {
+        atomic_write(&self.root.join(RETIREMENT_ADMITTED), b"1\n", 0o600)
     }
 
     /// Finish every legacy move whose root wipe already landed: a Controller

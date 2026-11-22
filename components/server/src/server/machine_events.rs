@@ -226,15 +226,6 @@ pub(super) async fn accept_machine_auth_refresh_candidate(
             bundle,
         )
         .await;
-        // Promoted (into its account): that generation is settled. A rejected
-        // candidate keeps a held wipe until the next observation or the bound.
-        if outcome.is_ok() && account_id.is_default() {
-            provider_accounts::retirement::reconnect::settled(
-                &refresh_machine_id,
-                &provider_id,
-                expected_generation,
-            );
-        }
         if let Err(error) = outcome {
             tracing::warn!(
                 %error,

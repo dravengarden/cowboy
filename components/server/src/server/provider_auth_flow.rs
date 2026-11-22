@@ -4,6 +4,8 @@
 use super::*;
 use std::time::Duration;
 
+pub(super) mod reconciler;
+
 #[derive(Clone)]
 pub(super) struct ProviderAuthExecutor {
     pub(super) native_login: Option<provider_accounts::login::NativeLogin>,
@@ -384,108 +386,6 @@ pub(super) async fn distribute_and_mark_scope(
     (next, replicas)
 }
 
-/// Backoff between deliveries of a generation some connected Machine failed
-/// to apply (for example a wipe interrupted by a live writer).
-const DISTRIBUTION_RETRY_DELAYS: [Duration; 6] = [
-    Duration::from_secs(5),
-    Duration::from_secs(15),
-    Duration::from_secs(60),
-    Duration::from_secs(300),
-    Duration::from_secs(900),
-    Duration::from_secs(3600),
-];
-
-/// The retry owners: one per recipient Machine, account, Provider and
-/// generation, however many distributions or reconnects failed it.
-type RetryKey = (
-    String,
-    crate::provider_account::ProviderAccountId,
-    String,
-    u64,
-);
-static RETRY_OWNERS: std::sync::LazyLock<parking_lot::Mutex<std::collections::HashSet<RetryKey>>> =
-    std::sync::LazyLock::new(Default::default);
-
-/// The generation `account`'s scope currently holds for `provider_id`.
-fn current_generation(
-    state: &AppState,
-    account: &crate::provider_account::ProviderAccountId,
-    provider_id: &str,
-) -> Option<u64> {
-    let status = if account.is_default() {
-        state.provider_auth.status(provider_id)
-    } else {
-        provider_accounts::portable::scope(state, account, provider_id)?.status(provider_id)
-    };
-    status.map(|status| status.auth_generation)
-}
-
-/// Deliver the current generation to `machine_id` again (it failed to
-/// apply it, a wipe was held, ...) until it acknowledges it, the generation
-/// is superseded or the Machine's connection is replaced (its reconnect
-/// reconciles again): backoff up to an hour, then hourly. Only this
-/// recipient is retried; a second failure of the same key adds no owner.
-fn retry_recipient(
-    state: &Arc<AppState>,
-    machine_id: &str,
-    account: &crate::provider_account::ProviderAccountId,
-    provider_id: &str,
-) {
-    let Some(generation) = current_generation(state, account, provider_id) else {
-        return;
-    };
-    let Ok(connection) = state.machine_control.operation_connection(machine_id) else {
-        return;
-    };
-    let key = (
-        machine_id.to_owned(),
-        account.clone(),
-        provider_id.to_owned(),
-        generation,
-    );
-    if !claim_retry(&key) {
-        return;
-    }
-    let state = Arc::clone(state);
-    tokio::spawn(async move {
-        let (machine_id, account, provider_id, _) = &key;
-        let last = DISTRIBUTION_RETRY_DELAYS[DISTRIBUTION_RETRY_DELAYS.len() - 1];
-        for delay in DISTRIBUTION_RETRY_DELAYS
-            .into_iter()
-            .chain(std::iter::repeat(last))
-        {
-            tokio::time::sleep(delay).await;
-            let replaced = state
-                .machine_control
-                .operation_connection(machine_id)
-                .map_or(true, |current| !current.same(&connection));
-            if *state.shutdown.borrow()
-                || replaced
-                || current_generation(&state, account, provider_id) != Some(generation)
-            {
-                break;
-            }
-            match sync_provider_account_auth_to_machine(&state, machine_id, provider_id, account)
-                .await
-            {
-                Ok(_) => {
-                    tracing::info!(%machine_id, %provider_id, generation, "Provider auth replica sync recovered");
-                    break;
-                }
-                Err(error) => {
-                    tracing::warn!(%error, %machine_id, %provider_id, generation, "Provider auth replica sync still failing");
-                }
-            }
-        }
-        RETRY_OWNERS.lock().remove(&key);
-    });
-}
-
-/// Become the retry owner of `key`; `false` when one already runs.
-fn claim_retry(key: &RetryKey) -> bool {
-    RETRY_OWNERS.lock().insert(key.clone())
-}
-
 pub(super) async fn distribute_provider_auth(
     state: &Arc<AppState>,
     provider_id: &str,
@@ -533,7 +433,6 @@ async fn distribute_account_auth(
             Err(error) => {
                 outcome.failed += 1;
                 tracing::warn!(%error, %machine_id, %provider_id, "Provider auth replica sync failed");
-                retry_recipient(state, &machine_id, account, provider_id);
             }
         }
     }
@@ -907,37 +806,4 @@ pub(super) fn resolve_scheduling_auth_generation(
         ));
     }
     Ok(Some(installed_generation))
-}
-
-#[cfg(test)]
-mod retry_owner_tests {
-    use super::*;
-
-    #[test]
-    fn one_retry_owner_per_recipient_account_provider_and_generation() {
-        let key: RetryKey = (
-            "owner-fixture".into(),
-            Default::default(),
-            "codex".into(),
-            16,
-        );
-        assert!(claim_retry(&key));
-        // Repeated failures and reconnects add no second loop.
-        assert!(!claim_retry(&key));
-        // Another recipient or generation has its own owner.
-        assert!(claim_retry(&(
-            "other-fixture".into(),
-            Default::default(),
-            "codex".into(),
-            16
-        )));
-        assert!(claim_retry(&(
-            "owner-fixture".into(),
-            Default::default(),
-            "codex".into(),
-            17
-        )));
-        RETRY_OWNERS.lock().remove(&key);
-        assert!(claim_retry(&key));
-    }
 }

@@ -8,8 +8,6 @@ use crate::provider_service::{
 };
 use crate::store::provider_accounts::legacy_cards;
 
-pub(in crate::server) mod reconnect;
-
 /// The visible wait of a prompt to a retired `default` session.
 pub(in crate::server) const SESSION_RETIRED: &str = "This session ran on a retired legacy default account; continue it in a new agent on a named account";
 
@@ -56,6 +54,60 @@ pub(in crate::server) fn admit_startup(auth: &ProviderAuthService) -> anyhow::Re
     }
     auth.retire_root_providers(legacy_cards::retired_provider);
     Ok(())
+}
+
+/// Card-family Providers whose latest root wipe some enrolled Machine
+/// (`recipients`, the non-revoked ones) has not acknowledged, with those
+/// Machines. A distribution the previous Controller recorded as `current`
+/// reached every Machine enrolled then (it kept no per-Machine record); a
+/// Machine enrolled later never held the root credential.
+fn unacknowledged_wipes(auth: &ProviderAuthService, recipients: &[String]) -> Vec<String> {
+    auth.statuses()
+        .into_iter()
+        .filter(|status| {
+            legacy_cards::retired_provider(&status.provider_id)
+                && status.distribution_state
+                    != crate::provider_service::ServiceDistributionState::Current
+        })
+        .filter_map(|status| {
+            let missing = auth.unacknowledged(&status.provider_id, recipients);
+            (!missing.is_empty()).then(|| format!("{}: {}", status.provider_id, missing.join(", ")))
+        })
+        .collect()
+}
+
+/// The second startup gate, once the store is open: every enrolled Machine
+/// must have applied every card Provider's root wipe, so no Machine can
+/// still hold (and later rotate) a moved root generation. Passing it once is
+/// recorded; later starts skip it (reboot convergence).
+pub(in crate::server) async fn admit_deliveries(
+    auth: &ProviderAuthService,
+    store: Option<&crate::store::Store>,
+) -> anyhow::Result<()> {
+    if auth.retirement_admitted() {
+        return Ok(());
+    }
+    let recipients: Vec<String> = match store {
+        Some(store) => store
+            .list_machines()
+            .await?
+            .into_iter()
+            .filter(|machine| !machine.revoked)
+            .map(|machine| machine.id)
+            .collect(),
+        None => Vec::new(),
+    };
+    admit_recipients(auth, &recipients)
+}
+
+fn admit_recipients(auth: &ProviderAuthService, recipients: &[String]) -> anyhow::Result<()> {
+    let missing = unacknowledged_wipes(auth, recipients);
+    anyhow::ensure!(
+        missing.is_empty(),
+        "legacy default card wipes are not acknowledged by every enrolled Machine ({}): connect those Machines to the previous Controller until the wipes are delivered, or revoke an unreachable Machine, before installing this release",
+        missing.join("; ")
+    );
+    auth.mark_retirement_admitted()
 }
 
 /// Whether the `default` account of `provider` is a retired card: the
@@ -156,6 +208,67 @@ mod tests {
             "antigravity",
             Some(&status("antigravity", SignedOut))
         ));
+    }
+
+    fn signed_out_grok(root: &std::path::Path) -> ProviderAuthService {
+        use base64::Engine as _;
+        let auth = ProviderAuthService::open(root).unwrap();
+        let source: cowboy_provider_sdk::StandardProviderSource =
+            serde_json::from_str(include_str!("../../../../../plugins/grok/provider.json"))
+                .unwrap();
+        let package = cowboy_provider_sdk::build_package(source.compile().unwrap()).unwrap();
+        let bundle = crate::machine_protocol::PortableCredentialBundle {
+            portable_schema: package.manifest.authentication.portable_schema.clone(),
+            method_id: "xai-account".into(),
+            values: [(
+                "auth_json".to_owned(),
+                base64::engine::general_purpose::STANDARD.encode(b"{}"),
+            )]
+            .into_iter()
+            .collect(),
+        };
+        auth.commit(&package, &bundle, None, Some(0)).unwrap();
+        auth.logout("grok").unwrap();
+        auth
+    }
+
+    #[test]
+    fn the_delivery_gate_refuses_an_unacknowledged_machine_once() {
+        let root = tempfile::tempdir().unwrap();
+        let auth = signed_out_grok(root.path());
+        let wipe = auth.status("grok").unwrap().auth_generation;
+        let recipients = ["hawk".to_owned(), "ovh".to_owned()];
+        auth.record_delivery("grok", "hawk", wipe).unwrap();
+        let refusal = admit_recipients(&auth, &recipients)
+            .unwrap_err()
+            .to_string();
+        assert!(refusal.contains("grok: ovh"), "{refusal}");
+        assert!(!auth.retirement_admitted());
+        // Revoking the unreachable Machine (it leaves the recipients) passes.
+        admit_recipients(&auth, &recipients[..1]).unwrap();
+        assert!(auth.retirement_admitted());
+    }
+
+    #[test]
+    fn the_delivery_gate_passes_when_every_machine_acknowledged_the_wipe() {
+        let root = tempfile::tempdir().unwrap();
+        let auth = signed_out_grok(root.path());
+        let wipe = auth.status("grok").unwrap().auth_generation;
+        let recipients = ["hawk".to_owned(), "ovh".to_owned()];
+        for machine in &recipients {
+            auth.record_delivery("grok", machine, wipe).unwrap();
+        }
+        admit_recipients(&auth, &recipients).unwrap();
+        // The previous Controller's aggregate `current` also counts.
+        let other = tempfile::tempdir().unwrap();
+        let auth = signed_out_grok(other.path());
+        auth.mark_distribution(
+            "grok",
+            wipe,
+            crate::provider_service::ServiceDistributionState::Current,
+        )
+        .unwrap();
+        admit_recipients(&auth, &recipients).unwrap();
     }
 
     #[test]

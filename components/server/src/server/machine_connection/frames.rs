@@ -345,12 +345,7 @@ impl MachineLink<'_> {
             ..
         } = self;
         inventory.providers = plugins;
-        // A credential scan on this connection may settle a held root wipe.
-        provider_accounts::retirement::reconnect::observed(
-            &hello.machine_id,
-            connection,
-            &inventory.providers,
-        );
+        provider_auth_flow::reconciler::nudge(Some(&hello.machine_id));
         let failed_provider_auth = failed_provider_auth_projection_ids(&inventory.providers);
         state.machine_control.record_remote(
             connection,
