@@ -45,10 +45,9 @@ export const ROUTING = [
   "To delegate a self-contained task, use mcp_cowboy_Subagent (mcp_cowboy_StopSubagent stops one):",
   "it runs in this turn with the same tools and returns its report, so wait for it before you end",
   "the turn.",
-  "Cowboy never starts a turn for you: a notice from a Cowboy call or another session reaches",
-  "the owner only as a draft. After calls.start, review.start or a queue.submit to another",
-  "session, stay in this turn and wait with the command in the receipt's `next`, then use the",
-  "result. Never end the turn to wait for a notice.",
+  "For long work in a Cowboy call (calls.start, review.start) or another session (queue.submit),",
+  "pass notify:true and end your turn: Cowboy starts your next turn with a notice when it",
+  "finishes. Wait inside the turn only when you need the result right away.",
 ].join("\n");
 
 /** Parse the Git probe's tab-separated lines. */

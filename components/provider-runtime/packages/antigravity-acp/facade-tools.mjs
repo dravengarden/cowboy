@@ -175,7 +175,7 @@ export const TOOLS = [
   {
     name: "RunCommand",
     description:
-      "Run a shell command in the workspace root. Waits up to wait_seconds (default: until it ends); a command still running returns its command_id, which RunCommand continues and StopCommand stops. Output keeps at most 256 KiB (head and tail).",
+      "Run a shell command in the workspace root. Waits up to wait_seconds (default: until it ends); a command still running returns its command_id, which RunCommand continues and StopCommand stops. timeout_seconds (default 120, at most 600) ends the command. Each call is a turn, so wait in few long calls: a continuation may use wait_seconds up to 600. Output keeps at most 256 KiB (head and tail).",
     inputSchema: {
       type: "object",
       properties: {

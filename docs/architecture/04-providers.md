@@ -166,8 +166,8 @@ same launcher. Antigravity is native-only and named-only: every account is an
 owner-declared native login on one Machine, and the default account is refused
 (`named_only` in `components/wire/src/provider_account.rs`). Its manifest
 signs `provider.native-custody.v1` so older readers refuse it, legacy
-package-less `npx`/`PATH` launches and probes skip it, its drafts are never
-scheduled, and `accounts.antigravity_admitted` (account IDs, default empty)
+package-less `npx`/`PATH` launches and probes skip it, its scheduled drafts
+fire like any session's (owner-paced since 2026-11-22), and `accounts.antigravity_admitted` (account IDs, default empty)
 admits each account at login start and completion, session creation, every
 dispatch and every worker revival. The Controller's account controls
 ([design](../antigravity-real-accounts-design.md#controller-account-controls-step-5a))

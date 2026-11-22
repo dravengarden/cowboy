@@ -13,12 +13,11 @@ fn control(state: AccountState, until_ms: Option<i64>) -> Control {
     }
 }
 
-fn input(control: Option<&Control>, explicit: bool, now_ms: i64) -> GateInput<'_> {
+fn input(control: Option<&Control>, now_ms: i64) -> GateInput<'_> {
     GateInput {
         admitted: true,
         control,
         uncertain: None,
-        explicit,
         now_ms,
     }
 }
@@ -54,12 +53,12 @@ fn states_round_trip_and_backend_classes_map_to_states() {
 #[test]
 fn every_non_ok_state_parks_dispatch_and_admission_comes_first() {
     assert_eq!(
-        gate(&input(None, false, 0)),
+        gate(&input(None, 0)),
         Gate::Proceed {
             clears_rate_limit: false
         }
     );
-    let mut refused = input(None, true, 0);
+    let mut refused = input(None, 0);
     refused.admitted = false;
     assert!(matches!(gate(&refused), Gate::Park(reason) if reason.contains("not admitted")));
     for state in AccountState::ALL {
@@ -68,31 +67,26 @@ fn every_non_ok_state_parks_dispatch_and_admission_comes_first() {
         }
         let record = control(state, None);
         assert!(
-            matches!(gate(&input(Some(&record), true, 0)), Gate::Park(_)),
+            matches!(gate(&input(Some(&record), 0)), Gate::Park(_)),
             "{state:?}"
         );
         assert!(revival_allowed(true, Some(&record), 0).is_err());
     }
     let uncertain = GateInput {
         uncertain: Some(("fs/writeFile", 2)),
-        ..input(None, true, 0)
+        ..input(None, 0)
     };
     assert!(matches!(gate(&uncertain), Gate::Park(reason) if reason.contains("fs/writeFile")));
 }
 
 #[test]
-fn a_rate_limit_needs_a_new_owner_send_after_it_ends() {
+fn a_rate_limit_parks_until_it_ends_then_the_next_dispatch_resumes() {
     let limited = control(AccountState::RateLimited, Some(1_000));
-    // Before the end, even an explicit send stays queued.
-    assert!(
-        matches!(gate(&input(Some(&limited), true, 999)), Gate::Park(r) if r.contains("until"))
-    );
-    // After it, an automatic drain still waits for the owner.
-    assert!(
-        matches!(gate(&input(Some(&limited), false, 1_000)), Gate::Park(r) if r.contains("send again"))
-    );
+    // Before the end, every dispatch stays queued.
+    assert!(matches!(gate(&input(Some(&limited), 999)), Gate::Park(r) if r.contains("until")));
+    // After it, any dispatch (owner, notice or agent) resumes the account.
     assert_eq!(
-        gate(&input(Some(&limited), true, 1_000)),
+        gate(&input(Some(&limited), 1_000)),
         Gate::Proceed {
             clears_rate_limit: true
         }

@@ -98,10 +98,13 @@ pub fn policy(
         .and_then(Value::as_u64)
         .filter(|tokens| MIN_CONTEXT_TOKENS_RANGE.contains(tokens))
         .unwrap_or(DEFAULT_MIN_CONTEXT_TOKENS);
+    // Antigravity never renews automatically (docs/requirements.md): a stored
+    // preference cannot turn an agent-dispatched prompt into a rollover.
     let idle_minutes = match preferences
         .and_then(|values| values.get("idle_minutes"))
         .and_then(|minutes| minutes.get(provider))
     {
+        _ if crate::provider_account::named_only(provider) => None,
         Some(Value::Null) => None,
         Some(minutes) => minutes
             .as_u64()

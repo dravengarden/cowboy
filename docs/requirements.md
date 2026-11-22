@@ -878,9 +878,18 @@ These boundaries are mandatory and fail closed:
   value `1` is ignored).
 - One person's own account per Cowboy account: no sharing, proxying, automatic
   rotation or quota-driven fallback to another account.
-- Human-paced use, with one owner-approved exception (2026-11-21). Antigravity
-  is not offered to scheduled or background jobs, auto-continue loops,
-  automatic rollover turns, Auto selection or Tools call targets. Its
+- Owner-paced use (owner decision 2026-11-22: Cowboy is one person's own
+  workspace). The owner's sessions may dispatch prompts into an Antigravity
+  session, and call, peer and scheduled-draft notices start its turns as they
+  do for every Provider; this replaces the earlier human-paced rule, under
+  which only a person could send. The owner accepted the account risk of
+  these agent-started turns, including subagents and owner- or
+  agent-scheduled drafts started in them: any ordinary session turn is an
+  owner turn. Antigravity is still not offered to background jobs, Cowboy's
+  auto-continue, automatic rollover turns (enforced in the shared rollover
+  policy whatever the stored preference), Auto selection or Tools call
+  targets. A rate limit parks every dispatch until it ends; the next
+  dispatch then resumes the account (no new owner send is needed). Its
   managed-call use is an explicitly requested, fresh read-only round: a
   context ask (a text-only `analysis` over recorded session history) or,
   as the owner extended it the same day ("other sessions can call
@@ -895,11 +904,12 @@ These boundaries are mandatory and fail closed:
   responses back off without retry storms.
 - Subagents, with one owner-approved exception (2026-11-22). An ordinary,
   owner-driven session may start subagents through the proxy's `Subagent`
-  tool: other native sessions of the same account, started inside the owner's
-  own turn, one level deep, at most two at once and eight per turn, stopped
-  when that turn ends, shown and stoppable as ACP subagents and subject to
-  the same tool gate. They are never offered to managed calls, scheduled or
-  background jobs, or any target other than the owner's session. Native
+  tool: other native sessions of the same account, started inside one of the
+  session's ordinary turns (owner-paced, see above), one level deep, at most
+  two at once and eight per turn, stopped when that turn ends, shown and
+  stoppable as ACP subagents and subject to the same tool gate. They are
+  never offered to managed calls, background jobs, or any target other than
+  the owner's session. Native
   `invoke_subagent`, swarms and workflows stay denied. The owner accepted the
   added account risk of these agent-initiated requests.
 - A suspension signal (for example "disabled in this account for violation of

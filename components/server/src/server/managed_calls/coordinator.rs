@@ -582,7 +582,6 @@ pub(in crate::server) async fn dispatch_calls_from(
         },
         Action::Result { call_id } => match ledger.inspect(&call_id).await {
             Ok(Some(record)) if record.state.terminal() => {
-                super::runner::outcome::withdraw_read_notice(&state.hub, &meta.id, &record);
                 let mut value = envelope(&record);
                 value["result"] = record.result.clone().unwrap_or(Value::Null);
                 value

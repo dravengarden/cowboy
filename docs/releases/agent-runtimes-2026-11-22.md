@@ -1,6 +1,6 @@
 # Agent runtime upgrades — 2026-11-22
 
-Status: source and component release 3.136.0 on the task branch; verification,
+Status: source and component release 3.137.0 on the task branch; verification,
 publication and installation below.
 
 ## Dependency audit
@@ -19,10 +19,10 @@ pages on 2026-11-22 with
 | dsh | 0.2.2-rc.1 | unchanged | `latest` is 0.2.2-rc.5; not part of this upgrade |
 | Claude/Codex DeepSeek gateways | — | unchanged | No change requested |
 
-Component release 3.136.0 records provider-runtime 1.3.20. Every Plugin that
-pins it advances one patch version: antigravity 0.2.21, claude-code 3.20.66,
-claude-deepseek 3.1.83, codex 3.6.25, codex-deepseek 3.1.83, deepseek-harness
-1.0.41 and grok 3.2.24. Recommended presets and new-session defaults are
+Component release 3.137.0 records provider-runtime 1.3.21. Every Plugin that
+pins it advances one patch version: antigravity 0.2.22, claude-code 3.20.67,
+claude-deepseek 3.1.84, codex 3.6.26, codex-deepseek 3.1.84, deepseek-harness
+1.0.42 and grok 3.2.25. Recommended presets and new-session defaults are
 unchanged.
 
 Sources:

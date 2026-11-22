@@ -80,6 +80,9 @@ fn preferences_and_session_override_resolve_in_order() {
     );
     // null disables a Provider even when the session asks for renewal.
     assert!(!policy(Some(&values), Some(true), "claude-code").enabled);
+    // A stored Antigravity value never enables renewal.
+    let agy = json!({"idle_minutes":{"antigravity":60}});
+    assert!(!policy(Some(&agy), Some(true), "antigravity").enabled);
     // Out-of-range values fall back to the preset.
     let bad = json!({"min_context_tokens":1,"idle_minutes":{"claude-code":0}});
     let claude = policy(Some(&bad), None, "claude-code");

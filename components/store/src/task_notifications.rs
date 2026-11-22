@@ -113,19 +113,6 @@ impl Occurrence {
         }
     }
 
-    /// The turn of a prompt `sender` queued into `target` ended. Opens the
-    /// sender, where the parked notice waits to be sent.
-    #[must_use]
-    pub fn peer(sender: &str, target: &str, prompt: &str, category: Category) -> Self {
-        Self {
-            session_id: sender.to_owned(),
-            dedupe_key: format!("peer:{target}:{prompt}"),
-            category,
-            destination: String::new(),
-            marker: String::new(),
-        }
-    }
-
     #[must_use]
     pub fn call(parent: &str, call_id: &str, category: Category, finished_at_ms: i64) -> Self {
         Self {

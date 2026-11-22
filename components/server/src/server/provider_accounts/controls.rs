@@ -407,7 +407,7 @@ impl Controls {
             .is_some_and(|pending| *pending > 0)
     }
 
-    fn gate(&self, meta: &SessionMeta, explicit: bool) -> Gate {
+    fn gate(&self, meta: &SessionMeta) -> Gate {
         if self.signal_pending(&meta.provider_account_id) {
             return Gate::Park(SIGNAL_PENDING.into());
         }
@@ -419,7 +419,6 @@ impl Controls {
             uncertain: uncertain
                 .as_ref()
                 .map(|(method, sequence)| (method.as_str(), *sequence)),
-            explicit,
             now_ms: now_ms(),
         })
     }
@@ -433,7 +432,7 @@ impl Controls {
         if !self.cache.loaded.load(Ordering::Acquire) {
             return Some("account controls are loading".into());
         }
-        match self.gate(meta, false) {
+        match self.gate(meta) {
             Gate::Park(reason) => Some(reason),
             Gate::Proceed { .. } => None,
         }

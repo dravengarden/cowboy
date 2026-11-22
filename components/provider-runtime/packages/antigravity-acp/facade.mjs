@@ -913,7 +913,14 @@ export class Facade {
         status = (await this.terminate(running))
           ? "Timed out; the command was stopped."
           : `Timed out; stopping it is not yet confirmed (command_id: ${running.processId}).`;
-      } else status = `Still running (command_id: ${running.processId}).`;
+      } else {
+        // Each continuation costs the agent a whole turn; say how long one
+        // may wait so a long gate is read in few, long waits.
+        const left = Math.max(1, Math.ceil((running.deadline - Date.now()) / 1000));
+        status =
+          `Still running (command_id: ${running.processId}). ` +
+          `Continue it with wait_seconds ${Math.min(left, LIMITS.commandMaxSeconds)} to wait for the rest of its ${left} s.`;
+      }
       if (running.closed) this.forget(session, running);
       return `${status}\n${running.output.take()}`;
     } finally {

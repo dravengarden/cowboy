@@ -83,15 +83,24 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
-Component release 3.136.0 records provider-runtime 1.3.20: Claude Code 2.1.330
+Component release 3.137.0 records provider-runtime 1.3.21: Claude Code 2.1.330
 with Claude Agent ACP 0.109.1, native Codex 0.171.0 with Codex ACP 2.9.0 (whose
 declared range now covers it, so the `native-codex-version` delta is gone),
 Grok 1.0.92 and agy 1.5.14
 ([release record](releases/agent-runtimes-2026-11-22.md)). Every Plugin that
-pins it advances one patch version: antigravity 0.2.21, claude-code 3.20.66,
-claude-deepseek 3.1.83, codex 3.6.25, codex-deepseek 3.1.83, deepseek-harness
-1.0.41 and grok 3.2.24. Recommended presets and new-session defaults are
+pins it advances one patch version: antigravity 0.2.22, claude-code 3.20.67,
+claude-deepseek 3.1.84, codex 3.6.26, codex-deepseek 3.1.84, deepseek-harness
+1.0.42 and grok 3.2.25. Recommended presets and new-session defaults are
 unchanged.
+
+Component release 3.136.0 records provider-runtime 1.3.20, whose
+`cowboy-antigravity-acp` 1.0.18 follows the owner-paced rule (2026-11-22):
+its routing projection and denial reasons tell Antigravity to pass
+`notify:true` and end the turn, because Cowboy now starts its next turn with
+the notice, and `RunCommand` names how long one continuation may wait.
+Antigravity 0.2.21 pins it. The other six Providers pinning provider-runtime
+advance one patch version (claude-code 3.20.66, claude-deepseek 3.1.83,
+codex 3.6.25, codex-deepseek 3.1.83, deepseek-harness 1.0.41, grok 3.2.24).
 
 Component release 3.135.0 records provider-runtime 1.3.19, whose
 `cowboy-antigravity-acp` 1.0.17 cuts the round trips of Antigravity's tool
