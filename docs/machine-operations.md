@@ -445,8 +445,8 @@ this is an accepted risk window, closed by signalling the exact verified
 PID: a replacement runs as another process, so the old PID is already gone
 (the signal fails) or the verifier refuses it.
 
-1. Pause the session's queue in Cowboy and do not Retry, reload or send to
-   it. Confirm it is crashed with its crash detail shown, idle (no turn,
+1. Note whether the session's queue is already paused, then pause it in
+   Cowboy and do not Retry, reload or send to it. Confirm it is crashed with its crash detail shown, idle (no turn,
    permission request or background task), and that its Machine has been
    connected for a few minutes.
 2. Take the row's `worker_pid` and `generation` from
@@ -457,7 +457,14 @@ PID: a replacement runs as another process, so the old PID is already gone
 3. Run the read-only verifier for the Machine's OS, as the Machine's service
    user, immediately before signalling. Signal only when it prints
    `verified`, and only that PID (or, on macOS, that PID's group).
-4. Unpause the session's queue afterwards.
+4. Restore the queue's pause state you noted in step 1 (leave it paused if
+   it was paused before).
+
+Residual risk: the checks bind to a PID, not to a process handle. If the
+reported worker already exited and the OS reused its PID for a replacement
+worker of the same session, generation and socket, every check passes. Keep
+the verify-and-signal as one command (below) so no time passes between them,
+and do not use this procedure while anything may relaunch the session.
 
 Linux (user-systemd workers; on OVH run both commands as `ubuntu` with
 `sudo -u ubuntu XDG_RUNTIME_DIR=/run/user/$(id -u ubuntu)`). Save as
@@ -516,7 +523,9 @@ syscall(202, $name, 3, $buf, $len, 0, 0) == 0  # __sysctl
 $buf = substr($buf, 0, unpack("Q", $len));
 my $argc = unpack("i", $buf);
 my $rest = substr($buf, 4);
-$rest =~ s/^[^\0]*\0+//;                       # executable path and padding
+$rest =~ s/^([^\0]*)\0+// or refuse("arguments of $pid truncated");
+my $exec = $1;                                 # kernel-reported executable path
+$exec =~ m{/cowboy-acp-worker$} or refuse("process $pid runs $exec");
 my @argv;
 for (1 .. $argc) {
     $rest =~ s/^([^\0]*)\0// or refuse("arguments of $pid truncated");
