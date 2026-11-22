@@ -83,6 +83,15 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.136.0 records provider-runtime 1.3.20, whose
+`cowboy-antigravity-acp` 1.0.18 follows the owner-paced rule (2026-11-22):
+its routing projection and denial reasons tell Antigravity to pass
+`notify:true` and end the turn, because Cowboy now starts its next turn with
+the notice, and `RunCommand` names how long one continuation may wait.
+Antigravity 0.2.21 pins it. The other six Providers pinning provider-runtime
+advance one patch version (claude-code 3.20.66, claude-deepseek 3.1.83,
+codex 3.6.25, codex-deepseek 3.1.83, deepseek-harness 1.0.41, grok 3.2.24).
+
 Component release 3.135.0 records provider-runtime 1.3.19, whose
 `cowboy-antigravity-acp` 1.0.17 cuts the round trips of Antigravity's tool
 facade across the Machine link: a command quiet for three one-second reads
