@@ -9,6 +9,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::super::AppState;
+use super::super::provider_accounts::retirement;
 use super::coordinator::{child_runtime_pinned, execution_action, runtime_readiness};
 use crate::core::Status;
 use crate::execution_environment::{ExecutionBinding, ManagedChildV1};
@@ -476,8 +477,7 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
             advance(state, store, record, fail("identity_mismatch", None)).await;
             return Step::Again;
         }
-        if let Some(code) = super::super::provider_accounts::retirement::call_refusal(state, child)
-        {
+        if let Some(code) = retirement::call_refusal(state, child) {
             advance(state, store, record, fail(code, None)).await;
             return Step::Again;
         }
@@ -1370,8 +1370,7 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
 /// across a restart), or a continued child of a retired legacy card.
 async fn withdraw_unstarted(state: &AppState, store: &Store, record: &Record) -> Option<Step> {
     let cancelled = record.cancel_requested_at_ms.is_some();
-    let retired =
-        super::super::provider_accounts::retirement::call_refusal(state, &record.child_session_id);
+    let retired = retirement::call_refusal(state, &record.child_session_id);
     if record.state != State::Running
         || !(cancelled || retired.is_some() || review_admissible(state, record).is_err())
     {
