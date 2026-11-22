@@ -514,7 +514,9 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     };
     let machine_presence_task =
         spawn_machine_presence_sweeper(store.as_ref(), &machine_snapshots, &shutdown_rx);
-    restore_provider_reset_schedules(&usage, store.as_ref()).await;
+    restore_provider_reset_schedules(&usage, store.as_ref())
+        .await
+        .context("cancelling retired reset schedules")?;
     let reset_task = spawn_provider_reset_timer(usage.clone(), store.clone(), shutdown_rx.clone());
     let supervisor = Arc::new(
         Supervisor::new(

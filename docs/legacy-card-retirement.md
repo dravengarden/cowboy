@@ -137,7 +137,9 @@ keys) replace every card.
   id of a retired binding) is cancelled at startup together with its audit
   row (`cancelled`, "the legacy default card is retired") in one
   transaction, also when its Plugin binding is absent, so a rolled-back
-  Controller cannot fire it later.
+  Controller cannot fire it later. Every lane is attempted, and any failure
+  fails Controller startup (the activator then restores the previous
+  Controller) rather than serving with a schedule left behind.
   Named account resets are untouched. The usage executor settings neither list
   nor accept a retired card's collector.
 - **Credentials.** Nothing is wiped implicitly by this release. Every legacy

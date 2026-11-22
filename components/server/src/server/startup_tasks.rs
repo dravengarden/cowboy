@@ -63,9 +63,12 @@ pub(super) fn log_runtime_configuration() {
 
 /// Reset credits belong to provider accounts, not sessions. Restore one
 /// shared timer per provider and keep them independent from session queues.
-pub(super) async fn restore_provider_reset_schedules(usage: &UsageService, store: Option<&Store>) {
+pub(super) async fn restore_provider_reset_schedules(
+    usage: &UsageService,
+    store: Option<&Store>,
+) -> anyhow::Result<()> {
     let Some(store) = store else {
-        return;
+        return Ok(());
     };
     // A retired card's pending Service reset would fire again after a
     // rollback, spending a credit of whatever credential is active then.
@@ -80,12 +83,11 @@ pub(super) async fn restore_provider_reset_schedules(usage: &UsageService, store
     lanes.sort();
     lanes.dedup();
     lanes.retain(|lane| !live.contains(lane));
-    match store.cancel_retired_resets(&lanes, now_ms()).await {
-        Ok(cancelled) if !cancelled.is_empty() => {
-            tracing::info!(lanes = ?cancelled, "cancelled retired cards' scheduled resets");
-        }
-        Ok(_) => {}
-        Err(error) => tracing::warn!(%error, "cancelling retired cards' scheduled resets"),
+    // Startup admission: a schedule a rollback could fire must be gone,
+    // with its audit, before the Controller serves.
+    let cancelled = store.cancel_retired_resets(&lanes, now_ms()).await?;
+    if !cancelled.is_empty() {
+        tracing::info!(lanes = ?cancelled, "cancelled retired cards' scheduled resets");
     }
     for provider in &usage.reset_provider_ids() {
         match store.load_provider_reset(provider).await {
@@ -103,6 +105,7 @@ pub(super) async fn restore_provider_reset_schedules(usage: &UsageService, store
             Err(error) => tracing::warn!(%error, %provider, "loading scheduled provider reset"),
         }
     }
+    Ok(())
 }
 
 /// Opens the configured local telemetry backends.

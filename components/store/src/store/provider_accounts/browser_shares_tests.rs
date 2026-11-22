@@ -1579,3 +1579,32 @@ async fn retired_reset_schedules_are_cancelled_with_their_audit() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn a_failed_reset_cancellation_keeps_the_schedule_and_tries_every_lane() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = sqlite_store(&dir).await;
+    for lane in ["codex", "xai"] {
+        store
+            .upsert_provider_reset(lane, 10, &format!("{lane}-key"))
+            .await
+            .unwrap();
+    }
+    let StorageBackend::Sqlite(db) = &store.backend else {
+        panic!("sqlite")
+    };
+    // The audit cannot be written: no deletion may commit without it.
+    sqlx::query("DROP TABLE provider_action_logs")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let error = store
+        .cancel_retired_resets(&["codex".to_owned(), "xai".to_owned()], 42)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("codex") && error.contains("xai"), "{error}");
+    for lane in ["codex", "xai"] {
+        assert!(store.load_provider_reset(lane).await.unwrap().is_some());
+    }
+}

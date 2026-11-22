@@ -107,7 +107,7 @@ impl Store {
         now_ms: i64,
     ) -> Result<Vec<String>> {
         macro_rules! cancel {
-            ($db:expr, $lane:expr) => {{
+            ($db:expr, $lane:expr) => {async {
                 let mut tx = $db.pool.begin().await?;
                 let deleted = sqlx::query("DELETE FROM scheduled_provider_actions WHERE provider=$1")
                     .bind($lane)
@@ -126,19 +126,27 @@ impl Store {
                     .await?;
                 }
                 tx.commit().await?;
-                deleted > 0
-            }};
+                anyhow::Ok(deleted > 0)
+            }.await};
         }
-        let mut cancelled = Vec::new();
+        // Every lane is attempted; any failure fails the whole call.
+        let (mut cancelled, mut failed) = (Vec::new(), Vec::new());
         for lane in lanes {
             let done = match &self.backend {
                 StorageBackend::Postgres(db) => cancel!(db, lane),
                 StorageBackend::Sqlite(db) => cancel!(db, lane),
             };
-            if done {
-                cancelled.push(lane.clone());
+            match done {
+                Ok(true) => cancelled.push(lane.clone()),
+                Ok(false) => {}
+                Err(error) => failed.push(format!("{lane}: {error:#}")),
             }
         }
+        anyhow::ensure!(
+            failed.is_empty(),
+            "cancelling retired reset schedules failed ({})",
+            failed.join("; ")
+        );
         Ok(cancelled)
     }
 }
