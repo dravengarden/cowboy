@@ -633,9 +633,18 @@ claude-remote-check: claude-remote-prepare claude-remote-relay claude-remote-scr
 # gate build writes that path. The rename is atomic, so a suite already running
 # never finds the host missing while a later invocation relinks it.
 claude-remote-prepare: claude-source-deps
+    #!/usr/bin/env bash
+    set -euo pipefail
     {{rust_slice_env}} cargo build --locked --no-default-features --features machine-host -p cowboy-machine --bin cowboy-execution-host
+    host=target/check-slices/debug/cowboy-execution-host
+    link=target/debug/cowboy-execution-host
     mkdir -p target/debug
-    ln -f target/check-slices/debug/cowboy-execution-host "target/debug/.cowboy-execution-host.$$" && mv -f "target/debug/.cowboy-execution-host.$$" target/debug/cowboy-execution-host
+    if ! test "$link" -ef "$host"; then
+      ln -f "$host" "$link.$$"
+      # A concurrent invocation may have linked the same file first.
+      mv -f "$link.$$" "$link" || test "$link.$$" -ef "$link"
+      rm -f "$link.$$"
+    fi
 
 # The pinned Claude ACP packages that `tools/register-memory-client.mjs`
 # resolves `ws` from. It reinstalls only when the pinned manifest changes, so
