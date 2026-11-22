@@ -637,3 +637,38 @@ async fn inheritance_preflight_refusal_creates_no_destination_or_context_reserva
         "failed"
     );
 }
+
+#[tokio::test]
+async fn account_inventory_serves_older_web_clients_after_the_card_retirement() {
+    let mut fixture = Fixture::new().await;
+    let (_controller, base) = fixture.start().await;
+    // The read-only `subscriptions` projection an older Web compares.
+    let inventory = fixture.get(&format!("{base}/api/provider-accounts")).await;
+    assert_eq!(inventory["display_preferences"]["revision"], 0);
+    assert!(
+        inventory["retired_default_providers"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("codex"))
+    );
+    // An older tab's pending card change gets a JSON rejection it reconciles.
+    for change in [
+        json!({"type":"set_legacy_browser_enabled","card":"anthropic","enabled":true}),
+        json!({"type":"set_browser_share","member":{"card":"openai"},"share_id":null}),
+    ] {
+        let response = fixture
+            .request(
+                reqwest::Method::PUT,
+                &format!("{base}/api/provider-accounts"),
+            )
+            .json(&json!({"operation":"old-tab","dataset":"old","expected_revision":0,"change":change}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 422);
+        assert_eq!(
+            response.json::<Value>().await.unwrap()["error"]["code"],
+            "invalid_argument"
+        );
+    }
+}

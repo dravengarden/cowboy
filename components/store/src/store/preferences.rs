@@ -149,6 +149,35 @@ impl Store {
         ))
     }
 
+    /// The retired `subscriptions` scope (legacy card labels) as it was last
+    /// stored, read-only: a Web release from before the legacy card
+    /// retirement compares its revision. A revision-zero empty value when the
+    /// owner never wrote one. Nothing writes this scope any more.
+    pub async fn retired_subscriptions_preferences(&self, owner: &str) -> Result<Preferences> {
+        macro_rules! read {
+            ($db:expr) => {
+                sqlx::query_scalar::<_, String>(
+                    "SELECT value FROM user_preferences WHERE owner_user_id=$1 AND scope='subscriptions'",
+                )
+                .bind(owner)
+                .fetch_optional(&$db.pool)
+                .await?
+            };
+        }
+        let value = match &self.backend {
+            StorageBackend::Postgres(db) => read!(db),
+            StorageBackend::Sqlite(db) => read!(db),
+        };
+        Ok(match value {
+            Some(value) => serde_json::from_str(&value)?,
+            None => Preferences {
+                scope: "subscriptions".into(),
+                revision: 0,
+                values: json!({"legacy_labels":{}}),
+            },
+        })
+    }
+
     pub async fn preference_receipt(
         &self,
         owner: &str,
@@ -337,6 +366,51 @@ mod tests {
                 .values["usage_order"],
             json!([])
         );
+    }
+
+    #[tokio::test]
+    async fn the_retired_subscriptions_scope_stays_readable_read_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!(
+            "sqlite://{}?mode=rwc",
+            dir.path().join("prefs.sqlite").display()
+        );
+        let store = Store::connect(&url, dir.path().join("artifacts"))
+            .await
+            .unwrap();
+        store.migrate().await.unwrap();
+        // The general reader no longer knows the scope ...
+        assert!(
+            store
+                .preferences("owner", "subscriptions")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        // ... the compatibility projection always answers.
+        let empty = store
+            .retired_subscriptions_preferences("owner")
+            .await
+            .unwrap();
+        assert_eq!(
+            (empty.revision, empty.values),
+            (0, json!({"legacy_labels":{}}))
+        );
+        let StorageBackend::Sqlite(db) = &store.backend else {
+            panic!("sqlite")
+        };
+        let stored = json!({"scope":"subscriptions","revision":4,"values":{"legacy_labels":{"codex":"OpenAI · Pika"}}});
+        sqlx::query("INSERT INTO user_preferences (owner_user_id,scope,value) VALUES ('owner','subscriptions',$1)")
+            .bind(stored.to_string())
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let kept = store
+            .retired_subscriptions_preferences("owner")
+            .await
+            .unwrap();
+        assert_eq!(kept.revision, 4);
+        assert_eq!(kept.values["legacy_labels"]["codex"], "OpenAI · Pika");
     }
 
     #[tokio::test]

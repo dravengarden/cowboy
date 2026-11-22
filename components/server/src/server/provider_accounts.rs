@@ -165,10 +165,9 @@ pub(super) async fn read_value(state: &Arc<AppState>, owner: &str) -> Result<Val
     // retirement compares this revision too and would discard every later
     // snapshot without it. Nothing writes the `subscriptions` preference now.
     let display = store
-        .preferences(owner, "subscriptions")
+        .retired_subscriptions_preferences(owner)
         .await
-        .map_err(|_| "unavailable")?
-        .ok_or("unavailable")?;
+        .map_err(|_| "unavailable")?;
     let enabled = state
         .service_config
         .get(&crate::config::schema::ACCOUNT_NATIVE_CLAUDE_SESSIONS);
@@ -315,11 +314,26 @@ pub(super) struct Update {
     mutation: Mutation,
 }
 
+/// A change only a Web release from before the legacy card retirement sends:
+/// a card browser switch or a card share membership.
+fn retired_change(input: &Value) -> bool {
+    let change = &input["change"];
+    change["type"] == "set_legacy_browser_enabled"
+        || (change["type"] == "set_browser_share" && change["member"].get("card").is_some())
+}
+
 pub(super) async fn update(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthenticatedProductRequest>,
-    Json(input): Json<Update>,
+    Json(input): Json<Value>,
 ) -> Response {
+    let input = match serde_json::from_value::<Update>(input.clone()) {
+        Ok(update) => update,
+        Err(error) if !retired_change(&input) => {
+            return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
+        }
+        Err(_) => return retired_update(&state, &auth.principal.user_id, &input).await,
+    };
     if !sync_dataset::matches(&state.service_id, &auth.principal, &input.dataset) {
         return (
             StatusCode::CONFLICT,
@@ -356,9 +370,48 @@ pub(super) async fn update(
     }
 }
 
+/// An older Web client's pending retired change: the receipt of the
+/// operation if the previous Controller committed it, else a definitive
+/// JSON rejection it recognizes, so it releases its journal.
+async fn retired_update(state: &AppState, owner: &str, input: &Value) -> Response {
+    let receipt = match (state.store.as_ref(), input["operation"].as_str()) {
+        (Some(store), Some(operation)) => store.provider_account_receipt(owner, operation).await,
+        _ => Ok(None),
+    };
+    match receipt {
+        Ok(Some(receipt)) => Json(receipt_value(&receipt)).into_response(),
+        Ok(None) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({"error":{"code":"invalid_argument"}})),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error":{"code":"unavailable"}})),
+        )
+            .into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_retired_card_changes_are_answered_for_older_clients() {
+        assert!(retired_change(
+            &json!({"change":{"type":"set_legacy_browser_enabled","card":"anthropic","enabled":true}})
+        ));
+        assert!(retired_change(
+            &json!({"change":{"type":"set_browser_share","member":{"card":"openai"},"share_id":null}})
+        ));
+        assert!(!retired_change(
+            &json!({"change":{"type":"set_browser_share","member":{"account_id":"a"},"share_id":null}})
+        ));
+        assert!(!retired_change(
+            &json!({"change":{"type":"rename","id":"a","label":"x"}})
+        ));
+    }
 
     #[test]
     fn rollout_cannot_enable_unsupported_provider_or_fall_back_to_default() {
