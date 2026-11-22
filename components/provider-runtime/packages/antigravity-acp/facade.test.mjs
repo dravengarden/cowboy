@@ -325,6 +325,27 @@ test("a connection lost during a quiet wait is an unknown outcome", async (t) =>
   assert.deepEqual(uncertain, [["s1", "process/read"]]);
 });
 
+test("an exit whose notification was lost is still seen before the deadline", async (t) => {
+  const { call } = await fixture(t, { notifications: false });
+  const done = await call("RunCommand", { command: "sleep 4; echo fin", timeout_seconds: 7 });
+  assert.match(done.text, /^Exit code: 0\n/);
+  assert.match(done.text, /fin/);
+});
+
+test("output a stop's drain reads is in its answer", async (t) => {
+  const { call } = await fixture(t);
+  const first = await call("RunCommand", {
+    command: "echo early; sleep 2; echo late; sleep 60",
+    wait_seconds: 1,
+  });
+  const id = /command_id: ([^)]+)\)/.exec(first.text)?.[1];
+  assert.ok(id, first.text);
+  await new Promise((resolve) => setTimeout(resolve, 3000));
+  const stopped = await call("StopCommand", { command_id: id });
+  assert.match(stopped.text, /^Stopped /);
+  assert.match(stopped.text, /late/);
+});
+
 test("ReadFile asks for a file's metadata once", async (t) => {
   const { call, endpoint } = await fixture(t);
   assert.match((await call("ReadFile", { path: "hello.txt" })).text, /hello target/);

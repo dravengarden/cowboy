@@ -648,8 +648,21 @@ export class Facade {
     return { processId, afterSeq: null, exitCode: null, closed: false };
   }
 
-  /** One `process/read`; returns the chunks and updates the cursor. */
-  async read(process, waitMs, { lostIsUncertain = true } = {}) {
+  /**
+   * One `process/read`; returns the chunks and updates the cursor. Reads of
+   * one process run one at a time, so a stop's drain and a waiting reader
+   * never share a cursor, and a command's chunks land in its retained
+   * output whichever reader took them.
+   */
+  read(process, waitMs, options) {
+    const read = (process.reading ?? Promise.resolve()).then(() =>
+      this.readOnce(process, waitMs, options),
+    );
+    process.reading = read.catch(() => {});
+    return read;
+  }
+
+  async readOnce(process, waitMs, { lostIsUncertain = true } = {}) {
     let result;
     try {
       result = await this.connection.call("process/read", {
@@ -674,7 +687,9 @@ export class Facade {
         throw new ToolError("Repeated process output");
       }
       process.afterSeq = chunk.seq;
-      chunks.push({ stream: chunk.stream, bytes: Buffer.from(chunk.chunk, "base64") });
+      const bytes = Buffer.from(chunk.chunk, "base64");
+      process.output?.push(bytes);
+      chunks.push({ stream: chunk.stream, bytes });
     }
     if (result.exited) process.exitCode = result.exitCode;
     if (result.closed) {
@@ -689,13 +704,21 @@ export class Facade {
   /**
    * Read `process` once within `remaining` ms: a one-second read while it
    * produces output, and after `LIMITS.quietReads` empty reads in a row a
-   * read that waits for a notification naming the process instead.
+   * read that waits for a notification naming the process instead. A quiet
+   * wait ends one second before the deadline, so a one-second read still
+   * sees an exit whose notification was lost.
    */
   async poll(process, remaining, options) {
     const listeners = this.connection.listeners;
+    const deadline = Date.now() + remaining;
     const chunks =
-      (process.quiet ?? 0) >= LIMITS.quietReads && listeners && remaining > 1000
-        ? await this.notifiedRead(process, Math.min(LIMITS.quietWaitMs, remaining), options)
+      (process.quiet ?? 0) >= LIMITS.quietReads && listeners && remaining > 2000
+        ? await this.notifiedRead(
+            process,
+            Math.min(LIMITS.quietWaitMs, remaining - 1000),
+            deadline,
+            options,
+          )
         : await this.read(process, Math.max(1, Math.min(1000, remaining)), options);
     process.quiet = chunks.length || process.closed ? 0 : (process.quiet ?? 0) + 1;
     return chunks;
@@ -711,7 +734,7 @@ export class Facade {
    * if its deadline leaves time, so a lost notification costs one read per
    * `waitMs` and a reader never starts a read past its deadline.
    */
-  async notifiedRead(process, waitMs, options) {
+  async notifiedRead(process, waitMs, deadline, options) {
     const listeners = this.connection.listeners;
     let listener;
     let timer;
@@ -728,7 +751,7 @@ export class Facade {
     try {
       const chunks = await this.read(process, 0, options);
       if (chunks.length || process.closed) return chunks;
-      if (!(await notified) || process.closed) return [];
+      if (!(await notified) || process.closed || Date.now() >= deadline) return [];
       return await this.read(process, 0, options);
     } finally {
       clearTimeout(timer);
@@ -794,6 +817,9 @@ export class Facade {
       }
     } catch (error) {
       failure = error;
+      // Fenced before cleanup is awaited: a concurrent call of the turn
+      // admits no mutation while this helper's outcome is unknown.
+      if (error instanceof UncertainEffect && turn) turn.uncertain ??= error.method;
     }
     // Whatever ended the loop, the process is not left running unconfirmed: a
     // helper that may still publish is an effect of unknown outcome.
@@ -835,6 +861,7 @@ export class Facade {
       }
       running = await this.start(turn, [this.shell, "-c", command]);
       running.deadline = Date.now() + seconds * 1000;
+      // Every reader's chunks land here (see `read`).
       running.output = new Retained(LIMITS.commandOutput);
       session.commands.set(running.processId, running);
       // The deadline holds even when nobody reads the command again.
@@ -852,7 +879,6 @@ export class Facade {
       let changed = false;
       while (!running.closed && Date.now() < until) {
         for (const { bytes } of await this.poll(running, until - Date.now())) {
-          running.output.push(bytes);
           changed ||= bytes.length > 0;
         }
         if (changed && !running.closed && Date.now() - shown >= LIMITS.progressMs) {
