@@ -430,9 +430,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         &args.data_dir,
         Arc::clone(&plugin_catalog),
     )?);
-    let provider_auth = Arc::new(crate::provider_service::ProviderAuthService::open(
-        &args.data_dir,
-    )?);
+    let provider_auth = provider_accounts::retirement::open_provider_auth(&args.data_dir)?;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     // Persistence closes only after dispatcher/runtime quiescence. Using the
     // HTTP shutdown signal directly would race a last-millisecond prompt
@@ -455,7 +453,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         &args,
         core_security.as_ref(),
         &plugin_dir,
-        &service_id,
+        (&service_id, &provider_auth),
         managed_export_policy,
         &runtime_health,
         &store_shutdown_rx,
@@ -492,7 +490,8 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         Arc::clone(&machine_control),
     )
     .with_config(service_config.clone())
-    .with_runtime_restrictions(Arc::clone(&runtime_restrictions));
+    .with_runtime_restrictions(Arc::clone(&runtime_restrictions))
+    .with_retired_service_accounts(crate::store::provider_accounts::legacy_cards::CARDS);
     usage.restore_execution_settings().await?;
     let runtime_router = RuntimeRouter::new();
     // Usage collectors and authenticated Machine connections must share this
@@ -515,7 +514,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     };
     let machine_presence_task =
         spawn_machine_presence_sweeper(store.as_ref(), &machine_snapshots, &shutdown_rx);
-    restore_provider_reset_schedules(&usage, store.as_ref()).await;
+    restore_provider_reset_schedules(&usage, store.as_ref()).await?;
     let reset_task = spawn_provider_reset_timer(usage.clone(), store.clone(), shutdown_rx.clone());
     let supervisor = Arc::new(
         Supervisor::new(

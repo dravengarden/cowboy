@@ -52,7 +52,6 @@ import {
 } from "../providerConfigOptions";
 import {
   loadUsageSnapshot,
-  requestUsageRefresh,
   useStoreSelector,
 } from "../store";
 import { NetworkButton } from "../NetworkActionFeedback";
@@ -98,7 +97,7 @@ import {
 } from "../usageWidget";
 import { useSubscriptionAccounts } from "../subscriptionAccounts";
 import { useNativeAccountUsage } from "../nativeAccountUsage";
-import { registeredUsageAccounts, type UsageAccountCard, usageCardManageUrl, usageCardResetSchedule, usageResetTarget } from "../usageAccounts";
+import { registeredUsageAccounts, type UsageAccountCard, usageCardManageUrl, usageResetTarget } from "../usageAccounts";
 import { AccountBrowserEntry } from "../machineBrowser/AccountBrowserEntry";
 import { DesktopModal } from "./DesktopModal";
 import { RunConfigurationDialog } from "./RunConfigurationDialog";
@@ -694,7 +693,7 @@ function DesktopProviderUsage({ account, schedule, onUsageChanged, onRefresh, re
   account: UsageAccountCard;
   /** Account-level controls beside the heading (the browser entry). */
   action?: React.ReactNode;
-  schedule: { fire_at_ms: number } | undefined;
+  schedule?: { fire_at_ms: number } | undefined;
   onUsageChanged: () => Promise<void>;
   onRefresh: (() => Promise<void>) | undefined;
   refreshing: boolean;
@@ -775,7 +774,7 @@ function DesktopProviderUsage({ account, schedule, onUsageChanged, onRefresh, re
         {account.native?.machine_id && <Typography variant="caption" color="text.secondary">Usage query Machine: {account.native.machine_id}</Typography>}
         {manageUrl !== undefined && <Button size="small" component="a" href={manageUrl} target="_blank" rel="noopener noreferrer"
           sx={{ alignSelf: "flex-start", textTransform: "none" }}>Plan &amp; limit resets</Button>}
-        {(account.collector || resetTarget) && <DesktopUsageExtras
+        {resetTarget && <DesktopUsageExtras
           usage={usage}
           target={resetTarget}
           schedule={schedule}
@@ -1294,7 +1293,7 @@ export function DesktopTopBarControls({
                     key={account.id}
                     account={account}
                     provider={provider}
-                    refreshing={account.collector ? usageRefreshing(snapshot, account.collector) : account.native?.refreshing ?? false}
+                    refreshing={account.native?.refreshing ?? false}
                     first={index === 0}
                     now={clock}
                   />
@@ -1396,10 +1395,8 @@ export function DesktopTopBarControls({
                   {index > 0 && <Divider />}
                   <DesktopProviderUsage
                     account={account}
-                    schedule={usageCardResetSchedule(snapshot, account)}
-                    refreshing={account.collector ? usageRefreshing(snapshot, account.collector) : account.native?.refreshing ?? false}
-                    onRefresh={account.collector ? () => requestUsageRefresh(account.collector)
-                      : account.native?.available ? () => native.refresh(account.id) : undefined}
+                    refreshing={account.native?.refreshing ?? false}
+                    onRefresh={account.native?.available ? () => native.refresh(account.id) : undefined}
                     onUsageChanged={() => loadUsage(false)}
                     action={<AccountBrowserEntry snapshot={accounts.data} account={account.id} label={account.title} />}
                   />

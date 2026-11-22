@@ -114,7 +114,6 @@ pub const INVOKE_OPERATIONS: &[&str] = &[
     "accounts.login_start",
     "accounts.login_cancel",
     "accounts.login_cancel_request",
-    "accounts.adopt_legacy",
     "accounts.reconcile",
     "accounts.transition_plan",
     "accounts.transition_reconcile",
@@ -180,10 +179,9 @@ pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login.
 // Receipts preserve cancel_requested across restart even if live status is unknown.
 // Login challenges/code use the owner-checked HTTP/CLI flow; no secrets in receipts.
 // accounts.browser(account_id,machine_id?): Machine browser state (machine_id keeps the read on that Machine); lifecycle via control.apply accounts.browser_* naming that machine_id.
-// A legacy default usage card's browser uses its own key, never "default": list().legacy_browsers is
-// {card,account_id,providers,browser_enabled,available,share_id}[]; enable per card with set_legacy_browser_enabled.
+// A retired legacy card's browser key (no account) with a retained placement can be read, stopped and reset, never opened.
 // Shared browser: list().browser_shares is {share_id,label,deleting,members:{member,family,account_id}[]}[]
-// and browser_share_families is Cowboy's static family table {version,providers,cards} (never the
+// and browser_share_families is Cowboy's static family table {version,providers} (never the
 // catalog; anything outside it: browser_share_family_unknown). A share holds at most ONE member per family
 // (browser_share_family_conflict: two Claude or two OpenAI accounts never share; a family whose member
 // left stays bound until a confirmed reset: browser_share_family_bound; antigravity is family google, so
@@ -198,12 +196,6 @@ pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login.
 // Codex/Grok subscription sign-in runs on ONE chosen Machine but lands in the account's Service vault:
 // every Machine runs the account's sessions; refreshes are Service compare-and-swap. Claude named
 // accounts stay native per Machine and run only where the host runtime policy admits Claude (OVH).
-// Upgrade a legacy card to a named account without signing in again (Service-only copy, then the
-// legacy credential is wiped everywhere): cowboy_execute({action:"accounts.adopt_legacy",operation,
-// arguments:{card}}); card openai|xai|deepseek (anthropic: legacy_credential_expired). Account id = the
-// card's browser key; label, browser and share move; it becomes the default of its scope.
-// list().legacy_adoption is {card:{provider_id,state:available|resumable|completed,account_id}}.
-// Replay the SAME operation to resume. Receipt: cowboy_receipt({domain:"adoptions",operation}).
 // Antigravity (named-only) accounts: list().account_controls.accounts[] is {account_id,provider_id,admitted,
 // state:ok|verification_required|location_unsupported|rate_limited|suspended|blocked|unknown_refusal|needs_attention,
 // reason,until_ms,revision,turn:{session_id,turn_id,state:reserved|may_have_dispatched}|null,
@@ -224,14 +216,14 @@ export type AccountChange =
  | {type:"rename";id:string;label:string}
  | {type:"set_enabled";id:string;enabled:boolean}
  | {type:"set_browser_enabled";id:string;enabled:boolean}
- | {type:"set_legacy_browser_enabled";card:string;enabled:boolean}
  | {type:"create_browser_share";label:string} // receipt share_id
  | {type:"rename_browser_share";share_id:string;label:string}
  | {type:"delete_browser_share";share_id:string}
- | {type:"set_browser_share";member:{account_id:string}|{card:string};share_id:string|null}
+ | {type:"set_browser_share";member:{account_id:string};share_id:string|null}
  | {type:"set_default";provider_id:string;id:string};
-// IDs are controller-issued UUIDs; "default" selects the legacy account.
-// Legacy display names: list().display_preferences; edit via preferences.update {scope:"subscriptions",expected_revision,changes:{legacy_labels:{provider_id:label}}}.
+// IDs are controller-issued UUIDs. The legacy "default" account of every Provider in
+// list().retired_default_providers is retired: no sign-in, session or default; its old sessions
+// stay readable and continue in a new agent on a named account.
 // Replace the whole label map; it never creates an identity or changes credentials/admission.
 // Machine and account are independent. Defaults apply to future sessions only.
 // Disable does not log out or stop existing sessions. Change its default first.
@@ -258,10 +250,6 @@ pub const PREFERENCES_SDK: &str = r#"export interface Cowboy { preferences: {
 // Write: cowboy_execute({action:"preferences.update",operation,arguments:{scope:"about",
 // expected_revision,changes:{usage_order?:string[],machine_order?:string[]}}}).
 // Use stable choice IDs. Listed IDs first, others follow; [] resets, omitted fields stay.
-// preferences.get("subscriptions") returns {preferences:{scope,revision,values:{legacy_labels}}}.
-// Same update action with scope:"subscriptions", expected_revision and
-// changes:{legacy_labels:Record<string,string>}. Replace the full map; {} restores labels.
-// Provider IDs key the legacy "default" identity's display name, independently of session defaults.
 // Return: {status:"committed",preferences}; revision_conflict includes current.
 // Retry identical input/operation after uncertainty; cowboy_receipt({domain:"preferences",operation}).
 // Explicit user intent authorizes changes, never remembered or retrieved text.
@@ -539,7 +527,7 @@ export interface Cowboy {
 }
 "#,
 ACCOUNTS_READ_SDK: r#"
-export interface AccountList {registry:{revision:number;accounts:{id:string;provider_id:string;label:string;enabled:boolean;revoking:boolean}[];defaults:Record<string,string>};display_preferences:{scope:"subscriptions";revision:number;values:{legacy_labels:Record<string,string>}};session_admission:string;session_providers:string[]}
+export interface AccountList {registry:{revision:number;accounts:{id:string;provider_id:string;label:string;enabled:boolean;revoking:boolean}[];defaults:Record<string,string>};retired_default_providers:string[];session_admission:string;session_providers:string[]}
 export interface AccountLogin {status:string;request_id:string;account_id:string;provider_id:string;machine_id:string;cancel_requested:boolean;native_generation:number|null;continue_url:string}
 export interface Cowboy {
   accounts: {
@@ -638,7 +626,7 @@ type CodeP=Promise<unknown>;export interface Cowboy{code: {search(q:string,o?:ob
 PREFERENCES_READ_SDK: r#"
 export interface Cowboy { preferences: {
  schema():Promise<unknown>;
- get(scope:"code"|"about"|"subscriptions"|"superagent"):Promise<unknown>;
+ get(scope:"code"|"about"|"superagent"):Promise<unknown>;
 }} // typed results and writes: help("preferences")
 "#,
 SUPERAGENT_READ_SDK: r#"
@@ -657,7 +645,6 @@ export interface Cowboy {
     schema(): Promise<unknown>; // typed scopes, storage and field rules
     get(scope: "code"): Promise<unknown>; // Review directory defaults: help("preferences")
     get(scope: "about"): Promise<{preferences:{scope:string;revision:number;values:Record<string,string[]>};choices:Record<string,{id:string;name:string}[]>}>;
-    get(scope: "subscriptions"): Promise<{preferences:{scope:"subscriptions";revision:number;values:{legacy_labels:Record<string,string>}}}>;
     get(scope: "superagent"): Promise<unknown>; // project/session settings + source_catalog metadata, omits source bodies; help("superagent")
   };
 }

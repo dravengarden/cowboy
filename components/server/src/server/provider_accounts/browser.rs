@@ -1,5 +1,5 @@
-//! Owner-operated Machine browsers for named accounts and for the legacy
-//! default usage cards (`legacy`): admission (Service gate, enablement),
+//! Owner-operated Machine browsers for named accounts (and the retained
+//! browsers of retired legacy cards, `legacy`): admission (Service gate, enablement),
 //! Machine selection, the lifecycle commands the owner may issue, durable
 //! placements and the state read shared by HTTP and MCP. The display stream
 //! itself is `viewer` and `machine_stream`.
@@ -78,40 +78,33 @@ pub(in crate::server) enum Authority {
     Reset,
 }
 
-/// Whose browser a key names: a named registry account, or a legacy
-/// default usage card through its own derived key. The two never overlap.
+/// Whose browser a key names: a named registry account, or the retained
+/// browser of a retired legacy card (its own derived key), which can be
+/// read, stopped and reset but never opened. The two never overlap.
 #[derive(Clone, Debug)]
 pub(in crate::server) enum BrowserAccount {
     Named(Account),
-    Legacy(legacy::LegacyCard),
+    RetiredCard,
 }
 
 impl BrowserAccount {
     fn available(&self) -> bool {
         match self {
             Self::Named(account) => account.available(),
-            Self::Legacy(card) => card.bound && card.card.is_some(),
+            Self::RetiredCard => false,
         }
     }
 
     fn browser_enabled(&self) -> bool {
         match self {
             Self::Named(account) => account.browser_enabled,
-            Self::Legacy(card) => card.enabled,
+            Self::RetiredCard => false,
         }
     }
 
-    /// Legacy cards are not revocable through the account registry.
+    /// A retired card is not revocable through the account registry.
     fn revoking(&self) -> bool {
         matches!(self, Self::Named(account) if account.revoking)
-    }
-
-    /// The legacy card a placement admission checks, `None` for a named account.
-    fn card(&self) -> Option<&str> {
-        match self {
-            Self::Named(_) => None,
-            Self::Legacy(card) => card.card.as_deref(),
-        }
     }
 }
 
@@ -203,10 +196,8 @@ async fn owned_account(
         None if shares::is_share_key(state, owner, account_id).await? => {
             return Err("browser_member_required");
         }
-        None => legacy::resolve(state, owner, account_id)
-            .await?
-            .map(BrowserAccount::Legacy)
-            .ok_or("account_unavailable")?,
+        None if legacy::retained(state, owner, account_id).await? => BrowserAccount::RetiredCard,
+        None => return Err("account_unavailable"),
     };
     let (key, share) = shares::resolve(state, owner, (account_id, &account), &registry).await?;
     Ok(Resolved {
@@ -219,7 +210,7 @@ async fn owned_account(
 }
 
 /// Machines holding the account's credentials: a named account's native
-/// generations or vault Machines, or a legacy card's default credentials.
+/// generations or vault Machines. A retired card has none.
 async fn credential_machines(
     state: &AppState,
     owner: &str,
@@ -229,10 +220,7 @@ async fn credential_machines(
         BrowserAccount::Named(named) => {
             legacy::named_credential_machines(state, owner, account_id, &named.provider_id).await
         }
-        BrowserAccount::Legacy(card) => match &card.card {
-            Some(card) => legacy::credential_machines(state, card).await,
-            None => Ok(Vec::new()),
-        },
+        BrowserAccount::RetiredCard => Ok(Vec::new()),
     }
 }
 
@@ -784,13 +772,7 @@ async fn dispatch_open(
         (Some(_), None) => return Err("browser_share_changed"),
         (None, _) => {
             store
-                .admit_browser_placement(
-                    owner,
-                    (account_id, resolved.account.card()),
-                    machine_id,
-                    &instance,
-                    now_ms(),
-                )
+                .admit_browser_placement(owner, account_id, machine_id, &instance, now_ms())
                 .await
         }
     };
@@ -1452,45 +1434,23 @@ mod tests {
         })
     }
 
-    fn card(card: Option<&str>, bound: bool, enabled: bool) -> BrowserAccount {
-        BrowserAccount::Legacy(legacy::LegacyCard {
-            card: card.map(str::to_owned),
-            bound,
-            enabled,
-        })
-    }
-
     #[test]
-    fn a_legacy_card_browser_launches_only_once_its_owner_enabled_it() {
-        // Off by default, like Lynx: the card is shown, its browser is not
-        // enabled, so nothing launches until the owner enables that card.
-        let lynx = card(Some("anthropic"), true, false);
-        assert_eq!(
-            authorize_account(Authority::Launch, true, &lynx),
-            Err("browser_not_enabled")
-        );
-        let enabled = card(Some("anthropic"), true, true);
-        assert_eq!(authorize_account(Authority::Launch, true, &enabled), Ok(()));
-        assert_eq!(enabled.card(), Some("anthropic"));
-        assert_eq!(
-            authorize_account(Authority::Launch, false, &enabled),
-            Err("machine_browser_not_enabled")
-        );
-        // A card the Service no longer collects, or a key known only from a
-        // retained placement, can be stopped and reset but never opened.
-        for retained in [card(Some("xai"), false, true), card(None, false, false)] {
+    fn a_retired_card_browser_can_be_stopped_and_reset_but_never_opened() {
+        let retired = BrowserAccount::RetiredCard;
+        for gate in [true, false] {
             assert_eq!(
-                authorize_account(Authority::Launch, true, &retained),
-                Err("account_unavailable")
+                authorize_account(Authority::Launch, gate, &retired),
+                Err(if gate {
+                    "account_unavailable"
+                } else {
+                    "machine_browser_not_enabled"
+                })
             );
-            assert_eq!(authorize_account(Authority::Stop, false, &retained), Ok(()));
-            assert_eq!(
-                authorize_account(Authority::Reset, false, &retained),
-                Ok(())
-            );
+            assert_eq!(authorize_account(Authority::Stop, gate, &retired), Ok(()));
+            assert_eq!(authorize_account(Authority::Reset, gate, &retired), Ok(()));
         }
-        // Legacy cards are never revoked through the registry.
-        assert!(!enabled.revoking());
+        // Retired cards are never revoked through the registry.
+        assert!(!retired.revoking());
         assert_eq!(
             error_status("browser_key_required"),
             StatusCode::BAD_REQUEST
@@ -1499,11 +1459,11 @@ mod tests {
 
     #[test]
     fn every_card_and_named_account_has_its_own_instance_on_a_machine() {
-        use crate::store::provider_accounts::legacy_browsers;
+        use crate::store::provider_accounts::legacy_cards;
         let named: ProviderAccountId = uuid::Uuid::new_v4().to_string().try_into().unwrap();
         let mut keys = vec![named];
         for card in ["anthropic", "deepseek", "openai", "xai"] {
-            keys.push(legacy_browsers::account("owner", card));
+            keys.push(legacy_cards::browser_key("owner", card));
         }
         let instances: std::collections::BTreeSet<String> = keys
             .iter()

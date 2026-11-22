@@ -291,10 +291,15 @@ pub(in crate::server::managed_calls) async fn provider_readiness(
             .await
             {
                 Ok(account) => account,
+                // A retired card default needs a named selection, not a sign-in.
+                Err("named_account_required") => return unavailable("named_account_required"),
                 Err(_) => return unavailable("authentication_required"),
             }
         }
-        None => Default::default(),
+        None => match super::super::super::provider_accounts::creatable_default(provider) {
+            Ok(()) => Default::default(),
+            Err(reason) => return unavailable(reason),
+        },
     };
     let resolved = match owner {
         Some(owner) if !account.is_default() => {

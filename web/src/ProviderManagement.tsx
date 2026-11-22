@@ -18,6 +18,7 @@ import {
 import { ArrowBackRounded } from "@mui/icons-material";
 import { ServiceSignInPage, useServiceSignInBrowser } from "./ServiceSignInPage";
 import { SubscriptionManagement, type SubscriptionCards } from "./SubscriptionManagement";
+import { RETIRED_SESSION_GUIDANCE, retiredDefaultProvider, useSubscriptionAccounts } from "./subscriptionAccounts";
 import { ProviderAccountIdentity, ProviderAccountStatus, providerAccountCardSx } from "./ProviderAccountIdentity";
 import { alpha } from "@mui/material/styles";
 import {
@@ -159,13 +160,11 @@ export function ProviderAuthenticationManagement({
 export function SessionProviderAccess(
   { providerId }: { providerId: string },
 ): React.JSX.Element {
-  return (
-    <ProviderManagement
-      scope="service"
-      focusProviderId={providerId}
-      embedded
-    />
-  );
+  const { data, error } = useSubscriptionAccounts();
+  // A retired legacy card has no Service sign-in: its session continues in a new agent.
+  if (!data && !error) return <Typography variant="caption" color="text.secondary">Checking this session’s account…</Typography>;
+  if (retiredDefaultProvider(data, providerId)) return <Alert severity="info" data-retired-session-account>{RETIRED_SESSION_GUIDANCE}</Alert>;
+  return <ProviderManagement scope="service" focusProviderId={providerId} embedded />;
 }
 
 export function MachineProviderManagement(
@@ -941,9 +940,7 @@ function ProviderManagement(
             : undefined;
           const credentialEntries = credentialGroup?.entries ?? [entry];
           const sharedCredential = credentialEntries.length > 1;
-          const accountNames = credentialEntries.map((item) => accounts?.legacy(item.provider_id).title);
-          const accountTitle = accountNames[0] && accountNames.every((name) => name === accountNames[0])
-            ? accountNames[0] : undefined;
+          const accountTitle: string | undefined = undefined;
           const readyCredential = scope === "service" &&
             entry.manifest.authentication.required &&
             auth?.authentication_state === "ready";
@@ -1124,7 +1121,6 @@ function ProviderManagement(
                               sx={{ pl: { xs: 0, sm: 5.25 } }}
                             >
                               <Stack spacing={1}>
-                                {accounts && credentialEntries.map((provider) => <Box key={provider.provider_id}>{accounts.legacy(provider.provider_id).controls}</Box>)}
                                 {lifecycleSurface}
                               </Stack>
                             </Box>

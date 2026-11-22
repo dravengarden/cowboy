@@ -1961,6 +1961,18 @@ impl MachinePluginStore {
             _ => true,
         };
         self.prepare_provider_root(&envelope.provider_id)?;
+        // Before the replica becomes current: a retry of this generation no
+        // longer reports it advanced, so the roll its workers owe is durable
+        // until the broker took it (`take_pending_roll`).
+        if auth_generation_advanced
+            && (envelope.action == ProviderAuthAction::Wipe || runtime_changed)
+        {
+            atomic_write(
+                &provider_auth_root.join(PENDING_ROLL),
+                envelope.auth_generation.to_string().as_bytes(),
+                0o600,
+            )?;
+        }
         crate::provider_account::prepare_private_directory(&provider_auth_root.join("replicas"))?;
         atomic_write(
             &provider_auth_root
@@ -1981,6 +1993,14 @@ impl MachinePluginStore {
             &provider_auth_root.join("replicas"),
             envelope.auth_generation,
         )?;
+        // Durable before the receipt: a power loss after the Controller
+        // records it must not bring back the previous replica or a wiped
+        // projection (renames and unlinks live in these directories).
+        sync_directories(&[
+            &provider_auth_root.join("replicas"),
+            &provider_auth_root,
+            provider_auth_root.parent().unwrap_or(&provider_auth_root),
+        ])?;
         Ok(PluginInventoryReceipt {
             provider_id: envelope.provider_id.clone(),
             auth_generation: envelope.auth_generation,
@@ -2054,7 +2074,7 @@ impl MachinePluginStore {
             PreparedProviderAuth::Wipe => {
                 self.revoke_native_profiles(&envelope.provider_id)?;
                 let provider_auth_root = self.auth_provider_root(&envelope.provider_id);
-                for directory in ["materialized", "runtime", native_usage::PRIVATE_HOMES] {
+                for directory in WIPED_PROJECTIONS {
                     let path = provider_auth_root.join(directory);
                     remove_projection::remove(&path)?;
                 }
@@ -2513,7 +2533,13 @@ impl MachinePluginStore {
                 .as_ref()
                 .map_or(ProviderMaterializationState::NotInstalled, |envelope| {
                     if envelope.action == ProviderAuthAction::Wipe {
-                        ProviderMaterializationState::NotInstalled
+                        // An interrupted wipe stays Failed, so the Controller
+                        // sends it again until nothing is left.
+                        if self.wipe_complete(provider_id) {
+                            ProviderMaterializationState::NotInstalled
+                        } else {
+                            ProviderMaterializationState::Failed
+                        }
                     } else if self
                         .materialization_is_current(&package, envelope)
                         .unwrap_or(false)
@@ -2525,8 +2551,12 @@ impl MachinePluginStore {
                 });
         let unavailable = self.account_sandbox_unavailable(&package);
         let detail = (materialization_state == ProviderMaterializationState::Failed).then(|| {
-            "Provider credential projection no longer matches its Service generation; waiting for credential reconciliation."
-                .to_owned()
+            if replica.as_ref().is_some_and(|envelope| envelope.action == ProviderAuthAction::Wipe) {
+                "Provider credential wipe is incomplete; waiting for credential reconciliation to remove the rest."
+            } else {
+                "Provider credential projection no longer matches its Service generation; waiting for credential reconciliation."
+            }
+            .to_owned()
         });
         Ok(Some(PluginInventory {
             plugin_id: package.manifest.id.clone(),
@@ -2547,6 +2577,51 @@ impl MachinePluginStore {
             materialization_state,
             detail: unavailable.or(detail),
         }))
+    }
+
+    /// The generation whose worker roll `provider_id` of `account` still
+    /// owes (recorded before its replica became current), if any.
+    pub fn pending_roll(
+        &self,
+        account: &crate::provider_account::ProviderAccountId,
+        provider_id: &str,
+    ) -> Option<u64> {
+        let scope = self.for_account(account).ok()?;
+        fs::read_to_string(scope.auth_provider_root(provider_id).join(PENDING_ROLL))
+            .ok()?
+            .trim()
+            .parse()
+            .ok()
+    }
+
+    /// The broker took the roll of `generation` (or a newer one replaced it).
+    pub fn clear_pending_roll(
+        &self,
+        account: &crate::provider_account::ProviderAccountId,
+        provider_id: &str,
+        generation: u64,
+    ) -> Result<()> {
+        if self
+            .pending_roll(account, provider_id)
+            .is_some_and(|pending| pending <= generation)
+        {
+            let scope = self.for_account(account)?;
+            match fs::remove_file(scope.auth_provider_root(provider_id).join(PENDING_ROLL)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
+    }
+
+    /// Every projection a wipe removes is gone (a wipe that stopped midway,
+    /// for example on a directory a live process kept writing to, is not).
+    fn wipe_complete(&self, provider_id: &str) -> bool {
+        let root = self.auth_provider_root(provider_id);
+        WIPED_PROJECTIONS
+            .iter()
+            .all(|directory| matches!(root.join(directory).try_exists(), Ok(false)))
     }
 
     fn materialization_is_current(
@@ -3015,6 +3090,17 @@ impl MachinePluginStore {
             }
             let provider_id = entry.file_name().to_string_lossy().into_owned();
             let mut failed = BTreeSet::new();
+            // An interrupted wipe is reported every scan until it is
+            // complete, so the Controller sends it again.
+            if self
+                .latest_auth_envelope(&provider_id)
+                .ok()
+                .flatten()
+                .is_some_and(|envelope| envelope.action == ProviderAuthAction::Wipe)
+                && !self.wipe_complete(&provider_id)
+            {
+                failed.insert(provider_id.clone());
+            }
             match self.auth_refresh_candidates_for_provider(&provider_id, &mut failed) {
                 Ok(mut candidates) => observations.candidates.append(&mut candidates),
                 Err(error) => {
@@ -3669,6 +3755,12 @@ fn validate_plugin_id(provider_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// A worker roll an applied generation still owes (its generation).
+const PENDING_ROLL: &str = "pending-roll";
+
+/// The credential projections of one Provider a wipe removes.
+const WIPED_PROJECTIONS: [&str; 3] = ["materialized", "runtime", native_usage::PRIVATE_HOMES];
+
 fn validate_auth_replica_transition(
     previous: Option<&SealedProviderAuth>,
     incoming: &SealedProviderAuth,
@@ -3692,6 +3784,23 @@ fn validate_auth_replica_transition(
                 && incoming.action == previous.action,
             "conflicting Service auth envelope for the current generation"
         );
+    }
+    Ok(())
+}
+
+/// Flush each directory's entries (renames, unlinks) to stable storage; an
+/// absent directory has nothing to flush.
+fn sync_directories(directories: &[&Path]) -> Result<()> {
+    for directory in directories {
+        match fs::File::open(directory) {
+            Ok(handle) => handle
+                .sync_all()
+                .with_context(|| format!("syncing {}", directory.display()))?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("opening {}", directory.display()));
+            }
+        }
     }
     Ok(())
 }
@@ -7582,6 +7691,90 @@ mod tests {
             0
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_pending_worker_roll_survives_until_the_broker_took_it() {
+        let root = tempfile::tempdir().unwrap();
+        let store =
+            MachinePluginStore::new(root.path(), Platform::Linux, "x86_64".to_owned()).unwrap();
+        let default = crate::provider_account::ProviderAccountId::default();
+        assert_eq!(store.pending_roll(&default, "codex"), None);
+        // Recorded before the wipe's replica became current (an interrupted
+        // apply leaves it; its retry, no longer "advanced", still rolls).
+        atomic_write(
+            &store.auth_provider_root("codex").join(PENDING_ROLL),
+            b"16",
+            0o600,
+        )
+        .unwrap();
+        assert_eq!(store.pending_roll(&default, "codex"), Some(16));
+        // An older generation's roll does not clear a newer one.
+        store.clear_pending_roll(&default, "codex", 15).unwrap();
+        assert_eq!(store.pending_roll(&default, "codex"), Some(16));
+        store.clear_pending_roll(&default, "codex", 16).unwrap();
+        assert_eq!(store.pending_roll(&default, "codex"), None);
+        // Idempotent.
+        store.clear_pending_roll(&default, "codex", 16).unwrap();
+    }
+
+    #[test]
+    fn directory_sync_flushes_existing_directories_and_skips_absent_ones() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("replicas")).unwrap();
+        sync_directories(&[
+            &root.path().join("replicas"),
+            root.path(),
+            &root.path().join("absent"),
+        ])
+        .unwrap();
+    }
+
+    #[test]
+    fn a_wipe_is_complete_only_once_every_projection_is_gone() {
+        let root = tempfile::tempdir().unwrap();
+        let store =
+            MachinePluginStore::new(root.path(), Platform::Linux, "x86_64".to_owned()).unwrap();
+        assert!(store.wipe_complete("codex"));
+        // What a wipe interrupted by a live writer left behind.
+        let left = store
+            .auth_provider_root("codex")
+            .join("runtime/generations/9/home/.codex");
+        fs::create_dir_all(&left).unwrap();
+        fs::write(left.join("auth.json"), b"old").unwrap();
+        assert!(!store.wipe_complete("codex"));
+        // Recorded as the current replica: every scan reports it failed.
+        let wipe = SealedProviderAuth {
+            envelope_schema: 1,
+            account_id: crate::provider_account::ProviderAccountId::default(),
+            provider_id: "codex".to_owned(),
+            auth_generation: 16,
+            auth_contract_fingerprint: format!("sha256:{}", "ab".repeat(32)),
+            projection_schema: "codex-auth-v1".to_owned(),
+            action: ProviderAuthAction::Wipe,
+            ephemeral_public_key: String::new(),
+            nonce: String::new(),
+            ciphertext: String::new(),
+            service_public_key: String::new(),
+            signature: String::new(),
+        };
+        fs::write(
+            store
+                .auth_provider_root("codex")
+                .join("replica-current.json"),
+            serde_json::to_vec(&wipe).unwrap(),
+        )
+        .unwrap();
+        let failed = |store: &MachinePluginStore| {
+            store
+                .auth_refresh_observations()
+                .failed_provider_ids
+                .contains(&(wipe.account_id.clone(), "codex".to_owned()))
+        };
+        assert!(failed(&store));
+        remove_projection::remove(&store.auth_provider_root("codex").join("runtime")).unwrap();
+        assert!(store.wipe_complete("codex"));
+        assert!(!failed(&store));
     }
 
     #[test]

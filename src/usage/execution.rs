@@ -63,8 +63,10 @@ impl UsageService {
             None => Vec::new(),
         };
         let configured = self.execution_machines.read().clone();
+        // Retired cards keep their bindings for named usage and activity
+        // reads, but no Service collector, so no executor to choose.
         let providers = self
-            .plugin_bindings()
+            .service_bindings()
             .into_iter()
             .filter(|binding| !binding.collector_argv.is_empty())
             .map(|binding| {
@@ -107,7 +109,7 @@ impl UsageService {
         machine_id: Option<String>,
     ) -> Result<()> {
         ensure!(
-            self.plugin_bindings()
+            self.service_bindings()
                 .iter()
                 .any(|binding| binding.account == account && !binding.collector_argv.is_empty()),
             "account has no usage collector"

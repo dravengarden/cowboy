@@ -8,9 +8,16 @@
 //! before the wipe reached it is still promoted, into the account: each move
 //! is recorded beside the vault and a refresh of exactly that generation is
 //! redirected to the account's compare-and-swap (`legacy_move`).
+//!
+//! Adoption retired with the legacy cards (`docs/legacy-card-retirement.md`).
+//! The journals it wrote and their fence and rotation route remain: a Machine
+//! that was offline during an adoption may still propose a rotation of a
+//! moved generation. The move itself stays only to produce journals in
+//! tests; `recover_legacy_moves` finishes a journal an interrupted adoption
+//! left behind.
 use super::*;
 
-const MOVES: &str = "legacy-moves";
+pub(super) const LEGACY_MOVES: &str = "legacy-moves";
 
 /// Where one Provider's root credential moved.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,6 +35,7 @@ pub struct LegacyMove {
 
 /// The account entries the move committed (empty when the account already
 /// held a Ready credential) and the root wipes to distribute.
+#[cfg(test)]
 #[derive(Debug, Default)]
 pub struct LegacyMoveOutcome {
     pub account: Vec<ProviderAuthenticationStatus>,
@@ -44,10 +52,13 @@ impl ProviderAuthService {
                     .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'),
             "invalid Provider id"
         );
-        Ok(self.root.join(MOVES).join(format!("{provider_id}.json")))
+        Ok(self
+            .root
+            .join(LEGACY_MOVES)
+            .join(format!("{provider_id}.json")))
     }
 
-    fn read_move(&self, provider_id: &str) -> Option<LegacyMove> {
+    pub(super) fn read_move(&self, provider_id: &str) -> Option<LegacyMove> {
         if !self.account_id.is_default() || self.recipient_key.is_some() {
             return None;
         }
@@ -58,7 +69,9 @@ impl ProviderAuthService {
     /// The completed move of `provider_id`'s root credential, if any: the
     /// target of a rotation of its moved root generation.
     pub fn legacy_move(&self, provider_id: &str) -> Option<LegacyMove> {
-        self.read_move(provider_id).filter(|moved| moved.completed)
+        // A journal without the copy's account generation routes nothing.
+        self.read_move(provider_id)
+            .filter(|moved| moved.completed && moved.account_generation > 0)
     }
 
     /// Called under the vault write lock by every root commit and refresh:
@@ -74,8 +87,8 @@ impl ProviderAuthService {
         Ok(())
     }
 
-    fn write_move(&self, providers: &[String], moved: &LegacyMove) -> Result<()> {
-        crate::provider_account::prepare_private_directory(&self.root.join(MOVES))?;
+    pub(super) fn write_move(&self, providers: &[String], moved: &LegacyMove) -> Result<()> {
+        crate::provider_account::prepare_private_directory(&self.root.join(LEGACY_MOVES))?;
         let bytes = serde_json::to_vec(moved)?;
         for provider_id in providers {
             atomic_write(&self.move_path(provider_id)?, &bytes, 0o600)?;
@@ -86,6 +99,7 @@ impl ProviderAuthService {
     /// Move the root vault's Ready credential of `packages`' scope into the
     /// named `account` vault (unless that already holds a Ready credential:
     /// a replay never overwrites it) and wipe every root entry of the scope.
+    #[cfg(test)]
     pub fn move_root_scope_into(
         &self,
         account: &Self,
@@ -313,7 +327,7 @@ mod tests {
         let pending = LegacyMove {
             account_id: id.clone(),
             root_generation: 1,
-            account_generation: 0,
+            account_generation: 1,
             completed: false,
         };
         service.write_move(&["codex".to_owned()], &pending).unwrap();

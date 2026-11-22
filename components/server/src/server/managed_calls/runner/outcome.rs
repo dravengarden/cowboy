@@ -97,3 +97,15 @@ pub(super) fn notify_parent(state: &super::AppState, record: &Record) {
         .hub
         .submit_call_notice(parent, &record.call_id, super::call_notice(record));
 }
+
+/// The call outcome code of a child turn's stop reason.
+pub(in crate::server::managed_calls) fn stop_code(stop_reason: &str) -> &'static str {
+    match stop_reason.to_ascii_lowercase().replace('_', "").as_str() {
+        "endturn" | "done" => "completed",
+        "cancelled" | "canceled" => "cancelled",
+        "refusal" => "refusal",
+        "maxtokens" => "max_tokens",
+        "maxturnrequests" => "max_turn_requests",
+        _ => "provider_error",
+    }
+}

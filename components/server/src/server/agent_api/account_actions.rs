@@ -1,5 +1,5 @@
 //! Account actions whose input needs its own shape.
-use super::actions::{account_owner, document_operation};
+use super::actions::account_owner;
 use super::*;
 use serde::Deserialize;
 
@@ -28,49 +28,6 @@ pub(super) async fn cancel_request(
             &input.account_id,
             &input.request_id,
             true,
-        )
-        .await?,
-    ))
-}
-
-/// Adopt a legacy default card into a named account; the same operation
-/// resumes it.
-pub(super) async fn adopt_legacy(
-    state: &Arc<AppState>,
-    meta: &SessionMeta,
-    args: Value,
-    operation: &str,
-) -> Result<Value, &'static str> {
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Input {
-        card: String,
-    }
-    let input: Input = serde_json::from_value(args).map_err(|_| "invalid_argument")?;
-    let owner = account_owner(state, meta).await?;
-    Ok(success(
-        super::super::provider_accounts::legacy_adoption::adopt(
-            state,
-            &owner,
-            &document_operation(&meta.id, operation),
-            &input.card,
-        )
-        .await?,
-    ))
-}
-
-/// The receipt of an adoption started under `operation`.
-pub(super) async fn adoption_receipt(
-    state: &Arc<AppState>,
-    meta: &SessionMeta,
-    operation: &str,
-) -> Result<Value, &'static str> {
-    let owner = account_owner(state, meta).await?;
-    Ok(success(
-        super::super::provider_accounts::legacy_adoption::receipt(
-            state,
-            &owner,
-            &document_operation(&meta.id, operation),
         )
         .await?,
     ))

@@ -3,7 +3,7 @@ import { assertEquals } from "../../tools/test-assert.ts";
 import type { SessionMeta } from "./protocol";
 import { applyUsageHostPlugins, type UsageSnapshot, usageLimits } from "./usageLimits";
 import type { SubscriptionSnapshot } from "./subscriptionAccounts";
-import { displayPlan, orderUsageAccounts, registeredUsageAccounts, sessionAccountQuota, usageCardManageUrl, usageCardResetSchedule, usageResetTarget } from "./usageAccounts";
+import { displayPlan, orderUsageAccounts, registeredUsageAccounts, sessionAccountQuota, usageCardManageUrl, usageResetTarget } from "./usageAccounts";
 import { loadProviderCatalog, resetProviderCatalog } from "./providerCatalogRegistry";
 import { providerUiManifestFixture } from "./providerUiContract.fixture";
 
@@ -11,7 +11,6 @@ const digest = `sha256:${"a".repeat(64)}`;
 const registry: SubscriptionSnapshot = {
   dataset: { user_id: "owner", dataset_id: "dataset" },
   registry: { revision: 1, defaults: {}, accounts: [{ id: "otter", provider_id: "claude-code", label: "Claude · Otter", enabled: true }] },
-  display_preferences: { scope: "subscriptions", revision: 1, values: { legacy_labels: { "claude-code": "Claude · Lynx" } } },
   session_admission: "enabled",
 };
 const snapshot: UsageSnapshot = {
@@ -36,18 +35,16 @@ test("native observations remain account scoped, support refresh and preserve pl
       account: { account: { planType: "max" } },
       rate_limits: { rateLimits: { primary: { usedPercent: 46, windowDurationMins: 300 } } } } };
   const cards = registeredUsageAccounts(snapshot, registry, [session], [observed]);
-  assertEquals(usageLimits(cards[1].usage)[0].remaining, 54);
-  assertEquals(cards[1].usage.account, observed.usage.account);
-  assertEquals(cards[1].statusLabel, undefined);
-  assertEquals(cards[1].collector, undefined); // Native quota never exposes Service reset/placement.
-  assertEquals(cards[0].usage, snapshot.providers[0]);
+  assertEquals(usageLimits(cards[0].usage)[0].remaining, 54);
+  assertEquals(cards[0].usage.account, observed.usage.account);
+  assertEquals(cards[0].statusLabel, undefined);
   assertEquals(sessionAccountQuota(snapshot, registry, [session], session, [observed]), observed.usage);
   for (const wrong of [{ ...observed, account_id: "lynx" }, { ...observed, provider_id: "codex" }]) {
-    assertEquals(registeredUsageAccounts(snapshot, registry, [], [wrong])[1].usage.rate_limits, undefined);
+    assertEquals(registeredUsageAccounts(snapshot, registry, [], [wrong])[0].usage.rate_limits, undefined);
   }
   const disabled = structuredClone(registry);
   disabled.registry.accounts[0]!.enabled = false;
-  assertEquals(registeredUsageAccounts(snapshot, disabled, [], [observed])[1].usage.rate_limits, undefined);
+  assertEquals(registeredUsageAccounts(snapshot, disabled, [], [observed])[0].usage.rate_limits, undefined);
 });
 function setup() {
   applyUsageHostPlugins([
@@ -60,18 +57,16 @@ function setup() {
     { id: "codex", usage: { account: "openai", product: "OpenAI", order: 1 } },
   ]);
 }
-test("registered accounts are distinct and never inherit Service usage or controls", () => {
+test("only registered accounts have usage cards; a Service observation is never one", () => {
   setup();
+  // The legacy default cards are retired: the Service's own observations
+  // (even a stale cached one) never become a card or a quota.
   const cards = registeredUsageAccounts(snapshot, registry, []);
-  assertEquals(cards.map((c) => c.title), ["Claude · Lynx", "Claude · Otter", "OpenAI"]);
-  assertEquals(cards[0].subtitle, "Anthropic · Default");
-  assertEquals(cards[0].collector, "anthropic");
-  assertEquals(cards[1].collector, undefined);
-  assertEquals(cards[1].usage.rate_limits, undefined);
-  assertEquals(cards[1].usage.account, undefined);
-  assertEquals(cards[1].usage.observed_at_ms, 0);
-  assertEquals(cards[1].statusLabel, "NOT REPORTED");
-  assertEquals(usageLimits(cards[0].usage)[0].remaining, 62);
+  assertEquals(cards.map((c) => c.title), ["Claude · Otter"]);
+  assertEquals(cards[0].usage.rate_limits, undefined);
+  assertEquals(cards[0].usage.account, undefined);
+  assertEquals(cards[0].usage.observed_at_ms, 0);
+  assertEquals(cards[0].statusLabel, "NOT REPORTED");
 });
 test("session quota notices never borrow another account's exhausted window", async () => {
   const previousFetch = globalThis.fetch;
@@ -99,8 +94,9 @@ test("session quota notices never borrow another account's exhausted window", as
     assertEquals(sessionAccountQuota(exhausted, registry, [session], { ...session, provider: "codex" }), undefined);
     const named = sessionAccountQuota(exhausted, registry, [session], session)!;
     assertEquals(usageLimits(named)[0].remaining, 75);
+    // A retired legacy default session has no quota notice at all.
     const legacy = { ...session, provider_account_id: "default" };
-    assertEquals(usageLimits(sessionAccountQuota(exhausted, registry, [session], legacy)!)[0].remaining, 0);
+    assertEquals(sessionAccountQuota(exhausted, registry, [session], legacy), undefined);
   } finally {
     globalThis.fetch = previousFetch;
     resetProviderCatalog();
@@ -108,7 +104,7 @@ test("session quota notices never borrow another account's exhausted window", as
 });
 test("named quota requires exact account, owner, Provider and signed generation", () => {
   setup();
-  const report = registeredUsageAccounts(snapshot, registry, [session])[1];
+  const report = registeredUsageAccounts(snapshot, registry, [session])[0];
   assertEquals(report.usage.source, "Session report");
   assertEquals(report.usage.observed_at_ms, 200);
   assertEquals(usageLimits(report.usage)[0].remaining, 75);
@@ -118,9 +114,8 @@ test("named quota requires exact account, owner, Provider and signed generation"
     { usage: { ...session.usage!, raw: { used: 90, size: 100 } } },
     { usage: { ...session.usage!, raw: { _meta: { "future/quota": { utilization: "0.25", rateLimitType: "five_hour" } } } } },
   ]) {
-    assertEquals(registeredUsageAccounts(snapshot, registry, [{ ...session, ...changed }])[1].usage.rate_limits, undefined);
+    assertEquals(registeredUsageAccounts(snapshot, registry, [{ ...session, ...changed }])[0].usage.rate_limits, undefined);
   }
-  assertEquals(registeredUsageAccounts(snapshot, registry, [session])[0].usage, snapshot.providers[0]);
 });
 test("disabled and unsupported accounts remain visible without borrowed quota", () => {
   setup();
@@ -128,7 +123,6 @@ test("disabled and unsupported accounts remain visible without borrowed quota", 
     const accounts = { ...registry, registry: { ...registry.registry, accounts: [{ ...registry.registry.accounts[0], ...change }] } };
     const card = registeredUsageAccounts(snapshot, accounts, [session]).find((c) => c.id === "otter")!;
     assertEquals(card.usage.rate_limits, undefined);
-    assertEquals(card.collector, undefined);
     assertEquals(card.title, "Claude · Otter");
   }
   const removed = { ...registry, registry: { ...registry.registry, accounts: [] } };
@@ -143,35 +137,38 @@ test("revoked accounts leave the usage cards", () => {
 test("newest valid quota wins; context-only reports do not erase or fabricate quota", () => {
   setup();
   const context = { ...session, usage: { ...session.usage!, observed_at_ms: 999, raw: { used: 900, size: 1000 } } };
-  const card = registeredUsageAccounts(snapshot, registry, [context, session])[1];
+  const card = registeredUsageAccounts(snapshot, registry, [context, session])[0];
   assertEquals(card.usage.observed_at_ms, 200);
   assertEquals(card.usage.activity, undefined);
   applyUsageHostPlugins([]);
   assertEquals(registeredUsageAccounts(snapshot, registry, [session]).find((c) => c.id === "otter")?.usage.rate_limits, undefined);
 });
-test("default changes never rebind Service data; legacy orders group accounts and explicit orders persist", () => {
+test("defaults label their card; legacy orders group accounts and explicit orders persist", () => {
   setup();
-  const accounts = { ...registry, registry: { ...registry.registry, defaults: { "claude-code": "otter" } } };
+  const accounts = { ...registry, registry: { ...registry.registry, defaults: { "claude-code": "otter" },
+    accounts: [...registry.registry.accounts, { id: "pika", provider_id: "codex", label: "OpenAI · Pika", enabled: true }] } };
   const cards = registeredUsageAccounts(snapshot, accounts, []);
-  assertEquals(cards[0].usage, snapshot.providers[0]);
-  assertEquals(cards[0].subtitle, "Anthropic");
-  assertEquals(cards[1].subtitle, "Anthropic · Default");
-  assertEquals(orderUsageAccounts(cards, ["anthropic", "openai"]).map((c) => c.id), ["anthropic", "otter", "openai"]);
-  assertEquals(orderUsageAccounts(cards, ["openai", "otter", "anthropic"]).map((c) => c.id), ["openai", "otter", "anthropic"]);
+  // Provider product order, the named accounts only.
+  assertEquals(cards.map((c) => c.id), ["otter", "pika"]);
+  assertEquals(cards[0].subtitle, "Anthropic · Default");
+  assertEquals(cards[1].subtitle, "OpenAI");
+  // An order saved while the legacy cards existed keeps grouping by Provider.
+  assertEquals(orderUsageAccounts(cards, ["openai", "anthropic"]).map((c) => c.id), ["pika", "otter"]);
+  assertEquals(orderUsageAccounts(cards, ["otter", "openai"]).map((c) => c.id), ["otter", "pika"]);
 });
 test("a login made before a Provider update asks to sign in again", () => {
   setup();
   const stale = { account_id: "otter", provider_id: "claude-code", refreshing: false, usage: null,
     reason: "native_login_outdated", message: "The Provider was updated after this account signed in." };
   const cards = registeredUsageAccounts(snapshot, registry, [], [stale]);
-  assertEquals(cards[1].statusLabel, "SIGN IN AGAIN");
-  assertEquals(cards[1].emptyMessage, stale.message);
+  assertEquals(cards[0].statusLabel, "SIGN IN AGAIN");
+  assertEquals(cards[0].emptyMessage, stale.message);
 });
 test("sign-in states name the action instead of an unreported status", () => {
   setup();
   for (const [reason, label] of [["native_login_pending", "SIGN-IN PENDING"], ["native_login_required", "NOT SIGNED IN"], ["portable_credentials_required", "NOT SIGNED IN"]]) {
     const observation = { account_id: "otter", provider_id: "claude-code", refreshing: false, usage: null, reason, message: "m" };
-    assertEquals(registeredUsageAccounts(snapshot, registry, [], [observation])[1].statusLabel, label);
+    assertEquals(registeredUsageAccounts(snapshot, registry, [], [observation])[0].statusLabel, label);
   }
 });
 test("a Max report without a 5-hour window is shown as Ultra; nothing else is inferred", () => {
@@ -192,8 +189,7 @@ test("a named-only Provider reports only its named accounts, never a Service car
   setup();
   const accounts: SubscriptionSnapshot = { ...registry, named_only_providers: ["claude-code"] };
   const cards = registeredUsageAccounts(snapshot, accounts, [session]);
-  assertEquals(cards.map((card) => card.id), ["openai", "otter"]);
-  assertEquals(cards.find((card) => card.id === "otter")?.collector, undefined);
+  assertEquals(cards.map((card) => card.id), ["otter"]);
 });
 
 test("a named-only account's collected quota shows the plan its sessions reported", () => {
@@ -242,26 +238,21 @@ test("a named card owns its reset lane only when its own usage reports reset cre
     usage: { provider: "anthropic", status: "available", source: "Anthropic", observed_at_ms: 300,
       rate_limits: { rateLimitResetCredits: credits } } };
   const service = { ...snapshot, reset_schedules: { anthropic: { fire_at_ms: 500 } } };
-  const [lynx, otter] = registeredUsageAccounts(service, registry, [], [observed]);
-  assertEquals(usageResetTarget(lynx!), { kind: "service", provider: "anthropic" });
-  assertEquals(usageCardResetSchedule(service, lynx!)?.fire_at_ms, 500);
-  // The named card spends and schedules only its own account's resets.
+  const [otter] = registeredUsageAccounts(service, registry, [], [observed]);
+  // The named card spends only its own account's resets, never the Service's.
   assertEquals(usageResetTarget(otter!), { kind: "account", accountId: "otter" });
-  // Named resets are immediate only: never a schedule, never the Service's.
-  assertEquals(usageCardResetSchedule(service, otter!), undefined);
   assertEquals(usageCardManageUrl(otter!), "https://claude.ai/settings/usage");
   // Without its own credit report it neither borrows the Service lane nor links out.
   const quiet = { ...observed, usage: { ...observed.usage, rate_limits: {} } };
-  const [, plain] = registeredUsageAccounts(service, registry, [], [quiet]);
+  const [plain] = registeredUsageAccounts(service, registry, [], [quiet]);
   assertEquals(usageResetTarget(plain!), undefined);
-  assertEquals(usageCardResetSchedule(service, plain!), undefined);
   // A named Claude card links to its plan page even without reset credits.
   assertEquals(usageCardManageUrl(plain!), "https://claude.ai/settings/usage");
   // And with no observation or Service snapshot at all.
   const bare = registeredUsageAccounts(null, registry, [], []).find((card) => card.id === "otter");
   assertEquals(usageCardManageUrl(bare!), "https://claude.ai/settings/usage");
   // A session-reported quota is never a reset lane.
-  const [, reported] = registeredUsageAccounts(service, registry, [session], []);
+  const [reported] = registeredUsageAccounts(service, registry, [session], []);
   assertEquals(usageResetTarget(reported!), undefined);
 });
 test("named resets appear only where the Service can spend them", () => {

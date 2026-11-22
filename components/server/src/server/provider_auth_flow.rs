@@ -2,6 +2,9 @@
 //! and provider release upgrades and reloads for sessions.
 
 use super::*;
+use std::time::Duration;
+
+pub(super) mod reconciler;
 
 #[derive(Clone)]
 pub(super) struct ProviderAuthExecutor {
@@ -357,7 +360,7 @@ pub(super) async fn distribute_and_mark_provider_auth(
 /// portable account) to every enrolled Machine and record the outcome.
 pub(super) async fn distribute_and_mark_scope(
     state: &Arc<AppState>,
-    scope: &crate::provider_service::ProviderAuthService,
+    scope: &Arc<crate::provider_service::ProviderAuthService>,
     account: &crate::provider_account::ProviderAccountId,
     statuses: Vec<crate::provider_service::ProviderAuthenticationStatus>,
 ) -> (
@@ -383,13 +386,6 @@ pub(super) async fn distribute_and_mark_scope(
     (next, replicas)
 }
 
-pub(super) async fn distribute_provider_auth(
-    state: &Arc<AppState>,
-    provider_id: &str,
-) -> ProviderDistributionOutcome {
-    distribute_account_auth(state, provider_id, &Default::default()).await
-}
-
 async fn distribute_account_auth(
     state: &Arc<AppState>,
     provider_id: &str,
@@ -402,8 +398,9 @@ async fn distribute_account_auth(
             ..ProviderDistributionOutcome::default()
         };
     };
-    let enrolled = match store.list_machines().await {
-        Ok(machines) => machines,
+    // The same recipients the reconciler and the retirement gate use.
+    let enrolled = match store.credential_recipients().await {
+        Ok(recipients) => recipients,
         Err(error) => {
             tracing::warn!(%error, %provider_id, "listing enrolled Machines for Provider auth sync");
             return ProviderDistributionOutcome {
@@ -413,8 +410,7 @@ async fn distribute_account_auth(
         }
     };
     let mut outcome = ProviderDistributionOutcome::default();
-    for machine in enrolled.into_iter().filter(|machine| !machine.revoked) {
-        let machine_id = machine.id;
+    for (machine_id, _) in enrolled {
         if !connected.contains(&machine_id) {
             outcome.pending += 1;
             continue;

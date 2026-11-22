@@ -51,7 +51,6 @@ export async function runInfoMetricsBrowserConformance(
     registry: { revision: 1, accounts: [
       { id: "otter", provider_id: "claude-code", label: "Claude · Otter", enabled: true },
     ], defaults: {} },
-    display_preferences: { scope: "subscriptions", revision: 1, values: { legacy_labels: { "claude-code": "Claude · Lynx" } } },
     session_admission: "enabled",
   };
   let socket: FixtureSocket | undefined;
@@ -442,48 +441,21 @@ export async function runInfoMetricsBrowserConformance(
         ?.getAttribute("data-machine-resources") === "ovh",
       "saved Machine order survives the resource grid",
     );
-    const olderDetails = container.querySelector<HTMLButtonElement>('[aria-label="Gemini usage details"]')!;
-    check(olderDetails?.getAttribute("aria-expanded") === "false" && !container.textContent?.includes("Gemini ACP · Updated"),
-      "secondary Provider details are collapsed initially");
-    olderDetails.click();
-    // Details carry the exact observation time; the header carries the age.
-    await until(() => container.textContent?.includes("Gemini ACP · Updated") === true);
-    check(container.textContent?.includes("NOT REPORTED"),
-      "expanded Provider details expose real age without a false waiting state");
-    check(
-      [...container.querySelectorAll('[role="meter"]')].some(
-        (meter) => meter.getAttribute("aria-valuetext") === "82% remaining",
-      ),
-      "quota meters expose remaining rather than consumed capacity",
-    );
     const accountCard = (id: string) => container.querySelector<HTMLElement>(`[data-usage-account="${id}"]`);
-    await until(() => accountCard("anthropic")?.textContent?.includes("Claude · Lynx") === true && !!accountCard("otter"));
-    check(container.querySelectorAll("[data-usage-account]").length === 4,
-      "registered accounts each have one card alongside other Providers");
-    check(accountCard("deepseek")?.textContent?.includes("USD 12.34") &&
-      accountCard("deepseek")?.querySelector('[aria-label="DeepSeek usage details"]')?.getAttribute("aria-expanded") === "false",
-      "balance-based accounts keep their balance visible before activity or details are loaded");
-    check(accountCard("anthropic")!.textContent?.includes("Default") &&
-      accountCard("otter")!.textContent?.includes("Claude · Otter"), "registered account labels and default identity are visible");
-    const details = accountCard("anthropic")!.querySelector<HTMLButtonElement>('[aria-label="Claude · Lynx usage details"]')!;
-    check(details.getAttribute("aria-expanded") === "false" && !accountCard("anthropic")!.textContent?.includes("Balance"),
-      "quota stays visible while balance and query details are folded");
-    details.focus();
-    check(document.activeElement === details, "card details is reachable by keyboard");
-    details.click();
-    await until(() => accountCard("anthropic")!.textContent?.includes("Balance") === true);
-    check(accountCard("anthropic")!.querySelectorAll('[role="meter"]').length === 2, "expanding details never duplicates the quota meters");
-    details.click();
-    await until(() => !accountCard("anthropic")!.textContent?.includes("Balance"));
+    await until(() => !!accountCard("otter"));
+    // The legacy default cards are retired: the Service's own observations
+    // (Anthropic, DeepSeek, Gemini) never render as a usage card.
+    check(container.querySelectorAll("[data-usage-account]").length === 1 && !accountCard("anthropic") &&
+      !container.querySelector('[aria-label="Gemini usage details"]'),
+      "only registered accounts have usage cards");
+    check(accountCard("otter")!.textContent?.includes("Claude · Otter"), "registered account labels are visible");
     check(accountCard("otter")!.querySelectorAll('[role="meter"]').length === 0 &&
-      accountCard("otter")!.textContent?.includes("No quota reported"), "missing Otter quota never borrows Lynx percentages");
-    // The card's own Machine browser entry is the only control it may carry.
+      accountCard("otter")!.textContent?.includes("No quota reported"), "missing Otter quota never borrows Service percentages");
+    // The card's own Machine browser entry and its details disclosure are
+    // the only controls it may carry.
     check(!accountCard("otter")!.querySelector('[aria-label^="Refresh"], input') &&
-      [...accountCard("otter")!.querySelectorAll("button")].every((button) => button.textContent?.trim() === "Browser") &&
+      [...accountCard("otter")!.querySelectorAll("button")].every((button) => ["Browser", "Details"].includes(button.textContent?.trim() ?? "")) &&
       !accountCard("otter")!.textContent?.includes("Updated"), "uncollected account has no wrong-account refresh or fabricated timestamp");
-    const lynxFreshness = accountCard("anthropic")!.querySelector<HTMLElement>("[data-usage-freshness]");
-    check(lynxFreshness !== null && /ago|just now|from session/.test(lynxFreshness.textContent ?? ""),
-      "a collected card dates its own numbers in its header");
     check(!accountCard("otter")!.querySelector("[data-usage-freshness]"),
       "an uncollected card shows no observation age");
     const changed = () => {
@@ -501,7 +473,7 @@ export async function runInfoMetricsBrowserConformance(
     accounts.registry.accounts = accounts.registry.accounts.filter((a) => a.id !== "new");
     changed();
     await until(() => !accountCard("new"));
-    check(container.querySelectorAll("[data-usage-account]").length === 4, "removed accounts disappear without refreshing the page");
+    check(container.querySelectorAll("[data-usage-account]").length === 1, "removed accounts disappear without refreshing the page");
     const report: SessionMeta = {
       id: "otter-session", provider: "claude-code", provider_account_id: "otter", owner_user_id: "info-fixture",
       provider_version: "1.0.0", provider_generation_digest: digest,
@@ -511,8 +483,7 @@ export async function runInfoMetricsBrowserConformance(
     };
     socket!.onmessage?.({ data: JSON.stringify({ type: "sessions", sessions: [report] }) });
     await until(() => accountCard("otter")?.querySelector('[role="meter"]') !== null);
-    check(accountCard("otter")!.textContent?.includes("75% remaining") &&
-      accountCard("anthropic")!.textContent?.includes("82% remaining"), "session quota is isolated by account and exact Provider generation");
+    check(accountCard("otter")!.textContent?.includes("75% remaining"), "session quota is isolated by account and exact Provider generation");
     nativeUsage = [{
       account_id: "otter", provider_id: "claude-code", machine_id: "ovh", available: true, refreshing: false,
       usage: { provider: "anthropic", source: "Anthropic", status: "available", observed_at_ms: now + 1,
@@ -532,8 +503,8 @@ export async function runInfoMetricsBrowserConformance(
       "a named account lists its usage-limit resets read-only, without a reset action");
     accountCard("otter")!.querySelector<HTMLButtonElement>('[aria-label$="usage details"]')!.click();
     await until(() => !accountCard("otter")!.textContent?.includes("Usage limit resets"));
-    check(accountCard("anthropic")!.textContent?.includes("82% remaining"),
-      "background named quota replaces its own session fallback without changing the Service account");
+    check(!accountCard("anthropic"),
+      "background named quota replaces its own session fallback and never revives a Service card");
     check(!!accountCard("otter")!.querySelector('[aria-label="Refresh Claude · River Otter"]') &&
       !accountCard("otter")!.textContent?.includes("Usage query Machine"), "named refresh is available while Machine metadata starts collapsed");
     const quotaReads = () => requests.filter((path) => path === "GET /api/provider-accounts/usage").length;
@@ -558,19 +529,14 @@ export async function runInfoMetricsBrowserConformance(
     accounts.registry.defaults["claude-code"] = "otter";
     changed();
     await until(() => accountCard("otter")?.textContent?.includes("Default") === true);
-    check(!accountCard("anthropic")!.textContent?.includes("Default") &&
-      accountCard("anthropic")!.textContent?.includes("82% remaining"), "changing the default never reassigns the legacy usage observation");
-    details.click();
-    await until(() => accountCard("anthropic")!.textContent?.includes("Auto reload") === true);
+    check(!accountCard("anthropic"), "changing the default never revives a legacy usage card");
     for (const width of [320, 390, 768, 1200]) {
       container.style.width = `${width}px`;
       render(width >= 768);
       await new Promise((resolve) => requestAnimationFrame(resolve));
       check(
-        container.scrollWidth <= container.clientWidth + 1 &&
-          container.textContent?.includes("Auto reload") &&
-          container.textContent?.includes("2 paused"),
-        `About with credit details fits ${width}px without horizontal overflow`,
+        container.scrollWidth <= container.clientWidth + 1,
+        `About fits ${width}px without horizontal overflow`,
       );
     }
     const cards = [
@@ -596,9 +562,6 @@ export async function runInfoMetricsBrowserConformance(
       "inspection and viewport changes perform no mutations or extra metric polling",
     );
     if (keepFixture) {
-      details.click();
-      olderDetails.click();
-      await until(() => !accountCard("anthropic")!.textContent?.includes("Auto reload"));
       container.style.width = `${screenshotWidth}px`;
       render(screenshotWidth >= 768);
     }

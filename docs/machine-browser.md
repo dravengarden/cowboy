@@ -1728,64 +1728,22 @@ another account's browser, which is why the viewer always names the account.
 
 ## Legacy default cards
 
-Every Provider usage card offers a Machine browser, including the cards that
-show the Service-collected legacy default account of an account-usage
-provider (Claude · Lynx for `anthropic`, DeepSeek · Mole for `deepseek`,
-OpenAI · Pika for `openai`, Grok · Fox for `xai`, and any other).
+The legacy default cards (Claude · Lynx, DeepSeek · Mole, OpenAI · Pika,
+Grok · Fox) are retired ([`legacy-card-retirement.md`](legacy-card-retirement.md)).
+What remains of their browsers:
 
-- **One card, one browser.** The usage page shows one legacy card per
-  account-usage provider, so the browser identity is per card, not per
-  Provider. The `claude-deepseek`, `codex-deepseek` and `deepseek-harness`
-  defaults share one usage card (account-usage provider `deepseek`, the
-  "Mole" card), which therefore has exactly one browser; any other card, a
-  named account of the same Provider, and another owner's DeepSeek card each
-  have their own. Should the usage page ever show one card per Provider, each
-  would need its own card id and therefore its own key.
-- **Key.** `legacy_browsers::account(owner, card)`: the first 16 bytes of
+- **Key.** `legacy_cards::browser_key(owner, card)`: the first 16 bytes of
   `sha256("cowboy-legacy-browser-account-v1\0" ‖ owner ‖ "\0" ‖ card)`
-  formatted as a UUID with version 8 and the RFC variant. It is stable, a
-  valid Machine `ProviderAccountId` and a single directory name, never
-  `default`, and never a registry identity (registry identities are version 4,
-  so the key spaces are disjoint). The browser routes, the viewer stream and
-  Cowboy MCP (`accounts.browser`, `accounts.browser_*`) accept it exactly like
-  a named account id; `accounts.list` (`GET /api/provider-accounts`) reports
-  each card as `legacy_browsers: [{card, account_id, providers,
-  browser_enabled, available}]`. The literal `default` names no single card
-  and is refused (`browser_key_required`).
-- **Machine directory.** The card's browser lives under
-  `provider-auth/accounts/<key>/` (`browser-state.json`, `browser/`), the same
-  layout as a named account. The legacy default's native credentials stay
-  under `provider-auth/providers/<provider>/`; no browser path reads or writes
-  them, and the Machine prepares only the account directory, never a
-  `providers/` credential scope, so a card key never appears as a credential
-  account.
-- **Enablement.** Off by default, per owner and card, in
-  `provider_legacy_browsers (owner_user_id, card_id)` (migrations
-  `0081_provider_legacy_browsers.sql` and sqlite `0055`; a row means
-  enabled). It changes only through `accounts.update`
-  `{type: "set_legacy_browser_enabled", card, enabled}`, under the owner lock
-  with the registry's revision and operation receipt, without changing any
-  registry account. Enabling needs a card the Service collects now; disabling
-  is always accepted, ends that card's viewers and hibernates its running
-  instances (the snapshot is kept). The account management row shows the
-  "Browser…" panel and the enable toggle on the Service-account row of the
-  card's first Provider; usage cards show the disabled entry with its reason
-  and a link to account management while it is off. The Service gate
-  `accounts.machine_browser` still applies.
-- **Machine placement.** The rule of named accounts, with the card's
-  credential Machines in place of native generations: the existing
-  placement, else a Machine holding the card's default credentials (an
-  enrolled Machine with an active installation of one of the card's
-  Providers whose Service credentials are ready; the Service distributes them
-  to every enrolled Machine), else, only when the card has neither anywhere,
-  the first-Machine chooser.
-- **Reset and revocation.** Reset deletes only the card's own `browser/`
-  tree on the named Machine. Legacy cards are not revocable through the
-  account registry; a named account's revocation plan captures placements by
-  its own id and can never capture a card's key, and nothing a card does
-  touches a named account's placements. A key whose card is no longer
-  collected but still has a placement can be read, stopped and reset, never
-  opened.
+  formatted as a UUID with version 8 and the RFC variant. An adopted card's
+  account uses it as its registry id, so its profile stayed where it was and
+  it is an ordinary named account browser.
+- **Retained profile.** A card key that is no registry account but still has a
+  placement (Claude · Lynx's, if it was ever opened) can be read, stopped and
+  reset through the ordinary browser routes and `accounts.browser_*`, never
+  opened. Reset deletes only its `browser/` tree on the named Machine.
+- **Enablement and shares.** `provider_legacy_browsers` is emptied by migration
+  `0086_retire_legacy_cards.sql` (SQLite `0060`) and kept only for a rolled-back
+  Controller; the same migration removes every `card:<card>` share member.
 
 ## Shared browser profiles
 
@@ -1799,7 +1757,8 @@ shared: every card keeps its own browser exactly as above.
   `provider_browser_share_members (owner, member, share_id, family)`
   (migrations `0082_provider_browser_shares.sql` and sqlite `0056`). A member
   is a browser identity: a named account (`{account_id}`, stored
-  `account:<id>`) or a legacy card (`{card}`, stored `card:<card>`). A member
+  `account:<id>`). A retired card's `card:<card>` binding stays unreadable and
+  blocks its family until a confirmed reset. A member
   belongs to at most one share (primary key `(owner, member)`).
 - **Family rule (hard).** Families come only from a closed, versioned table
   in Cowboy code (`store::provider_accounts::browser_families`, version 2,

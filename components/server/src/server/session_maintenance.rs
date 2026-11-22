@@ -162,7 +162,10 @@ pub(super) fn has_waiters(state: &AppState, machine: &str) -> bool {
             // Waiting for an execution Machine needs no runtime worker slot.
             && waiting(&state.hub, &s.id).is_some_and(|(_, reason)| reason != TARGET_WAIT_REASON)
             && state.hub.session_info(&s.id).is_some_and(|i| {
-                i.queue_count > 0 && (!i.meta.paused || state.hub.explicit_wait(&s.id))
+                i.queue_count > 0
+                    && (!i.meta.paused || state.hub.explicit_wait(&s.id))
+                    // Parked for good: no worker slot can ever serve it.
+                    && !provider_accounts::retirement::session_retired(state, &i.meta)
             })
     })
 }

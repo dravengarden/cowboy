@@ -47,7 +47,8 @@ import {
   sharedResetNote,
 } from "./shareRules";
 
-// Legacy card keys (UUID version 8) and named accounts (version 4).
+// Adopted legacy card accounts (their ids are the cards' UUID version 8
+// browser keys) and named accounts (version 4).
 const LYNX = "aaaaaaaa-bbbb-8ccc-8ddd-eeeeeeeeeeee";
 const PIKA = "0f0f0f0f-1e1e-8d2d-ac3c-4b4b4b4b4b4b";
 const FOX = "99999999-8888-8777-a666-555555555555";
@@ -59,14 +60,8 @@ const SHARE = "21212121-3434-4565-8787-909090909090";
 function snapshot(
   members: { member: object; family: string; account_id: string }[] = [],
 ): SubscriptionSnapshot {
-  const card = (name: string, key: string, providers: string[]) => ({
-    card: name,
-    account_id: key,
-    providers,
-    browser_enabled: true,
-    available: true,
-    share_id: members.some((member) => member.account_id === key) ? SHARE : null,
-  });
+  const adopted = (id: string, provider_id: string, label: string) =>
+    ({ id, provider_id, label, enabled: true, browser_enabled: true });
   return {
     dataset: { dataset_id: "d", user_id: "u" },
     registry: {
@@ -81,27 +76,14 @@ function snapshot(
           browser_enabled: true,
         },
         { id: WORK, provider_id: "codex", label: "Work", enabled: true, browser_enabled: true },
+        adopted(LYNX, "claude-code", "Lynx"),
+        adopted(MOLE, "claude-deepseek", "Mole"),
+        adopted(PIKA, "codex", "Pika"),
+        adopted(FOX, "grok", "Fox"),
       ],
-    },
-    display_preferences: {
-      scope: "subscriptions",
-      revision: 1,
-      values: {
-        legacy_labels: {
-          "claude-code": "Claude · Lynx",
-          codex: "OpenAI · Pika",
-          grok: "Grok · Fox",
-        },
-      },
     },
     session_admission: "enabled",
     machine_browser: "enabled",
-    legacy_browsers: [
-      card("anthropic", LYNX, ["claude-code"]),
-      card("deepseek", MOLE, ["claude-deepseek"]),
-      card("openai", PIKA, ["codex"]),
-      card("xai", FOX, ["grok"]),
-    ],
     browser_shares: [
       {
         share_id: SHARE,
@@ -113,17 +95,16 @@ function snapshot(
       },
     ],
     browser_share_families: {
-      version: 1,
-      providers: { "claude-code": "anthropic", codex: "openai", grok: "xai" },
-      cards: ["anthropic", "deepseek", "openai", "xai"],
+      version: 3,
+      providers: { "claude-code": "anthropic", codex: "openai", grok: "xai", "claude-deepseek": "deepseek" },
     },
   };
 }
 
 const google = [
-  { member: { card: "anthropic" }, family: "anthropic", account_id: LYNX },
-  { member: { card: "openai" }, family: "openai", account_id: PIKA },
-  { member: { card: "xai" }, family: "xai", account_id: FOX },
+  { member: { account_id: LYNX }, family: "anthropic", account_id: LYNX },
+  { member: { account_id: PIKA }, family: "openai", account_id: PIKA },
+  { member: { account_id: FOX }, family: "xai", account_id: FOX },
 ];
 
 test("a group offers each card, refusing a second account of a family with the reason", () => {
@@ -157,12 +138,8 @@ test("a group offers each card, refusing a second account of a family with the r
 
 test("a shared card's entry names its group and the reset names every member", () => {
   const accounts = snapshot(google);
-  for (const [card, key] of [
-    ["anthropic", LYNX],
-    ["openai", PIKA],
-    ["xai", FOX],
-  ] as const) {
-    const entry = accountBrowserEntry(accounts, card);
+  for (const key of [LYNX, PIKA, FOX]) {
+    const entry = accountBrowserEntry(accounts, key);
     // The card still opens through its own identity; the Service resolves it.
     assertEquals(entry.kind === "ready" && entry.account.id === key, true);
     assertEquals(shareOf(accounts, key)?.share_id, SHARE);
@@ -248,7 +225,7 @@ test("share changes journal exactly their fields and their refusals are final", 
     { type: "create_browser_share", label: "Google" },
     { type: "rename_browser_share", share_id: SHARE, label: "Google" },
     { type: "delete_browser_share", share_id: SHARE },
-    { type: "set_browser_share", member: { card: "openai" }, share_id: SHARE },
+    { type: "set_browser_share", member: { account_id: PIKA }, share_id: SHARE },
     { type: "set_browser_share", member: { account_id: LARK }, share_id: null },
   ]) {
     assertEquals(validPendingSubscription(pending(change)), true);
@@ -258,6 +235,8 @@ test("share changes journal exactly their fields and their refusals are final", 
     { type: "delete_browser_share", share_id: SHARE, member: { card: "x" } },
     { type: "set_browser_share", member: { card: "openai", account_id: LARK }, share_id: SHARE },
     { type: "set_browser_share", member: {}, share_id: SHARE },
+    // A retired legacy card is no member any more.
+    { type: "set_browser_share", member: { card: "openai" }, share_id: SHARE },
     { type: "set_browser_share", member: { card: "openai" } },
   ]) {
     assertEquals(validPendingSubscription(pending(change)), false);

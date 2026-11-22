@@ -1,16 +1,16 @@
 //! Shared account metadata writer for HTTP, CLI and MCP. Never accepts secrets.
 use super::*;
-use crate::store::provider_accounts::{Change, Mutation, MutationResult};
+use crate::store::provider_accounts::{Mutation, MutationResult};
 use serde_json::{Value, json};
 
 pub(super) mod browser;
 pub(super) mod controls;
-pub(super) mod legacy_adoption;
 pub(super) mod lifecycle;
 pub(super) mod login;
 pub(super) mod native_generation;
 pub(super) mod portable;
 pub(super) mod registration;
+pub(super) mod retirement;
 mod revocation;
 pub(super) mod transitions;
 pub(super) mod usage;
@@ -69,7 +69,7 @@ pub(super) async fn resolve_for_create(
             .await
             .map_err(|_| "unavailable")?,
         None if explicit.is_none_or(crate::provider_account::ProviderAccountId::is_default) => {
-            return Ok(Default::default());
+            return creatable_default(provider).map(|()| Default::default());
         }
         None => return Err("unavailable"),
     };
@@ -80,7 +80,9 @@ pub(super) async fn resolve_for_create(
     // Any number of sessions may run one account concurrently (design
     // "Revision 6"); the daemon's per-account bound is the only cap.
     named_only_admitted(state, provider, &id).await?;
-    if !id.is_default() {
+    if id.is_default() {
+        creatable_default(provider)?;
+    } else {
         allow_named_creation(
             named_session_provider(state, provider),
             state
@@ -89,6 +91,15 @@ pub(super) async fn resolve_for_create(
         )?;
     }
     Ok(id)
+}
+
+/// No session is created on a retired card's `default` account, whether or
+/// not its root entry exists (only historical sessions keep that exception).
+pub(super) fn creatable_default(provider: &str) -> Result<(), &'static str> {
+    if crate::store::provider_accounts::legacy_cards::retired_provider(provider) {
+        return Err("named_account_required");
+    }
+    Ok(())
 }
 
 /// A named-only Provider (Antigravity) has no default account, and admits
@@ -150,13 +161,13 @@ pub(super) async fn read_value(state: &Arc<AppState>, owner: &str) -> Result<Val
         .provider_accounts(owner)
         .await
         .map_err(|_| "unavailable")?;
-    // Display aliases have their own preference revision. A rename must not
-    // invalidate native bindings or change the serialized authority registry.
+    // Read-only compatibility projection: a Web client from before the
+    // retirement compares this revision too and would discard every later
+    // snapshot without it. Nothing writes the `subscriptions` preference now.
     let display = store
-        .preferences(owner, "subscriptions")
+        .retired_subscriptions_preferences(owner)
         .await
-        .map_err(|_| "unavailable")?
-        .ok_or("unavailable")?;
+        .map_err(|_| "unavailable")?;
     let enabled = state
         .service_config
         .get(&crate::config::schema::ACCOUNT_NATIVE_CLAUDE_SESSIONS);
@@ -173,13 +184,9 @@ pub(super) async fn read_value(state: &Arc<AppState>, owner: &str) -> Result<Val
         "portable_providers":state.provider_catalog.portable_account_providers(),
         // Subscriptions sign in once on any Machine; the account vault serves every Machine.
         "subscription_providers":state.provider_catalog.subscription_account_providers(),
-        // Legacy default cards that move into a named account without a new sign-in.
-        "legacy_adoption":legacy_adoption::cards_value(state, owner, &registry),
         "portable_scopes":portable_scopes(state),"portable_credentials":portable_credentials(state, &registry),
         // The Service gate of the optional Machine browser (`accounts.machine_browser`).
         "machine_browser":if browser::gate_open(state) {"enabled"} else {"not_enabled"},
-        // Each legacy default usage card's own browser key and enablement.
-        "legacy_browsers":browser::legacy::list_value(state, owner).await?,
         // Owner-defined shared browser profiles and the family of each
         // Provider (a share holds at most one member per family).
         "browser_shares":shares,"browser_share_families":families,
@@ -187,6 +194,9 @@ pub(super) async fn read_value(state: &Arc<AppState>, owner: &str) -> Result<Val
         // reason, the active turn, Machine fences, uncertain effects and the
         // kill switch's logout. Their Providers have no default account.
         "named_only_providers":crate::provider_account::NAMED_ONLY_PROVIDERS,
+        // The retired legacy default cards: these Providers have no Service
+        // (`default`) account either (`docs/legacy-card-retirement.md`).
+        "retired_default_providers":crate::store::provider_accounts::legacy_cards::retired_providers(),
         "account_controls":controls::read_value(state, &registry)}),
     )
 }
@@ -223,21 +233,9 @@ pub(super) async fn update_value(
     input: &Mutation,
 ) -> Result<Value, &'static str> {
     let store = state.store.as_ref().ok_or("unavailable")?;
-    // A legacy card's browser is enabled only for a card the Service collects;
-    // disabling is always accepted.
-    if let Change::SetLegacyBrowserEnabled {
-        card,
-        enabled: true,
-    } = &input.change
-        && !browser::legacy::bound_cards(state).contains_key(card)
-        && store
-            .provider_account_receipt(owner, operation)
-            .await
-            .map_err(|_| "unavailable")?
-            .is_none()
-    {
-        return Err("account_unavailable");
-    }
+    // `set_default` to `default` of a retired card's Provider clears the
+    // named selection (so its last named default can be disabled); creation
+    // then requires an explicit named account (`creatable_default`).
     // Metadata writes share one authority and receipt; no native login, usage
     // probe, credential access or worker activation happens here. Share
     // changes use the same writer, with families from the static table. Membership
@@ -277,7 +275,7 @@ pub(super) async fn update_value(
                 state,
                 owner,
                 &input.change,
-                browser::shares::fresh_effects(owner, &input.change, &receipt, replay || noop),
+                browser::shares::fresh_effects(owner, &input.change, replay || noop),
             );
             Ok(receipt_value(&receipt))
         }
@@ -316,11 +314,75 @@ pub(super) struct Update {
     mutation: Mutation,
 }
 
+/// A pending change only a Web release from before the legacy card
+/// retirement sends, typed exactly as that release's writer accepted it (a
+/// card browser switch or a card share membership), so its request hash is
+/// the one that writer recorded.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyUpdate {
+    operation: String,
+    dataset: String,
+    expected_revision: i64,
+    change: LegacyChange,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum LegacyChange {
+    SetLegacyBrowserEnabled {
+        card: String,
+        enabled: bool,
+    },
+    SetBrowserShare {
+        member: LegacyCardMember,
+        share_id: Option<String>,
+    },
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyCardMember {
+    card: String,
+}
+
+impl LegacyUpdate {
+    /// The request hash the previous writer recorded: its `Mutation`.
+    fn request_hash(&self) -> String {
+        #[derive(Serialize)]
+        struct Mutation<'a> {
+            expected_revision: i64,
+            change: &'a LegacyChange,
+        }
+        let bytes = serde_json::to_vec(&Mutation {
+            expected_revision: self.expected_revision,
+            change: &self.change,
+        })
+        .expect("a legacy mutation serializes");
+        crate::admin::hex_sha256(&bytes)
+    }
+}
+
+/// A change only a Web release from before the legacy card retirement sends:
+/// a card browser switch or a card share membership.
+fn retired_change(input: &Value) -> bool {
+    let change = &input["change"];
+    change["type"] == "set_legacy_browser_enabled"
+        || (change["type"] == "set_browser_share" && change["member"].get("card").is_some())
+}
+
 pub(super) async fn update(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthenticatedProductRequest>,
-    Json(input): Json<Update>,
+    Json(input): Json<Value>,
 ) -> Response {
+    let input = match serde_json::from_value::<Update>(input.clone()) {
+        Ok(update) => update,
+        Err(error) if !retired_change(&input) => {
+            return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
+        }
+        Err(_) => return retired_update(&state, &auth.principal, input).await,
+    };
     if !sync_dataset::matches(&state.service_id, &auth.principal, &input.dataset) {
         return (
             StatusCode::CONFLICT,
@@ -357,9 +419,73 @@ pub(super) async fn update(
     }
 }
 
+/// An older Web client's pending retired change: the receipt of exactly
+/// that operation and request if the previous Controller committed it, else
+/// a definitive JSON rejection the client recognizes, so it releases its
+/// journal. Its dataset must be the caller's.
+async fn retired_update(state: &AppState, principal: &ProductPrincipal, input: Value) -> Response {
+    let reject = |status: StatusCode, code: &str| {
+        (status, Json(json!({"error":{"code":code}}))).into_response()
+    };
+    let Ok(legacy) = serde_json::from_value::<LegacyUpdate>(input) else {
+        return reject(StatusCode::UNPROCESSABLE_ENTITY, "invalid_argument");
+    };
+    if !sync_dataset::matches(&state.service_id, principal, &legacy.dataset) {
+        return reject(StatusCode::CONFLICT, "dataset_changed");
+    }
+    let Some(store) = state.store.as_ref() else {
+        return reject(StatusCode::SERVICE_UNAVAILABLE, "unavailable");
+    };
+    match store
+        .provider_account_operation(&principal.user_id, &legacy.operation)
+        .await
+    {
+        Ok(Some((hash, receipt))) if hash == legacy.request_hash() => {
+            Json(receipt_value(&receipt)).into_response()
+        }
+        // Never committed, or the id names another request.
+        Ok(_) => reject(StatusCode::UNPROCESSABLE_ENTITY, "invalid_argument"),
+        Err(_) => reject(StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_legacy_change_hashes_as_the_previous_writer_recorded_it() {
+        // The previous writer hashed its Mutation {expected_revision, change}.
+        let legacy: LegacyUpdate = serde_json::from_value(json!({"operation":"op","dataset":"d",
+            "expected_revision":3,"change":{"type":"set_browser_share","member":{"card":"openai"},"share_id":null}}))
+            .unwrap();
+        let recorded = br#"{"expected_revision":3,"change":{"type":"set_browser_share","member":{"card":"openai"},"share_id":null}}"#;
+        assert_eq!(legacy.request_hash(), crate::admin::hex_sha256(recorded));
+        let legacy: LegacyUpdate = serde_json::from_value(json!({"operation":"op","dataset":"d",
+            "expected_revision":0,"change":{"type":"set_legacy_browser_enabled","card":"anthropic","enabled":true}}))
+            .unwrap();
+        let recorded = br#"{"expected_revision":0,"change":{"type":"set_legacy_browser_enabled","card":"anthropic","enabled":true}}"#;
+        assert_eq!(legacy.request_hash(), crate::admin::hex_sha256(recorded));
+        // Anything else is no legacy request.
+        assert!(serde_json::from_value::<LegacyUpdate>(json!({"operation":"op","dataset":"d",
+            "expected_revision":0,"change":{"type":"set_legacy_browser_enabled","card":"anthropic","enabled":true,"extra":1}})).is_err());
+    }
+
+    #[test]
+    fn only_the_retired_card_changes_are_answered_for_older_clients() {
+        assert!(retired_change(
+            &json!({"change":{"type":"set_legacy_browser_enabled","card":"anthropic","enabled":true}})
+        ));
+        assert!(retired_change(
+            &json!({"change":{"type":"set_browser_share","member":{"card":"openai"},"share_id":null}})
+        ));
+        assert!(!retired_change(
+            &json!({"change":{"type":"set_browser_share","member":{"account_id":"a"},"share_id":null}})
+        ));
+        assert!(!retired_change(
+            &json!({"change":{"type":"rename","id":"a","label":"x"}})
+        ));
+    }
 
     #[test]
     fn rollout_cannot_enable_unsupported_provider_or_fall_back_to_default() {

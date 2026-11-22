@@ -26,24 +26,23 @@ pub(super) async fn read_value(
         .map_err(|_| "unavailable")?;
     // Discover names from Plugin metadata; configuring layout must not warm
     // collectors or copy activity/usage payloads into the agent response.
+    // A retired legacy card is no usage card any more.
     let mut usage = state.usage.plugin_bindings();
+    usage.retain(|binding| {
+        !crate::store::provider_accounts::legacy_cards::CARDS.contains(&binding.account.as_str())
+    });
     usage.sort_by_key(|binding| binding.order.unwrap_or(u16::MAX));
     let store = state.store.as_ref().ok_or("unavailable")?;
     let registry = store
         .provider_accounts(owner)
         .await
         .map_err(|_| "unavailable")?;
-    let display = store
-        .preferences(owner, "subscriptions")
-        .await
-        .map_err(|_| "unavailable")?;
-    let catalog = state.provider_catalog.entries();
-    let mut usage_choices = usage.iter().map(|binding| {
-        let alias = catalog.iter().filter(|entry| entry.manifest.host.account_usage.as_ref()
-            .is_some_and(|usage| usage.provider == binding.account))
-            .find_map(|entry| display.as_ref()?.values.get("legacy_labels")?.get(&entry.provider_id)?.as_str());
-        json!({"id":binding.account,"name":alias.unwrap_or(binding.product.as_deref().unwrap_or(&binding.account))})
-    }).collect::<Vec<_>>();
+    let mut usage_choices = usage
+        .iter()
+        .map(|binding| {
+            json!({"id":binding.account,"name":binding.product.as_deref().unwrap_or(&binding.account)})
+        })
+        .collect::<Vec<_>>();
     usage_choices.extend(
         registry
             .accounts

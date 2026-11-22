@@ -115,11 +115,12 @@ no model request, no quota refresh. The model decides; nothing here routes a tas
 or adds to a resident prompt.
 
 `quota` is cached evidence for review selection. A child runs on its owner's
-default account of the Provider; when that default is a named account,
-`providers[].quota_account` is the account ID and its `quota.accounts[]` entry
-comes from that account's own cached usage read (with `reason`/`message` when
-it has none). The Provider-wide Service collector of a legacy default card never
-stands in for a named account.
+default account of the Provider; `providers[].quota_account` is that named
+account's ID and its `quota.accounts[]` entry comes from the account's own
+cached usage read (with `reason`/`message` when it has none). The legacy
+default cards and their Provider-wide Service collectors are retired
+([`legacy-card-retirement.md`](legacy-card-retirement.md)): a child that would
+run on the `default` account has no `quota_account` and no quota entry.
 
 ## Records
 

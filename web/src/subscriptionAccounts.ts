@@ -2,7 +2,6 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import { productSessionSignal } from "./productSessionEnd";
 import { productSyncPrincipal } from "./productSyncIdentity";
-import { type SubscriptionDisplay, validSubscriptionDisplay } from "./subscriptionDisplay";
 import { type AccountControls, validAccountControls } from "./accountControls";
 
 export interface SubscriptionAccount {
@@ -14,36 +13,18 @@ export interface SubscriptionAccount {
   /** Owner-enabled Machine browser for this account (`set_browser_enabled`). */
   browser_enabled?: boolean;
 }
-/** The Machine browser of a legacy default usage card (the Service-collected
- * default account of an account-usage provider such as `anthropic` or
- * `deepseek`): its own browser key, never shared with another card or a
- * named account, and its owner enablement (off by default). */
-export interface LegacyBrowser {
-  /** The usage card id: its account-usage provider. */
-  card: string;
-  /** The card's own browser key for the browser routes. */
-  account_id: string;
-  /** The Providers whose default account the card shows. */
-  providers: string[];
-  browser_enabled: boolean;
-  /** The Service collects the card now. */
-  available: boolean;
-  /** The shared browser profile the card uses, if any. */
-  share_id?: string | null;
-}
 /** A browser identity that may join a shared browser profile. */
-export type BrowserShareMemberRef = { account_id: string } | { card: string };
+export type BrowserShareMemberRef = { account_id: string };
 export interface BrowserShareMember {
   member: BrowserShareMemberRef;
   /** Its account-usage family; a share holds at most one per family. */
   family: string;
-  /** The member's own browser id (named account id or card key). */
+  /** The member's own browser id (its account id). */
   account_id: string;
 }
 export interface BrowserShareFamilies {
   version: number;
   providers: Record<string, string>;
-  cards: string[];
 }
 /** An owner-defined shared browser profile (docs/machine-browser.md,
  * "Shared browser profiles"). */
@@ -72,18 +53,15 @@ export interface PortableCredential {
 export interface SubscriptionSnapshot {
   dataset: { dataset_id: string; user_id: string };
   registry: { revision: number; accounts: SubscriptionAccount[]; defaults: Record<string, string> };
-  display_preferences?: SubscriptionDisplay;
   /** Accounts whose permanent revocation finished; they leave account lists. */
   revoked_accounts?: string[];
   session_admission: string;
   session_providers?: string[];
   /** The Service gate of the optional Machine browser (`accounts.machine_browser`). */
   machine_browser?: "enabled" | "not_enabled";
-  legacy_browsers?: LegacyBrowser[];
   browser_shares?: BrowserShare[];
   /** The Service's static family table (`browser_families`): Provider id
-   * → family, and the legacy cards that have a family. Nothing else may
-   * ever share a browser. */
+   * → family. Nothing else may ever share a browser. */
   browser_share_families?: BrowserShareFamilies;
   /** Providers whose accounts take an API key instead of a sign-in. */
   portable_providers?: string[];
@@ -93,16 +71,15 @@ export interface SubscriptionSnapshot {
   /** Subscription Providers: one sign-in on any Machine lands in the
    * account's Service vault and serves every Machine. */
   subscription_providers?: string[];
-  /** Legacy default cards that move into a named account without a new
-   * sign-in: card → its Provider, adoption state and account id. */
-  legacy_adoption?: Record<string, LegacyAdoption>;
   /** Providers whose sessions need a named account (Antigravity). */
   named_only_providers?: string[];
+  /** Providers whose legacy default card is retired: no Service account
+   * (docs/legacy-card-retirement.md). */
+  retired_default_providers?: string[];
   /** Their accounts' admission, state, active turn, fences, uncertain
    * effects and logout (`accounts.list().account_controls`). */
   account_controls?: AccountControls;
 }
-export interface LegacyAdoption { provider_id: string; state: "available" | "resumable" | "completed"; account_id: string }
 
 type PortableScopes = { portable_scopes?: string[][] } | undefined;
 /** Whether an account of `accountProvider` serves sessions of `provider`
@@ -121,27 +98,73 @@ export function providerDefault(data: PortableScopes & { registry: { defaults: R
   return [...scope].sort().map((member) => data.registry.defaults[member]).find(Boolean);
 }
 
+/** The Providers whose default is `account`, its own Provider first. An
+ * adopted shared-scope account (DeepSeek) is the default of every member;
+ * each must be cleared before the account can be disabled. */
+export function accountDefaults(snapshot: { registry: { defaults: Record<string, string> } }, account: { id: string; provider_id: string }): string[] {
+  return Object.entries(snapshot.registry.defaults).filter(([, id]) => id === account.id).map(([provider]) => provider)
+    .sort((left, right) => Number(right === account.provider_id) - Number(left === account.provider_id) || left.localeCompare(right));
+}
+
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function text(value: unknown): value is string { return typeof value === "string" && value.length > 0; }
-function validLegacyBrowser(value: unknown): value is LegacyBrowser {
-  return record(value) && text(value.card) && text(value.account_id) && Array.isArray(value.providers) &&
-    value.providers.every(text) && typeof value.browser_enabled === "boolean" && typeof value.available === "boolean" &&
-    (value.share_id === undefined || value.share_id === null || text(value.share_id));
-}
-function validLegacyAdoption(value: unknown): value is LegacyAdoption {
-  return record(value) && text(value.provider_id) && text(value.account_id) &&
-    (value.state === "available" || value.state === "resumable" || value.state === "completed");
-}
 function validShareMember(value: unknown): value is BrowserShareMember {
   if (!record(value) || !record(value.member) || !text(value.family) || !text(value.account_id)) return false;
   const keys = Object.keys(value.member);
+  // A Controller from before the legacy card retirement (Web deployed
+  // first, or a rollback) still reports `{card}` members; they are read and
+  // shown as bound families (`withoutLegacyShareMembers`), never edited.
   return keys.length === 1 && (text(value.member.account_id) || text(value.member.card));
+}
+
+/** The snapshot with every legacy `{card}` share member turned into a bound
+ * family of its share: the card's cookies keep that family out of the
+ * profile, and writes stay named-only. */
+export function withoutLegacyShareMembers(snapshot: SubscriptionSnapshot): SubscriptionSnapshot {
+  const legacy = (row: BrowserShareMember) => !text((row.member as Record<string, unknown>).account_id);
+  if (!snapshot.browser_shares?.some((share) => share.members.some(legacy))) return snapshot;
+  return {
+    ...snapshot,
+    browser_shares: snapshot.browser_shares.map((share) => ({
+      ...share,
+      members: share.members.filter((row) => !legacy(row)),
+      bound: [...share.bound ?? [], ...share.members.filter(legacy)
+        .filter((row) => !share.bound?.some((bound) => bound.family === row.family))
+        .map((row) => ({ family: row.family, account_id: row.account_id }))],
+    })),
+  };
+}
+
+/** A Machine browser of a legacy card that a Controller from before the
+ * retirement still advertises (`legacy_browsers`), read-only. */
+export interface LegacyCardBrowser { account_id: string; providers: string[]; available: boolean }
+export function legacyCardBrowsers(snapshot: SubscriptionSnapshot): LegacyCardBrowser[] {
+  const value = (snapshot as { legacy_browsers?: unknown }).legacy_browsers;
+  return Array.isArray(value)
+    ? value.filter((row): row is LegacyCardBrowser => record(row) && text(row.account_id) &&
+      Array.isArray(row.providers) && row.providers.every(text) && typeof row.available === "boolean")
+    : [];
+}
+
+/** What a session of a retired card's `default` account offers instead of a
+ * Service sign-in (the Controller's refusal reads the same). */
+export const RETIRED_SESSION_GUIDANCE = "This session ran on a retired legacy default account; continue it in a new agent on a named account.";
+/** The account-usage families of the retired legacy default cards. */
+const RETIRED_CARD_FAMILIES = ["anthropic", "deepseek", "openai", "xai"];
+/** Whether `provider`'s Service (`default`) account was a retired legacy
+ * card. An older Controller does not report `retired_default_providers`, so
+ * its family table decides as well. */
+export function retiredDefaultProvider(snapshot: SubscriptionSnapshot | undefined, provider: string): boolean {
+  if (!snapshot) return false;
+  if (snapshot.retired_default_providers?.includes(provider)) return true;
+  const family = snapshot.browser_share_families?.providers[provider];
+  return family !== undefined && RETIRED_CARD_FAMILIES.includes(family);
 }
 function validShareFamilies(value: unknown): value is BrowserShareFamilies {
   return record(value) && typeof value.version === "number" && record(value.providers) &&
-    Object.values(value.providers).every(text) && Array.isArray(value.cards) && value.cards.every(text);
+    Object.values(value.providers).every(text);
 }
 function validBrowserShare(value: unknown): value is BrowserShare {
   return record(value) && text(value.share_id) && typeof value.label === "string" &&
@@ -161,11 +184,9 @@ export function validSubscriptionSnapshot(value: unknown, owner: string | undefi
   const { dataset, registry } = value;
   return dataset.user_id === owner && text(dataset.dataset_id) &&
     typeof registry.revision === "number" && Number.isSafeInteger(registry.revision) && registry.revision >= 0 &&
-    (value.display_preferences === undefined || validSubscriptionDisplay(value.display_preferences)) &&
     (value.session_providers === undefined || (Array.isArray(value.session_providers) && value.session_providers.every(text))) &&
     (value.revoked_accounts === undefined || (Array.isArray(value.revoked_accounts) && value.revoked_accounts.every(text))) &&
     (value.machine_browser === undefined || value.machine_browser === "enabled" || value.machine_browser === "not_enabled") &&
-    (value.legacy_browsers === undefined || (Array.isArray(value.legacy_browsers) && value.legacy_browsers.every(validLegacyBrowser))) &&
     (value.browser_shares === undefined || (Array.isArray(value.browser_shares) && value.browser_shares.every(validBrowserShare))) &&
     (value.browser_share_families === undefined || validShareFamilies(value.browser_share_families)) &&
     (value.portable_providers === undefined || (Array.isArray(value.portable_providers) && value.portable_providers.every(text))) &&
@@ -173,7 +194,7 @@ export function validSubscriptionSnapshot(value: unknown, owner: string | undefi
       value.portable_scopes.every((scope: unknown) => Array.isArray(scope) && scope.every(text)))) &&
     (value.portable_credentials === undefined || (Array.isArray(value.portable_credentials) && value.portable_credentials.every(validPortableCredential))) &&
     (value.subscription_providers === undefined || (Array.isArray(value.subscription_providers) && value.subscription_providers.every(text))) &&
-    (value.legacy_adoption === undefined || (record(value.legacy_adoption) && Object.values(value.legacy_adoption).every(validLegacyAdoption))) &&
+    (value.retired_default_providers === undefined || (Array.isArray(value.retired_default_providers) && value.retired_default_providers.every(text))) &&
     (value.named_only_providers === undefined || (Array.isArray(value.named_only_providers) && value.named_only_providers.every(text))) &&
     (value.account_controls === undefined || validAccountControls(value.account_controls)) &&
     typeof value.session_admission === "string" && record(registry.defaults) && Object.values(registry.defaults).every(text) &&
@@ -212,8 +233,8 @@ async function refresh(): Promise<void> {
         if (!validSubscriptionSnapshot(value, owner)) throw new Error("Account inventory changed. Reload to continue.");
         const old = current().data;
         if (!old || old.dataset.dataset_id !== value.dataset.dataset_id ||
-          (value.registry.revision >= old.registry.revision && (value.display_preferences?.revision ?? 0) >= (old.display_preferences?.revision ?? 0))
-        ) { snapshot = { data: value, error: "" }; snapshotOwner = owner; }
+          value.registry.revision >= old.registry.revision
+        ) { snapshot = { data: withoutLegacyShareMembers(value), error: "" }; snapshotOwner = owner; }
       } catch (cause) {
         if (!signal.aborted && owner === productSyncPrincipal()) {
           snapshot = { ...current(), error: cause instanceof Error ? cause.message : "Could not load registered accounts." };
@@ -255,6 +276,8 @@ function subscribe(listener: () => void) {
   };
 }
 function clear() { snapshot = empty; snapshotOwner = undefined; publish(); }
+/** Browser fixtures share one page: start a surface from a first load. */
+export function resetSubscriptionAccountsForTest(): void { invalidated = false; clear(); }
 
 /** Read-only account inventory; mutations continue through the shared writer. */
 export function useSubscriptionAccounts(connected = true) {

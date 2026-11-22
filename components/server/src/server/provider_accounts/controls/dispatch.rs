@@ -1,7 +1,8 @@
-//! The account gate of one dispatch: admission, account state and uncertain
-//! effects. Sessions of one account run concurrently and nothing is reserved
-//! here (`docs/antigravity-real-accounts-design.md`, "Revision 5
-//! simplification" and "Revision 6: concurrent sessions per account").
+//! The account gate of one dispatch: retired legacy cards, admission,
+//! account state and uncertain effects. Sessions of one account run
+//! concurrently and nothing is reserved here
+//! (`docs/antigravity-real-accounts-design.md`, "Revision 5 simplification"
+//! and "Revision 6: concurrent sessions per account").
 use super::*;
 
 /// The account gate of every dispatch of `session` (user prompts and
@@ -10,10 +11,12 @@ pub(in crate::server) async fn before_dispatch(
     state: &Arc<AppState>,
     session: &str,
 ) -> Result<(), String> {
-    let governed = state
-        .hub
-        .session_info(session)
-        .is_some_and(|info| governed(&info.meta));
+    // A retired legacy card has no credential left anywhere to resume on.
+    if let Some(refusal) = super::super::retirement::session_refusal(state, session) {
+        return Err(wait(refusal));
+    }
+    let info = state.hub.session_info(session);
+    let governed = info.is_some_and(|info| governed(&info.meta));
     if !governed {
         return Ok(());
     }

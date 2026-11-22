@@ -9,6 +9,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::super::AppState;
+use super::super::provider_accounts::retirement;
 use super::coordinator::{child_runtime_pinned, execution_action, runtime_readiness};
 use crate::core::Status;
 use crate::execution_environment::{ExecutionBinding, ManagedChildV1};
@@ -474,6 +475,10 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
     if existing.is_some() {
         if existing_workspace.is_none() {
             advance(state, store, record, fail("identity_mismatch", None)).await;
+            return Step::Again;
+        }
+        if let Some(code) = retirement::call_refusal(state, child) {
+            advance(state, store, record, fail(code, None)).await;
             return Step::Again;
         }
         if let Err(code) = quiesce(state, child).await {
@@ -1080,17 +1085,6 @@ async fn register_child(state: &AppState, record: &Record, cwd: &str) -> Result<
     })
 }
 
-fn stop_code(stop_reason: &str) -> &'static str {
-    match stop_reason.to_ascii_lowercase().replace('_', "").as_str() {
-        "endturn" | "done" => "completed",
-        "cancelled" | "canceled" => "cancelled",
-        "refusal" => "refusal",
-        "maxtokens" => "max_tokens",
-        "maxturnrequests" => "max_turn_requests",
-        _ => "provider_error",
-    }
-}
-
 fn result_value(text: &str, stop_reason: &str, structured: Option<&Value>) -> Value {
     let truncated = text.len() > MAX_RESULT_TEXT;
     let mut end = text.len().min(MAX_RESULT_TEXT);
@@ -1223,7 +1217,7 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
         let wants_schema = request
             .as_ref()
             .is_some_and(|request| output_schema(request).is_some());
-        let code = stop_code(stop_reason);
+        let code = outcome::stop_code(stop_reason);
         let parsed = (wants_schema && code == "completed")
             .then(|| serde_json::from_str::<Value>(turn.final_text.trim()).ok())
             .flatten();
@@ -1362,10 +1356,13 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
 /// a cancelled call (resuming the queue during the stop grace would run it)
 /// or a review that would fail the reviewer check now (for example one
 /// admitted before reviews required a signed reviewer preset and queued
-/// across a restart).
+/// across a restart), or a continued child of a retired legacy card.
 async fn withdraw_unstarted(state: &AppState, store: &Store, record: &Record) -> Option<Step> {
     let cancelled = record.cancel_requested_at_ms.is_some();
-    if record.state != State::Running || !(cancelled || review_admissible(state, record).is_err()) {
+    let retired = retirement::call_refusal(state, &record.child_session_id);
+    if record.state != State::Running
+        || !(cancelled || retired.is_some() || review_admissible(state, record).is_err())
+    {
         return None;
     }
     // Only positive evidence counts: absent echoes are no proof, since the
@@ -1377,7 +1374,8 @@ async fn withdraw_unstarted(state: &AppState, store: &Store, record: &Record) ->
         return None;
     }
     if !cancelled {
-        advance(state, store, record, fail("review_model_not_allowed", None)).await;
+        let code = retired.unwrap_or("review_model_not_allowed");
+        advance(state, store, record, fail(code, None)).await;
         return Some(Step::Again);
     }
     // Running may only stop through Stopping. No native turn exists, so the
@@ -1421,6 +1419,11 @@ async fn reconfirm(
     record: &Record,
     request: &Request,
 ) -> Result<(), Step> {
+    // A retired card's child is settled, never reconfirmed or prompted.
+    if let Some(code) = retirement::call_refusal(state, &record.child_session_id) {
+        advance(state, store, record, fail(code, None)).await;
+        return Err(Step::Again);
+    }
     let Err(error) = configuration::ready(state, store, record).await else {
         // Reconfirmation can take long; a cancellation or another transition
         // committed meanwhile wins over the resubmission.

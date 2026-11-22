@@ -27,7 +27,6 @@ export async function namedOnlyAccountsBrowser(): Promise<string[]> {
     dataset: { dataset_id: "named-only", user_id: "subscription-fixture" },
     registry: { revision: 1, defaults: {}, accounts: [{ id: HUSKY, provider_id: "antigravity", label: "Husky", enabled: true }] },
     session_admission: "enabled", session_providers: ["antigravity"], named_only_providers: ["antigravity"],
-    display_preferences: { scope: "subscriptions", revision: 1, values: { legacy_labels: {} } },
   };
   const originalFetch = globalThis.fetch;
   const requests: string[] = [];
@@ -59,7 +58,7 @@ export async function namedOnlyAccountsBrowser(): Promise<string[]> {
     check(cards.length === 1 && cards[0]!.textContent!.includes("Claude Code") && !cards[0]!.textContent!.includes("Antigravity"),
       "a named-only Provider has no default/Service credential card");
     for (const node of container.querySelectorAll<HTMLButtonElement>("button")) if (node.textContent === "Manage") node.click();
-    await waitFor(() => container.textContent!.includes("claude-code · Service account"));
+    await waitFor(() => container.textContent!.includes("Disabling blocks access"));
     const text = container.textContent!;
     check(!text.includes("antigravity · Service account") && text.includes("Husky"),
       "the named-only Provider lists only its named accounts");

@@ -1,8 +1,50 @@
 use super::*;
-use crate::store::provider_accounts::Account;
+use crate::store::provider_accounts::{Account, legacy_cards};
 use std::collections::BTreeMap;
 
 const OWNER: &str = "owner";
+
+/// The adopted account of a former legacy card (Lynx, Pika, Fox, Mole): a
+/// named account whose id is the card's browser key.
+fn adopted(card: &str) -> Account {
+    let provider = match card {
+        "anthropic" => "claude-code",
+        "openai" => "codex",
+        "xai" => "grok",
+        _ => "claude-deepseek",
+    };
+    Account {
+        id: legacy_cards::browser_key(OWNER, card),
+        ..named(provider, card)
+    }
+}
+
+/// The share member of [`adopted`]`(card)`.
+fn card(card: &str) -> Member {
+    Member::account(legacy_cards::browser_key(OWNER, card))
+}
+
+/// `accounts` and every adopted card account.
+fn with_cards(mut accounts: Vec<Account>) -> Vec<Account> {
+    accounts.extend(legacy_cards::CARDS.iter().map(|card| adopted(card)));
+    accounts
+}
+
+/// Put every adopted card account into the stored registry.
+async fn seed_cards(store: &Store) {
+    let mut registry = store.provider_accounts(OWNER).await.unwrap();
+    registry.accounts = with_cards(std::mem::take(&mut registry.accounts));
+    registry.revision += 1;
+    let value = serde_json::to_string(&registry).unwrap();
+    macro_rules! write { ($db:expr) => {{
+        sqlx::query("INSERT INTO provider_account_registries (owner_user_id,revision,value) VALUES ($1,$2,$3) ON CONFLICT (owner_user_id) DO UPDATE SET revision=excluded.revision,value=excluded.value")
+            .bind(OWNER).bind(registry.revision).bind(&value).execute(&$db.pool).await.unwrap();
+    }}; }
+    match &store.backend {
+        StorageBackend::Postgres(db) => write!(db),
+        StorageBackend::Sqlite(db) => write!(db),
+    }
+}
 
 fn named(provider: &str, label: &str) -> Account {
     Account {
@@ -73,16 +115,16 @@ fn one_antigravity_account_joins_a_share_of_other_families() {
     let fixture = Fixture {
         registry: Registry {
             revision: 3,
-            accounts: vec![husky.clone(), otter.clone()],
+            accounts: with_cards(vec![husky.clone(), otter.clone()]),
             defaults: BTreeMap::new(),
         },
         placed: BTreeSet::new(),
     };
     let mut shares = Shares::default();
     let heron = fixture.create(&mut shares, "Heron");
-    for card in ["anthropic", "openai", "xai"] {
+    for family in ["anthropic", "openai", "xai"] {
         fixture
-            .set(&mut shares, Member::card(card), Some(&heron))
+            .set(&mut shares, card(family), Some(&heron))
             .unwrap();
     }
     fixture
@@ -115,7 +157,7 @@ fn a_share_holds_at_most_one_member_per_family() {
     let fixture = Fixture {
         registry: Registry {
             revision: 3,
-            accounts: vec![lark.clone(), codex.clone()],
+            accounts: with_cards(vec![lark.clone(), codex.clone()]),
             defaults: BTreeMap::new(),
         },
         placed: BTreeSet::new(),
@@ -123,9 +165,9 @@ fn a_share_holds_at_most_one_member_per_family() {
     let mut shares = Shares::default();
     let google = fixture.create(&mut shares, "Google");
     // Lynx (anthropic), Pika (openai) and Fox (xai) share one profile.
-    for card in ["anthropic", "openai", "xai"] {
+    for family in ["anthropic", "openai", "xai"] {
         fixture
-            .set(&mut shares, Member::card(card), Some(&google))
+            .set(&mut shares, card(family), Some(&google))
             .unwrap();
     }
     assert_eq!(shares.members_of(&google).len(), 3);
@@ -151,28 +193,26 @@ fn a_share_holds_at_most_one_member_per_family() {
         .set(&mut shares, Member::account(lark.id.clone()), Some(&other))
         .unwrap();
     assert_eq!(
-        fixture.set(&mut shares, Member::card("anthropic"), Some(&other)),
+        fixture.set(&mut shares, card("anthropic"), Some(&other)),
         Err("browser_share_family_conflict")
     );
     // Re-joining the same share is idempotent; moving leaves the old share.
     fixture
-        .set(&mut shares, Member::card("openai"), Some(&google))
+        .set(&mut shares, card("openai"), Some(&google))
         .unwrap();
     fixture
-        .set(&mut shares, Member::card("openai"), Some(&other))
+        .set(&mut shares, card("openai"), Some(&other))
         .unwrap();
     assert_eq!(shares.members_of(&google).len(), 2);
     assert_eq!(
         shares
-            .membership(&Member::card("openai"))
+            .membership(&card("openai"))
             .map(|row| row.share_id.as_str()),
         Some(other.as_str())
     );
     // Leaving drops only that membership.
-    fixture
-        .set(&mut shares, Member::card("openai"), None)
-        .unwrap();
-    assert!(shares.membership(&Member::card("openai")).is_none());
+    fixture.set(&mut shares, card("openai"), None).unwrap();
+    assert!(shares.membership(&card("openai")).is_none());
 }
 
 #[test]
@@ -183,7 +223,7 @@ fn members_whose_family_is_unknown_or_revoking_are_refused() {
     let fixture = Fixture {
         registry: Registry {
             revision: 1,
-            accounts: vec![unknown.clone(), revoking.clone()],
+            accounts: with_cards(vec![unknown.clone(), revoking.clone()]),
             defaults: BTreeMap::new(),
         },
         placed: BTreeSet::new(),
@@ -212,7 +252,7 @@ fn members_whose_family_is_unknown_or_revoking_are_refused() {
         Err("invalid_argument")
     );
     assert_eq!(
-        fixture.set(&mut shares, Member::card("anthropic"), Some("nope")),
+        fixture.set(&mut shares, card("anthropic"), Some("nope")),
         Err("browser_share_not_found")
     );
 }
@@ -222,7 +262,7 @@ fn share_keys_never_equal_account_or_card_keys() {
     let mut keys = BTreeSet::new();
     for owner in ["owner", "other"] {
         for card in ["anthropic", "deepseek", "openai", "xai"] {
-            assert!(keys.insert(legacy_browsers::account(owner, card)));
+            assert!(keys.insert(legacy_cards::browser_key(owner, card)));
         }
         for _ in 0..16 {
             let share = uuid::Uuid::new_v4().to_string();
@@ -233,7 +273,7 @@ fn share_keys_never_equal_account_or_card_keys() {
             // A share id itself is never its key.
             assert_ne!(key.as_str(), share);
             // The card and share domains differ even for equal inputs.
-            assert_ne!(key, legacy_browsers::account(owner, &share));
+            assert_ne!(key, legacy_cards::browser_key(owner, &share));
         }
     }
     for _ in 0..64 {
@@ -242,35 +282,33 @@ fn share_keys_never_equal_account_or_card_keys() {
     }
     assert!(share_id_valid(&uuid::Uuid::new_v4().to_string()));
     assert!(!share_id_valid("Share"));
-    assert_eq!(
-        Member::decode(&Member::card("xai").encode()),
-        Some(Member::card("xai"))
-    );
+    assert_eq!(Member::decode(&card("xai").encode()), Some(card("xai")));
     assert_eq!(Member::decode("account:default"), None);
-    assert_eq!(Member::decode("card:Bad Card"), None);
+    assert_eq!(Member::decode("card:anthropic"), None);
 }
 
 #[test]
-fn the_member_wire_form_is_exactly_account_id_or_card() {
+fn the_member_wire_form_is_exactly_account_id() {
     let account: Member = serde_json::from_value(
         serde_json::json!({"account_id": "11111111-2222-4333-8444-555555555555"}),
     )
     .unwrap();
     assert!(matches!(account, Member::Account(_)));
-    let card: Member = serde_json::from_value(serde_json::json!({"card": "openai"})).unwrap();
-    assert_eq!(card, Member::card("openai"));
+    // A retired legacy card is no member any more.
     for invalid in [
+        serde_json::json!({"card": "openai"}),
         serde_json::json!({"card": "openai", "account_id": "11111111-2222-4333-8444-555555555555"}),
-        serde_json::json!({"card": "openai", "family": "openai"}),
+        serde_json::json!({"account_id": "11111111-2222-4333-8444-555555555555", "family": "openai"}),
         serde_json::json!({}),
     ] {
         assert!(serde_json::from_value::<Member>(invalid).is_err());
     }
-    let change: Change = serde_json::from_value(serde_json::json!({
-        "type": "set_browser_share", "member": {"card": "xai"}, "share_id": null
-    }))
-    .unwrap();
-    assert!(change.is_browser_share());
+    assert!(
+        serde_json::from_value::<Change>(serde_json::json!({
+            "type": "set_browser_share", "member": {"card": "xai"}, "share_id": null
+        }))
+        .is_err()
+    );
 }
 
 async fn sqlite_store(dir: &tempfile::TempDir) -> Store {
@@ -284,6 +322,7 @@ async fn sqlite_store(dir: &tempfile::TempDir) -> Store {
     .await
     .unwrap();
     store.migrate().await.unwrap();
+    seed_cards(&store).await;
     store
 }
 
@@ -359,6 +398,7 @@ async fn postgres_store(dir: &tempfile::TempDir) -> Store {
         .await
         .unwrap();
     store.migrate().await.unwrap();
+    seed_cards(&store).await;
     store
 }
 
@@ -411,13 +451,8 @@ async fn registry_writer_and_family_rule(store: &Store) {
         MutationResult::Invalid("operation_reused")
     );
     assert_eq!(store.browser_shares(OWNER).await.unwrap().shares.len(), 1);
-    for card in ["anthropic", "openai", "xai"] {
-        applied(
-            store,
-            &format!("join-{card}"),
-            join(Member::card(card), &share),
-        )
-        .await;
+    for family in ["anthropic", "openai", "xai"] {
+        applied(store, &format!("join-{family}"), join(card(family), &share)).await;
     }
     assert_eq!(
         invalid(
@@ -522,7 +557,19 @@ async fn shared_placements_admit_only_current_enabled_members() {
     .browser_share_id
     .unwrap();
     let key = share_key(OWNER, &share);
-    let lynx = Member::card("anthropic");
+    // A Claude account whose own browser is off.
+    let lynx = Member::account(
+        applied(
+            &store,
+            "lynx",
+            Change::Create {
+                provider_id: "claude-code".into(),
+                label: "Lynx".into(),
+            },
+        )
+        .await
+        .account_id,
+    );
     let pika = Member::account(codex.clone());
     // Not a member yet.
     assert_eq!(
@@ -607,7 +654,7 @@ async fn revoking_a_member_never_captures_the_share_and_drops_its_membership() {
     let codex = named_account(&store, "codex", "codex").await;
     // The account's own browser was placed before it joined.
     store
-        .admit_browser_placement(OWNER, (&codex, None), "ovh", "b-own", 1)
+        .admit_browser_placement(OWNER, &codex, "ovh", "b-own", 1)
         .await
         .unwrap()
         .unwrap();
@@ -624,7 +671,7 @@ async fn revoking_a_member_never_captures_the_share_and_drops_its_membership() {
     let key = share_key(OWNER, &share);
     let pika = Member::account(codex.clone());
     applied(&store, "join-pika", join(pika.clone(), &share)).await;
-    applied(&store, "join-fox", join(Member::card("xai"), &share)).await;
+    applied(&store, "join-fox", join(card("xai"), &share)).await;
     store
         .admit_shared_browser_placement(OWNER, (&pika, &share), "ovh", "b-share", 2)
         .await
@@ -658,19 +705,10 @@ async fn deleting_a_share_revokes_exactly_its_own_placements() {
 
 #[allow(clippy::too_many_lines)] // One scenario: a share's whole deletion lifecycle.
 async fn share_deletion(store: &Store) {
-    applied(
-        store,
-        "lynx-on",
-        Change::SetLegacyBrowserEnabled {
-            card: "anthropic".into(),
-            enabled: true,
-        },
-    )
-    .await;
-    let lynx = Member::card("anthropic");
+    let lynx = card("anthropic");
     let own = lynx.own_key(OWNER);
     store
-        .admit_browser_placement(OWNER, (&own, Some("anthropic")), "ovh", "b-own", 1)
+        .admit_browser_placement(OWNER, &own, "ovh", "b-own", 1)
         .await
         .unwrap()
         .unwrap();
@@ -787,14 +825,14 @@ fn a_family_stays_bound_to_its_first_member_until_the_profile_is_fresh() {
     let fixture = Fixture {
         registry: Registry {
             revision: 1,
-            accounts: vec![lark.clone()],
+            accounts: with_cards(vec![lark.clone()]),
             defaults: BTreeMap::new(),
         },
         placed: BTreeSet::new(),
     };
     let mut shares = Shares::default();
     let google = fixture.create(&mut shares, "Google");
-    let lynx = Member::card("anthropic");
+    let lynx = card("anthropic");
     fixture
         .set(&mut shares, lynx.clone(), Some(&google))
         .unwrap();
@@ -812,7 +850,7 @@ fn a_family_stays_bound_to_its_first_member_until_the_profile_is_fresh() {
     // A fresh profile (confirmed reset) forgets the members that left.
     // Lynx had left before the reset began: its binding is released.
     assert!(
-        shares.renew_current(&google, &[Member::card("anthropic")], |member| {
+        shares.renew_current(&google, &[card("anthropic")], |member| {
             family_of(member, &fixture.registry)
         })
     );
@@ -845,10 +883,11 @@ fn a_member_must_be_the_owners_even_to_leave() {
         fixture.set(&mut shares, Member::account(foreign), None),
         Err("account_not_found")
     );
-    // A card is always the owner's own (its key derives from the owner).
-    fixture
-        .set(&mut shares, Member::card("openai"), None)
-        .unwrap();
+    // A retired card's key without an account is not the owner's either.
+    assert_eq!(
+        fixture.set(&mut shares, card("openai"), None),
+        Err("account_not_found")
+    );
 }
 
 #[tokio::test]
@@ -870,7 +909,7 @@ async fn family_binding(store: &Store) {
     .await
     .browser_share_id
     .unwrap();
-    let lynx = Member::card("anthropic");
+    let lynx = card("anthropic");
     applied(store, "bind-lynx-join", join(lynx.clone(), &share)).await;
     applied(
         store,
@@ -891,16 +930,7 @@ async fn family_binding(store: &Store) {
         "browser_share_family_bound"
     );
     // A reset is renewed only when the share's profile lives on that Machine alone.
-    let pika = Member::card("openai");
-    applied(
-        store,
-        "bind-pika-on",
-        Change::SetLegacyBrowserEnabled {
-            card: "openai".into(),
-            enabled: true,
-        },
-    )
-    .await;
+    let pika = card("openai");
     applied(store, "bind-pika-join", join(pika.clone(), &share)).await;
     store
         .admit_shared_browser_placement(OWNER, (&pika, &share), "ovh", "b-share", 1)
@@ -981,7 +1011,7 @@ fn a_binding_whose_family_the_table_no_longer_gives_blocks_the_share() {
     let fixture = Fixture {
         registry: Registry {
             revision: 1,
-            accounts: vec![lark.clone(), test.clone()],
+            accounts: with_cards(vec![lark.clone(), test.clone()]),
             defaults: BTreeMap::new(),
         },
         placed: BTreeSet::new(),
@@ -993,7 +1023,7 @@ fn a_binding_whose_family_the_table_no_longer_gives_blocks_the_share() {
         family: "claude".into(),
         member: Member::account(lark.id.clone()),
     });
-    for member in [Member::account(test.id.clone()), Member::card("openai")] {
+    for member in [Member::account(test.id.clone()), card("openai")] {
         assert_eq!(
             fixture.set(&mut shares, member, Some(&google)),
             Err("browser_share_family_drift")
@@ -1038,12 +1068,11 @@ fn families_come_only_from_the_static_table() {
         family(Member::account(registry.accounts[2].id.clone())),
         None
     );
-    assert_eq!(family(Member::card("xai")).as_deref(), Some("xai"));
-    // A card the table does not know has no family and never joins.
-    assert_eq!(family(Member::card("future-cloud")), None);
+    // A retired card's key outside the registry has no family and never joins.
+    assert_eq!(family(card("xai")), None);
     assert_eq!(
-        member_family(&Member::card("future-cloud"), &registry),
-        Err("browser_share_family_unknown")
+        member_family(&card("xai"), &registry),
+        Err("account_not_found")
     );
 }
 
@@ -1069,16 +1098,11 @@ fn a_bound_member_now_of_the_joining_family_blocks_it() {
     };
     let current = |member: &Member| family_of(member, &registry);
     assert_eq!(
-        binding_refusal(
-            &shares,
-            "s",
-            (&Member::card("anthropic"), "anthropic"),
-            current
-        ),
+        binding_refusal(&shares, "s", (&card("anthropic"), "anthropic"), current),
         Some("browser_share_family_bound")
     );
     assert_eq!(
-        binding_refusal(&shares, "s", (&Member::card("openai"), "openai"), current),
+        binding_refusal(&shares, "s", (&card("openai"), "openai"), current),
         None
     );
 }
@@ -1104,7 +1128,7 @@ async fn revoking_a_member_moves_the_share_identity() {
         join(Member::account(codex.clone()), &share),
     )
     .await;
-    applied(&store, "rev-fox", join(Member::card("xai"), &share)).await;
+    applied(&store, "rev-fox", join(card("xai"), &share)).await;
     let before = store
         .browser_shares(OWNER)
         .await
@@ -1165,7 +1189,7 @@ async fn a_pending_share_reset_fences_membership_until_its_outcome() {
     .await
     .browser_share_id
     .unwrap();
-    let lynx = Member::card("anthropic");
+    let lynx = card("anthropic");
     applied(&store, "fence-lynx", join(lynx.clone(), &share)).await;
     applied(
         &store,
@@ -1220,7 +1244,7 @@ async fn a_pending_share_reset_fences_membership_until_its_outcome() {
     );
     // No membership change of the share commits meanwhile.
     for (operation, change) in [
-        ("fence-pika", join(Member::card("openai"), &share)),
+        ("fence-pika", join(card("openai"), &share)),
         (
             "fence-codex-leave",
             Change::SetBrowserShare {
@@ -1369,4 +1393,263 @@ async fn an_unreadable_binding_is_kept_and_blocks_its_family_until_a_confirmed_r
         join(Member::account(lark), &share),
     )
     .await;
+}
+
+#[tokio::test]
+async fn the_retirement_cleanup_drops_card_members_and_keeps_their_bindings() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = sqlite_store(&dir).await;
+    let lark = named_account(&store, "retired-lark", "claude-code").await;
+    let share = applied(
+        &store,
+        "retired-create",
+        Change::CreateBrowserShare {
+            label: "Google".into(),
+        },
+    )
+    .await
+    .browser_share_id
+    .unwrap();
+    applied(&store, "retired-pika", join(card("openai"), &share)).await;
+    let revision = store.browser_shares(OWNER).await.unwrap().shares[0].revision;
+    let registry = store.provider_accounts(OWNER).await.unwrap().revision;
+    let StorageBackend::Sqlite(db) = &store.backend else {
+        panic!("sqlite")
+    };
+    // What a Controller before the retirement wrote for Claude · Lynx.
+    for (table, columns, values) in [
+        (
+            "provider_browser_share_members",
+            "member,share_id,family",
+            ["card:anthropic", share.as_str(), "anthropic"],
+        ),
+        (
+            "provider_browser_share_bindings",
+            "member,share_id,family",
+            ["card:anthropic", share.as_str(), "anthropic"],
+        ),
+    ] {
+        sqlx::query(&format!(
+            "INSERT INTO {table} (owner_user_id,{columns}) VALUES ($1,$2,$3,$4)"
+        ))
+        .bind(OWNER)
+        .bind(values[0])
+        .bind(values[1])
+        .bind(values[2])
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO provider_legacy_browsers (owner_user_id,card_id) VALUES ($1,'anthropic')",
+    )
+    .bind(OWNER)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    // Every Controller start (an upgrade, a re-upgrade after a rollback, a
+    // copied store) runs the cleanup.
+    assert_eq!(store.retire_legacy_card_rows().await.unwrap(), 1);
+    let members: Vec<String> = sqlx::query_scalar(
+        "SELECT member FROM provider_browser_share_members WHERE owner_user_id=$1 ORDER BY member",
+    )
+    .bind(OWNER)
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(members, [card("openai").encode()]);
+    let enabled: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM provider_legacy_browsers")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(enabled, 0);
+    let shares = store.browser_shares(OWNER).await.unwrap();
+    assert_eq!(shares.shares[0].revision, revision + 1);
+    // An account mutation captured before the cleanup fails its compare.
+    let after = store.provider_accounts(OWNER).await.unwrap();
+    assert_eq!(after.revision, registry + 1);
+    rerun_cleanup(&store, &share, (registry + 1, revision + 1)).await;
+    // Lynx's binding stays and keeps every Claude account out until a reset.
+    assert_eq!(shares.unreadable_bindings.len(), 1);
+    assert_eq!(
+        invalid(
+            &store,
+            "retired-lark-join",
+            join(Member::account(lark.clone()), &share)
+        )
+        .await,
+        "browser_share_family_bound"
+    );
+    assert!(confirmed_reset(&store, &share, "ovh", "retired-reset").await);
+    applied(
+        &store,
+        "retired-lark-join-2",
+        join(Member::account(lark), &share),
+    )
+    .await;
+}
+
+/// The cleanup moved the registry revision in its column and serialized
+/// value, is idempotent, and removes a card member a rolled-back Controller
+/// wrote again on the next start (`SQLx` skips the recorded migrations).
+async fn rerun_cleanup(store: &Store, share: &str, (registry, revision): (i64, i64)) {
+    let StorageBackend::Sqlite(db) = &store.backend else {
+        panic!("sqlite")
+    };
+    let stored: (i64, String) = sqlx::query_as(
+        "SELECT revision,value FROM provider_account_registries WHERE owner_user_id=$1",
+    )
+    .bind(OWNER)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(stored.0, registry);
+    assert_eq!(
+        serde_json::from_str::<Registry>(&stored.1)
+            .unwrap()
+            .revision,
+        registry
+    );
+    assert_eq!(store.retire_legacy_card_rows().await.unwrap(), 0);
+    assert_eq!(
+        store.provider_accounts(OWNER).await.unwrap().revision,
+        registry
+    );
+    sqlx::query(
+        "INSERT INTO provider_browser_share_members (owner_user_id,member,share_id,family) VALUES ($1,'card:anthropic',$2,'anthropic')",
+    )
+    .bind(OWNER)
+    .bind(share)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    // A migration alone (a CLI) leaves it; the next Controller start removes it.
+    store.migrate().await.unwrap();
+    let cards: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM provider_browser_share_members WHERE member LIKE 'card:%'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(cards, 1);
+    assert_eq!(store.retire_legacy_card_rows().await.unwrap(), 1);
+    assert_eq!(
+        store.provider_accounts(OWNER).await.unwrap().revision,
+        registry + 1
+    );
+    let shares = store.browser_shares(OWNER).await.unwrap();
+    assert_eq!(shares.shares[0].revision, revision + 1);
+    assert_eq!(shares.members.len(), 1);
+}
+
+#[tokio::test]
+async fn retired_reset_schedules_are_cancelled_with_their_audit() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = sqlite_store(&dir).await;
+    for lane in ["codex", "account-keep"] {
+        store
+            .upsert_provider_reset(lane, 10, &format!("{lane}-key"))
+            .await
+            .unwrap();
+    }
+    let lanes = ["codex".to_owned(), "xai".to_owned()];
+    assert_eq!(
+        store.cancel_retired_resets(&lanes, 42).await.unwrap(),
+        ["codex"]
+    );
+    assert!(store.load_provider_reset("codex").await.unwrap().is_none());
+    // Named-account lanes are untouched.
+    assert!(
+        store
+            .load_provider_reset("account-keep")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let logs = store.provider_action_logs(10).await.unwrap();
+    assert!(logs.iter().any(|log| log.provider == "codex"
+        && log.status == "cancelled"
+        && log.created_at_ms == 42));
+    // Idempotent.
+    assert!(
+        store
+            .cancel_retired_resets(&lanes, 43)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn a_failed_reset_cancellation_keeps_the_schedule_and_tries_every_lane() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = sqlite_store(&dir).await;
+    for lane in ["codex", "xai"] {
+        store
+            .upsert_provider_reset(lane, 10, &format!("{lane}-key"))
+            .await
+            .unwrap();
+    }
+    let StorageBackend::Sqlite(db) = &store.backend else {
+        panic!("sqlite")
+    };
+    // The audit cannot be written: no deletion may commit without it.
+    sqlx::query("DROP TABLE provider_action_logs")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let error = store
+        .cancel_retired_resets(&["codex".to_owned(), "xai".to_owned()], 42)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("codex") && error.contains("xai"), "{error}");
+    for lane in ["codex", "xai"] {
+        assert!(store.load_provider_reset(lane).await.unwrap().is_some());
+    }
+}
+
+#[tokio::test]
+async fn an_unenrolled_placeholder_machine_is_no_credential_recipient() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = sqlite_store(&dir).await;
+    // The baseline seeds a Hawk row without enrollment keys.
+    assert!(
+        store
+            .list_machines()
+            .await
+            .unwrap()
+            .iter()
+            .any(|machine| !machine.revoked && machine.fingerprint.is_none())
+    );
+    assert!(store.credential_recipients().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn only_live_sessions_on_a_retired_card_default_block_admission() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = sqlite_store(&dir).await;
+    let StorageBackend::Sqlite(db) = &store.backend else {
+        panic!("sqlite")
+    };
+    for (id, provider, account, status) in [
+        ("live-card", "codex", "default", "running"),
+        ("busy-card", "claude-code", "default", "busy"),
+        ("exited-card", "codex", "default", "exited"),
+        (
+            "named",
+            "codex",
+            "11111111-1111-4111-8111-111111111111",
+            "running",
+        ),
+        ("no-card", "antigravity", "default", "running"),
+    ] {
+        sqlx::query("INSERT INTO sessions(id,provider,machine_id,cwd,title,status,origin,provider_account_id) VALUES ($1,$2,'hawk','/tmp',$1,$3,'web',$4)")
+            .bind(id).bind(provider).bind(status).bind(account)
+            .execute(&db.pool).await.unwrap();
+    }
+    assert_eq!(
+        store.live_retired_default_sessions().await.unwrap(),
+        ["busy-card", "live-card"]
+    );
 }

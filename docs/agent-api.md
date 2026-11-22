@@ -885,17 +885,16 @@ target effect is released with `sessions.acknowledge_uncertain_effect
 {session_id, body:{sequence}}` (`POST /api/sessions/{id}/uncertain-effect/acknowledge`)
 after the owner reviewed the workspace.
 
-A legacy default card (`openai`, `xai`, `deepseek`) becomes a named account
-without a new sign-in: `POST /api/provider-accounts/legacy/{card}/adopt` with
-`operation`, or `accounts.adopt_legacy {card}` with
-`cowboy_receipt({domain:"adoptions",operation})`. The account id is the card's
-Machine browser key, the label the legacy label; browser enablement and share
-membership move to it. Under the root vault lock the Service copies the legacy
-credential into the account vault and wipes the legacy entries in one step,
-then distributes both and makes the account the default of its scope. A Machine
-refresh of exactly the moved legacy generation is promoted into the account.
-`anthropic` refuses with `legacy_credential_expired`. Sessions created before
-keep `provider_account_id: "default"` and lose their credential with the wipe.
+The legacy default cards are retired
+([`legacy-card-retirement.md`](legacy-card-retirement.md)): `accounts.adopt_legacy`,
+the `adoptions` receipt domain, `set_legacy_browser_enabled`, `{card}` share
+members, `list().legacy_adoption`, `list().legacy_browsers`,
+`list().display_preferences` and the `subscriptions` preference scope are gone.
+`list().retired_default_providers` names every Provider without a `default`
+account: Service sign-in, session creation, a `set_default` to `default` and a
+native fork of such a session are refused (`named_account_required`), and a
+prompt to an existing `default` session waits with a "continue it in a new agent
+on a named account" reason. Those sessions stay listable and readable.
 
 Login and receipt responses include a relative `continue_url`. Resolve it
 against the Cowboy origin and give it to the user to continue the same login on
@@ -1374,9 +1373,10 @@ dispatched. CLI equivalents are
 login-start, revocation and reconciliation commands remain the write surfaces.
 OAuth challenges and secret submission continue through the authenticated UI or
 bounded CLI stdin; raw secrets are not added to MCP arguments or receipts.
-Legacy Service authentication retains its signed Provider UI and authenticated
-`cowboy api` routes; the named-account MCP commands do not change those shared
-credentials. These are on-demand account helpers within the existing four tools.
+Service-scoped Provider authentication keeps its signed Provider UI and
+authenticated `cowboy api` routes for Providers without a retired legacy card;
+the named-account MCP commands do not change those shared credentials. These are
+on-demand account helpers within the existing four tools.
 
 After a durable cancellation acknowledgement the UI may discard its local tab
 pointer. The cancelled receipt stays discoverable, and Machine cleanup fences

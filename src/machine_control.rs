@@ -87,6 +87,16 @@ impl ConnectionToken {
     pub fn same(&self, other: &Self) -> bool {
         self.0.epoch == other.0.epoch && Arc::ptr_eq(&self.0, &other.0)
     }
+
+    /// A connection identity of its own, for Controller tests.
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn for_test(machine_id: &str, epoch: &str) -> Self {
+        Self(Arc::new(ConnectionIdentity {
+            machine_id: machine_id.to_owned(),
+            epoch: epoch.to_owned(),
+        }))
+    }
 }
 
 /// Core-originated login projection, never a remote RPC response or inventory.

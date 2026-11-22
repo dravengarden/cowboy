@@ -2,6 +2,37 @@
 
 use super::*;
 
+/// Roll the account's workers this apply (or an interrupted earlier attempt
+/// of its generation, recorded durably before its replica became current)
+/// owes. The record is kept until the broker took the roll, so a retry of
+/// the generation (no longer "advanced") rolls again; it is deduplicated by
+/// account, Provider and generation.
+fn roll_owed_workers(
+    providers: &MachinePluginStore,
+    runtime_commands: &tokio::sync::mpsc::UnboundedSender<crate::runtime_wire::Frame>,
+    envelope: &crate::machine_protocol::SealedProviderAuth,
+    receipt: &crate::machine_plugins::PluginInventoryReceipt,
+) {
+    let pending = providers.pending_roll(&envelope.account_id, &receipt.provider_id);
+    let Some(provider) = provider_auth_roll_target(receipt, envelope.action.clone())
+        .or_else(|| pending.map(|_| receipt.provider_id.clone()))
+    else {
+        return;
+    };
+    let taken = runtime_commands.send(crate::runtime_wire::Frame::CoreCommand {
+        command: crate::runtime_wire::CoreCommand::RollProvider {
+            provider: provider.clone(),
+            account_id: Some(envelope.account_id.clone()),
+        },
+    });
+    if taken.is_ok()
+        && let Err(error) =
+            providers.clear_pending_roll(&envelope.account_id, &provider, receipt.auth_generation)
+    {
+        tracing::warn!(%error, %provider, "clearing a taken worker roll");
+    }
+}
+
 pub(super) fn handle(
     command: MachineCommand,
     context: MachineCommandContext,
@@ -31,7 +62,9 @@ pub(super) fn handle(
             tokio::spawn(async move {
                 match providers.apply_auth(&envelope).await {
                     Ok(receipt) => {
-                        let roll_provider = provider_auth_roll_target(&receipt, envelope.action);
+                        // Before the receipt: once the Controller records it,
+                        // no retry of this generation comes back.
+                        roll_owed_workers(&providers, &runtime_commands, &envelope, &receipt);
                         let _ = events.send(MachineEvent::ProviderAuthReceipt {
                             request_id: request_id.clone(),
                             provider_id: receipt.provider_id,
@@ -48,15 +81,6 @@ pub(super) fn handle(
                         // platform-specific filesystem event shape.
                         publish_provider_auth_observations(&providers, &events, true, protocol)
                             .await;
-                        if let Some(provider) = roll_provider {
-                            let _ =
-                                runtime_commands.send(crate::runtime_wire::Frame::CoreCommand {
-                                    command: crate::runtime_wire::CoreCommand::RollProvider {
-                                        provider,
-                                        account_id: Some(envelope.account_id.clone()),
-                                    },
-                                });
-                        }
                         let _ = events.send(MachineEvent::CommandResult {
                             request_id,
                             accepted: true,

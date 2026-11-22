@@ -272,6 +272,9 @@ pub(in crate::server) fn parked_reason(
     state: &Arc<AppState>,
     meta: &SessionMeta,
 ) -> Option<String> {
+    if super::retirement::session_retired(state, meta) {
+        return Some(wait(super::retirement::SESSION_RETIRED));
+    }
     if !governed(meta) {
         return None;
     }
@@ -295,6 +298,9 @@ pub(in crate::server) fn revival_gate(
     state: &Arc<AppState>,
     meta: &SessionMeta,
 ) -> Result<(), String> {
+    if super::retirement::session_retired(state, meta) {
+        return Err(wait(super::retirement::SESSION_RETIRED));
+    }
     if !governed(meta) {
         return Ok(());
     }

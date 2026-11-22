@@ -7,10 +7,8 @@ import type {
   BrowserShare,
   BrowserShareMember,
   BrowserShareMemberRef,
-  LegacyBrowser,
   SubscriptionSnapshot,
 } from "../subscriptionAccounts";
-import { legacySubscriptionLabel } from "../subscriptionDisplay";
 import type { BrowserReadShare } from "./api";
 
 const FAMILY_NAMES: Record<string, string> = {
@@ -32,38 +30,18 @@ export interface ShareCandidate {
   label: string;
   /** Unknown for a Provider without an account-usage family: never shared. */
   family: string | undefined;
-  /** The identity's own browser id (named account id or card key). */
+  /** The identity's own browser id (its account id). */
   browserId: string;
 }
 
-/** A legacy card's name: the owner's label for it, else its family. */
-export function cardLabel(snapshot: SubscriptionSnapshot, card: LegacyBrowser): string {
-  const provider = card.providers[0];
-  const labels = snapshot.display_preferences?.values.legacy_labels;
-  const own =
-    provider && labels && Object.hasOwn(labels, provider)
-      ? legacySubscriptionLabel(snapshot.display_preferences, provider)
-      : undefined;
-  return own ?? familyName(card.card);
-}
-
-/** Every card the owner may share: collected legacy cards and named
- * accounts that are not being revoked. */
+/** Every account the owner may share: named accounts that are not being
+ * revoked. */
 export function shareCandidates(snapshot: SubscriptionSnapshot | undefined): ShareCandidate[] {
   if (!snapshot) return [];
-  // Families come only from the Service's static table; a card or
-  // Provider outside it has none and is offered disabled.
+  // Families come only from the Service's static table; a Provider
+  // outside it has none and is offered disabled.
   const families = snapshot.browser_share_families?.providers ?? {};
-  const familyCards = snapshot.browser_share_families?.cards ?? [];
-  const cards = (snapshot.legacy_browsers ?? [])
-    .filter((card) => card.available)
-    .map((card) => ({
-      member: { card: card.card },
-      label: cardLabel(snapshot, card),
-      family: familyCards.includes(card.card) ? card.card : undefined,
-      browserId: card.account_id,
-    }));
-  const named = snapshot.registry.accounts
+  return snapshot.registry.accounts
     .filter((account) => !account.revoking && !snapshot.revoked_accounts?.includes(account.id))
     .map((account) => {
       const family = families[account.provider_id];
@@ -74,7 +52,6 @@ export function shareCandidates(snapshot: SubscriptionSnapshot | undefined): Sha
         browserId: account.id,
       };
     });
-  return [...cards, ...named];
 }
 
 /** The live share whose members include the identity `browserId`. */

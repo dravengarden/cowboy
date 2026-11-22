@@ -260,11 +260,6 @@ export async function runSessionContextBrowserConformance(
           dataset_id: `dataset-${"c".repeat(64)}`,
           user_id: "context-fixture",
         },
-        display_preferences: {
-          scope: "subscriptions",
-          revision: 1,
-          values: { legacy_labels: { "claude-code": "Claude · Lynx" } },
-        },
         registry: {
           revision: 1,
           accounts: [{

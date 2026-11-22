@@ -13,9 +13,9 @@ use super::BrowserAccount;
 use crate::machine_protocol::MACHINE_BROWSER_PROTOCOL_VERSION;
 use crate::machine_protocol::machine_browser::{Command, Reason, State as BrowserState};
 use crate::provider_account::ProviderAccountId;
-use crate::store::provider_accounts::browser_families;
 use crate::store::provider_accounts::browser_shares::{self, Member, Shares, families_distinct};
-use crate::store::provider_accounts::{Change, Mutation, MutationResult, Receipt, Registry};
+use crate::store::provider_accounts::{Change, Mutation, MutationResult, Registry};
+use crate::store::provider_accounts::{browser_families, legacy_cards};
 use serde_json::{Value, json};
 
 const REVOKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
@@ -44,15 +44,15 @@ fn member_value(owner: &str, row: &browser_shares::ShareMember) -> Value {
     json!({"member": row.member, "family": row.family, "account_id": row.member.own_key(owner)})
 }
 
-/// The member identity of a browser account; a key known only from a
-/// retained placement has none and keeps its own key.
+/// The member identity of a browser account; a retired card's retained
+/// browser has none and keeps its own key.
 pub(in crate::server) fn member_of(
     account_id: &ProviderAccountId,
     account: &BrowserAccount,
 ) -> Option<Member> {
     match account {
         BrowserAccount::Named(_) => Some(Member::account(account_id.clone())),
-        BrowserAccount::Legacy(card) => card.card.as_deref().map(Member::card),
+        BrowserAccount::RetiredCard => None,
     }
 }
 
@@ -176,14 +176,21 @@ pub(in crate::server) async fn list_value(
                 // Families the profile belongs to (kept after a member left).
                 "bound": shares.bindings.iter().filter(|row| row.share_id == share.share_id)
                     .map(|row| json!({"family": row.family, "account_id": row.member.own_key(owner)}))
+                    // A retired card's binding keeps blocking its family until
+                    // a confirmed reset; named by the card's browser key.
+                    .chain(shares.unreadable_bindings.iter()
+                        .filter(|row| row.share_id == share.share_id)
+                        .filter_map(|row| row.retired_card().map(|card| json!({"family": row.family,
+                            "account_id": legacy_cards::browser_key(owner, card), "retired_card": card}))))
                     .collect::<Vec<_>>()})
         })
         .collect();
-    // The static family table: Provider ids and card ids with a family.
+    // The static family table: Provider ids with a family.
     let providers: BTreeMap<&str, &str> = browser_families::PROVIDERS.iter().copied().collect();
     Ok((
         Value::Array(listed),
-        json!({"version": browser_families::VERSION, "providers": providers, "cards": browser_families::CARDS}),
+        // `cards` stays, empty, for Web clients that predate the retirement.
+        json!({"version": browser_families::VERSION, "providers": providers, "cards": []}),
     ))
 }
 
@@ -204,21 +211,13 @@ pub(in crate::server) enum Effect {
 /// The effects of an applied change. A member leaving, disabling its
 /// browser or being revoked never resets, revokes or hibernates the share's
 /// browser: other members depend on it. Only deleting the share revokes it.
-pub(in crate::server) fn change_effects(
-    owner: &str,
-    change: &Change,
-    receipt: &Receipt,
-) -> Vec<Effect> {
+pub(in crate::server) fn change_effects(owner: &str, change: &Change) -> Vec<Effect> {
     match change {
         Change::BeginRevocation { id } => vec![Effect::EndMemberViewers(id.clone())],
         Change::SetBrowserEnabled { id, enabled: false }
         | Change::SetEnabled { id, enabled: false } => vec![
             Effect::EndMemberViewers(id.clone()),
             Effect::HibernateOwn(id.clone(), "browser_disabled"),
-        ],
-        Change::SetLegacyBrowserEnabled { enabled: false, .. } => vec![
-            Effect::EndMemberViewers(receipt.account_id.clone()),
-            Effect::HibernateOwn(receipt.account_id.clone(), "browser_disabled"),
         ],
         // Joining: the member's own browser is no longer reachable from its
         // card. Leaving: its viewer of the share ends.
@@ -249,21 +248,19 @@ pub(in crate::server) async fn change_holds(
     let Some(store) = state.store.as_ref() else {
         return false;
     };
-    let (Ok(registry), Ok(cards), Ok(shares)) = (
+    let (Ok(registry), Ok(shares)) = (
         store.provider_accounts(owner).await,
-        store.legacy_browser_cards(owner).await,
         store.browser_shares(owner).await,
     ) else {
         return false;
     };
-    change_holds_in(change, &registry, &cards, &shares)
+    change_holds_in(change, &registry, &shares)
 }
 
 /// `change_holds` against one read of the owner's state.
 pub(in crate::server) fn change_holds_in(
     change: &Change,
     registry: &Registry,
-    enabled_cards: &[String],
     shares: &Shares,
 ) -> bool {
     let account =
@@ -278,10 +275,6 @@ pub(in crate::server) fn change_holds_in(
         Change::SetEnabled { id, enabled: false } => {
             account(id).is_some_and(|account| !account.enabled)
         }
-        Change::SetLegacyBrowserEnabled {
-            card,
-            enabled: false,
-        } => !enabled_cards.contains(card),
         _ => true,
     }
 }
@@ -313,16 +306,11 @@ async fn hibernate_while_holding(
 
 /// The effects to run for an applied change: none for a replayed receipt,
 /// whose operation already committed (and ran its effects) earlier.
-pub(in crate::server) fn fresh_effects(
-    owner: &str,
-    change: &Change,
-    receipt: &Receipt,
-    replay: bool,
-) -> Vec<Effect> {
+pub(in crate::server) fn fresh_effects(owner: &str, change: &Change, replay: bool) -> Vec<Effect> {
     if replay {
         return Vec::new();
     }
-    change_effects(owner, change, receipt)
+    change_effects(owner, change)
 }
 
 /// Carry out the effects of a freshly applied change (never a replayed
@@ -384,11 +372,6 @@ pub(in crate::server) async fn update(
         if let Some(share_id) = share_id
             && !noop
         {
-            if let Member::Card(card) = member
-                && !super::legacy::bound_cards(state).contains_key(&card.card)
-            {
-                return Err("account_unavailable");
-            }
             super::network::join_refusal(state, owner, (member, share_id)).await?;
         }
     }

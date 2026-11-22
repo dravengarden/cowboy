@@ -44,7 +44,6 @@ pub fn trash_retention_days(preferences: Option<&Preferences>) -> i64 {
 pub fn defaults(scope: &str) -> Option<Preferences> {
     let values = match scope {
         "about" => json!({"usage_order":[],"machine_order":[]}),
-        "subscriptions" => json!({"legacy_labels":{}}),
         "trash" => json!({"retention_days": TRASH_RETENTION_DEFAULT_DAYS}),
         crate::superagent::SCOPE => json!({"configuration":crate::superagent::Settings::default()}),
         crate::context_rollover::PREFERENCE_SCOPE => crate::context_rollover::default_preferences(),
@@ -63,10 +62,6 @@ pub fn schema() -> Value {
         "update":{"action":"preferences.update","arguments":{"scope":"code","folder_id":"optional owned folder ID; omit for this session","expected":"exact override object from get: {} or {directory: value}","change":"{inherit:true} or {directory:null|'project'|'workspace::<machine>::<workspace>'|'session::<id>'}"}},
         "receipts":"preferences domain; accepted means queued, not committed. The 4096 most recently used receipts expire on eviction or Controller restart. On unknown, read current state before retry; retain expected/input/operation.",
         "activation":"Next code-context entry or Open default directory; never moves Agent workspace or starts a worker."},
-        "subscriptions":{"storage":"database","ownership":"current_user",
-        "fields":{"legacy_labels":{"type":"provider_label_map","default":{}}},
-        "provider_label_map":{"max_items":128,"provider_pattern":"^[a-z0-9-]{1,64}$","label_max_utf8_bytes":128},
-        "semantics":"Display names for each Provider's legacy default account. Replace the complete map using the observed revision; omitted entries restore Existing account. Labels must be trimmed, nonempty and contain no control characters. Does not change account identity, credentials, admission or session defaults."},
         "superagent":{"storage":"database","ownership":"current_user","default":{"configuration":crate::superagent::Settings::default()},
         "update":"preferences.update with expected_revision and changes:{configuration}; supplied sources/projects/sessions replace their field, omitted fields are retained; atomic validation and durable receipt",
         "discovery":"cowboy_read({help:'superagent'})","semantics":"Explicit project coordinator bindings and session enrollment; immutable Markdown knowledge grants no external-action permission. Coordinators cannot edit settings."},
@@ -105,19 +100,6 @@ fn valid(change: &PreferenceChange) -> bool {
                         return key == "retention_days"
                             && value.as_i64().is_some_and(|days| {
                                 (1..=TRASH_RETENTION_MAX_DAYS).contains(&days)
-                            });
-                    }
-                    if change.scope == "subscriptions" {
-                        return key == "legacy_labels"
-                            && value.as_object().is_some_and(|labels| {
-                                labels.len() <= 128
-                                    && labels.iter().all(|(provider, label)| {
-                                        super::provider_accounts::provider_id_valid(provider)
-                                            && label.as_str().is_some_and(|label| {
-                                                label == label.trim()
-                                                    && super::provider_accounts::label_valid(label)
-                                            })
-                                    })
                             });
                     }
                     matches!(key.as_str(), "usage_order" | "machine_order")
@@ -165,6 +147,35 @@ impl Store {
                 .transpose()?
                 .unwrap_or(default),
         ))
+    }
+
+    /// The retired `subscriptions` scope (legacy card labels) as it was last
+    /// stored, read-only: a Web release from before the legacy card
+    /// retirement compares its revision. A revision-zero empty value when the
+    /// owner never wrote one. Nothing writes this scope any more.
+    pub async fn retired_subscriptions_preferences(&self, owner: &str) -> Result<Preferences> {
+        macro_rules! read {
+            ($db:expr) => {
+                sqlx::query_scalar::<_, String>(
+                    "SELECT value FROM user_preferences WHERE owner_user_id=$1 AND scope='subscriptions'",
+                )
+                .bind(owner)
+                .fetch_optional(&$db.pool)
+                .await?
+            };
+        }
+        let value = match &self.backend {
+            StorageBackend::Postgres(db) => read!(db),
+            StorageBackend::Sqlite(db) => read!(db),
+        };
+        Ok(match value {
+            Some(value) => serde_json::from_str(&value)?,
+            None => Preferences {
+                scope: "subscriptions".into(),
+                revision: 0,
+                values: json!({"legacy_labels":{}}),
+            },
+        })
     }
 
     pub async fn preference_receipt(
@@ -235,74 +246,6 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    async fn legacy_label_contract(store: &Store) {
-        let owner = uuid::Uuid::new_v4().to_string();
-        let registry = store.provider_accounts(&owner).await.unwrap();
-        let change = PreferenceChange {
-            scope: "subscriptions".into(),
-            expected_revision: 0,
-            changes: json!({"legacy_labels":{"claude-code":"Claude · Lynx","codex":"Codex · Fox"}}),
-        };
-        let first = store
-            .update_preferences(&owner, "label", &change)
-            .await
-            .unwrap();
-        assert!(matches!(&first, PreferenceResult::Applied(p) if p.revision == 1));
-        assert_eq!(
-            store
-                .update_preferences(&owner, "label", &change)
-                .await
-                .unwrap(),
-            first
-        );
-        assert!(matches!(
-            store
-                .update_preferences(&owner, "stale", &change)
-                .await
-                .unwrap(),
-            PreferenceResult::Conflict(_)
-        ));
-        assert_eq!(store.provider_accounts(&owner).await.unwrap(), registry);
-        assert_eq!(
-            store
-                .preferences("other-owner", "subscriptions")
-                .await
-                .unwrap()
-                .unwrap()
-                .revision,
-            0
-        );
-        let reset = PreferenceChange {
-            expected_revision: 1,
-            changes: json!({"legacy_labels":{}}),
-            ..change.clone()
-        };
-        assert!(matches!(
-            store
-                .update_preferences(&owner, "reset-labels", &reset)
-                .await
-                .unwrap(),
-            PreferenceResult::Applied(_)
-        ));
-        assert_eq!(
-            store
-                .preferences(&owner, "subscriptions")
-                .await
-                .unwrap()
-                .unwrap()
-                .values,
-            json!({"legacy_labels":{}})
-        );
-        // The exact historical result remains readable after the display changed.
-        assert_eq!(
-            store
-                .update_preferences(&owner, "label", &change)
-                .await
-                .unwrap(),
-            first
-        );
-    }
 
     #[allow(clippy::too_many_lines)] // Shared end-to-end persistence/replay contract for both databases.
     async fn contract(store: &Store) {
@@ -426,6 +369,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_retired_subscriptions_scope_stays_readable_read_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!(
+            "sqlite://{}?mode=rwc",
+            dir.path().join("prefs.sqlite").display()
+        );
+        let store = Store::connect(&url, dir.path().join("artifacts"))
+            .await
+            .unwrap();
+        store.migrate().await.unwrap();
+        // The general reader no longer knows the scope ...
+        assert!(
+            store
+                .preferences("owner", "subscriptions")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        // ... the compatibility projection always answers.
+        let empty = store
+            .retired_subscriptions_preferences("owner")
+            .await
+            .unwrap();
+        assert_eq!(
+            (empty.revision, empty.values),
+            (0, json!({"legacy_labels":{}}))
+        );
+        let StorageBackend::Sqlite(db) = &store.backend else {
+            panic!("sqlite")
+        };
+        let stored = json!({"scope":"subscriptions","revision":4,"values":{"legacy_labels":{"codex":"OpenAI · Pika"}}});
+        sqlx::query("INSERT INTO user_preferences (owner_user_id,scope,value) VALUES ('owner','subscriptions',$1)")
+            .bind(stored.to_string())
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let kept = store
+            .retired_subscriptions_preferences("owner")
+            .await
+            .unwrap();
+        assert_eq!(kept.revision, 4);
+        assert_eq!(kept.values["legacy_labels"]["codex"], "OpenAI · Pika");
+    }
+
+    #[tokio::test]
     async fn sqlite_preferences_survive_reopen_and_serialize_concurrent_writes() {
         let dir = tempfile::tempdir().unwrap();
         let url = format!(
@@ -437,16 +425,6 @@ mod tests {
             .unwrap();
         store.migrate().await.unwrap();
         contract(&store).await;
-        legacy_label_contract(&store).await;
-        let labels = PreferenceChange {
-            scope: "subscriptions".into(),
-            expected_revision: 0,
-            changes: json!({"legacy_labels":{"claude-code":"Claude · Lynx"}}),
-        };
-        store
-            .update_preferences("restart-owner", "persist-label", &labels)
-            .await
-            .unwrap();
         let change = PreferenceChange {
             scope: "about".into(),
             expected_revision: 0,
@@ -460,22 +438,6 @@ mod tests {
         let reopened = Store::connect(&url, dir.path().join("artifacts"))
             .await
             .unwrap();
-        assert_eq!(
-            reopened
-                .preferences("restart-owner", "subscriptions")
-                .await
-                .unwrap()
-                .unwrap()
-                .values,
-            labels.changes
-        );
-        assert!(
-            reopened
-                .preference_receipt("restart-owner", "persist-label")
-                .await
-                .unwrap()
-                .is_some()
-        );
         assert_eq!(
             reopened
                 .preferences("restart-owner", "about")
@@ -504,42 +466,17 @@ mod tests {
             .unwrap();
         store.migrate().await.unwrap();
         contract(&store).await;
-        legacy_label_contract(&store).await;
     }
 
     #[test]
-    fn legacy_labels_are_bounded_display_metadata_only() {
-        for changes in [
-            json!({"legacy_labels":null}),
-            json!({"legacy_labels":[]}),
-            json!({"legacy_labels":{"claude-code":" "}}),
-            json!({"legacy_labels":{"claude-code":" padded "}}),
-            json!({"legacy_labels":{"claude-code":"a\nb"}}),
-            json!({"legacy_labels":{"claude-code":"界".repeat(43)}}),
-            json!({"legacy_labels":{"bad/provider":"Name"}}),
-            json!({"legacy_labels":{"CLAUDE":"Name"}}),
-            json!({"legacy_labels":{"claude-code":{"token":"secret"}}}),
-            json!({"legacy_labels":{},"enabled":true}),
-            json!({"usage_order":[]}),
-        ] {
-            assert!(!valid(&PreferenceChange {
-                scope: "subscriptions".into(),
-                expected_revision: 0,
-                changes
-            }));
-        }
-        let labels: serde_json::Map<String, Value> = (0..129)
-            .map(|i| (format!("provider-{i}"), json!("Label")))
-            .collect();
+    fn the_retired_legacy_label_preference_is_no_scope() {
+        // The legacy cards are retired (docs/legacy-card-retirement.md).
+        assert!(defaults("subscriptions").is_none());
+        assert!(schema()["scopes"].get("subscriptions").is_none());
         assert!(!valid(&PreferenceChange {
             scope: "subscriptions".into(),
             expected_revision: 0,
-            changes: json!({"legacy_labels":labels})
-        }));
-        assert!(!valid(&PreferenceChange {
-            scope: "about".into(),
-            expected_revision: 0,
-            changes: json!({"legacy_labels":{}})
+            changes: json!({"legacy_labels":{"claude-code":"Claude · Lynx"}})
         }));
     }
 

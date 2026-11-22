@@ -3,7 +3,7 @@ import type { SubscriptionSnapshot } from "./subscriptionAccounts";
 import { sessionQuota } from "./sessionQuota";
 import type { NativeAccountUsage } from "./nativeAccountUsage";
 import { accountControl, accountPlanLabel, namedOnlyProvider } from "./accountControls";
-import { accountManageUrl, providerManageUrl, accountProviderLabel, providerUsage, type ProviderUsage, record, type UsageSnapshot, usageCardProviders, usagePluginId, usageResetProvider, usageResetSchedule } from "./usageLimits";
+import { accountManageUrl, providerManageUrl, accountProviderLabel, type ProviderUsage, record, type UsageSnapshot, usageCardProviders, usagePluginId, usageResetProvider } from "./usageLimits";
 import type { UsageResetTarget } from "./usageApi";
 
 export interface UsageAccountCard {
@@ -12,8 +12,6 @@ export interface UsageAccountCard {
   title: string;
   subtitle?: string;
   usage: ProviderUsage;
-  /** Service collectors own configurable placement and reset-credit actions. */
-  collector?: string;
   emptyMessage?: string;
   statusLabel?: string;
   native?: NativeAccountUsage;
@@ -22,18 +20,16 @@ export interface UsageAccountCard {
 }
 
 /** A session notice must use the same bound identity as Settings and About.
- * Unknown metadata never authorizes falling back to the Service collector. */
+ * A retired legacy default account has no quota card at all. */
 export function sessionAccountQuota(
-  snapshot: UsageSnapshot | null,
+  _snapshot: UsageSnapshot | null,
   accounts: SubscriptionSnapshot | undefined,
   sessions: readonly SessionMeta[],
   session: SessionMeta | undefined,
   observations: readonly NativeAccountUsage[] = [],
 ): ProviderUsage | undefined {
   if (!session) return undefined;
-  if (!session.provider_account_id || session.provider_account_id === "default") {
-    return providerUsage(snapshot, session.provider, session.provider_version, session.provider_generation_digest);
-  }
+  if (!session.provider_account_id || session.provider_account_id === "default") return undefined;
   if (session.owner_user_id !== accounts?.dataset.user_id) return undefined;
   return registeredUsageAccounts(null, accounts, sessions, observations).find((card) => card.id === session.provider_account_id &&
     accounts?.registry.accounts.some((account) => account.id === card.id && account.provider_id === session.provider))?.usage;
@@ -85,25 +81,17 @@ export function registeredUsageAccounts(
         : native?.message ?? (native?.refreshing ? "Refreshing this account’s usage…" : "No quota reported for this account yet."),
     };
   };
+  // Provider product order first (the legacy default cards are retired, so
+  // every card is a registered account); an uninstalled or quota-less
+  // Provider must not hide its registered accounts.
   for (const usage of usageCardProviders(snapshot)) {
     const provider = usagePluginId(usage.provider);
-    // A named-only Provider has no Service account to report.
-    if (namedOnlyProvider(accounts, provider)) continue;
-    const label = accounts?.display_preferences?.values.legacy_labels[provider];
-    const group = named.filter((account) => account.provider_id === provider);
-    const isDefault = group.length > 0 && (!accounts?.registry.defaults[provider] || accounts.registry.defaults[provider] === "default");
-    cards.push({
-      id: usage.provider, group: usage.provider, title: label ?? accountProviderLabel(usage.provider),
-      ...(label || isDefault ? { subtitle: `${accountProviderLabel(usage.provider)}${isDefault ? " · Default" : ""}` } : {}),
-      usage, collector: usage.provider,
-    });
-    for (const account of group) {
-      if (added.has(account.id)) continue;
+    for (const account of named) {
+      if (account.provider_id !== provider || added.has(account.id)) continue;
       cards.push(namedCard(account));
       added.add(account.id);
     }
   }
-  // An uninstalled or quota-less Provider must not hide its registered accounts.
   for (const account of named) {
     if (!added.has(account.id)) cards.push(namedCard(account));
   }
@@ -137,25 +125,13 @@ export function displayPlan(usage: ProviderUsage, plan: string | undefined): str
   return windows.some((limit) => minutes(limit) === 300) ? plan : "ultra";
 }
 
-/** Where a card's reset actions go. A Service card keeps its collector lane.
- * A named card gets its own lane only when the Service can spend its resets
- * and its own collected usage reports reset credits; it never borrows the
- * Service card's lane or credits. */
+/** Where a card's reset actions go: the account's own lane, only when the
+ * Service can spend its resets and its own collected usage reports reset
+ * credits. */
 export function usageResetTarget(card: UsageAccountCard): UsageResetTarget | undefined {
-  if (card.collector) {
-    const provider = usageResetProvider(card.usage);
-    return provider ? { kind: "service", provider } : undefined;
-  }
   const collected = card.native?.usage;
   if (!collected || card.native?.resets_supported !== true || usageResetProvider(collected) === undefined) return undefined;
   return record(collected.rate_limits?.rateLimitResetCredits) ? { kind: "account", accountId: card.id } : undefined;
-}
-
-/** The scheduled reset shown on this card. Only Service cards schedule;
- * a named card's reset is immediate only. */
-export function usageCardResetSchedule(snapshot: UsageSnapshot | null, card: UsageAccountCard): { fire_at_ms: number } | undefined {
-  const target = usageResetTarget(card);
-  return target?.kind === "service" ? usageResetSchedule(snapshot, card.usage) : undefined;
 }
 
 /** The Provider's plan and reset page, on the cards that own reset actions. */

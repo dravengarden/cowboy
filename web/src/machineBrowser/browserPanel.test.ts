@@ -152,18 +152,13 @@ test("the phone's identity line sits below the toolbar buttons", () => {
 test("a shared card's browser entry has its own icon, accent and name", () => {
   const snapshot = (shared: boolean): SubscriptionSnapshot => ({
     dataset: { dataset_id: "d", user_id: "u" },
-    registry: { revision: 1, defaults: {}, accounts: [] },
+    registry: {
+      revision: 1,
+      defaults: {},
+      accounts: [{ id: PIKA, provider_id: "codex", label: "Pika", enabled: true, browser_enabled: true }],
+    },
     session_admission: "enabled",
     machine_browser: "enabled",
-    legacy_browsers: [
-      {
-        card: "openai",
-        account_id: PIKA,
-        providers: ["codex"],
-        browser_enabled: true,
-        available: true,
-      },
-    ],
     browser_shares: shared
       ? [
           {
@@ -172,15 +167,15 @@ test("a shared card's browser entry has its own icon, accent and name", () => {
             created_ms: 1,
             revision: 2,
             deleting: false,
-            members: [{ member: { card: "openai" }, family: "openai", account_id: PIKA }],
+            members: [{ member: { account_id: PIKA }, family: "openai", account_id: PIKA }],
           },
         ]
       : [],
-    browser_share_families: { version: 1, providers: {}, cards: ["openai"] },
+    browser_share_families: { version: 3, providers: { codex: "openai" } },
   });
   const entry = (shared: boolean) =>
     render(
-      React.createElement(AccountBrowserEntry, { snapshot: snapshot(shared), account: "openai" }),
+      React.createElement(AccountBrowserEntry, { snapshot: snapshot(shared), account: PIKA }),
     );
   const shared = entry(true);
   assertEquals(shared.includes('aria-label="Shared browser: Google"'), true);

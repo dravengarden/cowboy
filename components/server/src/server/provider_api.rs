@@ -96,6 +96,13 @@ pub(super) async fn api_provider_auth_commit(
     Path(provider_id): Path<String>,
     Json(request): Json<ProviderAuthCommitRequest>,
 ) -> Response {
+    if crate::store::provider_accounts::legacy_cards::retired_provider(&provider_id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            provider_accounts::retirement::LOGIN_RETIRED,
+        )
+            .into_response();
+    }
     let Some((_provider_version, _generation_digest, package)) =
         state.provider_catalog.latest_package(&provider_id)
     else {
@@ -223,6 +230,9 @@ fn default_login_refusal(
 ) -> Option<&'static str> {
     if crate::provider_account::named_only(&package.manifest.id) {
         return Some("named_account_required: this Provider signs in only to named accounts");
+    }
+    if crate::store::provider_accounts::legacy_cards::retired_provider(&package.manifest.id) {
+        return Some(provider_accounts::retirement::LOGIN_RETIRED);
     }
     (!crate::provider_account::portable_contract::contract(package)
         .methods
@@ -557,6 +567,19 @@ pub(super) async fn provider_account_auth_envelope_for_machine(
     provider_id: &str,
     account_id: &crate::provider_account::ProviderAccountId,
 ) -> Result<crate::machine_protocol::SealedProviderAuth, String> {
+    sealed_auth_envelope_for_machine(state, machine_id, provider_id, account_id)
+        .await
+        .map(|(envelope, _)| envelope)
+}
+
+/// The envelope for `machine_id` and the enrolled encryption key it was
+/// sealed to: an acknowledgement belongs to exactly that enrollment.
+pub(super) async fn sealed_auth_envelope_for_machine(
+    state: &Arc<AppState>,
+    machine_id: &str,
+    provider_id: &str,
+    account_id: &crate::provider_account::ProviderAccountId,
+) -> Result<(crate::machine_protocol::SealedProviderAuth, String), String> {
     let store = state
         .store
         .as_ref()
@@ -574,6 +597,7 @@ pub(super) async fn provider_account_auth_envelope_for_machine(
         }
         return scope
             .seal_for_machine(provider_id, &public_key)
+            .map(|envelope| (envelope, public_key))
             .map_err(|error| error.to_string());
     }
     let scope = provider_auth_scope_for_machine(state, machine_id, account_id).await?;
@@ -591,11 +615,12 @@ pub(super) async fn provider_account_auth_envelope_for_machine(
         {
             return Err("Provider grant changed during cleanup".into());
         }
-        Ok(envelope)
+        Ok((envelope, public_key))
     } else {
         scope
             .seal_current_grant(store, machine_id, provider_id)
             .await
+            .map(|envelope| (envelope, public_key))
             .map_err(|error| error.to_string())
     }
 }
@@ -1013,7 +1038,32 @@ mod default_login_tests {
                     .is_some_and(|refusal| refusal.starts_with("named_account_required"))
             );
         }
-        let grok = package(include_str!("../../../../plugins/grok/provider.json"));
-        assert_eq!(default_login_refusal(&grok, "xai-account"), None);
+    }
+
+    #[test]
+    fn a_retired_legacy_card_never_signs_in_at_service_scope() {
+        for (source, method) in [
+            (
+                include_str!("../../../../plugins/grok/provider.json"),
+                "xai-account",
+            ),
+            (
+                include_str!("../../../../plugins/codex/provider.json"),
+                "chatgpt",
+            ),
+            (
+                include_str!("../../../../plugins/claude-code/provider.json"),
+                "claude-account",
+            ),
+            (
+                include_str!("../../../../plugins/claude-deepseek/provider.json"),
+                "api-key",
+            ),
+        ] {
+            assert_eq!(
+                default_login_refusal(&package(source), method),
+                Some(super::provider_accounts::retirement::LOGIN_RETIRED)
+            );
+        }
     }
 }

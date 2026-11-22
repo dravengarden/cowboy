@@ -1278,6 +1278,10 @@ test("the native hook proxy runs its command on the target", async (t) => {
   while (runs.length < 2) await new Promise((resolve) => setImmediate(resolve));
   controller.abort();
   assert.equal(await pending, 1);
+  // The proxy posts the cancel without awaiting it, since native is ending the
+  // proxy anyway, so the bridge may see it only after the proxy has returned.
+  for (let waited = 0; cancelled.length < 1 && waited < 5000; waited += 5)
+    await new Promise((resolve) => setTimeout(resolve, 5));
   assert.equal(cancelled.length, 1);
   assert.match(cancelled[0], /^hook-/);
   // A PreToolUse guard the proxy cannot run blocks the native tool.

@@ -109,9 +109,15 @@ impl Fixture {
         migrations.run(&store).await.unwrap();
         sqlx::query("INSERT INTO machines(id,display_name,connection_mode,platform,architecture) VALUES ('offline-fixture','Fixture','outbound_wss','linux','x86_64')")
             .execute(&store).await.unwrap();
-        for id in ["source", "destination"] {
-            sqlx::query("INSERT INTO sessions(id,provider,machine_id,cwd,title,status,origin,agent_session_id) VALUES (?1,'codex','offline-fixture',?2,?1,'exited','web',?3)")
-                .bind(id).bind(root.path().to_str().unwrap()).bind(format!("original-native-{id}"))
+        // `retired` is a historical session of a retired card's default
+        // account; the others run on a Provider that never had a card.
+        for (id, provider) in [
+            ("source", "fixture-agent"),
+            ("destination", "fixture-agent"),
+            ("retired", "codex"),
+        ] {
+            sqlx::query("INSERT INTO sessions(id,provider,machine_id,cwd,title,status,origin,agent_session_id) VALUES (?1,?4,'offline-fixture',?2,?1,'exited','web',?3)")
+                .bind(id).bind(root.path().to_str().unwrap()).bind(format!("original-native-{id}")).bind(provider)
                 .execute(&store).await.unwrap();
         }
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -439,9 +445,23 @@ async fn refused_fresh_agent_records_failure_and_releases_its_destination_fence(
     let mut fixture = Fixture::new().await;
     let (_controller, base) = fixture.start().await;
     let context_url = format!("{base}/api/sessions/source/context");
-    let saved = fixture.request(reqwest::Method::PUT, &context_url).json(&json!({
+    // A retired legacy card's default never becomes a next agent.
+    let retired = fixture.request(reqwest::Method::PUT, &context_url).json(&json!({
         "revision":0,"sources":["source"],"next_agent":{
             "provider":"codex","provider_account_id":"default","machine_id":"offline-fixture","cwd":"missing-project","inherit_settings":false
+        }
+    })).send().await.unwrap();
+    assert_eq!(retired.status(), 409);
+    assert!(
+        retired
+            .text()
+            .await
+            .unwrap()
+            .contains("named_account_required")
+    );
+    let saved = fixture.request(reqwest::Method::PUT, &context_url).json(&json!({
+        "revision":0,"sources":["source"],"next_agent":{
+            "provider":"fixture-agent","provider_account_id":"default","machine_id":"offline-fixture","cwd":"missing-project","inherit_settings":false
         }
     })).send().await.unwrap();
     assert_eq!(saved.status(), 200, "{}", saved.text().await.unwrap());
@@ -498,7 +518,7 @@ async fn legacy_draft_send_cannot_strand_a_message_behind_a_staged_agent() {
         )
         .json(&json!({
             "revision":0,"sources":["source"],"next_agent":{
-                "provider":"codex","provider_account_id":"default",
+                "provider":"fixture-agent","provider_account_id":"default",
                 "machine_id":"offline-fixture","cwd":"missing-project","inherit_settings":false
             }
         }))
@@ -587,7 +607,7 @@ async fn inheritance_preflight_refusal_creates_no_destination_or_context_reserva
     let context_url = format!("{base}/api/sessions/source/context");
     let saved = fixture.request(reqwest::Method::PUT, &context_url).json(&json!({
         "revision":0,"sources":["source"],"next_agent":{
-            "provider":"codex","provider_account_id":"default","machine_id":"offline-fixture","cwd":"missing-project"
+            "provider":"fixture-agent","provider_account_id":"default","machine_id":"offline-fixture","cwd":"missing-project"
         }
     })).send().await.unwrap();
     assert_eq!(saved.status(), 200);
@@ -621,5 +641,99 @@ async fn inheritance_preflight_refusal_creates_no_destination_or_context_reserva
     assert_eq!(
         fixture.get(&context_url).await["delivery"]["state"],
         "failed"
+    );
+}
+
+#[tokio::test]
+async fn account_inventory_serves_older_web_clients_after_the_card_retirement() {
+    let mut fixture = Fixture::new().await;
+    let (_controller, base) = fixture.start().await;
+    // The read-only `subscriptions` projection an older Web compares.
+    let inventory = fixture.get(&format!("{base}/api/provider-accounts")).await;
+    assert_eq!(inventory["display_preferences"]["revision"], 0);
+    assert!(
+        inventory["retired_default_providers"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("codex"))
+    );
+    let dataset = inventory["dataset"]["dataset_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let url = format!("{base}/api/provider-accounts");
+    // A committed unrelated mutation whose operation id a legacy change reuses.
+    let created = fixture
+        .request(reqwest::Method::PUT, &url)
+        .json(
+            &json!({"operation":"reused-op","dataset":dataset,"expected_revision":0,
+            "change":{"type":"create_browser_share","label":"Google"}}),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), 200, "{}", created.text().await.unwrap());
+    // An older tab's pending card change gets a JSON rejection it reconciles,
+    // never another request's receipt.
+    for (operation, change) in [
+        (
+            "old-tab",
+            json!({"type":"set_legacy_browser_enabled","card":"anthropic","enabled":true}),
+        ),
+        (
+            "old-tab-share",
+            json!({"type":"set_browser_share","member":{"card":"openai"},"share_id":null}),
+        ),
+        (
+            "reused-op",
+            json!({"type":"set_browser_share","member":{"card":"openai"},"share_id":null}),
+        ),
+    ] {
+        let response = fixture
+            .request(reqwest::Method::PUT, &url)
+            .json(&json!({"operation":operation,"dataset":dataset,"expected_revision":0,"change":change}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 422, "{operation}");
+        assert_eq!(
+            response.json::<Value>().await.unwrap()["error"]["code"],
+            "invalid_argument"
+        );
+    }
+    // Another dataset's journal is not answered.
+    let foreign = fixture
+        .request(reqwest::Method::PUT, &url)
+        .json(
+            &json!({"operation":"old-tab","dataset":"another","expected_revision":0,
+            "change":{"type":"set_legacy_browser_enabled","card":"anthropic","enabled":true}}),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(foreign.status(), 409);
+}
+
+#[tokio::test]
+async fn a_retired_default_session_refuses_input_before_any_change() {
+    let mut fixture = Fixture::new().await;
+    let (_controller, base) = fixture.start().await;
+    // A legacy interrupt queues nothing and cancels nothing.
+    let response = fixture
+        .request(
+            reqwest::Method::POST,
+            &format!("{base}/api/sessions/retired/prompt"),
+        )
+        .json(&json!({"text":"continue","delivery":"interrupt","operation":"retired-interrupt"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 409);
+    assert!(
+        response
+            .text()
+            .await
+            .unwrap()
+            .contains("retired legacy default account")
     );
 }

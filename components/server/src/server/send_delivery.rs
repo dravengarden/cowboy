@@ -85,6 +85,9 @@ pub(super) fn begin(
     if crate::session_context::pending(&state.hub, session) {
         return Err("Context changes are pending. Wait for this turn to finish, then send normally, or cancel those changes.".into());
     }
+    if let Some(refusal) = super::provider_accounts::retirement::session_refusal(state, session) {
+        return Err(refusal.into());
+    }
     let blocks = build_prompt_blocks(text, content).ok_or("empty prompt")?;
     let fences = state.plugin_lifecycle_fences.read();
     if let Some(refusal) = provider_fence_key_for_session(&state.hub, session)
@@ -194,6 +197,10 @@ async fn interrupt_once(
     let operation = request.operation.as_deref().expect("validated operation");
     if build_prompt_blocks(&request.text, &request.content).is_none() {
         return refuse("empty prompt");
+    }
+    // Before any hold or cancellation: the replacement could only park.
+    if let Some(refusal) = super::provider_accounts::retirement::session_refusal(state, session) {
+        return refuse(refusal);
     }
     if state.supervisor.delivery_target(session).as_ref() != Some(target) {
         return refuse("the captured turn has changed");

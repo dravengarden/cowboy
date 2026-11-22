@@ -100,7 +100,7 @@ pub(super) async fn open_persistence(
     args: &ServeArgs,
     core_security: Option<&crate::core_security::Config>,
     plugin_dir: &crate::plugin_dir::PluginDir,
-    service_id: &str,
+    (service_id, provider_auth): (&str, &crate::provider_service::ProviderAuthService),
     managed_export_policy: Option<
         Arc<crate::telemetry_plugin::background_policy::BackgroundPolicy>,
     >,
@@ -112,6 +112,18 @@ pub(super) async fn open_persistence(
             .await
             .context("connecting database")?;
         store.migrate().await.context("running migrations")?;
+        // Read-only, before any retirement write: a refused upgrade leaves
+        // the database as the previous Controller left it.
+        provider_accounts::retirement::admit_store(provider_auth, &store, service_id)
+            .await
+            .context("admitting the legacy card retirement")?;
+        // After both credential gates, before anything is served: never from
+        // a CLI that may share a database with a Controller from before the
+        // retirement.
+        store
+            .retire_legacy_card_rows()
+            .await
+            .context("removing retired legacy card rows")?;
         store
             .initialize_core_security(core_security, plugin_dir)
             .await
