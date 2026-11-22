@@ -37,9 +37,19 @@ function fakeStorage(quota = Infinity): Storage & { readonly records: Map<string
   };
 }
 
+/** Fake database round trips still running, across every fake database. */
+let inFlight = 0;
+
 function fakeDatabase() {
   const state = { records: new Map<string, unknown>(), ready: true };
-  const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 2));
+  const tick = async (): Promise<void> => {
+    inFlight += 1;
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    } finally {
+      inFlight -= 1;
+    }
+  };
   const admit = (): void => {
     if (!state.ready) throw new Error("Product dataset requires an authenticated principal");
   };
@@ -76,7 +86,17 @@ async function loadPage(storage: Storage): Promise<Store> {
   return await import("./pendingEditStore.ts?page=" + String(generation)) as Store;
 }
 
-const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 30));
+/**
+ * Wait until the store has no database round trip running for 30ms. A fixed
+ * delay alone loses the race on a loaded host, where the fake's timers fire
+ * late; the bound turns a store that never settles into a failed assertion.
+ */
+const settle = async (): Promise<void> => {
+  for (let quiet = 0, waited = 0; quiet < 3 && waited < 5000; waited += 10) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    quiet = inFlight === 0 ? quiet + 1 : 0;
+  }
+};
 const edit = (session: string, text = TEXT, attachments = [image("a1")]) => ({
   sessionId: session,
   kind: "draft" as const,
