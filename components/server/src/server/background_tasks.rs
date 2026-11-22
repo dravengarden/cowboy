@@ -30,6 +30,8 @@ use crate::transcript_anchors::{
     subagent_terminal, valid_id,
 };
 
+pub(super) mod wait_observation;
+
 /// Calls repaired per Controller start; the rest wait for the next start.
 const CALL_ANCHOR_REPAIR_LIMIT: usize = 2_000;
 

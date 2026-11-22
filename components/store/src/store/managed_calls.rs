@@ -1,10 +1,12 @@
 //! Parent-scoped immutable admission and compare-and-set lifecycle persistence.
 
+mod wait_observation;
 use super::{PostgresStorage, SqliteStorage, StorageBackend, Store};
 use crate::managed_calls::Request;
 use crate::managed_calls::lifecycle::{Record, State};
 use anyhow::{Result, ensure};
 use sha2::{Digest as _, Sha256};
+pub use wait_observation::NoticeReconciliation;
 
 #[derive(sqlx::FromRow)]
 struct Row {
@@ -323,11 +325,12 @@ macro_rules! implementation {
                 for next in steps {
                     let old_document = serde_json::to_string(current)?;
                     let document = serde_json::to_string(next)?;
-                    let result = sqlx::query("UPDATE managed_agent_calls SET revision = $1, document = $2, document_sha256 = $3, state = $8 WHERE call_id = $4 AND parent_session_id = $5 AND revision = $6 AND document_sha256 = $7")
+                    let notice_finished = wait_observation::notice_finished_at(next);
+                    let result = sqlx::query("UPDATE managed_agent_calls SET revision = $1, document = $2, document_sha256 = $3, state = $8, notice_finished_at_ms = $9, notice_parent = $10 WHERE call_id = $4 AND parent_session_id = $5 AND revision = $6 AND document_sha256 = $7")
                         .bind(i64::try_from(next.revision)?).bind(&document).bind(checksum(&document))
                         .bind(&current.call_id).bind(&current.placement.parent_session_id)
                         .bind(i64::try_from(current.revision)?).bind(checksum(&old_document))
-                        .bind(next.state.code())
+                        .bind(next.state.code()).bind(notice_finished).bind(notice_finished.is_some())
                         .execute(&mut *tx).await?;
                     if result.rows_affected() != 1 {
                         // Dropping the transaction rolls back every earlier step.
@@ -430,6 +433,7 @@ mod tests {
         assert_lifecycle(&store, &first, &overlapping, &overlapping_record).await;
         assert_review_reservations(&store, &first, &request).await;
         assert_multi_step_advance(&store, &first, &request).await;
+        assert_notice_reconciliation(&store, &first, &request).await;
         drop(store);
         let _ = std::fs::remove_dir_all(root);
     }
@@ -518,6 +522,140 @@ mod tests {
             (stored.state, stored.revision),
             (State::Cancelled, requested.revision + 2)
         );
+    }
+
+    async fn assert_notice_reconciliation(store: &Store, template: &Record, input: &Request) {
+        use crate::agent_model::Event;
+        use crate::model::Envelope;
+        let parent = "notice-parent";
+        let other_parent = "notice-other-parent";
+        for id in [parent, other_parent] {
+            let session = serde_json::from_value(serde_json::json!({
+                "id":id,"provider":"codex","machine_id":"hawk","cwd":"/workspace",
+                "title":"Notice fixture","origin":"api","status":"running"
+            }))
+            .unwrap();
+            store.insert_session(&session).await.unwrap();
+        }
+        for (id, notify) in [
+            ("delivered", true),
+            ("unobserved", true),
+            ("not_requested", false),
+        ] {
+            let mut request = input.clone();
+            request.request_id = id.replace('_', "-");
+            if notify {
+                request.labels.insert("notify".into(), "parent".into());
+            }
+            let mut record = template.clone();
+            record.call_id = format!("call-{id}");
+            record.request_id.clone_from(&request.request_id);
+            record.request_digest = request.digest();
+            record.labels.clone_from(&request.labels);
+            record.placement.parent_session_id = parent.into();
+            record.child_session_id = format!("notice-child-{id}");
+            store.admit_managed_call(&record, &request).await.unwrap();
+            let mut terminal = record.clone();
+            terminal.state = State::Failed;
+            terminal.revision += 1;
+            terminal.updated_at_ms = if id == "delivered" { 350 } else { 250 };
+            terminal.finished_at_ms = (id == "delivered").then_some(250);
+            terminal.result = Some(serde_json::json!({"text": "result\0with escaped NUL"}));
+            assert!(
+                store
+                    .advance_managed_call(&record, &terminal)
+                    .await
+                    .unwrap()
+            );
+            let settled = store
+                .managed_call(parent, &record.call_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(settled.result, terminal.result);
+            match &store.backend {
+                StorageBackend::Postgres(db) if id != "not_requested" => {
+                    assert_postgres_notice_backfill(db, &terminal).await;
+                }
+                _ => {}
+            }
+        }
+        let observe = || store.reconcile_call_notice_echoes(200, 300);
+        let counts = observe().await.unwrap();
+        assert_eq!((counts.terminal_calls, counts.durable_echoes), (2, 0));
+        let event = |parent: &str, seq, id, kind| Envelope {
+            session_id: parent.to_owned(),
+            seq,
+            cmid: Some(format!("call-notice:call-{id}")),
+            event: Event::Update {
+                update: serde_json::json!({"sessionUpdate": kind}),
+            },
+        };
+        store
+            .upsert_event_batch(
+                &[
+                    event(parent, 1, "delivered", "user_message_chunk"),
+                    event(parent, 2, "delivered", "user_message_chunk"), // replay is a single receipt
+                    event(parent, 3, "unobserved", "agent_message_chunk"), // not a receiver echo
+                    event(other_parent, 2, "unobserved", "user_message_chunk"), // wrong receiver
+                ],
+                &std::collections::HashMap::from([(parent.into(), 4), (other_parent.into(), 3)]),
+            )
+            .await
+            .unwrap();
+        let counts = observe().await.unwrap();
+        assert_eq!((counts.terminal_calls, counts.durable_echoes), (2, 1));
+        assert!(!counts.truncated);
+        assert_eq!(
+            store
+                .reconcile_call_notice_echoes(100, 250)
+                .await
+                .unwrap()
+                .terminal_calls,
+            0
+        );
+        if let StorageBackend::Sqlite(db) = &store.backend {
+            wait_observation::assert_sqlite_plan_and_deadline(db).await;
+        }
+    }
+
+    async fn assert_postgres_notice_backfill(db: &PostgresStorage, terminal: &Record) {
+        let mut tx = db.pool.begin().await.unwrap();
+        // Shadow the production-shaped tables with an isolated pre-0086
+        // fixture. Run the exact migration on a checksummed legacy document.
+        sqlx::raw_sql(
+            "CREATE TEMP TABLE managed_agent_calls (call_id TEXT, state TEXT, document TEXT,
+                 document_sha256 TEXT) ON COMMIT DROP;
+             CREATE TEMP TABLE events (session_id TEXT, seq BIGINT, payload JSONB) ON COMMIT DROP;",
+        )
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        let document = serde_json::to_string(terminal).unwrap();
+        let digest = checksum(&document);
+        sqlx::query("INSERT INTO managed_agent_calls VALUES ($1, $2, $3, $4)")
+            .bind(&terminal.call_id)
+            .bind(terminal.state.code())
+            .bind(&document)
+            .bind(&digest)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/0086_wait_cache_observation.sql"
+        ))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        let row: (String, String, i64, bool) = sqlx::query_as(
+            "SELECT document, document_sha256, notice_finished_at_ms, notice_parent
+             FROM managed_agent_calls",
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        assert_eq!(row, (document, digest, 250, true));
+        tx.rollback().await.unwrap();
     }
 
     #[allow(clippy::too_many_lines)] // One durable timeline covers concurrent owners, failure and retry.

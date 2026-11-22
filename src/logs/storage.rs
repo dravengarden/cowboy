@@ -11,10 +11,20 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 mod aggregate;
+mod append;
+mod wait_cache_daily;
 
 const APPLICATION_ID: i64 = 0x43424c47;
 const MAX_SEGMENTS: usize = 64;
 const PAGE_BYTES: u64 = 4096;
+
+fn detail_segment_limit(policy: &Policy) -> u64 {
+    // Reserve 1/8 of each segment (at least 64 KiB; 128 KiB on the 1 MiB
+    // minimum) so wait_cache_gaps archival can finalize retired clocks without
+    // growing a segment past policy.segment_bytes.
+    let reserve = (policy.segment_bytes / 8 / PAGE_BYTES).max(16) * PAGE_BYTES;
+    policy.segment_bytes.saturating_sub(reserve)
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -367,7 +377,8 @@ impl SqliteStore {
             CREATE TABLE entries(id TEXT PRIMARY KEY, observed_ms INTEGER NOT NULL, timestamp_ms INTEGER NOT NULL, signal TEXT NOT NULL, severity INTEGER NOT NULL, event TEXT NOT NULL, service TEXT NOT NULL, session TEXT NOT NULL, machine TEXT NOT NULL, environment TEXT NOT NULL, trace_id TEXT NOT NULL, duration_ms REAL, body TEXT NOT NULL, protobuf BLOB NOT NULL);
             CREATE INDEX entries_time ON entries(observed_ms,id);
             CREATE INDEX entries_session ON entries(session,observed_ms);
-            CREATE INDEX entries_trace ON entries(trace_id,observed_ms);")?;
+            CREATE INDEX entries_trace ON entries(trace_id,observed_ms);
+            CREATE TABLE wait_cache_incomplete_days(day INTEGER PRIMARY KEY) WITHOUT ROWID;")?;
         connection.pragma_update(None, "application_id", APPLICATION_ID)?;
         connection.pragma_update(None, "user_version", 1)?;
         connection.pragma_update(None, "max_page_count", policy.segment_bytes / PAGE_BYTES)?;
@@ -380,82 +391,18 @@ impl SqliteStore {
             created_ms: now,
         })
     }
-    pub fn append(&self, entries: &[Entry], now: i64) -> Result<()> {
-        ensure!(entries.len() <= 256 && now >= 0, "log batch exceeds bounds");
-        for e in entries {
-            e.validate()?;
-        }
-        let _lock = self.lock(false)?;
-        let mut state = self.state()?;
-        let chunks = transaction_chunks(entries, state.policy.segment_bytes, |e| {
-            (e.protobuf.len() + e.body.len() + 2048) as u64
-        });
-        for chunk in chunks {
-            let mut segments = self.segments()?;
-            let estimate: u64 = chunk
-                .iter()
-                .map(|e| (e.protobuf.len() + e.body.len() + 2048) as u64)
-                .sum::<u64>()
-                * 2
-                + 32 * 1024;
-            let current = segments.last().filter(|s| {
-                now >= s.created_ms
-                    && now - s.created_ms < state.policy.rotate_seconds as i64 * 1000
-                    && s.bytes + estimate <= state.policy.segment_bytes
-            });
-            let segment = if let Some(segment) = current {
-                segment.clone()
-            } else {
-                // Free oldest capacity before allocating; current and temporary
-                // SQLite journals have a separately bounded one-segment allowance.
-                while !segments.is_empty()
-                    && (segments.iter().map(|s| s.bytes).sum::<u64>() + state.policy.segment_bytes
-                        > state.policy.max_bytes
-                        || segments.len() >= MAX_SEGMENTS)
-                {
-                    self.remove(&segments.remove(0))?;
-                    state.capacity_evicted_segments += 1;
-                    self.save(&state)?;
-                }
-                self.create_segment(now, &state.policy)?
-            };
-            let mut db = Self::connection(&segment.path, true)?;
-            db.pragma_update(
-                None,
-                "max_page_count",
-                state.policy.segment_bytes / PAGE_BYTES,
-            )?;
-            let tx = db.transaction()?;
-            {
-                let mut insert = tx.prepare_cached("INSERT OR IGNORE INTO entries VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)")?;
-                for e in chunk {
-                    insert.execute(params![
-                        e.id,
-                        e.observed_ms,
-                        e.timestamp_ms,
-                        e.signal,
-                        e.severity,
-                        e.event,
-                        e.service,
-                        e.session,
-                        e.machine,
-                        e.environment,
-                        e.trace_id,
-                        e.duration_ms,
-                        e.body,
-                        e.protobuf
-                    ])?;
-                }
-            }
-            tx.commit()?;
-        }
-        Ok(())
-    }
-    fn remove(&self, segment: &Segment) -> Result<()> {
+    fn remove(&self, segment: &Segment, now: i64) -> Result<()> {
         // Verify ownership and the application marker before every unlink.
         // The store lock excludes all Cowboy readers/writers; connections are
         // closed between batches, so rotation never unlinks an active database.
-        drop(Self::connection(&segment.path, true)?);
+        let db = Self::connection(&segment.path, true)?;
+        let incomplete_days = wait_cache_daily::read_segment_incomplete_days(&db, None, None)?;
+        drop(db);
+        if !incomplete_days.is_empty() {
+            // Preserve durable export-suppression markers before discarding
+            // the primary segment that recorded a failed sidecar write.
+            wait_cache_daily::Health::ensure_degraded_days(&self.directory, now, &incomplete_days)?;
+        }
         for suffix in ["-journal", "-wal", "-shm", ""] {
             let path = PathBuf::from(format!("{}{suffix}", segment.path.display()));
             if path.try_exists()? {
@@ -471,6 +418,7 @@ impl SqliteStore {
         let mut segments = self.segments()?;
         for segment in &segments {
             let db = Self::connection(&segment.path, true)?;
+            db.pragma_update(None, "foreign_keys", true)?;
             // Time-to-live is exact per observed record, not a whole-day grace.
             let removed = db.execute("DELETE FROM entries WHERE observed_ms < ?1", [cutoff])?;
             state.expired_records += removed as u64;
@@ -478,15 +426,17 @@ impl SqliteStore {
                 db.query_row("SELECT NOT EXISTS(SELECT 1 FROM entries)", [], |r| r.get(0))?;
             drop(db);
             if empty {
-                self.remove(segment)?;
+                self.remove(segment, now)?;
             }
         }
         segments = self.segments()?;
+        let space = wait_cache_daily::Space::read(&self.directory, &state.policy, false);
+        let primary_limit = space.primary_limit(&state.policy);
         while !segments.is_empty()
-            && (segments.iter().map(|s| s.bytes).sum::<u64>() > state.policy.max_bytes
+            && (segments.iter().map(|s| s.bytes).sum::<u64>() > primary_limit
                 || segments.len() > MAX_SEGMENTS)
         {
-            self.remove(&segments.remove(0))?;
+            self.remove(&segments.remove(0), now)?;
             state.capacity_evicted_segments += 1;
         }
         if before != (state.expired_records, state.capacity_evicted_segments) {
@@ -541,6 +491,9 @@ impl SqliteStore {
                 }
             }
         }
+        if wait_cache_daily::maintain(self, &state.policy, now).is_err() {
+            let _ = wait_cache_daily::Health::record_maintenance_failure(&self.directory, now);
+        }
         self.prune(&mut state, now)?;
         super::capture::cleanup_health(
             &self.directory,
@@ -554,8 +507,14 @@ impl SqliteStore {
         let state = self.state()?;
         let segments = self.segments()?;
         let health = super::capture::read_health(&self.directory)?;
+        let rollup = wait_cache_daily::Space::read(&self.directory, &state.policy, false);
+        let retained_bytes = segments
+            .iter()
+            .map(|s| s.bytes)
+            .sum::<u64>()
+            .saturating_add(rollup.bytes());
         Ok(
-            serde_json::json!({"schema":"cowboy.logs.status/v1","store_id":state.id,"directory":self.directory,"policy":state.policy,"retained_bytes":segments.iter().map(|s|s.bytes).sum::<u64>(),"segments":segments.len(),"expired_records":state.expired_records,"capacity_evicted_segments":state.capacity_evicted_segments,"maintained_ms":state.maintained_ms,"maintenance_interval_seconds":30,"writers":health.writers,"writer_history":health.summary,"writer_inventory_truncated":health.inventory_truncated}),
+            serde_json::json!({"schema":"cowboy.logs.status/v1","store_id":state.id,"directory":self.directory,"policy":state.policy,"retained_bytes":retained_bytes,"wait_cache_rollup":rollup,"segments":segments.len(),"expired_records":state.expired_records,"capacity_evicted_segments":state.capacity_evicted_segments,"maintained_ms":state.maintained_ms,"maintenance_interval_seconds":30,"writers":health.writers,"writer_history":health.summary,"writer_inventory_truncated":health.inventory_truncated}),
         )
     }
     pub fn query(&self, query: &Query) -> Result<Page> {
@@ -580,6 +539,9 @@ impl SqliteStore {
         } else {
             None
         };
+        if wait_cache_daily::enrich(&self.directory, &mut items).is_err() {
+            coverage.issues.push("wait_cache_rollup_unavailable".into());
+        }
         if !query.include_protobuf {
             for e in &mut items {
                 e.protobuf.clear();
@@ -619,7 +581,13 @@ impl SqliteStore {
         let segments = self.segments()?;
         let mut coverage = Coverage {
             segments: segments.len(),
-            retained_bytes: segments.iter().map(|s| s.bytes).sum(),
+            retained_bytes: segments
+                .iter()
+                .map(|s| s.bytes)
+                .sum::<u64>()
+                .saturating_add(
+                    wait_cache_daily::Space::read(&self.directory, &state.policy, false).bytes(),
+                ),
             expired_records: state.expired_records,
             capacity_evicted_segments: state.capacity_evicted_segments,
             ..Default::default()
@@ -652,8 +620,13 @@ impl SqliteStore {
                     Some(coverage.newest_observed_ms.map_or(hi, |v| v.max(hi)));
             }
             let projection = if blobs { "body,protobuf" } else { "'',x''" };
+            let gap = if blobs {
+                wait_cache_daily::gap_projection(&db)?
+            } else {
+                "NULL"
+            };
             let sql = format!(
-                "SELECT id,observed_ms,timestamp_ms,signal,severity,event,service,session,machine,environment,trace_id,duration_ms,{projection} FROM entries WHERE observed_ms>=?1 AND observed_ms<?2 AND (?3 IS NULL OR session=?3) AND (?4 IS NULL OR machine=?4) AND (?5 IS NULL OR environment=?5) AND (?6 IS NULL OR trace_id=?6) AND (?7 IS NULL OR event=?7) AND (?8 IS NULL OR service=?8) AND (?9 IS NULL OR signal=?9) AND severity>=?10 AND (?11 IS NULL OR instr(body,?11)>0 OR instr(event,?11)>0) AND (?12 IS NULL OR (observed_ms,id)<(?12,?13)) AND (?15 IS NULL OR id=?15) ORDER BY observed_ms DESC,id DESC LIMIT ?14"
+                "SELECT id,observed_ms,timestamp_ms,signal,severity,event,service,session,machine,environment,trace_id,duration_ms,{projection},{gap} FROM entries WHERE observed_ms>=?1 AND observed_ms<?2 AND (?3 IS NULL OR session=?3) AND (?4 IS NULL OR machine=?4) AND (?5 IS NULL OR environment=?5) AND (?6 IS NULL OR trace_id=?6) AND (?7 IS NULL OR event=?7) AND (?8 IS NULL OR service=?8) AND (?9 IS NULL OR signal=?9) AND severity>=?10 AND (?11 IS NULL OR instr(body,?11)>0 OR instr(event,?11)>0) AND (?12 IS NULL OR (observed_ms,id)<(?12,?13)) AND (?15 IS NULL OR id=?15) ORDER BY observed_ms DESC,id DESC LIMIT ?14"
             );
             let mut statement = db.prepare(&sql)?;
             let rows = statement.query_map(
@@ -675,7 +648,7 @@ impl SqliteStore {
                     query.id
                 ],
                 |r| {
-                    Ok(Entry {
+                    let entry = Entry {
                         id: r.get(0)?,
                         observed_ms: r.get(1)?,
                         timestamp_ms: r.get(2)?,
@@ -692,7 +665,8 @@ impl SqliteStore {
                         protobuf: r.get(13)?,
                         attributes: Default::default(),
                         metric: None,
-                    })
+                    };
+                    Ok((entry, r.get::<_, Option<i64>>(14)?))
                 },
             )?;
             for (index, row) in rows.enumerate() {
@@ -700,10 +674,12 @@ impl SqliteStore {
                     coverage.truncated = true;
                     break;
                 }
-                let Some(mut row) = query_step(row, &mut coverage)? else {
+                let Some((mut row, gap)) = query_step(row, &mut coverage)? else {
                     return Ok(coverage);
                 };
-                if blobs {
+                if let Some(gap) = gap {
+                    wait_cache_daily::add_gap_fields(&mut row, gap)?;
+                } else if blobs {
                     row.project_attributes()?;
                 }
                 bytes += row.protobuf.len() + row.body.len();

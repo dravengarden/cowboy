@@ -5,6 +5,7 @@ mod coordinator;
 mod history;
 mod runner;
 mod selection;
+mod wait_observation;
 
 pub(super) use coordinator::{
     Coordinator, authorize, code_changes, code_observation_head, delete_child, dispatch_calls,

@@ -303,7 +303,7 @@ impl ProviderUsageSpool {
         )?;
         transaction.commit()?;
         drop(connection);
-        crate::logs::provider_usage(&protocol);
+        crate::logs::wait_cache::gateway_usage(&event.event_id, &protocol);
         Ok(())
     }
 

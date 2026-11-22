@@ -394,32 +394,9 @@ mod controller {
                                         );
                                         for p in &mut v.data_points {
                                             ensure!(
-                                                p.explicit_bounds
-                                                    == [
-                                                        0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5,
-                                                        1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0
-                                                    ],
-                                                "unexpected histogram boundaries"
-                                            );
-                                            ensure!(
-                                                p.explicit_bounds.len() <= 32
-                                                    && p.bucket_counts.len()
-                                                        == p.explicit_bounds.len() + 1
-                                                    && p.explicit_bounds
-                                                        .iter()
-                                                        .all(|v| v.is_finite() && *v >= 0.0)
-                                                    && p.explicit_bounds
-                                                        .windows(2)
-                                                        .all(|w| w[0] < w[1]),
-                                                "invalid histogram buckets"
-                                            );
-                                            ensure!(
                                                 p.count <= 1_000_000_000
-                                                    && p.bucket_counts
-                                                        .iter()
-                                                        .try_fold(0u64, |n, v| n.checked_add(*v))
-                                                        == Some(p.count),
-                                                "invalid histogram count"
+                                                    && crate::metrics_egress::valid_client_histogram(p),
+                                                "invalid histogram bounds, buckets, or count"
                                             );
                                             ensure!(
                                                 p.sum
@@ -781,6 +758,29 @@ pub fn client_fixtures() -> Vec<(Signal, Vec<u8>)> {
             )
         })
         .collect()
+}
+
+#[cfg(all(any(test, feature = "test-support"), feature = "full"))]
+pub fn client_export_fixtures() -> Vec<(Signal, Vec<u8>)> {
+    static FIXTURES: std::sync::OnceLock<Vec<(Signal, Vec<u8>)>> = std::sync::OnceLock::new();
+    FIXTURES
+        .get_or_init(|| {
+            let mut aggregate = Aggregator::default();
+            client_fixtures()
+                .into_iter()
+                .map(|(signal, bytes)| {
+                    if signal != Signal::Metrics {
+                        return (signal, bytes);
+                    }
+                    // Machine egress sees Controller-sanitized cumulative points.
+                    let mut request = Request::decode(signal, &bytes).unwrap();
+                    request.sanitize("fixture").unwrap();
+                    aggregate.aggregate(&mut request).unwrap();
+                    (signal, request.export().decode().unwrap().0)
+                })
+                .collect()
+        })
+        .clone()
 }
 
 #[cfg(all(test, feature = "full"))]

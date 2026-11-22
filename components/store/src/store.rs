@@ -46,6 +46,7 @@ mod copy;
 mod core_security;
 pub mod draft_documents;
 mod managed_calls;
+pub use managed_calls::NoticeReconciliation;
 pub mod preferences;
 pub mod provider_accounts;
 mod session_metadata;

@@ -221,6 +221,7 @@ impl Coordinator {
             }
         });
         super::runner::recover(state);
+        super::wait_observation::spawn_reconciliation(state);
     }
 }
 
@@ -581,6 +582,7 @@ pub(in crate::server) async fn dispatch_calls_from(
         },
         Action::Result { call_id } => match ledger.inspect(&call_id).await {
             Ok(Some(record)) if record.state.terminal() => {
+                super::runner::outcome::withdraw_read_notice(&state.hub, &meta.id, &record);
                 let mut value = envelope(&record);
                 value["result"] = record.result.clone().unwrap_or(Value::Null);
                 value
@@ -1091,17 +1093,12 @@ async fn start(
     // that inserted the record writes it: an identical concurrent admission
     // observes the same record and must not replace its provenance.
     if record.call_id == call_id {
-        let approval_request_id = state
-            .managed_calls
-            .approvals
-            .admitted(&meta.id, &request.request_id);
-        super::super::background_tasks::push_call_anchor(
-            &state.hub,
+        super::wait_observation::note_admission(
+            state,
             &meta.id,
-            &record.call_id,
-            &record.request_id,
+            &record,
+            &request.request_id,
             origin,
-            approval_request_id.as_deref(),
         );
     }
     super::runner::ensure_runner(state, &record);
@@ -1253,6 +1250,9 @@ pub(super) async fn cancel_call(state: &Arc<AppState>, parent: &str, call: &str)
         }
         if store.advance_managed_call(&record, &next).await.ok()? {
             super::runner::outcome::record(&next);
+            if next.state.terminal() {
+                super::wait_observation::settled(state, &next);
+            }
             // The runner alone withdraws a running call's queued prompt and
             // decides between the immediate and the native stop: a second
             // actor here could lose the Stopping race after removing the

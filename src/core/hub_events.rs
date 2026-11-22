@@ -1,6 +1,77 @@
 use super::*;
+use std::sync::OnceLock;
+
+/// One immutable live frame shared by every WebSocket and the Web Push observer.
+/// Structured `Outbound` stays available for observers; JSON is serialized at
+/// most once and reused for every socket write.
+#[derive(Debug)]
+pub struct FanoutFrame {
+    outbound: Outbound,
+    native_wait_started: bool,
+    json: OnceLock<String>,
+}
+
+impl FanoutFrame {
+    fn new(outbound: Outbound, native_wait_started: bool) -> Arc<Self> {
+        Arc::new(Self {
+            outbound,
+            native_wait_started,
+            json: OnceLock::new(),
+        })
+    }
+
+    #[must_use]
+    pub fn outbound(&self) -> &Outbound {
+        &self.outbound
+    }
+
+    /// The Hub saw a start transition in the canonical native snapshots.
+    /// This hint is local to live subscribers.
+    #[must_use]
+    pub fn native_wait_started(&self) -> bool {
+        self.native_wait_started
+    }
+
+    /// Cached JSON for this frame. Concurrent first writers may serialize twice;
+    /// `OnceLock` keeps one buffer for the ring's lifetime.
+    pub fn json(&self) -> Result<&str, serde_json::Error> {
+        if let Some(json) = self.json.get() {
+            return Ok(json);
+        }
+        let encoded = serde_json::to_string(&self.outbound)?;
+        Ok(self.json.get_or_init(|| encoded))
+    }
+}
+
+impl std::ops::Deref for FanoutFrame {
+    type Target = Outbound;
+
+    fn deref(&self) -> &Self::Target {
+        &self.outbound
+    }
+}
 
 impl Hub {
+    pub(super) fn fanout(&self, outbound: Outbound) {
+        self.publish_frame(outbound, false);
+    }
+
+    fn publish_frame(&self, outbound: Outbound, native_wait_started: bool) {
+        // A send error just means no clients or internal observers are
+        // connected. The canonical hot tail remains authoritative.
+        let bytes = match &outbound {
+            Outbound::Event { envelope } => estimated_envelope_bytes(envelope),
+            _ => 256,
+        };
+        self.inner
+            .broadcast_last_bytes
+            .store(bytes, Ordering::Relaxed);
+        let _ = self
+            .inner
+            .tx
+            .send(FanoutFrame::new(outbound, native_wait_started));
+    }
+
     fn prepare_attention_event(&self, session_id: &str, event: Event) -> Event {
         let mut event = event;
         crate::persistence::compact_inbound_event(&mut event);
@@ -26,20 +97,21 @@ impl Hub {
         // A subagent snapshot is fenced by its producer identity (I4) before
         // it receives a seq: an exact duplicate or an older revision of the
         // same worker incarnation never becomes a newer observation.
-        let subagent_child = live_subagent_child(&event);
-        let mut subagent_ending = None;
-        if let (Some(child), Event::Update { update }) = (&subagent_child, &event) {
-            match self.accept_subagent_snapshot(session_id, child, update) {
-                Some(ending) => subagent_ending = Some(ending),
-                None => return,
-            }
-        }
+        let subagent_child = live_subagent_child(&event).map(str::to_owned);
         let mut subagent_anchor = None;
-        let (envelope, durable_agent_session_id, attention_changed) = {
+        let (envelope, durable_agent_session_id, attention_changed, native_wait_started) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            let seq = s.next_seq;
+            let mut subagent_ending = None;
+            if let (Some(child), Event::Update { update }) = (&subagent_child, &event) {
+                match self.accept_subagent_snapshot(session_id, child, update, seq) {
+                    Some(ending) => subagent_ending = Some(ending),
+                    None => return,
+                }
+            }
             Self::annotate_dispatched_prompt(s, &mut event, cmid.as_deref());
             // A permission answered on two devices at once resolves once. The
             // second answer is the same fact: the first row stays and no
@@ -60,29 +132,18 @@ impl Hub {
             let attention = s.pending_actions.summary();
             let attention_changed = s.meta.attention != attention;
             s.meta.attention = attention;
-            let seq = s.next_seq;
             s.next_seq += 1;
+            if let Some(boundary) = context_rollover::HistoryBoundary::from_event(&event) {
+                s.history_boundary = boundary;
+            }
+            let native_wait_started = subagent_child
+                .as_deref()
+                .is_some_and(|child| native_wait_start(s, &event, child, subagent_ending));
             if counts_as_activity(&event) {
                 s.last_activity = std::time::Instant::now();
             }
-            // I2: clients order subagent snapshots by the Controller's receipt
-            // seq, never by the producer's wall-clock revision alone.
-            if subagent_child.is_some()
-                && let Event::Update { update } = &mut event
-                && let Some(object) = update.as_object_mut()
-            {
-                object.insert("observedSeq".to_owned(), serde_json::Value::from(seq));
-                // One terminal occurrence keeps one identity through later
-                // metadata updates; a new one starts at this seq.
-                match subagent_ending {
-                    Some(SubagentEnding::Ended) => {
-                        object.insert("terminalSeq".to_owned(), serde_json::Value::from(seq));
-                    }
-                    Some(SubagentEnding::AlreadyEnded(Some(terminal))) => {
-                        object.insert("terminalSeq".to_owned(), serde_json::Value::from(terminal));
-                    }
-                    _ => {}
-                }
+            if subagent_child.is_some() {
+                stamp_subagent_snapshot(&mut event, seq, subagent_ending);
             }
             let envelope = Envelope {
                 session_id: session_id.to_owned(),
@@ -141,16 +202,18 @@ impl Hub {
             let durable_agent_session_id = is_user_message_chunk(&envelope)
                 .then(|| s.meta.agent_session_id.clone())
                 .flatten();
-            (envelope, durable_agent_session_id, attention_changed)
+            if let (Some(child), Some(anchor), Event::Update { update }) =
+                (subagent_child, subagent_anchor, &envelope.event)
+            {
+                self.record_subagent_observation(session_id, child, anchor, update.clone());
+            }
+            (
+                envelope,
+                durable_agent_session_id,
+                attention_changed,
+                native_wait_started,
+            )
         };
-        if let (Some(child), Event::Update { update }) = (&subagent_child, &envelope.event) {
-            self.settle_subagent_mark(session_id, child, update);
-        }
-        if let (Some(child), Some(anchor), Event::Update { update }) =
-            (subagent_child, subagent_anchor, &envelope.event)
-        {
-            self.record_subagent_observation(session_id, child, anchor, update.clone());
-        }
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::AppendEvent(envelope.clone()));
             if let Some(agent_session_id) = durable_agent_session_id {
@@ -160,14 +223,63 @@ impl Hub {
                 });
             }
         }
-        self.fanout(Outbound::Event { envelope });
+        self.publish_frame(Outbound::Event { envelope }, native_wait_started);
         if attention_changed {
             self.broadcast_sessions();
         }
     }
 }
 
-fn live_subagent_child(event: &Event) -> Option<String> {
+fn stamp_subagent_snapshot(event: &mut Event, seq: u64, ending: Option<SubagentEnding>) {
+    let Event::Update { update } = event else {
+        return;
+    };
+    let Some(object) = update.as_object_mut() else {
+        return;
+    };
+    // I2: order snapshots by Controller receipt seq.
+    object.insert("observedSeq".to_owned(), serde_json::Value::from(seq));
+    // One terminal occurrence keeps its seq through later metadata updates.
+    let terminal = match ending {
+        Some(SubagentEnding::Ended(terminal)) => Some(terminal),
+        Some(SubagentEnding::AlreadyEnded(terminal)) => terminal,
+        _ => None,
+    };
+    if let Some(terminal) = terminal {
+        object.insert("terminalSeq".to_owned(), serde_json::Value::from(terminal));
+    } else {
+        object.remove("terminalSeq");
+    }
+}
+
+fn native_wait_start(
+    session: &Session,
+    event: &Event,
+    child: &str,
+    transition: Option<SubagentEnding>,
+) -> bool {
+    let Some(SubagentEnding::Working {
+        first_snapshot,
+        after_idle,
+    }) = transition
+    else {
+        return false;
+    };
+    if !matches!(event, Event::Update { update } if update["state"] == "running") {
+        return false;
+    }
+    // Restarts may only warm a suffix of the durable transcript. An absent
+    // mark can prove a first occurrence only with complete known history.
+    after_idle
+        || (first_snapshot
+            && session.reached_start
+            && session
+                .log
+                .iter()
+                .all(|row| live_subagent_child(&row.event) != Some(child)))
+}
+
+fn live_subagent_child(event: &Event) -> Option<&str> {
     match event {
         Event::Update { update }
             if update
@@ -179,7 +291,6 @@ fn live_subagent_child(event: &Event) -> Option<String> {
                 .get("sessionId")
                 .and_then(serde_json::Value::as_str)
                 .filter(|child| crate::transcript_anchors::valid_id(child))
-                .map(str::to_owned)
         }
         _ => None,
     }
@@ -271,5 +382,124 @@ mod idle_sandbox_loss_tests {
             ),
         );
         assert_eq!(hub.status("agy"), Some(Status::Exited));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::runtime_reconciliation_tests::restored_busy;
+
+    #[test]
+    fn live_frame_only_marks_proven_subagent_starts() {
+        for complete_history in [true, false] {
+            let hub = Hub::new();
+            let mut session = restored_busy("parent");
+            session.reached_start = complete_history;
+            hub.restore_reconciling_runtime(vec![session]);
+            let mut stream = hub.subscribe();
+            for (revision, (state, incarnation, expected)) in [
+                ("running", "worker", complete_history),
+                ("running", "worker", false),
+                ("idle", "worker", false),
+                ("running", "worker", true),
+                ("running", "reconnected-worker", false),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                hub.push(
+                    "parent",
+                    Event::Update {
+                        update: serde_json::json!({
+                            "sessionUpdate": crate::transcript_anchors::SUBAGENT_UPDATE,
+                            "sessionId": "child", "incarnation": incarnation,
+                            "state": state, "revision": revision + 1,
+                        }),
+                    },
+                );
+                let frame = stream.try_recv().unwrap();
+                assert_eq!(frame.native_wait_started(), expected);
+                assert!(!frame.json().unwrap().contains("native_wait_started"));
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_metadata_updates_retain_canonical_terminal_seq_without_fabricating_one() {
+        let hub = Hub::new();
+        let mut session = restored_busy("parent");
+        session.reached_start = true;
+        hub.restore_reconciling_runtime(vec![session]);
+        let mut stream = hub.subscribe();
+        let mut push_snapshot = |child: &str, state: &str, rev: u64, summary: &str| {
+            hub.push(
+                "parent",
+                Event::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": crate::transcript_anchors::SUBAGENT_UPDATE,
+                        "sessionId": child, "incarnation": "worker",
+                        "state": state, "revision": rev, "summary": summary,
+                    }),
+                },
+            );
+            let frame = stream.try_recv().unwrap();
+            let Outbound::Event { envelope } = frame.outbound() else {
+                panic!("expected event frame");
+            };
+            let Event::Update { update } = &envelope.event else {
+                panic!("expected update event");
+            };
+            (
+                envelope.seq,
+                update["observedSeq"].as_u64(),
+                update["terminalSeq"].as_u64(),
+            )
+        };
+        let (_, _, running_terminal) = push_snapshot("child-live", "running", 1, "working");
+        assert_eq!(running_terminal, None);
+        let (ended_seq, obs1, term1) = push_snapshot("child-live", "idle", 2, "done");
+        assert_eq!((obs1, term1), (Some(ended_seq), Some(ended_seq)));
+        // Later terminal metadata updates retain the original terminalSeq atomically.
+        let (meta_seq, obs2, term2) = push_snapshot("child-live", "idle", 3, "done with summary");
+        assert_eq!((obs2, term2), (Some(meta_seq), Some(ended_seq)));
+        assert_ne!(meta_seq, ended_seq);
+
+        // Warmed legacy terminal mark without any sequence stays unstamped instead of
+        // fabricating a new terminalSeq on every metadata update.
+        hub.warm_subagent_marks(vec![(
+            "parent".into(),
+            crate::store::transcript_anchors::AnchoredRow {
+                key: format!("{}child-legacy", crate::transcript_anchors::SUBAGENT_PREFIX),
+                anchor_seq: 1,
+                update: serde_json::json!({
+                    "sessionUpdate": crate::transcript_anchors::SUBAGENT_UPDATE,
+                    "sessionId": "child-legacy", "incarnation": "worker",
+                    "state": "idle", "revision": 1, "summary": "legacy",
+                }),
+            },
+        )]);
+        // Even if an incoming legacy metadata update supplies its own
+        // terminalSeq, Hub strips it when deriving None.
+        hub.push(
+            "parent",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": crate::transcript_anchors::SUBAGENT_UPDATE,
+                    "sessionId": "child-legacy", "incarnation": "worker",
+                    "state": "idle", "revision": 2, "summary": "legacy metadata update",
+                    "terminalSeq": 1,
+                }),
+            },
+        );
+        let frame = stream.try_recv().unwrap();
+        let Outbound::Event { envelope } = frame.outbound() else {
+            panic!("expected event frame");
+        };
+        let Event::Update { update } = &envelope.event else {
+            panic!("expected update event");
+        };
+        assert_eq!(update["observedSeq"].as_u64(), Some(envelope.seq));
+        assert_eq!(update.get("terminalSeq"), None);
     }
 }

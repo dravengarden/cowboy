@@ -68,7 +68,14 @@ impl SqliteStore {
         let segments = self.segments()?;
         let mut coverage = Coverage {
             segments: segments.len(),
-            retained_bytes: segments.iter().map(|s| s.bytes).sum(),
+            retained_bytes: segments
+                .iter()
+                .map(|s| s.bytes)
+                .sum::<u64>()
+                .saturating_add(
+                    super::wait_cache_daily::Space::read(&self.directory, &state.policy, false)
+                        .bytes(),
+                ),
             expired_records: state.expired_records,
             capacity_evicted_segments: state.capacity_evicted_segments,
             ..Default::default()

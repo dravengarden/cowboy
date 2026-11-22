@@ -1,8 +1,160 @@
 //! Hub state behind a context renewal (see [`crate::context_rollover`]).
-use super::{Event, Hub};
+use super::{Envelope, Event, Hub, SessionMeta, StoreWrite};
 use crate::context_rollover::{Digest, MARKER};
 
+/// Separate diagnostic sample. A restored unversioned usage value cannot prove
+/// which native context generated it. The production field is still managed
+/// by the original ACP usage path.
+pub(super) struct UsageEvidence {
+    native_id: String,
+    provider_generation: String,
+    used: u64,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum HistoryBoundary {
+    Unknown,
+    Known(Option<u64>),
+}
+
+impl HistoryBoundary {
+    pub(super) fn from_log(log: &[Envelope], reached_start: bool) -> Self {
+        log.iter()
+            .rev()
+            .find_map(|entry| Self::from_event(&entry.event))
+            .unwrap_or(if reached_start {
+                Self::Known(None)
+            } else {
+                Self::Unknown
+            })
+    }
+
+    pub(super) fn from_event(event: &Event) -> Option<Self> {
+        let Event::Update { update } = event else {
+            return None;
+        };
+        match update["sessionUpdate"].as_str()? {
+            MARKER => Some(Self::Known(update["before"].as_u64())),
+            "context_cleared" => Some(Self::Known(None)),
+            _ => None,
+        }
+    }
+
+    fn matches(self, boundary: u64) -> Option<bool> {
+        match self {
+            Self::Unknown => None,
+            Self::Known(committed) => Some(committed == Some(boundary)),
+        }
+    }
+}
+
 impl Hub {
+    /// A committed boundary stays known when the hot tail rolls forward.
+    /// A restored, truncated tail may need the newest durable marker.
+    pub fn observes_rollover_boundary(&self, session_id: &str, boundary: u64) -> Option<bool> {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)?
+            .history_boundary
+            .matches(boundary)
+    }
+
+    /// Fill an unknown restored slot. A Clear or newer marker received during
+    /// the lookup always wins over the store read.
+    pub fn restore_observed_rollover_boundary(
+        &self,
+        session_id: &str,
+        committed: Option<u64>,
+        boundary: u64,
+    ) -> bool {
+        let mut sessions = self.inner.sessions.lock();
+        let Some(session) = sessions.get_mut(session_id) else {
+            return false;
+        };
+        if let HistoryBoundary::Unknown = session.history_boundary {
+            session.history_boundary = HistoryBoundary::Known(committed);
+        }
+        session.history_boundary.matches(boundary) == Some(true)
+    }
+
+    /// Record the agent-reported context-window usage (ACP `usage_update`):
+    /// `used` tokens of a `size`-token window. Broadcast, and persisted as the
+    /// session's last reading so a dormant session still shows it after a
+    /// Controller restart. Deduped — the agent re-emits identical usage several times per
+    /// turn, so we only broadcast when the numbers actually move, keeping the
+    /// session-list churn (and mobile bandwidth) down.
+    ///
+    /// A `0`/`0` reading carries no observation: a freshly launched worker
+    /// seeds its snapshot that way before the agent reports anything. Applying
+    /// it after a resume (Provider update, reload, crash recovery) would erase
+    /// the resumed context's real size, so idle hibernation and context
+    /// rollover would treat a large expired context as empty. Only Clear and
+    /// renewal, which discard the native context, reset the reading.
+    pub fn set_session_usage(&self, session_id: &str, usage: crate::agent_model::SessionUsage) {
+        if usage.used == 0 && usage.size == 0 {
+            return;
+        }
+        let changed = {
+            let mut sessions = self.inner.sessions.lock();
+            match sessions.get_mut(session_id) {
+                Some(s) => {
+                    if let Some(native_id) = s.meta.agent_session_id.as_ref()
+                        && !s.meta.provider_generation_digest.is_empty()
+                        && usage.size > 0
+                    {
+                        s.usage_evidence = Some(UsageEvidence {
+                            native_id: native_id.clone(),
+                            provider_generation: s.meta.provider_generation_digest.clone(),
+                            used: usage.used,
+                        });
+                    }
+                    // A counter-only snapshot repeating the stored counters is no
+                    // newer observation; replacing the reading would drop its raw
+                    // Provider fields (an Antigravity account plan, for one).
+                    if usage.raw.is_null()
+                        && s.meta.usage.as_ref().is_some_and(|stored| {
+                            (stored.used, stored.size) == (usage.used, usage.size)
+                        })
+                    {
+                        return;
+                    }
+                    if s.meta.usage.as_ref() == Some(&usage) {
+                        return;
+                    }
+                    s.meta.context_used = usage.used;
+                    s.meta.context_size = usage.size;
+                    s.meta.usage = Some(usage.clone());
+                    true
+                }
+                _ => false,
+            }
+        };
+        if changed {
+            if let Some(tx) = self.inner.store_tx.as_ref() {
+                let _ = tx.send(StoreWrite::UpdateSessionUsage {
+                    session_id: session_id.to_owned(),
+                    usage: Some(usage),
+                });
+            }
+            self.broadcast_sessions();
+        }
+    }
+
+    /// Only return a reading from the same observed native context and Provider
+    /// generation as the decision snapshot. Includes a real zero reading.
+    pub fn verified_context_usage(&self, expected: &SessionMeta) -> Option<u64> {
+        let sessions = self.inner.sessions.lock();
+        let session = sessions.get(&expected.id)?;
+        let evidence = session.usage_evidence.as_ref()?;
+        let native_id = expected.agent_session_id.as_deref()?;
+        (evidence.native_id == native_id
+            && session.meta.agent_session_id.as_deref() == Some(native_id)
+            && evidence.provider_generation == expected.provider_generation_digest
+            && session.meta.provider_generation_digest == evidence.provider_generation)
+            .then_some(evidence.used)
+    }
+
     /// The digest of the session's current native context from the held log
     /// tail, or `None` for an unknown session, with the durable cursor to read
     /// its opening request from when the tail no longer holds it.
@@ -81,5 +233,76 @@ impl Hub {
             },
         );
         self.last_event_seq(session_id)
+    }
+}
+
+impl Hub {
+    /// A parent turn end after the task's anchor, with no inference from worker
+    /// exit or idleness. When the anchor or intervening history is gone, leave
+    /// the observation unknown.
+    pub fn parent_ended_during_wait(&self, id: &str, task_key: &str) -> Option<bool> {
+        let sessions = self.inner.sessions.lock();
+        let session = sessions.get(id)?;
+        let mut ended = false;
+        let mut previous = session.log.last()?.seq.saturating_add(1);
+        let mut gap = false;
+        for envelope in session.log.iter().rev() {
+            gap |= envelope.seq.saturating_add(1) != previous;
+            previous = envelope.seq;
+            match &envelope.event {
+                Event::TurnEnd { stop_reason, .. } => {
+                    // These are the successful native PromptResponse outcomes,
+                    // excluding fabricated cancellation and failed dispatch.
+                    ended |= matches!(
+                        stop_reason.as_str(),
+                        "EndTurn" | "MaxTokens" | "MaxTurnRequests"
+                    );
+                }
+                Event::Update { update }
+                    if crate::transcript_anchors::anchor_key(update).as_deref()
+                        == Some(task_key) =>
+                {
+                    if update
+                        .pointer("/origin/kind")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("repaired")
+                    {
+                        return None;
+                    }
+                    return (ended || !gap).then_some(ended);
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::runtime_reconciliation_tests::restored_busy;
+
+    #[test]
+    fn committed_boundary_outlives_hot_tail_and_a_clear_fences_durable_lookup() {
+        let hub = Hub::new();
+        let mut restored = restored_busy("session");
+        restored.reached_start = false;
+        hub.restore_reconciling_runtime(vec![restored]);
+        assert_eq!(hub.observes_rollover_boundary("session", 12), None);
+        assert!(hub.restore_observed_rollover_boundary("session", Some(12), 12));
+        assert_eq!(hub.observes_rollover_boundary("session", 13), Some(false));
+        hub.mark_context_rolled_over("session", 13, 1, 2).unwrap();
+        hub.inner
+            .sessions
+            .lock()
+            .get_mut("session")
+            .unwrap()
+            .log
+            .clear();
+        assert_eq!(hub.observes_rollover_boundary("session", 13), Some(true));
+        hub.clear_transcript("session");
+        assert!(!hub.restore_observed_rollover_boundary("session", Some(13), 13));
+        assert_eq!(hub.observes_rollover_boundary("session", 13), Some(false));
     }
 }

@@ -183,6 +183,9 @@ async fn advance(
         Ok(advanced) => {
             if advanced {
                 outcome::record(&next);
+                if next.state.terminal() {
+                    super::wait_observation::settled(state, &next);
+                }
                 state.managed_calls.notify();
             }
             advanced
@@ -1399,6 +1402,9 @@ async fn withdraw_unstarted(state: &AppState, store: &Store, record: &Record) ->
     {
         if let Some(cancelled) = steps.last() {
             outcome::record(cancelled);
+            if cancelled.state.terminal() {
+                super::wait_observation::settled(state, cancelled);
+            }
         }
         state.managed_calls.notify();
     }
@@ -1453,7 +1459,7 @@ async fn reconfirm(
     Err(Step::Again)
 }
 
-fn call_notice(record: &Record) -> String {
+pub(super) fn call_notice(record: &Record) -> String {
     let title = record
         .labels
         .get("title")

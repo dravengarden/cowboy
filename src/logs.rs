@@ -13,6 +13,7 @@ mod source;
 pub mod storage;
 #[cfg(test)]
 mod tests;
+pub mod wait_cache;
 
 #[cfg(feature = "machine-host")]
 pub use capture::provider_usage;

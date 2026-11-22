@@ -525,10 +525,9 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         )
         .with_runtime_restrictions(runtime_restrictions),
     );
-    let local_sinks = local_evidence_sinks(&args, log_directory)?;
-    let observability = Observability::start(
+    let observability = Observability::start_with_wait_cache(
         store.clone(),
-        crate::logs::Fanout(local_sinks),
+        crate::logs::Fanout(local_evidence_sinks(&args, log_directory.clone())?),
         match managed_export_activation {
             Some(crate::telemetry_plugin::background_policy::Activation::Active(policy)) => {
                 Some(telemetry_binding::background::exporter(
@@ -549,6 +548,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 telemetry_binding_fence.clone(),
             )?,
         },
+        Some(log_directory),
     );
     let telemetry_shutdown = observability.clone();
 

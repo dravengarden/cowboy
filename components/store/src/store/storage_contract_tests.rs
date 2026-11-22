@@ -1,6 +1,7 @@
 use super::*;
 
 mod account_controls;
+mod rollover_observation;
 mod test_support;
 
 pub(super) use super::fixtures::session;

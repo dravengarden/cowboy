@@ -10,6 +10,7 @@
     clippy::must_use_candidate
 )]
 
+use crate::metrics_egress::legacy::dimension as metric_dimension;
 use crate::otlp::RequestControllerExt as _;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Write as _;
@@ -247,6 +248,15 @@ impl Observability {
         file: impl EvidenceSink + 'static,
         exporter: Option<TelemetryExporter>,
     ) -> Self {
+        Self::start_with_wait_cache(store, file, exporter, None)
+    }
+
+    pub fn start_with_wait_cache(
+        store: Option<Store>,
+        file: impl EvidenceSink + 'static,
+        exporter: Option<TelemetryExporter>,
+        log_directory: Option<std::path::PathBuf>,
+    ) -> Self {
         let (tx, rx) = mpsc::channel(QUEUE_CAPACITY);
         let (shutdown, shutdown_rx) = watch::channel(false);
         let health = Arc::new(ObservabilityHealth::default());
@@ -258,6 +268,14 @@ impl Observability {
                 rx,
                 Arc::clone(&health),
             )));
+            if let Some(directory) = log_directory {
+                jobs.push(tokio::spawn(export_wait_cache_days(
+                    directory,
+                    tx.clone(),
+                    Arc::clone(&health),
+                    shutdown_rx.clone(),
+                )));
+            }
             tx
         });
         let incident_tx = store.map(|store| {
@@ -954,6 +972,62 @@ async fn run_exporter(
     }
 }
 
+async fn export_wait_cache_days(
+    directory: std::path::PathBuf,
+    tx: mpsc::Sender<ExportBatch>,
+    health: Arc<ObservabilityHealth>,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    use crate::logs::wait_cache::{DAY_MS, utc_day};
+    let mut interval = tokio::time::interval(Duration::from_mins(30));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut last_queued = None;
+    loop {
+        tokio::select! {
+            _ = shutdown.changed() => return,
+            _ = interval.tick() => {}
+        }
+        let now = chrono::Utc::now().timestamp_millis();
+        let today = utc_day(now);
+        let yesterday = today.saturating_sub(DAY_MS);
+        // Give native diagnostic batches and the local writer a chance to
+        // finish the cohort. Repeat after queue backpressure, using the same
+        // cumulative sample timestamp (no replay of a delta).
+        if now - today < 30 * 60 * 1000 || last_queued == Some(yesterday) {
+            continue;
+        }
+        let directory = directory.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            crate::logs::storage::SqliteStore::open(directory, false)?
+                .wait_cache_otlp(yesterday, now, true)
+        })
+        .await;
+        let Ok(Ok(bytes)) = result else {
+            health.failed_file_batches.fetch_add(1, Ordering::Relaxed);
+            continue;
+        };
+        if bytes.is_empty() {
+            continue;
+        }
+        let Ok(request) = crate::otlp::Request::decode(crate::otlp::Signal::Metrics, &bytes) else {
+            health.failed_metric_batches.fetch_add(1, Ordering::Relaxed);
+            continue;
+        };
+        let batch = ExportBatch {
+            logs: String::new(),
+            metrics: String::new(),
+            otlp: Some(request.export()),
+        };
+        if tx.try_send(batch).is_ok() {
+            last_queued = Some(yesterday);
+        } else {
+            health
+                .dropped_export_batches
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
 async fn run_incident_writer(
     store: Store,
     mut rx: mpsc::Receiver<TelemetryBatch>,
@@ -1095,34 +1169,6 @@ fn metrics_payload(batch: &TelemetryBatch) -> String {
         );
     }
     output
-}
-
-fn metric_dimension<'a>(key: &'a str, value: &'a str) -> Option<(&'a str, &'a str)> {
-    // Finite instrument dimensions only. Arbitrary attributes remain in logs,
-    // never remote time-series labels (including build/client/session IDs).
-    let allowed = match key {
-        "connection" => &["initial", "reconnect"][..],
-        "transport" => &["websocket", "http"][..],
-        "reason" => &[
-            "initial",
-            "online",
-            "visibility",
-            "retry",
-            "heartbeat_timeout",
-            "transport_error",
-            "close",
-            "manual",
-        ][..],
-        _ => return None,
-    };
-    Some((
-        key,
-        if allowed.contains(&value) {
-            value
-        } else {
-            "other"
-        },
-    ))
 }
 
 async fn persist_incident(
@@ -1418,6 +1464,36 @@ mod tests {
         assert_eq!(points.len(), 2);
         assert_eq!(points[1]["point"]["sum"]["asDouble"], 2.0);
         std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn wait_cache_metric_refusal_updates_existing_export_health() {
+        let health = Arc::new(ObservabilityHealth::default());
+        let (tx, rx) = mpsc::channel(1);
+        let export: TelemetryExporter = Arc::new(|batch| {
+            Box::pin(async move {
+                assert_eq!(batch.otlp.unwrap().signal, crate::otlp::Signal::Metrics);
+                ExportReceipt {
+                    rejected_items: 1,
+                    ..Default::default()
+                }
+            })
+        });
+        tx.send(ExportBatch {
+            logs: String::new(),
+            metrics: String::new(),
+            otlp: Some(crate::otlp::Export {
+                signal: crate::otlp::Signal::Metrics,
+                protobuf: String::new(),
+            }),
+        })
+        .await
+        .unwrap();
+        drop(tx);
+        run_exporter(export, rx, Arc::clone(&health)).await;
+        assert_eq!(health.failed_metric_batches(), 1);
+        assert_eq!(health.rejected_export_items(), 1);
+        assert_eq!(health.failed_log_batches(), 0);
     }
 
     #[tokio::test]

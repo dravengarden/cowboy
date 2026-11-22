@@ -61,7 +61,10 @@ impl Fixture {
                 PluginHostOperation::ExportOtlp
             },
             payload: if legacy {
-                serde_json::json!({"logs":"{}\n", "metrics":"fixture 1\n"})
+                serde_json::json!({
+                    "logs":"{}\n",
+                    "metrics":"cowboy_client_long_task_count{platform=\"web\"} 1 1788825600000\n",
+                })
             } else {
                 let (signal, bytes) = crate::otlp::client_fixtures().remove(0);
                 serde_json::json!({"signal":signal, "protobuf":base64::engine::general_purpose::STANDARD.encode(bytes)})
@@ -345,7 +348,7 @@ async fn concurrent_export_is_rejected_and_legacy_lanes_each_recheck_before_retr
 
 #[tokio::test]
 async fn deadline_stops_retry_for_every_otlp_signal_without_cancelling_the_first_attempt() {
-    for (signal, bytes) in crate::otlp::client_fixtures() {
+    for (signal, bytes) in crate::otlp::client_export_fixtures() {
         let fixture = Fixture::new(false).await;
         let mut destination = Destination::new(StatusCode::SERVICE_UNAVAILABLE).await;
         fixture.configure(&destination.endpoint);

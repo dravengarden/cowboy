@@ -383,6 +383,10 @@ pub enum Operation {
         query: Query,
         baseline: Option<Box<Query>>,
     },
+    WaitCacheDaily {
+        from_ms: i64,
+        to_ms: i64,
+    },
     Status,
 }
 #[derive(Serialize, Deserialize)]
@@ -405,6 +409,14 @@ pub fn execute_local(source: &Source, operation: Operation) -> Result<Value> {
         source.ssh.is_none() && source.ssh_config.is_none(),
         "recursive remote queries are forbidden"
     );
+    if let Operation::WaitCacheDaily { from_ms, to_ms } = &operation {
+        ensure!(
+            matches!(source.backend, Backend::Sqlite),
+            "daily rollups require SQLite"
+        );
+        return SqliteStore::open(source.directory.clone(), false)?
+            .wait_cache_daily(*from_ms, *to_ms);
+    }
     let reader = source.local()?;
     match operation {
         Operation::Query { query } => Ok(serde_json::to_value(reader.query(&query)?)?),
@@ -413,6 +425,7 @@ pub fn execute_local(source: &Source, operation: Operation) -> Result<Value> {
             reader.metrics(&query)?,
             baseline.as_ref().map(|q| reader.metrics(q)).transpose()?,
         )),
+        Operation::WaitCacheDaily { .. } => unreachable!("handled before opening the reader"),
         Operation::Status => reader.status(),
     }
 }

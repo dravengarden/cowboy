@@ -192,22 +192,30 @@ fn wait_command(target: &str, prompt: &str) -> String {
 
 /// A human-paced parent (Antigravity) never receives a call notice as a
 /// turn, so an admitted call's receipt tells it to wait inside this turn.
-pub(super) fn call_next(hub: &crate::core::Hub, parent: &str, mut value: Value) -> Value {
-    let Some(call) = value["call_id"].as_str().map(str::to_owned) else {
-        return value;
+/// The action reply wraps the receipt as `{schema, state:"ok", value}`; the
+/// hint belongs on the receipt the gateway hands to the agent.
+pub(super) fn call_next(hub: &crate::core::Hub, parent: &str, mut reply: Value) -> Value {
+    let wrapped = reply["state"] == "ok" && reply["value"].is_object();
+    let receipt = if wrapped {
+        &mut reply["value"]
+    } else {
+        &mut reply
     };
-    if !hub.is_human_paced(parent) || !value["error"].is_null() {
-        return value;
+    let Some(call) = receipt["call_id"].as_str().map(str::to_owned) else {
+        return reply;
+    };
+    if !hub.is_human_paced(parent) || !receipt["error"].is_null() {
+        return reply;
     }
-    value["next"] = json!(format!(
+    receipt["next"] = json!(format!(
         "Cowboy cannot start your next turn, so a notice would only reach the owner as a \
          draft. Stay in this turn: RunCommand with wait_seconds 600 and timeout_seconds 600: \
          cowboy call wait {call} --timeout-ms 580000 . Repeat while the state is not \
          terminal (if it reports context_unavailable, call cowboy_read \
-         cowboy.calls.wait(\"{call}\",60000) instead), then read \
+         cowboy.calls.wait(\"{call}\",55000) with timeout_ms 60000 instead), then read \
          cowboy.calls.result(\"{call}\",{{offset:0,chars:4000}}) and continue."
     ));
-    value
+    reply
 }
 
 /// What the sender should do next. A human-paced sender cannot be woken
@@ -597,6 +605,20 @@ mod tests {
         assert_eq!(call_next(&hub, "me", admitted.clone()), admitted);
         let refused = json!({"state":"error","call_id":"call-2","error":{"code":"x"}});
         assert_eq!(call_next(&hub, "agy", refused.clone()), refused);
+        // start_call replies through the action envelope; the hint must
+        // land on the receipt the gateway unwraps for the agent.
+        let wrapped = json!({"schema":1,"state":"ok","value":admitted});
+        let agy = call_next(&hub, "agy", wrapped.clone());
+        assert!(agy["next"].is_null());
+        assert!(
+            agy["value"]["next"]
+                .as_str()
+                .unwrap()
+                .contains("cowboy call wait call-1")
+        );
+        assert_eq!(call_next(&hub, "me", wrapped.clone()), wrapped);
+        let failed = json!({"schema":1,"state":"ok","value":refused});
+        assert_eq!(call_next(&hub, "agy", failed.clone()), failed);
     }
 
     #[test]

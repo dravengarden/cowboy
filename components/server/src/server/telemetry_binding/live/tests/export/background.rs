@@ -62,7 +62,7 @@ async fn background_export_delivers_all_otlp_lanes_under_independent_exact_polic
         .telemetry_binding_ledger("service-test")
         .await
         .unwrap();
-    let fixtures = crate::otlp::client_fixtures();
+    let fixtures = crate::otlp::client_export_fixtures();
     for (index, (signal, _)) in fixtures.iter().enumerate() {
         let request = attempt(&f, index);
         let receipt = export(batch(&f, index)).await;
