@@ -280,6 +280,10 @@ test("SearchFiles with only a glob finds files by name", { skip: !hasRg }, async
   assert.deepEqual(folded, ["img/deep/logo.PNG", "img/icon.png"]);
   assert.equal((await call("SearchFiles", { glob: "**/*.gif" })).text, "No matches.");
   assert.match((await call("SearchFiles", {})).text, /Give pattern, glob or both/);
+  assert.match(
+    (await call("SearchFiles", { glob: "*.png", path: "img/notes.txt" })).text,
+    /give a directory as path/,
+  );
 });
 
 test("WriteFile and EditFile are conditional on what was read", async (t) => {

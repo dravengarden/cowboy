@@ -580,6 +580,14 @@ export class Facade {
     }
     if (names && glob === undefined) throw new ToolError("Give pattern, glob or both");
     const target = await this.resolve(path, { outside: true });
+    if (names) {
+      // ripgrep lists an explicitly named file whatever the glob says, so a
+      // name search needs a directory.
+      const metadata = await this.rpc("fs/getMetadata", { path: url(target) });
+      if (!metadata?.isDirectory) {
+        throw new ToolError("To find files by name, give a directory as path");
+      }
+    }
     // Inside the root, matches are named relative to it (the command's cwd).
     const searched = inside(this.root, target) ? posix.relative(this.root, target) || "." : target;
     const argv = names
