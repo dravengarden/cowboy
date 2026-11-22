@@ -136,7 +136,7 @@ test("tools are unavailable outside a turn and after the turn ends", async (t) =
   );
 });
 
-test("ReadFile pages at 256 KiB and paths stay inside the workspace", async (t) => {
+test("ReadFile pages at 256 KiB and reads anywhere the user can read", async (t) => {
   const { root, base, call } = await fixture(t);
   assert.deepEqual(await call("ReadFile", { path: "hello.txt" }), {
     text: "hello target\n",
@@ -152,33 +152,34 @@ test("ReadFile pages at 256 KiB and paths stay inside the workspace", async (t) 
     (await call("ReadFile", { path: "big.txt", length: LIMITS.readBytes + 1 })).error,
     true,
   );
+  // Reads, like Claude's and Codex's, are not confined to the workspace.
   for (const path of [
     "../outside/secret.txt",
     "escape/secret.txt",
     join(base, "outside", "secret.txt"),
-    "/etc/passwd",
   ]) {
-    const result = await call("ReadFile", { path });
-    assert.equal(result.error, true, path);
-    assert.doesNotMatch(result.text, /OUTSIDE_SECRET/);
+    assert.deepEqual(await call("ReadFile", { path }), { text: "OUTSIDE_SECRET\n", error: false });
   }
   assert.match((await call("ReadFile", { path: "missing.txt" })).text, /No such file/);
   assert.equal((await call("ReadFile", { path: "a\0b" })).error, true);
 });
 
 test("ListDirectory is bounded to 2000 entries", async (t) => {
-  const { root, call } = await fixture(t);
+  const { base, root, call } = await fixture(t);
   mkdirSync(join(root, "many"));
   for (let index = 0; index < 2005; index++) writeFileSync(join(root, "many", `f${index}`), "");
   const listing = await call("ListDirectory", { path: "many" });
   assert.equal(listing.text.split("\n").length, 1 + 2000 + 1);
   assert.match(listing.text, /truncated; 5 more entries/);
   assert.match((await call("ListDirectory", {})).text, /\nsrc\//);
-  assert.equal((await call("ListDirectory", { path: "escape" })).error, true);
+  assert.equal(
+    (await call("ListDirectory", { path: "escape" })).text,
+    `${join(base, "outside")}:\nsecret.txt`,
+  );
 });
 
 test("SearchFiles runs the target's rg with match and byte bounds", { skip: !hasRg }, async (t) => {
-  const { root, call } = await fixture(t);
+  const { base, root, call } = await fixture(t);
   writeFileSync(join(root, "src", "a.txt"), "needle one\nhay\n");
   assert.match((await call("SearchFiles", { pattern: "needle" })).text, /src\/a\.txt:1:needle one/);
   assert.equal((await call("SearchFiles", { pattern: "absent-token" })).text, "No matches.");
@@ -186,11 +187,14 @@ test("SearchFiles runs the target's rg with match and byte bounds", { skip: !has
   const many = await call("SearchFiles", { pattern: "needle", path: "src" });
   assert.ok(many.text.split("\n").length <= LIMITS.searchMatches + 1);
   assert.match(many.text, /results truncated/);
-  assert.equal((await call("SearchFiles", { pattern: "x", path: "../outside" })).error, true);
+  assert.equal(
+    (await call("SearchFiles", { pattern: "OUTSIDE", path: "../outside" })).text,
+    `${join(base, "outside", "secret.txt")}:1:OUTSIDE_SECRET`,
+  );
 });
 
 test("WriteFile and EditFile are conditional on what was read", async (t) => {
-  const { root, call } = await fixture(t);
+  const { base, root, call } = await fixture(t);
   assert.match(
     (await call("WriteFile", { path: "new/dir/a.txt", content: "one\n" })).text,
     /Created/,
@@ -231,8 +235,16 @@ test("WriteFile and EditFile are conditional on what was read", async (t) => {
   assert.equal(readFileSync(join(root, "e.txt"), "utf8"), "a B a\n");
   await call("EditFile", { path: "e.txt", old_string: "a", new_string: "z", replace_all: true });
   assert.equal(readFileSync(join(root, "e.txt"), "utf8"), "z B z\n");
-  assert.equal((await call("WriteFile", { path: "escape/x.txt", content: "x" })).error, true);
-  assert.equal((await call("WriteFile", { path: "../x.txt", content: "x" })).error, true);
+  // Writes stay inside the workspace root, also for a file read outside it.
+  const secret = join(base, "outside", "secret.txt");
+  await call("ReadFile", { path: secret });
+  for (const path of ["escape/x.txt", "../x.txt", secret, "escape/secret.txt"]) {
+    const refused = await call("WriteFile", { path, content: "x" });
+    assert.match(refused.text, /outside the workspace root/, path);
+  }
+  const edit = await call("EditFile", { path: secret, old_string: "OUTSIDE", new_string: "x" });
+  assert.match(edit.text, /outside the workspace root/);
+  assert.equal(readFileSync(secret, "utf8"), "OUTSIDE_SECRET\n");
   const big = await call("WriteFile", { path: "big", content: "x".repeat(LIMITS.writeBytes + 1) });
   assert.match(big.text, /larger than 3 MiB/);
 });

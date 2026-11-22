@@ -3,8 +3,10 @@
 //
 // `agy` runs on OVH; every workspace tool runs on the session's development
 // Machine through the one execution `Connection` the proxy owns. Paths are
-// canonicalized on the target and confined to the workspace root. That
-// confinement is a guardrail against mistakes, not an isolation boundary:
+// canonicalized on the target; reads reach any file the target user can
+// read, as Claude's and Codex's do, and writes are confined to the
+// workspace root. That confinement is a guardrail against mistakes, not an
+// isolation boundary:
 // `RunCommand` already gives the model a shell on the same Machine, and a
 // path can change between the check and its use (design "Revision 5
 // simplification"). A mutation
@@ -368,8 +370,11 @@ export class Facade {
     }
   }
 
-  /** A canonical path inside the workspace root; missing tails allowed. */
-  async resolve(path, { allowMissing = false } = {}) {
+  /**
+   * A canonical path, relative paths from the workspace root; missing tails
+   * allowed. It must be inside the root unless `outside` (a read).
+   */
+  async resolve(path, { allowMissing = false, outside = false } = {}) {
     if (path === undefined) path = ".";
     if (typeof path !== "string" || !path || path.length > 4096 || path.includes("\0")) {
       throw new ToolError("Invalid path");
@@ -393,7 +398,7 @@ export class Facade {
       }
     }
     const full = posix.join(canonical, ...rest);
-    if (!inside(this.root, full)) {
+    if (!outside && !inside(this.root, full)) {
       throw new ToolError(`${path} is outside the workspace root ${this.root}`);
     }
     return full;
@@ -421,7 +426,7 @@ export class Facade {
     if (!Number.isInteger(length) || length < 1 || length > LIMITS.readBytes) {
       throw new ToolError(`length must be between 1 and ${LIMITS.readBytes}`);
     }
-    const file = await this.resolve(path);
+    const file = await this.resolve(path, { outside: true });
     const metadata = await this.rpc("fs/getMetadata", { path: url(file) });
     if (!metadata.isFile) throw new ToolError(`Not a regular file: ${path}`);
     let size = metadata.size;
@@ -455,7 +460,7 @@ export class Facade {
   }
 
   async listDirectory({ path }) {
-    const directory = await this.resolve(path);
+    const directory = await this.resolve(path, { outside: true });
     const listing = await this.rpc("fs/readDirectory", { path: url(directory) });
     const entries = (listing.entries ?? [])
       .filter((entry) => typeof entry?.fileName === "string")
@@ -476,12 +481,14 @@ export class Facade {
     if (glob !== undefined && (typeof glob !== "string" || !glob || glob.length > 1024)) {
       throw new ToolError("Invalid glob");
     }
-    const target = await this.resolve(path);
+    const target = await this.resolve(path, { outside: true });
     const argv = ["rg", "--line-number", "--no-heading", "--with-filename", "--color=never"];
     argv.push("--max-columns=1000", "--max-columns-preview");
     if (ignoreCase === true) argv.push("--ignore-case");
     if (glob !== undefined) argv.push("--glob", glob);
-    argv.push("-e", pattern, "--", posix.relative(this.root, target) || ".");
+    // Inside the root, matches are named relative to it (the command's cwd).
+    const searched = inside(this.root, target) ? posix.relative(this.root, target) || "." : target;
+    argv.push("-e", pattern, "--", searched);
     const result = await this.runBounded(turn, argv, {
       timeoutMs: LIMITS.searchTimeoutMs,
       maxBytes: LIMITS.searchBytes,

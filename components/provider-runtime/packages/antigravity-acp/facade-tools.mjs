@@ -108,11 +108,14 @@ export const TOOLS = [
   {
     name: "ReadFile",
     description:
-      "Read a file of the workspace. Returns at most 256 KiB per call; use offset to page through larger files.",
+      "Read a file: a path relative to the workspace root, or an absolute path anywhere the user can read. Returns at most 256 KiB per call; use offset to page through larger files.",
     inputSchema: {
       type: "object",
       properties: {
-        path: { type: "string", description: "Path relative to the workspace root, or absolute" },
+        path: {
+          type: "string",
+          description: "Path relative to the workspace root, or absolute (anywhere readable)",
+        },
         offset: { type: "integer", minimum: 0, description: "Byte offset to start at" },
         length: { type: "integer", minimum: 1, maximum: LIMITS.readBytes },
       },
@@ -122,7 +125,8 @@ export const TOOLS = [
   },
   {
     name: "ListDirectory",
-    description: "List one directory of the workspace (not recursive, at most 2000 entries).",
+    description:
+      "List one directory, relative to the workspace root or absolute anywhere the user can read (not recursive, at most 2000 entries).",
     inputSchema: {
       type: "object",
       properties: { path: { type: "string", description: "Directory; default the root" } },
@@ -132,7 +136,7 @@ export const TOOLS = [
   {
     name: "SearchFiles",
     description:
-      "Search file contents with ripgrep. Returns at most 500 matching lines and 512 KiB; stops after 30 s.",
+      "Search file contents with ripgrep, in the workspace or any absolute path the user can read. Returns at most 500 matching lines and 512 KiB; stops after 30 s.",
     inputSchema: {
       type: "object",
       properties: {
@@ -148,7 +152,7 @@ export const TOOLS = [
   {
     name: "WriteFile",
     description:
-      "Create a file, or replace a file you read in this session with ReadFile. Fails if the file changed since it was read.",
+      "Create a file, or replace a file you read in this session with ReadFile, inside the workspace root. Fails if the file changed since it was read.",
     inputSchema: {
       type: "object",
       properties: { path: { type: "string" }, content: { type: "string" } },
@@ -159,7 +163,7 @@ export const TOOLS = [
   {
     name: "EditFile",
     description:
-      "Replace text in a file you read in this session with ReadFile. old_string must occur exactly once unless replace_all is true.",
+      "Replace text in a file inside the workspace root that you read in this session with ReadFile. old_string must occur exactly once unless replace_all is true.",
     inputSchema: {
       type: "object",
       properties: {

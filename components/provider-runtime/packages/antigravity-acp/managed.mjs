@@ -58,8 +58,8 @@ export const MANAGED_ROUTING = [
   "mcp_cowboy_RunCommand (read-only and without network: commands cannot change files). Every",
   "other tool, including web search, URL reading, questions, subagents and Cowboy calls, is",
   "denied; do not try them. Nobody can answer a question during this call. Paths are relative",
-  "to the working directory below or absolute inside it. The local directory of this process",
-  "is not the workspace.",
+  "to the working directory below or absolute anywhere the user can read. The local directory",
+  "of this process is not the workspace.",
 ].join("\n");
 
 /**
