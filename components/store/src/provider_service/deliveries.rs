@@ -8,7 +8,21 @@ use super::*;
 
 const DELIVERIES: &str = "deliveries.json";
 
-type Acknowledgements = BTreeMap<String, BTreeMap<String, u64>>;
+/// A credential recipient: an enrolled Machine and its enrollment identity
+/// (re-enrolling a Machine id gives it a new one, so its acknowledgements
+/// do not carry over).
+pub type Recipient = (String, String);
+
+/// One Machine's acknowledgement: the generation it applied and the
+/// enrollment that applied it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Delivery {
+    pub generation: u64,
+    pub enrollment: String,
+}
+
+type Acknowledgements = BTreeMap<String, BTreeMap<String, Delivery>>;
 
 impl ProviderAuthService {
     fn read_deliveries(&self) -> Acknowledgements {
@@ -18,42 +32,67 @@ impl ProviderAuthService {
             .unwrap_or_default()
     }
 
-    /// The generation of `provider_id` each Machine acknowledged.
-    pub fn deliveries(&self, provider_id: &str) -> BTreeMap<String, u64> {
+    fn write_deliveries(&self, deliveries: &Acknowledgements) -> Result<()> {
+        atomic_write(
+            &self.root.join(DELIVERIES),
+            &serde_json::to_vec(deliveries)?,
+            0o600,
+        )
+    }
+
+    /// Each Machine's acknowledgement of `provider_id`.
+    pub fn deliveries(&self, provider_id: &str) -> BTreeMap<String, Delivery> {
         let _serialized = self.providers.read();
         self.read_deliveries()
             .remove(provider_id)
             .unwrap_or_default()
     }
 
-    /// `machine_id` applied `generation` of `provider_id` (never lowered).
+    /// `machine_id` (enrolled as `enrollment`) applied `generation` of
+    /// `provider_id`. A same-enrollment acknowledgement is never lowered.
     pub fn record_delivery(
         &self,
         provider_id: &str,
-        machine_id: &str,
+        (machine_id, enrollment): (&str, &str),
         generation: u64,
     ) -> Result<()> {
         let _serialized = self.providers.write();
         let mut deliveries = self.read_deliveries();
-        let acknowledged = deliveries
-            .entry(provider_id.to_owned())
-            .or_default()
-            .entry(machine_id.to_owned())
-            .or_default();
-        if *acknowledged >= generation {
+        let entries = deliveries.entry(provider_id.to_owned()).or_default();
+        if entries
+            .get(machine_id)
+            .is_some_and(|known| known.enrollment == enrollment && known.generation >= generation)
+        {
             return Ok(());
         }
-        *acknowledged = generation;
-        atomic_write(
-            &self.root.join(DELIVERIES),
-            &serde_json::to_vec(&deliveries)?,
-            0o600,
-        )
+        entries.insert(
+            machine_id.to_owned(),
+            Delivery {
+                generation,
+                enrollment: enrollment.to_owned(),
+            },
+        );
+        self.write_deliveries(&deliveries)
     }
 
-    /// The enrolled Machines (`recipients`) that have not acknowledged the
-    /// current generation of `provider_id`.
-    pub fn unacknowledged(&self, provider_id: &str, recipients: &[String]) -> Vec<String> {
+    /// Fresh evidence contradicts `machine_id`'s acknowledgement of
+    /// `provider_id` (it reports the generation failed, or an older one):
+    /// forget it, so the generation is delivered again.
+    pub fn forget_delivery(&self, provider_id: &str, machine_id: &str) -> Result<()> {
+        let _serialized = self.providers.write();
+        let mut deliveries = self.read_deliveries();
+        let Some(entries) = deliveries.get_mut(provider_id) else {
+            return Ok(());
+        };
+        if entries.remove(machine_id).is_none() {
+            return Ok(());
+        }
+        self.write_deliveries(&deliveries)
+    }
+
+    /// The recipients that have not acknowledged the current generation of
+    /// `provider_id` with their current enrollment.
+    pub fn unacknowledged(&self, provider_id: &str, recipients: &[Recipient]) -> Vec<String> {
         let Some(generation) = self
             .status(provider_id)
             .map(|status| status.auth_generation)
@@ -63,12 +102,12 @@ impl ProviderAuthService {
         let acknowledged = self.deliveries(provider_id);
         recipients
             .iter()
-            .filter(|machine| {
-                acknowledged
-                    .get(*machine)
-                    .is_none_or(|acked| *acked < generation)
+            .filter(|(machine, enrollment)| {
+                acknowledged.get(machine).is_none_or(|known| {
+                    &known.enrollment != enrollment || known.generation < generation
+                })
             })
-            .cloned()
+            .map(|(machine, _)| machine.clone())
             .collect()
     }
 
@@ -79,7 +118,7 @@ impl ProviderAuthService {
     pub fn reconcile_distribution(
         &self,
         provider_id: &str,
-        recipients: &[String],
+        recipients: &[Recipient],
         failed: &BTreeSet<String>,
     ) -> Result<Option<ProviderAuthenticationStatus>> {
         let Some(status) = self.status(provider_id) else {
@@ -133,10 +172,13 @@ mod tests {
         };
         service.commit(&package, &bundle, None, Some(0)).unwrap();
         let wiped = service.logout("grok").unwrap();
-        let recipients = ["hawk".to_owned(), "ovh".to_owned()];
-        assert_eq!(service.unacknowledged("grok", &recipients), recipients);
+        let recipients = [
+            ("hawk".to_owned(), "k1".to_owned()),
+            ("ovh".to_owned(), "k2".to_owned()),
+        ];
+        assert_eq!(service.unacknowledged("grok", &recipients), ["hawk", "ovh"]);
         // An older generation's acknowledgement is no acknowledgement.
-        service.record_delivery("grok", "hawk", 1).unwrap();
+        service.record_delivery("grok", ("hawk", "k1"), 1).unwrap();
         let failed = BTreeSet::from(["ovh".to_owned()]);
         assert_eq!(
             service
@@ -147,7 +189,7 @@ mod tests {
             ServiceDistributionState::Failed
         );
         service
-            .record_delivery("grok", "hawk", wiped.auth_generation)
+            .record_delivery("grok", ("hawk", "k1"), wiped.auth_generation)
             .unwrap();
         assert_eq!(
             service
@@ -158,11 +200,14 @@ mod tests {
             ServiceDistributionState::Partial
         );
         service
-            .record_delivery("grok", "ovh", wiped.auth_generation)
+            .record_delivery("grok", ("ovh", "k2"), wiped.auth_generation)
             .unwrap();
         // Never lowered.
-        service.record_delivery("grok", "ovh", 1).unwrap();
-        assert_eq!(service.deliveries("grok")["ovh"], wiped.auth_generation);
+        service.record_delivery("grok", ("ovh", "k2"), 1).unwrap();
+        assert_eq!(
+            service.deliveries("grok")["ovh"].generation,
+            wiped.auth_generation
+        );
         let current = service
             .reconcile_distribution("grok", &recipients, &BTreeSet::new())
             .unwrap()
@@ -182,5 +227,11 @@ mod tests {
         drop(service);
         let reopened = ProviderAuthService::open(root.path()).unwrap();
         assert!(reopened.unacknowledged("grok", &recipients).is_empty());
+        // A re-enrolled Machine id starts unacknowledged.
+        let reenrolled = [("ovh".to_owned(), "k3".to_owned())];
+        assert_eq!(reopened.unacknowledged("grok", &reenrolled), ["ovh"]);
+        // Contradicting evidence forgets an acknowledgement.
+        reopened.forget_delivery("grok", "hawk").unwrap();
+        assert_eq!(reopened.unacknowledged("grok", &recipients), ["hawk"]);
     }
 }

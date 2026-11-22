@@ -61,20 +61,9 @@ pub(super) fn log_runtime_configuration() {
     );
 }
 
-/// Startup admission once the store is open: the retirement's delivery gate,
-/// then the reset schedules (cancelling the retired cards').
-pub(super) async fn admit_retirement(
-    usage: &UsageService,
-    provider_auth: &crate::provider_service::ProviderAuthService,
-    store: Option<&Store>,
-) -> anyhow::Result<()> {
-    provider_accounts::retirement::admit_deliveries(provider_auth, store).await?;
-    restore_provider_reset_schedules(usage, store).await
-}
-
 /// Reset credits belong to provider accounts, not sessions. Restore one
 /// shared timer per provider and keep them independent from session queues.
-async fn restore_provider_reset_schedules(
+pub(super) async fn restore_provider_reset_schedules(
     usage: &UsageService,
     store: Option<&Store>,
 ) -> anyhow::Result<()> {

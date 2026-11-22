@@ -492,8 +492,18 @@ pub(super) async fn sync_provider_account_auth_to_machine(
     } else {
         state.provider_auth.existing_account(account_id)
     };
-    if let Some(scope) = scope
-        && let Err(error) = scope.record_delivery(provider_id, machine_id, generation)
+    let enrollment = match state.store.as_ref() {
+        Some(store) => store
+            .machine_encryption_public_key(machine_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|key| crate::admin::hex_sha256(key.as_bytes())),
+        None => None,
+    };
+    if let (Some(scope), Some(enrollment)) = (scope, enrollment)
+        && let Err(error) =
+            scope.record_delivery(provider_id, (machine_id, &enrollment), generation)
     {
         tracing::warn!(%error, %machine_id, %provider_id, "recording a credential delivery acknowledgement");
     }

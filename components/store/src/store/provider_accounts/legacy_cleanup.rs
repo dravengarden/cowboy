@@ -149,4 +149,47 @@ impl Store {
         );
         Ok(cancelled)
     }
+
+    /// The enrolled, non-revoked Machines a Service credential is delivered
+    /// to, each with its enrollment identity (its encryption key's digest): a
+    /// placeholder row without enrollment keys is no recipient.
+    pub async fn credential_recipients(&self) -> Result<Vec<(String, String)>> {
+        let mut recipients = Vec::new();
+        for machine in self.list_machines().await? {
+            if machine.revoked || machine.fingerprint.is_none() {
+                continue;
+            }
+            if let Some(key) = self.machine_encryption_public_key(&machine.id).await? {
+                recipients.push((machine.id, crate::digest::hex_sha256(key.as_bytes())));
+            }
+        }
+        Ok(recipients)
+    }
+
+    /// Live sessions (starting, running or busy) on a retired card's
+    /// `default` account: their workers may still hold a card credential.
+    pub async fn live_retired_default_sessions(&self) -> Result<Vec<String>> {
+        let providers = super::legacy_cards::retired_providers();
+        macro_rules! read {
+            ($db:expr, $deleted:literal) => {
+                sqlx::query_as::<_, (String, String)>(concat!(
+                    "SELECT id, provider FROM sessions WHERE ",
+                    $deleted,
+                    " IS NULL AND provider_account_id='default' \
+                     AND status IN ('starting','running','busy') ORDER BY id"
+                ))
+                .fetch_all(&$db.pool)
+                .await?
+            };
+        }
+        let rows = match &self.backend {
+            StorageBackend::Postgres(db) => read!(db, "deleted_at"),
+            StorageBackend::Sqlite(db) => read!(db, "deleted_at_ms"),
+        };
+        Ok(rows
+            .into_iter()
+            .filter(|(_, provider)| providers.contains(&provider.as_str()))
+            .map(|(id, _)| id)
+            .collect())
+    }
 }

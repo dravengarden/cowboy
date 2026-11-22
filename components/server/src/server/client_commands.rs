@@ -291,6 +291,11 @@ pub(super) fn reset_session_command(
     state: &Arc<AppState>,
     session_id: String,
 ) -> ControlFlow<bool, Result<(), String>> {
+    // Before either path clears anything: a retired card's session could
+    // never start again, so its history stays and the guidance is returned.
+    if let Some(refusal) = provider_accounts::retirement::session_refusal(state, &session_id) {
+        return ControlFlow::Continue(Err(refusal.to_owned()));
+    }
     ControlFlow::Continue({
         if state.hub.session_info(&session_id).is_some_and(|info| {
             info.meta.execution_binding.is_some()

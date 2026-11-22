@@ -345,8 +345,6 @@ impl MachineLink<'_> {
             ..
         } = self;
         inventory.providers = plugins;
-        provider_auth_flow::reconciler::nudge(Some(&hello.machine_id));
-        let failed_provider_auth = failed_provider_auth_projection_ids(&inventory.providers);
         state.machine_control.record_remote(
             connection,
             MachineEvent::PluginInventory {
@@ -369,26 +367,13 @@ impl MachineLink<'_> {
             .await;
         if result.is_ok() {
             state.machine_snapshots.publish().await;
-            for provider_id in failed_provider_auth {
-                let repair_state = Arc::clone(state);
-                let repair_machine_id = hello.machine_id.clone();
-                tokio::spawn(async move {
-                    if let Err(error) = sync_provider_auth_to_machine(
-                        &repair_state,
-                        &repair_machine_id,
-                        &provider_id,
-                    )
-                    .await
-                    {
-                        tracing::warn!(
-                            %error,
-                            machine = %repair_machine_id,
-                            %provider_id,
-                            "repairing failed Provider credential projection"
-                        );
-                    }
-                });
-            }
+            // Automatic repair runs only through the reconciler (with its
+            // backoff): contradicting evidence forgets the acknowledgement.
+            provider_auth_flow::reconciler::observe_inventory(
+                state,
+                &hello.machine_id,
+                &inventory.providers,
+            );
         }
         result
     }

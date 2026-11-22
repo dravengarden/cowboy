@@ -1981,6 +1981,14 @@ impl MachinePluginStore {
             &provider_auth_root.join("replicas"),
             envelope.auth_generation,
         )?;
+        // Durable before the receipt: a power loss after the Controller
+        // records it must not bring back the previous replica or a wiped
+        // projection (renames and unlinks live in these directories).
+        sync_directories(&[
+            &provider_auth_root.join("replicas"),
+            &provider_auth_root,
+            provider_auth_root.parent().unwrap_or(&provider_auth_root),
+        ])?;
         Ok(PluginInventoryReceipt {
             provider_id: envelope.provider_id.clone(),
             auth_generation: envelope.auth_generation,
@@ -3725,6 +3733,23 @@ fn validate_auth_replica_transition(
                 && incoming.action == previous.action,
             "conflicting Service auth envelope for the current generation"
         );
+    }
+    Ok(())
+}
+
+/// Flush each directory's entries (renames, unlinks) to stable storage; an
+/// absent directory has nothing to flush.
+fn sync_directories(directories: &[&Path]) -> Result<()> {
+    for directory in directories {
+        match fs::File::open(directory) {
+            Ok(handle) => handle
+                .sync_all()
+                .with_context(|| format!("syncing {}", directory.display()))?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("opening {}", directory.display()));
+            }
+        }
     }
     Ok(())
 }
@@ -7615,6 +7640,18 @@ mod tests {
             0
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn directory_sync_flushes_existing_directories_and_skips_absent_ones() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("replicas")).unwrap();
+        sync_directories(&[
+            &root.path().join("replicas"),
+            root.path(),
+            &root.path().join("absent"),
+        ])
+        .unwrap();
     }
 
     #[test]

@@ -1608,3 +1608,48 @@ async fn a_failed_reset_cancellation_keeps_the_schedule_and_tries_every_lane() {
         assert!(store.load_provider_reset(lane).await.unwrap().is_some());
     }
 }
+
+#[tokio::test]
+async fn an_unenrolled_placeholder_machine_is_no_credential_recipient() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = sqlite_store(&dir).await;
+    // The baseline seeds a Hawk row without enrollment keys.
+    assert!(
+        store
+            .list_machines()
+            .await
+            .unwrap()
+            .iter()
+            .any(|machine| !machine.revoked && machine.fingerprint.is_none())
+    );
+    assert!(store.credential_recipients().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn only_live_sessions_on_a_retired_card_default_block_admission() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = sqlite_store(&dir).await;
+    let StorageBackend::Sqlite(db) = &store.backend else {
+        panic!("sqlite")
+    };
+    for (id, provider, account, status) in [
+        ("live-card", "codex", "default", "running"),
+        ("busy-card", "claude-code", "default", "busy"),
+        ("exited-card", "codex", "default", "exited"),
+        (
+            "named",
+            "codex",
+            "11111111-1111-4111-8111-111111111111",
+            "running",
+        ),
+        ("no-card", "antigravity", "default", "running"),
+    ] {
+        sqlx::query("INSERT INTO sessions(id,provider,machine_id,cwd,title,status,origin,provider_account_id) VALUES ($1,$2,'hawk','/tmp',$1,$3,'web',$4)")
+            .bind(id).bind(provider).bind(status).bind(account)
+            .execute(&db.pool).await.unwrap();
+    }
+    assert_eq!(
+        store.live_retired_default_sessions().await.unwrap(),
+        ["busy-card", "live-card"]
+    );
+}

@@ -57,11 +57,14 @@ pub(in crate::server) fn admit_startup(auth: &ProviderAuthService) -> anyhow::Re
 }
 
 /// Card-family Providers whose latest root wipe some enrolled Machine
-/// (`recipients`, the non-revoked ones) has not acknowledged, with those
-/// Machines. A distribution the previous Controller recorded as `current`
-/// reached every Machine enrolled then (it kept no per-Machine record); a
-/// Machine enrolled later never held the root credential.
-fn unacknowledged_wipes(auth: &ProviderAuthService, recipients: &[String]) -> Vec<String> {
+/// (`recipients`) has not acknowledged, with those Machines. A distribution
+/// the previous Controller recorded as `current` reached every Machine
+/// enrolled then (it kept no per-Machine record); a Machine enrolled later
+/// never held the root credential.
+fn unacknowledged_wipes(
+    auth: &ProviderAuthService,
+    recipients: &[crate::provider_service::Recipient],
+) -> Vec<String> {
     auth.statuses()
         .into_iter()
         .filter(|status| {
@@ -76,44 +79,69 @@ fn unacknowledged_wipes(auth: &ProviderAuthService, recipients: &[String]) -> Ve
         .collect()
 }
 
-/// The second startup gate, once the store is open: every enrolled Machine
-/// must have applied every card Provider's root wipe, so no Machine can
-/// still hold (and later rotate) a moved root generation. Passing it once is
-/// recorded; later starts skip it (reboot convergence).
-pub(in crate::server) async fn admit_deliveries(
+/// What admission covers: the Service dataset and every card Provider's
+/// root wipe generation.
+fn admission(
     auth: &ProviderAuthService,
-    store: Option<&crate::store::Store>,
-) -> anyhow::Result<()> {
-    if auth.retirement_admitted() {
-        return Ok(());
-    }
-    let recipients: Vec<String> = match store {
-        Some(store) => store
-            .list_machines()
-            .await?
+    dataset: &str,
+) -> crate::provider_service::AdmittedRetirement {
+    crate::provider_service::AdmittedRetirement {
+        dataset: dataset.to_owned(),
+        wipes: auth
+            .statuses()
             .into_iter()
-            .filter(|machine| !machine.revoked)
-            .map(|machine| machine.id)
+            .filter(|status| legacy_cards::retired_provider(&status.provider_id))
+            .map(|status| (status.provider_id, status.auth_generation))
             .collect(),
-        None => Vec::new(),
-    };
-    admit_recipients(auth, &recipients)
+    }
 }
 
-fn admit_recipients(auth: &ProviderAuthService, recipients: &[String]) -> anyhow::Result<()> {
+/// The second startup gate, read-only, right after migrations and before
+/// the card-row cleanup: every enrolled Machine applied every card
+/// Provider's root wipe (so none can still hold, and later rotate, a moved
+/// root generation), and no session on a retired card's `default` account is
+/// starting, running or busy (its worker may hold a card credential). An
+/// admission is recorded with its dataset and wipe generations; a later
+/// start with exactly those (a reboot with a Machine offline) skips the
+/// checks, any change (a rollback signed a card in and out) runs them again.
+pub(in crate::server) async fn admit_store(
+    auth: &ProviderAuthService,
+    store: &crate::store::Store,
+    dataset: &str,
+) -> anyhow::Result<()> {
+    let admitted = admission(auth, dataset);
+    if auth.admitted_retirement().as_ref() == Some(&admitted) {
+        return Ok(());
+    }
+    let recipients = store.credential_recipients().await?;
+    let sessions = store.live_retired_default_sessions().await?;
+    admit(auth, &admitted, &recipients, &sessions)
+}
+
+fn admit(
+    auth: &ProviderAuthService,
+    admitted: &crate::provider_service::AdmittedRetirement,
+    recipients: &[crate::provider_service::Recipient],
+    sessions: &[String],
+) -> anyhow::Result<()> {
     let missing = unacknowledged_wipes(auth, recipients);
     anyhow::ensure!(
         missing.is_empty(),
         "legacy default card wipes are not acknowledged by every enrolled Machine ({}): connect those Machines to the previous Controller until the wipes are delivered, or revoke an unreachable Machine, before installing this release",
         missing.join("; ")
     );
-    auth.mark_retirement_admitted()
+    anyhow::ensure!(
+        sessions.is_empty(),
+        "sessions on retired legacy default accounts are still live ({}): stop them with the previous Controller before installing this release",
+        sessions.join(", ")
+    );
+    auth.record_admitted_retirement(admitted)
 }
 
 /// Whether the `default` account of `provider` is a retired card: the
-/// Provider is of a card family and its root entry exists but is not Ready
-/// (wiped by an adoption or a sign-out). A Provider that never had a root
-/// entry keeps its ordinary "not authenticated" failure.
+/// Provider is of a card family and its root entry is not Ready (wiped by an
+/// adoption or a sign-out, or never present: a Machine's legacy launch path
+/// could otherwise resume it on its own native login).
 pub(in crate::server) fn retired(state: &AppState, provider: &str) -> bool {
     retired_entry(provider, state.provider_auth.status(provider).as_ref())
 }
@@ -154,7 +182,7 @@ fn retired_session(
 fn retired_entry(provider: &str, root: Option<&ProviderAuthenticationStatus>) -> bool {
     legacy_cards::retired_provider(provider)
         && root
-            .is_some_and(|status| status.authentication_state != ServiceAuthenticationState::Ready)
+            .is_none_or(|status| status.authentication_state != ServiceAuthenticationState::Ready)
 }
 
 #[cfg(test)]
@@ -203,7 +231,8 @@ mod tests {
         assert!(retired_entry("codex", Some(&status("codex", SignedOut))));
         assert!(!retired_entry("codex", Some(&status("codex", Ready))));
         // Never had a card credential: the ordinary failure stays.
-        assert!(!retired_entry("codex", None));
+        // No vault entry at all is no way back either.
+        assert!(retired_entry("codex", None));
         assert!(!retired_entry(
             "antigravity",
             Some(&status("antigravity", SignedOut))
@@ -232,21 +261,30 @@ mod tests {
         auth
     }
 
+    fn recipients() -> [crate::provider_service::Recipient; 2] {
+        [("hawk".into(), "k1".into()), ("ovh".into(), "k2".into())]
+    }
+
     #[test]
-    fn the_delivery_gate_refuses_an_unacknowledged_machine_once() {
+    fn the_delivery_gate_refuses_an_unacknowledged_machine_or_a_live_session() {
         let root = tempfile::tempdir().unwrap();
         let auth = signed_out_grok(root.path());
         let wipe = auth.status("grok").unwrap().auth_generation;
-        let recipients = ["hawk".to_owned(), "ovh".to_owned()];
-        auth.record_delivery("grok", "hawk", wipe).unwrap();
-        let refusal = admit_recipients(&auth, &recipients)
+        let admitted = admission(&auth, "dataset");
+        auth.record_delivery("grok", ("hawk", "k1"), wipe).unwrap();
+        let refusal = admit(&auth, &admitted, &recipients(), &[])
             .unwrap_err()
             .to_string();
         assert!(refusal.contains("grok: ovh"), "{refusal}");
-        assert!(!auth.retirement_admitted());
+        assert!(auth.admitted_retirement().is_none());
+        // A live session on a retired default is refused too, by name.
+        let refusal = admit(&auth, &admitted, &recipients()[..1], &["sess-1".into()])
+            .unwrap_err()
+            .to_string();
+        assert!(refusal.contains("sess-1"), "{refusal}");
         // Revoking the unreachable Machine (it leaves the recipients) passes.
-        admit_recipients(&auth, &recipients[..1]).unwrap();
-        assert!(auth.retirement_admitted());
+        admit(&auth, &admitted, &recipients()[..1], &[]).unwrap();
+        assert_eq!(auth.admitted_retirement(), Some(admitted));
     }
 
     #[test]
@@ -254,11 +292,14 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let auth = signed_out_grok(root.path());
         let wipe = auth.status("grok").unwrap().auth_generation;
-        let recipients = ["hawk".to_owned(), "ovh".to_owned()];
-        for machine in &recipients {
-            auth.record_delivery("grok", machine, wipe).unwrap();
+        for (machine, enrollment) in recipients() {
+            auth.record_delivery("grok", (&machine, &enrollment), wipe)
+                .unwrap();
         }
-        admit_recipients(&auth, &recipients).unwrap();
+        admit(&auth, &admission(&auth, "dataset"), &recipients(), &[]).unwrap();
+        // A re-enrolled Machine id does not inherit its acknowledgement.
+        let reenrolled = [("ovh".to_owned(), "k3".to_owned())];
+        assert!(admit(&auth, &admission(&auth, "dataset"), &reenrolled, &[]).is_err());
         // The previous Controller's aggregate `current` also counts.
         let other = tempfile::tempdir().unwrap();
         let auth = signed_out_grok(other.path());
@@ -268,7 +309,34 @@ mod tests {
             crate::provider_service::ServiceDistributionState::Current,
         )
         .unwrap();
-        admit_recipients(&auth, &recipients).unwrap();
+        admit(&auth, &admission(&auth, "dataset"), &recipients(), &[]).unwrap();
+    }
+
+    #[test]
+    fn an_admission_covers_only_its_dataset_and_wipe_generations() {
+        let root = tempfile::tempdir().unwrap();
+        let auth = signed_out_grok(root.path());
+        let admitted = admission(&auth, "dataset");
+        assert_eq!(
+            admitted.wipes["grok"],
+            auth.status("grok").unwrap().auth_generation
+        );
+        auth.record_admitted_retirement(&admitted).unwrap();
+        assert_eq!(
+            auth.admitted_retirement().as_ref(),
+            Some(&admission(&auth, "dataset"))
+        );
+        // Another dataset, or a newer wipe (a rollback signed in and out
+        // again), is not admitted.
+        assert_ne!(
+            auth.admitted_retirement().as_ref(),
+            Some(&admission(&auth, "other"))
+        );
+        auth.logout("grok").unwrap();
+        assert_ne!(
+            auth.admitted_retirement().as_ref(),
+            Some(&admission(&auth, "dataset"))
+        );
     }
 
     #[test]
@@ -285,7 +353,9 @@ mod tests {
             &default,
             Some(&status("codex", Ready))
         ));
-        assert!(!retired_session("codex", &default, None));
+        assert!(retired_session("codex", &default, None));
+        // A Provider without a card keeps its default.
+        assert!(!retired_session("portable-fixture", &default, None));
     }
 
     #[test]

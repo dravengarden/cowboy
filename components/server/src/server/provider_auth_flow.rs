@@ -405,8 +405,9 @@ async fn distribute_account_auth(
             ..ProviderDistributionOutcome::default()
         };
     };
-    let enrolled = match store.list_machines().await {
-        Ok(machines) => machines,
+    // The same recipients the reconciler and the retirement gate use.
+    let enrolled = match store.credential_recipients().await {
+        Ok(recipients) => recipients,
         Err(error) => {
             tracing::warn!(%error, %provider_id, "listing enrolled Machines for Provider auth sync");
             return ProviderDistributionOutcome {
@@ -416,8 +417,7 @@ async fn distribute_account_auth(
         }
     };
     let mut outcome = ProviderDistributionOutcome::default();
-    for machine in enrolled.into_iter().filter(|machine| !machine.revoked) {
-        let machine_id = machine.id;
+    for (machine_id, _) in enrolled {
         if !connected.contains(&machine_id) {
             outcome.pending += 1;
             continue;

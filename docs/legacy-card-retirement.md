@@ -99,10 +99,12 @@ keys) replace every card.
   different generation). Silently rebinding the session to a named account
   would change its credential lineage under a running native thread; an
   explicit Continue in new agent on a named account is the honest operation,
-  and it already exists. The refusal applies only where the retired card's
-  root entry exists and is not Ready, so a fixture or Provider that never had
-  a card is unaffected; a `default` session of a Provider without any root
-  entry still fails as before with "not authenticated at Cowboy Service scope".
+  and it already exists. The refusal applies to every `default` session of a
+  card-family Provider whose root entry is not Ready, including one with no
+  root entry at all (a Machine's legacy launch path could otherwise resume it
+  on its own native login); a Provider that never had a card is unaffected.
+  Clear conversation of such a session is refused before it clears anything,
+  with the same guidance.
 - **Creation** of a `default` session (new session, managed child, context
   next-agent, Continue, the store-less local path) for a retired Provider is
   refused with `named_account_required`, by Provider family and whether or not
@@ -152,14 +154,24 @@ keys) replace every card.
   lists a directory again when a live process (a still-running `default`
   worker whose home it is) added entries meanwhile, and a Machine whose wipe
   left a projection reports the Provider as `failed` in every inventory and
-  credential scan. Every successful delivery records a durable per-Machine
-  acknowledgement in its credential scope (`deliveries.json` beside the
-  vault). One Controller loop (every 10 s, and at once when a Machine
-  connects or reports its inventory) sends the current generation of every
-  Service-held credential to each connected, enrolled Machine whose
-  acknowledgement is missing, and recomputes the distribution state from the
-  acknowledgements. A failing recipient backs off in memory by Machine id
-  (5 s to 1 h); its next connect or inventory report retries it at once.
+  credential scan. A Machine applying a new wipe also rolls that account's
+  workers (a live worker may still hold the credential), and syncs the
+  replica and projection directories before acknowledging it. Every
+  successful delivery records a durable per-Machine acknowledgement in its
+  credential scope (`deliveries.json` beside the vault), bound to the
+  Machine's enrollment (its encryption key), so a re-enrolled Machine id
+  starts unacknowledged. The recipients are the enrolled, non-revoked
+  Machines (a placeholder row without enrollment keys is none), one query
+  shared by delivery, reconciliation and the startup gate. One Controller
+  loop (every 10 s, and at once when a Machine connects or reports its
+  inventory) sends the current generation of every Service-held credential
+  to each connected recipient whose acknowledgement is missing, and
+  recomputes the distribution state from the acknowledgements. A failing
+  recipient backs off in memory by Machine id (5 s to 1 h); a new connection
+  resets it. Automatic repair runs only through this loop: an inventory that
+  contradicts an acknowledgement (the projection failed, or an older
+  generation) forgets it, so a Machine reporting the same failure keeps its
+  backoff.
   On 2026-11-21 Pika's root wipe on Hawk failed with `ENOTEMPTY` because a
   resumed `default` Codex session kept writing into its generation home, and
   nothing retried it until a later sign-out.
@@ -194,27 +206,38 @@ sign-in. Startup logs it at error level for an explicit repair. Production
 had none at release time (every journal completed with account generation
 1).
 
-### Delivery gate
+### Delivery and session gate
 
-Once the store is open, the first start of this release also requires every
-enrolled, non-revoked Machine to have applied every card Provider's latest
-root wipe: its durable acknowledgement, or a distribution the previous
-Controller recorded as `current` (it reached every Machine enrolled then; it
-kept no per-Machine record). Then no Machine can still hold, and later
-rotate, a moved root generation, so nothing has to hold a wipe back for an
-offline rotation. A Machine enrolled later never held the root credential.
-The refusal names each Provider and Machine:
+Right after migrations, before the card-row cleanup writes anything (a
+refused upgrade leaves the database as the previous Controller left it),
+the Controller also requires:
+
+- every enrolled, non-revoked Machine to have applied every card Provider's
+  latest root wipe: its durable acknowledgement, or a distribution the
+  previous Controller recorded as `current` (it reached every Machine
+  enrolled then; it kept no per-Machine record). Then no Machine can still
+  hold, and later rotate, a moved root generation, so nothing holds a wipe
+  back for an offline rotation. A Machine enrolled later never held the root
+  credential;
+- no session on a retired card's `default` account to be starting, running
+  or busy (its worker may still hold a card credential).
+
+The refusals name the Providers, Machines and sessions:
 
 ```text
 legacy default card wipes are not acknowledged by every enrolled Machine
 (codex: falcon): connect those Machines to the previous Controller until the
 wipes are delivered, or revoke an unreachable Machine, before installing this
 release
+
+sessions on retired legacy default accounts are still live (sess-1): stop
+them with the previous Controller before installing this release
 ```
 
-Passing it once is recorded (`retirement-admitted` beside the vault); later
-starts (a reboot with a Machine offline) skip it, since no root write can
-reach a card Provider any more.
+The admission is recorded with the Service dataset and each card Provider's
+root wipe generation (`retirement-admitted.json` beside the vault). A later
+start with exactly those (a reboot with a Machine offline) skips the checks;
+any change (a rollback signed a card in and out again) runs them again.
 
 ## Release order and operations
 
@@ -227,8 +250,19 @@ reach a card Provider any more.
    Provider's Service authentication shows distribution `current`. Connect
    an offline Machine until it does, or revoke a Machine that will not come
    back; otherwise the new Controller refuses to start.
-2. Controller release (`.#cowboy-controller-release`): runs the cleanup and
-   both gates.
-3. Web release (`.#cowboy-web-release`). A Web shipped first only hides the
-   cards early; it breaks nothing.
-4. No Machine release is needed; Machines keep the `default` identity.
+   Adoption must happen with every Machine online: a Machine that was offline
+   during it may hold a rotation of the moved credential that the old
+   Controller's wipe on reconnect can delete before it is promoted. A Machine
+   recovered later must not be reconnected expecting such a rotation to be
+   promoted; sign its account in again instead. No session on a card's
+   `default` account may still be running (stop it with the old Controller).
+2. Web release (`.#cowboy-web-release`) first: the new Web works with the
+   old Controller, and it never opens a retired card's sign-in on the
+   device. Reload every open tab afterwards, so no older tab still holds a
+   cached legacy sign-in challenge.
+3. Controller release (`.#cowboy-controller-release`): runs both gates, then
+   the cleanup.
+4. No Machine release is needed for the upgrade; Machines keep the `default`
+   identity. A later Machine release adds the wipe hardening (retried
+   removal, failed-wipe reporting, a worker roll on a new wipe, directory
+   sync before acknowledging).

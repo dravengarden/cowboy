@@ -10,7 +10,15 @@
 use super::*;
 use std::borrow::Cow;
 
-const RETIREMENT_ADMITTED: &str = "retirement-admitted";
+const RETIREMENT_ADMITTED: &str = "retirement-admitted.json";
+
+/// The startup gate's admission (`admitted_retirement`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdmittedRetirement {
+    pub dataset: String,
+    pub wipes: BTreeMap<String, u64>,
+}
 
 /// Refusal of a root write whose requested Provider is retired.
 pub const ROOT_RETIRED: &str = "named_account_required";
@@ -73,16 +81,22 @@ impl ProviderAuthService {
         })
     }
 
-    /// Whether the retirement's startup gate passed once on this Service:
-    /// from then on no root write reaches a card Provider and Machines
-    /// enrolled later never held a card credential, so later starts (a
-    /// reboot) need not wait for every Machine again.
-    pub fn retirement_admitted(&self) -> bool {
-        self.root.join(RETIREMENT_ADMITTED).is_file()
+    /// What the retirement's startup gate admitted on this Service: its
+    /// dataset and each card Provider's root wipe generation. A later start
+    /// whose dataset and wipes are exactly these needs no Machine check (a
+    /// reboot with a Machine offline); any change (a rollback signed a card in
+    /// and out again) checks again.
+    pub fn admitted_retirement(&self) -> Option<AdmittedRetirement> {
+        let bytes = fs::read(self.root.join(RETIREMENT_ADMITTED)).ok()?;
+        serde_json::from_slice(&bytes).ok()
     }
 
-    pub fn mark_retirement_admitted(&self) -> Result<()> {
-        atomic_write(&self.root.join(RETIREMENT_ADMITTED), b"1\n", 0o600)
+    pub fn record_admitted_retirement(&self, admitted: &AdmittedRetirement) -> Result<()> {
+        atomic_write(
+            &self.root.join(RETIREMENT_ADMITTED),
+            &serde_json::to_vec(admitted)?,
+            0o600,
+        )
     }
 
     /// Finish every legacy move whose root wipe already landed: a Controller

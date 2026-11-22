@@ -453,7 +453,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         &args,
         core_security.as_ref(),
         &plugin_dir,
-        &service_id,
+        (&service_id, &provider_auth),
         managed_export_policy,
         &runtime_health,
         &store_shutdown_rx,
@@ -514,7 +514,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     };
     let machine_presence_task =
         spawn_machine_presence_sweeper(store.as_ref(), &machine_snapshots, &shutdown_rx);
-    admit_retirement(&usage, &provider_auth, store.as_ref()).await?;
+    restore_provider_reset_schedules(&usage, store.as_ref()).await?;
     let reset_task = spawn_provider_reset_timer(usage.clone(), store.clone(), shutdown_rx.clone());
     let supervisor = Arc::new(
         Supervisor::new(

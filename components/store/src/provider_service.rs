@@ -44,12 +44,13 @@ const VAULT_DOMAIN: &[u8] = b"cowboy-provider-auth-vault-v1\0";
 static ATOMIC_WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 mod deliveries;
+pub use deliveries::{Delivery, Recipient};
 pub mod grants;
 mod legacy_moves;
 use legacy_moves::LEGACY_MOVES;
 pub use legacy_moves::LegacyMove;
 mod root_retirement;
-pub use root_retirement::ROOT_RETIRED;
+pub use root_retirement::{AdmittedRetirement, ROOT_RETIRED};
 mod portable_accounts;
 mod scope_adoption;
 

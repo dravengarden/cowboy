@@ -2534,9 +2534,10 @@ fn provider_auth_roll_target(
     // a refresh written by this Machine's own Provider is already shared by
     // every worker, and rolling every session for it (every 8 hours for
     // Claude) restarted dozens of idle native runtimes at once.
-    (action == crate::machine_protocol::ProviderAuthAction::Apply
-        && receipt.auth_generation_advanced
-        && receipt.runtime_changed)
+    // A new wipe always rolls the account's workers: a live worker may still
+    // hold the wiped credential (in its environment or memory).
+    let wiped = action == crate::machine_protocol::ProviderAuthAction::Wipe;
+    (receipt.auth_generation_advanced && (wiped || receipt.runtime_changed))
         .then(|| receipt.provider_id.clone())
 }
 
@@ -4187,9 +4188,16 @@ mod tests {
         );
         receipt.auth_generation_advanced = true;
         assert_eq!(
+            provider_auth_roll_target(&receipt, ProviderAuthAction::Wipe).as_deref(),
+            Some("codex")
+        );
+        // A replayed wipe (no new generation) rolls nothing again.
+        receipt.auth_generation_advanced = false;
+        assert_eq!(
             provider_auth_roll_target(&receipt, ProviderAuthAction::Wipe),
             None
         );
+        receipt.auth_generation_advanced = true;
         // A refresh this Machine produced: nothing its workers read changed.
         receipt.runtime_changed = false;
         assert_eq!(

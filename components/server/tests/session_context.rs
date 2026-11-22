@@ -109,9 +109,15 @@ impl Fixture {
         migrations.run(&store).await.unwrap();
         sqlx::query("INSERT INTO machines(id,display_name,connection_mode,platform,architecture) VALUES ('offline-fixture','Fixture','outbound_wss','linux','x86_64')")
             .execute(&store).await.unwrap();
-        for id in ["source", "destination"] {
-            sqlx::query("INSERT INTO sessions(id,provider,machine_id,cwd,title,status,origin,agent_session_id) VALUES (?1,'codex','offline-fixture',?2,?1,'exited','web',?3)")
-                .bind(id).bind(root.path().to_str().unwrap()).bind(format!("original-native-{id}"))
+        // `retired` is a historical session of a retired card's default
+        // account; the others run on a Provider that never had a card.
+        for (id, provider) in [
+            ("source", "fixture-agent"),
+            ("destination", "fixture-agent"),
+            ("retired", "codex"),
+        ] {
+            sqlx::query("INSERT INTO sessions(id,provider,machine_id,cwd,title,status,origin,agent_session_id) VALUES (?1,?4,'offline-fixture',?2,?1,'exited','web',?3)")
+                .bind(id).bind(root.path().to_str().unwrap()).bind(format!("original-native-{id}")).bind(provider)
                 .execute(&store).await.unwrap();
         }
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -706,4 +712,28 @@ async fn account_inventory_serves_older_web_clients_after_the_card_retirement() 
         .await
         .unwrap();
     assert_eq!(foreign.status(), 409);
+}
+
+#[tokio::test]
+async fn a_retired_default_session_refuses_input_before_any_change() {
+    let mut fixture = Fixture::new().await;
+    let (_controller, base) = fixture.start().await;
+    // A legacy interrupt queues nothing and cancels nothing.
+    let response = fixture
+        .request(
+            reqwest::Method::POST,
+            &format!("{base}/api/sessions/retired/prompt"),
+        )
+        .json(&json!({"text":"continue","delivery":"interrupt","operation":"retired-interrupt"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 409);
+    assert!(
+        response
+            .text()
+            .await
+            .unwrap()
+            .contains("retired legacy default account")
+    );
 }

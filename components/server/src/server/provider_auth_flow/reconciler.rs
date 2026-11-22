@@ -7,8 +7,10 @@
 //! vault and each portable account) to each connected, enrolled Machine whose
 //! acknowledgement is missing, and recomputes the scope's distribution state
 //! from the acknowledgements. A recipient that fails backs off in memory,
-//! keyed by Machine id (not by connection), up to an hour; a connect or
-//! inventory report of that Machine resets it. Nothing is owned per task:
+//! keyed by Machine id (not by connection), up to an hour; a new connection
+//! of that Machine resets it. Automatic repairs of a failed projection go
+//! through this loop too: an inventory contradicting an acknowledgement only
+//! forgets it, so a Machine reporting the same failure keeps its backoff. Nothing is owned per task:
 //! an acknowledgement or a newer generation simply ends the resends.
 use super::*;
 use std::collections::{BTreeSet, HashMap};
@@ -63,7 +65,44 @@ impl Backoff {
 static BACKOFF: LazyLock<parking_lot::Mutex<Backoff>> = LazyLock::new(Default::default);
 static NUDGE: LazyLock<tokio::sync::Notify> = LazyLock::new(tokio::sync::Notify::new);
 
-/// Run a pass soon; `machine` connected or reported, so retry it at once.
+/// A Machine's fresh inventory: forget each root acknowledgement it
+/// contradicts (the Provider's projection failed, or it reports an older
+/// generation than it acknowledged), then run a pass. The backoff of a
+/// recipient that keeps reporting the same failed generation stays; only a
+/// new connection (or a newer generation) makes it due sooner.
+pub(in crate::server) fn observe_inventory(
+    state: &AppState,
+    machine: &str,
+    plugins: &[crate::machine_protocol::PluginInventory],
+) {
+    for plugin in plugins {
+        let Some(known) = state
+            .provider_auth
+            .deliveries(&plugin.plugin_id)
+            .remove(machine)
+        else {
+            continue;
+        };
+        if contradicts(plugin, known.generation)
+            && let Err(error) = state
+                .provider_auth
+                .forget_delivery(&plugin.plugin_id, machine)
+        {
+            tracing::warn!(%error, %machine, provider_id = %plugin.plugin_id, "forgetting a contradicted delivery acknowledgement");
+        }
+    }
+    nudge(None);
+}
+
+/// Whether `plugin`'s report contradicts an acknowledgement of `generation`.
+fn contradicts(plugin: &crate::machine_protocol::PluginInventory, generation: u64) -> bool {
+    !failed_provider_auth_projection_ids(std::slice::from_ref(plugin)).is_empty()
+        || plugin
+            .auth_generation
+            .is_some_and(|reported| reported < generation)
+}
+
+/// Run a pass soon; `machine` connected, so retry it at once.
 pub(in crate::server) fn nudge(machine: Option<&str>) {
     if let Some(machine) = machine {
         BACKOFF.lock().reset_machine(machine);
@@ -121,14 +160,9 @@ async fn pass(state: &Arc<AppState>) {
     let Some(store) = state.store.as_ref() else {
         return;
     };
-    let Ok(machines) = store.list_machines().await else {
+    let Ok(recipients) = store.credential_recipients().await else {
         return;
     };
-    let recipients: Vec<String> = machines
-        .into_iter()
-        .filter(|machine| !machine.revoked)
-        .map(|machine| machine.id)
-        .collect();
     let connected = state.machine_control.connected_machine_ids();
     for (account, scope, statuses) in scopes(state) {
         for status in statuses {
@@ -184,6 +218,29 @@ mod tests {
 
     fn key(machine: &str) -> Key {
         (machine.into(), Default::default(), "codex".into())
+    }
+
+    fn inventory(
+        generation: u64,
+        state: crate::machine_protocol::ProviderMaterializationState,
+    ) -> crate::machine_protocol::PluginInventory {
+        serde_json::from_value(serde_json::json!({
+            "plugin_id": "codex", "plugin_version": "1.0.0", "plugin_kind": "agent_provider",
+            "generation_digest": "d", "contract_fingerprint": "f", "state": "active",
+            "auth_generation": generation, "replica_state": "current", "materialization_state": state,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn only_contradicting_evidence_forgets_an_acknowledgement() {
+        use crate::machine_protocol::ProviderMaterializationState::{
+            Current, Failed, NotInstalled,
+        };
+        assert!(!contradicts(&inventory(16, NotInstalled), 16));
+        assert!(!contradicts(&inventory(17, Current), 16));
+        assert!(contradicts(&inventory(16, Failed), 16));
+        assert!(contradicts(&inventory(15, Current), 16));
     }
 
     #[test]
