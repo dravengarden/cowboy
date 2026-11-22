@@ -126,6 +126,9 @@ list and the affected paths, and give a reason for `high`.
   (`models/`), Plugin presets and copy, and CLI help. Deterministic gates
   (`just check`, the structure and layering ratchets, wire generation
   checks) carry those areas; size alone is not risk.
+- Both tiers choose Sol Max for Codex reviews. Astra Max and Fable are never
+  automatic: name one only when the user asked for that model, with
+  `risk: high` and that request as the reason.
 - A fix-confirmation round is routine. Continue the review child when it
   runs a routine-tier preset; a child on Astra Max refuses a routine round, so
   start a fresh routine review with the same task and base (it reuses the
