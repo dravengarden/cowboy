@@ -124,14 +124,32 @@ impl Store {
         dispatch!(self, active_managed_calls())
     }
 
-    /// A parent's active and total call counts, for its session budget.
+    /// A parent's active and total call counts.
     pub async fn managed_call_counts(&self, parent: &str) -> Result<(u64, u64)> {
         dispatch!(self, managed_call_counts(parent))
+    }
+
+    /// How many calls the parent admitted in one owner turn, for its per-turn
+    /// budget. Calls from before the turn column (`NULL`) belong to no turn.
+    pub async fn managed_call_turn_count(&self, parent: &str, owner_turn: i64) -> Result<u64> {
+        dispatch!(self, managed_call_turn_count(parent, owner_turn))
     }
 
     /// Returns the original record after duplicate admission. A caller must
     /// claim Queued -> Starting using CAS; inserting/observing grants no launch.
     pub async fn admit_managed_call(&self, record: &Record, request: &Request) -> Result<Record> {
+        self.admit_managed_call_in_turn(record, request, None).await
+    }
+
+    /// Like [`Self::admit_managed_call`], also recording the owner turn the
+    /// call counts against. A duplicate admission keeps the original row and
+    /// its turn.
+    pub async fn admit_managed_call_in_turn(
+        &self,
+        record: &Record,
+        request: &Request,
+        owner_turn: Option<i64>,
+    ) -> Result<Record> {
         ensure!(
             record.validate()
                 && record.state == State::Queued
@@ -139,7 +157,7 @@ impl Store {
                 && matches_request(record, request),
             "invalid managed call admission"
         );
-        dispatch!(self, admit_managed_call(record, request))
+        dispatch!(self, admit_managed_call(record, request, owner_turn))
     }
 
     /// Whether a person dismissed this call from the session's list.
@@ -294,23 +312,30 @@ macro_rules! implementation {
                 Ok((u64::try_from(active)?, u64::try_from(total)?))
             }
 
+            async fn managed_call_turn_count(&self, parent: &str, owner_turn: i64) -> Result<u64> {
+                let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM managed_agent_calls WHERE parent_session_id = $1 AND owner_turn = $2")
+                    .bind(parent).bind(owner_turn).fetch_one(&self.pool).await?;
+                Ok(u64::try_from(count)?)
+            }
+
             async fn active_managed_calls(&self) -> Result<Vec<Record>> {
                 sqlx::query_as::<_, Row>("SELECT call_id, parent_session_id, request_id, request_document, child_session_id, state, revision, document, document_sha256 FROM managed_agent_calls WHERE state IN ('queued', 'starting', 'running', 'waiting_input', 'stopping') ORDER BY admission_order LIMIT 1000")
                     .fetch_all(&self.pool).await?
                     .into_iter().map(|row| row.decode().map(|(record, _)| record)).collect()
             }
 
-            async fn admit_managed_call(&self, record: &Record, request: &Request) -> Result<Record> {
+            async fn admit_managed_call(&self, record: &Record, request: &Request, owner_turn: Option<i64>) -> Result<Record> {
                 let document = serde_json::to_string(record)?;
                 let request_document = serde_json::to_string(request)?;
                 Request::parse(request_document.as_bytes())?;
                 // A duplicate continuation also hits the active-child index.
                 // Observe by the original parent/request after any uniqueness
                 // conflict; another request owning that child yields no match.
-                sqlx::query("INSERT INTO managed_agent_calls (call_id, parent_session_id, request_id, revision, document, document_sha256, request_document, child_session_id, state) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT DO NOTHING")
+                sqlx::query("INSERT INTO managed_agent_calls (call_id, parent_session_id, request_id, revision, document, document_sha256, request_document, child_session_id, state, owner_turn) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT DO NOTHING")
                     .bind(&record.call_id).bind(&record.placement.parent_session_id).bind(&record.request_id)
                     .bind(i64::try_from(record.revision)?).bind(&document).bind(checksum(&document))
                     .bind(&request_document).bind(&record.child_session_id).bind(record.state.code())
+                    .bind(owner_turn)
                     .execute(&self.pool).await?;
                 let existing = self.managed_call_request(&record.placement.parent_session_id, &record.request_id)
                     .await?.ok_or_else(|| anyhow::anyhow!("managed call admission missing"))?;
@@ -434,6 +459,7 @@ mod tests {
         assert_review_reservations(&store, &first, &request).await;
         assert_multi_step_advance(&store, &first, &request).await;
         assert_notice_reconciliation(&store, &first, &request).await;
+        assert_owner_turn_counts(&store, &first, &request).await;
         drop(store);
         let _ = std::fs::remove_dir_all(root);
     }
@@ -522,6 +548,60 @@ mod tests {
             (stored.state, stored.revision),
             (State::Cancelled, requested.revision + 2)
         );
+    }
+
+    /// The per-turn budget counts the calls stamped with one owner turn. A
+    /// call without a stamp (admitted before the column) belongs to no turn, a
+    /// duplicate admission keeps the original stamp, and another parent's
+    /// calls never count.
+    async fn assert_owner_turn_counts(store: &Store, template: &Record, input: &Request) {
+        let session = |id: &str| {
+            serde_json::from_value(serde_json::json!({
+                "id":id,"provider":"codex","machine_id":"hawk","cwd":"/workspace",
+                "title":"Turn fixture","origin":"api","status":"running"
+            }))
+            .unwrap()
+        };
+        for id in ["turn-parent", "turn-other"] {
+            store.insert_session(&session(id)).await.unwrap();
+        }
+        let admit = |parent: &'static str, name: &'static str, turn: Option<i64>| {
+            let mut request = input.clone();
+            request.request_id = name.into();
+            let mut record = template.clone();
+            record.placement.parent_session_id = parent.into();
+            record.call_id = name.into();
+            record.child_session_id = format!("{name}-child");
+            record.request_id.clone_from(&request.request_id);
+            record.request_digest = request.digest();
+            async move {
+                store
+                    .admit_managed_call_in_turn(&record, &request, turn)
+                    .await
+                    .unwrap()
+            }
+        };
+        admit("turn-parent", "turn-a", Some(7)).await;
+        admit("turn-parent", "turn-b", Some(7)).await;
+        admit("turn-parent", "turn-c", Some(9)).await;
+        admit("turn-parent", "turn-none", Some(-1)).await;
+        admit("turn-parent", "turn-legacy", None).await;
+        admit("turn-other", "turn-d", Some(7)).await;
+        let count = |parent: &'static str, turn: i64| async move {
+            store.managed_call_turn_count(parent, turn).await.unwrap()
+        };
+        assert_eq!(count("turn-parent", 7).await, 2);
+        assert_eq!(count("turn-parent", 9).await, 1);
+        assert_eq!(count("turn-parent", -1).await, 1);
+        assert_eq!(count("turn-parent", 8).await, 0);
+        assert_eq!(count("turn-other", 7).await, 1);
+        // The legacy call is in the lifetime total but in no turn.
+        assert_eq!(store.managed_call_counts("turn-parent").await.unwrap().1, 5);
+        // A replay under another turn returns the original and does not move it.
+        let replay = admit("turn-parent", "turn-a", Some(9)).await;
+        assert_eq!(replay.call_id, "turn-a");
+        assert_eq!(count("turn-parent", 7).await, 2);
+        assert_eq!(count("turn-parent", 9).await, 1);
     }
 
     async fn assert_notice_reconciliation(store: &Store, template: &Record, input: &Request) {

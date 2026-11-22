@@ -1044,6 +1044,7 @@ async fn start(
         preset: target.recorded_preset(),
         selection,
         generation: generation.filter(|_| request.purpose.is_review()),
+        owner_turn: None,
     };
     // Continuation admission holds the child lifecycle fence while it
     // rechecks the child and inserts, so retirement cannot interleave.
