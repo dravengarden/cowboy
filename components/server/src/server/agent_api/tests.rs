@@ -298,9 +298,11 @@ fn transcript_chunks_coalesce_and_tool_updates_fold_into_their_call() {
         json!([{"seq":6,"to":6,"kind":"agent","text":"Run","truncated":true}])
     );
     assert_eq!(page["more"], true);
-    assert!(EventQuery::parse(&json!({"kinds":["thought"]}))
-        .err()
-        .is_some_and(|error| error.contains("\"thought\" is not one")));
+    assert!(
+        EventQuery::parse(&json!({"kinds":["thought"]}))
+            .err()
+            .is_some_and(|error| error.contains("\"thought\" is not one"))
+    );
     let aliases = EventQuery::parse(&json!({"kinds":["assistant","user_message"]})).unwrap();
     assert_eq!(aliases.kinds, ["agent", "user"]);
     assert!(EventQuery::parse(&json!({"limit":101})).is_err());
