@@ -818,6 +818,21 @@
         "url": "ssh://git@github.com/dravengarden/cowboy.git"
       }
     },
+    "crane": {
+      "locked": {
+        "lastModified": 1784248371,
+        "narHash": "sha256-0l0Y4D4wbZhp1Oi6h8OpbLtIm/4FN88oCf54MK2ZgiM=",
+        "owner": "ipetkov",
+        "repo": "crane",
+        "rev": "f7d151ec0bf52cf9662e2f59d7bea28588c2f070",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ipetkov",
+        "repo": "crane",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1779560665,
@@ -1461,6 +1476,7 @@
     "root": {
       "inputs": {
         "cowboy-workers": "cowboy-workers",
+        "crane": "crane",
         "nixpkgs": "nixpkgs_40",
         "rust-overlay": "rust-overlay_40"
       }
