@@ -250,6 +250,12 @@ export class AcpProxy {
       terminate(reason);
     };
     this.pending = new Map();
+    /**
+     * Parent prompts `agy` answered whose reply to the worker is not yet
+     * written (settlement still running), by the worker's request id: a forced
+     * exit still has to answer them, exactly once (`finalized`).
+     */
+    this.settling = new Map();
     /** Permission requests forwarded to the worker, with their session. */
     this.agentRequests = new Map();
     this.turns = new Map();
@@ -746,7 +752,20 @@ export class AcpProxy {
       // alongside the session itself (not after it).
       const children = this.subagents.cancelChildren(sessionId);
       const runtime = await this.runtime;
-      await Promise.all([runtime.facade.endTurn(sessionId, { cancelled: true }), children]);
+      const fenced = Promise.all([
+        runtime.facade.endTurn(sessionId, { cancelled: true }),
+        children,
+      ]);
+      if (this.subagents.owns(sessionId)) {
+        // A subagent's Stop reaches `agy` at once and starts its watchdog;
+        // the facade's cleanup drains beside it, never in front of it (it
+        // would also hold the worker's serialized input).
+        this.agent(message);
+        this.subagents.nativeCancelled(sessionId);
+        await fenced;
+        return;
+      }
+      await fenced;
     }
     this.agent(message);
     // From here `agy` has the cancel: a child it does not answer ends the unit.
@@ -875,9 +894,20 @@ export class AcpProxy {
    */
   settleExit() {
     if (this.killed === undefined) return;
-    for (const [id, record] of [...this.pending]) {
-      if (record.method !== "session/prompt" || record.internal) continue;
+    // Rows first: the worker must see every child end before the parent does.
+    this.subagents.exited();
+    const open = [
+      ...[...this.pending].filter(
+        ([, record]) => record.method === "session/prompt" && !record.internal,
+      ),
+      ...this.settling,
+    ];
+    for (const [id, record] of open) {
       this.pending.delete(id);
+      if (record.finalized) continue;
+      record.finalized = true;
+      const replyId = record.replyId ?? id;
+      this.settling.delete(replyId);
       const turn = this.turns.get(record.sessionId);
       const backend = turn?.childBackends?.length
         ? withChildren(turn, {
@@ -898,7 +928,7 @@ export class AcpProxy {
           : (TURN_ERROR_TEXT[backend.class] ?? TURN_ERROR_TEXT.unknown_refusal);
       this.client({
         jsonrpc: "2.0",
-        id: record.replyId ?? id,
+        id: replyId,
         error: {
           code: TURN_ERROR_CODE,
           message:
@@ -1099,6 +1129,8 @@ export class AcpProxy {
     const turn = this.turns.get(record.sessionId);
     // A correction prompt answers the worker's prompt it continues.
     const replyId = record.replyId ?? id;
+    // Registered until its reply is written: a forced exit answers it.
+    this.settling.set(replyId, record);
     // Checked synchronously, and every ending fences the turn's facade calls
     // before anything is awaited; an admitted correction reopens them.
     const problem = this.correction(turn, message);
@@ -1116,7 +1148,10 @@ export class AcpProxy {
       record.sessionId,
       message.result?.stopReason,
     );
-    if (problem && (await this.correct(record, turn, problem, replyId, settled, message))) return;
+    if (problem && (await this.correct(record, turn, problem, replyId, settled, message))) {
+      this.settling.delete(replyId);
+      return;
+    }
     if (turn?.structured) this.sealed.add(record.sessionId);
     const backend = withChildren(turn, attempts(turn, settled));
     if (this.turns.get(record.sessionId) === turn) this.turns.delete(record.sessionId);
@@ -1351,6 +1386,10 @@ export class AcpProxy {
    * typed compaction; a restating turn that failed restates again next time.
    */
   endPrompt(record, reply) {
+    // Said once: a forced exit may have answered this prompt already.
+    if (record.finalized) return;
+    record.finalized = true;
+    this.settling.delete(reply.id);
     const { sessionId } = record;
     if (record.compaction) {
       const { status, error } = compactionStatus(reply);

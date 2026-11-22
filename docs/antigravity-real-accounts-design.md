@@ -1492,21 +1492,28 @@ waiting, so a model can run two at once and collect both.
   Backend evidence is account-scoped: `agy`'s success lines carry no session
   id, so a child is `ok` with its own barrier, no refusal in its window and a
   success in the window (its own or a sibling's), and a sibling's refusal
-  fails it too.
+  fails it too; as for the parent, an errored prompt with otherwise clean
+  evidence is an unproven outcome. A helper process that cannot be confirmed
+  closed (a failed read, a timeout whose termination is not confirmed) is a
+  lost effect.
 - **Bounded.** One level only (a child's `Subagent` call fails), at most 2
   running at once and 8 started per turn, a prompt of at most 64 KiB, a report
   of at most 64 K characters, nothing in plan mode or before the mode is known.
 - **Nothing outlives the turn, and a stop fails closed.** The parent's prompt
   ending, its cancel or its Stop cancels every child (their facade turns are
   fenced and `agy` is asked to stop in the same tick) after the parent's own
-  fence; a child's own Stop (its row) cancels only that child. `agy` has 10 s
+  fence; a child's own Stop (its row) cancels only that child and reaches
+  `agy` at once, the facade's cleanup draining beside it. `agy` has 10 s
   from the moment the cancel reached it to confirm a stopped child by ending
   its prompt (an answer disarms the watchdog at once, whatever its
   settlement still takes); if it does not, the unit's `agy` process is killed
   (nothing could show the native work stopped), every parent prompt still open
   is answered with what is already known (a latched violation, a child's
-  refusal, a lost effect, else an unproven outcome) before the process exits,
-  and the row is failed, never reported stopped. A settled child's native session is
+  refusal, a lost effect, else an unproven outcome, including one `agy` had
+  already answered and whose settlement was still running, once) after the
+  children's rows are ended and before the process exits, and the row is
+  failed, never reported stopped. A turn's end waits separately for a child
+  `agy` did answer to settle its evidence (it never kills that child). A settled child's native session is
   closed (also one `agy` opens after its request timed out; if that cannot be
   closed, or never answers within 2 minutes, the unit's `agy` is ended), its facade
   channel revoked and its facade session forgotten; `agy` keeps its

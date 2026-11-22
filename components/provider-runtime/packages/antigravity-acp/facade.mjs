@@ -707,25 +707,36 @@ export class Facade {
     const deadline = Date.now() + timeoutMs;
     let truncated = false;
     let timedOut = false;
-    while (!process.closed) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) {
-        timedOut = true;
-        break;
+    let failure;
+    try {
+      while (!process.closed) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) {
+          timedOut = true;
+          break;
+        }
+        for (const { stream, bytes } of await this.read(process, Math.min(1000, remaining), {
+          lostIsUncertain,
+        })) {
+          const room = Math.max(0, maxBytes - out.size);
+          const kept = bytes.subarray(0, room);
+          out.size += kept.length;
+          (stream === "stderr" ? out.stderr : out.stdout).push(kept);
+          if (stream !== "stderr") out.lines += kept.toString().split("\n").length - 1;
+          if (kept.length < bytes.length || (maxLines && out.lines > maxLines)) truncated = true;
+        }
+        if (truncated) break;
       }
-      for (const { stream, bytes } of await this.read(process, Math.min(1000, remaining), {
-        lostIsUncertain,
-      })) {
-        const room = Math.max(0, maxBytes - out.size);
-        const kept = bytes.subarray(0, room);
-        out.size += kept.length;
-        (stream === "stderr" ? out.stderr : out.stdout).push(kept);
-        if (stream !== "stderr") out.lines += kept.toString().split("\n").length - 1;
-        if (kept.length < bytes.length || (maxLines && out.lines > maxLines)) truncated = true;
-      }
-      if (truncated) break;
+    } catch (error) {
+      failure = error;
     }
-    if (!process.closed) await this.terminate(process).catch(() => {});
+    // Whatever ended the loop, the process is not left running unconfirmed: a
+    // helper that may still publish is an effect of unknown outcome.
+    if (!process.closed) {
+      const closed = await this.terminate(process).catch(() => false);
+      if (!closed && !readiness) throw new UncertainEffect("process/terminate");
+    }
+    if (failure !== undefined) throw failure;
     return {
       exitCode: process.exitCode,
       stdout: Buffer.concat(out.stdout).toString(),

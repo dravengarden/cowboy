@@ -34,6 +34,8 @@ export const SUBAGENT_GUIDANCE = [
 const REQUEST_TIMEOUT_MS = 30_000;
 /** How long `agy` has to confirm a stopped child before the unit is ended. */
 const SETTLE_TIMEOUT_MS = 10_000;
+/** How long an answered child's backend evidence may take to settle (its log barrier waits 10 s). */
+const EVIDENCE_WAIT_MS = 15_000;
 /** Settled children kept for a later wait or stop, per proxy. */
 const MAX_KEPT = 64;
 /** The most configuration replays a child gets from its parent. */
@@ -93,12 +95,14 @@ export class Subagents {
       refusalText = (klass) => `Antigravity refused the request (${klass}).`,
       settleMs = SETTLE_TIMEOUT_MS,
       requestMs = REQUEST_TIMEOUT_MS,
+      evidenceMs = EVIDENCE_WAIT_MS,
     } = {},
   ) {
     this.proxy = proxy;
     this.refusalText = refusalText;
     this.settleMs = settleMs;
     this.requestMs = requestMs;
+    this.evidenceMs = evidenceMs;
     /** Whether the worker's `initialize` declared `clientCapabilities.subagents`. */
     this.supported = false;
     /** Per parent session: the setup a child repeats and what it configured. */
@@ -236,11 +240,12 @@ export class Subagents {
       });
       if (timeoutMs !== null) {
         timer = setTimeout(() => {
-          uncount();
           if (!creating) {
             proxy.pending.delete(id);
             return fail(new Error(`${method} timed out`));
           }
+          // The open stays counted until it is reconciled: frames of the
+          // session it may still create stay held, never read as the parent's.
           // A session `agy` may still open: close it when it does, and end
           // the unit if no answer ever comes or the close fails.
           const late = {
@@ -249,14 +254,16 @@ export class Subagents {
               clearTimeout(expiry);
               const sessionId = message.result?.sessionId;
               if (typeof sessionId === "string") {
-                this.opening.set(sessionId, []);
+                this.adopt(sessionId);
                 this.closeById(sessionId, true);
               }
+              uncount();
             },
           };
           const expiry = setTimeout(() => {
             if (proxy.pending.get(id) !== late) return;
             proxy.pending.delete(id);
+            uncount();
             this.terminate("a subagent session request was never answered");
           }, LATE_REPLY_MS);
           expiry.unref?.();
@@ -576,12 +583,17 @@ export class Subagents {
     // anything more and its commands stop.
     await proxy.facade.endTurn(child.id).catch(() => {});
     const runtime = await proxy.runtime;
-    const settled = await runtime.evidence
+    let settled = await runtime.evidence
       .settle(child.cursor, child.id, message.result?.stopReason)
       .catch(() => ({ class: "unknown_refusal" }));
     if (proxy.turns.get(child.id) === turn) proxy.turns.delete(child.id);
     if (!RUNNING.has(child.state)) return;
     const violation = turn?.violation;
+    // As for the parent: an errored prompt whose evidence reads clean is an
+    // outcome nobody can prove, never a clean one.
+    if (message.error !== undefined && settled.class === "ok") {
+      settled = { ...settled, class: "unknown_refusal" };
+    }
     // The parent's reply carries the worst of what its children settled to.
     if (settled.class !== "ok") (child.parentTurn.childBackends ??= []).push(settled);
     if (violation !== undefined) {
@@ -808,17 +820,40 @@ export class Subagents {
       Promise.all(running.map((child) => child.done)),
       pause(this.settleMs + 500),
     ]);
-    const stuck = running.filter((child) => RUNNING.has(child.state));
-    if (stuck.some((child) => child.id !== undefined)) {
+    // The native watchdog is the only kill deadline: `agy` that never answered
+    // the prompt ends the unit; one that answered gets its own, separate time
+    // to settle the child's evidence.
+    const silent = running.filter((child) => RUNNING.has(child.state) && !child.replied);
+    if (silent.some((child) => child.id !== undefined)) {
       this.terminate("a subagent did not confirm it stopped");
     }
-    for (const child of stuck) {
+    const answered = running.filter((child) => RUNNING.has(child.state) && child.replied);
+    if (answered.length) {
+      await Promise.race([
+        Promise.all(answered.map((child) => child.done)),
+        pause(this.evidenceMs),
+      ]);
+    }
+    for (const child of running.filter((item) => RUNNING.has(item.state))) {
       this.proxy.turns.delete(child.id);
       this.finishChild(child, "failed", {
         stopReason: "error",
         error: "Antigravity did not confirm the subagent stopped",
       });
       // A start still opening ends through its own stale check.
+      if (child.id === undefined) child.settled();
+    }
+  }
+
+  /** `agy` is gone: every row still running ends as failed, before the parent's reply. */
+  exited() {
+    for (const child of [...this.children.values()]) {
+      if (!RUNNING.has(child.state)) continue;
+      this.proxy.turns.delete(child.id);
+      this.finishChild(child, "failed", {
+        stopReason: "error",
+        error: "Antigravity ended before the subagent finished",
+      });
       if (child.id === undefined) child.settled();
     }
   }

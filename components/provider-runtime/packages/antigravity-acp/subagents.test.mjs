@@ -1067,7 +1067,7 @@ test("an answered prompt disarms the stop watchdog before its settlement complet
   assert.equal((await proxy.subagents.wait("s", id, 0)).state, "cancelled");
 });
 
-test("the stop watchdog starts when the cancel reaches agy, not before", async () => {
+test("a child's Stop reaches agy at once, while the facade's cleanup drains beside it", async () => {
   const made = await parent();
   const { proxy, agent, control } = made;
   const id = await startChild(made);
@@ -1078,15 +1078,103 @@ test("the stop watchdog starts when the cancel reaches agy, not before", async (
     method: "session/cancel",
     params: { sessionId: id },
   });
-  await new Promise((done) => setTimeout(done, 60));
-  // Cleanup is still running: agy has not been asked, so nothing is overdue.
-  assert.equal(sent(agent, "session/cancel").length, 0);
-  assert.deepEqual(made.terminated, []);
-  await stopping;
+  await new Promise((done) => setTimeout(done, 20));
+  // Cleanup is still running, yet agy already has the cancel.
   assert.equal(sent(agent, "session/cancel").length, 1);
   await endPrompt(made, id, "cancelled");
+  await stopping;
   await new Promise((done) => setTimeout(done, 80));
   assert.deepEqual(made.terminated, []);
+  assert.equal((await proxy.subagents.wait("s", id, 0)).state, "cancelled");
+});
+
+test("a silent child ends the unit at the native deadline; an answered one is not killed by the turn's end", async () => {
+  // Answered: its evidence settles late, the parent's end waits for it.
+  const answered = await parent();
+  const id = await startChild(answered);
+  answered.control.settleDelay = 90;
+  const ended = answered.proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 9,
+    result: { stopReason: "end_turn" },
+  });
+  await flush(2);
+  await endPrompt(answered, id, "cancelled");
+  await ended;
+  assert.deepEqual(answered.terminated, []);
+  assert.equal((await answered.proxy.subagents.wait("s", id, 0)).state, "cancelled");
+});
+
+test("an errored child prompt with clean evidence is an unproven outcome for the parent too", async () => {
+  const made = await parent();
+  const { proxy, agent } = made;
+  const id = await startChild(made);
+  const prompt = agent.find((message) => message.method === "session/prompt");
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: prompt.id,
+    error: { code: -32603, message: "vendor error" },
+  });
+  await flush();
+  assert.equal((await proxy.subagents.wait("s", id, 0)).state, "failed");
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 9, result: { stopReason: "end_turn" } });
+  assert.match(made.client.at(-1).error.message, /antigravity_backend_refusal:unknown_refusal/);
+});
+
+test("a forced exit answers a parent reply that was already being settled, once, after its rows", async () => {
+  const made = await parent();
+  const { proxy, client, control } = made;
+  const id = await startChild(made);
+  await proxy.fromAgent(
+    childUpdate(id, {
+      sessionUpdate: "tool_call",
+      toolCallId: "b",
+      name: "run_command",
+      status: "in_progress",
+    }),
+  );
+  await proxy.fromAgent(
+    childUpdate(id, { sessionUpdate: "tool_call_update", toolCallId: "b", status: "completed" }),
+  );
+  // agy answers the parent; its settlement is still running when the unit ends.
+  control.settleDelay = 120;
+  const settling = proxy.fromAgent({ jsonrpc: "2.0", id: 9, result: { stopReason: "cancelled" } });
+  await flush(2);
+  client.length = 0;
+  proxy.terminate("a subagent did not confirm it stopped");
+  proxy.settleExit();
+  const kinds = client.map(
+    (message) => message.params?.update?.state?.state ?? message.error?.message,
+  );
+  assert.deepEqual(kinds, ["idle", `${VIOLATION_PREFIX}run_command`]);
+  await settling;
+  await new Promise((done) => setTimeout(done, 150));
+  // The original handler's own reply is dropped: the prompt was answered once.
+  assert.equal(client.filter((message) => message.id === 9).length, 1);
+});
+
+test("an open that timed out keeps holding unknown frames until it is reconciled", async () => {
+  const made = await parent();
+  const { proxy, agent, client, control } = made;
+  control.ignore.add("session/new");
+  const starting = proxy.subagents.start("s", { prompt: "x" }).then(
+    () => undefined,
+    (error) => error,
+  );
+  await flush(1);
+  const [created] = sent(agent, "session/new");
+  assert.match((await starting).message, /timed out/);
+  // A frame of a session nobody knows: still held, not the parent's.
+  client.length = 0;
+  await proxy.fromAgent(
+    childUpdate("late-7", { sessionUpdate: "config_option_update", configOptions: [] }),
+  );
+  assert.equal(client.length, 0);
+  await proxy.fromAgent({ jsonrpc: "2.0", id: created.id, result: { sessionId: "late-7" } });
+  await flush();
+  // Claimed by the late session and dropped with it, never read as root traffic.
+  assert.equal(client.length, 0);
+  assert.equal(proxy.subagents.pendingOpens, 0);
 });
 
 test("a stopped or answered child admits no more permissions at once", async () => {
