@@ -595,6 +595,11 @@ pub(super) fn force_cancel_grace(state: &AppState, session_id: &str) -> std::tim
 }
 
 pub(super) fn force_cancel_with_watchdog(state: &AppState, session_id: &str) -> Result<(), String> {
+    // Never cancel a retired session's live turn for a send that will only
+    // park; an explicit Stop takes its own path.
+    if let Some(refusal) = provider_accounts::retirement::session_refusal(state, session_id) {
+        return Err(refusal.to_owned());
+    }
     let Some(cancelled_revision @ (Status::Busy | Status::Starting, _)) =
         state.hub.status_revision(session_id)
     else {

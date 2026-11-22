@@ -198,6 +198,10 @@ async fn interrupt_once(
     if build_prompt_blocks(&request.text, &request.content).is_none() {
         return refuse("empty prompt");
     }
+    // Before any hold or cancellation: the replacement could only park.
+    if let Some(refusal) = super::provider_accounts::retirement::session_refusal(state, session) {
+        return refuse(refusal);
+    }
     if state.supervisor.delivery_target(session).as_ref() != Some(target) {
         return refuse("the captured turn has changed");
     }
