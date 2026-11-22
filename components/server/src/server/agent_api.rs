@@ -1160,7 +1160,9 @@ fn call_error(op: &str, echo: &str, error: String) -> Value {
             "; pass an explicit limit and continue from the returned cursor".to_owned()
         }
         "text_window_required" => {
-            "; pass {offset:0,chars:1000} (max 4000) and continue from range.next".to_owned()
+            // List reads (messages, queue, drafts) window each row with chars
+            // only; a single text read also pages with offset.
+            "; pass {chars:1000} (max 4000); a single text read also takes {offset} and continues from range.next".to_owned()
         }
         _ => String::new(),
     };

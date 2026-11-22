@@ -253,7 +253,8 @@ cannot continue using an owner snapshot after the parent closes or its account
 is disabled.
 
 Large document bodies and call-result text can be read with
-`{offset:0,chars:1000}`. An unwindowed read returns a small body whole, or
+`{offset:0,chars:1000}`; list reads such as messages, queue and drafts take
+`chars` only. An unwindowed read returns a small body whole, or
 `text_window_required` above 1,000 characters. It never silently turns a full
 read into a prefix: an older caller might otherwise append to that prefix and
 overwrite the document's remainder, or mistake partial findings for a complete
