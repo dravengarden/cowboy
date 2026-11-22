@@ -151,14 +151,17 @@ keys) replace every card.
   worker whose home it is) added entries meanwhile; a Machine whose wipe still
   left a projection reports it as `failed` (so every inventory report and
   reconnect sends the wipe again); and the Controller delivers a generation a
-  connected Machine failed again with backoff (5 s to 1 h, then hourly)
-  until it succeeds or is superseded, also for a wipe redelivered at
-  reconnect. The Machine's periodic credential scan reports an incomplete
-  wipe as failed too. A reconnecting Machine that still holds a moved root
-  generation receives that Provider's wipe only after its first credential
-  observation on the new connection (its scan publishes the inventory, then
-  any rotation candidate, which is routed into the account) plus 15 s, or
-  after 5 minutes when it reports nothing (older Machines, or no rotation). On 2026-11-21 Pika's root wipe on Hawk failed with
+  connected Machine failed again, to that Machine only, with backoff (5 s to
+  1 h, then hourly): one retry owner per recipient, account, Provider and
+  generation, ending when the Machine acknowledges it, the generation is
+  superseded or the Machine's connection is replaced (its reconnect
+  reconciles again). The Machine's periodic credential scan reports an
+  incomplete wipe as failed too. A reconnecting Machine that still holds a
+  moved root generation gets no root wipe of that Provider on that
+  connection, from any sender, until the generation is settled there: an
+  inventory reporting no pending refresh of it, or the promotion of its
+  refresh candidate, or 5 minutes for a Machine that reports nothing (older
+  Machines). A held delivery fails and is retried like any other. On 2026-11-21 Pika's root wipe on Hawk failed with
   `ENOTEMPTY` because a resumed `default` Codex session kept writing into its
   generation home, and nothing retried it until a later sign-out.
 

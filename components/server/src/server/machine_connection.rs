@@ -481,6 +481,14 @@ pub(super) async fn sync_provider_account_auth_to_machine(
     let envelope =
         provider_account_auth_envelope_for_machine(state, machine_id, provider_id, account_id)
             .await?;
+    // The one boundary every delivery passes: a held root wipe is refused
+    // (a failed delivery, retried) whoever sends it.
+    if account_id.is_default()
+        && envelope.action == crate::machine_protocol::ProviderAuthAction::Wipe
+        && provider_accounts::retirement::reconnect::held(machine_id, provider_id, &connection)
+    {
+        return Err(provider_accounts::retirement::reconnect::HELD.to_owned());
+    }
     state
         .provider_auth_sync
         .apply(&state.machine_control, &connection, envelope)
@@ -1197,9 +1205,9 @@ fn spawn_machine_reconnect_sync(
     for authentication in state.provider_auth.replica_statuses() {
         let sync_state = Arc::clone(state);
         let machine_id = hello.machine_id.clone();
-        // The wipe of a moved root generation this Machine still holds
-        // waits for its first credential observation (an offline rotation).
-        let deferred = state
+        // No root wipe reaches this Machine while it may hold an unreported
+        // rotation of the moved generation (held at the send boundary).
+        if let Some(moved) = state
             .provider_auth
             .legacy_move(&authentication.provider_id)
             .filter(|moved| {
@@ -1213,14 +1221,15 @@ fn spawn_machine_reconnect_sync(
                     moved.root_generation,
                 )
             })
-            .map(|_| provider_accounts::retirement::reconnect::defer(&machine_id));
+        {
+            provider_accounts::retirement::reconnect::hold(
+                &machine_id,
+                &authentication.provider_id,
+                connection,
+                moved.root_generation,
+            );
+        }
         tokio::spawn(async move {
-            if let Some(observation) = deferred {
-                use provider_accounts::retirement::reconnect::{
-                    COMPATIBILITY_WAIT, SETTLE, released,
-                };
-                released(observation, SETTLE, COMPATIBILITY_WAIT).await;
-            }
             let outcome = distribute_provider_auth(&sync_state, &authentication.provider_id).await;
             match sync_state.provider_auth.mark_distribution(
                 &authentication.provider_id,
@@ -1228,14 +1237,6 @@ fn spawn_machine_reconnect_sync(
                 outcome.state(),
             ) {
                 Ok(marked) => {
-                    if outcome.failed > 0 {
-                        retry_distribution(
-                            &sync_state,
-                            &sync_state.provider_auth,
-                            &Default::default(),
-                            &marked,
-                        );
-                    }
                     let replicas = BTreeMap::from([(marked.provider_id.clone(), outcome)]);
                     recover_failed_provider_sessions(&sync_state, &[marked], &replicas);
                 }

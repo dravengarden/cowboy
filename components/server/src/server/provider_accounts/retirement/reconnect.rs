@@ -1,27 +1,40 @@
 //! A Machine that was offline during an adoption may have rotated the moved
-//! root generation meanwhile. Its reconnect must not deliver the root wipe
-//! before the Machine has reported that rotation: the wipe deletes the
-//! writable projection, and a later credential scan skips a wiped
-//! generation. The wipe of such a Provider waits for the Machine's first
-//! credential observation on the new connection (its scan publishes the
-//! Plugin inventory first, then any refresh candidates, which the
-//! connection's read loop routes into the account in order), plus a short
-//! settle. A Machine that never reports (an older one) gets it after a
-//! bounded wait instead.
+//! root generation meanwhile. No root wipe of that Provider reaches it before
+//! the rotation is reported: the wipe deletes the writable projection, and a
+//! later credential scan skips a wiped generation.
+//!
+//! The hold is enforced where every Provider credential is sent to a Machine
+//! (`sync_provider_account_auth_to_machine`), keyed by the recipient's
+//! connection, the Provider and the moved generation, so no other Machine's
+//! reconciliation or a retry can bypass it. It is released only when that
+//! generation is settled on that connection: a credential observation whose
+//! inventory reports no pending refresh of it (or another generation), or the
+//! promotion of the Machine's refresh candidate of it. A Machine that never
+//! reports (an older one) is released after a bounded wait. A held send fails
+//! and is retried like any other failed delivery.
 use std::collections::HashMap;
 use std::sync::LazyLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
-use tokio::sync::watch;
 
-/// After the observation: its refresh candidates follow it on the connection.
-pub(in crate::server) const SETTLE: Duration = Duration::from_secs(15);
+use crate::machine_control::ConnectionToken;
+use crate::machine_protocol::{PluginInventory, ProviderMaterializationState};
+
 /// A Machine that never publishes an observation (compatibility).
 pub(in crate::server) const COMPATIBILITY_WAIT: Duration = Duration::from_secs(300);
 
-static AWAITING: LazyLock<Mutex<HashMap<String, watch::Sender<bool>>>> =
-    LazyLock::new(Mutex::default);
+/// The refusal of a held wipe (a failed delivery, retried).
+pub(in crate::server) const HELD: &str =
+    "root wipe held until the Machine reports its credential state";
+
+struct Hold {
+    connection: ConnectionToken,
+    generation: u64,
+    until: Instant,
+}
+
+static HOLDS: LazyLock<Mutex<HashMap<(String, String), Hold>>> = LazyLock::new(Mutex::default);
 
 /// Whether a Machine reporting `reported` still holds the moved root
 /// generation `moved_root` and may carry an unreported rotation of it.
@@ -29,34 +42,90 @@ pub(in crate::server) fn holds_moved_generation(reported: Option<u64>, moved_roo
     reported == Some(moved_root)
 }
 
-/// Register `machine` as awaiting its first credential observation on its
-/// new connection (shared by every deferred Provider of that Machine).
-pub(in crate::server) fn defer(machine: &str) -> watch::Receiver<bool> {
-    AWAITING
-        .lock()
-        .entry(machine.to_owned())
-        .or_insert_with(|| watch::channel(false).0)
-        .subscribe()
+/// Hold every root wipe of `provider` to `machine` on `connection` until
+/// `generation` is settled there.
+pub(in crate::server) fn hold(
+    machine: &str,
+    provider: &str,
+    connection: &ConnectionToken,
+    generation: u64,
+) {
+    hold_until(
+        machine,
+        provider,
+        connection,
+        generation,
+        Instant::now() + COMPATIBILITY_WAIT,
+    );
 }
 
-/// `machine` published a credential observation (a Plugin inventory event).
-pub(in crate::server) fn observed(machine: &str) {
-    if let Some(sender) = AWAITING.lock().remove(machine) {
-        sender.send_replace(true);
+fn hold_until(
+    machine: &str,
+    provider: &str,
+    connection: &ConnectionToken,
+    generation: u64,
+    until: Instant,
+) {
+    HOLDS.lock().insert(
+        (machine.to_owned(), provider.to_owned()),
+        Hold {
+            connection: connection.clone(),
+            generation,
+            until,
+        },
+    );
+}
+
+/// Whether a root wipe of `provider` to `machine` on `connection` is held.
+/// A hold of an earlier connection or past its bound is dropped.
+pub(in crate::server) fn held(machine: &str, provider: &str, connection: &ConnectionToken) -> bool {
+    held_at(machine, provider, connection, Instant::now())
+}
+
+fn held_at(machine: &str, provider: &str, connection: &ConnectionToken, now: Instant) -> bool {
+    let mut holds = HOLDS.lock();
+    let key = (machine.to_owned(), provider.to_owned());
+    match holds.get(&key) {
+        Some(hold) if hold.connection.same(connection) && now < hold.until => true,
+        Some(_) => {
+            holds.remove(&key);
+            false
+        }
+        None => false,
     }
 }
 
-/// Wait until it is safe to deliver a deferred wipe.
-pub(in crate::server) async fn released(
-    mut observation: watch::Receiver<bool>,
-    settle: Duration,
-    wait: Duration,
+/// `machine` published a credential observation on `connection`: release
+/// each held Provider whose moved generation it reports settled (another
+/// generation, or no refresh of it pending).
+pub(in crate::server) fn observed(
+    machine: &str,
+    connection: &ConnectionToken,
+    plugins: &[PluginInventory],
 ) {
-    if tokio::time::timeout(wait, observation.wait_for(|seen| *seen))
-        .await
-        .is_ok_and(|seen| seen.is_ok())
+    HOLDS.lock().retain(|(held_machine, provider), hold| {
+        if held_machine != machine || !hold.connection.same(connection) {
+            return true;
+        }
+        plugins
+            .iter()
+            .find(|plugin| &plugin.plugin_id == provider)
+            .is_some_and(|plugin| {
+                plugin.auth_generation == Some(hold.generation)
+                    && plugin.materialization_state == ProviderMaterializationState::Applying
+            })
+    });
+}
+
+/// The Machine's refresh candidate of `generation` was promoted.
+pub(in crate::server) fn settled(machine: &str, provider: &str, generation: u64) {
+    let mut holds = HOLDS.lock();
+    let key = (machine.to_owned(), provider.to_owned());
+    if holds
+        .get(&key)
+        .is_some_and(|hold| hold.generation == generation)
     {
-        tokio::time::sleep(settle).await;
+        holds.remove(&key);
     }
 }
 
@@ -64,30 +133,67 @@ pub(in crate::server) async fn released(
 mod tests {
     use super::*;
 
+    fn inventory(
+        provider: &str,
+        generation: u64,
+        state: ProviderMaterializationState,
+    ) -> PluginInventory {
+        serde_json::from_value(serde_json::json!({
+            "plugin_id": provider, "plugin_version": "1.0.0", "plugin_kind": "agent_provider",
+            "generation_digest": "d", "contract_fingerprint": "f", "state": "active",
+            "auth_generation": generation, "replica_state": "current",
+            "materialization_state": state,
+        }))
+        .unwrap()
+    }
+
     #[test]
-    fn only_a_machine_still_on_the_moved_generation_is_deferred() {
+    fn only_a_machine_still_on_the_moved_generation_is_held() {
         assert!(holds_moved_generation(Some(7), 7));
         assert!(!holds_moved_generation(Some(8), 7));
         assert!(!holds_moved_generation(None, 7));
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn a_deferred_wipe_waits_for_the_observation_or_the_compatibility_bound() {
-        let started = tokio::time::Instant::now();
-        let first = defer("observing-fixture");
-        let second = defer("observing-fixture");
-        let release = tokio::spawn(released(first, SETTLE, COMPATIBILITY_WAIT));
-        tokio::time::sleep(Duration::from_secs(10)).await;
-        assert!(!release.is_finished());
-        observed("observing-fixture");
-        release.await.unwrap();
-        assert_eq!(started.elapsed(), Duration::from_secs(10) + SETTLE);
-        // Every deferred Provider of the Machine is released, also late.
-        released(second, SETTLE, COMPATIBILITY_WAIT).await;
-        assert_eq!(started.elapsed(), Duration::from_secs(10) + SETTLE * 2);
-        // An older Machine that never reports still gets it.
-        let started = tokio::time::Instant::now();
-        released(defer("silent-fixture"), SETTLE, COMPATIBILITY_WAIT).await;
-        assert_eq!(started.elapsed(), COMPATIBILITY_WAIT);
+    #[test]
+    fn a_hold_is_per_connection_and_released_only_when_its_generation_settles() {
+        let connection = ConnectionToken::for_test("hold-a", "1");
+        let other = ConnectionToken::for_test("hold-a", "2");
+        hold("hold-a", "codex", &connection, 14);
+        assert!(held("hold-a", "codex", &connection));
+        assert!(!held("hold-b", "codex", &connection));
+        assert!(!held("hold-a", "grok", &connection));
+        // A pending refresh of the moved generation keeps it held.
+        observed(
+            "hold-a",
+            &connection,
+            &[inventory(
+                "codex",
+                14,
+                ProviderMaterializationState::Applying,
+            )],
+        );
+        assert!(held("hold-a", "codex", &connection));
+        // Another generation's candidate settles nothing.
+        settled("hold-a", "codex", 13);
+        assert!(held("hold-a", "codex", &connection));
+        settled("hold-a", "codex", 14);
+        assert!(!held("hold-a", "codex", &connection));
+        // An observation without a pending refresh settles it.
+        hold("hold-a", "codex", &connection, 14);
+        observed(
+            "hold-a",
+            &connection,
+            &[inventory(
+                "codex",
+                14,
+                ProviderMaterializationState::Current,
+            )],
+        );
+        assert!(!held("hold-a", "codex", &connection));
+        // A replaced connection, or the bound, drops it.
+        hold("hold-a", "codex", &connection, 14);
+        assert!(!held("hold-a", "codex", &other));
+        hold_until("hold-a", "codex", &connection, 14, Instant::now());
+        assert!(!held("hold-a", "codex", &connection));
     }
 }
