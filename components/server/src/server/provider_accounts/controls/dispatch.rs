@@ -4,6 +4,13 @@
 //! simplification" and "Revision 6: concurrent sessions per account").
 use super::*;
 
+/// Whether a dispatch is the owner's own send, the only kind that clears an
+/// ended rate limit. A notice, a scheduled draft or another agent's prompt is
+/// explicit for maintenance retries but never an owner send.
+pub(in crate::server) fn owner_send(explicit: bool, cmid: Option<&str>) -> bool {
+    explicit && crate::prompt_origin::origin_from_cmid(cmid).is_human()
+}
+
 /// The account gate of every dispatch of `session` (user prompts and
 /// supervised follow-ups alike). `Err` is the session's visible wait.
 pub(in crate::server) async fn before_dispatch(

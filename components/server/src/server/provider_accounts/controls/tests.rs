@@ -691,6 +691,23 @@ async fn an_uncertain_effect_parks_the_session_until_acknowledged() {
     assert_eq!(record["observed"], json!(3));
 }
 
+#[test]
+fn only_a_human_send_is_an_owner_send() {
+    assert!(owner_send(true, None));
+    assert!(owner_send(true, Some("composer-cmid")));
+    assert!(!owner_send(false, Some("composer-cmid")));
+    let agent = format!("agent-{}", "a".repeat(64));
+    for cmid in [
+        agent.as_str(),
+        "call-notice:call-1",
+        "session-notice:peer:op-1",
+        "__sched__draft-1",
+        "__wake__s",
+    ] {
+        assert!(!owner_send(true, Some(cmid)), "{cmid}");
+    }
+}
+
 #[tokio::test]
 async fn a_rate_limit_resumes_only_on_an_owner_send_after_it_ends() {
     let (_fake, controls, _root) = fixture().await;

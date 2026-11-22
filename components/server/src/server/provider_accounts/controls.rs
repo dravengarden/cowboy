@@ -36,7 +36,7 @@ pub(in crate::server) mod http;
 mod logout;
 mod plan;
 mod reconcile;
-pub(in crate::server) use dispatch::{before_dispatch, handoff};
+pub(in crate::server) use dispatch::{before_dispatch, handoff, owner_send};
 pub(in crate::server) use reconcile::{start, turn_end_listener};
 
 /// What the controls observe of the rest of the Controller. [`AppEnv`] is
