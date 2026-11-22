@@ -26,6 +26,14 @@ import {
 } from "./projection.mjs";
 import { fakeEndpoint } from "./test-endpoint.mjs";
 
+const hasBash = (() => {
+  try {
+    return execFileSync("sh", ["-c", "command -v bash"]).toString().trim() || false;
+  } catch {
+    return false;
+  }
+})();
+
 const hasFish = (() => {
   try {
     return execFileSync("sh", ["-c", "command -v fish"]).toString().trim() || false;
@@ -199,7 +207,10 @@ test("ReadFile returns a whole image as an MCP image block", async (t) => {
   const big = await facade.call("s1", "ReadFile", { path: "big.png" });
   assert.equal(big.content.length, 1);
   assert.match(big.content[0].text, /^\[binary content, 262144 bytes\]/);
-  // An explicit length keeps the byte range.
+  // An explicit length keeps the byte range; a null one is invalid.
+  const nulled = await facade.call("s1", "ReadFile", { path: "shot.png", length: null });
+  assert.equal(nulled.isError, true);
+  assert.match(nulled.content[0].text, /length must be between/);
   const ranged = await facade.call("s1", "ReadFile", { path: "shot.png", length: 4 });
   assert.deepEqual(ranged.content.length, 1);
   // The type follows the name asked for, not a symlink target's.
@@ -306,6 +317,7 @@ test("WriteFile and EditFile are conditional on what was read", async (t) => {
   assert.throws(() => readFileSync(join(base, "outside", "gone", "x.txt")));
   assert.throws(() => readFileSync(join(base, "outside", "gone")));
   // Writes stay inside the workspace root, also for a file read outside it.
+  // (A parent that cannot be listed: see the dangling-symlink probe test.)
   const secret = join(base, "outside", "secret.txt");
   await call("ReadFile", { path: secret });
   for (const path of ["escape/x.txt", "../x.txt", secret, "escape/secret.txt"]) {
@@ -350,25 +362,30 @@ test("RunCommand runs the user's shell as a login shell; internal helpers do not
   const starts = endpoint.calls
     .filter((entry) => entry.method === "process/start")
     .map((entry) => entry.params.argv);
+  const quoted = `'${root}'`;
   assert.deepEqual(starts[0], [
     facade.shell,
     "-l",
     "-c",
-    `cd -- '${root}' || exit 1\necho "login $#"`,
+    `\\command cd -- ${quoted} || exit 1; \\command [ "$(\\command pwd -P)" = ${quoted} ] || exit 1\necho "login $#"`,
   ]);
   const helper = starts.find((argv) => argv[2]?.includes("apply"));
   assert.deepEqual(helper.slice(0, 2), ["/bin/sh", "-c"]);
-  // Quotes in the directory stay one word; fish has its own syntax; an
-  // unknown shell and a managed call stay plain.
+  // Quotes in the directory stay one word; bash and zsh use `builtin`; fish
+  // has its own syntax; an unknown shell and a managed call stay plain.
   facade.root = "/w/it's";
-  assert.equal(facade.commandArgv("ls")[3], "cd -- '/w/it'\\''s' || exit 1\nls");
+  facade.shell = "/bin/bash";
+  assert.equal(
+    facade.commandArgv("ls")[3],
+    `\\builtin cd -- '/w/it'\\''s' || exit 1; \\command [ "$(\\command pwd -P)" = '/w/it'\\''s' ] || exit 1\nls`,
+  );
   facade.shell = "/usr/bin/fish";
   facade.root = "/w/it's \\";
   assert.deepEqual(facade.commandArgv("ls"), [
     "/usr/bin/fish",
     "-l",
     "-c",
-    "cd -- '/w/it\\'s \\\\'; or exit 1\nls",
+    "builtin cd '/w/it\\'s \\\\'; or exit 1; builtin test (builtin pwd -P) = '/w/it\\'s \\\\'; or exit 1\nls",
   ]);
   facade.shell = "/usr/bin/nu";
   assert.deepEqual(facade.commandArgv("ls"), ["/usr/bin/nu", "-c", "ls"]);
@@ -389,6 +406,20 @@ test("a login profile that changes directory does not move the command", async (
   assert.equal((await call("RunCommand", { command: "pwd" })).text, `Exit code: 0\n${root}\n`);
   const status = await call("RunCommand", { command: "exit 7" });
   assert.match(status.text, /^Exit code: 7/);
+});
+
+test("a profile's cd function cannot move the command", { skip: !hasBash }, async (t) => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "agy-shell-")));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  mkdirSync(join(base, "bin"));
+  // A "bash" whose environment defines `cd` (as a profile may) to go elsewhere.
+  writeFileSync(
+    join(base, "bin", "bash"),
+    `#!${hasBash}\ncd() { builtin cd ${base}; }\nexport -f cd\nexec ${hasBash} "$@"\n`,
+    { mode: 0o755 },
+  );
+  const { root, call } = await fixture(t, { shell: join(base, "bin", "bash") });
+  assert.equal((await call("RunCommand", { command: "pwd" })).text, `Exit code: 0\n${root}\n`);
 });
 
 test("fish runs the login command in its own syntax", { skip: !hasFish }, async (t) => {
@@ -658,6 +689,44 @@ test("a missing home or one that is the repository adds nothing twice", async (t
   writeFileSync(join(root, "AGENTS.md"), "ROOT_GUIDANCE\n");
   const projection = await buildProjection(facade, root);
   assert.equal(projection.split("ROOT_GUIDANCE").length, 2);
+});
+
+test("a dangling symlink is refused by its metadata; an unlistable parent still creates", async (t) => {
+  // The executor reports a dangling link's own metadata, and listing fails.
+  const { base, root, call } = await fixture(t, {
+    metadataNoFollow: true,
+    fail: (method) =>
+      method === "fs/readDirectory" ? { code: -32600, message: "permission denied" } : undefined,
+  });
+  symlinkSync(join(base, "outside", "gone"), join(root, "dangling"));
+  const refused = await call("WriteFile", { path: "dangling/x.txt", content: "x" });
+  assert.match(refused.text, /symlink whose target does not exist/);
+  assert.throws(() => readFileSync(join(base, "outside", "gone", "x.txt")));
+  // Nothing identifies a symlink: a create under a parent that cannot be
+  // listed goes ahead.
+  const created = await call("WriteFile", { path: "fresh/dir/a.txt", content: "a\n" });
+  assert.match(created.text, /^Created/);
+  assert.equal(readFileSync(join(root, "fresh", "dir", "a.txt"), "utf8"), "a\n");
+});
+
+test("a home that links into the repository gets no symlink handling", async (t) => {
+  const { base, root, facade } = await fixture(t);
+  execFileSync("git", ["-C", root, "init", "-q", "-b", "main"], { stdio: "pipe" });
+  writeFileSync(join(base, "outside", "AGENTS.md"), "OUTSIDE_GUIDANCE\n");
+  mkdirSync(join(root, "sub"));
+  symlinkSync(join(base, "outside", "AGENTS.md"), join(root, "sub", "AGENTS.md"));
+  // The reported home is outside the checkout but resolves into it.
+  symlinkSync(join(root, "sub"), join(base, "linked-home"));
+  facade.connection.info.userHomeDir = pathToFileURL(join(base, "linked-home")).href;
+  assert.doesNotMatch(await buildProjection(facade, root), /OUTSIDE_GUIDANCE/);
+});
+
+test("guidance whose decoded text was clipped is marked truncated", async (t) => {
+  const { root, facade } = await fixture(t);
+  // Exactly the byte bound, but invalid bytes decode to three bytes each.
+  writeFileSync(join(root, "AGENTS.md"), Buffer.alloc(PROJECTION_LIMITS.guidanceFile, 0xff));
+  const projection = await buildProjection(facade, root);
+  assert.match(projection, /\ufffd\n\[truncated\]\n/);
 });
 
 test("a home inside the repository is read by the repository's rules", async (t) => {

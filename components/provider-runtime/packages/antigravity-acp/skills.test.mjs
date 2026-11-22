@@ -223,13 +223,46 @@ test("repository skills are listed first under the section bound, shown by name"
     { name: "zz-repo", description: "Repo", path: "/w/zz/SKILL.md" },
     { name: "aa-repo", description: "Repo", path: "/w/aa/SKILL.md" },
   ];
-  const section = skillsSection(skills, "F");
-  assert.ok(Buffer.byteLength(section) < SKILL_LIMITS.section + 2048);
+  const section = skillsSection(skills, `COWBOY_UNTRUSTED_${"f".repeat(32)}`);
+  assert.ok(Buffer.byteLength(section) <= SKILL_LIMITS.section, `${Buffer.byteLength(section)}`);
   assert.match(section, /- zz-repo: Repo/);
   assert.match(section, /\[truncated: skill list limit reached\]/);
   const names = [...section.matchAll(/^- (\S+):/gm)].map((match) => match[1]);
   assert.deepEqual(names, [...names].sort());
   assert.equal(names[0], "aa-repo");
+});
+
+test("a repository that supplies enough skills never waits for the home", async (t) => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "agy-home-skills-")));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const home = join(base, "home");
+  skill(join(home, ".claude", "skills"), "slow", "---\nname: slow\n---");
+  // A home mount that answers only after 30 s.
+  const { root, facade, endpoint } = await fixture(t, {
+    home,
+    delay: (method, params) => (String(params?.path ?? "").includes(home) ? 30_000 : 0),
+  });
+  for (let index = 0; index < SKILL_LIMITS.skills; index++) {
+    const name = `r${String(index).padStart(2, "0")}`;
+    skill(join(root, ".claude", "skills"), name, `---\nname: ${name}\n---`);
+  }
+  const started = Date.now();
+  const skills = await discoverSkills(facade, [root], root, home);
+  assert.ok(Date.now() - started < 10_000, `${Date.now() - started} ms`);
+  assert.equal(skills.length, SKILL_LIMITS.skills);
+  assert.ok(!skills.some((entry) => entry.user));
+  assert.ok(!endpoint.calls.some((entry) => String(entry.params?.path ?? "").includes(home)));
+});
+
+test("a home that resolves into the repository gets no symlink handling", async (t) => {
+  const { base, root, facade } = await fixture(t);
+  mkdirSync(join(base, "outside", "evil"), { recursive: true });
+  writeFileSync(join(base, "outside", "evil", "SKILL.md"), "---\nname: evil\n---\n");
+  mkdirSync(join(root, "sub", ".claude", "skills"), { recursive: true });
+  symlinkSync(join(base, "outside", "evil"), join(root, "sub", ".claude", "skills", "evil"));
+  symlinkSync(join(root, "sub"), join(base, "linked-home"));
+  const skills = await discoverSkills(facade, [root], root, join(base, "linked-home"));
+  assert.deepEqual(skills, []);
 });
 
 test("a repository without skills adds no section", async (t) => {

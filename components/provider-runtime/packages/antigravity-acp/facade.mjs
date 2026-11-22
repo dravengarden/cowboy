@@ -416,17 +416,37 @@ export class Facade {
   }
 
   /**
-   * A missing component that is listed in its (existing, canonical) parent is
-   * a dangling symlink: its target cannot be canonicalized, so nothing shows
-   * it stays inside the root, and creating through it could write anywhere.
+   * Refuse a write through a dangling symlink: the first missing component
+   * of a path, under its existing canonical parent, may be a symlink whose
+   * target cannot be canonicalized, so nothing shows it stays inside the
+   * root and creating through it could write anywhere. It is refused only
+   * once identified: metadata that reports it (a symlink, or anything at a
+   * path canonicalize called missing), else its name in the parent's
+   * listing. A parent that cannot be listed (search and create but no
+   * read permission) identifies nothing.
    */
   async refuseDangling(parent, name, path) {
-    const listing = await this.rpc("fs/readDirectory", { path: url(parent) });
-    if ((listing.entries ?? []).some((entry) => entry?.fileName === name)) {
+    const component = posix.join(parent, name);
+    const refuse = () => {
       throw new ToolError(
-        `${path} passes through ${posix.join(parent, name)}, a symlink whose target does not exist; refused`,
+        `${path} passes through ${component}, a symlink whose target does not exist; refused`,
       );
+    };
+    try {
+      const metadata = await this.connection.call("fs/getMetadata", { path: url(component) });
+      if (metadata) refuse();
+    } catch (error) {
+      if (error instanceof ToolError) throw error;
+      if (!missing(error)) throw error;
     }
+    let listing;
+    try {
+      listing = await this.connection.call("fs/readDirectory", { path: url(parent) });
+    } catch (error) {
+      if (lost(error)) throw error;
+      return;
+    }
+    if ((listing?.entries ?? []).some((entry) => entry?.fileName === name)) refuse();
   }
 
   /**
@@ -447,7 +467,8 @@ export class Facade {
   }
 
   async readFile(session, { path, offset = 0, length: asked }) {
-    const length = asked ?? LIMITS.readBytes;
+    // Only an omitted length defaults; `null` stays invalid.
+    const length = asked === undefined ? LIMITS.readBytes : asked;
     if (!Number.isInteger(offset) || offset < 0) throw new ToolError("Invalid offset");
     if (!Number.isInteger(length) || length < 1 || length > LIMITS.readBytes) {
       throw new ToolError(`length must be between 1 and ${LIMITS.readBytes}`);
@@ -989,11 +1010,29 @@ export class Facade {
     if (this.managed) return [this.shell, "-c", command];
     // The `cd` is part of the script, not an `eval` around it: the shell
     // still execs the command's last simple command, so a stop reaches it.
+    // It is the builtin (a profile's `cd` function or alias cannot replace
+    // it), and the physical directory is checked against the canonical
+    // root before the command runs.
     if (name === "fish") {
-      return [this.shell, "-l", "-c", `cd -- ${fishLiteral(this.root)}; or exit 1\n${command}`];
+      const root = fishLiteral(this.root);
+      return [
+        this.shell,
+        "-l",
+        "-c",
+        `builtin cd ${root}; or exit 1; builtin test (builtin pwd -P) = ${root}; or exit 1\n${command}`,
+      ];
     }
     if (POSIX_SHELLS.has(name)) {
-      return [this.shell, "-l", "-c", `cd -- ${posixLiteral(this.root)} || exit 1\n${command}`];
+      const root = posixLiteral(this.root);
+      // `builtin` in bash and zsh; POSIX `command` elsewhere. The leading
+      // backslash keeps an alias from expanding.
+      const run = name === "bash" || name === "zsh" ? "\\builtin" : "\\command";
+      return [
+        this.shell,
+        "-l",
+        "-c",
+        `${run} cd -- ${root} || exit 1; \\command [ "$(\\command pwd -P)" = ${root} ] || exit 1\n${command}`,
+      ];
     }
     return [this.shell, "-c", command];
   }

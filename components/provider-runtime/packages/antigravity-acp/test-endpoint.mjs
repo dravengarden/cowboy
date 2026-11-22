@@ -44,6 +44,9 @@ export async function fakeEndpoint(
     delay = () => 0,
     // The target user's home directory the executor reports, if any.
     home = undefined,
+    // Metadata of a dangling symlink reports the link (no-follow) instead
+    // of a missing path.
+    metadataNoFollow = false,
   } = {},
 ) {
   const toReal = (path) => (path.startsWith(virtual) ? root + path.slice(virtual.length) : path);
@@ -81,6 +84,13 @@ export async function fakeEndpoint(
     }),
     "fs/getMetadata": (params) => {
       const link = lstatSync(path(params));
+      if (metadataNoFollow && link.isSymbolicLink()) {
+        try {
+          statSync(path(params));
+        } catch {
+          return { isDirectory: false, isFile: false, isSymlink: true, size: link.size };
+        }
+      }
       const stat = statSync(path(params));
       return {
         isDirectory: stat.isDirectory(),

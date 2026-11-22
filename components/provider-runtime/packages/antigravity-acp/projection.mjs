@@ -112,6 +112,13 @@ async function readGuidance(facade, file, root, { follow = false } = {}) {
   try {
     const canonical = fileURLToPath((await call("fs/canonicalize", { path: at })).path);
     if (follow) {
+      // A home whose directory resolves into the repository (a home path
+      // outside it that links into the checkout) gets no symlink handling;
+      // an explicit file link from a separate home is still followed.
+      const directory = fileURLToPath(
+        (await call("fs/canonicalize", { path: pathToFileURL(posix.dirname(file)).href })).path,
+      );
+      if (inside(root, directory)) return undefined;
       source = canonical;
       at = pathToFileURL(canonical).href;
     } else if (canonical !== file || !inside(root, canonical)) return undefined;
@@ -253,9 +260,12 @@ export async function buildProjection(
       // Cut at a character boundary, and debit what is actually emitted.
       let end = Math.min(limit, bytes.length);
       while (end > 0 && end < bytes.length && (bytes[end] & 0xc0) === 0x80) end--;
-      const text = clipUtf8(bytes.subarray(0, end).toString().replaceAll(fence, "[fence]"), limit);
+      const decoded = bytes.subarray(0, end).toString().replaceAll(fence, "[fence]");
+      const text = clipUtf8(decoded, limit);
       room -= Buffer.byteLength(text);
-      guidance.push(`--- ${file} ---\n${text}${bytes.length > limit ? "\n[truncated]" : ""}`);
+      // Cut when the raw bytes or the decoded text did not fit.
+      const cut = end < bytes.length || text.length < decoded.length;
+      guidance.push(`--- ${file} ---\n${text}${cut ? "\n[truncated]" : ""}`);
     }
   }
   const skills = await skilled;
