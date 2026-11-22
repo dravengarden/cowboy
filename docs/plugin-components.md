@@ -83,6 +83,16 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.135.0 records provider-runtime 1.3.19: Claude Code 2.1.330
+with Claude Agent ACP 0.109.1, native Codex 0.171.0 with Codex ACP 2.9.0 (whose
+declared range now covers it, so the `native-codex-version` delta is gone),
+Grok 1.0.92 and agy 1.5.14
+([release record](releases/agent-runtimes-2026-11-22.md)). Every Plugin that
+pins it advances one patch version: antigravity 0.2.19, claude-code 3.20.65,
+claude-deepseek 3.1.82, codex 3.6.24, codex-deepseek 3.1.82, deepseek-harness
+1.0.40 and grok 3.2.23. Recommended presets and new-session defaults are
+unchanged.
+
 Component release 3.134.0 records provider-runtime 1.3.18, whose
 `cowboy-antigravity-acp` 1.0.16 hosts subagents in the proxy: the facade's
 `Subagent` and `StopSubagent` tools start another native `agy` session inside
