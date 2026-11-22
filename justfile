@@ -610,11 +610,24 @@ provider-release-coverage CATALOG:
 claude-remote-check: claude-remote-prepare claude-remote-relay claude-remote-scripts
 
 # The execution host and the pinned Claude ACP sources the runtime tests load.
-claude-remote-prepare:
+claude-remote-prepare: claude-source-deps
     cargo build --locked --no-default-features --features machine-host -p cowboy-machine --bin cowboy-execution-host
-    mkdir -p dist/claude-source-tests
-    cp components/provider-runtime/packages/claude-agent-acp/package{,-lock}.json dist/claude-source-tests/
-    npm ci --prefer-offline --ignore-scripts --no-audit --no-fund --prefix dist/claude-source-tests
+
+# The pinned Claude ACP packages that `tools/register-memory-client.mjs`
+# resolves `ws` from. It reinstalls only when the pinned manifest changes, so
+# suites already running beside a later invocation never lose node_modules.
+claude-source-deps:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    src=components/provider-runtime/packages/claude-agent-acp
+    dst=dist/claude-source-tests
+    if cmp -s "$src/package.json" "$dst/package.json" && cmp -s "$src/package-lock.json" "$dst/package-lock.json" &&
+      test -f "$dst/node_modules/.package-lock.json"; then
+      exit 0
+    fi
+    mkdir -p "$dst"
+    cp "$src"/package{,-lock}.json "$dst/"
+    npm ci --prefer-offline --ignore-scripts --no-audit --no-fund --prefix "$dst"
 
 claude-remote-relay:
     cargo fmt --manifest-path plugins/claude-code/relay/Cargo.toml -- --check
@@ -643,11 +656,11 @@ provider-check: plugin-check claude-remote-check provider-scripts-check provider
 provider-scripts-check: provider-antigravity-check provider-runtime-scripts
 
 # Its facade suite alone waits out about 50s of real command deadlines.
-provider-antigravity-check:
+provider-antigravity-check: claude-source-deps
     node --import ./tools/register-memory-client.mjs --test components/provider-runtime/packages/antigravity-acp/*.test.mjs
     bun x --no-install biome format components/provider-runtime/packages/antigravity-acp components/provider-runtime/owned-sources.ts
 
-provider-runtime-scripts:
+provider-runtime-scripts: claude-source-deps
     bun test ./tools/mcp-bindings_test.ts
     node --import ./tools/register-memory-client.mjs --test tools/execution-probe_test.mjs
     bun x --no-install biome format components/provider-runtime/execution-connection.mjs components/provider-runtime/execution-probe.mjs tools/execution-probe_test.mjs plugins/codex/runtime/bindings.mjs
@@ -901,7 +914,9 @@ check: toolchain-check fmt structure-check docs-index-check protocol-contract-ch
     background clippy CARGO_BUILD_BUILD_DIR="$PWD/target/check-clippy" CARGO_INCREMENTAL=0
     background release-sources-check
     background zed-check
-    # Suites that read sources only and share no build directory.
+    # Suites that share no build directory. They resolve `ws` from the
+    # prepared Claude ACP packages, so install those before they start.
+    just claude-source-deps
     background provider-antigravity-check
     background provider-runtime-scripts
     background test-web
