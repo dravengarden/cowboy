@@ -106,6 +106,9 @@ const TERMINAL = new Set(["completed", "failed"]);
 /** `cowboy` server calls announced and not yet answered, per session. */
 const MAX_WAITING = 64;
 
+/** A tool call of one session: another session may reuse an ID. */
+const callKey = (sessionId, id) => `${sessionId}\u0000${id}`;
+
 /** A call's arguments as a comparable key (`agy`'s `toolSummary` dropped). */
 function argumentKey(input) {
   if (input === null || typeof input !== "object" || Array.isArray(input)) return "{}";
@@ -233,13 +236,16 @@ export function stripTier(message) {
  *   newChannel(), evidence: { mark(), settle(cursor, sessionId, stopReason) } }`
  */
 export class AcpProxy {
-  constructor({ agent, client, runtime, log = () => {} }) {
+  constructor({ agent, client, runtime, log = () => {}, terminate = () => {}, subagents = {} }) {
     this.agent = agent;
     this.client = client;
     this.runtime = runtime;
     this.log = log;
+    /** Ends the unit's `agy` (a stop `agy` never confirmed leaves nothing running unseen). */
+    this.terminate = terminate;
     this.pending = new Map();
-    this.agentRequests = new Set();
+    /** Permission requests forwarded to the worker, with their session. */
+    this.agentRequests = new Map();
     this.turns = new Map();
     /** Sessions whose structured managed turn ended: native text there is held. */
     this.sealed = new Set();
@@ -279,6 +285,7 @@ export class AcpProxy {
     /** The subagents this unit runs for its sessions (`subagents.mjs`). */
     this.subagents = new Subagents(this, {
       refusalText: (klass) => TURN_ERROR_TEXT[klass] ?? TURN_ERROR_TEXT.unknown_refusal,
+      ...subagents,
     });
     Promise.resolve(runtime).then(
       (ready) => {
@@ -372,14 +379,15 @@ export class AcpProxy {
   }
 
   /** `toolCall` as Cowboy shows it (see presentation.mjs). */
-  present(toolCall) {
+  present(toolCall, sessionId) {
     const id = toolCall?.toolCallId;
+    const key = typeof id === "string" ? callKey(sessionId, id) : undefined;
     const tool = presentedTool(toolCall?.name);
-    if (tool !== undefined && typeof id === "string") {
+    if (tool !== undefined && key !== undefined) {
       if (this.calls.size >= MAX_TOOL_CALLS) this.calls.delete(this.calls.keys().next().value);
-      this.calls.set(id, tool);
+      this.calls.set(key, tool);
     }
-    const known = typeof id === "string" ? this.calls.get(id) : undefined;
+    const known = key !== undefined ? this.calls.get(key) : undefined;
     // An extension tool shows as the MCP call it is (Cowboy, memory, ...).
     const name = typeof toolCall?.name === "string" ? toolCall.name : undefined;
     const route = name?.startsWith("mcp_cowboy_")
@@ -390,9 +398,9 @@ export class AcpProxy {
         ? presentExtension(toolCall, route)
         : presentToolCall(toolCall, { root: this.root, known });
     // The facade's answer, which `agy` never reports for an MCP tool.
-    if (typeof id === "string" && TERMINAL.has(toolCall?.status) && this.results.has(id)) {
-      const content = this.results.get(id);
-      this.results.delete(id);
+    if (key !== undefined && TERMINAL.has(toolCall?.status) && this.results.has(key)) {
+      const content = this.results.get(key);
+      this.results.delete(key);
       return content.length ? { ...shown, content } : shown;
     }
     return shown;
@@ -426,13 +434,15 @@ export class AcpProxy {
     if (!["tool_call", "tool_call_update"].includes(update?.sessionUpdate)) return message;
     this.track(message.params.sessionId, update);
     const id = update.toolCallId;
-    const known = typeof id === "string" ? this.calls.get(id) : undefined;
+    const sessionId = message.params.sessionId;
+    const key = typeof id === "string" ? callKey(sessionId, id) : undefined;
+    const known = key !== undefined ? this.calls.get(key) : undefined;
     if ((presentedTool(update.name) ?? known) === "UpdatePlan") {
-      if (typeof id === "string" && known === undefined) this.calls.set(id, "UpdatePlan");
-      if (typeof id === "string" && TERMINAL.has(update.status)) this.results.delete(id);
+      if (key !== undefined && known === undefined) this.calls.set(key, "UpdatePlan");
+      if (key !== undefined && TERMINAL.has(update.status)) this.results.delete(key);
       return undefined;
     }
-    const shown = this.present(update);
+    const shown = this.present(update, sessionId);
     if (shown === update) return message;
     return { ...message, params: { ...message.params, update: shown } };
   }
@@ -500,7 +510,10 @@ export class AcpProxy {
     const id = this.bind(call);
     if (id === undefined) return;
     if (this.results.size >= MAX_TOOL_CALLS) this.results.delete(this.results.keys().next().value);
-    this.results.set(id, resultContent(call.name, call.args, result, this.root));
+    this.results.set(
+      callKey(call.sessionId, id),
+      resultContent(call.name, call.args, result, this.root),
+    );
   }
 
   /** A running command's output so far, shown on its tool call. */
@@ -540,7 +553,15 @@ export class AcpProxy {
     if (message === null || typeof message !== "object" || Array.isArray(message)) return;
     const { id, method } = message;
     if (typeof method !== "string") {
-      if (this.agentRequests.delete(id)) this.agent(message);
+      if (this.agentRequests.has(id)) {
+        const sessionId = this.agentRequests.get(id);
+        this.agentRequests.delete(id);
+        // An answer that arrives after its subagent ended grants nothing.
+        if (this.subagents.owns(sessionId) && !this.subagents.active(sessionId)) {
+          return this.agent({ jsonrpc: "2.0", id, result: { outcome: { outcome: "cancelled" } } });
+        }
+        this.agent(message);
+      }
       return;
     }
     if (id === undefined) {
@@ -834,6 +855,11 @@ export class AcpProxy {
   async fromAgent(message) {
     if (message === null || typeof message !== "object" || Array.isArray(message)) return;
     const { id, method } = message;
+    // A subagent's session the worker has not been told about yet: nothing of
+    // it reaches the worker (it would read as the parent's) until it is.
+    if (typeof method === "string" && this.subagents.holds(message.params?.sessionId)) {
+      return this.subagents.hold(message);
+    }
     if (typeof method === "string") {
       if (id === undefined) {
         if (method === "session/update") {
@@ -893,7 +919,11 @@ export class AcpProxy {
       // for any tool but the facade's is rejected here, never shown; so is
       // a managed child's request for any session but its own.
       const name = message.params?.toolCall?.name;
-      if (!this.allows(name) || this.foreignSession(message.params)) {
+      // A subagent that ended asks for nothing more.
+      const ended =
+        this.subagents.owns(message.params?.sessionId) &&
+        !this.subagents.active(message.params.sessionId);
+      if (!this.allows(name) || this.foreignSession(message.params) || ended) {
         const options = Array.isArray(message.params?.options) ? message.params.options : [];
         const reject =
           options.find((option) => option?.kind === "reject_once") ??
@@ -912,7 +942,9 @@ export class AcpProxy {
       // Cowboy's own tools need no prompt, like a Claude session's default
       // bypassPermissions; plan mode still asks.
       const sessionId = message.params?.sessionId;
-      const mode = this.modes.get(sessionId);
+      // A subagent acts in its parent's current mode, so a parent that moved
+      // to plan mode stops approving for its children as well.
+      const mode = this.modes.get(this.subagents.parentOf(sessionId) ?? sessionId);
       // `UpdatePlan` only shows a checklist, in every mode.
       const planning = name === "mcp_cowboy_UpdatePlan";
       // A managed call has nobody to ask: its read tools run, nothing else.
@@ -935,11 +967,11 @@ export class AcpProxy {
           return this.agent({ jsonrpc: "2.0", id, result: { outcome: { outcome: "cancelled" } } });
         }
       }
-      this.agentRequests.add(id);
+      this.agentRequests.set(id, sessionId);
       const asked = stripTier(message);
       return this.client({
         ...asked,
-        params: { ...asked.params, toolCall: this.present(asked.params?.toolCall) },
+        params: { ...asked.params, toolCall: this.present(asked.params?.toolCall, sessionId) },
       });
     }
     const record = this.pending.get(id);
@@ -1027,7 +1059,7 @@ export class AcpProxy {
     );
     if (problem && (await this.correct(record, turn, problem, replyId, settled, message))) return;
     if (turn?.structured) this.sealed.add(record.sessionId);
-    const backend = attempts(turn, settled);
+    const backend = withChildren(turn, attempts(turn, settled));
     if (this.turns.get(record.sessionId) === turn) this.turns.delete(record.sessionId);
     await this.settleMemory(turn);
     const violation = turn?.violation;
@@ -1290,6 +1322,17 @@ function attempts(turn, settled) {
     refusals: all.flatMap((item) => (Array.isArray(item.refusals) ? item.refusals : [])),
     attempts: all.length,
   };
+}
+
+/**
+ * A turn's backend evidence with what its subagents settled to: a child's
+ * refusal (or an outcome its log could not prove) is the turn's too, even
+ * when the parent's own window reads clean.
+ */
+function withChildren(turn, backend) {
+  const child = turn?.childBackend;
+  if (child === undefined || backend.class !== "ok") return backend;
+  return { ...backend, ...child };
 }
 
 /** Optional ACP usage counters, published only when every attempt has one. */

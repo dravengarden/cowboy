@@ -131,10 +131,24 @@ export class Facade {
   session(sessionId) {
     let session = this.sessions.get(sessionId);
     if (!session) {
-      session = { turn: undefined, observed: new Map(), commands: new Map() };
+      session = { turn: undefined, observed: new Map(), commands: new Map(), parent: undefined };
       this.sessions.set(sessionId, session);
     }
     return session;
+  }
+
+  /** `childId` is a subagent of `parentId`: its lost effects end the parent's turn too. */
+  link(childId, parentId) {
+    this.session(childId).parent = parentId;
+  }
+
+  /**
+   * A settled subagent's session is forgotten (its turn already ended): a
+   * command whose termination is not yet confirmed keeps it tracked.
+   */
+  forgetSession(sessionId) {
+    const session = this.sessions.get(sessionId);
+    if (session && !session.turn && session.commands.size === 0) this.sessions.delete(sessionId);
   }
 
   beginTurn(sessionId) {
@@ -258,6 +272,11 @@ export class Facade {
     } catch (error) {
       if (error instanceof UncertainEffect) {
         turn.uncertain ??= error.method;
+        // Latched before anything is awaited, on the parent turn that was
+        // open when the child's effect was lost.
+        const parentTurn =
+          session?.parent === undefined ? undefined : this.sessions.get(session.parent)?.turn;
+        if (parentTurn) parentTurn.uncertain ??= error.method;
         // The worker's trusted ledger records it before this tool answers
         // (so before the turn can end), also when every transport call was
         // answered (a timed-out publish): the session parks until the owner

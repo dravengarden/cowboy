@@ -1471,21 +1471,32 @@ waiting, so a model can run two at once and collect both.
   observed transcript, Stop and the permission attribution need nothing new
   in the Controller or Web.
 - **Same gate.** The child is a session of the same `agy` process, so the same
-  `PreToolUse` hook, marker, allow-list, mode-based approval and violation
-  detection apply; the proxy keeps a turn record per child so a built-in tool
-  that ran is seen. A child's violation, unknown effect or backend refusal
-  ends the parent's turn the same way (the parent is cancelled, the Controller
-  classifies it, and the account's quota or refusal handling is unchanged: the
-  child's backend lines lie inside the parent's evidence window).
+  `PreToolUse` hook, marker, allow-list and violation detection apply; the
+  proxy keeps a turn record per child so a built-in tool that ran is seen. A
+  child approves facade tools in its parent's *current* mode (a parent that
+  moves to plan mode, or whose mode is unconfirmed, makes its children ask the
+  owner), and a request of a child that ended is rejected, a late approval
+  answered as cancelled. A child's violation, unknown effect or backend
+  refusal ends the parent's turn the same way: the parent's facade turn, its
+  other children and any start still opening are fenced in the same tick,
+  then `agy` is cancelled; the child's settled backend class is merged into
+  the parent's reply (its backend lines also lie inside the parent's
+  evidence window), and a child starts only with a log cursor.
 - **Bounded.** One level only (a child's `Subagent` call fails), at most 2
   running at once and 8 started per turn, a prompt of at most 64 KiB, a report
   of at most 64 K characters, nothing in plan mode or before the mode is known.
-- **Nothing outlives the turn.** The parent's prompt ending, its cancel or its
-  Stop cancels every child (their facade turns are fenced, `agy` is asked to
-  stop, a still unsettled one is closed after 10 s) before the parent's own
-  fence completes; a child's own Stop (its row) cancels only that child. A
-  settled child's native session is closed; `agy` keeps its conversation on
-  disk. Child text is never recorded as the owner's memory.
+- **Nothing outlives the turn, and a stop fails closed.** The parent's prompt
+  ending, its cancel or its Stop cancels every child (their facade turns are
+  fenced and `agy` is asked to stop in the same tick) after the parent's own
+  fence; a child's own Stop (its row) cancels only that child. `agy` has 10 s
+  to confirm a stopped child by ending its prompt; if it does not, the unit's
+  `agy` process is killed (nothing could show the native work stopped) and the
+  row is failed, never reported stopped. A settled child's native session is
+  closed (also one `agy` opens after its request timed out), its facade
+  channel revoked and its facade session forgotten; `agy` keeps its
+  conversation on disk. The frames of a session still opening are held until
+  the worker has been told of the child, so its setup traffic is never read as
+  the parent's. Child text is never recorded as the owner's memory.
 - **Account risk.** The child's prompts are agent-initiated requests on a
   consumer subscription inside the owner's own turn: the owner accepted that
   (requirements, Antigravity consumer-subscription boundary). Managed calls

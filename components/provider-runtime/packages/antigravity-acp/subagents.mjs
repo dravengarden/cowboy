@@ -10,10 +10,12 @@
 //
 // Everything a child may do is what its parent may: the same `agy` process,
 // hook policy, facade (its own channel and turn on the one execution
-// connection) and mode. It never starts a subagent, and nothing outlives the
-// parent's turn: a parent that ends, is cancelled or breaks the gate takes its
-// children with it, and a child that breaks the gate or meets a backend
-// refusal ends the parent's turn the same way.
+// connection) and the parent's current mode. It never starts a subagent, and
+// nothing outlives the parent's turn: a parent that ends, is cancelled or
+// breaks the gate takes its children with it, and a child that breaks the
+// gate, loses an effect or meets a backend refusal ends the parent's turn the
+// same way. Every stop fails closed: a child `agy` does not confirm stopped
+// ends the unit's `agy` process, so no native work can go on unseen.
 import { randomUUID } from "node:crypto";
 import { LIMITS, ToolError } from "./facade-tools.mjs";
 import { agyNotice } from "./presentation.mjs";
@@ -30,12 +32,16 @@ export const SUBAGENT_GUIDANCE = [
 
 /** How long a native request waits for `agy` before the start fails. */
 const REQUEST_TIMEOUT_MS = 30_000;
-/** How long a turn's end waits for its stopped children to settle. */
+/** How long `agy` has to confirm a stopped child before the unit is ended. */
 const SETTLE_TIMEOUT_MS = 10_000;
 /** Settled children kept for a later wait or stop, per proxy. */
 const MAX_KEPT = 64;
 /** The most configuration replays a child gets from its parent. */
 const MAX_CONFIG = 16;
+/** Frames of a child held until the worker knows it (bounded). */
+const MAX_HELD = 256;
+
+const TURN_ENDED = "The turn ended before the subagent started.";
 
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const RUNNING = new Set(["starting", "running"]);
@@ -60,7 +66,6 @@ function pause(ms, signal) {
   return new Promise((done) => {
     if (signal?.aborted) return done();
     const timer = setTimeout(finish, ms);
-    timer.unref?.();
     function finish() {
       clearTimeout(timer);
       signal?.removeEventListener("abort", finish);
@@ -73,15 +78,24 @@ function pause(ms, signal) {
 export class Subagents {
   /**
    * @param proxy the `AcpProxy` this host serves: its `agent` and `client`
-   *   writers, `pending`, `turns` and `modes` maps and its `runtime`
+   *   writers, `pending`, `turns` and `modes` maps, its `runtime` and
+   *   `facade`, and `terminate` (ends `agy`)
    * @param refusalText the owner-facing text of a backend refusal class
+   * @param settleMs how long `agy` has to confirm a stopped child
+   * @param requestMs how long a native request waits for `agy`
    */
   constructor(
     proxy,
-    { refusalText = (klass) => `Antigravity refused the request (${klass}).` } = {},
+    {
+      refusalText = (klass) => `Antigravity refused the request (${klass}).`,
+      settleMs = SETTLE_TIMEOUT_MS,
+      requestMs = REQUEST_TIMEOUT_MS,
+    } = {},
   ) {
     this.proxy = proxy;
     this.refusalText = refusalText;
+    this.settleMs = settleMs;
+    this.requestMs = requestMs;
     /** Whether the worker's `initialize` declared `clientCapabilities.subagents`. */
     this.supported = false;
     /** Per parent session: the setup a child repeats and what it configured. */
@@ -90,6 +104,11 @@ export class Subagents {
     this.children = new Map();
     /** Per parent session: the live children and this turn's counters. */
     this.groups = new Map();
+    /**
+     * Native sessions `agy` opened for a start that the worker does not know
+     * yet: their frames wait here until the child is announced.
+     */
+    this.opening = new Map();
   }
 
   /** The worker's `initialize` request. */
@@ -100,6 +119,16 @@ export class Subagents {
   /** Whether `sessionId` is one of this host's children. */
   owns(sessionId) {
     return this.children.has(sessionId);
+  }
+
+  /** The parent of a child session, else `undefined`. */
+  parentOf(sessionId) {
+    return this.children.get(sessionId)?.parent;
+  }
+
+  /** Whether `sessionId` is a child that still runs (its turn is open). */
+  active(sessionId) {
+    return RUNNING.has(this.children.get(sessionId)?.state);
   }
 
   /** A session `agy` opened for the worker: what a child of it repeats. */
@@ -145,32 +174,71 @@ export class Subagents {
     return group;
   }
 
-  running(group) {
+  count(group) {
     let count = 0;
     for (const id of group.ids) if (RUNNING.has(this.children.get(id)?.state)) count += 1;
     return count;
   }
 
-  /** One request to `agy` and its reply (or a refusal when it never comes). */
-  request(method, params, timeoutMs = REQUEST_TIMEOUT_MS) {
+  /**
+   * One request to `agy` and its reply. Without a reply in time it fails; a
+   * session `agy` still opens afterwards is closed, never left behind.
+   */
+  request(method, params, timeoutMs = this.requestMs) {
     const { proxy } = this;
     const id = `cowboy-subagent-${randomUUID()}`;
     return new Promise((done, fail) => {
       let timer;
-      const settle = (message) => {
-        clearTimeout(timer);
-        done(message);
-      };
-      proxy.pending.set(id, { method, internal: settle });
+      proxy.pending.set(id, {
+        method,
+        internal: (message) => {
+          clearTimeout(timer);
+          // Before anything else runs, a new session's frames are held: the
+          // worker must hear of the child before any of its traffic.
+          const opened = message.result?.sessionId;
+          if (method === "session/new" && typeof opened === "string") {
+            this.opening.set(opened, []);
+          }
+          done(message);
+        },
+      });
       if (timeoutMs !== null) {
         timer = setTimeout(() => {
-          proxy.pending.delete(id);
+          proxy.pending.set(id, {
+            method,
+            internal: (message) => {
+              const late = message.result?.sessionId;
+              if (method === "session/new" && typeof late === "string") {
+                this.opening.set(late, []);
+                this.closeById(late);
+              }
+            },
+          });
           fail(new Error(`${method} timed out`));
         }, timeoutMs);
-        timer.unref?.();
       }
       proxy.agent({ jsonrpc: "2.0", id, method, params });
     });
+  }
+
+  /** Whether `sessionId` is a native session the worker must not hear from yet. */
+  holds(sessionId) {
+    return typeof sessionId === "string" && this.opening.has(sessionId);
+  }
+
+  /** Keep one frame of a session still opening, bounded. */
+  hold(message) {
+    const frames = this.opening.get(message.params?.sessionId);
+    if (frames && frames.length < MAX_HELD) frames.push(message);
+  }
+
+  /** The child is announced: its held frames now take the ordinary path. */
+  release(sessionId) {
+    const frames = this.opening.get(sessionId) ?? [];
+    this.opening.delete(sessionId);
+    frames
+      .reduce((done, frame) => done.then(() => this.proxy.fromAgent(frame)), Promise.resolve())
+      .catch(() => {});
   }
 
   /**
@@ -193,7 +261,7 @@ export class Subagents {
     if (group.started >= LIMITS.subagentTurn) {
       throw new ToolError(`At most ${LIMITS.subagentTurn} subagents start per turn.`);
     }
-    if (this.running(group) >= LIMITS.subagentConcurrent) {
+    if (this.count(group) >= LIMITS.subagentConcurrent) {
       throw new ToolError(
         `At most ${LIMITS.subagentConcurrent} subagents run at once; wait for one to finish.`,
       );
@@ -205,9 +273,11 @@ export class Subagents {
     const child = {
       id: undefined,
       parent: parentId,
+      parentTurn,
       title,
       prompt,
       state: "starting",
+      announced: false,
       text: "",
       messageId: undefined,
       report: "",
@@ -217,12 +287,19 @@ export class Subagents {
       closed: false,
       channel: undefined,
       cursor: undefined,
+      killTimer: undefined,
       settled: undefined,
       done: undefined,
     };
     child.done = new Promise((done) => {
       child.settled = done;
     });
+    // The turn that may start this child is still the one that asked.
+    const stale = () =>
+      child.cancelled ||
+      group.epoch !== epoch ||
+      proxy.turns.get(parentId) !== parentTurn ||
+      parentTurn.cancelled;
     const placeholder = `starting-${randomUUID()}`;
     group.ids.add(placeholder);
     this.children.set(placeholder, child);
@@ -231,8 +308,10 @@ export class Subagents {
       this.children.delete(placeholder);
     };
     let runtime;
+    let nativeId;
     try {
       runtime = await proxy.runtime;
+      if (stale()) throw new ToolError(TURN_ENDED);
       child.channel = runtime.newChannel();
       const created = await this.request("session/new", {
         cwd: setup.cwd,
@@ -243,38 +322,38 @@ export class Subagents {
           },
         },
       });
-      const id = created.result?.sessionId;
-      if (typeof id !== "string" || !id) {
+      nativeId = created.result?.sessionId;
+      if (typeof nativeId !== "string" || !nativeId) {
+        nativeId = undefined;
         throw new ToolError(
           `Antigravity could not start the subagent${created.error?.message ? `: ${String(created.error.message).slice(0, 200)}` : "."}`,
         );
       }
-      child.id = id;
-      // From here the child is registered under its own id and channel.
+      // Checked before the session is bound or registered anywhere.
+      if (stale()) throw new ToolError(TURN_ENDED);
+      child.id = nativeId;
       abandon();
-      group.ids.add(id);
-      this.children.set(id, child);
-      runtime.bindChannel(child.channel, id);
-      proxy.modes.set(id, mode);
-      // The parent's turn may have ended or been stopped while `agy` opened
-      // the session: nothing may start then.
-      const stale = () =>
-        group.epoch !== epoch || proxy.turns.get(parentId) !== parentTurn || parentTurn.cancelled;
-      if (stale()) {
-        this.closeNative(child);
-        this.finishChild(child, "cancelled", { stopReason: "cancelled" });
-        throw new ToolError("The turn ended before the subagent started.");
-      }
+      group.ids.add(nativeId);
+      this.children.set(nativeId, child);
+      runtime.bindChannel(child.channel, nativeId);
+      runtime.facade.link?.(nativeId, parentId);
       for (const replay of setup.config.values()) {
-        await this.request(replay.method, { sessionId: id, ...replay.params }).catch(() => {});
+        const reply = await this.request(replay.method, { sessionId: nativeId, ...replay.params });
+        if (reply.error !== undefined) {
+          throw new ToolError(
+            "Antigravity refused the session's model settings for the subagent; nothing was started.",
+          );
+        }
+        if (stale()) throw new ToolError(TURN_ENDED);
       }
       child.cursor = await runtime.evidence.mark();
-      if (stale()) {
-        this.closeNative(child);
-        this.finishChild(child, "cancelled", { stopReason: "cancelled" });
-        throw new ToolError("The turn ended before the subagent started.");
+      // Without a cursor the child's backend outcome could not be settled.
+      if (child.cursor === undefined) {
+        throw new ToolError("Antigravity's log is unavailable, so no subagent was started.");
       }
+      if (stale()) throw new ToolError(TURN_ENDED);
       child.state = "running";
+      child.announced = true;
       this.announce(child, {
         title,
         description: "Antigravity subagent",
@@ -288,20 +367,22 @@ export class Subagents {
           sessionId: parentId,
           update: {
             sessionUpdate: "session_message",
-            messageId: `cowboy-subagent-${id}`,
+            messageId: `cowboy-subagent-${nativeId}`,
             senderSessionId: parentId,
-            recipientSessionId: id,
-            recipientMessageId: `cowboy-subagent-${id}`,
+            recipientSessionId: nativeId,
+            recipientMessageId: `cowboy-subagent-${nativeId}`,
             content: [{ type: "text", text: prompt }],
           },
         },
       });
-      proxy.turns.set(id, this.childTurn(id, prompt));
-      runtime.facade.beginTurn(id);
+      proxy.turns.set(nativeId, this.childTurn(nativeId, prompt));
+      runtime.facade.beginTurn(nativeId);
+      // The worker knows the child now: what `agy` sent while it opened.
+      this.release(nativeId);
       // A prompt has no timeout of its own: it ends when the turn does.
       this.request(
         "session/prompt",
-        { sessionId: id, prompt: [{ type: "text", text: prompt }] },
+        { sessionId: nativeId, prompt: [{ type: "text", text: prompt }] },
         null,
       )
         .then((message) => this.settle(child, message))
@@ -311,25 +392,29 @@ export class Subagents {
             error: String(error?.message ?? error).slice(0, 200),
           }),
         );
-      return id;
+      return nativeId;
     } catch (error) {
       abandon();
+      const text = String(error?.message ?? error).slice(0, 200);
+      if (nativeId !== undefined && child.id === undefined) {
+        // `agy` opened a session this start never registered.
+        this.closeById(nativeId);
+      }
       if (child.id === undefined) {
-        group.started -= 1;
-        if (child.channel !== undefined) runtime?.bindChannel(child.channel, undefined);
+        // A reservation belongs to the turn that made it.
+        if (group.epoch === epoch) group.started -= 1;
+        if (child.channel !== undefined) runtime?.unbindChannel?.(child.channel);
+        child.state = "failed";
+        child.error = text;
+        child.settled();
       } else if (RUNNING.has(child.state)) {
         // It exists natively but never ran: close it and its row.
-        this.proxy.turns.delete(child.id);
-        this.closeNative(child);
-        this.finishChild(child, "failed", {
-          stopReason: "error",
-          error: String(error?.message ?? error).slice(0, 200),
-        });
+        proxy.turns.delete(child.id);
+        this.opening.delete(child.id);
+        this.finishChild(child, "failed", { stopReason: "error", error: text });
       }
       if (error instanceof ToolError) throw error;
-      throw new ToolError(
-        `Could not start the subagent: ${String(error?.message ?? error).slice(0, 200)}`,
-      );
+      throw new ToolError(`Could not start the subagent: ${text}`);
     }
   }
 
@@ -396,17 +481,21 @@ export class Subagents {
   async settle(child, message) {
     const { proxy } = this;
     if (!RUNNING.has(child.state)) return;
-    const runtime = await proxy.runtime;
     const turn = proxy.turns.get(child.id);
     // Fenced first, as for any ending turn: no tool call of the child admits
     // anything more and its commands stop.
-    await runtime.facade.endTurn(child.id).catch(() => {});
+    await proxy.facade.endTurn(child.id).catch(() => {});
+    const runtime = await proxy.runtime;
     const settled = await runtime.evidence
       .settle(child.cursor, child.id, message.result?.stopReason)
       .catch(() => ({ class: "unknown_refusal" }));
     if (proxy.turns.get(child.id) === turn) proxy.turns.delete(child.id);
     if (!RUNNING.has(child.state)) return;
     const violation = turn?.violation;
+    // The parent's reply carries the worst of what its children settled to.
+    if (settled.class !== "ok" && child.parentTurn.childBackend === undefined) {
+      child.parentTurn.childBackend = settled;
+    }
     if (violation !== undefined) {
       return this.finishChild(child, "failed", {
         stopReason: "error",
@@ -418,9 +507,7 @@ export class Subagents {
         stopReason: "error",
         error: this.refusalText(settled.class),
       });
-      // The account is refusing: the parent's turn ends with the same
-      // classification (its window holds this child's backend lines), so
-      // nothing more is sent.
+      // The account is refusing: nothing more is sent from this turn.
       return this.endParent(child.parent);
     }
     if (message.error !== undefined) {
@@ -440,23 +527,40 @@ export class Subagents {
   /** End `child` for good: its row, its waiters and its native session. */
   finishChild(child, state, { stopReason, error } = {}) {
     if (!RUNNING.has(child.state)) return;
+    clearTimeout(child.killTimer);
     child.state = state;
     child.stopReason = stopReason;
     child.error = error;
     child.report = bounded(child.text.trim(), LIMITS.subagentReportChars);
     if (child.id !== undefined) {
-      const idle = { state: "idle", stopReason: stopReason ?? "end_turn" };
-      if (error !== undefined) idle.error = { code: -32603, message: error };
-      this.announce(child, { capabilities: { cancel: null }, state: idle });
-      // A later call on its channel finds no session and no turn.
-      this.proxy.runtime.then(
-        (runtime) => runtime.bindChannel(child.channel, undefined),
-        () => {},
-      );
+      if (child.announced) {
+        const idle = { state: "idle", stopReason: stopReason ?? "end_turn" };
+        if (error !== undefined) idle.error = { code: -32603, message: error };
+        this.announce(child, { capabilities: { cancel: null }, state: idle });
+      }
       this.closeNative(child);
+      this.retire(child);
     }
     child.settled();
     this.prune();
+  }
+
+  /**
+   * Revoke what a settled child held: its facade channel (a later call on it
+   * finds nothing), its facade session and its mode and call bookkeeping.
+   */
+  retire(child) {
+    const { proxy } = this;
+    proxy.modes.delete(child.id);
+    proxy.waiting?.delete(child.id);
+    this.opening.delete(child.id);
+    proxy.runtime.then(
+      (runtime) => {
+        runtime.unbindChannel?.(child.channel);
+        runtime.facade.forgetSession?.(child.id);
+      },
+      () => {},
+    );
   }
 
   /**
@@ -466,7 +570,13 @@ export class Subagents {
   closeNative(child) {
     if (child.id === undefined || child.closed) return;
     child.closed = true;
-    this.request("session/close", { sessionId: child.id }, 5000).catch(() => {});
+    this.closeById(child.id);
+  }
+
+  closeById(id) {
+    this.request("session/close", { sessionId: id }, 5000)
+      .catch(() => {})
+      .finally(() => this.opening.delete(id));
   }
 
   /** Forget the oldest settled children beyond what a later wait can need. */
@@ -504,7 +614,7 @@ export class Subagents {
     const child = this.owned(parentId, id);
     if (RUNNING.has(child.state)) {
       await this.cancelChild(child);
-      await Promise.race([child.done, pause(SETTLE_TIMEOUT_MS)]);
+      await Promise.race([child.done, pause(this.settleMs + 1000)]);
     }
     return this.outcome(child);
   }
@@ -512,24 +622,45 @@ export class Subagents {
   /** The owner (or the worker) stopped a child's session. */
   cancelled(sessionId) {
     const child = this.children.get(sessionId);
-    if (child) child.cancelled = true;
+    if (child) this.armKill(child);
   }
 
   /**
-   * Stop one child: its facade turn is fenced first, then `agy` is asked to
-   * stop. Its settlement ends the row.
+   * `agy` has `settleMs` to confirm a stopped child; if it does not, nothing
+   * can show that native work stopped, so the unit's `agy` is ended.
    */
-  async cancelChild(child) {
-    if (!RUNNING.has(child.state) || child.id === undefined) return;
+  armKill(child) {
+    if (child.killTimer !== undefined) return;
     child.cancelled = true;
-    const turn = this.proxy.turns.get(child.id);
-    if (turn) turn.cancelled = true;
-    const runtime = await this.proxy.runtime;
-    await runtime.facade.endTurn(child.id, { cancelled: true }).catch(() => {});
-    this.proxy.agent({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId: child.id } });
+    child.killTimer = setTimeout(() => {
+      if (!RUNNING.has(child.state)) return;
+      this.terminate("a subagent did not confirm it stopped");
+    }, this.settleMs);
   }
 
-  /** Every running child of `parentId`. */
+  terminate(reason) {
+    this.proxy.log(`ending agy: ${reason}`);
+    this.proxy.terminate(reason);
+  }
+
+  /**
+   * Stop one child: its facade turn is fenced and `agy` is asked to stop in
+   * the same tick, so nothing it starts is admitted meanwhile. Its settlement
+   * ends the row; without one the unit is ended.
+   */
+  cancelChild(child) {
+    if (!RUNNING.has(child.state)) return Promise.resolve();
+    child.cancelled = true;
+    if (child.id === undefined) return Promise.resolve();
+    const turn = this.proxy.turns.get(child.id);
+    if (turn) turn.cancelled = true;
+    const fence = this.proxy.facade?.endTurn(child.id, { cancelled: true });
+    this.proxy.agent({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId: child.id } });
+    this.armKill(child);
+    return Promise.resolve(fence).catch(() => {});
+  }
+
+  /** Every running child of `parentId`, a start still opening included. */
   live(parentId) {
     const group = this.groups.get(parentId);
     return group
@@ -545,8 +676,23 @@ export class Subagents {
   }
 
   /**
-   * The parent's turn is ending: stop what still runs and wait briefly for it
-   * to settle, then close the rest by force so no row stays running.
+   * Fence `parentId`'s turn at once: its starts still opening see a stale
+   * turn, its facade admits nothing more and every child is stopped, all
+   * before anything is awaited.
+   */
+  halt(parentId) {
+    const group = this.groups.get(parentId);
+    if (group) group.epoch += 1;
+    const turn = this.proxy.turns.get(parentId);
+    if (turn) turn.cancelled = true;
+    Promise.resolve(this.proxy.facade?.endTurn(parentId, { cancelled: true })).catch(() => {});
+    for (const child of this.live(parentId)) this.cancelChild(child);
+  }
+
+  /**
+   * The parent's turn is ending: stop what still runs and wait for `agy` to
+   * confirm. A child it does not confirm ends the unit rather than being
+   * reported stopped.
    */
   async finish(parentId) {
     const group = this.groups.get(parentId);
@@ -554,18 +700,24 @@ export class Subagents {
     group.epoch += 1;
     group.started = 0;
     const running = this.live(parentId);
-    if (running.length) {
-      await Promise.all(running.map((child) => this.cancelChild(child)));
-      await Promise.race([
-        Promise.all(running.map((child) => child.done)),
-        pause(SETTLE_TIMEOUT_MS),
-      ]);
-      for (const child of running) {
-        if (RUNNING.has(child.state)) {
-          this.proxy.turns.delete(child.id);
-          this.finishChild(child, "cancelled", { stopReason: "cancelled" });
-        }
-      }
+    if (!running.length) return;
+    await Promise.all(running.map((child) => this.cancelChild(child)));
+    await Promise.race([
+      Promise.all(running.map((child) => child.done)),
+      pause(this.settleMs + 500),
+    ]);
+    const stuck = running.filter((child) => RUNNING.has(child.state));
+    if (stuck.some((child) => child.id !== undefined)) {
+      this.terminate("a subagent did not confirm it stopped");
+    }
+    for (const child of stuck) {
+      this.proxy.turns.delete(child.id);
+      this.finishChild(child, "failed", {
+        stopReason: "error",
+        error: "Antigravity did not confirm the subagent stopped",
+      });
+      // A start still opening ends through its own stale check.
+      if (child.id === undefined) child.settled();
     }
   }
 
@@ -575,30 +727,31 @@ export class Subagents {
    */
   violated(sessionId, code) {
     const child = this.children.get(sessionId);
-    if (!child) return;
-    const parentTurn = this.proxy.turns.get(child.parent);
-    if (parentTurn && parentTurn.violation === undefined) parentTurn.violation = code;
-    this.endParent(child.parent);
+    const parentId = child ? child.parent : sessionId;
+    if (child) {
+      const parentTurn = this.proxy.turns.get(parentId);
+      if (parentTurn && child.parentTurn === parentTurn && parentTurn.violation === undefined) {
+        parentTurn.violation = code;
+      }
+    }
+    this.halt(parentId);
+    if (child) this.endParent(parentId);
   }
 
   /** A child's effect on the target became unknown: the parent's turn ends too. */
   uncertain(sessionId, method) {
     const child = this.children.get(sessionId);
     if (!child) return false;
-    this.proxy.runtime.then(
-      (runtime) => {
-        const turn = runtime.facade.session(child.parent).turn;
-        if (turn) turn.uncertain ??= method;
-      },
-      () => {},
-    );
+    // Only the turn that started the child: a late report never ends a later one.
+    if (this.proxy.turns.get(child.parent) !== child.parentTurn) return true;
+    this.halt(child.parent);
     this.proxy.uncertain(child.parent, method);
     return true;
   }
 
   /** Stop the parent's turn and every child of it. */
   endParent(parentId) {
+    this.halt(parentId);
     this.proxy.agent({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId: parentId } });
-    this.cancelChildren(parentId).catch(() => {});
   }
 }

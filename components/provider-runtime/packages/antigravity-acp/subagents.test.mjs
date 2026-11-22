@@ -20,7 +20,19 @@ const request = (id, method, params = {}) => ({ jsonrpc: "2.0", id, method, para
  */
 function unit({
   backend = () => ({ class: "ok", successes: 1, barrier: true, refusals: [] }),
+  subagents = { settleMs: 40, requestMs: 60 },
 } = {}) {
+  /** What the fake `agy` does besides answering every request. */
+  const control = {
+    ignore: new Set(),
+    fail: new Map(),
+    mark: 7,
+    afterNew: () => [],
+  };
+  const terminated = [];
+  const unbound = [];
+  const forgotten = [];
+  const links = [];
   const agent = [];
   /** Every request `agy` ever got (`agent` is cleared by tests). */
   const everything = [];
@@ -38,12 +50,15 @@ function unit({
       session: (id) => ({
         turn: { id, uncertain: undefined, mark: (value) => uncertain.push([id, value]) },
       }),
+      link: (childId, parentId) => links.push([childId, parentId]),
+      forgetSession: (id) => forgotten.push(id),
     },
     sessionCwd: (cwd) => cwd,
     checkMirror: () => {},
     projection: async (cwd) => `PROJECTION ${cwd}`,
     newChannel: () => `channel-${channels.size}`,
     bindChannel: (channel, sessionId) => channels.set(channel, sessionId),
+    unbindChannel: (channel) => unbound.push(channel),
     mcpServer: (channel) => ({
       name: "cowboy",
       command: "/node",
@@ -51,7 +66,7 @@ function unit({
       env: [],
     }),
     evidence: {
-      mark: async () => 7,
+      mark: async () => control.mark,
       settle: async (cursor, sessionId, stopReason) => ({
         ...backend(sessionId),
         cursor,
@@ -66,14 +81,20 @@ function unit({
     everything.push(message);
     // The fake agent answers after the proxy's synchronous work, as agy does.
     if (typeof message.id !== "string" || !message.id.startsWith("cowboy-subagent-")) return;
+    if (control.ignore.has(message.method)) return;
     setImmediate(() => {
-      if (message.method === "session/new") {
-        opened += 1;
+      if (control.fail.has(message.method)) {
         proxy.fromAgent({
           jsonrpc: "2.0",
           id: message.id,
-          result: { sessionId: `child-${opened}` },
+          error: { code: -32603, message: control.fail.get(message.method) },
         });
+      } else if (message.method === "session/new") {
+        opened += 1;
+        const sessionId = `child-${opened}`;
+        proxy.fromAgent({ jsonrpc: "2.0", id: message.id, result: { sessionId } });
+        // Frames read in the same chunk as the reply, with no await between.
+        for (const frame of control.afterNew(sessionId)) proxy.fromAgent(frame);
       } else if (
         ["session/set_model", "session/set_config_option", "session/close"].includes(message.method)
       ) {
@@ -85,8 +106,24 @@ function unit({
     agent: fake,
     client: (message) => client.push(message),
     runtime: Promise.resolve(runtime),
+    terminate: (reason) => terminated.push(reason),
+    subagents,
   });
-  return { proxy, agent, everything, client, turns, channels, uncertain, runtime };
+  return {
+    proxy,
+    agent,
+    everything,
+    client,
+    turns,
+    channels,
+    uncertain,
+    runtime,
+    control,
+    terminated,
+    unbound,
+    forgotten,
+    links,
+  };
 }
 
 /** A worker that declared subagents, with one session `s` in a turn (id 9). */
@@ -505,12 +542,15 @@ test("a child that runs a built-in tool ends the parent's turn as a violation", 
   await proxy.fromAgent(
     childUpdate(id, { sessionUpdate: "tool_call_update", toolCallId: "b", status: "completed" }),
   );
-  // The child and the parent are both cancelled.
+  // The child and the parent are both cancelled, and the parent's facade is
+  // fenced at once.
   assert.deepEqual(
-    sent(agent, "session/cancel")
-      .map((message) => message.params.sessionId)
-      .sort(),
+    [...new Set(sent(agent, "session/cancel").map((message) => message.params.sessionId))].sort(),
     [id, "s"].sort(),
+  );
+  assert.equal(
+    made.turns.some((entry) => entry[0] === "end" && entry[1] === "s" && entry[2]),
+    true,
   );
   await proxy.fromAgent({ jsonrpc: "2.0", id: askedChild.id, result: { stopReason: "cancelled" } });
   await flush();
@@ -543,6 +583,11 @@ test("a backend refusal of a child fails it and stops the parent", async () => {
     sent(agent, "session/cancel").some((message) => message.params.sessionId === "s"),
     true,
   );
+  // The parent's own window reads clean, yet its reply carries the refusal.
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 9, result: { stopReason: "cancelled" } });
+  const reply = made.client.at(-1);
+  assert.equal(reply.id, 9);
+  assert.match(reply.error.message, /antigravity_backend_refusal:rate_limited/);
 });
 
 test("a child's unknown effect on the target ends the parent's turn too", async () => {
@@ -553,30 +598,65 @@ test("a child's unknown effect on the target ends the parent's turn too", async 
   proxy.uncertain(id, "fs/writeFile");
   await flush();
   assert.deepEqual(
-    sent(agent, "session/cancel")
-      .map((message) => message.params.sessionId)
-      .sort(),
+    [...new Set(sent(agent, "session/cancel").map((message) => message.params.sessionId))].sort(),
     [id, "s"].sort(),
   );
   assert.equal(proxy.turns.get("s").uncertain, "fs/writeFile");
+  // The parent's facade turn is fenced at once as well.
   assert.equal(
-    made.uncertain.some(([sessionId]) => sessionId === "s"),
-    false,
+    made.turns.some((entry) => entry[0] === "end" && entry[1] === "s" && entry[2]),
+    true,
   );
 });
 
+test("a late report of a child's lost effect never ends a later turn", async () => {
+  const made = await parent();
+  const { proxy, agent } = made;
+  const id = await startChild(made);
+  await endPrompt(made, id);
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 9, result: { stopReason: "end_turn" } });
+  await proxy.fromClient(request(10, "session/prompt", { sessionId: "s", prompt: [] }));
+  agent.length = 0;
+  proxy.uncertain(id, "fs/writeFile");
+  await flush();
+  assert.equal(sent(agent, "session/cancel").length, 0);
+  assert.equal(proxy.turns.get("s").uncertain, undefined);
+});
+
 test("a start that outlives its turn closes the native session it opened", async () => {
+  const made = await parent();
+  const { proxy, agent, control } = made;
+  control.ignore.add("session/new");
+  const starting = proxy.subagents.start("s", { prompt: "late" }).then(
+    () => undefined,
+    (error) => error,
+  );
+  await flush(1);
+  const [created] = sent(agent, "session/new");
+  // The turn ends while agy is still opening the session; then it opens it.
+  const ended = proxy.fromAgent({ jsonrpc: "2.0", id: 9, result: { stopReason: "end_turn" } });
+  await proxy.fromAgent({ jsonrpc: "2.0", id: created.id, result: { sessionId: "late-1" } });
+  await Promise.all([ended, flush()]);
+  assert.match((await starting).message, /turn ended before the subagent started/);
+  const closed = sent(agent, "session/close");
+  assert.deepEqual(
+    closed.map((message) => message.params.sessionId),
+    ["late-1"],
+  );
+  assert.equal(sent(agent, "session/prompt").length, 0);
+  assert.equal(proxy.subagents.owns("late-1"), false);
+});
+
+test("a turn that ends before agy opens the session starts nothing", async () => {
   const made = await parent();
   const { proxy, agent } = made;
   const starting = proxy.subagents.start("s", { prompt: "late" }).then(
     () => undefined,
     (error) => error,
   );
-  // The turn ends while agy is still opening the session.
   const ended = proxy.fromAgent({ jsonrpc: "2.0", id: 9, result: { stopReason: "end_turn" } });
   await Promise.all([ended, flush()]);
   assert.match((await starting).message, /turn ended before the subagent started/);
-  assert.equal(sent(agent, "session/close").length, 1);
   assert.equal(sent(agent, "session/prompt").length, 0);
 });
 
@@ -669,4 +749,291 @@ test("the facade validates Subagent calls and answers through the host", async (
     /not available in a read-only/,
   );
   assert.throws(() => renderSubagent("c", { state: "failed", error: "boom" }), ToolError);
+});
+
+test("a violation of the parent itself fences it and its children at once", async () => {
+  const made = await parent();
+  const { proxy, agent, turns } = made;
+  const id = await startChild(made);
+  agent.length = 0;
+  await proxy.fromAgent(
+    childUpdate("s", {
+      sessionUpdate: "tool_call",
+      toolCallId: "b",
+      name: "run_command",
+      status: "in_progress",
+    }),
+  );
+  await proxy.fromAgent(
+    childUpdate("s", { sessionUpdate: "tool_call_update", toolCallId: "b", status: "completed" }),
+  );
+  assert.equal(
+    turns.some((entry) => entry[0] === "end" && entry[1] === "s" && entry[2]),
+    true,
+  );
+  assert.equal(
+    turns.some((entry) => entry[0] === "end" && entry[1] === id && entry[2]),
+    true,
+  );
+  assert.deepEqual(
+    [...new Set(sent(agent, "session/cancel").map((message) => message.params.sessionId))].sort(),
+    [id, "s"].sort(),
+  );
+  // A start still opening sees the fenced turn.
+  await assert.rejects(proxy.subagents.start("s", { prompt: "x" }), /inside a running turn/);
+});
+
+test("a child agy does not confirm stopped ends the unit instead of being reported stopped", async () => {
+  const made = await parent();
+  const { proxy, client } = made;
+  const id = await startChild(made);
+  await proxy.fromClient({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId: id } });
+  // agy never answers the cancelled prompt.
+  await new Promise((done) => setTimeout(done, 80));
+  assert.deepEqual(made.terminated, ["a subagent did not confirm it stopped"]);
+
+  // The same at the parent's turn end: the row is failed, not "stopped".
+  const ending = await parent();
+  const stuck = await startChild(ending);
+  const ended = ending.proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 9,
+    result: { stopReason: "end_turn" },
+  });
+  await ended;
+  assert.equal(ending.terminated.length >= 1, true);
+  const last = updates(ending.client, "s", "subagent_update").at(-1).params.update;
+  assert.equal(last.state.stopReason, "error");
+  assert.match(last.state.error.message, /did not confirm/);
+  assert.equal((await ending.proxy.subagents.wait("s", stuck, 0)).state, "failed");
+  assert.equal(client.length >= 0, true);
+});
+
+test("a parent that moves to plan mode stops approving for its children", async () => {
+  const made = await parent();
+  const { proxy, agent, client } = made;
+  const id = await startChild(made);
+  await proxy.fromClient(request(30, "session/set_mode", { sessionId: "s", modeId: "plan" }));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 30, result: {} });
+  agent.length = 0;
+  client.length = 0;
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "perm-2",
+    method: "session/request_permission",
+    params: {
+      sessionId: id,
+      toolCall: { toolCallId: "c", name: "mcp_cowboy_WriteFile" },
+      options: [{ optionId: "yes", kind: "allow_once" }],
+    },
+  });
+  // Not approved by the proxy: the owner is asked, under the child's session.
+  assert.equal(agent.length, 0);
+  assert.equal(client.at(-1).method, "session/request_permission");
+  assert.equal(client.at(-1).params.sessionId, id);
+});
+
+test("a session still opening is held until the worker knows the child", async () => {
+  const made = await parent();
+  const { proxy, client, control } = made;
+  control.afterNew = (sessionId) => [
+    childUpdate(sessionId, { sessionUpdate: "config_option_update", configOptions: [] }),
+    {
+      jsonrpc: "2.0",
+      id: "perm-3",
+      method: "session/request_permission",
+      params: {
+        sessionId,
+        toolCall: { toolCallId: "c", name: "mcp_cowboy_ReadFile" },
+        options: [{ optionId: "yes", kind: "allow_once" }],
+      },
+    },
+  ];
+  const id = await startChild(made);
+  await flush();
+  const announced = client.findIndex(
+    (message) => message.params?.update?.sessionUpdate === "subagent_update",
+  );
+  const config = client.findIndex(
+    (message) =>
+      message.params?.sessionId === id &&
+      message.params?.update?.sessionUpdate === "config_option_update",
+  );
+  assert.equal(announced >= 0, true);
+  assert.equal(config > announced, true);
+  // Nothing of the child reached the worker as the parent's own traffic.
+  assert.equal(
+    client.some(
+      (message) =>
+        message.params?.update?.sessionUpdate === "config_option_update" &&
+        message.params.sessionId === "s",
+    ),
+    false,
+  );
+  assert.equal(proxy.subagents.holds(id), false);
+});
+
+test("a session agy opens after its request timed out is closed", async () => {
+  const made = await parent();
+  const { proxy, agent, control } = made;
+  control.ignore.add("session/new");
+  const starting = proxy.subagents.start("s", { prompt: "x" }).then(
+    () => undefined,
+    (error) => error,
+  );
+  await flush(1);
+  const [created] = sent(agent, "session/new");
+  assert.match((await starting).message, /timed out/);
+  await proxy.fromAgent({ jsonrpc: "2.0", id: created.id, result: { sessionId: "late-9" } });
+  await flush();
+  assert.deepEqual(
+    sent(agent, "session/close").map((message) => message.params.sessionId),
+    ["late-9"],
+  );
+  assert.equal(proxy.subagents.holds("late-9"), false);
+  assert.equal(proxy.subagents.group("s").started, 0);
+});
+
+test("an ended child's permission requests are refused and a late approval grants nothing", async () => {
+  const made = await parent();
+  const { proxy, agent, client } = made;
+  const id = await startChild(made);
+  // A question forwarded to the owner while the child runs.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "ask-1",
+    method: "session/request_permission",
+    params: {
+      sessionId: id,
+      toolCall: { toolCallId: "q", name: "ask_question" },
+      options: [{ optionId: "yes", kind: "allow_once" }],
+    },
+  });
+  assert.equal(client.at(-1).method, "session/request_permission");
+  await endPrompt(made, id);
+  agent.length = 0;
+  // The owner answers after the child ended: agy hears a cancellation.
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: "ask-1",
+    result: { outcome: { outcome: "selected", optionId: "yes" } },
+  });
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    id: "ask-1",
+    result: { outcome: { outcome: "cancelled" } },
+  });
+  // And a new request of the ended child is rejected, not approved or shown.
+  agent.length = 0;
+  client.length = 0;
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "perm-4",
+    method: "session/request_permission",
+    params: {
+      sessionId: id,
+      toolCall: { toolCallId: "c", name: "mcp_cowboy_RunCommand" },
+      options: [
+        { optionId: "yes", kind: "allow_once" },
+        { optionId: "no", kind: "reject_once" },
+      ],
+    },
+  });
+  assert.deepEqual(agent.at(-1).result.outcome, { outcome: "selected", optionId: "no" });
+  assert.equal(client.length, 0);
+});
+
+test("a startup failure of an earlier turn does not refund the next turn's budget", async () => {
+  const made = await parent();
+  const { proxy, agent, control } = made;
+  control.ignore.add("session/new");
+  const starting = proxy.subagents.start("s", { prompt: "x" }).then(
+    () => undefined,
+    (error) => error,
+  );
+  await flush(1);
+  const [created] = sent(agent, "session/new");
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 9, result: { stopReason: "end_turn" } });
+  await proxy.fromClient(request(10, "session/prompt", { sessionId: "s", prompt: [] }));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: created.id, error: { code: -32603, message: "no" } });
+  await starting;
+  assert.equal(proxy.subagents.group("s").started, 0);
+});
+
+test("a refused model setting fails the start and leaves nothing behind", async () => {
+  const made = await parent();
+  const { proxy, agent, control } = made;
+  await proxy.fromClient(request(20, "session/set_model", { sessionId: "s", modelId: "m" }));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 20, result: {} });
+  control.fail.set("session/set_model", "unknown model");
+  agent.length = 0;
+  await assert.rejects(startChild(made), /refused the session's model settings/);
+  assert.equal(sent(agent, "session/prompt").length, 0);
+  assert.equal(sent(agent, "session/close").length, 1);
+  assert.equal(proxy.subagents.live("s").length, 0);
+});
+
+test("without a log cursor no subagent starts", async () => {
+  const made = await parent();
+  const { proxy, agent, control } = made;
+  control.mark = undefined;
+  await assert.rejects(startChild(made), /log is unavailable/);
+  assert.equal(sent(agent, "session/prompt").length, 0);
+  assert.equal(sent(agent, "session/close").length, 1);
+  assert.equal(proxy.subagents.live("s").length, 0);
+});
+
+test("a settled child's channel and facade session are revoked", async () => {
+  const made = await parent();
+  const id = await startChild(made);
+  assert.deepEqual(made.links, [[id, "s"]]);
+  await endPrompt(made, id);
+  assert.deepEqual(made.unbound, ["channel-1"]);
+  assert.deepEqual(made.forgotten, [id]);
+});
+
+test("two sessions that reuse a tool call id keep their own tool and result", async () => {
+  const { proxy } = unit();
+  proxy.present(
+    {
+      toolCallId: "t",
+      name: "mcp_cowboy_ReadFile",
+      status: "in_progress",
+      rawInput: { path: "a" },
+    },
+    "A",
+  );
+  proxy.present(
+    {
+      toolCallId: "t",
+      name: "mcp_cowboy_RunCommand",
+      status: "in_progress",
+      rawInput: { command: "ls" },
+    },
+    "B",
+  );
+  assert.equal(proxy.present({ toolCallId: "t", status: "completed" }, "A").name, "Read");
+  assert.equal(proxy.present({ toolCallId: "t", status: "completed" }, "B").name, "Run");
+});
+
+test("a lost effect of a child latches on the parent's facade turn at once", async () => {
+  const connection = {
+    descriptor: { binding: { workspace: { cwd: "/w" } } },
+    call: async (method) => {
+      if (method === "process/start") throw { remote: { data: { outcome: "unknown" } } };
+      return {};
+    },
+  };
+  const facade = new Facade(connection, { root: "/w", shell: "/bin/sh" });
+  facade.beginTurn("parent");
+  facade.beginTurn("child");
+  facade.link("child", "parent");
+  const result = await facade.call("child", "RunCommand", { command: "touch x" });
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /outcome unknown/);
+  assert.equal(facade.session("parent").turn.uncertain, "process/start");
+  // Settled and forgotten: nothing is tracked for the child any more.
+  await facade.endTurn("child");
+  facade.forgetSession("child");
+  assert.equal(facade.sessions.has("child"), false);
 });

@@ -329,6 +329,8 @@ async function connectedRuntime({
       return channel;
     },
     bindChannel: (channel, sessionId) => channels.set(channel, sessionId),
+    // A settled subagent's channel: a relay that connects with it is refused.
+    unbindChannel: (channel) => channels.delete(channel),
     mcpServer: (channel) => ({
       name: "cowboy",
       command: node,
@@ -456,6 +458,8 @@ export async function runProxy({
     client: write(output),
     runtime,
     log: (line) => process.stderr.write(`cowboy: ${line}\n`),
+    // Nothing can show that a subagent `agy` did not stop has stopped: end it.
+    terminate: () => agy.kill("SIGKILL"),
   });
   runtime.then(
     (ready) => ready.attach(proxy),
