@@ -96,6 +96,7 @@ import {
   type UsageWidgetWindow,
 } from "../usageWidget";
 import { useSubscriptionAccounts } from "../subscriptionAccounts";
+import { type AboutValues, DEFAULT_ABOUT_VALUES, topBarUsageGroups, topBarUsageItems, useAboutPreferences } from "../aboutPreferences";
 import { useNativeAccountUsage } from "../nativeAccountUsage";
 import { registeredUsageAccounts, type UsageAccountCard, usageCardManageUrl, usageResetTarget } from "../usageAccounts";
 import { AccountBrowserEntry } from "../machineBrowser/AccountBrowserEntry";
@@ -231,7 +232,12 @@ function balanceUsageSummary(
 /** Segment budget for one account, in 100%-scale px. */
 function usageSegmentWidth(provider: UsageWidgetProvider): number {
   if (usageWidgetHasBalance(provider)) return USAGE_BALANCE_SEGMENT_WIDTH_PX;
-  if (provider.groups) return usageGroupSegmentWidth(provider.groups.length);
+  if (provider.groups) {
+    return usageGroupSegmentWidth(
+      provider.groups.length,
+      provider.groups.reduce((count, group) => count + group.windows.length, 0),
+    );
+  }
   return usagePercentSegmentWidth(provider.windows?.length ?? 1);
 }
 
@@ -262,9 +268,27 @@ type UsageColumn = {
   group?: string;
   /** Every window of a group, for the hover. */
   detail?: string;
+  /** The first column of a group after the first: a little more room. */
+  groupStart?: boolean;
 };
 
-function usageColumns(
+/** The strip's segments: the Usage order without hidden accounts, and each
+ *  account without its hidden quota groups (Antigravity `Gemini 4 Argon`).
+ *  An account with every group hidden leaves the strip. */
+function topBarWidgetProviders(
+  accounts: readonly UsageAccountCard[],
+  values: AboutValues,
+): { account: UsageAccountCard; provider: UsageWidgetProvider }[] {
+  return topBarUsageItems(accounts, values, (account) => account.id).flatMap((account) => {
+    const provider = usageWidgetForAccount(account.usage);
+    if (!provider) return [];
+    if (usageWidgetHasBalance(provider) || !provider.groups) return [{ account, provider }];
+    const groups = topBarUsageGroups(account.id, provider.groups, values);
+    return groups.length > 0 ? [{ account, provider: { ...provider, groups } }] : [];
+  });
+}
+
+export function usageColumns(
   provider: UsageWidgetProvider,
   usageProvider: string,
   now: number,
@@ -276,14 +300,12 @@ function usageColumns(
     }];
   }
   if (provider.groups) {
-    // One column per group, showing the window that binds it: a group with
-    // 97% of its 5h left but 19% of its week reads 19%, and flips to the 5h
-    // the moment that one runs lower. Every window stays in the hover and
-    // the U panel.
-    return provider.groups.map((group) => ({
-      ...usageWindowColumn(group.binding, now),
-      group: group.label,
-      detail: `${group.label}: ${
+    // One column per window, the group named over its first: `Gemini 33%`
+    // `71%` over `5h · 57m` `Weekly · 5d`. A group's 5h and its week block
+    // independently, so neither hides behind the other. The hover keeps the
+    // complete list.
+    return provider.groups.flatMap((group, groupIndex) => {
+      const detail = `${group.label}: ${
         group.windows.map((window) =>
           `${window.periodLabel} ${String(window.remaining)}%${
             usageCountdown(window.resetsAt, now) === undefined
@@ -291,8 +313,14 @@ function usageColumns(
               : ` (${usageCountdown(window.resetsAt, now) ?? ""})`
           }`
         ).join(" · ")
-      }`,
-    }));
+      }`;
+      return group.windows.map((window, index): UsageColumn => ({
+        ...usageWindowColumn(window, now),
+        ...(index === 0
+          ? { group: group.label, detail, ...(groupIndex > 0 ? { groupStart: true } : {}) }
+          : {}),
+      }));
+    });
   }
   return (provider.windows ?? [provider]).map((window) =>
     usageWindowColumn(window, now)
@@ -342,7 +370,7 @@ function UsageProviderSummary(
       {...(grouped ? { "data-usage-grouped": "" } : {})}
       title={`${account.title}${refreshing ? " · Refreshing…" : ""}${
         grouped
-          ? `\n${columns.map((column) => column.detail ?? "").join("\n")}`
+          ? `\n${columns.flatMap((column) => column.detail ?? []).join("\n")}`
           : ""
       }`}
       aria-label={`${account.title}${refreshing ? " · Refreshing" : ""}`}
@@ -385,7 +413,7 @@ function UsageProviderSummary(
           key={`primary-${String(index)}`}
           direction="row"
           spacing={0.55}
-          sx={{ minWidth: 0 }}
+          sx={{ minWidth: 0, ...(column.groupStart ? { pl: 0.75 } : {}) }}
         >
           {!grouped && index === 0 && nameText}
           {!grouped && index === 0 && spinner}
@@ -994,10 +1022,10 @@ export function DesktopTopBarControls({
   const { catalog } = useProviderCatalog();
   const usageAccounts = useMemo(() => registeredUsageAccounts(snapshot, accounts.data, sessions, native.accounts),
     [catalog, snapshot, accounts.data, sessions, native.accounts]);
-  const widgetProviders = usageAccounts.flatMap((account) => {
-    const provider = usageWidgetForAccount(account.usage);
-    return provider ? [{ account, provider }] : [];
-  });
+  // The strip follows the About layout (Settings → Info → Customize layout).
+  const layout = useAboutPreferences(useStoreSelector((state) => state.connected));
+  const layoutValues = layout.data?.preferences.values ?? DEFAULT_ABOUT_VALUES;
+  const widgetProviders = topBarWidgetProviders(usageAccounts, layoutValues);
   const updatedAgo = relativeUpdateTime(snapshot?.refreshed_at_ms ?? 0, clock);
   const topbarCommands = useMemo<DesktopCommand[]>(() => [
     {

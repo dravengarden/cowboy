@@ -63,7 +63,7 @@ import { displayPlan, orderUsageAccounts, registeredUsageAccounts, type UsageAcc
 import { UsageResetActions, UsageResetFields, useUsageResetFlow } from "./UsageResetFlow";
 import { useProviderCatalog } from "./providerCatalog";
 import { useNativeAccountUsage } from "./nativeAccountUsage";
-import { formatCompactCurrency, usageBalanceForAccount } from "./usageWidget";
+import { formatCompactCurrency, usageBalanceForAccount, usageWidgetForAccount, usageWidgetHasBalance } from "./usageWidget";
 
 function InfoRow({ k, v }: { k: string; v: string }): React.JSX.Element {
   return (
@@ -650,12 +650,19 @@ export function InfoContent({
   const layout = useAboutPreferences(connected);
   const accounts = useSubscriptionAccounts(connected);
   const usageSnapshot = useStoreSelector((state) => state.usage);
+  // The collector's observations carry per-group quotas (Antigravity), which
+  // the editor offers as separate top-bar toggles.
+  const native = useNativeAccountUsage(accounts.data?.registry.revision);
   const [editing, setEditing] = useState(false);
   const values = layout.data?.preferences.values ?? DEFAULT_ABOUT_VALUES;
   const choices = useMemo(() => layout.data ? {
     ...layout.data.choices,
-    usage_order: registeredUsageAccounts(usageSnapshot, accounts.data, []).map((item) => ({ id: item.id, name: item.title })),
-  } : undefined, [layout.data, usageSnapshot, accounts.data]);
+    usage_order: registeredUsageAccounts(usageSnapshot, accounts.data, [], native.accounts).map((item) => {
+      const widget = usageWidgetForAccount(item.usage);
+      const groups = widget && !usageWidgetHasBalance(widget) ? widget.groups : undefined;
+      return { id: item.id, name: item.title, ...(groups ? { groups: groups.map((group) => ({ id: group.id, name: group.label })) } : {}) };
+    }),
+  } : undefined, [layout.data, usageSnapshot, accounts.data, native.accounts]);
   return (
     <Stack spacing={1.5} sx={{ containerType: "inline-size" }}>
       {editing && <Stack direction="row" alignItems="center" justifyContent="space-between">

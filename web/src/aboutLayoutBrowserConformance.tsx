@@ -5,7 +5,7 @@ import { flushSync } from "react-dom";
 import { Button, CssBaseline } from "@mui/material";
 import { BrowserProductTheme } from "./browserProductTheme";
 import { AboutLayoutEditor } from "./AboutLayoutEditor";
-import { type AboutPreferences, PREFERENCES_CHANGED, useAboutPreferences } from "./aboutPreferences";
+import { type AboutPreferences, type AboutValues, PREFERENCES_CHANGED, useAboutPreferences } from "./aboutPreferences";
 import { bindProductSyncPrincipal } from "./productSyncIdentity";
 import { checkMobileSettingsReader } from "./mobileSettingsReaderBrowserChecks";
 export { checkMobileSettingsReader } from "./mobileSettingsReaderBrowserChecks";
@@ -19,8 +19,9 @@ export async function runAboutLayoutBrowserConformance(keepFixture = false): Pro
   const root = createRoot(container);
   const tests: string[] = [];
   const data: AboutPreferences = {
-    preferences: { scope: "about", revision: 0, values: { usage_order: [], machine_order: [] } },
-    choices: { usage_order: [{ id: "anthropic", name: "Anthropic" }, { id: "openai", name: "OpenAI" }], machine_order: [{ id: "hawk", name: "Hawk" }, { id: "ovh", name: "OVH" }] },
+    // Stored before `usage_top_bar_hidden` existed: the reader fills its default.
+    preferences: { scope: "about", revision: 0, values: { usage_order: [], machine_order: [] } as unknown as AboutValues },
+    choices: { usage_order: [{ id: "anthropic", name: "Anthropic" }, { id: "openai", name: "OpenAI", groups: [{ id: "gemini", name: "Gemini" }, { id: "gemini-4-argon", name: "Gemini 4 Argon" }] }], machine_order: [{ id: "hawk", name: "Hawk" }, { id: "ovh", name: "OVH" }] },
     dataset: { dataset_id: "fixture-dataset", user_id: "layout-fixture" },
   };
   const writes: string[] = [];
@@ -53,7 +54,7 @@ export async function runAboutLayoutBrowserConformance(keepFixture = false): Pro
   }
   const until = async (predicate: () => boolean) => {
     for (let n = 0; n < 150; n++) { if (predicate()) return; await new Promise((resolve) => setTimeout(resolve, 20)); }
-    throw new Error(`layout fixture timed out: ${container.textContent}`);
+    throw new Error(`layout fixture timed out after ${tests.length} checks (revision ${data.preferences.revision}): ${container.textContent}`);
   };
   const check = (ok: boolean, label: string) => { if (!ok) throw new Error(label); tests.push(label); };
   const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent === label)!;
@@ -89,7 +90,7 @@ export async function runAboutLayoutBrowserConformance(keepFixture = false): Pro
     button("Retry").click();
     await until(() => data.preferences.revision === 4 && !button("Retry"));
     check(data.preferences.values.machine_order[0] === "hawk", "explicit retry applies retained proposal on fresh revision");
-    data.preferences = { ...data.preferences, revision: 5, values: { usage_order: ["anthropic", "openai"], machine_order: ["ovh", "hawk"] } };
+    data.preferences = { ...data.preferences, revision: 5, values: { usage_order: ["anthropic", "openai"], machine_order: ["ovh", "hawk"], usage_top_bar_hidden: [] } };
     window.dispatchEvent(new Event(PREFERENCES_CHANGED));
     await until(() => container.querySelector('[aria-label^="Move "]')?.getAttribute("aria-label") === "Move Anthropic");
     check(true, "AI or another device invalidation refreshes the open editor");
@@ -99,6 +100,25 @@ export async function runAboutLayoutBrowserConformance(keepFixture = false): Pro
     button("Restore default order").click();
     await until(() => data.preferences.revision === 6);
     check(data.preferences.values.usage_order.length === 0 && data.preferences.values.machine_order.length === 0, "restore defaults updates both lists atomically");
+    const eye = () => container.querySelector<HTMLButtonElement>('[aria-label="Show OpenAI in the Desktop top bar"]')!;
+    check(eye().getAttribute("aria-pressed") === "true", "usage accounts start shown in the top bar");
+    await until(() => !eye().disabled);
+    eye().click();
+    await until(() => data.preferences.revision === 7 && eye().getAttribute("aria-pressed") === "false");
+    check(JSON.stringify(data.preferences.values.usage_top_bar_hidden) === '["openai"]', "hiding an account from the top bar persists its ID");
+    await until(() => !eye().disabled);
+    eye().click();
+    await until(() => data.preferences.revision === 8 && eye().getAttribute("aria-pressed") === "true");
+    check(data.preferences.values.usage_top_bar_hidden.length === 0, "showing it again removes the ID");
+    const argon = () => container.querySelector<HTMLButtonElement>('[aria-label="Show Gemini 4 Argon in the Desktop top bar"]')!;
+    await until(() => !argon().disabled);
+    argon().click();
+    await until(() => data.preferences.revision === 9 && argon().getAttribute("aria-pressed") === "false");
+    check(JSON.stringify(data.preferences.values.usage_top_bar_hidden) === '["openai::gemini-4-argon"]', "a quota group hides on its own as <account>::<group>");
+    await until(() => !eye().disabled);
+    eye().click();
+    await until(() => data.preferences.revision === 10 && container.querySelector('[data-about-visibility-groups="openai"]') === null);
+    check(true, "a hidden account folds away its group toggles");
     await checkMobileSettingsReader();
     return tests;
   } finally {

@@ -27,6 +27,9 @@ export type UsageWidgetWindow = {
  *  counted together. `binding` is the window with the least remaining: the
  *  one that stops the next request. */
 export type UsageWidgetGroup = {
+  /** Stable within the account: the slug of the short label. Preferences
+   *  name a group as `<account>::<id>`. */
+  id: string;
   label: string;
   binding: UsageWidgetWindow;
   /** Every window of the group, shortest first. */
@@ -195,6 +198,12 @@ export function usageGroupShortLabel(label: string): string {
   return short.length > 0 ? short : label;
 }
 
+/** `Claude/GPT` → `claude-gpt`; fits the preference ID alphabet. */
+export function usageGroupId(label: string): string {
+  return label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
+    .slice(0, 80) || "group";
+}
+
 /** Per-group quotas (Antigravity) when the account has no account-wide
  *  window. Groups keep the Provider's report order; each shows its binding
  *  window, so the strip spends one column per group rather than per window. */
@@ -228,8 +237,10 @@ function groupedWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
           ? candidate
           : best
       );
+      const short = usageGroupShortLabel(label);
       return {
-        label: usageGroupShortLabel(label),
+        id: usageGroupId(short),
+        label: short,
         binding: groupWindow(binding),
         windows: windows.map(groupWindow),
       };

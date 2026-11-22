@@ -59,13 +59,19 @@ export function usagePercentSegmentWidth(windows: number): number {
 }
 /** The account name of a grouped segment, set once beside its groups. */
 export const USAGE_GROUP_NAME_WIDTH_PX = 48;
-/** One quota group: `Claude/GPT 99%` over `Weekly · 6d23h`. The group name
- *  rides in the column, so it costs a little more than a bare window. */
+/** One quota group's first window: `Claude/GPT 99%` over `5h · 2h3m`. The
+ *  group name rides in the column, so it costs a little more than a bare
+ *  window; each further window of the group costs a bare window. */
 export const USAGE_GROUP_WIDTH_PX = 132;
+/** The gap that sets one group apart from the previous one. */
+export const USAGE_GROUP_GAP_PX = 6;
 
 /** Budget for a segment of per-group quotas (Antigravity). */
-export function usageGroupSegmentWidth(groups: number): number {
-  return USAGE_GROUP_NAME_WIDTH_PX + Math.max(1, groups) * USAGE_GROUP_WIDTH_PX;
+export function usageGroupSegmentWidth(groups: number, windows = groups): number {
+  const shown = Math.max(1, groups);
+  return USAGE_GROUP_NAME_WIDTH_PX + shown * USAGE_GROUP_WIDTH_PX +
+    Math.max(0, windows - shown) * USAGE_WINDOW_WIDTH_PX +
+    Math.max(0, shown - 1) * USAGE_GROUP_GAP_PX;
 }
 /** The widest a balance account (DeepSeek) may grow: spend, partial-pricing,
  *  cache-miss and blocking-error counters. It hugs shorter content and

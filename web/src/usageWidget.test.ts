@@ -264,6 +264,7 @@ test("usage widget shows per-group quotas by their binding window", () => {
     resetsAt: 100,
     groups: [
       {
+        id: "gemini",
         label: "Gemini",
         binding: { remaining: 34, periodLabel: "5h", resetsAt: 100 },
         windows: [
@@ -272,6 +273,7 @@ test("usage widget shows per-group quotas by their binding window", () => {
         ],
       },
       {
+        id: "claude-gpt",
         label: "Claude/GPT",
         // 99% of the week binds over 100% of the 5h window.
         binding: { remaining: 99, periodLabel: "Weekly", resetsAt: 300 },
@@ -281,6 +283,7 @@ test("usage widget shows per-group quotas by their binding window", () => {
         ],
       },
       {
+        id: "gemini-4-argon",
         label: "Gemini 4 Argon",
         binding: { remaining: 100, periodLabel: "Weekly", resetsAt: 500 },
         windows: [{ remaining: 100, periodLabel: "Weekly", resetsAt: 500 }],

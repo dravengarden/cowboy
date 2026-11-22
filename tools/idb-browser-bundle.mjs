@@ -170,6 +170,7 @@ await build({
     suite === "managed-calls" ||
     suite === "dormant-session" ||
     suite === "info-metrics" ||
+    suite === "about-layout" ||
     suite === "review-context" ||
     suite === "loading-progress" ||
     suite === "review-compare" ||

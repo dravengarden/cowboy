@@ -1,11 +1,15 @@
 import { useMemo, useRef, useState } from "react";
 import { Alert, Box, Button, IconButton, Menu, MenuItem, Stack, Tooltip, Typography } from "@mui/material";
-import { DragIndicator, MoreVert } from "@mui/icons-material";
+import { DragIndicator, MoreVert, Visibility, VisibilityOff } from "@mui/icons-material";
 import { useSortable } from "./useSortable";
-import { type AboutValues, type OrderChoice, type OrderKey, orderedItems } from "./aboutPreferences";
+import { type AboutValues, type OrderChoice, type OrderKey, orderedItems, usageTopBarGroupKey } from "./aboutPreferences";
 
-function OrderList({ title, choices, order, disabled, onChange }: {
+/** Per-row visibility for a surface that shows a subset of the list. */
+type RowVisibility = { label: string; hidden: string[]; onChange: (hidden: string[]) => void };
+
+function OrderList({ title, choices, order, disabled, onChange, visibility }: {
   title: string; choices: OrderChoice[]; order: string[]; disabled: boolean; onChange: (ids: string[]) => void;
+  visibility?: RowVisibility;
 }): React.JSX.Element {
   const ids = useMemo(() => orderedItems(choices, order, (item) => item.id).map((item) => item.id), [choices, order]);
   const dragChange = useRef(onChange);
@@ -24,14 +28,48 @@ function OrderList({ title, choices, order, disabled, onChange }: {
       <Typography variant="overline" color="text.secondary">{title}</Typography>
       {!ids.length && <Typography variant="body2" color="text.secondary">No items yet.</Typography>}
       {sortable.order.map((id) => (
-        <Stack key={id} ref={sortable.registerItem(id)} style={sortable.itemStyle(id)} direction="row" alignItems="center"
-          sx={{ border: 1, borderColor: "divider", borderRadius: 1.5, minHeight: 44, bgcolor: "background.paper" }}>
+        <Box key={id} ref={sortable.registerItem(id)} style={sortable.itemStyle(id)}
+          sx={{ border: 1, borderColor: "divider", borderRadius: 1.5, bgcolor: "background.paper" }}>
+        <Stack direction="row" alignItems="center" sx={{ minHeight: 44 }}>
           <Tooltip title="Drag to reorder">
             <IconButton {...sortable.handleProps(id)} disabled={disabled} aria-label={`Drag ${choices.find((item) => item.id === id)?.name ?? id}`} tabIndex={-1} sx={{ width: 44, height: 44 }}><DragIndicator /></IconButton>
           </Tooltip>
           <Typography variant="body2" sx={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>{choices.find((item) => item.id === id)?.name ?? id}</Typography>
+          {visibility && (() => {
+            const hidden = visibility.hidden.includes(id);
+            const name = choices.find((item) => item.id === id)?.name ?? id;
+            return (
+              <Tooltip title={hidden ? `Hidden from ${visibility.label}` : `Shown in ${visibility.label}`}>
+                <span>
+                  <IconButton disabled={disabled} aria-pressed={!hidden} aria-label={`Show ${name} in ${visibility.label}`} data-about-visibility={id}
+                    onClick={() => visibility.onChange(hidden ? visibility.hidden.filter((item) => item !== id) : [...visibility.hidden, id])}
+                    sx={{ width: 44, height: 44 }}>
+                    {hidden ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" color="primary" />}
+                  </IconButton>
+                </span>
+              </Tooltip>
+            );
+          })()}
           <IconButton disabled={disabled} aria-label={`Move ${choices.find((item) => item.id === id)?.name ?? id}`} onClick={(event) => setMenu({ anchor: event.currentTarget, id })} sx={{ width: 44, height: 44 }}><MoreVert /></IconButton>
         </Stack>
+        {visibility && !visibility.hidden.includes(id) && (choices.find((item) => item.id === id)?.groups?.length ?? 0) > 1 && (
+          <Stack direction="row" flexWrap="wrap" sx={{ pl: 5.5, pb: 0.5, columnGap: 1 }} data-about-visibility-groups={id}>
+            {choices.find((item) => item.id === id)!.groups!.map((group) => {
+              const key = usageTopBarGroupKey(id, group.id);
+              const hidden = visibility.hidden.includes(key);
+              return (
+                <Button key={group.id} size="small" color={hidden ? "inherit" : "primary"} disabled={disabled}
+                  aria-pressed={!hidden} aria-label={`Show ${group.name} in ${visibility.label}`} data-about-visibility={key}
+                  startIcon={hidden ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
+                  onClick={() => visibility.onChange(hidden ? visibility.hidden.filter((item) => item !== key) : [...visibility.hidden, key])}
+                  sx={{ minHeight: 32, textTransform: "none", ...(hidden ? { color: "text.secondary" } : {}) }}>
+                  {group.name}
+                </Button>
+              );
+            })}
+          </Stack>
+        )}
+        </Box>
       ))}
       <Menu anchorEl={menu?.anchor} open={!!menu} onClose={() => setMenu(undefined)}>
         <MenuItem disabled={disabled || index <= 0} onClick={() => move(0)}>Move to top</MenuItem>
@@ -49,9 +87,10 @@ export function AboutLayoutEditor({ choices, values, disabled, onChange, desktop
 }): React.JSX.Element {
   return (
     <Stack spacing={2} data-about-layout-editor>
-      <Typography variant="body2" color="text.secondary">Drag the handles or use each row’s Move menu. Saved to your account across devices.</Typography>
+      <Typography variant="body2" color="text.secondary">Drag the handles or use each row’s Move menu; the eye picks which usage accounts the Desktop top bar shows. Saved to your account across devices.</Typography>
       <Box sx={{ display: "grid", gridTemplateColumns: desktop ? "repeat(2, minmax(0, 1fr))" : "minmax(0, 1fr)", gap: 2 }}>
-        <OrderList title="Usage" choices={choices.usage_order} order={values.usage_order} disabled={disabled} onChange={(usage_order) => onChange({ usage_order })} />
+        <OrderList title="Usage" choices={choices.usage_order} order={values.usage_order} disabled={disabled} onChange={(usage_order) => onChange({ usage_order })}
+          visibility={{ label: "the Desktop top bar", hidden: values.usage_top_bar_hidden, onChange: (usage_top_bar_hidden) => onChange({ usage_top_bar_hidden }) }} />
         <OrderList title="Machines" choices={choices.machine_order} order={values.machine_order} disabled={disabled} onChange={(machine_order) => onChange({ machine_order })} />
       </Box>
       <Box><Button disabled={disabled} onClick={() => onChange({ usage_order: [], machine_order: [] })}>Restore default order</Button></Box>
