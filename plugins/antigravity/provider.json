@@ -256,9 +256,9 @@
       },
       {
         "id": "google-antigravity-cli",
-        "version": "1.5.9",
-        "source": "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.9-4515810895593472/",
-        "integrity": "sha256:471444ebaa846d5075cf636149d8fbf544bb7b81fc36a041437d8930ab21b475",
+        "version": "1.5.14",
+        "source": "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.14-5302690847260672/",
+        "integrity": "sha256:498e1ac7a9cfe2e1e566e9f929f5f6fec917ffbe99443189306435f955b95c9b",
         "private": true
       }
     ],
