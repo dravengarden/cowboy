@@ -23,6 +23,15 @@ export const LIMITS = Object.freeze({
   // at most every 2 s (each update rewrites the call's one stored row).
   progressMs: 2_000,
   progressBytes: 16 * 1024,
+  // Subagents (design "Subagents"): one parent turn runs at most this many at
+  // once and starts at most `subagentTurn`; a call waits at most
+  // `subagentWaitSeconds` (default and maximum, like a command).
+  subagentConcurrent: 2,
+  subagentTurn: 8,
+  subagentWaitSeconds: 600,
+  subagentPromptBytes: 64 * 1024,
+  subagentReportChars: 64 * 1024,
+  subagentTitleChars: 80,
 });
 
 // Commands see the target user's whole environment, as a Claude or Codex
@@ -184,6 +193,33 @@ export const TOOLS = [
         },
       },
       required: ["plan"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "Subagent",
+    description: `Delegate a self-contained task to a subagent: another Antigravity session that works in the same workspace with the same tools and shows to the owner as a subagent. Give prompt (everything it needs: it sees nothing of this conversation) and a short description to start one; it cannot start subagents itself. Waits up to wait_seconds (default and maximum ${LIMITS.subagentWaitSeconds}; 0 returns at once) and returns the subagent's final report. One still running returns its subagent_id, which Subagent (with subagent_id and no prompt) keeps waiting for and StopSubagent stops. At most ${LIMITS.subagentConcurrent} run at once and ${LIMITS.subagentTurn} start per turn. Wait for every subagent you start: they are stopped when your turn ends.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        prompt: { type: "string", description: "The task, complete in itself" },
+        description: {
+          type: "string",
+          description: "A title of a few words shown to the owner",
+        },
+        subagent_id: { type: "string", description: "Keep waiting for a running subagent" },
+        wait_seconds: { type: "integer", minimum: 0, maximum: LIMITS.subagentWaitSeconds },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "StopSubagent",
+    description: "Stop a running subagent started by Subagent.",
+    inputSchema: {
+      type: "object",
+      properties: { subagent_id: { type: "string" } },
+      required: ["subagent_id"],
       additionalProperties: false,
     },
   },

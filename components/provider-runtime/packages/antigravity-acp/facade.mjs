@@ -89,6 +89,12 @@ export class Facade {
     this.sessions = new Map();
     /** The session's extension tools (`extensions.mjs`), once started. */
     this.extensions = undefined;
+    /**
+     * The proxy's subagent host (`subagents.mjs`): `start(sessionId, {prompt,
+     * description})`, `wait(sessionId, id, ms, signal)` and `stop(sessionId,
+     * id)`. Absent until the proxy attaches (and in a managed child).
+     */
+    this.subagents = undefined;
   }
 
   /** Canonicalize the binding's workspace root and build the facade. */
@@ -137,6 +143,9 @@ export class Facade {
       ended: false,
       uncertain: undefined,
       inflight: new Set(),
+      // Aborted when the turn ends or is cancelled: a call waiting on a
+      // subagent returns at once instead of holding the end of the turn.
+      abort: new AbortController(),
     };
   }
 
@@ -155,6 +164,7 @@ export class Facade {
         turn.ended = true;
         session.turn = undefined;
       }
+      turn.abort?.abort();
       await Promise.allSettled([...turn.inflight]);
     }
     const commands = [...session.commands.values()];
@@ -216,6 +226,8 @@ export class Facade {
           }
         }),
       StopCommand: () => this.stopCommand(session, args),
+      Subagent: () => this.subagent(sessionId, turn, args),
+      StopSubagent: () => this.stopSubagent(sessionId, args),
       // Presentation only (the proxy shows it as the session's plan); it
       // never reaches the target.
       UpdatePlan: async () => {
@@ -768,6 +780,74 @@ export class Facade {
     if (!closed) return `Stopping ${id} is not yet confirmed; call StopCommand again.`;
     this.forget(session, running);
     return `Stopped ${id}.\n${running.output.take()}`;
+  }
+
+  /**
+   * Start a subagent, or keep waiting for one, and return its report once it
+   * ends. The turn stays open while this waits (the subagent's own tool calls
+   * need it), so a wait never exceeds `LIMITS.subagentWaitSeconds`; a longer
+   * task returns its id to wait for again.
+   */
+  async subagent(sessionId, turn, args) {
+    const { prompt, description, subagent_id: id, wait_seconds: wait } = args;
+    const host = this.subagents;
+    if (host === undefined) throw new ToolError("Subagents are not available in this session.");
+    if (
+      wait !== undefined &&
+      (!Number.isInteger(wait) || wait < 0 || wait > LIMITS.subagentWaitSeconds)
+    ) {
+      throw new ToolError(`wait_seconds must be between 0 and ${LIMITS.subagentWaitSeconds}`);
+    }
+    let childId = id;
+    if (id !== undefined) {
+      if (prompt !== undefined || description !== undefined) {
+        throw new ToolError("Give either prompt or subagent_id");
+      }
+      if (typeof id !== "string" || !id) throw new ToolError("Invalid subagent_id");
+    } else {
+      if (typeof prompt !== "string" || !prompt.trim()) {
+        throw new ToolError("prompt (or the subagent_id of a running subagent) is required");
+      }
+      if (Buffer.byteLength(prompt) > LIMITS.subagentPromptBytes) {
+        throw new ToolError(`prompt is larger than ${LIMITS.subagentPromptBytes} bytes`);
+      }
+      if (description !== undefined && typeof description !== "string") {
+        throw new ToolError("description must be text");
+      }
+      childId = await host.start(sessionId, { prompt, description });
+    }
+    const outcome = await host.wait(
+      sessionId,
+      childId,
+      (wait ?? LIMITS.subagentWaitSeconds) * 1000,
+      turn.abort?.signal,
+    );
+    return renderSubagent(childId, outcome);
+  }
+
+  async stopSubagent(sessionId, { subagent_id: id }) {
+    const host = this.subagents;
+    if (host === undefined) throw new ToolError("Subagents are not available in this session.");
+    if (typeof id !== "string" || !id) throw new ToolError("Invalid subagent_id");
+    return renderSubagent(id, await host.stop(sessionId, id));
+  }
+}
+
+/**
+ * What a subagent call tells the model: its report, or how to keep waiting.
+ * A failed one is a tool error, so the model does not take its text for a
+ * report.
+ */
+export function renderSubagent(id, outcome) {
+  switch (outcome?.state) {
+    case "running":
+      return `Subagent ${id} is still running. Call Subagent with subagent_id "${id}" (and no prompt) to keep waiting, or StopSubagent to stop it. It is stopped when your turn ends.`;
+    case "completed":
+      return `Subagent ${id} finished.\n\n${outcome.report || "(it reported nothing)"}`;
+    case "cancelled":
+      return `Subagent ${id} was stopped${outcome.report ? `. What it had said:\n\n${outcome.report}` : "."}`;
+    default:
+      throw new ToolError(`Subagent ${id} failed: ${outcome?.error ?? "unknown error"}`);
   }
 }
 

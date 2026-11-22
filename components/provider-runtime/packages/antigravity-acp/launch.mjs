@@ -45,6 +45,8 @@ const EXPECTED_TOOLS = [
   "RunCommand",
   "StopCommand",
   "UpdatePlan",
+  "Subagent",
+  "StopSubagent",
 ];
 const MAX_FRAME = 32 * 1024 * 1024;
 

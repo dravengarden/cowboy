@@ -199,6 +199,7 @@
         "projection.mjs",
         "proxy.mjs",
         "skills.mjs",
+        "subagents.mjs",
         "usage.mjs",
         "hooks.json",
         "settings.json"

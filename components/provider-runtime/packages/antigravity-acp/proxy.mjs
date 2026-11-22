@@ -33,6 +33,7 @@ import {
   schemaRefusal,
 } from "./managed-output.mjs";
 import { expandSkillCommand, skillCommands } from "./skills.mjs";
+import { Subagents } from "./subagents.mjs";
 
 /** Client requests a `runtime` unit forwards; everything else is refused. */
 export const RUNTIME_REQUESTS = Object.freeze([
@@ -275,6 +276,10 @@ export class AcpProxy {
     this.managedSession = undefined;
     /** Whether that `session/new` is still waiting for `agy`'s answer. */
     this.managedOpening = false;
+    /** The subagents this unit runs for its sessions (`subagents.mjs`). */
+    this.subagents = new Subagents(this, {
+      refusalText: (klass) => TURN_ERROR_TEXT[klass] ?? TURN_ERROR_TEXT.unknown_refusal,
+    });
     Promise.resolve(runtime).then(
       (ready) => {
         this.root = ready?.facade?.root;
@@ -282,6 +287,8 @@ export class AcpProxy {
         this.memory = ready?.memory ?? null;
         /** A managed read-only child (`managed.mjs`): its own allow-list. */
         this.managed = ready?.managed === true;
+        // A managed child delegates nothing: its facade has no subagent host.
+        if (ready?.facade && !this.managed) ready.facade.subagents = this.subagents;
       },
       () => {},
     );
@@ -566,9 +573,10 @@ export class AcpProxy {
       this.switches.set(requested.sessionId, (this.switches.get(requested.sessionId) ?? 0) + 1);
     }
     // The reply is handled with this runtime, without awaiting it again.
-    const record = { method, runtime, mode: requested };
+    const record = { method, runtime, mode: requested, params: forwarded.params };
     if (method === "initialize") {
       this.compaction.initialize(forwarded.params);
+      this.subagents.initialize(forwarded.params);
       this.notices = Boolean(forwarded.params?.clientCapabilities?.session?.notices);
       // `agy` must never delegate file or terminal work to the worker: the
       // worker runs on the runtime Machine, not on the session's target.
@@ -582,6 +590,7 @@ export class AcpProxy {
       try {
         if (typeof params.cwd !== "string") throw new Error("session cwd is required");
         params.cwd = runtime.sessionCwd(params.cwd);
+        record.cwd = params.cwd;
         runtime.checkMirror(params.cwd);
         const projection = await runtime.projection(params.cwd);
         record.projection = projection;
@@ -703,8 +712,12 @@ export class AcpProxy {
     if (typeof sessionId === "string" && this.turns.has(sessionId)) {
       // Marked before anything is awaited: no correction starts after a stop.
       this.turns.get(sessionId).cancelled = true;
+      this.subagents.cancelled(sessionId);
+      // A stopped session takes the subagents it started with it, fenced
+      // alongside the session itself (not after it).
+      const children = this.subagents.cancelChildren(sessionId);
       const runtime = await this.runtime;
-      await runtime.facade.endTurn(sessionId, { cancelled: true });
+      await Promise.all([runtime.facade.endTurn(sessionId, { cancelled: true }), children]);
     }
     this.agent(message);
   }
@@ -741,6 +754,8 @@ export class AcpProxy {
     turn.violation = name === undefined ? "unknown" : toolCode(name);
     this.log(`built-in tool ${turn.violation} executed; ending the turn`);
     this.agent({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });
+    // A subagent's violation ends its parent's turn as well.
+    this.subagents.violated(sessionId, turn.violation);
   }
 
   /**
@@ -774,7 +789,8 @@ export class AcpProxy {
   remember(params) {
     if (!this.memory?.observe) return;
     const turn = this.turns.get(params?.sessionId);
-    if (!turn) return;
+    // A subagent's words are its report, not the owner's conversation.
+    if (!turn || turn.child) return;
     const update = params.update;
     const observation = updateObservation(update);
     if (!observation) return;
@@ -807,6 +823,8 @@ export class AcpProxy {
 
   /** A facade call's effect became unknown: end that session's turn. */
   uncertain(sessionId, method) {
+    // A subagent's unknown effect ends its parent's turn too.
+    this.subagents.uncertain(sessionId, method);
     const turn = this.turns.get(sessionId);
     if (!turn) return;
     turn.uncertain ??= method;
@@ -840,7 +858,16 @@ export class AcpProxy {
           // agy echoes every prompt block as the owner's message; the blocks
           // Cowboy injected (recalled memory, restated context) are not.
           if (injectedEcho(update)) return;
+          // A subagent's delegation prompt is shown as a linked message of
+          // its parent, and the commands of the owner's session are not its.
+          if (
+            this.subagents.owns(message.params?.sessionId) &&
+            ["user_message_chunk", "available_commands_update"].includes(update?.sessionUpdate)
+          ) {
+            return;
+          }
           this.observe(message.params);
+          this.subagents.collect(message.params);
           // Before presentation, which hides some tool calls (UpdatePlan).
           const answer = this.collectReply(message.params);
           // Evidence and the worker see the same sanitized, presented
@@ -928,6 +955,9 @@ export class AcpProxy {
     }
     // No result or error leaves the proxy with the raw tier.
     message = stripTier(message);
+    // The proxy's own request (a subagent's session): its host answers, the
+    // worker never sees it.
+    if (record.internal) return record.internal(message);
     const { runtime } = record;
     if (record.mode) {
       const { sessionId, mode } = record.mode;
@@ -946,6 +976,14 @@ export class AcpProxy {
         const sessionId = message.result?.sessionId ?? record.session;
         this.reportMode(sessionId, message.result);
         this.compaction.opened(sessionId, record.projection);
+        if (!runtime.managed) {
+          this.subagents.opened(sessionId, { cwd: record.cwd, projection: record.projection });
+        }
+      } else if (
+        record.method === "session/set_model" ||
+        record.method === "session/set_config_option"
+      ) {
+        this.subagents.configured(record.method, record.params);
       }
     }
     if (record.channel && typeof message.result?.sessionId === "string") {
@@ -973,7 +1011,12 @@ export class AcpProxy {
     // Checked synchronously, and every ending fences the turn's facade calls
     // before anything is awaited; an admitted correction reopens them.
     const problem = this.correction(turn, message);
-    await runtime.facade.endTurn(record.sessionId);
+    // Both start before anything is awaited: the turn's facade calls are
+    // fenced at once, and nothing a turn started outlives it (its subagents
+    // stop, which a later start of theirs already sees).
+    const fenced = runtime.facade.endTurn(record.sessionId);
+    await this.subagents.finish(record.sessionId);
+    await fenced;
     // Every ending is classified, a vendor error too: its log window may
     // hold a refusal; an error without one is `unknown_refusal`, never a
     // vendor message the Controller cannot attribute.

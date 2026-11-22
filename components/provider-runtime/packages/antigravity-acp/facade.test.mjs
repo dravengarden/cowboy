@@ -129,6 +129,8 @@ test("tools are unavailable outside a turn and after the turn ends", async (t) =
       "RunCommand",
       "StopCommand",
       "UpdatePlan",
+      "Subagent",
+      "StopSubagent",
     ],
   );
 });

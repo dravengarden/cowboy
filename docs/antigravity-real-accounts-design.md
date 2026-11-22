@@ -1415,7 +1415,7 @@ words. Workflows (`.agents/workflows/*.md`) are not projected.
 | Tool(s) | Reason | Alternative named in the hook's denial |
 | --- | --- | --- |
 | `read_file`, `write_file`, `edit_file`, `run_command` (and `list_dir`, `grep_search`, `find_by_name`, `command_status`, …) | they act on the runtime Machine | the facade tools |
-| `invoke_subagent`, `define_subagent`, `manage_subagents`, `send_message`, `swarm` (`post_message`, `read_board`, `swarm_wait`, `claim_next`), `run_workflow` | see "Subagents" | Cowboy managed calls (`mcp_cowboy_cowboy_execute`, action `calls.start`) when listed |
+| `invoke_subagent`, `define_subagent`, `manage_subagents`, `send_message`, `swarm` (`post_message`, `read_board`, `swarm_wait`, `claim_next`), `run_workflow` | see "Subagents" | `mcp_cowboy_Subagent` (a proxy-hosted subagent); Cowboy managed calls (`mcp_cowboy_cowboy_execute`, action `calls.start`) for work of another session |
 | `schedule`, `manage_task` | timers and background tasks live in the `agy` process, which Cowboy stops when the session idles; a fired timer would start a turn no client prompted | `RunCommand` with `wait_seconds`; a scheduled message in Cowboy; for work handed to another session, `cowboy session wait` inside the human's turn ([session completion notices](agent-api.md#session-completion-notices)) |
 | `execute_url`, browser and computer-use tools (`bind_app`, `ax_*`, `focus_app`) | no browser or desktop in the account unit | `search_web`, `read_url_content`, a browser MCP tool of the folder |
 | `generate_image` | writes the image to the account's artifact directory on the runtime Machine, which the session cannot see | none yet |
@@ -1441,13 +1441,60 @@ outside any client prompt, a turn the worker never started (no evidence
 settlement, no fencing, no queue ownership); (3) none of its steps are
 visible over ACP, so the Web cannot show it as a subagent row and the
 proxy's detection behind the gate cannot see it; (4) Cowboy stops the idle
-process, killing it. Decision (c) with (b)'s route: native subagents, swarms
-and workflows stay denied; the denial and the installed managed-call
-guidance route delegation to Cowboy managed calls, which run a full,
-visible, cancellable child session through the same execution binding.
-Revisit if a later `agy` holds the prompt open until its children report and
-reports their steps over ACP (e.g. as ACP subagent sessions, which Cowboy's
-`initialize` already advertises).
+process, killing it. Native subagents, swarms and workflows therefore stay
+denied (the hook's denial names the alternatives), and `agy` 1.5.14, the
+newest at 2026-11-22, still declares no subagent capability in its ACP
+`initialize` (`agentCapabilities` is identical to 1.5.9's for a client that
+declared `clientCapabilities.subagents`), so waiting for it reports nothing.
+
+**Proxy-hosted subagents (owner decision, 2026-11-22).** The proxy runs the
+delegation itself, so each of the four problems has an answer inside the
+turn. The facade's `Subagent` tool (`subagents.mjs`) starts another native
+`agy` session in the same process, with the parent's working directory,
+projection (plus the subagent guidance), mode, model and effort settings and
+its own facade channel and turn on the one execution connection, and sends the
+delegation prompt. The tool call stays open while the child works: it waits at
+most `wait_seconds` (default and maximum 600, like a command) and returns the
+child's final report, or its `subagent_id` for another `Subagent` call to keep
+waiting (or `StopSubagent` to stop it). `wait_seconds: 0` starts it without
+waiting, so a model can run two at once and collect both.
+
+- **Reporting.** The worker's `initialize` declared
+  `clientCapabilities.subagents` (the proxy offers the tool only to such a
+  client; otherwise the call fails). The proxy sends the ACP subagent form the
+  worker already routes ([subagents](subagents.md)): a `subagent_update` on the
+  parent before any child traffic (`capabilities.cancel`, `state: running`),
+  the delegation prompt as a linked `session_message`, the child's own
+  `session/update`s and permission requests under its session id (its prompt
+  echo and command list are dropped), and a final `subagent_update` with
+  `idle` and a stop reason (`end_turn`, `cancelled` or `error`). The row, its
+  observed transcript, Stop and the permission attribution need nothing new
+  in the Controller or Web.
+- **Same gate.** The child is a session of the same `agy` process, so the same
+  `PreToolUse` hook, marker, allow-list, mode-based approval and violation
+  detection apply; the proxy keeps a turn record per child so a built-in tool
+  that ran is seen. A child's violation, unknown effect or backend refusal
+  ends the parent's turn the same way (the parent is cancelled, the Controller
+  classifies it, and the account's quota or refusal handling is unchanged: the
+  child's backend lines lie inside the parent's evidence window).
+- **Bounded.** One level only (a child's `Subagent` call fails), at most 2
+  running at once and 8 started per turn, a prompt of at most 64 KiB, a report
+  of at most 64 K characters, nothing in plan mode or before the mode is known.
+- **Nothing outlives the turn.** The parent's prompt ending, its cancel or its
+  Stop cancels every child (their facade turns are fenced, `agy` is asked to
+  stop, a still unsettled one is closed after 10 s) before the parent's own
+  fence completes; a child's own Stop (its row) cancels only that child. A
+  settled child's native session is closed; `agy` keeps its conversation on
+  disk. Child text is never recorded as the owner's memory.
+- **Account risk.** The child's prompts are agent-initiated requests on a
+  consumer subscription inside the owner's own turn: the owner accepted that
+  (requirements, Antigravity consumer-subscription boundary). Managed calls
+  keep the read-only profile and no subagents.
+
+Not covered: a child's token usage (agy reports none per session), the model
+label of its row (`agy` sends no per-child model configuration), and any
+acceptance with real traffic before the first rollout (the unit tests drive a
+fake `agy`; the rollout runs one subagent on the admitted account).
 
 ### Remaining (needs work outside this adapter)
 

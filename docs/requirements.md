@@ -893,6 +893,15 @@ These boundaries are mandatory and fail closed:
   named default account under that account's controls. The
   owner accepted the account risk of these agent-initiated turns. 429/quota
   responses back off without retry storms.
+- Subagents, with one owner-approved exception (2026-11-22). An ordinary,
+  owner-driven session may start subagents through the proxy's `Subagent`
+  tool: other native sessions of the same account, started inside the owner's
+  own turn, one level deep, at most two at once and eight per turn, stopped
+  when that turn ends, shown and stoppable as ACP subagents and subject to
+  the same tool gate. They are never offered to managed calls, scheduled or
+  background jobs, or any target other than the owner's session. Native
+  `invoke_subagent`, swarms and workflows stay denied. The owner accepted the
+  added account risk of these agent-initiated requests.
 - A suspension signal (for example "disabled in this account for violation of
   Terms of Service") marks the account suspended, stops its workers and halts
   retries until the owner acts.
