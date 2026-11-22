@@ -83,6 +83,22 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.140.0 records provider-runtime 1.3.24, whose
+`cowboy-antigravity-acp` 1.0.20 closes Claude/Codex parity gaps found in live
+acceptance: `RunCommand` runs in the user's login shell (the user's PATH) after
+a builtin-only return to the workspace directory, whole AGENTS.md files and
+the user's home guidance (`~/AGENTS.md`, `~/.gemini/GEMINI.md`) are projected,
+read tools reach any path the user can read while writes stay in the working
+directory and must prove absence before creating, the user's home skills are
+listed beside the repository's, and `ReadFile` returns images as image blocks.
+Home content is never taken from inside the repository, and home reads are
+bounded so a stalled home cannot hold startup or end the shared execution
+connection (`Connection.request` now takes an optional per-request
+`timeoutMs`). Antigravity 0.2.25 pins it. The other six Providers pinning
+provider-runtime advance one patch version (claude-code 3.20.70,
+claude-deepseek 3.1.87, codex 3.6.30, codex-deepseek 3.1.87, deepseek-harness
+1.0.45, grok 3.2.28).
+
 Component release 3.139.0 records provider-runtime 1.3.23, which pins `agy`
 1.5.14 again with cowboy-antigravity-acp 1.0.19: a turn's backend evidence now
 settles on a barrier request the proxy sends `agy` once the turn has replied
