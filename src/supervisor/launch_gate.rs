@@ -14,6 +14,17 @@ impl Supervisor {
         *self.launch_gate.lock() = Some(gate);
     }
 
+    /// A registered session's start: runtime placement restrictions, then
+    /// the launch gate like every other launch (a retired or blocked account).
+    pub(super) fn check_registered_launch(
+        &self,
+        meta: &crate::core::SessionMeta,
+    ) -> Result<(), String> {
+        self.runtime_restrictions
+            .check(&meta.provider, &meta.machine_id)?;
+        self.check_launch_gate(&meta.id)
+    }
+
     pub(super) fn check_launch_gate(&self, session_id: &str) -> Result<(), String> {
         let gate = self.launch_gate.lock().clone();
         gate.map_or(Ok(()), |gate| gate(session_id))

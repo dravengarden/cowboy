@@ -411,8 +411,7 @@ impl Supervisor {
             .find(|meta| meta.id == session_id)
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
         meta.require_runtime_launch()?;
-        self.runtime_restrictions
-            .check(&meta.provider, &meta.machine_id)?;
+        self.check_registered_launch(&meta)?;
         let spec = if meta.provider_generation_digest.is_empty() {
             provider::lookup(&meta.provider)
         } else {
@@ -2271,6 +2270,12 @@ mod tests {
                     AgentCommand::Prompt(Vec::new(), Some("c1".into()), None)
                 )
                 .unwrap_err(),
+            parked
+        );
+        assert!(runtime.pending_for_test().is_empty());
+        // A registered session's first start passes the same gate.
+        assert_eq!(
+            supervisor.start_registered_session("s").unwrap_err(),
             parked
         );
         assert!(runtime.pending_for_test().is_empty());

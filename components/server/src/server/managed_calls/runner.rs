@@ -1085,17 +1085,6 @@ async fn register_child(state: &AppState, record: &Record, cwd: &str) -> Result<
     })
 }
 
-fn stop_code(stop_reason: &str) -> &'static str {
-    match stop_reason.to_ascii_lowercase().replace('_', "").as_str() {
-        "endturn" | "done" => "completed",
-        "cancelled" | "canceled" => "cancelled",
-        "refusal" => "refusal",
-        "maxtokens" => "max_tokens",
-        "maxturnrequests" => "max_turn_requests",
-        _ => "provider_error",
-    }
-}
-
 fn result_value(text: &str, stop_reason: &str, structured: Option<&Value>) -> Value {
     let truncated = text.len() > MAX_RESULT_TEXT;
     let mut end = text.len().min(MAX_RESULT_TEXT);
@@ -1228,7 +1217,7 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
         let wants_schema = request
             .as_ref()
             .is_some_and(|request| output_schema(request).is_some());
-        let code = stop_code(stop_reason);
+        let code = outcome::stop_code(stop_reason);
         let parsed = (wants_schema && code == "completed")
             .then(|| serde_json::from_str::<Value>(turn.final_text.trim()).ok())
             .flatten();
@@ -1430,6 +1419,11 @@ async fn reconfirm(
     record: &Record,
     request: &Request,
 ) -> Result<(), Step> {
+    // A retired card's child is settled, never reconfirmed or prompted.
+    if let Some(code) = retirement::call_refusal(state, &record.child_session_id) {
+        advance(state, store, record, fail(code, None)).await;
+        return Err(Step::Again);
+    }
     let Err(error) = configuration::ready(state, store, record).await else {
         // Reconfirmation can take long; a cancellation or another transition
         // committed meanwhile wins over the resubmission.
