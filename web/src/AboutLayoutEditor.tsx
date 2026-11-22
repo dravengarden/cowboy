@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { Alert, Box, Button, IconButton, Menu, MenuItem, Stack, Tooltip, Typography } from "@mui/material";
 import { DragIndicator, MoreVert, Visibility, VisibilityOff } from "@mui/icons-material";
 import { useSortable } from "./useSortable";
-import { type AboutValues, type OrderChoice, type OrderKey, orderedItems } from "./aboutPreferences";
+import { type AboutValues, type OrderChoice, type OrderKey, orderedItems, usageTopBarGroupKey } from "./aboutPreferences";
 
 /** Per-row visibility for a surface that shows a subset of the list. */
 type RowVisibility = { label: string; hidden: string[]; onChange: (hidden: string[]) => void };
@@ -28,8 +28,9 @@ function OrderList({ title, choices, order, disabled, onChange, visibility }: {
       <Typography variant="overline" color="text.secondary">{title}</Typography>
       {!ids.length && <Typography variant="body2" color="text.secondary">No items yet.</Typography>}
       {sortable.order.map((id) => (
-        <Stack key={id} ref={sortable.registerItem(id)} style={sortable.itemStyle(id)} direction="row" alignItems="center"
-          sx={{ border: 1, borderColor: "divider", borderRadius: 1.5, minHeight: 44, bgcolor: "background.paper" }}>
+        <Box key={id} ref={sortable.registerItem(id)} style={sortable.itemStyle(id)}
+          sx={{ border: 1, borderColor: "divider", borderRadius: 1.5, bgcolor: "background.paper" }}>
+        <Stack direction="row" alignItems="center" sx={{ minHeight: 44 }}>
           <Tooltip title="Drag to reorder">
             <IconButton {...sortable.handleProps(id)} disabled={disabled} aria-label={`Drag ${choices.find((item) => item.id === id)?.name ?? id}`} tabIndex={-1} sx={{ width: 44, height: 44 }}><DragIndicator /></IconButton>
           </Tooltip>
@@ -51,6 +52,24 @@ function OrderList({ title, choices, order, disabled, onChange, visibility }: {
           })()}
           <IconButton disabled={disabled} aria-label={`Move ${choices.find((item) => item.id === id)?.name ?? id}`} onClick={(event) => setMenu({ anchor: event.currentTarget, id })} sx={{ width: 44, height: 44 }}><MoreVert /></IconButton>
         </Stack>
+        {visibility && !visibility.hidden.includes(id) && (choices.find((item) => item.id === id)?.groups?.length ?? 0) > 1 && (
+          <Stack direction="row" flexWrap="wrap" sx={{ pl: 5.5, pb: 0.5, columnGap: 1 }} data-about-visibility-groups={id}>
+            {choices.find((item) => item.id === id)!.groups!.map((group) => {
+              const key = usageTopBarGroupKey(id, group.id);
+              const hidden = visibility.hidden.includes(key);
+              return (
+                <Button key={group.id} size="small" color={hidden ? "inherit" : "primary"} disabled={disabled}
+                  aria-pressed={!hidden} aria-label={`Show ${group.name} in ${visibility.label}`} data-about-visibility={key}
+                  startIcon={hidden ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
+                  onClick={() => visibility.onChange(hidden ? visibility.hidden.filter((item) => item !== key) : [...visibility.hidden, key])}
+                  sx={{ minHeight: 32, textTransform: "none", ...(hidden ? { color: "text.secondary" } : {}) }}>
+                  {group.name}
+                </Button>
+              );
+            })}
+          </Stack>
+        )}
+        </Box>
       ))}
       <Menu anchorEl={menu?.anchor} open={!!menu} onClose={() => setMenu(undefined)}>
         <MenuItem disabled={disabled || index <= 0} onClick={() => move(0)}>Move to top</MenuItem>

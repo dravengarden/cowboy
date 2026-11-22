@@ -21,7 +21,7 @@ export async function runAboutLayoutBrowserConformance(keepFixture = false): Pro
   const data: AboutPreferences = {
     // Stored before `usage_top_bar_hidden` existed: the reader fills its default.
     preferences: { scope: "about", revision: 0, values: { usage_order: [], machine_order: [] } as unknown as AboutValues },
-    choices: { usage_order: [{ id: "anthropic", name: "Anthropic" }, { id: "openai", name: "OpenAI" }], machine_order: [{ id: "hawk", name: "Hawk" }, { id: "ovh", name: "OVH" }] },
+    choices: { usage_order: [{ id: "anthropic", name: "Anthropic" }, { id: "openai", name: "OpenAI", groups: [{ id: "gemini", name: "Gemini" }, { id: "gemini-4-argon", name: "Gemini 4 Argon" }] }], machine_order: [{ id: "hawk", name: "Hawk" }, { id: "ovh", name: "OVH" }] },
     dataset: { dataset_id: "fixture-dataset", user_id: "layout-fixture" },
   };
   const writes: string[] = [];
@@ -110,6 +110,15 @@ export async function runAboutLayoutBrowserConformance(keepFixture = false): Pro
     eye().click();
     await until(() => data.preferences.revision === 8 && eye().getAttribute("aria-pressed") === "true");
     check(data.preferences.values.usage_top_bar_hidden.length === 0, "showing it again removes the ID");
+    const argon = () => container.querySelector<HTMLButtonElement>('[aria-label="Show Gemini 4 Argon in the Desktop top bar"]')!;
+    await until(() => !argon().disabled);
+    argon().click();
+    await until(() => data.preferences.revision === 9 && argon().getAttribute("aria-pressed") === "false");
+    check(JSON.stringify(data.preferences.values.usage_top_bar_hidden) === '["openai::gemini-4-argon"]', "a quota group hides on its own as <account>::<group>");
+    await until(() => !eye().disabled);
+    eye().click();
+    await until(() => data.preferences.revision === 10 && container.querySelector('[data-about-visibility-groups="openai"]') === null);
+    check(true, "a hidden account folds away its group toggles");
     await checkMobileSettingsReader();
     return tests;
   } finally {

@@ -10,7 +10,12 @@ export interface AboutValues {
   usage_top_bar_hidden: string[];
 }
 export interface PreferenceSnapshot { scope: "about"; revision: number; values: AboutValues }
-export interface OrderChoice { id: string; name: string }
+export interface OrderChoice {
+  id: string;
+  name: string;
+  /** Quota groups inside a usage account, toggled separately in the top bar. */
+  groups?: { id: string; name: string }[];
+}
 export interface AboutPreferences {
   preferences: PreferenceSnapshot;
   choices: Record<OrderKey, OrderChoice[]>;
@@ -35,6 +40,19 @@ export function orderedItems<T>(items: readonly T[], order: readonly string[], i
 export function topBarUsageItems<T>(items: readonly T[], values: AboutValues, id: (item: T) => string): T[] {
   const hidden = new Set(values.usage_top_bar_hidden);
   return orderedItems(items, values.usage_order, id).filter((item) => !hidden.has(id(item)));
+}
+
+/** A quota group inside an account (Antigravity `Gemini 4 Argon`) shares the
+ *  hidden list as `<account>::<group>`; both IDs stay in the preference
+ *  alphabet, and `::` never occurs inside either. */
+export function usageTopBarGroupKey(account: string, group: string): string {
+  return `${account}::${group}`;
+}
+
+/** The account's groups the top bar shows, in report order. */
+export function topBarUsageGroups<T extends { id: string }>(account: string, groups: readonly T[], values: AboutValues): T[] {
+  const hidden = new Set(values.usage_top_bar_hidden);
+  return groups.filter((group) => !hidden.has(usageTopBarGroupKey(account, group.id)));
 }
 
 export function useAboutPreferences(connected: boolean) {
