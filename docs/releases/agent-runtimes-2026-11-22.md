@@ -199,3 +199,17 @@ A managed call never predicts; `CODEX_ACP_PROMPT_SUGGESTIONS=false` still turns
 it off. Claude's prediction stays dormant: claude-agent-acp 0.109 sends it only
 as the standard update, and its native generator did not run offline with an
 API key, so it waits for the worker to read the standard form.
+
+| Gate | Result |
+| --- | --- |
+| codex-acp delta tests (`cowboy-prompt-suggestions`, upstream prompt suggestions) | 16 passed; the series' type checks and upstream suite pass in the runtime build |
+| `provider-check`, `check-compact` at `7671baa41` | Passed |
+| Codex worker / image conformance on the 3.6.28 runtime | Accepted (34 / 13 checks); their harness does not set the opt-in, so turns are unchanged |
+| Catalog readers | Active (`mhd8kxx0`) and rollback (`42gs643j`) Controllers read an isolated copy twice: readable |
+| Public artifact URLs, live coverage | Resolve to their digests; passed |
+
+Codex 3.6.28 (`sha256:f0c2c5e1abc00ea6ee0d9e9ca627a4bbc87bb4ec3bc0896254a39646761424bf`)
+is installed on Hawk and OVH by `cowboy operator converge --plugin codex`, and a
+managed analysis call on it completed (managed calls never predict). An ordinary
+session's first prediction appears after its next completed turn; it costs one
+cached `thread/sample` per completed turn.
