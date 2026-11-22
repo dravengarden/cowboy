@@ -386,13 +386,6 @@ pub(super) async fn distribute_and_mark_scope(
     (next, replicas)
 }
 
-pub(super) async fn distribute_provider_auth(
-    state: &Arc<AppState>,
-    provider_id: &str,
-) -> ProviderDistributionOutcome {
-    distribute_account_auth(state, provider_id, &Default::default()).await
-}
-
 async fn distribute_account_auth(
     state: &Arc<AppState>,
     provider_id: &str,

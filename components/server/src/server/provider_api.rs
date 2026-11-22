@@ -567,6 +567,19 @@ pub(super) async fn provider_account_auth_envelope_for_machine(
     provider_id: &str,
     account_id: &crate::provider_account::ProviderAccountId,
 ) -> Result<crate::machine_protocol::SealedProviderAuth, String> {
+    sealed_auth_envelope_for_machine(state, machine_id, provider_id, account_id)
+        .await
+        .map(|(envelope, _)| envelope)
+}
+
+/// The envelope for `machine_id` and the enrolled encryption key it was
+/// sealed to: an acknowledgement belongs to exactly that enrollment.
+pub(super) async fn sealed_auth_envelope_for_machine(
+    state: &Arc<AppState>,
+    machine_id: &str,
+    provider_id: &str,
+    account_id: &crate::provider_account::ProviderAccountId,
+) -> Result<(crate::machine_protocol::SealedProviderAuth, String), String> {
     let store = state
         .store
         .as_ref()
@@ -584,6 +597,7 @@ pub(super) async fn provider_account_auth_envelope_for_machine(
         }
         return scope
             .seal_for_machine(provider_id, &public_key)
+            .map(|envelope| (envelope, public_key))
             .map_err(|error| error.to_string());
     }
     let scope = provider_auth_scope_for_machine(state, machine_id, account_id).await?;
@@ -601,11 +615,12 @@ pub(super) async fn provider_account_auth_envelope_for_machine(
         {
             return Err("Provider grant changed during cleanup".into());
         }
-        Ok(envelope)
+        Ok((envelope, public_key))
     } else {
         scope
             .seal_current_grant(store, machine_id, provider_id)
             .await
+            .map(|envelope| (envelope, public_key))
             .map_err(|error| error.to_string())
     }
 }

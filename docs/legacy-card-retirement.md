@@ -236,33 +236,67 @@ them with the previous Controller before installing this release
 
 The admission is recorded with the Service dataset and each card Provider's
 root wipe generation (`retirement-admitted.json` beside the vault). A later
-start with exactly those (a reboot with a Machine offline) skips the checks;
-any change (a rollback signed a card in and out again) runs them again.
+start with exactly those (a reboot with a Machine offline) skips the
+Machine wipe check; any change (a rollback signed a card in and out again)
+runs it again. The live-session check runs on every start (an older
+Controller after a rollback could resume a card session without changing any
+wipe). Delivery acknowledgements are recorded under exactly the enrollment
+key the envelope was sealed to. A reconnecting Machine only wakes the
+reconciler for itself; there is no fleet-wide redelivery on reconnect, and
+failed-session recovery follows each successful root delivery.
 
 ## Release order and operations
 
-1. With the current Controller: adopt OpenAI · Pika (`accounts.adopt_legacy
-   {card:"openai"}`), sign out Claude · Lynx at Service scope, and confirm
-   the Service authentications (`GET /api/plugins` `authentications[]`) show
-   every card-family Provider `signed_out`. Reset
-   (or stop) a Lynx Machine browser if one was enabled.
-   Every enrolled Machine must have received those wipes: each card-family
-   Provider's Service authentication shows distribution `current`. Connect
-   an offline Machine until it does, or revoke a Machine that will not come
-   back; otherwise the new Controller refuses to start.
-   Adoption must happen with every Machine online: a Machine that was offline
-   during it may hold a rotation of the moved credential that the old
-   Controller's wipe on reconnect can delete before it is promoted. A Machine
-   recovered later must not be reconnected expecting such a rotation to be
-   promoted; sign its account in again instead. No session on a card's
-   `default` account may still be running (stop it with the old Controller).
-2. Web release (`.#cowboy-web-release`) first: the new Web works with the
-   old Controller, and it never opens a retired card's sign-in on the
-   device. Reload every open tab afterwards, so no older tab still holds a
+### Production cutover (prerequisites already met)
+
+On the production Service the adoptions and the Lynx sign-out are done, so
+the cutover only verifies them before releasing:
+
+1. **Verify** with the current Controller:
+   - every card-family Provider's Service authentication (`GET /api/plugins`
+     `authentications[]`) is `signed_out` with distribution `current`, so
+     every enrolled Machine applied its wipe;
+   - no session on a card's `default` account is starting, running or busy;
+   - on every enrolled Machine, no worker process of a card family's
+     `default` account is alive (a `default` worker is launched without
+     `--provider-account-id`). Run on each Machine, read-only; the output
+     must be empty:
+
+     ```sh
+     ps -eo pid,args | grep '[c]owboy-acp-worker ' \
+       | grep -E -- '--provider (claude-code|codex|grok|claude-deepseek|codex-deepseek|deepseek-harness)( |$)' \
+       | grep -v -- '--provider-account-id'
+     ```
+
+     A listed process is such a worker: stop its session with the current
+     Controller (or the Machine's own stop), then run the check again. The
+     Controller's status rows cannot prove this on their own (a worker can
+     outlive a session recorded as crashed).
+2. **Web release** (`.#cowboy-web-release`): the new Web works with the old
+   Controller and never opens a retired card's sign-in on the device.
+3. **Close or reload every open Cowboy tab**, so no older tab still holds a
    cached legacy sign-in challenge.
-3. Controller release (`.#cowboy-controller-release`): runs both gates, then
-   the cleanup.
-4. No Machine release is needed for the upgrade; Machines keep the `default`
+4. **Controller release** (`.#cowboy-controller-release`): runs both gates,
+   then the cleanup.
+5. No Machine release is needed for the upgrade; Machines keep the `default`
    identity. A later Machine release adds the wipe hardening (retried
-   removal, failed-wipe reporting, a worker roll on a new wipe, directory
-   sync before acknowledging).
+   removal, failed-wipe reporting, a durable worker roll on a new wipe,
+   directory sync before acknowledging).
+
+### Deployments without those prerequisites
+
+Only where a card is not adopted or signed out yet, or a Machine's wipe is
+not `current`, with the current Controller first:
+
+- Adopt each card into a named account (`accounts.adopt_legacy
+  {card:"openai"}`, ...) and sign out Claude · Lynx at Service scope; reset
+  (or stop) a Lynx Machine browser if one was enabled. Do this with every
+  Machine online: a Machine offline during an adoption may hold a rotation of
+  the moved credential that the old Controller's wipe on reconnect can delete
+  before it is promoted. A Machine recovered later must not be reconnected
+  expecting such a rotation to be promoted; sign its account in again
+  instead.
+- Connect an offline Machine until its wipes show `current`, or revoke a
+  Machine that will not come back; otherwise the new Controller refuses to
+  start.
+- Then follow the production cutover above.

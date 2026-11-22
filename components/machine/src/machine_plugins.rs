@@ -1961,6 +1961,18 @@ impl MachinePluginStore {
             _ => true,
         };
         self.prepare_provider_root(&envelope.provider_id)?;
+        // Before the replica becomes current: a retry of this generation no
+        // longer reports it advanced, so the roll its workers owe is durable
+        // until the broker took it (`take_pending_roll`).
+        if auth_generation_advanced
+            && (envelope.action == ProviderAuthAction::Wipe || runtime_changed)
+        {
+            atomic_write(
+                &provider_auth_root.join(PENDING_ROLL),
+                envelope.auth_generation.to_string().as_bytes(),
+                0o600,
+            )?;
+        }
         crate::provider_account::prepare_private_directory(&provider_auth_root.join("replicas"))?;
         atomic_write(
             &provider_auth_root
@@ -2565,6 +2577,42 @@ impl MachinePluginStore {
             materialization_state,
             detail: unavailable.or(detail),
         }))
+    }
+
+    /// The generation whose worker roll `provider_id` of `account` still
+    /// owes (recorded before its replica became current), if any.
+    pub fn pending_roll(
+        &self,
+        account: &crate::provider_account::ProviderAccountId,
+        provider_id: &str,
+    ) -> Option<u64> {
+        let scope = self.for_account(account).ok()?;
+        fs::read_to_string(scope.auth_provider_root(provider_id).join(PENDING_ROLL))
+            .ok()?
+            .trim()
+            .parse()
+            .ok()
+    }
+
+    /// The broker took the roll of `generation` (or a newer one replaced it).
+    pub fn clear_pending_roll(
+        &self,
+        account: &crate::provider_account::ProviderAccountId,
+        provider_id: &str,
+        generation: u64,
+    ) -> Result<()> {
+        if self
+            .pending_roll(account, provider_id)
+            .is_some_and(|pending| pending <= generation)
+        {
+            let scope = self.for_account(account)?;
+            match fs::remove_file(scope.auth_provider_root(provider_id).join(PENDING_ROLL)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
     }
 
     /// Every projection a wipe removes is gone (a wipe that stopped midway,
@@ -3706,6 +3754,9 @@ fn validate_plugin_id(provider_id: &str) -> Result<()> {
     );
     Ok(())
 }
+
+/// A worker roll an applied generation still owes (its generation).
+const PENDING_ROLL: &str = "pending-roll";
 
 /// The credential projections of one Provider a wipe removes.
 const WIPED_PROJECTIONS: [&str; 3] = ["materialized", "runtime", native_usage::PRIVATE_HOMES];
@@ -7640,6 +7691,31 @@ mod tests {
             0
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_pending_worker_roll_survives_until_the_broker_took_it() {
+        let root = tempfile::tempdir().unwrap();
+        let store =
+            MachinePluginStore::new(root.path(), Platform::Linux, "x86_64".to_owned()).unwrap();
+        let default = crate::provider_account::ProviderAccountId::default();
+        assert_eq!(store.pending_roll(&default, "codex"), None);
+        // Recorded before the wipe's replica became current (an interrupted
+        // apply leaves it; its retry, no longer "advanced", still rolls).
+        atomic_write(
+            &store.auth_provider_root("codex").join(PENDING_ROLL),
+            b"16",
+            0o600,
+        )
+        .unwrap();
+        assert_eq!(store.pending_roll(&default, "codex"), Some(16));
+        // An older generation's roll does not clear a newer one.
+        store.clear_pending_roll(&default, "codex", 15).unwrap();
+        assert_eq!(store.pending_roll(&default, "codex"), Some(16));
+        store.clear_pending_roll(&default, "codex", 16).unwrap();
+        assert_eq!(store.pending_roll(&default, "codex"), None);
+        // Idempotent.
+        store.clear_pending_roll(&default, "codex", 16).unwrap();
     }
 
     #[test]

@@ -110,30 +110,36 @@ pub(in crate::server) async fn admit_store(
     dataset: &str,
 ) -> anyhow::Result<()> {
     let admitted = admission(auth, dataset);
+    // Every start: an older Controller after a rollback can resume a card
+    // session without changing any wipe (only the wipe check is cached).
+    let sessions = store.live_retired_default_sessions().await?;
     if auth.admitted_retirement().as_ref() == Some(&admitted) {
-        return Ok(());
+        return admit(auth, &admitted, None, &sessions);
     }
     let recipients = store.credential_recipients().await?;
-    let sessions = store.live_retired_default_sessions().await?;
-    admit(auth, &admitted, &recipients, &sessions)
+    admit(auth, &admitted, Some(&recipients), &sessions)
 }
 
+/// `recipients` is `None` when the recorded admission covers the wipes.
 fn admit(
     auth: &ProviderAuthService,
     admitted: &crate::provider_service::AdmittedRetirement,
-    recipients: &[crate::provider_service::Recipient],
+    recipients: Option<&[crate::provider_service::Recipient]>,
     sessions: &[String],
 ) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        sessions.is_empty(),
+        "sessions on retired legacy default accounts are still live ({}): stop them with the previous Controller before installing this release",
+        sessions.join(", ")
+    );
+    let Some(recipients) = recipients else {
+        return Ok(());
+    };
     let missing = unacknowledged_wipes(auth, recipients);
     anyhow::ensure!(
         missing.is_empty(),
         "legacy default card wipes are not acknowledged by every enrolled Machine ({}): connect those Machines to the previous Controller until the wipes are delivered, or revoke an unreachable Machine, before installing this release",
         missing.join("; ")
-    );
-    anyhow::ensure!(
-        sessions.is_empty(),
-        "sessions on retired legacy default accounts are still live ({}): stop them with the previous Controller before installing this release",
-        sessions.join(", ")
     );
     auth.record_admitted_retirement(admitted)
 }
@@ -272,19 +278,30 @@ mod tests {
         let wipe = auth.status("grok").unwrap().auth_generation;
         let admitted = admission(&auth, "dataset");
         auth.record_delivery("grok", ("hawk", "k1"), wipe).unwrap();
-        let refusal = admit(&auth, &admitted, &recipients(), &[])
+        let refusal = admit(&auth, &admitted, Some(&recipients()), &[])
             .unwrap_err()
             .to_string();
         assert!(refusal.contains("grok: ovh"), "{refusal}");
         assert!(auth.admitted_retirement().is_none());
         // A live session on a retired default is refused too, by name.
-        let refusal = admit(&auth, &admitted, &recipients()[..1], &["sess-1".into()])
-            .unwrap_err()
-            .to_string();
+        let refusal = admit(
+            &auth,
+            &admitted,
+            Some(&recipients()[..1]),
+            &["sess-1".into()],
+        )
+        .unwrap_err()
+        .to_string();
         assert!(refusal.contains("sess-1"), "{refusal}");
         // Revoking the unreachable Machine (it leaves the recipients) passes.
-        admit(&auth, &admitted, &recipients()[..1], &[]).unwrap();
-        assert_eq!(auth.admitted_retirement(), Some(admitted));
+        admit(&auth, &admitted, Some(&recipients()[..1]), &[]).unwrap();
+        assert_eq!(auth.admitted_retirement().as_ref(), Some(&admitted));
+        // Admitted: the wipes are no longer checked, a live session still is.
+        admit(&auth, &admitted, None, &[]).unwrap();
+        let refusal = admit(&auth, &admitted, None, &["sess-2".into()])
+            .unwrap_err()
+            .to_string();
+        assert!(refusal.contains("sess-2"), "{refusal}");
     }
 
     #[test]
@@ -296,10 +313,16 @@ mod tests {
             auth.record_delivery("grok", (&machine, &enrollment), wipe)
                 .unwrap();
         }
-        admit(&auth, &admission(&auth, "dataset"), &recipients(), &[]).unwrap();
+        admit(
+            &auth,
+            &admission(&auth, "dataset"),
+            Some(&recipients()),
+            &[],
+        )
+        .unwrap();
         // A re-enrolled Machine id does not inherit its acknowledgement.
         let reenrolled = [("ovh".to_owned(), "k3".to_owned())];
-        assert!(admit(&auth, &admission(&auth, "dataset"), &reenrolled, &[]).is_err());
+        assert!(admit(&auth, &admission(&auth, "dataset"), Some(&reenrolled), &[]).is_err());
         // The previous Controller's aggregate `current` also counts.
         let other = tempfile::tempdir().unwrap();
         let auth = signed_out_grok(other.path());
@@ -309,7 +332,13 @@ mod tests {
             crate::provider_service::ServiceDistributionState::Current,
         )
         .unwrap();
-        admit(&auth, &admission(&auth, "dataset"), &recipients(), &[]).unwrap();
+        admit(
+            &auth,
+            &admission(&auth, "dataset"),
+            Some(&recipients()),
+            &[],
+        )
+        .unwrap();
     }
 
     #[test]

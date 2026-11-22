@@ -478,9 +478,8 @@ pub(super) async fn sync_provider_account_auth_to_machine(
     account_id: &crate::provider_account::ProviderAccountId,
 ) -> Result<u64, String> {
     let connection = state.machine_control.operation_connection(machine_id)?;
-    let envelope =
-        provider_account_auth_envelope_for_machine(state, machine_id, provider_id, account_id)
-            .await?;
+    let (envelope, sealed_to) =
+        sealed_auth_envelope_for_machine(state, machine_id, provider_id, account_id).await?;
     let generation = state
         .provider_auth_sync
         .apply(&state.machine_control, &connection, envelope)
@@ -492,16 +491,10 @@ pub(super) async fn sync_provider_account_auth_to_machine(
     } else {
         state.provider_auth.existing_account(account_id)
     };
-    let enrollment = match state.store.as_ref() {
-        Some(store) => store
-            .machine_encryption_public_key(machine_id)
-            .await
-            .ok()
-            .flatten()
-            .map(|key| crate::admin::hex_sha256(key.as_bytes())),
-        None => None,
-    };
-    if let (Some(scope), Some(enrollment)) = (scope, enrollment)
+    // Exactly the enrollment the envelope was sealed to, never a key read
+    // after the receipt (a re-enrollment may have landed meanwhile).
+    let enrollment = crate::admin::hex_sha256(sealed_to.as_bytes());
+    if let Some(scope) = scope
         && let Err(error) =
             scope.record_delivery(provider_id, (machine_id, &enrollment), generation)
     {
@@ -1217,27 +1210,9 @@ fn spawn_machine_reconnect_sync(
         hello.machine_id.clone(),
         connection.clone(),
     ));
+    // Only this recipient: the reconciler delivers whatever it has not
+    // acknowledged, with session recovery on success; no fleet broadcast.
     provider_auth_flow::reconciler::nudge(Some(&hello.machine_id));
-    for authentication in state.provider_auth.replica_statuses() {
-        let sync_state = Arc::clone(state);
-        let machine_id = hello.machine_id.clone();
-        tokio::spawn(async move {
-            let outcome = distribute_provider_auth(&sync_state, &authentication.provider_id).await;
-            match sync_state.provider_auth.mark_distribution(
-                &authentication.provider_id,
-                authentication.auth_generation,
-                outcome.state(),
-            ) {
-                Ok(marked) => {
-                    let replicas = BTreeMap::from([(marked.provider_id.clone(), outcome)]);
-                    recover_failed_provider_sessions(&sync_state, &[marked], &replicas);
-                }
-                Err(error) => {
-                    tracing::warn!(%error, %machine_id, provider_id = %authentication.provider_id, "recording reconnected Machine Provider auth convergence");
-                }
-            }
-        });
-    }
 }
 
 /// Installs the Machine's RemoteRuntime in the router and finishes its

@@ -128,6 +128,23 @@ pub(in crate::server) fn start(state: &Arc<AppState>) {
     });
 }
 
+/// A root generation reached `machine`: sessions there that failed on an
+/// older credential may recover (what a reconnect broadcast used to do).
+fn recovered(
+    state: &AppState,
+    status: &crate::provider_service::ProviderAuthenticationStatus,
+    machine: &str,
+    generation: u64,
+) {
+    let outcome = ProviderDistributionOutcome {
+        succeeded: 1,
+        synchronized_generations: BTreeMap::from([(machine.to_owned(), generation)]),
+        ..ProviderDistributionOutcome::default()
+    };
+    let replicas = BTreeMap::from([(status.provider_id.clone(), outcome)]);
+    recover_failed_provider_sessions(state, std::slice::from_ref(status), &replicas);
+}
+
 /// The Service-held credential scopes and their current statuses.
 fn scopes(
     state: &AppState,
@@ -184,7 +201,12 @@ async fn pass(state: &Arc<AppState>) {
                 match sync_provider_account_auth_to_machine(state, &machine, provider, &account)
                     .await
                 {
-                    Ok(_) => BACKOFF.lock().succeeded(&key),
+                    Ok(generation) => {
+                        BACKOFF.lock().succeeded(&key);
+                        if account.is_default() {
+                            recovered(state, &status, &machine, generation);
+                        }
+                    }
                     Err(error) => {
                         tracing::warn!(%error, machine_id = %machine, provider_id = %provider,
                             account = account.as_str(), generation = status.auth_generation,
