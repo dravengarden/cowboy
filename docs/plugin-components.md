@@ -83,6 +83,14 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.141.0 records provider-runtime 1.3.25, whose
+`cowboy-antigravity-acp` 1.0.21 counts only time spent waiting on home
+requests against the 10 s home discovery budget, so a repository with many
+skills no longer leaves the user's home skills unlisted. Antigravity 0.2.26
+pins it. The other six Providers pinning provider-runtime advance one patch
+version (claude-code 3.20.71, claude-deepseek 3.1.88, codex 3.6.31,
+codex-deepseek 3.1.88, deepseek-harness 1.0.46, grok 3.2.29).
+
 Component release 3.140.0 records provider-runtime 1.3.24, whose
 `cowboy-antigravity-acp` 1.0.20 closes Claude/Codex parity gaps found in live
 acceptance: `RunCommand` runs in the user's login shell (the user's PATH) after
