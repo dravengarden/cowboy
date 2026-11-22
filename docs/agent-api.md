@@ -239,23 +239,12 @@ bounded hot window), and 404 for a deleted session. `?wait_ms=N` (at most
 installed CLI can wait with `cowboy api GET`. `cowboy session wait <session>
 <prompt>` loops over it (default 540 s) and prints one JSON line.
 
-The same holds for managed calls: an Antigravity parent's `calls.start` and
-`review.start` receipts carry a `next` that tells it to stay in the turn with
-RunCommand `cowboy call wait <call_id> --timeout-ms 580000` (or
-`cowboy.calls.wait` when the call context is unavailable) and then read
-`calls.result`, because its `notify:true` notice only parks as a draft. Its
-routing projection states the rule once per session, and the denial of native
-subagents and schedules names the same path: read-only delegation through
-calls, file-editing delegation through another session.
-
-Antigravity runs human-paced only ([requirements](requirements.md)): an Agent
-API command never dispatches into an Antigravity session (`queue.submit`,
-`queue.send`, `queue.force_send`, `drafts.activate[_all]` and `sessions.retry`
-return `human_paced_target`; `drafts.add` leaves the send to a person), and
-Cowboy never starts an Antigravity sender's turn. Its notice parks as a draft
-with a task notification. Its receipt therefore tells it to stay in the human's
-turn instead: RunCommand (`wait_seconds` and `timeout_seconds` 600) with the
-printed `cowboy api` wait loop, repeated while the state is queued or running.
+Antigravity sessions are paced like every other Provider's
+([requirements](requirements.md), owner decision 2026-11-22): Agent API
+commands dispatch into them, and call, peer and scheduled notices start their
+turns. The denial of native subagents and schedules names the Cowboy path:
+read-only delegation through calls, file-editing delegation through another
+session.
 
 Selection `path` values are JSON pointers; a missing leading slash (`"plugins"`,
 `"0"`) is read as the same pointer. Each broker operation rechecks the live

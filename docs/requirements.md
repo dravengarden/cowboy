@@ -878,9 +878,14 @@ These boundaries are mandatory and fail closed:
   value `1` is ignored).
 - One person's own account per Cowboy account: no sharing, proxying, automatic
   rotation or quota-driven fallback to another account.
-- Human-paced use, with one owner-approved exception (2026-11-21). Antigravity
-  is not offered to scheduled or background jobs, auto-continue loops,
-  automatic rollover turns, Auto selection or Tools call targets. Its
+- Owner-paced use (owner decision 2026-11-22: Cowboy is one person's own
+  workspace). The owner's sessions may dispatch prompts into an Antigravity
+  session, and call, peer and scheduled-draft notices start its turns as they
+  do for every Provider; this replaces the earlier human-paced rule, under
+  which only a person could send. The owner accepted the account risk of
+  these agent-started turns. Antigravity is still not offered to background
+  jobs, auto-continue loops, automatic rollover turns, Auto selection or Tools
+  call targets. Its
   managed-call use is an explicitly requested, fresh read-only round: a
   context ask (a text-only `analysis` over recorded session history) or,
   as the owner extended it the same day ("other sessions can call

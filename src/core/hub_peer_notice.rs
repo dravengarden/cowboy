@@ -99,22 +99,11 @@ impl Hub {
         }
     }
 
-    /// Whether automatic prompts to this session park as drafts for a
-    /// person (Antigravity runs human-paced only).
-    #[must_use]
-    pub fn is_human_paced(&self, session_id: &str) -> bool {
-        self.human_paced(session_id)
-    }
-
     /// Queue the sender's notice that the turn of a prompt it sent ended.
-    /// The id makes a repeat a no-op. Returns true when the sender is
-    /// human-paced (Antigravity) and the notice was parked as a draft, which
-    /// a person must send.
-    pub fn submit_peer_notice(&self, session_id: &str, key: &str, text: String) -> bool {
-        let parked = self.is_human_paced(session_id);
+    /// The id makes a repeat a no-op.
+    pub fn submit_peer_notice(&self, session_id: &str, key: &str, text: String) {
         let cmid = format!("{}{key}", crate::agent_model::PEER_NOTICE_PREFIX);
         self.submit_automatic(session_id, text, cmid);
-        parked
     }
 }
 
@@ -211,22 +200,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_peer_notice_queues_once_and_parks_for_a_human_paced_sender() {
-        let hub = hub_with("sender", "codex");
-        hub.set_status("sender", Status::Busy, None);
-        assert!(!hub.submit_peer_notice("sender", "peer:op-1", "done".into()));
-        assert!(!hub.submit_peer_notice("sender", "peer:op-1", "done".into()));
-        assert_eq!(hub.session_info("sender").unwrap().queue_count, 1);
+    async fn a_peer_notice_queues_once_for_every_provider() {
+        for provider in ["codex", "antigravity"] {
+            let hub = hub_with("sender", provider);
+            hub.set_status("sender", Status::Busy, None);
+            hub.submit_peer_notice("sender", "peer:op-1", "done".into());
+            hub.submit_peer_notice("sender", "peer:op-1", "done".into());
+            let (queue, drafts) = hub.queue_and_drafts("sender", |_| true).unwrap();
+            assert_eq!(queue.len(), 1, "{provider}");
+            assert!(drafts.is_empty(), "{provider}");
+        }
         assert!(!Hub::is_authored_cmid("session-notice:peer:op-1"));
-
-        let agy = hub_with("agy", "antigravity");
-        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-        agy.set_dispatch_tx(tx);
-        agy.set_status("agy", Status::Running, None);
-        assert!(agy.submit_peer_notice("agy", "peer:op-1", "done".into()));
-        assert!(rx.try_recv().is_err(), "a person sends it");
-        let (queue, drafts) = agy.queue_and_drafts("agy", |_| true).unwrap();
-        assert!(queue.is_empty());
-        assert_eq!(drafts.len(), 1);
     }
 }

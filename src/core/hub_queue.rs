@@ -1012,7 +1012,6 @@ impl Hub {
         fire_at_ms: i64,
         delivery: Delivery,
     ) {
-        let human_paced = self.human_paced(session_id);
         let draft_id = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -1025,7 +1024,7 @@ impl Hub {
                     cmid.as_deref()
                         .and_then(|c| s.drafts.iter().position(|m| m.cmid.as_deref() == Some(c)))
                 });
-            let schedule = (!human_paced).then_some(DraftSchedule {
+            let schedule = Some(DraftSchedule {
                 fire_at_ms,
                 delivery,
             });
@@ -1054,9 +1053,7 @@ impl Hub {
         };
         self.emit_pending(session_id);
         self.broadcast_sessions();
-        if !human_paced {
-            self.arm_draft_timer(session_id, &draft_id, fire_at_ms);
-        }
+        self.arm_draft_timer(session_id, &draft_id, fire_at_ms);
     }
 
     /// Strip the schedule off a draft, leaving it a plain parked draft, and cancel
@@ -1090,9 +1087,6 @@ impl Hub {
     pub fn fire_scheduled_draft(&self, session_id: &str, draft_id: &str) {
         if self.is_managed_child(session_id) {
             return;
-        }
-        if self.human_paced(session_id) {
-            return self.unschedule_draft(session_id, draft_id);
         }
         let fired = {
             let mut sessions = self.inner.sessions.lock();

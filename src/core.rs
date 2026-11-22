@@ -2448,24 +2448,9 @@ impl Hub {
         self.submit_automatic(session_id, text, cmid);
     }
 
-    /// Submit a prompt no human sent (call notice, scheduled wakeup). A
-    /// human-paced session parks it as a draft for an explicit send instead.
+    /// Submit a prompt no human sent (call notice, scheduled wakeup).
     pub fn submit_automatic(&self, session_id: &str, text: String, cmid: String) {
-        if self.human_paced(session_id) {
-            crate::logs::wait_cache::record_notice_admission(session_id, Some(&cmid), "draft_path");
-            return self.add_draft(session_id, text, Vec::new(), Some(cmid));
-        }
         self.submit_inner(session_id, text, Vec::new(), Some(cmid), false, false);
-    }
-
-    /// Antigravity sessions run human-paced only: no draft schedule, wakeup or
-    /// call notice dispatches a turn; each waits for an explicit human send.
-    fn human_paced(&self, session_id: &str) -> bool {
-        self.inner
-            .sessions
-            .lock()
-            .get(session_id)
-            .is_some_and(|s| crate::provider_account::named_only(&s.meta.provider))
     }
 
     /// Subscribe to the live event stream.

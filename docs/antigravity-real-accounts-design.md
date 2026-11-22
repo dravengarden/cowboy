@@ -1058,7 +1058,7 @@ request is added for any of it.
   `auto`, `plan`) is already shown per session as "Agent mode" and persists
   as a session preference, so Plan stays one choice away. How `plan` behaves
   with every built-in tool denied is not observed yet; it is an acceptance
-  item for the next human-paced session, not something a card should
+  item for the next owner-driven session, not something a card should
   preselect.
 - **Account plan.** `session/new|load|resume` results carry
   `_meta.antigravity.tier` (`{name: "Antigravity Starter Quota", id:
