@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import { assertEquals } from "../../../tools/test-assert.ts";
-import { usageGroupRows } from "./DesktopTopBarControls";
+import { usageGroupRows } from "./UsageGroupedSegment";
 import { USAGE_GROUP_ATTENTION_WIDTH_PX, USAGE_GROUP_WINDOW_WIDTH_PX, usageGroupSegmentWidth } from "./topBarDensity";
 
 test("quota groups read as rows of labelled windows", () => {

@@ -93,7 +93,6 @@ import {
   usageWidgetHasBalance,
   type UsageWidgetProvider,
   usageWidgetForAccount,
-  type UsageWidgetGroup,
   type UsageWidgetWindow,
 } from "../usageWidget";
 import { useSubscriptionAccounts } from "../subscriptionAccounts";
@@ -129,10 +128,10 @@ import {
   usageGroupSegmentWidth,
   usagePercentSegmentWidth,
   usageRemainingTone,
-  type UsageTone,
 } from "./topBarDensity";
 import { lowPriorityInterval } from "../network/bandwidth";
 import { usageWidgetBalanceLabel } from "../usageHostMap";
+import { USAGE_TONE_COLOR, UsageGroupedSegment } from "./UsageGroupedSegment";
 
 const EMPTY_CONFIG_OPTIONS: ConfigOption[] = [];
 
@@ -199,11 +198,6 @@ function SessionActionLabel({
 /** Same cadence as the session quota notice (ProviderQuotaStatus). */
 const USAGE_POLL_MS = 60_000;
 
-const USAGE_TONE_COLOR: Record<UsageTone, string> = {
-  critical: "error.main",
-  low: "warning.main",
-  normal: "text.primary",
-};
 
 // Only facts that need attention earn space: partial pricing and blocking
 // errors appear when they exist, never as "100% priced" or "0 blocked". An
@@ -266,61 +260,6 @@ type UsageColumn = {
   remaining?: number;
 };
 
-/** One window cell of a quota group row: `5h 34%`. */
-export type UsageGroupCell = {
-  period: string;
-  primary: string;
-  remaining: number;
-  /** The countdown, only for a window that needs attention; the hover
-   *  carries every countdown. */
-  countdown?: string;
-};
-
-/** One quota group as a row of the grouped segment. */
-export type UsageGroupRow = {
-  label: string;
-  cells: UsageGroupCell[];
-  /** Every window of the group with its countdown, for the hover. */
-  detail: string;
-};
-
-/** `Weekly` is the widest label and the most repeated one; a column of `W`
- *  next to a column of `5h` stays unambiguous. */
-function shortPeriodLabel(label: string): string {
-  return label === "Weekly" ? "W" : label;
-}
-
-/** Per-group quotas (Antigravity) as a matrix: each group a row, each window
- *  a labelled cell, so `Gemini  5h 34%  W 28%` reads left to right without
- *  matching a number to a caption on the line below. */
-export function usageGroupRows(
-  groups: readonly UsageWidgetGroup[],
-  now: number,
-): UsageGroupRow[] {
-  return groups.map((group) => ({
-    label: group.label,
-    cells: group.windows.map((window): UsageGroupCell => {
-      const countdown = usageCountdown(window.resetsAt, now);
-      return {
-        period: shortPeriodLabel(window.periodLabel),
-        primary: `${String(window.remaining)}%`,
-        remaining: window.remaining,
-        ...(countdown !== undefined && usageRemainingTone(window.remaining) !== "normal"
-          ? { countdown }
-          : {}),
-      };
-    }),
-    detail: `${group.label}: ${
-      group.windows.map((window) => {
-        const countdown = usageCountdown(window.resetsAt, now);
-        return `${window.periodLabel} ${String(window.remaining)}%${
-          countdown === undefined ? "" : ` (${countdown})`
-        }`;
-      }).join(" · ")
-    }`,
-  }));
-}
-
 /** The strip's segments: the Usage order without hidden accounts, and each
  *  account without its hidden quota groups (Antigravity `Gemini 4 Argon`).
  *  An account with every group hidden leaves the strip. */
@@ -353,7 +292,7 @@ export function usageColumns(
   );
 }
 
-export function UsageProviderSummary(
+function UsageProviderSummary(
   { provider, first, now, account, refreshing }: {
     provider: UsageWidgetProvider;
     account: UsageAccountCard;
@@ -396,101 +335,17 @@ export function UsageProviderSummary(
   const label = `${account.title}${refreshing ? " · Refreshing" : ""}`;
 
   if (!usageWidgetHasBalance(provider) && provider.groups !== undefined) {
-    // Per-group quotas read as a small matrix: the account name spans the
-    // rows, each group is a row, each window a labelled cell. The window
-    // label sits beside its number, so nothing has to be matched against a
-    // caption below it, and the windows of every group align as columns.
-    const rows = usageGroupRows(provider.groups, now);
-    const windowColumns = Math.max(1, ...rows.map((row) => row.cells.length));
-    // Two rows fill the strip's height; a third shown group tightens them.
-    const rowSx = {
-      fontSize: "0.6875rem",
-      lineHeight: rows.length > 2 ? 1.15 : 1.5,
-    } as const;
     return (
-      <Box
-        data-usage-provider={provider.kind}
-        data-usage-account={account.id}
-        data-usage-grouped=""
-        title={`${account.title}${refreshing ? " · Refreshing…" : ""}\n${
-          rows.map((row) => row.detail).join("\n")
-        }`}
-        aria-label={label}
-        sx={{
-          ...segmentSx,
-          alignItems: "center",
-          gridTemplateColumns: `auto auto repeat(${String(windowColumns)}, auto)`,
-          columnGap: 1,
-        }}
-      >
-        <Stack
-          direction="row"
-          spacing={0.55}
-          alignItems="center"
-          sx={{ gridRow: `1 / span ${String(rows.length)}`, minWidth: 0, pr: 0.25 }}
-        >
-          {nameText}
-          {spinner}
-        </Stack>
-        {rows.map((row, rowIndex) => (
-          <Box key={row.label} sx={{ display: "contents" }}>
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              fontWeight={500}
-              noWrap
-              sx={{ ...rowSx, gridRow: rowIndex + 1, minWidth: 0 }}
-            >
-              {row.label}
-            </Typography>
-            {row.cells.map((cell, cellIndex) => (
-              <Stack
-                key={`${row.label}-${String(cellIndex)}`}
-                direction="row"
-                spacing={0.5}
-                alignItems="baseline"
-                sx={{ gridRow: rowIndex + 1, gridColumn: cellIndex + 3, minWidth: 0 }}
-              >
-                <Typography
-                  variant="caption"
-                  color="text.secondary"
-                  noWrap
-                  sx={{ ...rowSx, fontSize: "0.625rem" }}
-                >
-                  {cell.period}
-                </Typography>
-                <Typography
-                  variant="caption"
-                  fontWeight={800}
-                  noWrap
-                  sx={{
-                    ...rowSx,
-                    flexShrink: 0,
-                    // Right-aligned in a fixed-width figure so `34%` and
-                    // `100%` share a right edge down the column.
-                    minWidth: "4ch",
-                    textAlign: "right",
-                    fontVariantNumeric: "tabular-nums",
-                    color: USAGE_TONE_COLOR[usageRemainingTone(cell.remaining)],
-                  }}
-                >
-                  {cell.primary}
-                </Typography>
-                {cell.countdown !== undefined && (
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    noWrap
-                    sx={{ ...rowSx, fontSize: "0.625rem", fontVariantNumeric: "tabular-nums" }}
-                  >
-                    {cell.countdown}
-                  </Typography>
-                )}
-              </Stack>
-            ))}
-          </Box>
-        ))}
-      </Box>
+      <UsageGroupedSegment
+        groups={provider.groups}
+        kind={provider.kind}
+        account={account}
+        refreshing={refreshing}
+        now={now}
+        nameCell={<>{nameText}{spinner}</>}
+        label={label}
+        sx={segmentSx}
+      />
     );
   }
 
