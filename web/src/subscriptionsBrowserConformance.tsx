@@ -476,7 +476,9 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
         inputs: !document.querySelector('input, [data-subscription-authorization]'),
         reads: handoffReads.slice(before), preserved: sessionStorage.getItem(handoffKey) === pending,
       };
-      check(blocked.actions && blocked.inputs && blocked.reads.every((path) => ["/api/provider-accounts", "/api/sync/dataset", "/api/provider-accounts/login-operations/another-operation"].includes(path)) && blocked.preserved,
+      check(blocked.actions && blocked.inputs && blocked.reads.every((path) => ["/api/provider-accounts", "/api/sync/dataset", "/api/provider-accounts/login-operations/another-operation",
+        // Inspecting the saved request is a read; it is never resumed here.
+        `/api/provider-accounts/${handoffAccount}/logins/provider-login-another-request`].includes(path)) && blocked.preserved,
         `handoff blocks another saved ${"request" in saved ? "request" : "operation"} without exposing or driving it: ${JSON.stringify(blocked)}`);
       const savedFetch = globalThis.fetch;
       globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {

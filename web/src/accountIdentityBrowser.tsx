@@ -5,7 +5,7 @@ import { BrowserProductTheme } from "./browserProductTheme";
 import { AccountBadge } from "./AccountBadge";
 import { SessionProviderSection } from "./Composer";
 import { accountIdentity } from "./accountIdentity";
-import { useSubscriptionAccounts } from "./subscriptionAccounts";
+import { resetSubscriptionAccountsForTest, useSubscriptionAccounts } from "./subscriptionAccounts";
 import { bindProductSyncPrincipal } from "./productSyncIdentity";
 import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import type { SubscriptionSnapshot } from "./subscriptionAccounts";
@@ -22,6 +22,9 @@ function Row({ id, captureRefresh }: { id: string; captureRefresh?: (refresh: ()
 
 export async function accountIdentityBrowser(observe?: (surface: string, stage: string) => Promise<void>): Promise<string[]> {
   bindProductSyncPrincipal("subscription-fixture");
+  // It observes a first, still pending inventory read; earlier surfaces of
+  // this page filled the shared inventory already.
+  resetSubscriptionAccountsForTest();
   const originalFetch = globalThis.fetch;
   const inventory: SubscriptionSnapshot = {
     dataset: { dataset_id: "account-display", user_id: "subscription-fixture" },
@@ -29,6 +32,7 @@ export async function accountIdentityBrowser(observe?: (surface: string, stage: 
       { id: "otter", provider_id: "claude-code", label: "Claude · Otter", enabled: true },
     ] },
     session_admission: "enabled",
+    retired_default_providers: ["claude-code"],
   };
   let reads = 0;
   let release: (() => void) | undefined;
@@ -90,8 +94,8 @@ export async function accountIdentityBrowser(observe?: (surface: string, stage: 
     release!();
     await waitFor(() => reads === 2 && container.textContent!.includes("Claude · Otter"));
     check(reads === 2, "preference invalidation during loading is not lost");
-    check(container.querySelector('[data-account-badge="default"]')?.textContent === "Lynx" &&
-      container.querySelector('[data-account-badge="otter"]')?.textContent === "Otter", "session rows distinguish original Service account from named default");
+    check(container.querySelector('[data-account-badge="default"]')?.textContent === "Retired legacy account" &&
+      container.querySelector('[data-account-badge="otter"]')?.textContent === "Otter", "session rows distinguish a retired legacy default session from the named default");
     const settings = container.querySelector("[data-session-account]")!;
     check(settings.textContent!.includes("Claude · Otter") && !settings.textContent!.includes("Lynx") &&
       settings.textContent!.includes("No quota reported"), "named session settings never borrow Service identity or quota");

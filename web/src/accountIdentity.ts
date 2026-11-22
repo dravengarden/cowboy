@@ -1,5 +1,5 @@
 import type { SessionMeta } from "./protocol";
-import type { SubscriptionSnapshot } from "./subscriptionAccounts";
+import { retiredDefaultProvider, type SubscriptionSnapshot } from "./subscriptionAccounts";
 
 export interface AccountIdentity {
   id?: string;
@@ -26,10 +26,12 @@ export function accountIdentity(
   };
   const account = named ? accounts?.registry.accounts.find((item) => item.id === id && item.provider_id === provider) : undefined;
   const label = named ? account?.label : undefined;
-  // The legacy default card is retired; its old sessions keep this name.
-  const full = label || (named ? "Account unavailable" : "Retired legacy account");
+  // Only a card family's default was a legacy card; its old sessions keep
+  // this name and cannot run. Other Providers keep their Service account.
+  const retired = !named && retiredDefaultProvider(accounts, provider);
+  const full = label || (named ? "Account unavailable" : retired ? "Retired legacy account" : "Service account");
   const short = label?.includes(" · ") ? label.slice(label.indexOf(" · ") + 3) : full;
-  const available = !named || Boolean(account?.enabled && !account.revoking);
+  const available = named ? Boolean(account?.enabled && !account.revoking) : !retired;
   const status = account?.revoking ? "Access revocation in progress" : account && !account.enabled ? "Disabled" : undefined;
   return {
     id, label: full, short, named, available,

@@ -1,6 +1,7 @@
 /** The page step of a Service sign-in: where its verification link may
- * open. See `serviceSignInBrowser` for the rule; the device page stays only
- * where no Machine browser serves the Provider's card. */
+ * open. See `serviceSignInBrowser` for the rule: a retired card's page opens
+ * only in its Machine browser (or not at all); other Providers keep the
+ * device page. */
 import { Alert, Button, Typography, Stack } from "@mui/material";
 import type { useReliableTouchTap } from "./useReliableTouchTap";
 import { LinkBrowserEntry } from "./machineBrowser/LinkBrowserEntry";
@@ -105,6 +106,14 @@ export function ServiceSignInPage({
               />
             )}
           </>
+        )
+        : browser?.kind === "refused"
+        ? (
+          <Alert severity="info" data-service-sign-in-refused>
+            This legacy default account is retired, and its
+            sign-in page never opens on this device. Add a named
+            account in Settings → Subscriptions instead.
+          </Alert>
         )
         : (
           <Typography variant="caption" color="text.secondary">

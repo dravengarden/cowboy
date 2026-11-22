@@ -1,7 +1,8 @@
 import { test } from "bun:test";
 import { assertEquals, assertThrows } from "../../tools/test-assert.ts";
 import { subscriptionLoginsPage } from "./SubscriptionLogins";
-import { subscriptionWriteRejected, validPendingSubscription, validSubscriptionLabel, validSubscriptionSnapshot } from "./SubscriptionManagement";
+import { obsoletePendingSubscription, subscriptionWriteRejected, validPendingSubscription, validSubscriptionLabel, validSubscriptionSnapshot } from "./SubscriptionManagement";
+import { withoutLegacyShareMembers } from "./subscriptionAccounts";
 
 test("login discovery rejects mixed accounts, duplicate Machines and nonadvancing cursors", () => {
   const scope = { owner: "owner", dataset: "dataset", account: "account", provider: "claude-code" };
@@ -26,6 +27,38 @@ test("uncertain subscription errors never discard the original operation", () =>
     assertEquals(subscriptionWriteRejected(422, code), false);
   }
   assertEquals(subscriptionWriteRejected(503, "account_is_default"), false);
+  // A definitive refusal of a retired default ends the retry.
+  assertEquals(subscriptionWriteRejected(422, "named_account_required"), true);
+});
+
+test("a pending change saved for a retired legacy card is discarded, never retried", () => {
+  const input = { operation: "op", dataset: "dataset", expected_revision: 3 };
+  for (const change of [{ type: "set_legacy_labels", labels: { "claude-code": "Claude · Lynx" } },
+    { type: "set_legacy_browser_enabled", card: "anthropic", enabled: true },
+    { type: "set_browser_share", member: { card: "anthropic" }, share_id: "share" }]) {
+    assertEquals(obsoletePendingSubscription({ ...input, change }), true);
+  }
+  for (const change of [{ type: "set_enabled", id: "account", enabled: false },
+    { type: "set_browser_share", member: { account_id: "account" }, share_id: null }]) {
+    assertEquals(obsoletePendingSubscription({ ...input, change }), false);
+  }
+  assertEquals(obsoletePendingSubscription(null), false);
+});
+
+test("an older Controller's legacy card share member is read as a bound family", () => {
+  const share = { share_id: "share", label: "Google", created_ms: 1, revision: 2, deleting: false,
+    members: [{ member: { account_id: "otter" }, family: "anthropic", account_id: "otter" },
+      { member: { card: "openai" }, family: "openai", account_id: "pika-key" }] };
+  const input = { dataset: { dataset_id: "dataset", user_id: "owner" }, session_admission: "enabled", browser_shares: [share],
+    registry: { revision: 0, defaults: {}, accounts: [{ id: "otter", provider_id: "claude-code", label: "Otter", enabled: true }] } };
+  assertEquals(validSubscriptionSnapshot(input, "owner"), true);
+  if (!validSubscriptionSnapshot(input, "owner")) return;
+  const read = withoutLegacyShareMembers(input).browser_shares![0]!;
+  assertEquals(read.members.map((row) => row.account_id), ["otter"]);
+  assertEquals(read.bound, [{ family: "openai", account_id: "pika-key" }]);
+  // A malformed member still rejects the snapshot.
+  const garbled = { ...input, browser_shares: [{ ...share, members: [{ member: { card: "" }, family: "openai", account_id: "x" }] }] };
+  assertEquals(validSubscriptionSnapshot(garbled, "owner"), false);
 });
 
 test("persisted subscription retries reject malformed or expanded actions", () => {

@@ -105,7 +105,54 @@ function text(value: unknown): value is string { return typeof value === "string
 function validShareMember(value: unknown): value is BrowserShareMember {
   if (!record(value) || !record(value.member) || !text(value.family) || !text(value.account_id)) return false;
   const keys = Object.keys(value.member);
-  return keys.length === 1 && text(value.member.account_id);
+  // A Controller from before the legacy card retirement (Web deployed
+  // first, or a rollback) still reports `{card}` members; they are read and
+  // shown as bound families (`withoutLegacyShareMembers`), never edited.
+  return keys.length === 1 && (text(value.member.account_id) || text(value.member.card));
+}
+
+/** The snapshot with every legacy `{card}` share member turned into a bound
+ * family of its share: the card's cookies keep that family out of the
+ * profile, and writes stay named-only. */
+export function withoutLegacyShareMembers(snapshot: SubscriptionSnapshot): SubscriptionSnapshot {
+  const legacy = (row: BrowserShareMember) => !text((row.member as Record<string, unknown>).account_id);
+  if (!snapshot.browser_shares?.some((share) => share.members.some(legacy))) return snapshot;
+  return {
+    ...snapshot,
+    browser_shares: snapshot.browser_shares.map((share) => ({
+      ...share,
+      members: share.members.filter((row) => !legacy(row)),
+      bound: [...share.bound ?? [], ...share.members.filter(legacy)
+        .filter((row) => !share.bound?.some((bound) => bound.family === row.family))
+        .map((row) => ({ family: row.family, account_id: row.account_id }))],
+    })),
+  };
+}
+
+/** A Machine browser of a legacy card that a Controller from before the
+ * retirement still advertises (`legacy_browsers`), read-only. */
+export interface LegacyCardBrowser { account_id: string; providers: string[]; available: boolean }
+export function legacyCardBrowsers(snapshot: SubscriptionSnapshot): LegacyCardBrowser[] {
+  const value = (snapshot as { legacy_browsers?: unknown }).legacy_browsers;
+  return Array.isArray(value)
+    ? value.filter((row): row is LegacyCardBrowser => record(row) && text(row.account_id) &&
+      Array.isArray(row.providers) && row.providers.every(text) && typeof row.available === "boolean")
+    : [];
+}
+
+/** What a session of a retired card's `default` account offers instead of a
+ * Service sign-in (the Controller's refusal reads the same). */
+export const RETIRED_SESSION_GUIDANCE = "This session ran on a retired legacy default account; continue it in a new agent on a named account.";
+/** The account-usage families of the retired legacy default cards. */
+const RETIRED_CARD_FAMILIES = ["anthropic", "deepseek", "openai", "xai"];
+/** Whether `provider`'s Service (`default`) account was a retired legacy
+ * card. An older Controller does not report `retired_default_providers`, so
+ * its family table decides as well. */
+export function retiredDefaultProvider(snapshot: SubscriptionSnapshot | undefined, provider: string): boolean {
+  if (!snapshot) return false;
+  if (snapshot.retired_default_providers?.includes(provider)) return true;
+  const family = snapshot.browser_share_families?.providers[provider];
+  return family !== undefined && RETIRED_CARD_FAMILIES.includes(family);
 }
 function validShareFamilies(value: unknown): value is BrowserShareFamilies {
   return record(value) && typeof value.version === "number" && record(value.providers) &&
@@ -179,7 +226,7 @@ async function refresh(): Promise<void> {
         const old = current().data;
         if (!old || old.dataset.dataset_id !== value.dataset.dataset_id ||
           value.registry.revision >= old.registry.revision
-        ) { snapshot = { data: value, error: "" }; snapshotOwner = owner; }
+        ) { snapshot = { data: withoutLegacyShareMembers(value), error: "" }; snapshotOwner = owner; }
       } catch (cause) {
         if (!signal.aborted && owner === productSyncPrincipal()) {
           snapshot = { ...current(), error: cause instanceof Error ? cause.message : "Could not load registered accounts." };
@@ -221,6 +268,8 @@ function subscribe(listener: () => void) {
   };
 }
 function clear() { snapshot = empty; snapshotOwner = undefined; publish(); }
+/** Browser fixtures share one page: start a surface from a first load. */
+export function resetSubscriptionAccountsForTest(): void { invalidated = false; clear(); }
 
 /** Read-only account inventory; mutations continue through the shared writer. */
 export function useSubscriptionAccounts(connected = true) {

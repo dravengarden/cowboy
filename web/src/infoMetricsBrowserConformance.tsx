@@ -451,9 +451,10 @@ export async function runInfoMetricsBrowserConformance(
     check(accountCard("otter")!.textContent?.includes("Claude · Otter"), "registered account labels are visible");
     check(accountCard("otter")!.querySelectorAll('[role="meter"]').length === 0 &&
       accountCard("otter")!.textContent?.includes("No quota reported"), "missing Otter quota never borrows Service percentages");
-    // The card's own Machine browser entry is the only control it may carry.
+    // The card's own Machine browser entry and its details disclosure are
+    // the only controls it may carry.
     check(!accountCard("otter")!.querySelector('[aria-label^="Refresh"], input') &&
-      [...accountCard("otter")!.querySelectorAll("button")].every((button) => button.textContent?.trim() === "Browser") &&
+      [...accountCard("otter")!.querySelectorAll("button")].every((button) => ["Browser", "Details"].includes(button.textContent?.trim() ?? "")) &&
       !accountCard("otter")!.textContent?.includes("Updated"), "uncollected account has no wrong-account refresh or fabricated timestamp");
     check(!accountCard("otter")!.querySelector("[data-usage-freshness]"),
       "an uncollected card shows no observation age");

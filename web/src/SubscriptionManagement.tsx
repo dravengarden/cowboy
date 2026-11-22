@@ -15,7 +15,7 @@ import { sharedBrowser } from "./machineBrowser/shareRules";
 import { browserErrorText } from "./machineBrowser/api";
 import { ProviderAccountIdentity, providerAccountCardSx } from "./ProviderAccountIdentity";
 import { validSubscriptionLabel } from "./subscriptionDisplay";
-import { type SubscriptionSnapshot as Snapshot, validSubscriptionSnapshot } from "./subscriptionAccounts";
+import { type SubscriptionSnapshot as Snapshot, validSubscriptionSnapshot, withoutLegacyShareMembers } from "./subscriptionAccounts";
 import { accountControl } from "./accountControls";
 import { AccountControlsPanel } from "./AccountControlsPanel";
 import { useNativeAccountUsage } from "./nativeAccountUsage";
@@ -69,13 +69,25 @@ function validShareMember(value: unknown): boolean {
   return record(value) && Object.keys(value).length === 1 && text(value.account_id);
 }
 
+/** A pending change a Web release from before the legacy card retirement
+ * saved (a legacy label edit, a card browser switch or a card share
+ * membership). Its effect is retired whether or not it committed: the
+ * Controller ignores legacy labels and removes every card browser and card
+ * share member at start. It is discarded, never retried. */
+export function obsoletePendingSubscription(value: unknown): boolean {
+  if (!record(value) || !record(value.change)) return false;
+  const change = value.change;
+  return change.type === "set_legacy_labels" || change.type === "set_legacy_browser_enabled" ||
+    (change.type === "set_browser_share" && record(change.member) && text(change.member.card));
+}
+
 /** Only explicit domain rejections establish that this mutation did not commit. */
 export function subscriptionWriteRejected(status: number, code: string | undefined): boolean {
   return status === 422 && ["invalid_account", "account_capacity", "account_is_default", "invalid_provider", "account_unavailable", "invalid_preferences",
     "account_not_found", "account_revoking", "invalid_argument", "invalid_browser_share", "browser_share_capacity", "browser_share_not_found",
     "browser_share_family_conflict", "browser_share_family_unknown", "browser_share_family_bound", "browser_share_family_drift",
     "browser_share_changed", "browser_share_machine_unsupported", "browser_share_machine_unknown",
-    "browser_share_reset_pending"].includes(code ?? "");
+    "browser_share_reset_pending", "named_account_required"].includes(code ?? "");
 }
 
 /** The owner-facing explanation of a definitive refusal. */
@@ -124,7 +136,7 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
         throw new Error("Account changed. Reload before editing subscriptions.");
       }
       setSnapshot((old) => !old || old.dataset.dataset_id !== value.dataset.dataset_id ||
-        value.registry.revision >= old.registry.revision ? value : old);
+        value.registry.revision >= old.registry.revision ? withoutLegacyShareMembers(value) : old);
     } catch (cause) { if (live() && sequence === loading.current) setError(String(cause)); }
   }
   useEffect(() => {
@@ -133,9 +145,14 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
       const saved = sessionStorage.getItem(journalKey);
       if (saved) {
         const value: unknown = JSON.parse(saved);
-        if (!validPendingSubscription(value)) throw new Error("Invalid pending subscription change.");
-        setPending(value);
-        setError("A previous change needs reconciliation. Retry sends the same operation.");
+        if (obsoletePendingSubscription(value)) {
+          sessionStorage.removeItem(journalKey);
+          setError("A pending change to a retired legacy default card was discarded. Legacy cards are retired; nothing needs to be retried.");
+        } else if (!validPendingSubscription(value)) throw new Error("Invalid pending subscription change.");
+        else {
+          setPending(value);
+          setError("A previous change needs reconciliation. Retry sends the same operation.");
+        }
       }
       setJournalReady(true);
     } catch { setError("Could not read the pending subscription change. Local storage must be available before editing."); }
@@ -228,7 +245,10 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
           </Stack>
           <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
             <Button disabled={disabled || account.revoking} onClick={() => save({ type: "set_enabled", id: account.id, enabled: !account.enabled })}>{account.revoking ? "Revoked access" : account.enabled ? "Disable" : "Enable"}</Button>
-            {!control && <Button disabled={disabled || !account.enabled || snapshot.registry.defaults[account.provider_id] === account.id || !providerSubscriptionEnabled(snapshot, account.provider_id)} onClick={() => save({ type: "set_default", provider_id: account.provider_id, id: account.id })}>Use by default</Button>}
+            {!control && (snapshot.registry.defaults[account.provider_id] === account.id
+              // Clears the selection, so the account can be disabled; new sessions then pick an account.
+              ? <Button disabled={disabled} onClick={() => save({ type: "set_default", provider_id: account.provider_id, id: "default" })}>Stop using by default</Button>
+              : <Button disabled={disabled || !account.enabled || !providerSubscriptionEnabled(snapshot, account.provider_id)} onClick={() => save({ type: "set_default", provider_id: account.provider_id, id: account.id })}>Use by default</Button>)}
             {owner && <SubscriptionBrowserActions account={account} owner={owner} dataset={snapshot.dataset.dataset_id} disabled={disabled} shared={sharedBrowser(snapshot, account.id)}
               onSetBrowserEnabled={(enabled) => save({ type: "set_browser_enabled", id: account.id, enabled })} />}
             {owner && <SubscriptionRevocation account={account.id} label={account.label} revoking={Boolean(account.revoking)} owner={owner}

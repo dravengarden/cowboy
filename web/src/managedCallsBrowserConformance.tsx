@@ -281,6 +281,7 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     if (url === "/api/provider-accounts") return Promise.resolve(Response.json({
       dataset: { dataset_id: "calls-fixture", user_id: "call-account-fixture" },
       registry: { revision: 1, accounts: [], defaults: {} }, session_admission: "enabled",
+      retired_default_providers: ["claude-code", "codex", "grok", "claude-deepseek", "codex-deepseek", "deepseek-harness"],
     }));
     if (url === "/api/sessions/parent-clear/bootstrap") {
       return Promise.resolve(Response.json({ messages: [{
@@ -1432,6 +1433,7 @@ export async function renderManagedCallsPreview(
     if (url === "/api/provider-accounts") return Promise.resolve(Response.json({
       dataset: { dataset_id: "calls-fixture", user_id: "call-account-fixture" },
       registry: { revision: 1, accounts: [], defaults: {} }, session_admission: "enabled",
+      retired_default_providers: ["claude-code", "codex", "grok", "claude-deepseek", "codex-deepseek", "deepseek-harness"],
     }));
     const bootstrap = childBootstrap(url);
     if (bootstrap) return Promise.resolve(bootstrap);

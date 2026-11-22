@@ -18,6 +18,7 @@ import {
 import { ArrowBackRounded } from "@mui/icons-material";
 import { ServiceSignInPage, useServiceSignInBrowser } from "./ServiceSignInPage";
 import { SubscriptionManagement, type SubscriptionCards } from "./SubscriptionManagement";
+import { RETIRED_SESSION_GUIDANCE, retiredDefaultProvider, useSubscriptionAccounts } from "./subscriptionAccounts";
 import { ProviderAccountIdentity, ProviderAccountStatus, providerAccountCardSx } from "./ProviderAccountIdentity";
 import { alpha } from "@mui/material/styles";
 import {
@@ -159,13 +160,11 @@ export function ProviderAuthenticationManagement({
 export function SessionProviderAccess(
   { providerId }: { providerId: string },
 ): React.JSX.Element {
-  return (
-    <ProviderManagement
-      scope="service"
-      focusProviderId={providerId}
-      embedded
-    />
-  );
+  const { data, error } = useSubscriptionAccounts();
+  // A retired legacy card has no Service sign-in: its session continues in a new agent.
+  if (!data && !error) return <Typography variant="caption" color="text.secondary">Checking this session’s account…</Typography>;
+  if (retiredDefaultProvider(data, providerId)) return <Alert severity="info" data-retired-session-account>{RETIRED_SESSION_GUIDANCE}</Alert>;
+  return <ProviderManagement scope="service" focusProviderId={providerId} embedded />;
 }
 
 export function MachineProviderManagement(

@@ -6,6 +6,7 @@ const inventory: SubscriptionSnapshot = {
   dataset: { dataset_id: "dataset", user_id: "owner" },
   registry: { revision: 1, accounts: [{ id: "otter", provider_id: "claude-code", label: "Claude · Otter", enabled: true }], defaults: { "claude-code": "otter" } },
   session_admission: "enabled",
+  retired_default_providers: ["claude-code", "codex"],
 };
 test("session binding stays on the original account when creation default changes", () => {
   // A session of the retired legacy default card keeps a stable name.
@@ -36,4 +37,13 @@ test("arbitrary custom account labels remain intact and shortening is display on
   expect(accountIdentity(data, "claude-code", "otter")).toMatchObject({ id: "otter", short: "weekend", label: "Research · weekend" });
   data.registry.accounts[0]!.label = "Research";
   expect(accountIdentity(data, "claude-code", "otter").short).toBe("Research");
+});
+test("only a card family's default is a retired legacy account", () => {
+  expect(accountIdentity(inventory, "codex", "default")).toMatchObject({ label: "Retired legacy account", available: false });
+  expect(accountIdentity(inventory, "future-provider", "default")).toMatchObject({ label: "Service account", available: true });
+  // An older Controller names no retired Providers; its family table decides.
+  const older = { ...inventory, retired_default_providers: undefined,
+    browser_share_families: { version: 3, providers: { "claude-code": "anthropic", antigravity: "google" } } };
+  expect(accountIdentity(older, "claude-code", "default").label).toBe("Retired legacy account");
+  expect(accountIdentity(older, "antigravity", "default").label).toBe("Service account");
 });
