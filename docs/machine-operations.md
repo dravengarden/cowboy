@@ -405,60 +405,82 @@ credentials it started with (on 2026-11-22 five such workers had run on OVH
 for up to eleven days).
 
 The Controller reports them; it never stops them. A crashed session whose
-worker is still attached after ten minutes logs one warning per session and
-worker epoch (`crashed session still holds a live worker`, with session,
-Machine, Provider, `default` or `named` account and age), and is listed per
-Machine under `crashed_workers` in `GET /api/session-maintenance`, shown in
-Settings → Resources & automatic maintenance.
+last reported worker is still in the Crashed state ten minutes later logs one
+warning per session and worker epoch (`crashed session may still hold a live
+worker`, with session, Machine, Provider, `default` or `named` account,
+generation and age), and is listed per connected Machine under
+`crashed_workers` in `GET /api/session-maintenance` (Settings → Resources &
+automatic maintenance). Each row carries the worker's `worker_epoch`, its
+`worker_pid` (a generated epoch is `<pid>-<nanoseconds>`) and `generation`.
+Rows are marked `may_be_stale`: the runtime wire has no detach signal, so a
+worker that already exited keeps its Crashed row until the Machine's next
+connection reports its inventory. Always verify the process first.
 
-To release one:
+Choose one of:
 
-1. Prefer the session's own recovery when it should run again: **Retry**
-   (`POST /api/sessions/{id}/reload`) replaces the crashed worker with a fresh
-   one on the current Provider release and credentials, keeping the
-   transcript and resuming the native thread. Do not use it for a session
-   whose account was retired (for example a legacy `default` card account);
-   the replacement would fail the same way.
-2. Otherwise stop only that worker by hand. First confirm in Cowboy that the
-   session is crashed and idle: its crash detail is shown (so the crash
-   reached the Controller), no turn, permission request or background task
-   is active, and the Machine has been connected for a few minutes. The
-   worker exits on `TERM` without flushing events it has not yet delivered,
-   which is why the crash must already be visible.
-   - Linux (user-systemd workers): as the Machine's service user, find the
-     unit and stop it:
+1. **Leave it.** A crashed worker serves nothing; it only holds memory, a
+   slot and its credentials. Without memory pressure or a credential concern
+   it can wait for the session's next prompt or Retry.
+2. **Retry** (`POST /api/sessions/{id}/reload`), when the session should run
+   again. Retry restarts the session on its saved Provider release and
+   account binding and resumes the native thread when the Provider can; it
+   does not update the Provider (that is a separate update). It fences and
+   replaces the old worker. Do not use it for a session whose account was
+   retired (for example a legacy `default` card account): the replacement
+   fails the same way.
+3. **Emergency stop by hand**, only when the worker must go now: its account
+   was retired or its credentials were rotated or wiped, or it is the memory
+   pressure. The worker exits on `TERM` without flushing events it has not
+   delivered yet, so its undelivered tail (normally empty for a crash shown
+   with its detail) can be lost; the session's recorded history stays.
 
-     ```sh
-     systemctl --user list-units --no-legend 'cowboy-worker-*-<session-id>.service'
-     systemctl --user stop cowboy-worker-<socket-hash>-<session-id>.service
-     ```
+### Emergency stop
 
-     On OVH the service user is `ubuntu`:
+Do not stop a worker while a Retry, reload or Provider update of that
+session may be in progress (the session shows Starting or an update). First
+confirm in Cowboy that the session is crashed with its crash detail shown,
+idle (no turn, permission request or background task) and that its Machine
+has been connected for a few minutes. Take the row's `worker_pid` and
+`generation`, then verify the exact process before signalling it.
 
-     ```sh
-     sudo -u ubuntu XDG_RUNTIME_DIR=/run/user/$(id -u ubuntu) \
-       systemctl --user stop cowboy-worker-<socket-hash>-<session-id>.service
-     ```
+Linux (user-systemd workers), as the Machine's service user (on OVH prefix
+each `systemctl --user` with
+`sudo -u ubuntu XDG_RUNTIME_DIR=/run/user/$(id -u ubuntu)`):
 
-   - macOS (direct child workers of the LaunchAgent, not launchd jobs): find
-     the worker by its session argument and send it `TERM`; its process group
-     holds the Provider subtree:
+```sh
+session=<session-id> pid=<worker_pid> generation=<generation>
+unit=$(systemctl --user list-units --no-legend --plain "cowboy-worker-*-$session.service" | awk '{print $1}')
+test -n "$unit" || { echo 'no worker unit: it already exited' >&2; exit 1; }
+test "$(systemctl --user show -p MainPID --value "$unit")" = "$pid" || { echo 'unit MainPID differs' >&2; exit 1; }
+case $(readlink "/proc/$pid/exe") in */cowboy-acp-worker) ;; *) echo 'not a worker' >&2; exit 1 ;; esac
+args=$(tr '\0' '\n' < "/proc/$pid/cmdline") || exit 1
+printf '%s\n' "$args" | grep -qxF -- "$session" || { echo 'other session' >&2; exit 1; }
+printf '%s\n' "$args" | grep -qxF -- "$generation" || { echo 'other generation' >&2; exit 1; }
+printf '%s\n' "$args" | grep -A1 -xF -- --socket   # the Machine service's run/m socket
+systemctl --user stop "$unit"
+```
 
-     ```sh
-     pgrep -f -- '--session-id <session-id> ' | while read -r pid; do
-       ps -o pid=,pgid=,args= -p "$pid"
-     done
-     kill -TERM -- -<pgid>
-     ```
+macOS (direct child workers of the LaunchAgent, not launchd jobs): the
+worker leads its own process group with the Provider subtree. Verify its
+arguments with the runbook's argument-complete check
+(`docs/legacy-card-retirement.md`, macOS script: the row's PID, the exact
+`--session-id`, `--generation` and `--socket`), then require it to be its
+group's leader and signal only that group:
 
-3. Verify: the unit or process is gone
-   (`systemctl --user is-active <unit>` reports `inactive` or the unit is not
-   found; `pgrep -f -- '--session-id <session-id> '` prints nothing), the
-   Machine logs `declared worker has no running unit; reporting it stopped`
-   or the worker's `worker stopped by SIGTERM`, and the session is still
-   crashed in Cowboy with its history and crash detail. It leaves the
-   `crashed_workers` list within a minute. The next prompt or Retry starts a
-   new worker as usual.
+```sh
+pid=<worker_pid>
+test "$(ps -o pgid= -p "$pid" | tr -d ' ')" = "$pid" || { echo 'not a group leader' >&2; exit 1; }
+ps -o comm= -p "$pid" | grep -q '/cowboy-acp-worker$' || { echo 'not a worker' >&2; exit 1; }
+kill -TERM -- "-$pid"
+sleep 5; pgrep -g "$pid" && echo 'group still has processes' >&2
+```
+
+Verify: the unit is gone or inactive, or `pgrep -g <pid>` prints nothing;
+the Machine logs `declared worker has no running unit; reporting it stopped`
+or the worker's `worker stopped by SIGTERM`; and the session is still crashed
+in Cowboy with its history and crash detail. The row leaves the list when
+the Machine next reports its inventory. The next prompt or Retry starts a
+new worker as usual.
 
 ## Component publication
 

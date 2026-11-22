@@ -245,6 +245,15 @@ key the envelope was sealed to. A reconnecting Machine only wakes the
 reconciler for itself; there is no fleet-wide redelivery on reconnect, and
 failed-session recovery follows each successful root delivery.
 
+Known gap (follow-up): the envelope is sealed to the enrollment key read
+from the store, but the connection that carries it is not bound to that
+enrollment. If a Machine id is re-enrolled while a connection of the
+previous enrollment is still current, a wipe (which is not encrypted) can be
+acknowledged over that old connection and the acknowledgement credited to
+the re-enrolled Machine. Re-enrollment is a rare operator action: after one,
+reconnect the Machine and confirm its wipes again rather than relying on an
+acknowledgement recorded around the re-enrollment.
+
 ## Release order and operations
 
 ### Production cutover (prerequisites already met)
@@ -264,7 +273,8 @@ the cutover only verifies them before releasing:
      reads each worker's actual argument vector (NUL-delimited
      `/proc/<pid>/cmdline`), so a path or value that contains the option
      text cannot hide a `default` worker, and it fails instead of passing
-     when a worker's arguments (or `/proc`) cannot be read. Save it as
+     when `/proc`, a live process or a worker's arguments cannot be read or
+     its argument check fails. Save it as
      `default-workers.sh` and run `sh default-workers.sh` as the Machine's
      user:
 
@@ -272,17 +282,24 @@ the cutover only verifies them before releasing:
      status=0
      [ -r /proc/self/cmdline ] || { echo 'no /proc; the check is inconclusive' >&2; exit 1; }
      for proc in /proc/[0-9]*; do
-       comm=$(cat "$proc/comm" 2>/dev/null) || continue
+       pid=${proc#/proc/}
+       if ! comm=$(cat "$proc/comm" 2>/dev/null); then
+         # Exited meanwhile, or not readable: only the first is conclusive.
+         [ -e "$proc" ] || continue
+         echo "$pid: process unreadable; the check is inconclusive" >&2
+         status=1
+         continue
+       fi
        case $comm in cowboy-acp-work*) ;; *) continue ;; esac
        # NUL-delimited argv, one argument per line (an embedded newline is kept
        # inside its argument as \001, so it cannot forge another argument).
        if ! args=$(tr '\n\0' '\001\n' < "$proc/cmdline" 2>/dev/null) || [ -z "$args" ]; then
          [ -e "$proc" ] || continue
-         echo "${proc#/proc/}: worker arguments unreadable; the check is inconclusive" >&2
+         echo "$pid: worker arguments unreadable; the check is inconclusive" >&2
          status=1
          continue
        fi
-       printf '%s\n' "$args" | awk -v pid="${proc#/proc/}" '
+       printf '%s\n' "$args" | awk -v pid="$pid" '
          NR == 1 { worker = $0 ~ /(^|\/)cowboy-acp-worker$/ }
          worker && prev == "--provider" { provider = $0 }
          worker && $0 == "--provider-account-id" { named = 1 }
@@ -290,7 +307,7 @@ the cutover only verifies them before releasing:
          END {
            if (worker && provider ~ /^(claude-code|codex|grok|claude-deepseek|codex-deepseek|deepseek-harness)$/ && !named)
              print pid, provider
-         }'
+         }' || { echo "$pid: argument check failed; the check is inconclusive" >&2; status=1; }
      done
      exit "$status"
      ```
@@ -298,7 +315,9 @@ the cutover only verifies them before releasing:
      On a macOS Machine (such as macbook-air), `ps` cannot show where one
      argument ends; the same check reads each worker's argument vector from
      the kernel (`sysctl` `KERN_PROCARGS2`) with the system Perl, and fails
-     when `ps`, or a live worker's arguments, cannot be read. Save it as
+     when `ps` fails or prints a line it cannot parse, or when a live
+     worker's arguments cannot be read (including a process it may not
+     inspect). Save it as
      `default-workers.pl` and run `perl default-workers.pl` as the Machine's
      user:
 
@@ -328,11 +347,17 @@ the cutover only verifies them before releasing:
          return \@argv;
      }
      for my $line (@ps) {
-         my ($pid, $comm) = $line =~ /^\s*(\d+)\s+(.*?)\s*$/ or next;
+         my ($pid, $comm) = $line =~ /^\s*(\d+)\s+(.*?)\s*$/;
+         if (!defined $pid) {
+             warn "unparsable ps line; the check is inconclusive\n";
+             $status = 1;
+             next;
+         }
          next unless $comm =~ m{(^|/)cowboy-acp-worker$};
          my $argv = argv_of($pid);
          if (!$argv) {
-             next unless kill 0, $pid;
+             # Gone (ESRCH) is conclusive; a live process we may not inspect is not.
+             next unless kill(0, $pid) || $!{EPERM};
              warn "$pid: worker arguments unreadable; the check is inconclusive\n";
              $status = 1;
              next;

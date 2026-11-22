@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::agent_model::Status;
+use crate::remote_runtime::CrashedWorkerSighting;
 
 use super::AppState;
 
@@ -29,60 +30,77 @@ const TICK: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone)]
 struct Attached {
-    worker_epoch: String,
+    worker: CrashedWorkerSighting,
     first_seen: Instant,
     warned: bool,
 }
 
-/// One crashed session with a live worker, as one sweep observed it.
+/// One crashed session in one sweep: its last crashed worker on a connected
+/// Machine, or `None` with `connected` telling whether that absence is known.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Sighting {
+pub(super) struct Candidate {
     pub session_id: String,
-    pub worker_epoch: String,
+    pub connected: bool,
+    pub worker: Option<CrashedWorkerSighting>,
 }
 
-/// Session -> its attached crashed worker, from when this Controller first
-/// saw that worker epoch. A new epoch starts over.
+/// Session -> its crashed worker, from when this Controller first saw that
+/// worker epoch. One bounded entry per crashed session: it is kept while
+/// the Machine is offline (and hidden), and ends only when the session is
+/// gone or no longer crashed, or a connected Machine no longer reports that
+/// worker (detached) or reports another epoch (replaced).
 #[derive(Default)]
 pub(in crate::server) struct Observed(parking_lot::Mutex<HashMap<String, Attached>>);
 
 impl Observed {
-    /// Record one sweep's sightings; returns those to warn about now (each
-    /// session and epoch once, after [`REPORT_AFTER`]) with their age.
+    /// Record one sweep; returns the workers to warn about now (each session
+    /// and epoch once, after [`REPORT_AFTER`]) with their age.
     pub(super) fn observe(
         &self,
-        sightings: &[Sighting],
+        candidates: &[Candidate],
         now: Instant,
-    ) -> Vec<(Sighting, Duration)> {
+    ) -> Vec<(String, CrashedWorkerSighting, Duration)> {
         let mut attached = self.0.lock();
-        attached.retain(|session, _| sightings.iter().any(|seen| &seen.session_id == session));
+        attached.retain(|session, _| {
+            candidates.iter().any(|seen| {
+                &seen.session_id == session && (seen.worker.is_some() || !seen.connected)
+            })
+        });
         let mut warn = Vec::new();
-        for seen in sightings {
+        for seen in candidates {
+            let Some(worker) = &seen.worker else {
+                continue;
+            };
+            let fresh = || Attached {
+                worker: worker.clone(),
+                first_seen: now,
+                warned: false,
+            };
             let entry = attached
                 .entry(seen.session_id.clone())
-                .or_insert_with(|| Attached {
-                    worker_epoch: seen.worker_epoch.clone(),
-                    first_seen: now,
-                    warned: false,
-                });
-            if entry.worker_epoch != seen.worker_epoch {
-                *entry = Attached {
-                    worker_epoch: seen.worker_epoch.clone(),
-                    first_seen: now,
-                    warned: false,
-                };
+                .or_insert_with(fresh);
+            if entry.worker.worker_epoch != worker.worker_epoch {
+                *entry = fresh();
             }
             let age = now.duration_since(entry.first_seen);
             if age >= REPORT_AFTER && !entry.warned {
                 entry.warned = true;
-                warn.push((seen.clone(), age));
+                warn.push((seen.session_id.clone(), worker.clone(), age));
             }
         }
         warn
     }
 
-    /// The reported sessions among `sessions` (attached past [`REPORT_AFTER`]).
-    pub(super) fn report(&self, sessions: &[&crate::core::SessionMeta]) -> Vec<serde_json::Value> {
+    /// The reported sessions among `sessions` of one Machine (attached past
+    /// [`REPORT_AFTER`]); none while that Machine is disconnected.
+    pub(super) fn report(
+        &self,
+        sessions: &[&crate::core::SessionMeta],
+        connected: bool,
+    ) -> Vec<serde_json::Value> {
+        if !connected {
+            return Vec::new();
+        }
         self.report_at(sessions, Instant::now())
     }
 
@@ -103,13 +121,28 @@ impl Observed {
                         "title": session.title,
                         "provider": session.provider,
                         "account": account(session),
-                        "worker_epoch": entry.worker_epoch,
+                        "worker_epoch": entry.worker.worker_epoch,
+                        "worker_pid": worker_pid(&entry.worker.worker_epoch),
+                        "generation": entry.worker.generation,
                         "attached_for_ms": u64::try_from(age.as_millis()).unwrap_or(u64::MAX),
+                        // No detach signal exists: verify the process first.
+                        "may_be_stale": true,
                     })
                 })
             })
             .collect()
     }
+}
+
+/// A worker's generated epoch is `<pid>-<nanoseconds>`; its PID is what an
+/// operator verifies before stopping anything.
+fn worker_pid(epoch: &str) -> Option<u32> {
+    let (pid, nanos) = epoch.split_once('-')?;
+    nanos
+        .bytes()
+        .all(|byte| byte.is_ascii_digit())
+        .then_some(())?;
+    pid.parse().ok()
 }
 
 fn account(session: &crate::core::SessionMeta) -> &'static str {
@@ -120,47 +153,64 @@ fn account(session: &crate::core::SessionMeta) -> &'static str {
     }
 }
 
+/// The crashed sessions of one sweep, without keeping the session list.
+fn candidates(state: &AppState) -> Vec<(Candidate, String, String, &'static str)> {
+    state
+        .hub
+        .session_list()
+        .into_iter()
+        .filter(|session| session.status == Status::Crashed)
+        .map(|session| {
+            let runtime = state.runtime_router.runtime(&session.machine_id);
+            let connected = runtime.as_ref().is_some_and(|runtime| runtime.connected());
+            let worker = runtime.and_then(|runtime| runtime.last_crashed_worker(&session.id));
+            let account = account(&session);
+            (
+                Candidate {
+                    session_id: session.id,
+                    connected,
+                    worker,
+                },
+                session.machine_id,
+                session.provider,
+                account,
+            )
+        })
+        .collect()
+}
+
 pub(in crate::server) fn start(state: &Arc<AppState>) {
     let weak = Arc::downgrade(state);
     tokio::spawn(async move {
         loop {
-            let Some(state) = weak.upgrade() else { return };
-            if *state.shutdown.borrow() {
-                return;
-            }
-            let sessions = state.hub.session_list();
-            let sightings: Vec<_> = sessions
-                .iter()
-                .filter(|session| session.status == Status::Crashed)
-                .filter_map(|session| {
-                    let worker_epoch = state
-                        .runtime_router
-                        .runtime(&session.machine_id)?
-                        .attached_crashed_worker(&session.id)?;
-                    Some(Sighting {
-                        session_id: session.id.clone(),
-                        worker_epoch,
-                    })
-                })
-                .collect();
-            let warn = state
-                .session_maintenance
-                .crashed_workers
-                .observe(&sightings, Instant::now());
-            for (seen, age) in warn {
-                let Some(session) = sessions
+            {
+                let Some(state) = weak.upgrade() else { return };
+                if *state.shutdown.borrow() {
+                    return;
+                }
+                let swept = candidates(&state);
+                let sightings: Vec<_> = swept
                     .iter()
-                    .find(|session| session.id == seen.session_id)
-                else {
-                    continue;
-                };
-                tracing::warn!(session = %session.id, machine = %session.machine_id,
-                    provider = %session.provider, account = account(session),
-                    worker_epoch = %seen.worker_epoch, attached_for_s = age.as_secs(),
-                    "crashed session still holds a live worker; stop it by hand \
-                     (docs/machine-operations.md#crashed-sessions-with-a-live-worker)");
+                    .map(|(candidate, ..)| candidate.clone())
+                    .collect();
+                let warn = state
+                    .session_maintenance
+                    .crashed_workers
+                    .observe(&sightings, Instant::now());
+                for (session_id, worker, age) in warn {
+                    let Some((_, machine, provider, account)) = swept
+                        .iter()
+                        .find(|(candidate, ..)| candidate.session_id == session_id)
+                    else {
+                        continue;
+                    };
+                    tracing::warn!(session = %session_id, %machine, %provider, account,
+                        worker_epoch = %worker.worker_epoch, generation = %worker.generation,
+                        attached_for_s = age.as_secs(),
+                        "crashed session may still hold a live worker; verify and stop it by hand \
+                         (docs/machine-operations.md#crashed-sessions-with-a-live-worker)");
+                }
             }
-            drop(state);
             tokio::time::sleep(TICK).await;
         }
     });
@@ -170,47 +220,66 @@ pub(in crate::server) fn start(state: &Arc<AppState>) {
 mod tests {
     use super::*;
 
-    fn seen(session: &str, epoch: &str) -> Sighting {
-        Sighting {
+    fn seen(session: &str, epoch: &str) -> Candidate {
+        Candidate {
             session_id: session.to_owned(),
-            worker_epoch: epoch.to_owned(),
+            connected: true,
+            worker: Some(CrashedWorkerSighting {
+                worker_epoch: epoch.to_owned(),
+                generation: "gen-1".to_owned(),
+            }),
         }
+    }
+
+    fn gone(session: &str, connected: bool) -> Candidate {
+        Candidate {
+            session_id: session.to_owned(),
+            connected,
+            worker: None,
+        }
+    }
+
+    fn warned(found: &[(String, CrashedWorkerSighting, Duration)]) -> Vec<&str> {
+        found.iter().map(|(session, ..)| session.as_str()).collect()
     }
 
     #[test]
     fn each_crashed_worker_is_reported_once_after_its_delay_and_a_new_epoch_starts_over() {
         let observed = Observed::default();
         let start = Instant::now();
-        assert!(observed.observe(&[seen("a", "e1")], start).is_empty());
+        assert!(observed.observe(&[seen("a", "7-1")], start).is_empty());
         assert!(
             observed
-                .observe(&[seen("a", "e1")], start + REPORT_AFTER / 2)
+                .observe(&[seen("a", "7-1")], start + REPORT_AFTER / 2)
                 .is_empty()
         );
-        let warned = observed.observe(&[seen("a", "e1"), seen("b", "f1")], start + REPORT_AFTER);
-        assert_eq!(warned.len(), 1);
-        assert_eq!(warned[0].0, seen("a", "e1"));
+        let found = observed.observe(&[seen("a", "7-1"), seen("b", "8-1")], start + REPORT_AFTER);
+        assert_eq!(warned(&found), ["a"]);
         // Warned once per session and epoch.
+        assert_eq!(
+            warned(&observed.observe(
+                &[seen("a", "7-1"), seen("b", "8-1")],
+                start + REPORT_AFTER * 2
+            )),
+            ["b"]
+        );
+        // An offline Machine keeps the entry (no second warning on return).
+        let later = start + REPORT_AFTER * 3;
+        assert!(observed.observe(&[gone("a", false)], later).is_empty());
+        assert!(observed.observe(&[seen("a", "7-1")], later).is_empty());
+        // A replacement epoch has its own delay.
+        assert!(observed.observe(&[seen("a", "9-1")], later).is_empty());
+        assert_eq!(
+            warned(&observed.observe(&[seen("a", "9-1")], later + REPORT_AFTER)),
+            ["a"]
+        );
+        // A connected Machine no longer reporting it, or a session no longer
+        // crashed, ends the entry.
         assert!(
             observed
-                .observe(
-                    &[seen("a", "e1"), seen("b", "f1")],
-                    start + REPORT_AFTER * 2
-                )
-                .iter()
-                .all(|(sighting, _)| sighting.session_id == "b")
+                .observe(&[gone("a", true)], later + REPORT_AFTER)
+                .is_empty()
         );
-        // A replacement epoch has its own delay.
-        let later = start + REPORT_AFTER * 3;
-        assert!(observed.observe(&[seen("a", "e2")], later).is_empty());
-        assert_eq!(
-            observed
-                .observe(&[seen("a", "e2")], later + REPORT_AFTER)
-                .len(),
-            1
-        );
-        // A worker no longer attached (stopped, recycled) is forgotten.
-        assert!(observed.observe(&[], later + REPORT_AFTER).is_empty());
         assert!(observed.0.lock().is_empty());
     }
 
@@ -233,14 +302,14 @@ mod tests {
     }
 
     #[test]
-    fn the_inventory_lists_only_crashed_sessions_past_the_delay() {
+    fn the_inventory_lists_crashed_sessions_past_the_delay_as_possibly_stale() {
         let observed = Observed::default();
         let start = Instant::now();
         observed.observe(
             &[
-                seen("old", "e1"),
-                seen("fresh", "f1"),
-                seen("revived", "r1"),
+                seen("old", "4242-17"),
+                seen("fresh", "broker-x"),
+                seen("revived", "1-1"),
             ],
             start,
         );
@@ -253,9 +322,13 @@ mod tests {
         assert_eq!(report.len(), 2, "{report:?}");
         assert_eq!(report[0]["id"], "old");
         assert_eq!(report[0]["account"], "default");
-        assert_eq!(report[0]["provider"], "claude-code");
-        assert_eq!(report[0]["worker_epoch"], "e1");
-        assert_eq!(report[1]["id"], "fresh");
+        assert_eq!(report[0]["worker_epoch"], "4242-17");
+        assert_eq!(report[0]["worker_pid"], 4242);
+        assert_eq!(report[0]["generation"], "gen-1");
+        assert_eq!(report[0]["may_be_stale"], true);
         assert_eq!(report[1]["account"], "named");
+        assert!(report[1]["worker_pid"].is_null());
+        // Hidden while the Machine is disconnected.
+        assert!(observed.report(&rows, false).is_empty());
     }
 }

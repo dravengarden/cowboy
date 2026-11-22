@@ -8,6 +8,7 @@
 )]
 
 mod snapshot;
+pub use snapshot::CrashedWorkerSighting;
 use snapshot::apply_snapshot;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -5254,7 +5255,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_crashed_worker_still_attached_is_detected_but_counts_as_absent() {
+    async fn a_crashed_worker_is_reported_as_last_seen_and_counts_as_absent() {
         let hub = hub_with_stale_spark_preferences();
         let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
         runtime.ensure(snapshot("s").launch.unwrap());
@@ -5263,22 +5264,37 @@ mod tests {
         worker.current_turn_id = None;
         project_snapshot(&runtime.shared, &worker);
         // Not connected: nothing is claimed about the Machine.
-        assert_eq!(runtime.attached_crashed_worker("s"), None);
+        assert_eq!(runtime.last_crashed_worker("s"), None);
         runtime.shared.connected.store(true, Ordering::Release);
         assert!(!runtime.has_worker("s"));
-        assert_eq!(
-            runtime.attached_crashed_worker("s").as_deref(),
-            Some(worker.worker_epoch.as_str())
-        );
-        // The broker's registry placeholder is no attached worker.
+        let seen = runtime.last_crashed_worker("s").expect("crashed worker");
+        assert_eq!(seen.worker_epoch, worker.worker_epoch);
+        assert_eq!(seen.generation, worker.generation);
+        // The broker's frame for a worker that disconnected is the same
+        // Crashed snapshot of the same epoch: the wire carries no detach
+        // signal, so the sighting stays (and is labelled possibly stale).
+        let mut detached = worker.clone();
+        detached.exit_detail = None;
+        handle_frame(
+            &runtime.shared,
+            Frame::Snapshot {
+                worker: Box::new(detached),
+            },
+            &mut Vec::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(runtime.last_crashed_worker("s"), Some(seen));
+        // The next connection's inventory replaces it with the broker's
+        // registry placeholder, which is no worker.
         let mut placeholder = worker.clone();
         placeholder.worker_epoch = "broker-placeholder".to_owned();
-        project_snapshot(&runtime.shared, &placeholder);
-        assert_eq!(runtime.attached_crashed_worker("s"), None);
+        update_worker_snapshots(&runtime.shared, vec![placeholder]).await;
+        assert_eq!(runtime.last_crashed_worker("s"), None);
         // A running worker is no crashed one.
         worker.state = WorkerState::Running;
         project_snapshot(&runtime.shared, &worker);
-        assert_eq!(runtime.attached_crashed_worker("s"), None);
+        assert_eq!(runtime.last_crashed_worker("s"), None);
     }
 
     #[tokio::test]

@@ -33,7 +33,11 @@ export interface CrashedWorker {
   provider: string;
   account: "default" | "named";
   worker_epoch: string;
+  worker_pid?: number | null;
+  generation: string;
   attached_for_ms: number;
+  /** No detach signal exists: the worker may already be gone. */
+  may_be_stale: boolean;
 }
 
 function attachedFor(ms: number): string {
@@ -121,13 +125,13 @@ export function SessionMaintenancePanel({ order = [] }: { order?: string[] } = {
             <Typography variant="caption" color="text.secondary">Pause or cancel in the session queue.</Typography>
           </Box>}
           {(row.crashed_workers?.length ?? 0) > 0 && <Box data-crashed-workers sx={{ borderLeft: 2, borderColor: "error.main", pl: 1 }}>
-            <Typography variant="caption" fontWeight={650}>{row.crashed_workers!.length} crashed sessions still hold a worker</Typography>
+            <Typography variant="caption" fontWeight={650}>{row.crashed_workers!.length} crashed sessions may still hold a worker</Typography>
             {row.crashed_workers!.map((item) => (
               <Typography key={item.id} variant="caption" color="text.secondary" display="block" sx={{ overflowWrap: "anywhere" }}>
-                {item.title} · {item.provider} ({item.account} account) · {attachedFor(item.attached_for_ms)}
+                {item.title} · {item.provider} ({item.account} account) · {attachedFor(item.attached_for_ms)}{item.worker_pid ? ` · pid ${item.worker_pid}` : ""}
               </Typography>
             ))}
-            <Typography variant="caption" color="text.secondary">Nothing stops these automatically; an operator stops each worker (Machine operations guide).</Typography>
+            <Typography variant="caption" color="text.secondary">Last reported state, may be stale. Nothing stops these automatically; verify the process before an operator stops it (Machine operations guide).</Typography>
           </Box>}
           <Divider />
           <Box>

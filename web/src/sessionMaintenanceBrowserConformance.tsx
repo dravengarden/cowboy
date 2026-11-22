@@ -30,7 +30,7 @@ export async function runSessionMaintenanceBrowserConformance(keepFixture = fals
     waiting: [{ id: "waiting", title: "Pending task", reason: "all worker slots are occupied", paused: false }],
     crashed_workers: [{
       id: "crashed", title: "Refused turn", provider: "claude-code", account: "default",
-      worker_epoch: "epoch-1", attached_for_ms: 11 * 60_000,
+      worker_epoch: "4242-17", worker_pid: 4242, generation: "worker-1", attached_for_ms: 11 * 60_000, may_be_stale: true,
     }],
   };
   let reject = false;
@@ -63,8 +63,9 @@ export async function runSessionMaintenanceBrowserConformance(keepFixture = fals
     const text = container.textContent ?? "";
     check(text.includes("32 sessions") && text.includes("24 sleeping") && text.includes("all worker slots"),
       "record counts and durable resource wait are distinct from worker capacity");
-    check(text.includes("1 crashed sessions still hold a worker") && text.includes("Refused turn")
-      && text.includes("default account") && text.includes("11 min"),
+    check(text.includes("1 crashed sessions may still hold a worker") && text.includes("Refused turn")
+      && text.includes("default account") && text.includes("11 min") && text.includes("pid 4242")
+      && text.includes("may be stale"),
       "a crashed session's still-attached worker is reported, not acted on");
     check(container.scrollWidth <= container.clientWidth, "phone width has no horizontal overflow");
     const inputs = () => [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];

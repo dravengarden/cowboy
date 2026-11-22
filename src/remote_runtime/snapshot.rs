@@ -111,14 +111,26 @@ pub(super) fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
     true
 }
 
+/// The last worker this Controller saw for a session it recorded crashed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrashedWorkerSighting {
+    pub worker_epoch: String,
+    pub generation: String,
+}
+
 impl super::RemoteRuntime {
-    /// The epoch of the worker still attached to `session_id` after it
-    /// reported the session crashed. The Controller treats such a worker as
-    /// absent ([`Self::has_worker`]) and never reuses it, yet nothing stops
-    /// it: the next prompt recycles the session, a generation rollout or a
-    /// credential roll drains only running workers. Read-only evidence for
-    /// operators; nothing acts on it automatically.
-    pub fn attached_crashed_worker(&self, session_id: &str) -> Option<String> {
+    /// The worker this Controller last saw for `session_id` in the Crashed
+    /// state, as the Machine reported it on the current connection. The
+    /// Controller treats it as absent ([`Self::has_worker`]) and never reuses
+    /// it, yet nothing stops a live one: the next prompt recycles the
+    /// session, a rollout or roll drains only running workers.
+    ///
+    /// This is no proof that the process is still alive. The runtime wire
+    /// has no attach or detach signal: a worker that disconnects restates
+    /// itself as Crashed with the same epoch (or, for an undeclared session,
+    /// says nothing), and only the inventory of the next connection drops it.
+    /// Read-only evidence for an operator, who verifies the process first.
+    pub fn last_crashed_worker(&self, session_id: &str) -> Option<CrashedWorkerSighting> {
         if !self.connected() {
             return None;
         }
@@ -127,6 +139,9 @@ impl super::RemoteRuntime {
             .lock()
             .get(session_id)
             .filter(|worker| worker.has_connected_owner() && worker.state == WorkerState::Crashed)
-            .map(|worker| worker.worker_epoch.clone())
+            .map(|worker| CrashedWorkerSighting {
+                worker_epoch: worker.worker_epoch.clone(),
+                generation: worker.generation.clone(),
+            })
     }
 }
