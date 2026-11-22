@@ -839,7 +839,10 @@ release-sources-check:
         printf '%s\n' "$source" > "$tree.source"
       fi
       echo "== $output"
-      (cd "$tree" && CARGO_TARGET_DIR="$target" cargo check --locked "$@")
+      # Intermediates stay under the checkout too, where check-compact's
+      # SCCACHE_BASEDIRS covers them: another worktree's identical slice then
+      # hits the cache instead of rechecking every crate.
+      (cd "$tree" && CARGO_TARGET_DIR="$target" CARGO_BUILD_BUILD_DIR="$target" cargo check --locked "$@")
     }
     check cowboy-machine-src --no-default-features --features machine-host \
       -p cowboy --bin cowboy -p cowboy-machine \
