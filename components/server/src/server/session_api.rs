@@ -340,6 +340,11 @@ pub(super) async fn api_session_prompt(
             .unwrap_or_else(|| format!("api:{}", uuid::Uuid::new_v4())),
     );
     if delivery == SendDelivery::Interrupt {
+        // Before touching the queue: an interrupt of a retired session only
+        // parks, so nothing is queued and nothing cancelled.
+        if let Some(refusal) = provider_accounts::retirement::session_refusal(&state, &session_id) {
+            return (StatusCode::CONFLICT, refusal).into_response();
+        }
         let Some(queued) =
             state
                 .hub

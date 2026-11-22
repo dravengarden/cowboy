@@ -1035,6 +1035,12 @@ pub(super) fn queue_command(
             Ok(())
         }
         Inbound::ForcePushQueued { session_id, id, .. } => {
+            // A retired session's row stays where it is; no turn is cancelled.
+            if let Some(refusal) =
+                provider_accounts::retirement::session_refusal(state, &session_id)
+            {
+                return ControlFlow::Continue(Err(refusal.to_owned()));
+            }
             // Interrupt the running turn so the promoted prompt runs next; on an
             // idle session there's nothing to cancel, so just send it now.
             state.hub.request_send_queued(&session_id, &id); // promote to front either way

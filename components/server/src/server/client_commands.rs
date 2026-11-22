@@ -234,6 +234,13 @@ pub(super) fn submit_command(
                 trace,
             );
         }
+        if force
+            && let Some(refusal) =
+                provider_accounts::retirement::session_refusal(state, &session_id)
+        {
+            // Nothing queued, nothing cancelled: a retired session only parks.
+            return ControlFlow::Continue(Err(refusal.to_owned()));
+        }
         if force {
             // Long-press send: jump to the front of the queue and interrupt the
             // running turn so it runs next (same end-state as a queued row's
