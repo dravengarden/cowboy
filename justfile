@@ -1013,13 +1013,15 @@ check: toolchain-check
     background test-web
     background build-web
     background dependencies
+    # The MCP relay is a Cargo workspace of its own (plugins/claude-code/relay).
+    background claude-remote-relay
     just fmt structure-check docs-index-check protocol-contract-check typecheck
     reap
     just idb-conformance-check site-check native-shell-check lint-plugins plugin-check
     reap
     just composition-check
     reap
-    just claude-remote-relay provider-build-check
+    just provider-build-check
     while ((${#pending[@]})); do
       job="${pending[0]}"
       pending=("${pending[@]:1}")
