@@ -93,6 +93,7 @@ import {
   usageWidgetHasBalance,
   type UsageWidgetProvider,
   usageWidgetForAccount,
+  type UsageWidgetGroup,
   type UsageWidgetWindow,
 } from "../usageWidget";
 import { useSubscriptionAccounts } from "../subscriptionAccounts";
@@ -234,8 +235,7 @@ function usageSegmentWidth(provider: UsageWidgetProvider): number {
   if (usageWidgetHasBalance(provider)) return USAGE_BALANCE_SEGMENT_WIDTH_PX;
   if (provider.groups) {
     return usageGroupSegmentWidth(
-      provider.groups.length,
-      provider.groups.reduce((count, group) => count + group.windows.length, 0),
+      Math.max(0, ...provider.groups.map((group) => group.windows.length)),
     );
   }
   return usagePercentSegmentWidth(provider.windows?.length ?? 1);
@@ -264,13 +264,62 @@ type UsageColumn = {
   primary: string;
   secondary: string;
   remaining?: number;
-  /** A quota group's name, set before its percentage. */
-  group?: string;
-  /** Every window of a group, for the hover. */
-  detail?: string;
-  /** The first column of a group after the first: a little more room. */
-  groupStart?: boolean;
 };
+
+/** One window cell of a quota group row: `5h 34%`. */
+export type UsageGroupCell = {
+  period: string;
+  primary: string;
+  remaining: number;
+  /** The countdown, only for a window that needs attention; the hover
+   *  carries every countdown. */
+  countdown?: string;
+};
+
+/** One quota group as a row of the grouped segment. */
+export type UsageGroupRow = {
+  label: string;
+  cells: UsageGroupCell[];
+  /** Every window of the group with its countdown, for the hover. */
+  detail: string;
+};
+
+/** `Weekly` is the widest label and the most repeated one; a column of `W`
+ *  next to a column of `5h` stays unambiguous. */
+function shortPeriodLabel(label: string): string {
+  return label === "Weekly" ? "W" : label;
+}
+
+/** Per-group quotas (Antigravity) as a matrix: each group a row, each window
+ *  a labelled cell, so `Gemini  5h 34%  W 28%` reads left to right without
+ *  matching a number to a caption on the line below. */
+export function usageGroupRows(
+  groups: readonly UsageWidgetGroup[],
+  now: number,
+): UsageGroupRow[] {
+  return groups.map((group) => ({
+    label: group.label,
+    cells: group.windows.map((window): UsageGroupCell => {
+      const countdown = usageCountdown(window.resetsAt, now);
+      return {
+        period: shortPeriodLabel(window.periodLabel),
+        primary: `${String(window.remaining)}%`,
+        remaining: window.remaining,
+        ...(countdown !== undefined && usageRemainingTone(window.remaining) !== "normal"
+          ? { countdown }
+          : {}),
+      };
+    }),
+    detail: `${group.label}: ${
+      group.windows.map((window) => {
+        const countdown = usageCountdown(window.resetsAt, now);
+        return `${window.periodLabel} ${String(window.remaining)}%${
+          countdown === undefined ? "" : ` (${countdown})`
+        }`;
+      }).join(" · ")
+    }`,
+  }));
+}
 
 /** The strip's segments: the Usage order without hidden accounts, and each
  *  account without its hidden quota groups (Antigravity `Gemini 4 Argon`).
@@ -299,35 +348,12 @@ export function usageColumns(
       secondary: balanceUsageSummary(provider, usageProvider),
     }];
   }
-  if (provider.groups) {
-    // One column per window, the group named over its first: `Gemini 33%`
-    // `71%` over `5h · 57m` `Weekly · 5d`. A group's 5h and its week block
-    // independently, so neither hides behind the other. The hover keeps the
-    // complete list.
-    return provider.groups.flatMap((group, groupIndex) => {
-      const detail = `${group.label}: ${
-        group.windows.map((window) =>
-          `${window.periodLabel} ${String(window.remaining)}%${
-            usageCountdown(window.resetsAt, now) === undefined
-              ? ""
-              : ` (${usageCountdown(window.resetsAt, now) ?? ""})`
-          }`
-        ).join(" · ")
-      }`;
-      return group.windows.map((window, index): UsageColumn => ({
-        ...usageWindowColumn(window, now),
-        ...(index === 0
-          ? { group: group.label, detail, ...(groupIndex > 0 ? { groupStart: true } : {}) }
-          : {}),
-      }));
-    });
-  }
   return (provider.windows ?? [provider]).map((window) =>
     usageWindowColumn(window, now)
   );
 }
 
-function UsageProviderSummary(
+export function UsageProviderSummary(
   { provider, first, now, account, refreshing }: {
     provider: UsageWidgetProvider;
     account: UsageAccountCard;
@@ -339,16 +365,6 @@ function UsageProviderSummary(
     now: number;
   },
 ): React.JSX.Element {
-  // An account with several windows (Anthropic 5h + Weekly) keeps ONE
-  // segment: the provider name heads the first column only and column
-  // alignment, not a divider, ties each number to its window. Each column
-  // reads like a single-window segment, so the eye learns one pattern.
-  const columns = usageColumns(provider, account.usage.provider, now);
-  // Per-group quotas name each column, so the account name moves out of the
-  // first column into its own cell spanning both rows; otherwise it would
-  // read `Husky Gemini 81%`.
-  const grouped = !usageWidgetHasBalance(provider) &&
-    provider.groups !== undefined;
   const name = account.title.split(" · ").at(-1);
   const nameText = (
     <Typography
@@ -363,71 +379,151 @@ function UsageProviderSummary(
   const spinner = refreshing
     ? <CircularProgress size={10} aria-label="Refreshing usage" />
     : null;
-  return (
-    <Box
-      data-usage-provider={provider.kind}
-      data-usage-account={account.id}
-      {...(grouped ? { "data-usage-grouped": "" } : {})}
-      title={`${account.title}${refreshing ? " · Refreshing…" : ""}${
-        grouped
-          ? `\n${columns.flatMap((column) => column.detail ?? []).join("\n")}`
-          : ""
-      }`}
-      aria-label={`${account.title}${refreshing ? " · Refreshing" : ""}`}
-      sx={{
-        // Every segment hugs its own text. The density decision still reserves
-        // each kind's budget, so a segment may use less but never more; past
-        // it the text truncates rather than pushing the toolbar.
-        maxWidth: usageSegmentWidth(provider),
-        px: 0.75,
-        py: 0.25,
-        textAlign: "left",
-        display: "grid",
-        // Row-major: every primary, then every secondary, so each window's
-        // percentage sits directly over its own `5h · 30m`. That alignment is
-        // the grouping; a rule between windows would split one account into
-        // what reads as two segments. Rules mean "next account" only.
-        gridTemplateColumns: `${grouped ? "auto " : ""}repeat(${
-          String(columns.length)
-        }, auto)`,
-        columnGap: 1.25,
-        // One segmented control, not three floating chips: the group paints the
-        // surface and 1px rules separate the accounts, which reads calmer and
-        // returns the per-card gutters to the toolbar.
-        ...(first ? {} : { borderLeft: 1, borderColor: "divider" }),
-      }}
-    >
-      {grouped && (
+  const segmentSx = {
+    // Every segment hugs its own text. The density decision still reserves
+    // each kind's budget, so a segment may use less but never more; past
+    // it the text truncates rather than pushing the toolbar.
+    maxWidth: usageSegmentWidth(provider),
+    px: 0.75,
+    py: 0.25,
+    textAlign: "left",
+    display: "grid",
+    // One segmented control, not three floating chips: the group paints the
+    // surface and 1px rules separate the accounts, which reads calmer and
+    // returns the per-card gutters to the toolbar.
+    ...(first ? {} : { borderLeft: 1, borderColor: "divider" }),
+  } as const;
+  const label = `${account.title}${refreshing ? " · Refreshing" : ""}`;
+
+  if (!usageWidgetHasBalance(provider) && provider.groups !== undefined) {
+    // Per-group quotas read as a small matrix: the account name spans the
+    // rows, each group is a row, each window a labelled cell. The window
+    // label sits beside its number, so nothing has to be matched against a
+    // caption below it, and the windows of every group align as columns.
+    const rows = usageGroupRows(provider.groups, now);
+    const windowColumns = Math.max(1, ...rows.map((row) => row.cells.length));
+    // Two rows fill the strip's height; a third shown group tightens them.
+    const rowSx = {
+      fontSize: "0.6875rem",
+      lineHeight: rows.length > 2 ? 1.15 : 1.5,
+    } as const;
+    return (
+      <Box
+        data-usage-provider={provider.kind}
+        data-usage-account={account.id}
+        data-usage-grouped=""
+        title={`${account.title}${refreshing ? " · Refreshing…" : ""}\n${
+          rows.map((row) => row.detail).join("\n")
+        }`}
+        aria-label={label}
+        sx={{
+          ...segmentSx,
+          alignItems: "center",
+          gridTemplateColumns: `auto auto repeat(${String(windowColumns)}, auto)`,
+          columnGap: 1,
+        }}
+      >
         <Stack
           direction="row"
           spacing={0.55}
           alignItems="center"
-          sx={{ gridRow: "1 / span 2", minWidth: 0 }}
+          sx={{ gridRow: `1 / span ${String(rows.length)}`, minWidth: 0, pr: 0.25 }}
         >
           {nameText}
           {spinner}
         </Stack>
-      )}
-      {columns.map((column, index) => (
-        <Stack
-          key={`primary-${String(index)}`}
-          direction="row"
-          spacing={0.55}
-          sx={{ minWidth: 0, ...(column.groupStart ? { pl: 0.75 } : {}) }}
-        >
-          {!grouped && index === 0 && nameText}
-          {!grouped && index === 0 && spinner}
-          {column.group !== undefined && (
+        {rows.map((row, rowIndex) => (
+          <Box key={row.label} sx={{ display: "contents" }}>
             <Typography
               variant="caption"
               color="text.secondary"
               fontWeight={500}
               noWrap
-              sx={{ minWidth: 0 }}
+              sx={{ ...rowSx, gridRow: rowIndex + 1, minWidth: 0 }}
             >
-              {column.group}
+              {row.label}
             </Typography>
-          )}
+            {row.cells.map((cell, cellIndex) => (
+              <Stack
+                key={`${row.label}-${String(cellIndex)}`}
+                direction="row"
+                spacing={0.5}
+                alignItems="baseline"
+                sx={{ gridRow: rowIndex + 1, gridColumn: cellIndex + 3, minWidth: 0 }}
+              >
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  noWrap
+                  sx={{ ...rowSx, fontSize: "0.625rem" }}
+                >
+                  {cell.period}
+                </Typography>
+                <Typography
+                  variant="caption"
+                  fontWeight={800}
+                  noWrap
+                  sx={{
+                    ...rowSx,
+                    flexShrink: 0,
+                    // Right-aligned in a fixed-width figure so `34%` and
+                    // `100%` share a right edge down the column.
+                    minWidth: "4ch",
+                    textAlign: "right",
+                    fontVariantNumeric: "tabular-nums",
+                    color: USAGE_TONE_COLOR[usageRemainingTone(cell.remaining)],
+                  }}
+                >
+                  {cell.primary}
+                </Typography>
+                {cell.countdown !== undefined && (
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    noWrap
+                    sx={{ ...rowSx, fontSize: "0.625rem", fontVariantNumeric: "tabular-nums" }}
+                  >
+                    {cell.countdown}
+                  </Typography>
+                )}
+              </Stack>
+            ))}
+          </Box>
+        ))}
+      </Box>
+    );
+  }
+
+  // An account with several windows (Anthropic 5h + Weekly) keeps ONE
+  // segment: the provider name heads the first column only and column
+  // alignment, not a divider, ties each number to its window. Each column
+  // reads like a single-window segment, so the eye learns one pattern.
+  const columns = usageColumns(provider, account.usage.provider, now);
+  return (
+    <Box
+      data-usage-provider={provider.kind}
+      data-usage-account={account.id}
+      title={`${account.title}${refreshing ? " · Refreshing…" : ""}`}
+      aria-label={label}
+      sx={{
+        ...segmentSx,
+        // Row-major: every primary, then every secondary, so each window's
+        // percentage sits directly over its own `5h · 30m`. That alignment is
+        // the grouping; a rule between windows would split one account into
+        // what reads as two segments. Rules mean "next account" only.
+        gridTemplateColumns: `repeat(${String(columns.length)}, auto)`,
+        columnGap: 1.25,
+      }}
+    >
+      {columns.map((column, index) => (
+        <Stack
+          key={`primary-${String(index)}`}
+          direction="row"
+          spacing={0.55}
+          sx={{ minWidth: 0 }}
+        >
+          {index === 0 && nameText}
+          {index === 0 && spinner}
           <Typography
             variant="caption"
             fontWeight={800}

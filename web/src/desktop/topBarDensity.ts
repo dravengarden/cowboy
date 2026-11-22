@@ -58,20 +58,23 @@ export function usagePercentSegmentWidth(windows: number): number {
     Math.max(0, windows - 1) * USAGE_WINDOW_WIDTH_PX;
 }
 /** The account name of a grouped segment, set once beside its groups. */
-export const USAGE_GROUP_NAME_WIDTH_PX = 48;
-/** One quota group's first window: `Claude/GPT 99%` over `5h · 2h3m`. The
- *  group name rides in the column, so it costs a little more than a bare
- *  window; each further window of the group costs a bare window. */
-export const USAGE_GROUP_WIDTH_PX = 132;
-/** The gap that sets one group apart from the previous one. */
-export const USAGE_GROUP_GAP_PX = 6;
+export const USAGE_GROUP_NAME_WIDTH_PX = 56;
+/** A quota group's row label (`Claude/GPT`). Groups stack as rows, so the
+ *  segment pays for the widest label once, not once per group. */
+export const USAGE_GROUP_LABEL_WIDTH_PX = 80;
+/** One window cell of a group row: `5h 100%`. */
+export const USAGE_GROUP_WINDOW_WIDTH_PX = 60;
+/** A window that needs attention appends its countdown (`8% 6d1h`); every
+ *  window of a group may need it at once. */
+export const USAGE_GROUP_ATTENTION_WIDTH_PX = 36;
 
-/** Budget for a segment of per-group quotas (Antigravity). */
-export function usageGroupSegmentWidth(groups: number, windows = groups): number {
-  const shown = Math.max(1, groups);
-  return USAGE_GROUP_NAME_WIDTH_PX + shown * USAGE_GROUP_WIDTH_PX +
-    Math.max(0, windows - shown) * USAGE_WINDOW_WIDTH_PX +
-    Math.max(0, shown - 1) * USAGE_GROUP_GAP_PX;
+/** Budget for a segment of per-group quotas (Antigravity): the groups stack
+ *  as rows and their windows align as columns, so the width follows the
+ *  group with the most windows, not the number of groups. */
+export function usageGroupSegmentWidth(windowsPerGroup: number): number {
+  return USAGE_GROUP_NAME_WIDTH_PX + USAGE_GROUP_LABEL_WIDTH_PX +
+    Math.max(1, windowsPerGroup) *
+      (USAGE_GROUP_WINDOW_WIDTH_PX + USAGE_GROUP_ATTENTION_WIDTH_PX);
 }
 /** The widest a balance account (DeepSeek) may grow: spend, partial-pricing,
  *  cache-miss and blocking-error counters. It hugs shorter content and

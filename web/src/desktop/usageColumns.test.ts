@@ -1,26 +1,26 @@
 import { test } from "bun:test";
 import { assertEquals } from "../../../tools/test-assert.ts";
-import { usageColumns } from "./DesktopTopBarControls";
-import { usageGroupSegmentWidth } from "./topBarDensity";
+import { usageGroupRows } from "./DesktopTopBarControls";
+import { USAGE_GROUP_ATTENTION_WIDTH_PX, USAGE_GROUP_WINDOW_WIDTH_PX, usageGroupSegmentWidth } from "./topBarDensity";
 
-test("a quota group shows each window, named over its first", () => {
-  const window = (remaining: number, periodLabel: string) => ({ remaining, periodLabel });
-  const columns = usageColumns({
-    kind: "none",
-    label: "Antigravity",
-    ...window(33, "5h"),
-    groups: [
-      { id: "gemini", label: "Gemini", binding: window(33, "5h"), windows: [window(33, "5h"), window(71, "Weekly")] },
-      { id: "claude-gpt", label: "Claude/GPT", binding: window(99, "Weekly"), windows: [window(100, "5h"), window(99, "Weekly")] },
-    ],
-  }, "antigravity", 0);
-  assertEquals(columns.map((column) => [column.group, column.primary, column.secondary.split(" · ")[0], column.groupStart]), [
-    ["Gemini", "33%", "5h", undefined],
-    [undefined, "71%", "Weekly", undefined],
-    ["Claude/GPT", "100%", "5h", true],
-    [undefined, "99%", "Weekly", undefined],
+test("quota groups read as rows of labelled windows", () => {
+  const now = 1_000_000_000_000;
+  const window = (remaining: number, periodLabel: string, hours: number) => ({
+    remaining,
+    periodLabel,
+    resetsAt: now / 1000 + hours * 3600,
+  });
+  const rows = usageGroupRows([
+    { id: "gemini", label: "Gemini", binding: window(8, "Weekly", 30), windows: [window(34, "5h", 2), window(8, "Weekly", 30)] },
+    { id: "claude-gpt", label: "Claude/GPT", binding: window(99, "Weekly", 100), windows: [window(100, "5h", 4), window(99, "Weekly", 100)] },
+  ], now);
+  assertEquals(rows.map((row) => [row.label, row.cells.map((cell) => `${cell.period} ${cell.primary}`)]), [
+    ["Gemini", ["5h 34%", "W 8%"]],
+    ["Claude/GPT", ["5h 100%", "W 99%"]],
   ]);
-  assertEquals(columns.filter((column) => column.detail !== undefined).length, 2);
-  // Two groups of two windows cost two group columns, two bare windows and a gap.
-  assertEquals(usageGroupSegmentWidth(2, 4), usageGroupSegmentWidth(2) + 2 * 100);
+  // Only a window that needs attention shows its countdown; the hover keeps all.
+  assertEquals(rows.flatMap((row) => row.cells.map((cell) => cell.countdown !== undefined)), [false, true, false, false]);
+  assertEquals(rows[0]?.detail.startsWith("Gemini: 5h 34% ("), true);
+  // Groups stack as rows: the width follows the windows per group, not the group count.
+  assertEquals(usageGroupSegmentWidth(2), usageGroupSegmentWidth(1) + USAGE_GROUP_WINDOW_WIDTH_PX + USAGE_GROUP_ATTENTION_WIDTH_PX);
 });
