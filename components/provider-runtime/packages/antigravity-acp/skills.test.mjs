@@ -38,7 +38,7 @@ async function fixture(t, options = {}) {
     endpoint.close();
     rmSync(base, { recursive: true, force: true });
   });
-  return { base, root, facade };
+  return { base, root, facade, endpoint };
 }
 
 function skill(directory, name, frontmatter) {
@@ -179,6 +179,57 @@ test("repository skills are kept first when the list is cut", async (t) => {
   assert.equal(skills.length, SKILL_LIMITS.skills);
   assert.equal(skills.at(-1).name, "zz-repo");
   assert.equal(skills.filter((entry) => entry.user).length, SKILL_LIMITS.skills - 1);
+});
+
+test("a home inside the repository follows the repository's rules", async (t) => {
+  const { base, root, facade } = await fixture(t);
+  mkdirSync(join(base, "outside", "evil"), { recursive: true });
+  writeFileSync(join(base, "outside", "evil", "SKILL.md"), "---\nname: evil\n---\n");
+  mkdirSync(join(root, ".codex", "skills"), { recursive: true });
+  symlinkSync(join(base, "outside", "evil"), join(root, ".codex", "skills", "evil"));
+  skill(join(root, ".codex", "skills"), "own", "---\nname: own\n---");
+  const skills = await discoverSkills(facade, [root], root, root);
+  assert.deepEqual(skills, [
+    { name: "own", description: "", path: join(root, ".codex", "skills", "own", "SKILL.md") },
+  ]);
+});
+
+test("the scan stops once enough skills are found, repository first", async (t) => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "agy-home-skills-")));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const home = join(base, "home");
+  for (let index = 0; index < 200; index++) {
+    const name = `h${String(index).padStart(3, "0")}`;
+    skill(join(home, ".claude", "skills"), name, `---\nname: ${name}\n---`);
+  }
+  const { root, facade, endpoint } = await fixture(t, { home });
+  skill(join(root, ".agents", "skills"), "zz-repo", "---\nname: zz-repo\n---");
+  const skills = await discoverSkills(facade, [root], root, home);
+  assert.equal(skills.length, SKILL_LIMITS.skills);
+  assert.ok(skills.some((entry) => entry.name === "zz-repo"));
+  const reads = endpoint.calls.filter((entry) => entry.method === "fs/readFile").length;
+  assert.ok(reads <= SKILL_LIMITS.skills + SKILL_LIMITS.concurrency, `${reads} reads`);
+});
+
+test("repository skills are listed first under the section bound, shown by name", () => {
+  const description = "d".repeat(500);
+  const skills = [
+    ...Array.from({ length: 60 }, (_, index) => ({
+      name: `u${String(index).padStart(2, "0")}`,
+      description,
+      path: `/h/${index}/SKILL.md`,
+      user: true,
+    })),
+    { name: "zz-repo", description: "Repo", path: "/w/zz/SKILL.md" },
+    { name: "aa-repo", description: "Repo", path: "/w/aa/SKILL.md" },
+  ];
+  const section = skillsSection(skills, "F");
+  assert.ok(Buffer.byteLength(section) < SKILL_LIMITS.section + 2048);
+  assert.match(section, /- zz-repo: Repo/);
+  assert.match(section, /\[truncated: skill list limit reached\]/);
+  const names = [...section.matchAll(/^- (\S+):/gm)].map((match) => match[1]);
+  assert.deepEqual(names, [...names].sort());
+  assert.equal(names[0], "aa-repo");
 });
 
 test("a repository without skills adds no section", async (t) => {

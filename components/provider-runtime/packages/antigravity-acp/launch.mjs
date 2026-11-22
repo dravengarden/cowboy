@@ -288,9 +288,9 @@ async function connectedRuntime({
         return ready;
       });
   extensions.catch(() => {});
-  // A managed call gets its own routing and no repository skills (it runs
-  // no slash command and reads only what its request names).
-  const projecting = managed ? { routing: MANAGED_ROUTING, skills: false } : {};
+  // A managed call gets its own routing, no skills and no home guidance (it
+  // runs no slash command and reads only what its request names).
+  const projecting = managed ? { routing: MANAGED_ROUTING, skills: false, home: false } : {};
   await buildProjection(facade, facade.root, projecting);
   const { server, socketPath, channels } = await listen(facade, temporary);
   const runtime = {

@@ -660,6 +660,65 @@ test("a missing home or one that is the repository adds nothing twice", async (t
   assert.equal(projection.split("ROOT_GUIDANCE").length, 2);
 });
 
+test("a home inside the repository is read by the repository's rules", async (t) => {
+  const { base, root, facade } = await fixture(t);
+  execFileSync("git", ["-C", root, "init", "-q", "-b", "main"], { stdio: "pipe" });
+  writeFileSync(join(base, "outside", "AGENTS.md"), "OUTSIDE_GUIDANCE\n");
+  // The checkout is the home, and contains another home: both symlinks
+  // would be followed for a home outside it.
+  symlinkSync(join(base, "outside", "AGENTS.md"), join(root, "AGENTS.md"));
+  mkdirSync(join(root, "nested-home"));
+  symlinkSync(join(base, "outside", "AGENTS.md"), join(root, "nested-home", "AGENTS.md"));
+  for (const home of [root, join(root, "nested-home")]) {
+    facade.connection.info.userHomeDir = pathToFileURL(home).href;
+    assert.doesNotMatch(await buildProjection(facade, root), /OUTSIDE_GUIDANCE/, home);
+  }
+});
+
+test("a managed projection reads no home guidance", async (t) => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "agy-home-")));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const { home } = homeFixture(base);
+  writeFileSync(join(home, "AGENTS.md"), "HOME_AGENTS\n");
+  const { root, facade, endpoint } = await fixture(t, { home });
+  writeFileSync(join(root, "AGENTS.md"), "ROOT_GUIDANCE\n");
+  const projection = await buildProjection(facade, root, { skills: false, home: false });
+  assert.match(projection, /ROOT_GUIDANCE/);
+  assert.doesNotMatch(projection, /HOME_AGENTS|home guidance/);
+  assert.ok(!endpoint.calls.some((entry) => String(entry.params?.path).includes(home)));
+});
+
+test("a home entry naming a nested repository file keeps its label", async (t) => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "agy-home-")));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const { home } = homeFixture(base);
+  const { root, facade } = await fixture(t, { home });
+  execFileSync("git", ["-C", root, "init", "-q", "-b", "main"], { stdio: "pipe" });
+  writeFileSync(join(root, "src", "AGENTS.md"), "NESTED_GUIDANCE\n");
+  symlinkSync(join(root, "src", "AGENTS.md"), join(home, "AGENTS.md"));
+  const projection = await buildProjection(facade, join(root, "src"));
+  assert.equal(projection.split("NESTED_GUIDANCE").length, 2);
+  assert.match(projection, new RegExp(`--- ${join(home, "AGENTS.md")} ---\nNESTED_GUIDANCE`));
+});
+
+test("guidance is cut at a character boundary within its byte bounds", async (t) => {
+  const { root, facade } = await fixture(t);
+  const limit = PROJECTION_LIMITS.guidanceFile;
+  // Invalid bytes decode to U+FFFD (three bytes each); a two-byte character
+  // straddles the cut.
+  writeFileSync(join(root, "AGENTS.md"), Buffer.alloc(limit + 10, 0xff));
+  writeFileSync(join(root, "GEMINI.md"), `a${"\u00e9".repeat(limit)}`);
+  const projection = await buildProjection(facade, root);
+  const fence = /(COWBOY_UNTRUSTED_[a-f0-9]{32})/.exec(projection)[1];
+  const [, agents, gemini] = projection.split(fence)[2].split(/\n--- [^\n]+ ---\n/);
+  for (const text of [agents, gemini]) {
+    const body = text.replace(/\n\[truncated\]\n?$/, "");
+    assert.ok(Buffer.byteLength(body) <= limit, `${Buffer.byteLength(body)}`);
+  }
+  assert.doesNotMatch(gemini, /\ufffd/);
+  assert.ok(Buffer.byteLength(gemini) > limit - 4);
+});
+
 test("home guidance shares the guidance budget", async (t) => {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "agy-home-")));
   t.after(() => rmSync(base, { recursive: true, force: true }));
