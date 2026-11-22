@@ -879,7 +879,10 @@ export class Facade {
       if (!Number.isInteger(seconds) || seconds < 1 || seconds > LIMITS.commandMaxSeconds) {
         throw new ToolError(`timeout_seconds must be between 1 and ${LIMITS.commandMaxSeconds}`);
       }
-      running = await this.start(turn, [this.shell, "-c", command]);
+      // A login shell, so /etc/profile and the user's profile set PATH
+      // (Nix profiles, user tools) as in the user's own terminal and as
+      // Claude's login-shell snapshot does; internal helpers stay `/bin/sh`.
+      running = await this.start(turn, [this.shell, "-l", "-c", command]);
       running.deadline = Date.now() + seconds * 1000;
       // Every reader's chunks land here (see `read`).
       running.output = new Retained(LIMITS.commandOutput);

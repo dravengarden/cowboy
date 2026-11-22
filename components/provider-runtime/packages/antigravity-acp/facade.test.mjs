@@ -259,6 +259,18 @@ test("RunCommand bounds output and time; StopCommand stops a running command", a
   assert.equal((await call("RunCommand", { command: "x", timeout_seconds: 601 })).error, true);
 });
 
+test("RunCommand runs the user's shell as a login shell; internal helpers do not", async (t) => {
+  const { call, endpoint, facade } = await fixture(t);
+  assert.match((await call("RunCommand", { command: "echo login" })).text, /Exit code: 0\nlogin/);
+  await call("WriteFile", { path: "helper.txt", content: "x\n" });
+  const starts = endpoint.calls
+    .filter((entry) => entry.method === "process/start")
+    .map((entry) => entry.params.argv);
+  assert.deepEqual(starts[0], [facade.shell, "-l", "-c", "echo login"]);
+  const helper = starts.find((argv) => argv[2]?.includes("apply"));
+  assert.deepEqual(helper.slice(0, 2), ["/bin/sh", "-c"]);
+});
+
 test("a quiet command stops polling and ends on the executor's exit notification", async (t) => {
   const { call, endpoint } = await fixture(t);
   const started = Date.now();
