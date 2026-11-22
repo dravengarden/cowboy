@@ -106,21 +106,20 @@ fn valid(change: &PreferenceChange) -> bool {
                     matches!(
                         key.as_str(),
                         "usage_order" | "machine_order" | "usage_top_bar_hidden"
-                    )
-                        && value.as_array().is_some_and(|ids| {
-                            let mut unique = std::collections::HashSet::new();
-                            ids.len() <= 256
-                                && ids.iter().all(|id| {
-                                    id.as_str().is_some_and(|id| {
-                                        !id.is_empty()
-                                            && id.len() <= 128
-                                            && id.bytes().all(|c| {
-                                                c.is_ascii_alphanumeric() || b"-_.:".contains(&c)
-                                            })
-                                            && unique.insert(id)
-                                    })
+                    ) && value.as_array().is_some_and(|ids| {
+                        let mut unique = std::collections::HashSet::new();
+                        ids.len() <= 256
+                            && ids.iter().all(|id| {
+                                id.as_str().is_some_and(|id| {
+                                    !id.is_empty()
+                                        && id.len() <= 128
+                                        && id.bytes().all(|c| {
+                                            c.is_ascii_alphanumeric() || b"-_.:".contains(&c)
+                                        })
+                                        && unique.insert(id)
                                 })
-                        })
+                            })
+                    })
                 })
         })
 }
