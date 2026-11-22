@@ -37,6 +37,11 @@ export async function fakeEndpoint(
     virtual = root,
     fileHelper = FILE_HELPER,
     managed = undefined,
+    // The executor's notifications naming a process (its output and its
+    // end), as the worker forwards them; `false` drops every one.
+    notifications = true,
+    // Milliseconds each request waits before it is served.
+    delay = () => 0,
   } = {},
 ) {
   const toReal = (path) => (path.startsWith(virtual) ? root + path.slice(virtual.length) : path);
@@ -44,6 +49,14 @@ export async function fakeEndpoint(
   const http = createServer();
   const wss = new WebSocketServer({ server: http, maxPayload: 14 * 1024 * 1024 });
   const calls = [];
+  let inflight = 0;
+  let maxInflight = 0;
+  const notify = (method, processId) => {
+    if (!notifications) return;
+    for (const client of wss.clients) {
+      client.send(JSON.stringify({ method, params: { processId } }));
+    }
+  };
   const processes = new Map();
   const handles = new Map();
   const missing = () => ({ code: -32004, message: "No such file or directory (os error 2)" });
@@ -122,8 +135,9 @@ export async function fakeEndpoint(
         closed: false,
         waiters: [],
       };
-      const wake = () => {
+      const wake = (method = "process/output") => {
         for (const waiter of entry.waiters.splice(0)) waiter();
+        notify(method, params.processId);
       };
       for (const stream of ["stdout", "stderr"]) {
         child[stream].on("data", (bytes) => {
@@ -134,12 +148,12 @@ export async function fakeEndpoint(
       child.on("error", () => {
         entry.exited = entry.closed = true;
         entry.exitCode = 127;
-        wake();
+        wake("process/exited");
       });
       child.on("close", (code, signal) => {
         entry.exited = entry.closed = true;
         entry.exitCode = code ?? (signal ? 128 + 15 : null);
-        wake();
+        wake("process/exited");
       });
       entry.child = child;
       processes.set(params.processId, entry);
@@ -178,7 +192,11 @@ export async function fakeEndpoint(
       if (frame.id === undefined) return;
       calls.push({ method: frame.method, params: frame.params });
       let reply;
+      inflight += 1;
+      maxInflight = Math.max(maxInflight, inflight);
       try {
+        const wait = delay(frame.method, frame.params);
+        if (wait) await new Promise((done) => setTimeout(done, wait));
         const method = methods[frame.method];
         if (!method) throw { code: -32601, message: "unknown method" };
         const failure = fail(frame.method, frame.params);
@@ -197,6 +215,7 @@ export async function fakeEndpoint(
                 },
         };
       }
+      inflight -= 1;
       if (lose(frame.method, frame.params)) return socket.terminate();
       socket.send(JSON.stringify(reply));
     });
@@ -204,6 +223,8 @@ export async function fakeEndpoint(
   await new Promise((done) => http.listen(socketPath, done));
   return {
     calls,
+    /** The most requests this endpoint was serving at once. */
+    maxInflight: () => maxInflight,
     close: () => {
       for (const entry of processes.values()) entry.child.kill("SIGKILL");
       for (const client of wss.clients) client.terminate();

@@ -259,6 +259,75 @@ test("RunCommand bounds output and time; StopCommand stops a running command", a
   assert.equal((await call("RunCommand", { command: "x", timeout_seconds: 601 })).error, true);
 });
 
+test("a quiet command stops polling and ends on the executor's exit notification", async (t) => {
+  const { call, endpoint } = await fixture(t);
+  const started = Date.now();
+  const quiet = await call("RunCommand", { command: "sleep 5; echo done" });
+  const elapsed = Date.now() - started;
+  assert.match(quiet.text, /^Exit code: 0\n/);
+  assert.match(quiet.text, /done/);
+  const reads = endpoint.calls.filter((entry) => entry.method === "process/read");
+  // Three one-second reads, then a read that does not wait before the
+  // notification wait (instead of a one-second read each second).
+  assert.deepEqual(
+    reads.slice(0, LIMITS.quietReads + 1).map((entry) => entry.params.waitMs > 900),
+    [true, true, true, false],
+  );
+  assert.ok(reads.length <= LIMITS.quietReads + 4, `${reads.length} reads`);
+  // The exit is seen at once, not at the end of a quiet wait.
+  assert.ok(elapsed < 5000 + 1500, `${elapsed} ms`);
+});
+
+test("output ends a quiet wait and resumes one-second reads", async (t) => {
+  const { call, endpoint } = await fixture(t);
+  const ticking = await call("RunCommand", { command: "sleep 4; echo tick; sleep 2; echo tock" });
+  assert.match(ticking.text, /^Exit code: 0\n/);
+  assert.match(ticking.text, /tick\ntock/);
+  const reads = endpoint.calls.filter((entry) => entry.method === "process/read");
+  const waits = reads.map((entry) => entry.params.waitMs > 900);
+  // Quiet, quiet, quiet, then notification-driven reads until "tick", then
+  // one-second reads again while the command still runs.
+  assert.deepEqual(waits.slice(0, 4), [true, true, true, false]);
+  assert.ok(waits.slice(4).includes(true), JSON.stringify(waits));
+  assert.ok(reads.length <= 10, `${reads.length} reads`);
+});
+
+test("ReadFile asks for a file's metadata once", async (t) => {
+  const { call, endpoint } = await fixture(t);
+  assert.match((await call("ReadFile", { path: "hello.txt" })).text, /hello target/);
+  const methods = endpoint.calls.map((entry) => entry.method);
+  assert.equal(methods.filter((method) => method === "fs/getMetadata").length, 1);
+  assert.equal(methods.filter((method) => method === "fs/readFile").length, 1);
+});
+
+test("projection reads guidance and skills concurrently, within a bound, in order", async (t) => {
+  const { root, facade, endpoint } = await fixture(t, {
+    delay: (method) => (method.startsWith("fs/") ? 50 : 0),
+  });
+  execFileSync("git", ["-C", root, "init", "-q", "-b", "main"], { stdio: "pipe" });
+  mkdirSync(join(root, "src", "deep"), { recursive: true });
+  writeFileSync(join(root, "AGENTS.md"), "ROOT_GUIDANCE\n");
+  writeFileSync(join(root, "src", "AGENTS.md"), "SRC_GUIDANCE\n");
+  writeFileSync(join(root, "src", "deep", "GEMINI.md"), "DEEP_GUIDANCE\n");
+  for (const name of ["alpha", "beta", "gamma", "delta"]) {
+    mkdirSync(join(root, ".agents", "skills", name), { recursive: true });
+    writeFileSync(
+      join(root, ".agents", "skills", name, "SKILL.md"),
+      `---\nname: ${name}\ndescription: the ${name} skill\n---\n`,
+    );
+  }
+  const projection = await buildProjection(facade, join(root, "src", "deep"));
+  const order = ["ROOT_GUIDANCE", "SRC_GUIDANCE", "DEEP_GUIDANCE"].map((text) =>
+    projection.indexOf(text),
+  );
+  assert.ok(order.every((index, at) => index > 0 && (at === 0 || index > order[at - 1])));
+  for (const name of ["alpha", "beta", "gamma", "delta"]) {
+    assert.match(projection, new RegExp(`- ${name}: the ${name} skill`));
+  }
+  assert.ok(endpoint.maxInflight() > 1, "reads overlap");
+  assert.ok(endpoint.maxInflight() <= 6, `${endpoint.maxInflight()} in flight`);
+});
+
 test("a lost mutation reply reports an unknown outcome and ends the turn", async (t) => {
   let lose = false;
   // The publication's helper start loses its reply.

@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { posix } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { inside } from "./facade.mjs";
+import { mapBounded } from "./facade-tools.mjs";
 import { discoverSkills, skillsSection } from "./skills.mjs";
 
 export const PROJECTION_LIMITS = Object.freeze({
@@ -16,6 +17,8 @@ export const PROJECTION_LIMITS = Object.freeze({
   guidanceFile: 16 * 1024,
   guidanceWholeFile: 1024 * 1024,
   gitTimeoutMs: 15_000,
+  // Guidance files read at once (and as many skill reads beside them).
+  concurrency: 3,
 });
 const GUIDANCE_NAMES = ["AGENTS.md", "GEMINI.md"];
 
@@ -79,7 +82,7 @@ export function guidanceDirectories(top, cwd) {
  * checks this is a guardrail, not an isolation boundary: `RunCommand` is a
  * shell on the same Machine (design "Revision 5 simplification").
  */
-async function readGuidance(facade, file, room, root) {
+async function readGuidance(facade, file, root) {
   const at = pathToFileURL(file).href;
   const call = (method, params) => facade.connection.call(method, params);
   let metadata;
@@ -91,18 +94,13 @@ async function readGuidance(facade, file, room, root) {
   } catch {
     return undefined;
   }
-  const limit = Math.min(PROJECTION_LIMITS.guidanceFile, room);
+  const limit = PROJECTION_LIMITS.guidanceFile;
   try {
     // The same whole-file read the facade's ReadFile uses; guidance files are
     // small, and every executor generation serves it.
     if (metadata.size <= PROJECTION_LIMITS.guidanceWholeFile) {
       const read = await call("fs/readFile", { path: at });
-      const bytes = Buffer.from(read.dataBase64, "base64");
-      return {
-        text: bytes.subarray(0, limit).toString(),
-        cut: bytes.length > limit,
-        size: bytes.length,
-      };
+      return Buffer.from(read.dataBase64, "base64");
     }
   } catch {
     return undefined;
@@ -115,9 +113,7 @@ async function readGuidance(facade, file, room, root) {
   }
   try {
     const block = await call("fs/readBlock", { handleId, offset: 0, len: limit + 1 });
-    const bytes = Buffer.from(block.chunk, "base64");
-    const cut = bytes.length > limit;
-    return { text: bytes.subarray(0, limit).toString(), cut, size: bytes.length };
+    return Buffer.from(block.chunk, "base64");
   } catch {
     return undefined;
   } finally {
@@ -168,25 +164,32 @@ export async function buildProjection(
     environment.push(...shown);
     if (git.status.length > PROJECTION_LIMITS.statusLines) environment.push("[truncated]");
   } else environment.push("Git: not a repository");
+  // Every candidate is read at once (each is a few round trips to the
+  // target); the shared budget is then applied in order, root first.
+  const directories = guidanceDirectories(git.top, cwd);
+  const files = directories.flatMap((directory) =>
+    GUIDANCE_NAMES.map((name) => posix.join(directory, name)),
+  );
+  const [reads, skills] = await Promise.all([
+    mapBounded(files, PROJECTION_LIMITS.concurrency, (file) =>
+      readGuidance(facade, file, git.top ?? cwd),
+    ),
+    listSkills ? discoverSkills(facade, directories, git.top ?? cwd) : [],
+  ]);
   const guidance = [];
   let room = PROJECTION_LIMITS.guidanceTotal;
-  for (const directory of guidanceDirectories(git.top, cwd)) {
-    for (const name of GUIDANCE_NAMES) {
-      const file = posix.join(directory, name);
-      if (room <= 0) {
-        guidance.push(`--- ${file} ---\n[truncated: guidance limit reached]`);
-        continue;
-      }
-      const read = await readGuidance(facade, file, room, git.top ?? cwd);
-      if (!read) continue;
-      const text = read.text.replaceAll(fence, "[fence]");
-      room -= Buffer.byteLength(text);
-      guidance.push(`--- ${file} ---\n${text}${read.cut ? "\n[truncated]" : ""}`);
+  for (const [index, file] of files.entries()) {
+    const bytes = reads[index];
+    if (!bytes) continue;
+    if (room <= 0) {
+      guidance.push(`--- ${file} ---\n[truncated: guidance limit reached]`);
+      continue;
     }
+    const limit = Math.min(PROJECTION_LIMITS.guidanceFile, room);
+    const text = bytes.subarray(0, limit).toString().replaceAll(fence, "[fence]");
+    room -= Buffer.byteLength(text);
+    guidance.push(`--- ${file} ---\n${text}${bytes.length > limit ? "\n[truncated]" : ""}`);
   }
-  const skills = listSkills
-    ? await discoverSkills(facade, guidanceDirectories(git.top, cwd), git.top ?? cwd)
-    : [];
   onSkills?.(skills);
   const sections = [
     "<cowboy_routing>",

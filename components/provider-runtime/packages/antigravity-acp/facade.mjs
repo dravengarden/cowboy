@@ -387,11 +387,13 @@ export class Facade {
     return full;
   }
 
-  /** The whole content of a file, or undefined when it does not exist. */
-  async current(file) {
-    let metadata;
+  /**
+   * The whole content of a file, or undefined when it does not exist. A
+   * caller that has just read its `metadata` passes it, saving a round trip.
+   */
+  async current(file, metadata) {
     try {
-      metadata = await this.connection.call("fs/getMetadata", { path: url(file) });
+      metadata ??= await this.connection.call("fs/getMetadata", { path: url(file) });
     } catch (error) {
       if (missing(error)) return undefined;
       throw error;
@@ -413,7 +415,7 @@ export class Facade {
     let size = metadata.size;
     let bytes;
     if (size <= LIMITS.wholeFile) {
-      const data = (await this.current(file)) ?? Buffer.alloc(0);
+      const data = (await this.current(file, metadata)) ?? Buffer.alloc(0);
       session.observed.set(file, sha256(data));
       size = data.length;
       bytes = data.subarray(offset, offset + length);
@@ -672,6 +674,51 @@ export class Facade {
     return chunks;
   }
 
+  /**
+   * Read `process` once within `remaining` ms: a one-second read while it
+   * produces output, and after `LIMITS.quietReads` empty reads in a row a
+   * read that waits for a notification naming the process instead.
+   */
+  async poll(process, remaining, options) {
+    const listeners = this.connection.listeners;
+    const chunks =
+      (process.quiet ?? 0) >= LIMITS.quietReads && listeners && remaining > 1000
+        ? await this.notifiedRead(process, Math.min(LIMITS.quietWaitMs, remaining), options)
+        : await this.read(process, Math.max(1, Math.min(1000, remaining)), options);
+    process.quiet = chunks.length || process.closed ? 0 : (process.quiet ?? 0) + 1;
+    return chunks;
+  }
+
+  /**
+   * Read without waiting; with nothing new, wait up to `waitMs` for an
+   * executor notification naming the process (or the connection's close)
+   * and read once more. It listens before reading, so output arriving in
+   * between still ends the wait, and no read is in flight while it waits.
+   */
+  async notifiedRead(process, waitMs, options) {
+    const listeners = this.connection.listeners;
+    let listener;
+    let timer;
+    const notified = new Promise((resolve) => {
+      listener = (frame) => {
+        if (frame.method === "closed" || frame.params?.processId === process.processId) {
+          resolve();
+        }
+      };
+      timer = setTimeout(resolve, waitMs);
+      listeners.add(listener);
+    });
+    try {
+      const chunks = await this.read(process, 0, options);
+      if (chunks.length || process.closed) return chunks;
+      await notified;
+      return await this.read(process, 0, options);
+    } finally {
+      clearTimeout(timer);
+      listeners.delete(listener);
+    }
+  }
+
   /** Terminate `process`; `true` only once the target confirmed it closed. */
   async terminate(process) {
     if (process.closed) return true;
@@ -715,7 +762,7 @@ export class Facade {
           timedOut = true;
           break;
         }
-        for (const { stream, bytes } of await this.read(process, Math.min(1000, remaining), {
+        for (const { stream, bytes } of await this.poll(process, remaining, {
           lostIsUncertain,
         })) {
           const room = Math.max(0, maxBytes - out.size);
@@ -786,8 +833,7 @@ export class Facade {
       let shown = Date.now();
       let changed = false;
       while (!running.closed && Date.now() < until) {
-        const waitMs = Math.max(1, Math.min(1000, until - Date.now()));
-        for (const { bytes } of await this.read(running, waitMs)) {
+        for (const { bytes } of await this.poll(running, until - Date.now())) {
           running.output.push(bytes);
           changed ||= bytes.length > 0;
         }
