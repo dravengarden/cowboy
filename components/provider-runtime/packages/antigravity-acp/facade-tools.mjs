@@ -326,6 +326,8 @@ export function inside(root, path) {
 /** How long one read of the user's home may take (design: a stalled home
  * mount must not push `initialize` past the worker's deadline). */
 export const HOME_READ_MS = 3000;
+/** The whole home discovery of one projection (guidance and skills). */
+export const HOME_BUDGET_MS = 10_000;
 
 /**
  * Reads of the target user's home for its guidance and skills. The home is
@@ -339,9 +341,11 @@ export const HOME_READ_MS = 3000;
  *   path below the home, lies inside the repository, so the repository
  *   cannot inject content through the home.
  *
- * Each request races a `HOME_READ_MS` timer without cancelling it (the
- * connection has no per-request cancel); a late answer is ignored, and once
- * one read timed out no further home request is sent.
+ * Each request races a `HOME_READ_MS` timer, and the whole discovery a
+ * `HOME_BUDGET_MS` budget from its first request, without cancelling the
+ * request (the connection has no per-request cancel); a late answer is
+ * ignored, and once one read timed out or the budget is spent no further
+ * home request is sent.
  */
 export class HomeReads {
   /**
@@ -349,11 +353,13 @@ export class HomeReads {
    * without a home. Nothing is sent until a home candidate is needed: the
    * overlap check (`usable`) runs with the first one.
    */
-  static for(call, home, root, { deadlineMs = HOME_READ_MS } = {}) {
-    return home ? new HomeReads(call, home, root, deadlineMs) : undefined;
+  static for(call, home, root, { deadlineMs = HOME_READ_MS, budgetMs = HOME_BUDGET_MS } = {}) {
+    return home ? new HomeReads(call, home, root, deadlineMs, budgetMs) : undefined;
   }
 
-  constructor(call, home, root, deadlineMs) {
+  constructor(call, home, root, deadlineMs, budgetMs) {
+    this.budgetMs = budgetMs;
+    this.until = undefined;
     this.send = call;
     this.home = home;
     this.root = root;
@@ -389,7 +395,12 @@ export class HomeReads {
 
   /** One request within the deadline; rejects when the home stalled. */
   async call(method, params) {
-    if (this.stalled) throw new Error("The home did not answer in time");
+    this.until ??= Date.now() + this.budgetMs;
+    const wait = Math.min(this.deadlineMs, this.until - Date.now());
+    if (this.stalled || wait <= 0) {
+      this.stalled = true;
+      throw new Error("The home did not answer in time");
+    }
     const request = this.send(method, params);
     request.catch(() => {});
     let timer;
@@ -397,7 +408,7 @@ export class HomeReads {
       timer = setTimeout(() => {
         this.stalled = true;
         reject(new Error("The home did not answer in time"));
-      }, this.deadlineMs);
+      }, wait);
       timer.unref?.();
     });
     try {

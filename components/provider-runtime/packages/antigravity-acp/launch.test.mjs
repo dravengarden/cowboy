@@ -141,8 +141,13 @@ function session(t, setup, environment = {}, args = []) {
 
 test("the proxy relays ACP through the facade over one execution connection", async (t) => {
   const setup = layout(t);
+  // The target user's home, read only when a session opens.
+  const targetHome = join(setup.base, "target-home");
+  mkdirSync(targetHome);
+  writeFileSync(join(targetHome, "AGENTS.md"), "TARGET_HOME_GUIDANCE\n");
   const endpoint = await fakeEndpoint(setup.socket, setup.target, {
     virtual: setup.virtual,
+    home: targetHome,
   });
   t.after(() => endpoint.close());
   const { call, notifications } = session(t, setup);
@@ -150,6 +155,9 @@ test("the proxy relays ACP through the facade over one execution connection", as
     protocolVersion: 1,
     clientCapabilities: { fs: { readTextFile: true }, terminal: true },
   });
+  const touchesHome = () =>
+    endpoint.calls.some((entry) => String(entry.params?.path ?? "").includes(targetHome));
+  assert.equal(touchesHome(), false, "initialize reads no home");
   assert.deepEqual(initialized.result.seen.clientCapabilities, {
     fs: { readTextFile: false, writeTextFile: false },
     terminal: false,
@@ -160,6 +168,7 @@ test("the proxy relays ACP through the facade over one execution connection", as
   assert.equal(created.result.sessionId, "fake-session");
   assert.equal(created.result.seen.params.cwd, setup.virtual);
   assert.equal(created.result.seen.hookProfile, "ordinary");
+  assert.equal(touchesHome(), true, "the session projection reads the home");
   assert.deepEqual(created.result.seen.tools, [
     "ReadFile",
     "ListDirectory",

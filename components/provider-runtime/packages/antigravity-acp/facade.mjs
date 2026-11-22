@@ -437,8 +437,8 @@ export class Facade {
    * root and creating through it could write anywhere. It is refused only
    * once identified: no-follow metadata reporting a symlink, or (when the
    * metadata follows links and reports nothing) its name in the parent's
-   * listing. A parent that cannot be listed (search and create but no
-   * read permission) identifies nothing. Returns `true` when the component
+   * listing. A write needs positive evidence of absence: a parent that
+   * cannot be listed refuses it. Returns `true` when the component
    * now exists as a file or directory (it appeared meanwhile): the caller
    * resolves again, so containment is checked on its canonical path.
    */
@@ -457,12 +457,16 @@ export class Facade {
     }
     if (metadata?.isSymlink) refuse();
     if (metadata) return true;
+    // Metadata that follows links reports a dangling one as missing too, so
+    // absence is proven only by the parent's listing.
     let listing;
     try {
       listing = await this.connection.call("fs/readDirectory", { path: url(parent) });
     } catch (error) {
       if (lost(error)) throw error;
-      return;
+      throw new ToolError(
+        `${path} cannot be created: ${parent} cannot be listed to confirm ${name} is absent (it may be a dangling symlink); refused`,
+      );
     }
     if ((listing?.entries ?? []).some((entry) => entry?.fileName === name)) refuse();
     return false;
@@ -1029,28 +1033,29 @@ export class Facade {
     if (this.managed) return [this.shell, "-c", command];
     // The `cd` is part of the script, not an `eval` around it: the shell
     // still execs the command's last simple command, so a stop reaches it.
-    // It is the builtin (a profile's `cd` function or alias cannot replace
-    // it), and the physical directory is checked against the canonical
-    // root before the command runs.
+    // Only builtins run before the command (a profile's `cd` function or
+    // alias cannot replace them, and a minimal login PATH cannot break
+    // them), and the physical directory is checked against the canonical
+    // root before the command runs. A sentinel after `pwd -P` keeps the
+    // path exact (a command substitution would strip trailing newlines).
     if (name === "fish") {
-      const root = fishLiteral(this.root);
       return [
         this.shell,
         "-l",
         "-c",
-        `builtin cd ${root}; or exit 1; builtin test (builtin pwd -P) = ${root}; or exit 1\n${command}`,
+        `builtin cd ${fishLiteral(this.root)}; or exit 1; builtin test (begin; builtin pwd -P; builtin printf x; end | builtin string collect) = ${fishLiteral(`${this.root}\nx`)}; or exit 1\n${command}`,
       ];
     }
     if (POSIX_SHELLS.has(name)) {
-      const root = posixLiteral(this.root);
-      // `builtin` in bash and zsh; POSIX `command` elsewhere. The leading
+      // `builtin` in bash and zsh (zsh's `command` skips builtins); POSIX
+      // `command` elsewhere, which finds a builtin before PATH. The leading
       // backslash keeps an alias from expanding.
-      const run = name === "bash" || name === "zsh" ? "\\builtin" : "\\command";
+      const b = name === "bash" || name === "zsh" ? "\\builtin" : "\\command";
       return [
         this.shell,
         "-l",
         "-c",
-        `${run} cd -- ${root} || exit 1; \\command [ "$(\\command pwd -P)" = ${root} ] || exit 1\n${command}`,
+        `${b} cd -- ${posixLiteral(this.root)} || exit 1; ${b} test "$(${b} pwd -P; ${b} printf x)" = ${posixLiteral(`${this.root}\nx`)} || exit 1\n${command}`,
       ];
     }
     return [this.shell, "-c", command];

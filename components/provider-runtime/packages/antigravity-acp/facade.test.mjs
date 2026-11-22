@@ -16,7 +16,7 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { Connection } from "../../execution-connection.mjs";
 import { Facade, LIMITS, Retained, ToolError } from "./facade.mjs";
-import { decodeText, imageType, splice } from "./facade-tools.mjs";
+import { decodeText, HomeReads, imageType, splice } from "./facade-tools.mjs";
 import {
   buildProjection,
   guidanceDirectories,
@@ -362,30 +362,30 @@ test("RunCommand runs the user's shell as a login shell; internal helpers do not
   const starts = endpoint.calls
     .filter((entry) => entry.method === "process/start")
     .map((entry) => entry.params.argv);
-  const quoted = `'${root}'`;
+  const guard = (b, dir) =>
+    `${b} cd -- '${dir}' || exit 1; ${b} test "$(${b} pwd -P; ${b} printf x)" = '${dir}\nx' || exit 1\n`;
   assert.deepEqual(starts[0], [
     facade.shell,
     "-l",
     "-c",
-    `\\command cd -- ${quoted} || exit 1; \\command [ "$(\\command pwd -P)" = ${quoted} ] || exit 1\necho "login $#"`,
+    `${guard("\\command", root)}echo "login $#"`,
   ]);
   const helper = starts.find((argv) => argv[2]?.includes("apply"));
   assert.deepEqual(helper.slice(0, 2), ["/bin/sh", "-c"]);
   // Quotes in the directory stay one word; bash and zsh use `builtin`; fish
   // has its own syntax; an unknown shell and a managed call stay plain.
   facade.root = "/w/it's";
-  facade.shell = "/bin/bash";
-  assert.equal(
-    facade.commandArgv("ls")[3],
-    `\\builtin cd -- '/w/it'\\''s' || exit 1; \\command [ "$(\\command pwd -P)" = '/w/it'\\''s' ] || exit 1\nls`,
-  );
+  for (const shell of ["/bin/bash", "/usr/bin/zsh"]) {
+    facade.shell = shell;
+    assert.equal(facade.commandArgv("ls")[3], `${guard("\\builtin", "/w/it'\\''s")}ls`);
+  }
   facade.shell = "/usr/bin/fish";
   facade.root = "/w/it's \\";
   assert.deepEqual(facade.commandArgv("ls"), [
     "/usr/bin/fish",
     "-l",
     "-c",
-    "builtin cd '/w/it\\'s \\\\'; or exit 1; builtin test (builtin pwd -P) = '/w/it\\'s \\\\'; or exit 1\nls",
+    "builtin cd '/w/it\\'s \\\\'; or exit 1; builtin test (begin; builtin pwd -P; builtin printf x; end | builtin string collect) = '/w/it\\'s \\\\\nx'; or exit 1\nls",
   ]);
   facade.shell = "/usr/bin/nu";
   assert.deepEqual(facade.commandArgv("ls"), ["/usr/bin/nu", "-c", "ls"]);
@@ -691,7 +691,7 @@ test("a missing home or one that is the repository adds nothing twice", async (t
   assert.equal(projection.split("ROOT_GUIDANCE").length, 2);
 });
 
-test("a dangling symlink is refused by its metadata; an unlistable parent still creates", async (t) => {
+test("a dangling symlink is refused by its metadata; an unlistable parent refuses creates", async (t) => {
   // The executor reports a dangling link's own metadata, and listing fails.
   const { base, root, call } = await fixture(t, {
     metadataNoFollow: true,
@@ -702,11 +702,56 @@ test("a dangling symlink is refused by its metadata; an unlistable parent still 
   const refused = await call("WriteFile", { path: "dangling/x.txt", content: "x" });
   assert.match(refused.text, /symlink whose target does not exist/);
   assert.throws(() => readFileSync(join(base, "outside", "gone", "x.txt")));
-  // Nothing identifies a symlink: a create under a parent that cannot be
-  // listed goes ahead.
-  const created = await call("WriteFile", { path: "fresh/dir/a.txt", content: "a\n" });
-  assert.match(created.text, /^Created/);
-  assert.equal(readFileSync(join(root, "fresh", "dir", "a.txt"), "utf8"), "a\n");
+  // Absence cannot be proven without the parent's listing: refused.
+  const unproven = await call("WriteFile", { path: "fresh/dir/a.txt", content: "a\n" });
+  assert.equal(unproven.error, true);
+  assert.match(unproven.text, /cannot be listed to confirm fresh is absent/);
+  assert.throws(() => readFileSync(join(root, "fresh", "dir", "a.txt")));
+  // Replacing an existing file needs no listing.
+  await call("ReadFile", { path: "hello.txt" });
+  assert.match((await call("WriteFile", { path: "hello.txt", content: "y\n" })).text, /^Replaced/);
+});
+
+test("a dangling link is refused when metadata follows links and listing fails", async (t) => {
+  const { base, root, call } = await fixture(t, {
+    fail: (method) =>
+      method === "fs/readDirectory" ? { code: -32600, message: "permission denied" } : undefined,
+  });
+  symlinkSync(join(base, "outside", "gone"), join(root, "dangling"));
+  const refused = await call("WriteFile", { path: "dangling/x.txt", content: "x" });
+  assert.equal(refused.error, true);
+  assert.throws(() => readFileSync(join(base, "outside", "gone", "x.txt")));
+});
+
+test("the directory guard keeps working with a minimal PATH and an exact path", async (t) => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "agy-shell-")));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  mkdirSync(join(base, "bin"));
+  // A profile leaving no usable PATH, for a bash and for a plain sh.
+  const shells = [];
+  for (const [name, real] of [
+    ["bash", hasBash],
+    ["sh", "/bin/sh"],
+  ]) {
+    if (!real) continue;
+    writeFileSync(
+      join(base, "bin", name),
+      `#!${real}\nexport PATH=/nonexistent\nexec ${real} "$@"\n`,
+      { mode: 0o755 },
+    );
+    shells.push(join(base, "bin", name));
+  }
+  if (hasFish) shells.push(hasFish);
+  const { root, call, facade } = await fixture(t);
+  // A root whose final component ends in a newline still matches.
+  const odd = join(root, "odd\n");
+  mkdirSync(odd);
+  facade.root = odd;
+  for (const shell of shells) {
+    facade.shell = shell;
+    const ran = await call("RunCommand", { command: "echo ran" });
+    assert.equal(ran.text, "Exit code: 0\nran\n", shell);
+  }
 });
 
 test("a home that links into the repository gets no symlink handling", async (t) => {
@@ -787,6 +832,27 @@ test("a home containing the repository loads its own links; links into the repos
   assert.equal(linked.split("NESTED_GUIDANCE").length, 2);
   assert.match(linked, new RegExp(`--- ${join(root, "src", "AGENTS.md")} ---\nNESTED_GUIDANCE`));
   assert.doesNotMatch(linked, /the user's home guidance/);
+});
+
+test("home reads stop at their deadline and at the discovery budget", async () => {
+  const sent = [];
+  const never = (method) => {
+    sent.push(method);
+    return new Promise(() => {});
+  };
+  const reads = HomeReads.for(never, "/h", "/r", { deadlineMs: 50, budgetMs: 1000 });
+  const started = Date.now();
+  await assert.rejects(reads.call("fs/getMetadata", {}), /did not answer in time/);
+  assert.ok(Date.now() - started < 500);
+  // Stalled: nothing more is sent.
+  await assert.rejects(reads.call("fs/getMetadata", {}), /did not answer in time/);
+  assert.equal(sent.length, 1);
+  // A budget spent by answered reads stops further ones too.
+  const quick = async () => ({ path: "file:///x" });
+  const budgeted = HomeReads.for(quick, "/h", "/r", { deadlineMs: 50, budgetMs: 80 });
+  await budgeted.call("fs/getMetadata", {});
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  await assert.rejects(budgeted.call("fs/getMetadata", {}), /did not answer in time/);
 });
 
 test("a stalled home read gives up within its deadline", async (t) => {
