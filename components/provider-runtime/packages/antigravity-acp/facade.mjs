@@ -168,6 +168,7 @@ export class Facade {
 
   beginTurn(sessionId) {
     this.session(sessionId).turn = {
+      sessionId,
       cancelled: false,
       ended: false,
       uncertain: undefined,
@@ -298,15 +299,7 @@ export class Facade {
       return { content: [{ type: "text", text: await handlers[name]() }] };
     } catch (error) {
       if (error instanceof UncertainEffect) {
-        turn.uncertain ??= error.method;
-        // Latched before anything is awaited, on the parent turn that was
-        // open when the child's effect was lost.
-        if (session?.parentTurn) session.parentTurn.uncertain ??= error.method;
-        try {
-          this.onLost(sessionId, error.method);
-        } catch {
-          // The fence below still ends this session's turn.
-        }
+        this.fenceLost(turn, error.method);
         // The worker's trusted ledger records it before this tool answers
         // (so before the turn can end), also when every transport call was
         // answered (a timed-out publish): the session parks until the owner
@@ -330,6 +323,24 @@ export class Facade {
       if (missing(error))
         throw new ToolError(`No such file or directory: ${fileURLToPath(params.path)}`);
       throw error;
+    }
+  }
+
+  /**
+   * An effect of `turn` has an unknown outcome: fence the turn, the parent
+   * turn that was open when a child's effect was lost, and (through
+   * `onLost`) its other children, before anything is awaited. Repeating it
+   * changes nothing.
+   */
+  fenceLost(turn, method) {
+    turn.uncertain ??= method;
+    if (turn.sessionId === undefined) return;
+    const session = this.sessions.get(turn.sessionId);
+    if (session?.parentTurn) session.parentTurn.uncertain ??= method;
+    try {
+      this.onLost(turn.sessionId, method);
+    } catch {
+      // The turn's own fence still ends it.
     }
   }
 
@@ -662,7 +673,15 @@ export class Facade {
     return read;
   }
 
-  async readOnce(process, waitMs, { lostIsUncertain = true } = {}) {
+  async readOnce(process, waitMs, { lostIsUncertain = true, deadline } = {}) {
+    // Checked when this read's turn in the chain comes: a reader ahead of
+    // it may have confirmed the close or used the caller's remaining time.
+    if (process.closed) return [];
+    if (deadline !== undefined) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return [];
+      waitMs = Math.min(waitMs, remaining);
+    }
     let result;
     try {
       result = await this.connection.call("process/read", {
@@ -711,6 +730,7 @@ export class Facade {
   async poll(process, remaining, options) {
     const listeners = this.connection.listeners;
     const deadline = Date.now() + remaining;
+    options = { ...options, deadline };
     const chunks =
       (process.quiet ?? 0) >= LIMITS.quietReads && listeners && remaining > 2000
         ? await this.notifiedRead(
@@ -819,7 +839,7 @@ export class Facade {
       failure = error;
       // Fenced before cleanup is awaited: a concurrent call of the turn
       // admits no mutation while this helper's outcome is unknown.
-      if (error instanceof UncertainEffect && turn) turn.uncertain ??= error.method;
+      if (error instanceof UncertainEffect && turn) this.fenceLost(turn, error.method);
     }
     // Whatever ended the loop, the process is not left running unconfirmed: a
     // helper that may still publish is an effect of unknown outcome.
