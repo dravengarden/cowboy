@@ -29,6 +29,23 @@
       };
       bun = import ./nix/bun.nix { inherit pkgs; };
       cowboy-nodejs = import ./nix/nodejs.nix { inherit pkgs; };
+      # A prebuilt jemalloc for the development shell's Cargo builds,
+      # configured like tikv-jemalloc-sys's own build of the same release
+      # (prefixed, static, no C++, docs or statistics). Otherwise every fresh
+      # build directory, each gate lane included, ran jemalloc's configure and
+      # make before the cowboy crate could start: 52s on Hawk even with every
+      # object already in sccache. Release packages still build it from source:
+      # they compile their malloc_conf in (JEMALLOC_SYS_WITH_MALLOC_CONF).
+      cowboy-dev-jemalloc = pkgs.rust-jemalloc-sys.overrideAttrs (old: {
+        pname = "cowboy-dev-jemalloc";
+        dontDisableStatic = true;
+        doCheck = false;
+        configureFlags = (old.configureFlags or [ ]) ++ [
+          "--disable-cxx"
+          "--enable-doc=no"
+          "--disable-stats"
+        ];
+      });
       execution-runtime = import ./nix/execution-runtime.nix { inherit pkgs; };
       buildBunViteApp = import ./nix/bun-vite-app.nix {
         inherit pkgs bun;
@@ -1158,6 +1175,9 @@
         # which run on Node in production and are tested on it).
         COWBOY_BUN_VERSION = bun.version;
         COWBOY_NODE_VERSION = cowboy-nodejs.version;
+        # tikv-jemalloc-sys links this instead of building jemalloc in every
+        # build directory (see cowboy-dev-jemalloc).
+        JEMALLOC_OVERRIDE = "${cowboy-dev-jemalloc}/lib/libjemalloc_pic.a";
         # Match the Rust packages' OpenSSL inputs even when the caller has no
         # inherited developer environment (for example a remote executor).
         buildInputs = [ pkgs.openssl ];
