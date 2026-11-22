@@ -651,24 +651,59 @@ async fn account_inventory_serves_older_web_clients_after_the_card_retirement() 
             .unwrap()
             .contains(&json!("codex"))
     );
-    // An older tab's pending card change gets a JSON rejection it reconciles.
-    for change in [
-        json!({"type":"set_legacy_browser_enabled","card":"anthropic","enabled":true}),
-        json!({"type":"set_browser_share","member":{"card":"openai"},"share_id":null}),
+    let dataset = inventory["dataset"]["dataset_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let url = format!("{base}/api/provider-accounts");
+    // A committed unrelated mutation whose operation id a legacy change reuses.
+    let created = fixture
+        .request(reqwest::Method::PUT, &url)
+        .json(
+            &json!({"operation":"reused-op","dataset":dataset,"expected_revision":0,
+            "change":{"type":"create_browser_share","label":"Google"}}),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), 200, "{}", created.text().await.unwrap());
+    // An older tab's pending card change gets a JSON rejection it reconciles,
+    // never another request's receipt.
+    for (operation, change) in [
+        (
+            "old-tab",
+            json!({"type":"set_legacy_browser_enabled","card":"anthropic","enabled":true}),
+        ),
+        (
+            "old-tab-share",
+            json!({"type":"set_browser_share","member":{"card":"openai"},"share_id":null}),
+        ),
+        (
+            "reused-op",
+            json!({"type":"set_browser_share","member":{"card":"openai"},"share_id":null}),
+        ),
     ] {
         let response = fixture
-            .request(
-                reqwest::Method::PUT,
-                &format!("{base}/api/provider-accounts"),
-            )
-            .json(&json!({"operation":"old-tab","dataset":"old","expected_revision":0,"change":change}))
+            .request(reqwest::Method::PUT, &url)
+            .json(&json!({"operation":operation,"dataset":dataset,"expected_revision":0,"change":change}))
             .send()
             .await
             .unwrap();
-        assert_eq!(response.status(), 422);
+        assert_eq!(response.status(), 422, "{operation}");
         assert_eq!(
             response.json::<Value>().await.unwrap()["error"]["code"],
             "invalid_argument"
         );
     }
+    // Another dataset's journal is not answered.
+    let foreign = fixture
+        .request(reqwest::Method::PUT, &url)
+        .json(
+            &json!({"operation":"old-tab","dataset":"another","expected_revision":0,
+            "change":{"type":"set_legacy_browser_enabled","card":"anthropic","enabled":true}}),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(foreign.status(), 409);
 }

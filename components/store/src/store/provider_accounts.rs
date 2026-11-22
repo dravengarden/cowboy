@@ -472,6 +472,25 @@ impl Store {
             .transpose()?)
     }
 
+    /// A committed operation's request hash and receipt.
+    pub async fn provider_account_operation(
+        &self,
+        owner: &str,
+        operation: &str,
+    ) -> Result<Option<(String, Receipt)>> {
+        macro_rules! read { ($db:expr) => {
+            sqlx::query_as::<_, (String, String)>("SELECT request_hash,result FROM provider_account_operations WHERE owner_user_id=$1 AND operation_id=$2")
+                .bind(owner).bind(operation).fetch_optional(&$db.pool).await?
+        }; }
+        let value = match &self.backend {
+            StorageBackend::Postgres(db) => read!(db),
+            StorageBackend::Sqlite(db) => read!(db),
+        };
+        value
+            .map(|(hash, result)| Ok((hash, serde_json::from_str(&result)?)))
+            .transpose()
+    }
+
     pub async fn mutate_provider_accounts(
         &self,
         owner: &str,

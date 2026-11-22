@@ -314,6 +314,55 @@ pub(super) struct Update {
     mutation: Mutation,
 }
 
+/// A pending change only a Web release from before the legacy card
+/// retirement sends, typed exactly as that release's writer accepted it (a
+/// card browser switch or a card share membership), so its request hash is
+/// the one that writer recorded.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyUpdate {
+    operation: String,
+    dataset: String,
+    expected_revision: i64,
+    change: LegacyChange,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum LegacyChange {
+    SetLegacyBrowserEnabled {
+        card: String,
+        enabled: bool,
+    },
+    SetBrowserShare {
+        member: LegacyCardMember,
+        share_id: Option<String>,
+    },
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyCardMember {
+    card: String,
+}
+
+impl LegacyUpdate {
+    /// The request hash the previous writer recorded: its `Mutation`.
+    fn request_hash(&self) -> String {
+        #[derive(Serialize)]
+        struct Mutation<'a> {
+            expected_revision: i64,
+            change: &'a LegacyChange,
+        }
+        let bytes = serde_json::to_vec(&Mutation {
+            expected_revision: self.expected_revision,
+            change: &self.change,
+        })
+        .expect("a legacy mutation serializes");
+        crate::admin::hex_sha256(&bytes)
+    }
+}
+
 /// A change only a Web release from before the legacy card retirement sends:
 /// a card browser switch or a card share membership.
 fn retired_change(input: &Value) -> bool {
@@ -332,7 +381,7 @@ pub(super) async fn update(
         Err(error) if !retired_change(&input) => {
             return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
         }
-        Err(_) => return retired_update(&state, &auth.principal.user_id, &input).await,
+        Err(_) => return retired_update(&state, &auth.principal, input).await,
     };
     if !sync_dataset::matches(&state.service_id, &auth.principal, &input.dataset) {
         return (
@@ -370,32 +419,57 @@ pub(super) async fn update(
     }
 }
 
-/// An older Web client's pending retired change: the receipt of the
-/// operation if the previous Controller committed it, else a definitive
-/// JSON rejection it recognizes, so it releases its journal.
-async fn retired_update(state: &AppState, owner: &str, input: &Value) -> Response {
-    let receipt = match (state.store.as_ref(), input["operation"].as_str()) {
-        (Some(store), Some(operation)) => store.provider_account_receipt(owner, operation).await,
-        _ => Ok(None),
+/// An older Web client's pending retired change: the receipt of exactly
+/// that operation and request if the previous Controller committed it, else
+/// a definitive JSON rejection the client recognizes, so it releases its
+/// journal. Its dataset must be the caller's.
+async fn retired_update(state: &AppState, principal: &ProductPrincipal, input: Value) -> Response {
+    let reject = |status: StatusCode, code: &str| {
+        (status, Json(json!({"error":{"code":code}}))).into_response()
     };
-    match receipt {
-        Ok(Some(receipt)) => Json(receipt_value(&receipt)).into_response(),
-        Ok(None) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(json!({"error":{"code":"invalid_argument"}})),
-        )
-            .into_response(),
-        Err(_) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"error":{"code":"unavailable"}})),
-        )
-            .into_response(),
+    let Ok(legacy) = serde_json::from_value::<LegacyUpdate>(input) else {
+        return reject(StatusCode::UNPROCESSABLE_ENTITY, "invalid_argument");
+    };
+    if !sync_dataset::matches(&state.service_id, principal, &legacy.dataset) {
+        return reject(StatusCode::CONFLICT, "dataset_changed");
+    }
+    let Some(store) = state.store.as_ref() else {
+        return reject(StatusCode::SERVICE_UNAVAILABLE, "unavailable");
+    };
+    match store
+        .provider_account_operation(&principal.user_id, &legacy.operation)
+        .await
+    {
+        Ok(Some((hash, receipt))) if hash == legacy.request_hash() => {
+            Json(receipt_value(&receipt)).into_response()
+        }
+        // Never committed, or the id names another request.
+        Ok(_) => reject(StatusCode::UNPROCESSABLE_ENTITY, "invalid_argument"),
+        Err(_) => reject(StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_legacy_change_hashes_as_the_previous_writer_recorded_it() {
+        // The previous writer hashed its Mutation {expected_revision, change}.
+        let legacy: LegacyUpdate = serde_json::from_value(json!({"operation":"op","dataset":"d",
+            "expected_revision":3,"change":{"type":"set_browser_share","member":{"card":"openai"},"share_id":null}}))
+            .unwrap();
+        let recorded = br#"{"expected_revision":3,"change":{"type":"set_browser_share","member":{"card":"openai"},"share_id":null}}"#;
+        assert_eq!(legacy.request_hash(), crate::admin::hex_sha256(recorded));
+        let legacy: LegacyUpdate = serde_json::from_value(json!({"operation":"op","dataset":"d",
+            "expected_revision":0,"change":{"type":"set_legacy_browser_enabled","card":"anthropic","enabled":true}}))
+            .unwrap();
+        let recorded = br#"{"expected_revision":0,"change":{"type":"set_legacy_browser_enabled","card":"anthropic","enabled":true}}"#;
+        assert_eq!(legacy.request_hash(), crate::admin::hex_sha256(recorded));
+        // Anything else is no legacy request.
+        assert!(serde_json::from_value::<LegacyUpdate>(json!({"operation":"op","dataset":"d",
+            "expected_revision":0,"change":{"type":"set_legacy_browser_enabled","card":"anthropic","enabled":true,"extra":1}})).is_err());
+    }
 
     #[test]
     fn only_the_retired_card_changes_are_answered_for_older_clients() {
