@@ -19,6 +19,11 @@ export type ServiceSignInBrowser =
   /** A retired card's sign-in without its Machine browser: never opened. */
   | { kind: "refused" };
 
+/** Every Provider of a retired card family, closed: an older Controller's
+ * snapshot may carry neither `retired_default_providers` nor a family table,
+ * and such a sign-in must still never open on this device. */
+const RETIRED_CARD_PROVIDERS = ["claude-code", "codex", "grok", "claude-deepseek", "codex-deepseek", "deepseek-harness"];
+
 export function serviceSignInBrowser(
   snapshot: SubscriptionSnapshot | undefined,
   owner: string | undefined,
@@ -31,5 +36,7 @@ export function serviceSignInBrowser(
   if (card) {
     return { kind: "machine", owner, dataset: snapshot.dataset.dataset_id, account: card.account_id };
   }
-  return retiredDefaultProvider(snapshot, provider) ? { kind: "refused" } : { kind: "device" };
+  return retiredDefaultProvider(snapshot, provider) || RETIRED_CARD_PROVIDERS.includes(provider)
+    ? { kind: "refused" }
+    : { kind: "device" };
 }

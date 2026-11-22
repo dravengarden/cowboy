@@ -15,7 +15,7 @@ import { sharedBrowser } from "./machineBrowser/shareRules";
 import { browserErrorText } from "./machineBrowser/api";
 import { ProviderAccountIdentity, providerAccountCardSx } from "./ProviderAccountIdentity";
 import { validSubscriptionLabel } from "./subscriptionDisplay";
-import { type SubscriptionSnapshot as Snapshot, validSubscriptionSnapshot, withoutLegacyShareMembers } from "./subscriptionAccounts";
+import { accountDefaults, type SubscriptionSnapshot as Snapshot, validSubscriptionSnapshot, withoutLegacyShareMembers } from "./subscriptionAccounts";
 import { accountControl } from "./accountControls";
 import { AccountControlsPanel } from "./AccountControlsPanel";
 import { useNativeAccountUsage } from "./nativeAccountUsage";
@@ -245,10 +245,13 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
           </Stack>
           <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
             <Button disabled={disabled || account.revoking} onClick={() => save({ type: "set_enabled", id: account.id, enabled: !account.enabled })}>{account.revoking ? "Revoked access" : account.enabled ? "Disable" : "Enable"}</Button>
-            {!control && (snapshot.registry.defaults[account.provider_id] === account.id
-              // Clears the selection, so the account can be disabled; new sessions then pick an account.
-              ? <Button disabled={disabled} onClick={() => save({ type: "set_default", provider_id: account.provider_id, id: "default" })}>Stop using by default</Button>
-              : <Button disabled={disabled || !account.enabled || !providerSubscriptionEnabled(snapshot, account.provider_id)} onClick={() => save({ type: "set_default", provider_id: account.provider_id, id: account.id })}>Use by default</Button>)}
+            {!control && snapshot.registry.defaults[account.provider_id] !== account.id &&
+              <Button disabled={disabled || !account.enabled || !providerSubscriptionEnabled(snapshot, account.provider_id)} onClick={() => save({ type: "set_default", provider_id: account.provider_id, id: account.id })}>Use by default</Button>}
+            {/* Clears each default naming it (an adopted shared-scope account is the default of every member), so it can be disabled. */}
+            {!control && accountDefaults(snapshot, account).slice(0, 1).map((provider) =>
+              <Button key={provider} disabled={disabled} onClick={() => save({ type: "set_default", provider_id: provider, id: "default" })}>
+                {provider === account.provider_id && accountDefaults(snapshot, account).length === 1 ? "Stop using by default" : `Stop using by default (${provider})`}
+              </Button>)}
             {owner && <SubscriptionBrowserActions account={account} owner={owner} dataset={snapshot.dataset.dataset_id} disabled={disabled} shared={sharedBrowser(snapshot, account.id)}
               onSetBrowserEnabled={(enabled) => save({ type: "set_browser_enabled", id: account.id, enabled })} />}
             {owner && <SubscriptionRevocation account={account.id} label={account.label} revoking={Boolean(account.revoking)} owner={owner}

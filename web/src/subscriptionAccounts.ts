@@ -98,6 +98,14 @@ export function providerDefault(data: PortableScopes & { registry: { defaults: R
   return [...scope].sort().map((member) => data.registry.defaults[member]).find(Boolean);
 }
 
+/** The Providers whose default is `account`, its own Provider first. An
+ * adopted shared-scope account (DeepSeek) is the default of every member;
+ * each must be cleared before the account can be disabled. */
+export function accountDefaults(snapshot: { registry: { defaults: Record<string, string> } }, account: { id: string; provider_id: string }): string[] {
+  return Object.entries(snapshot.registry.defaults).filter(([, id]) => id === account.id).map(([provider]) => provider)
+    .sort((left, right) => Number(right === account.provider_id) - Number(left === account.provider_id) || left.localeCompare(right));
+}
+
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

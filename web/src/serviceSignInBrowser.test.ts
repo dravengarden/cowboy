@@ -40,3 +40,11 @@ test("an older Controller's card Machine browser takes the sign-in page", () => 
   expect(serviceSignInBrowser(snapshot({ ...legacy, machine_browser: "not_enabled", browser_share_families: families } as Partial<SubscriptionSnapshot>), "me", "claude-code"))
     .toEqual({ kind: "refused" });
 });
+
+test("a snapshot without retirement metadata still never sends a card sign-in to the device", () => {
+  const bare = snapshot({ machine_browser: "not_enabled" });
+  for (const provider of ["claude-code", "codex", "grok", "claude-deepseek", "codex-deepseek", "deepseek-harness"]) {
+    expect(serviceSignInBrowser(bare, "me", provider)).toEqual({ kind: "refused" });
+  }
+  expect(serviceSignInBrowser(bare, "me", "future-provider")).toEqual({ kind: "device" });
+});

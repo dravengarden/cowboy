@@ -2,7 +2,7 @@ import { test } from "bun:test";
 import { assertEquals, assertThrows } from "../../tools/test-assert.ts";
 import { subscriptionLoginsPage } from "./SubscriptionLogins";
 import { obsoletePendingSubscription, subscriptionWriteRejected, validPendingSubscription, validSubscriptionLabel, validSubscriptionSnapshot } from "./SubscriptionManagement";
-import { withoutLegacyShareMembers } from "./subscriptionAccounts";
+import { accountDefaults, withoutLegacyShareMembers } from "./subscriptionAccounts";
 
 test("login discovery rejects mixed accounts, duplicate Machines and nonadvancing cursors", () => {
   const scope = { owner: "owner", dataset: "dataset", account: "account", provider: "claude-code" };
@@ -90,3 +90,9 @@ test("subscription responses must belong to the owner and contain valid account 
   assertEquals(validSubscriptionSnapshot({ ...input, registry: { ...input.registry, defaults: [] } }, "owner"), false);
 });
 
+
+test("an adopted shared-scope account lists every default it must clear, its own first", () => {
+  const snapshot = { registry: { defaults: { "codex-deepseek": "mole", "claude-deepseek": "mole", "deepseek-harness": "mole", codex: "pika" } } };
+  assertEquals(accountDefaults(snapshot, { id: "mole", provider_id: "claude-deepseek" }), ["claude-deepseek", "codex-deepseek", "deepseek-harness"]);
+  assertEquals(accountDefaults(snapshot, { id: "otter", provider_id: "claude-code" }), []);
+});
