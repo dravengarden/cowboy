@@ -2,6 +2,7 @@
 //! and provider release upgrades and reloads for sessions.
 
 use super::*;
+use std::time::Duration;
 
 #[derive(Clone)]
 pub(super) struct ProviderAuthExecutor {
@@ -357,7 +358,7 @@ pub(super) async fn distribute_and_mark_provider_auth(
 /// portable account) to every enrolled Machine and record the outcome.
 pub(super) async fn distribute_and_mark_scope(
     state: &Arc<AppState>,
-    scope: &crate::provider_service::ProviderAuthService,
+    scope: &Arc<crate::provider_service::ProviderAuthService>,
     account: &crate::provider_account::ProviderAccountId,
     statuses: Vec<crate::provider_service::ProviderAuthenticationStatus>,
 ) -> (
@@ -371,6 +372,9 @@ pub(super) async fn distribute_and_mark_scope(
         let outcome = distribute_account_auth(state, &provider_id, account).await;
         match scope.mark_distribution(&provider_id, status.auth_generation, outcome.state()) {
             Ok(marked) => {
+                if outcome.failed > 0 {
+                    retry_distribution(state, scope, account, &marked);
+                }
                 replicas.insert(provider_id, outcome);
                 next.push(marked);
             }
@@ -381,6 +385,50 @@ pub(super) async fn distribute_and_mark_scope(
         }
     }
     (next, replicas)
+}
+
+/// Backoff between deliveries of a generation some connected Machine failed
+/// to apply (for example a wipe interrupted by a live writer).
+const DISTRIBUTION_RETRY_DELAYS: [Duration; 6] = [
+    Duration::from_secs(5),
+    Duration::from_secs(15),
+    Duration::from_secs(60),
+    Duration::from_secs(300),
+    Duration::from_secs(900),
+    Duration::from_secs(3600),
+];
+
+/// Deliver `status`'s generation again until no connected Machine fails it,
+/// it is superseded (the mark is refused as stale), or the backoff ends.
+/// Offline Machines are repaired at reconnect from their reported state.
+fn retry_distribution(
+    state: &Arc<AppState>,
+    scope: &Arc<crate::provider_service::ProviderAuthService>,
+    account: &crate::provider_account::ProviderAccountId,
+    status: &crate::provider_service::ProviderAuthenticationStatus,
+) {
+    let (state, scope, account) = (Arc::clone(state), Arc::clone(scope), account.clone());
+    let (provider_id, generation) = (status.provider_id.clone(), status.auth_generation);
+    tokio::spawn(async move {
+        for delay in DISTRIBUTION_RETRY_DELAYS {
+            tokio::time::sleep(delay).await;
+            if *state.shutdown.borrow() {
+                return;
+            }
+            let outcome = distribute_account_auth(&state, &provider_id, &account).await;
+            if scope
+                .mark_distribution(&provider_id, generation, outcome.state())
+                .is_err()
+            {
+                return;
+            }
+            if outcome.failed == 0 {
+                tracing::info!(%provider_id, generation, "Provider auth replica sync recovered");
+                return;
+            }
+        }
+        tracing::warn!(%provider_id, generation, "Provider auth replica sync still failing; waiting for the next Machine report");
+    });
 }
 
 pub(super) async fn distribute_provider_auth(

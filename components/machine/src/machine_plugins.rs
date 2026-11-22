@@ -2054,7 +2054,7 @@ impl MachinePluginStore {
             PreparedProviderAuth::Wipe => {
                 self.revoke_native_profiles(&envelope.provider_id)?;
                 let provider_auth_root = self.auth_provider_root(&envelope.provider_id);
-                for directory in ["materialized", "runtime", native_usage::PRIVATE_HOMES] {
+                for directory in WIPED_PROJECTIONS {
                     let path = provider_auth_root.join(directory);
                     remove_projection::remove(&path)?;
                 }
@@ -2513,7 +2513,13 @@ impl MachinePluginStore {
                 .as_ref()
                 .map_or(ProviderMaterializationState::NotInstalled, |envelope| {
                     if envelope.action == ProviderAuthAction::Wipe {
-                        ProviderMaterializationState::NotInstalled
+                        // An interrupted wipe stays Failed, so the Controller
+                        // sends it again until nothing is left.
+                        if self.wipe_complete(provider_id) {
+                            ProviderMaterializationState::NotInstalled
+                        } else {
+                            ProviderMaterializationState::Failed
+                        }
                     } else if self
                         .materialization_is_current(&package, envelope)
                         .unwrap_or(false)
@@ -2525,8 +2531,12 @@ impl MachinePluginStore {
                 });
         let unavailable = self.account_sandbox_unavailable(&package);
         let detail = (materialization_state == ProviderMaterializationState::Failed).then(|| {
-            "Provider credential projection no longer matches its Service generation; waiting for credential reconciliation."
-                .to_owned()
+            if replica.as_ref().is_some_and(|envelope| envelope.action == ProviderAuthAction::Wipe) {
+                "Provider credential wipe is incomplete; waiting for credential reconciliation to remove the rest."
+            } else {
+                "Provider credential projection no longer matches its Service generation; waiting for credential reconciliation."
+            }
+            .to_owned()
         });
         Ok(Some(PluginInventory {
             plugin_id: package.manifest.id.clone(),
@@ -2547,6 +2557,15 @@ impl MachinePluginStore {
             materialization_state,
             detail: unavailable.or(detail),
         }))
+    }
+
+    /// Every projection a wipe removes is gone (a wipe that stopped midway,
+    /// for example on a directory a live process kept writing to, is not).
+    fn wipe_complete(&self, provider_id: &str) -> bool {
+        let root = self.auth_provider_root(provider_id);
+        WIPED_PROJECTIONS
+            .iter()
+            .all(|directory| matches!(root.join(directory).try_exists(), Ok(false)))
     }
 
     fn materialization_is_current(
@@ -3668,6 +3687,9 @@ fn validate_plugin_id(provider_id: &str) -> Result<()> {
     );
     Ok(())
 }
+
+/// The credential projections of one Provider a wipe removes.
+const WIPED_PROJECTIONS: [&str; 3] = ["materialized", "runtime", native_usage::PRIVATE_HOMES];
 
 fn validate_auth_replica_transition(
     previous: Option<&SealedProviderAuth>,
@@ -7553,6 +7575,23 @@ mod tests {
             0
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_wipe_is_complete_only_once_every_projection_is_gone() {
+        let root = tempfile::tempdir().unwrap();
+        let store =
+            MachinePluginStore::new(root.path(), Platform::Linux, "x86_64".to_owned()).unwrap();
+        assert!(store.wipe_complete("codex"));
+        // What a wipe interrupted by a live writer left behind.
+        let left = store
+            .auth_provider_root("codex")
+            .join("runtime/generations/9/home/.codex");
+        fs::create_dir_all(&left).unwrap();
+        fs::write(left.join("auth.json"), b"old").unwrap();
+        assert!(!store.wipe_complete("codex"));
+        remove_projection::remove(&store.auth_provider_root("codex").join("runtime")).unwrap();
+        assert!(store.wipe_complete("codex"));
     }
 
     #[test]

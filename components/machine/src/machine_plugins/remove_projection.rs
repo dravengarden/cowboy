@@ -190,19 +190,27 @@ fn remove_entry(
         );
         let mode = Mode::from_raw_mode(metadata.st_mode);
         fchmod(&directory, mode | Mode::RWXU)?;
-        for entry in Dir::read_from(&directory)? {
-            let entry = entry?;
-            let child = entry.file_name();
-            if child.to_bytes() == b"." || child.to_bytes() == b".." {
-                continue;
+        // A process still writing below (a live Provider worker whose home
+        // this is) can add entries after they were listed: list again and
+        // retry, a bounded number of times, instead of abandoning the rest.
+        for attempt in 1.. {
+            for child in entries(&directory)? {
+                remove_entry(&directory, child.as_c_str(), device, depth + 1, checkpoint)?;
             }
-            remove_entry(&directory, child, device, depth + 1, checkpoint)?;
+            checkpoint()?;
+            match unlinkat(&parent, name, AtFlags::REMOVEDIR) {
+                Ok(()) | Err(Errno::NOENT) => return Ok(()),
+                Err(Errno::NOTEMPTY) if attempt < REMOVE_ATTEMPTS => {}
+                Err(error) => return Err(error.into()),
+            }
         }
-        checkpoint()?;
-        unlinkat(parent, name, AtFlags::REMOVEDIR)?;
-        Ok(())
+        unreachable!("the removal loop returns")
     }
 }
+
+/// Listing passes over one directory before an entry that keeps appearing
+/// fails the removal (it is retried by the next credential reconciliation).
+const REMOVE_ATTEMPTS: usize = 8;
 
 #[cfg(test)]
 mod tests {
@@ -237,6 +245,30 @@ mod tests {
             0o400
         );
         remove(&projection).unwrap();
+    }
+
+    #[test]
+    fn entries_written_during_the_removal_are_removed_too() {
+        let root = tempfile::tempdir().unwrap();
+        let projection = root.path().join("runtime");
+        let home = projection.join("generations/9/home/.codex");
+        fs::create_dir_all(&home).unwrap();
+        fs::write(home.join("auth.json"), b"secret").unwrap();
+        // A live writer adds a file below `home` after it was listed, the
+        // first time the checkpoint before its directory removal runs.
+        let written = std::cell::Cell::new(false);
+        let late = home.join("sessions-rollout.jsonl");
+        remove_checked(&projection, &|| {
+            if !written.get() && home.join("auth.json").symlink_metadata().is_err() && home.exists()
+            {
+                written.set(true);
+                fs::write(&late, b"late").unwrap();
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert!(written.get());
+        assert!(!projection.exists());
     }
 
     #[test]

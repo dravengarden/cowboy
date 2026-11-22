@@ -139,6 +139,15 @@ keys) replace every card.
   /api/providers/claude-code/auth`, "Sign out" on the Service Provider row) for
   `anthropic`. Both publish a wipe generation that the existing Provider auth
   synchronisation delivers to every enrolled Machine.
+  A wipe is retried until the Machine confirms it: the Machine's removal
+  lists a directory again when a live process (a still-running `default`
+  worker whose home it is) added entries meanwhile; a Machine whose wipe still
+  left a projection reports it as `failed` (so every inventory report and
+  reconnect sends the wipe again); and the Controller delivers a generation a
+  connected Machine failed again with backoff (5 s to 1 h) until it succeeds
+  or is superseded. On 2026-11-21 Pika's root wipe on Hawk failed with
+  `ENOTEMPTY` because a resumed `default` Codex session kept writing into its
+  generation home, and nothing retried it until a later sign-out.
 
 ## Startup gate
 
