@@ -1,7 +1,9 @@
 # Agent runtime upgrades — 2026-11-22
 
-Status: source and component release 3.137.0 on the task branch; verification,
-publication and installation below.
+Status: component releases 3.137.0 and 3.138.0 published from Cowboy main and
+installed on Hawk and OVH; Codex 3.6.28 adds predicted prompts. Falcon and
+macbook-air wait for a Machine update (Plugin SDK 1.19.0 and 1.18.0; the
+releases need 1.20.0).
 
 ## Dependency audit
 
@@ -116,6 +118,84 @@ Providers a patch each, their runtime bytes unchanged). 1.5.14 needs the
 proxy's evidence to recognise its turn end, a real-account acceptance and the
 allow-list entry together.
 
+## Collector checks
+
+| Check | Result |
+| --- | --- |
+| `just codex-refresh-guard-probe` (0.171.0) | A fake token endpoint got two refresh requests; the collector's refusal URL got none and `auth.json` was unchanged (as 0.169.1) |
+| `just grok-billing-capture` (1.0.92) | Request differs from 1.0.77 only in client version and user agent; all 31 projection cases and the 401 answer unchanged; `auth.json` not rewritten |
+
+Both tools are new in this change, so the next pin change re-measures the same
+behavior; the capture first reproduced the committed 1.0.77 fixture exactly.
+
 ## Verification
 
-To be completed with the gate results.
+Receipts are under `/srv/storage/fast0/agent/tmp/agent-upgrade-2026-11-22/`.
+Every fixture used a loopback scripted API and fake credentials unless stated.
+
+| Gate | Result |
+| --- | --- |
+| `provider-check`, `check-compact` at `69e901460` (3.137.0) and `0f881f3b2` (3.138.0) | Passed |
+| `just claude-remote-check` | 386 passed |
+| Eleven native probes against 2.1.330 | As above |
+| Claude worker conformance (all phases, packaged adapter) | Accepted, 96 checks |
+| Claude managed / TaskStop conformance | Accepted (7 checks; four topologies) |
+| Codex worker / turn / image / child-stop | Accepted (34 / 9 / 13 checks / 4 cases) |
+| Codex native hooks research | Identical to 0.169.1 |
+| codex-acp upstream suite with the seven deltas | Type checks and 2,614 tests passed (39 skipped upstream) |
+| Old/new coexistence with the resident worker | Passed for the six non-Antigravity Providers against the installed releases (claude-code 3.20.63, claude-deepseek 3.1.80, codex 3.6.22, codex-deepseek 3.1.80, grok 3.2.21, deepseek-harness 1.0.38) |
+| Catalog readers before publication | Active (`42gs643j`) and rollback (`l48cffn1`) Controllers each read an isolated copy twice, identical, for both releases |
+| Public artifact URLs | 29 per release resolve to their bound digests |
+| `provider-release-coverage` | Passed, isolated and live |
+
+The `session` suite the remote map selects for the Codex manifest was not run:
+its fixture rebuilds the Codex manifest with an empty environment and a fixture
+agent, so neither release changes what it exercises. 3.138.0 changes no runtime
+bytes of the six other Providers (their runtime artifacts equal 3.137.0's) and
+Antigravity's equal 0.2.21's.
+
+## Publication
+
+| Plugin | 3.137.0 | 3.138.0 |
+| --- | --- | --- |
+| claude-code | 3.20.67 `sha256:1c83a947…` | 3.20.68 `sha256:f8cc9652…` |
+| claude-deepseek | 3.1.84 `sha256:35ba7d92…` | 3.1.85 `sha256:e9cce53e…` |
+| codex | 3.6.26 `sha256:8dc600d9…` | 3.6.27 `sha256:fc6a4834…` |
+| codex-deepseek | 3.1.84 `sha256:34e5f1ba…` | 3.1.85 `sha256:647fec68…` |
+| grok | 3.2.25 `sha256:18aa7122…` | 3.2.26 `sha256:85d0dc81…` |
+| antigravity | 0.2.22 `sha256:81d82549…` (agy 1.5.14, fails closed) | 0.2.23 `sha256:643136d2…` |
+| deepseek-harness | 1.0.42 `sha256:3985cc86…` | 1.0.43 `sha256:9f4a6e19…` |
+
+## Installation and real-account smoke
+
+`cowboy operator converge` (canary Hawk, then OVH) applied every planned
+upgrade; Antigravity, not declared for OVH, was installed by exact release.
+
+| Machine | Installed |
+| --- | --- |
+| Hawk | claude-deepseek 3.1.85, codex 3.6.27, codex-deepseek 3.1.85, deepseek-harness 1.0.43, grok 3.2.26 |
+| OVH | antigravity 0.2.23, claude-code 3.20.68, codex 3.6.27, grok 3.2.26 |
+| Falcon, macbook-air | Refused with `plugin_sdk_unsupported` (SDK 1.19.0 / 1.18.0; 1.20.0 required); unchanged |
+
+One managed analysis call per Provider read a file and answered: Claude Code
+3.20.67 (Sonnet) and Codex 3.6.26 (Sol 6.2 Medium) completed. Antigravity is
+described above; after the rollback the same call on 0.2.21 completed. The Husky
+account's control was left in `unknown_refusal` for its owner to clear.
+
+## Codex 3.6.28: predicted next prompt
+
+The Web has offered a predicted next prompt published as
+`session_info_update._meta.promptSuggestions` since 2026-10-31 (Desktop ghost
+text that Tab fills, a Mobile chip; never sent, live only), but both adapters
+predict only for JetBrains AIR clients, so it stayed dormant. Cowboy cannot
+claim to be AIR, and its worker's ACP schema (agent-client-protocol 3.6) has no
+`prompt_suggestions_update`.
+
+The new `cowboy-prompt-suggestions` codex-acp delta takes the prediction when
+the Provider sets `COWBOY_CODEX_PROMPT_SUGGESTIONS=1`: after a completed turn
+outside plan mode, one `thread/sample` (high effort) on an ephemeral fork of the
+session's thread, whose context is a cache hit, publishes one line or clears it.
+A managed call never predicts; `CODEX_ACP_PROMPT_SUGGESTIONS=false` still turns
+it off. Claude's prediction stays dormant: claude-agent-acp 0.109 sends it only
+as the standard update, and its native generator did not run offline with an
+API key, so it waits for the worker to read the standard form.
