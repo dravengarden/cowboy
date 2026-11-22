@@ -49,12 +49,15 @@ test("a denied built-in with a Cowboy alternative names it", () => {
     assert.equal(decision, "deny", name);
     assert.match(reason, /calls\.start/, name);
   }
-  assert.match(decide(input("schedule", { DurationSeconds: 60 })).reason, /schedule a message/);
+  assert.match(
+    decide(input("schedule", { DurationSeconds: 60 })).reason,
+    /scheduled Cowboy message/,
+  );
   assert.match(decide(input("manage_task")).reason, /RunCommand with\s+wait_seconds/);
   const delegation = decide(input("invoke_subagent")).reason;
   assert.match(delegation, /review\.start/);
   assert.match(delegation, /queue\.submit/);
-  assert.match(delegation, /stay in this turn/);
+  assert.match(delegation, /notify:true and end your turn/);
   assert.match(delegation, /mcp_cowboy_Subagent/);
   assert.match(decide(input("execute_url")).reason, /search_web/);
   assert.equal(decide(input("read_file")).reason, DENIAL_REASON);
