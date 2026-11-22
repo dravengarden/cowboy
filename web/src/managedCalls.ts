@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { SessionMeta } from "./protocol";
+import { providerDisplayName } from "./providerDisplayName";
 import { useStoreSelector } from "./store";
 
 /** A parent-scoped managed call summary. Execution state, a structured review
@@ -270,12 +271,14 @@ export function machineName(id: string | null | undefined): string {
     : id.charAt(0).toUpperCase() + id.slice(1);
 }
 
+/** Claude and Codex keep their short names; any other Provider is named by its
+ * signed Plugin (for example Antigravity), else by its id. */
 export function providerLabel(provider: string): string {
   return provider === "claude-code"
     ? "Claude"
     : provider === "codex"
     ? "Codex"
-    : provider;
+    : providerDisplayName(provider) ?? provider;
 }
 
 export function elapsedLabel(fromMs: number, toMs: number): string {

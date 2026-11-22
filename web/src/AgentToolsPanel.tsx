@@ -46,6 +46,7 @@ import {
   withTarget,
 } from "./agentTools";
 import { ProviderIcon } from "./ProviderIcon";
+import { useProviderLabels } from "./providerDisplayName";
 import { ReviewRoutingTable } from "./ReviewRoutingTable";
 
 function Row(
@@ -430,6 +431,7 @@ export function AgentToolsEditor(
     onChange: (next: AgentTools) => void;
   },
 ): React.JSX.Element {
+  useProviderLabels();
   const calls = value.calls;
   const setCalls = (next: Partial<AgentTools["calls"]>): void => {
     const merged = { ...calls, ...next };
@@ -618,6 +620,7 @@ export function SessionToolsSection(
     heading?: boolean;
   },
 ): React.JSX.Element {
+  useProviderLabels();
   const sharedSaving = useSessionToolsSaving(sessionId);
   const { value, error, saving, save } = useRemoteDocument(
     () => fetchSessionTools(sessionId),
@@ -677,6 +680,7 @@ export function SessionToolsSection(
 
 /** Defaults per agent kind; every session of that kind inherits them. */
 export function AgentToolsSettings(): React.JSX.Element {
+  useProviderLabels();
   const { value, error, saving, save } = useRemoteDocument(
     fetchAgentTools,
     "agent-tools",

@@ -94,6 +94,7 @@ import {
   useManagedCalls,
   useCallClock,
 } from "./managedCalls";
+import { useProviderLabels } from "./providerDisplayName";
 export function StateChip(
   { call, desktop = false }: { call: ManagedCallSummary; desktop?: boolean },
 ): React.JSX.Element {
@@ -214,6 +215,7 @@ function CallRow({
   now: number;
   onSelect: () => void;
 }): React.JSX.Element {
+  useProviderLabels();
   const tap = useReliableTouchTap<HTMLButtonElement>(onSelect);
   const end = callActive(call.state) ? now : call.updated_at_ms;
   return (
@@ -438,6 +440,7 @@ export function CallDetailView({
   /** Absent when the child is already the opened session. */
   onOpenChild?: ((child: string) => void) | undefined;
 }): React.JSX.Element {
+  useProviderLabels();
   const { detail, error } = useManagedCall(
     parent,
     call.call_id,
@@ -818,6 +821,7 @@ export function CallConversation({
   detailsOpen?: boolean;
   onDetails: () => void;
 }): React.JSX.Element {
+  useProviderLabels();
   const end = callActive(call.state) ? Date.now() : call.updated_at_ms;
   return (
     <Box
