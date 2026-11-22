@@ -665,7 +665,8 @@ provider-check: plugin-check claude-remote-check provider-scripts-check provider
 provider-scripts-check: provider-antigravity-check provider-runtime-scripts
 
 # Its facade suite alone waits out about 50s of real command deadlines.
-provider-antigravity-check: claude-source-deps
+# The facade tests publish through the real execution host in target/debug.
+provider-antigravity-check: claude-remote-prepare
     node --import ./tools/register-memory-client.mjs --test components/provider-runtime/packages/antigravity-acp/*.test.mjs
     bun x --no-install biome format components/provider-runtime/packages/antigravity-acp components/provider-runtime/owned-sources.ts
 
