@@ -273,6 +273,11 @@ export const lost = (error) => !error?.remote && /result unknown/.test(error?.me
  * the keeper's reply was lost (`data.outcome: "unknown"`).
  */
 export const unknownOutcome = (error) => lost(error) || error?.remote?.data?.outcome === "unknown";
+/** The execution connection is closed and could not be opened again (no
+ * request was sent); never a target's own error. */
+export const unreachable = (error) =>
+  !error?.remote &&
+  /^Execution (unavailable|connection (refused|closed))/.test(error?.message ?? "");
 
 /**
  * Strict UTF-8 text of `bytes`; never a lossy replacement. A leading BOM is

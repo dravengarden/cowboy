@@ -32,6 +32,7 @@ import {
   ToolError,
   UncertainEffect,
   unknownOutcome,
+  unreachable,
   url,
 } from "./facade-tools.mjs";
 import { MANAGED_FACADE_TOOLS } from "./managed.mjs";
@@ -658,7 +659,13 @@ export class Facade {
         waitMs,
       });
     } catch (error) {
-      if (lostIsUncertain && unknownOutcome(error)) throw new UncertainEffect("process/read");
+      // A started process whose state cannot be read, because the reply was
+      // lost or the connection could not be opened again, has an unknown
+      // outcome: a quiet reader waits with no read in flight, so a close
+      // reaches it as a reconnect failure rather than a lost reply.
+      if (lostIsUncertain && (unknownOutcome(error) || unreachable(error))) {
+        throw new UncertainEffect("process/read");
+      }
       throw error;
     }
     const chunks = [];
@@ -670,7 +677,12 @@ export class Facade {
       chunks.push({ stream: chunk.stream, bytes: Buffer.from(chunk.chunk, "base64") });
     }
     if (result.exited) process.exitCode = result.exitCode;
-    if (result.closed) process.closed = true;
+    if (result.closed) {
+      process.closed = true;
+      // Another reader (StopCommand, expiry, cleanup) confirmed the close:
+      // a quiet reader waiting on this process ends its wait.
+      process.wake?.();
+    }
     return chunks;
   }
 
@@ -691,9 +703,13 @@ export class Facade {
 
   /**
    * Read without waiting; with nothing new, wait up to `waitMs` for an
-   * executor notification naming the process (or the connection's close)
-   * and read once more. It listens before reading, so output arriving in
-   * between still ends the wait, and no read is in flight while it waits.
+   * executor notification naming the process (or the connection's close,
+   * or another reader confirming its close) and read once more. It listens
+   * before reading, so output arriving in between still ends the wait, and
+   * no read is in flight while it waits. A wait that ends with no
+   * notification returns nothing: the caller reads first on its next poll
+   * if its deadline leaves time, so a lost notification costs one read per
+   * `waitMs` and a reader never starts a read past its deadline.
    */
   async notifiedRead(process, waitMs, options) {
     const listeners = this.connection.listeners;
@@ -702,20 +718,22 @@ export class Facade {
     const notified = new Promise((resolve) => {
       listener = (frame) => {
         if (frame.method === "closed" || frame.params?.processId === process.processId) {
-          resolve();
+          resolve(true);
         }
       };
-      timer = setTimeout(resolve, waitMs);
+      process.wake = () => resolve(true);
+      timer = setTimeout(() => resolve(false), waitMs);
       listeners.add(listener);
     });
     try {
       const chunks = await this.read(process, 0, options);
       if (chunks.length || process.closed) return chunks;
-      await notified;
+      if (!(await notified) || process.closed) return [];
       return await this.read(process, 0, options);
     } finally {
       clearTimeout(timer);
       listeners.delete(listener);
+      process.wake = undefined;
     }
   }
 

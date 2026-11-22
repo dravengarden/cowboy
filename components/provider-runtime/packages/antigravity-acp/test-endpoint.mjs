@@ -190,7 +190,7 @@ export async function fakeEndpoint(
     socket.on("message", async (bytes) => {
       const frame = JSON.parse(bytes.toString());
       if (frame.id === undefined) return;
-      calls.push({ method: frame.method, params: frame.params });
+      calls.push({ method: frame.method, params: frame.params, at: Date.now() });
       let reply;
       inflight += 1;
       maxInflight = Math.max(maxInflight, inflight);

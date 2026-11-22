@@ -100,7 +100,9 @@ async function readGuidance(facade, file, root) {
     // small, and every executor generation serves it.
     if (metadata.size <= PROJECTION_LIMITS.guidanceWholeFile) {
       const read = await call("fs/readFile", { path: at });
-      return Buffer.from(read.dataBase64, "base64");
+      // Only what a projection can show is kept (one byte more tells it
+      // the file was cut), not the whole file.
+      return Buffer.from(Buffer.from(read.dataBase64, "base64").subarray(0, limit + 1));
     }
   } catch {
     return undefined;
@@ -164,32 +166,38 @@ export async function buildProjection(
     environment.push(...shown);
     if (git.status.length > PROJECTION_LIMITS.statusLines) environment.push("[truncated]");
   } else environment.push("Git: not a repository");
-  // Every candidate is read at once (each is a few round trips to the
-  // target); the shared budget is then applied in order, root first.
+  // Candidates are read a few at a time (each is a few round trips to the
+  // target), in order, root first; the shared budget is applied as they
+  // arrive, and once it is spent nothing more is read.
   const directories = guidanceDirectories(git.top, cwd);
   const files = directories.flatMap((directory) =>
     GUIDANCE_NAMES.map((name) => posix.join(directory, name)),
   );
-  const [reads, skills] = await Promise.all([
-    mapBounded(files, PROJECTION_LIMITS.concurrency, (file) =>
-      readGuidance(facade, file, git.top ?? cwd),
-    ),
-    listSkills ? discoverSkills(facade, directories, git.top ?? cwd) : [],
-  ]);
+  const skilled = listSkills ? discoverSkills(facade, directories, git.top ?? cwd) : [];
   const guidance = [];
   let room = PROJECTION_LIMITS.guidanceTotal;
-  for (const [index, file] of files.entries()) {
-    const bytes = reads[index];
-    if (!bytes) continue;
-    if (room <= 0) {
-      guidance.push(`--- ${file} ---\n[truncated: guidance limit reached]`);
-      continue;
+  for (let start = 0; start < files.length; start += PROJECTION_LIMITS.concurrency) {
+    const batch = files.slice(start, start + PROJECTION_LIMITS.concurrency);
+    const reads =
+      room > 0
+        ? await mapBounded(batch, PROJECTION_LIMITS.concurrency, (file) =>
+            readGuidance(facade, file, git.top ?? cwd),
+          )
+        : [];
+    for (const [index, file] of batch.entries()) {
+      if (room <= 0) {
+        guidance.push(`--- ${file} ---\n[truncated: guidance limit reached]`);
+        continue;
+      }
+      const bytes = reads[index];
+      if (!bytes) continue;
+      const limit = Math.min(PROJECTION_LIMITS.guidanceFile, room);
+      const text = bytes.subarray(0, limit).toString().replaceAll(fence, "[fence]");
+      room -= Buffer.byteLength(text);
+      guidance.push(`--- ${file} ---\n${text}${bytes.length > limit ? "\n[truncated]" : ""}`);
     }
-    const limit = Math.min(PROJECTION_LIMITS.guidanceFile, room);
-    const text = bytes.subarray(0, limit).toString().replaceAll(fence, "[fence]");
-    room -= Buffer.byteLength(text);
-    guidance.push(`--- ${file} ---\n${text}${bytes.length > limit ? "\n[truncated]" : ""}`);
   }
+  const skills = await skilled;
   onSkills?.(skills);
   const sections = [
     "<cowboy_routing>",

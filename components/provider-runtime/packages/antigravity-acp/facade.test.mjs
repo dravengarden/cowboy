@@ -292,6 +292,39 @@ test("output ends a quiet wait and resumes one-second reads", async (t) => {
   assert.ok(reads.length <= 10, `${reads.length} reads`);
 });
 
+test("a quiet reader starts no read past its wait when notifications are lost", async (t) => {
+  const { call, endpoint } = await fixture(t, { notifications: false });
+  const started = Date.now();
+  const running = await call("RunCommand", { command: "sleep 30", wait_seconds: 5 });
+  const until = started + 5000;
+  assert.match(running.text, /^Still running \(command_id: /);
+  assert.ok(Date.now() - started < 6500, `${Date.now() - started} ms`);
+  const reads = endpoint.calls.filter((entry) => entry.method === "process/read");
+  assert.equal(reads.filter((entry) => entry.at >= until).length, 0);
+});
+
+test("a stop confirmed by another reader ends a quiet reader's wait", async (t) => {
+  const { call, facade } = await fixture(t, { notifications: false });
+  const started = Date.now();
+  const running = call("RunCommand", { command: "sleep 60", wait_seconds: 30 });
+  await new Promise((done) => setTimeout(done, 4500));
+  const [id] = facade.session("s1").commands.keys();
+  assert.match((await call("StopCommand", { command_id: id })).text, /^Stopped /);
+  const text = (await running).text;
+  assert.match(text, /^Exit code: /);
+  // Without the wake it would sleep to the 15 s quiet bound.
+  assert.ok(Date.now() - started < 9000, `${Date.now() - started} ms`);
+});
+
+test("a connection lost during a quiet wait is an unknown outcome", async (t) => {
+  const { call, endpoint, uncertain } = await fixture(t, { notifications: false });
+  const running = call("RunCommand", { command: "sleep 60", wait_seconds: 30 });
+  await new Promise((done) => setTimeout(done, 4500));
+  endpoint.close();
+  await running;
+  assert.deepEqual(uncertain, [["s1", "process/read"]]);
+});
+
 test("ReadFile asks for a file's metadata once", async (t) => {
   const { call, endpoint } = await fixture(t);
   assert.match((await call("ReadFile", { path: "hello.txt" })).text, /hello target/);
@@ -326,6 +359,29 @@ test("projection reads guidance and skills concurrently, within a bound, in orde
   }
   assert.ok(endpoint.maxInflight() > 1, "reads overlap");
   assert.ok(endpoint.maxInflight() <= 6, `${endpoint.maxInflight()} in flight`);
+});
+
+test("projection reads no guidance once its budget is spent", async (t) => {
+  const { root, facade, endpoint } = await fixture(t);
+  execFileSync("git", ["-C", root, "init", "-q", "-b", "main"], { stdio: "pipe" });
+  const deep = join(root, "a", "b", "c", "d", "e");
+  mkdirSync(deep, { recursive: true });
+  for (const directory of [
+    root,
+    join(root, "a"),
+    join(root, "a", "b"),
+    join(root, "a", "b", "c"),
+  ]) {
+    writeFileSync(join(directory, "AGENTS.md"), "g".repeat(PROJECTION_LIMITS.guidanceFile + 10));
+  }
+  writeFileSync(join(deep, "AGENTS.md"), "LATE_GUIDANCE\n");
+  const projection = await buildProjection(facade, deep);
+  assert.ok(!projection.includes("LATE_GUIDANCE"));
+  assert.match(projection, /e\/AGENTS\.md ---\n\[truncated: guidance limit reached\]/);
+  const late = endpoint.calls.filter((entry) =>
+    String(entry.params?.path ?? "").endsWith("/e/AGENTS.md"),
+  );
+  assert.equal(late.length, 0);
 });
 
 test("a lost mutation reply reports an unknown outcome and ends the turn", async (t) => {
