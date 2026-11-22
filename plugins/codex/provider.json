@@ -224,6 +224,7 @@
       }
     },
     "environment": {
+      "COWBOY_CODEX_PROMPT_SUGGESTIONS": "1",
       "CODEX_PATH": {
         "source": "component_command",
         "component": {

@@ -1,0 +1,185 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Draven <dravengarden@gmail.com>
+Date: Sun, 22 Nov 2026 03:05:23 +0000
+Subject: [PATCH] Offer predicted prompts to Cowboy when its Provider opts in
+
+The adapter predicts the next prompt after a completed turn only for
+JetBrains AIR clients and publishes it as
+`session_info_update._meta.promptSuggestions`. Cowboy offers exactly
+that form in its composer, but it is not AIR, and the ACP schema its
+worker reads has no `prompt_suggestions_update`. Its Codex Provider
+package sets COWBOY_CODEX_PROMPT_SUGGESTIONS=1 to take the same
+prediction; a managed call never predicts, and upstream's
+CODEX_ACP_PROMPT_SUGGESTIONS=false still turns it off.
+
+Cowboy-Delta: cowboy-prompt-suggestions
+Upstream: cowboy-specific
+Drop-When: Cowboy's worker reads ACP prompt_suggestions_update and codex-acp publishes it to clients advertising session.promptSuggestions
+Tests: src/__tests__/CodexACPAgent/cowboy-prompt-suggestions.test.ts
+
+diff --git a/src/CodexAcpServer.ts b/src/CodexAcpServer.ts
+index aa6063c5c8f26f22567d0392691ec3f1adca97e3..286fe1f79edfbda7c77515a028796e9b2573b7c2 100644
+--- a/src/CodexAcpServer.ts
++++ b/src/CodexAcpServer.ts
+@@ -210,6 +210,7 @@ import {
+ import {randomUUID} from "node:crypto";
+ import {TitleGenerator} from "./TitleGenerator";
+ import {PromptSuggestionGenerator, promptSuggestionsEnabled, promptSuggestionsMeta} from "./PromptSuggestionGenerator";
++import {cowboyPromptSuggestions} from "./CowboyPromptSuggestions";
+ import {once} from "node:events";
+ import {
+     AIR_AGENT_FILE_CHANGE_REPORT_KEY,
+@@ -4214,7 +4215,9 @@ export class CodexAcpServer {
+     }
+ 
+     private createPromptSuggestions(sessionState: SessionState): PromptSuggestionGenerator | undefined {
+-        if (!sessionState.clientCapabilities.airClient || !promptSuggestionsEnabled()) return undefined;
++        if (!(sessionState.clientCapabilities.airClient || cowboyPromptSuggestions()) || !promptSuggestionsEnabled()) {
++            return undefined;
++        }
+         return new PromptSuggestionGenerator(
+             this.codexAcpClient.appServerClient,
+             async text => {
+diff --git a/src/CowboyPromptSuggestions.ts b/src/CowboyPromptSuggestions.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..06c2f9bc1fb18aed3811b97d8677b61eabb1df89
+--- /dev/null
++++ b/src/CowboyPromptSuggestions.ts
+@@ -0,0 +1,13 @@
++import {managedProfileActive} from "./CowboyManagedProfile";
++
++/** The variable Cowboy's Codex Provider package sets to take predicted prompts. */
++export const COWBOY_PROMPT_SUGGESTIONS_ENV = "COWBOY_CODEX_PROMPT_SUGGESTIONS";
++
++/**
++ * Cowboy offers a predicted next prompt published as `session_info_update._meta.promptSuggestions`, the form this
++ * adapter keeps for AIR, but it is not AIR and the ACP schema its worker reads has no `prompt_suggestions_update`.
++ * Its Provider package opts in with `COWBOY_CODEX_PROMPT_SUGGESTIONS=1`; a managed call never predicts.
++ */
++export function cowboyPromptSuggestions(env: NodeJS.ProcessEnv = process.env): boolean {
++    return env[COWBOY_PROMPT_SUGGESTIONS_ENV] === "1" && !managedProfileActive();
++}
+diff --git a/src/__tests__/CodexACPAgent/cowboy-prompt-suggestions.test.ts b/src/__tests__/CodexACPAgent/cowboy-prompt-suggestions.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..a13280a72dc3ccba67647f5b8205831f40493e90
+--- /dev/null
++++ b/src/__tests__/CodexACPAgent/cowboy-prompt-suggestions.test.ts
+@@ -0,0 +1,118 @@
++import {afterEach, describe, expect, it, vi} from "vitest";
++import {
++    connectSession,
++    itemCompleted,
++    settle,
++    turnCompleted,
++    turnStarted,
++    type PromptSession,
++} from "./v2-prompt-harness";
++import type {ThreadItem} from "../../app-server/v2";
++import {COWBOY_PROMPT_SUGGESTIONS_ENV, cowboyPromptSuggestions} from "../../CowboyPromptSuggestions";
++import {MANAGED_PROFILE, MANAGED_PROFILE_ENV} from "../../CowboyManagedProfile";
++
++function agentMessage(text: string): ThreadItem {
++    return {type: "agentMessage", id: "msg-final", text, phase: "final_answer", moderation: null, memoryCitation: null, delivery: null, questions: null};
++}
++
++/** The `promptSuggestions` values of the session info updates the client received, in order. */
++function suggestionUpdates(client: PromptSession): unknown[] {
++    return client.scopedUpdates.flatMap(({update}) => {
++        const meta = (update as {_meta?: Record<string, unknown>})._meta;
++        return update.sessionUpdate === "session_info_update" && meta?.["promptSuggestions"] !== undefined
++            ? [meta["promptSuggestions"]]
++            : [];
++    });
++}
++
++async function runTurn(client: PromptSession, index: number, text: string, answer: string) {
++    const turnId = `turn-${index + 1}`;
++    const response = client.sendPrompt([{type: "text", text}]);
++    await vi.waitFor(() => expect(client.turnStartParams).toHaveLength(index + 1));
++    client.emit(turnStarted(turnId));
++    client.emit(itemCompleted(agentMessage(answer), turnId));
++    client.emit(turnCompleted(turnId));
++    await response;
++    await client.promptRunFinished(index);
++}
++
++/** Cowboy is not AIR; its Provider package opts in to the `_meta` form the Web offers. */
++describe("predicted follow-up prompt for Cowboy over ACP v1", () => {
++    let closeClient: (() => void) | null = null;
++    let sampleParams: Array<Record<string, unknown>> = [];
++
++    afterEach(() => {
++        closeClient?.();
++        closeClient = null;
++        vi.unstubAllEnvs();
++        vi.clearAllMocks();
++    });
++
++    function connect() {
++        sampleParams = [];
++        return connectSession(1, {
++            codexResponses: {
++                "thread/sample": async params => {
++                    sampleParams.push(params as Record<string, unknown>);
++                    return {
++                        sourceTurnId: (params as {expectedTurnId: string}).expectedTurnId,
++                        responseId: "r",
++                        text: JSON.stringify({suggestion: "Run the tests"}),
++                        inputTokens: null,
++                        cachedInputTokens: null,
++                        outputTokens: null,
++                    };
++                },
++            },
++        });
++    }
++
++    it("publishes after a turn and clears on the next prompt when the Provider opts in", async () => {
++        vi.stubEnv(COWBOY_PROMPT_SUGGESTIONS_ENV, "1");
++        const client = await connect();
++        closeClient = () => client.connection.close();
++
++        await runTurn(client, 0, "Fix the bug", "Fixed the bug.");
++        await vi.waitFor(() => expect(suggestionUpdates(client)).toEqual([{suggestions: [{text: "Run the tests"}]}]));
++        expect(sampleParams[0]).toMatchObject({expectedTurnId: "turn-1"});
++
++        await runTurn(client, 1, "Run the tests", "Tests pass.");
++        await vi.waitFor(() => expect(suggestionUpdates(client)).toHaveLength(3));
++        expect(suggestionUpdates(client).slice(0, 2)).toEqual([
++            {suggestions: [{text: "Run the tests"}]},
++            {suggestions: []},
++        ]);
++    });
++
++    it("samples nothing without the opt-in", async () => {
++        vi.stubEnv(COWBOY_PROMPT_SUGGESTIONS_ENV, "true");
++        const client = await connect();
++        closeClient = () => client.connection.close();
++
++        await runTurn(client, 0, "Fix the bug", "Fixed the bug.");
++        await settle();
++
++        expect(suggestionUpdates(client)).toEqual([]);
++        expect(sampleParams).toEqual([]);
++    });
++
++    it("never predicts for a managed call", () => {
++        vi.stubEnv(COWBOY_PROMPT_SUGGESTIONS_ENV, "1");
++        expect(cowboyPromptSuggestions()).toBe(true);
++        vi.stubEnv(MANAGED_PROFILE_ENV, MANAGED_PROFILE);
++        expect(cowboyPromptSuggestions()).toBe(false);
++    });
++
++    it("keeps the upstream kill switch", async () => {
++        vi.stubEnv(COWBOY_PROMPT_SUGGESTIONS_ENV, "1");
++        vi.stubEnv("CODEX_ACP_PROMPT_SUGGESTIONS", "false");
++        const client = await connect();
++        closeClient = () => client.connection.close();
++
++        await runTurn(client, 0, "Fix the bug", "Fixed the bug.");
++        await settle();
++
++        expect(suggestionUpdates(client)).toEqual([]);
++        expect(sampleParams).toEqual([]);
++    });
++});

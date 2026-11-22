@@ -44,6 +44,15 @@ The shared runtime component remains unchanged. This Provider owns the changes
 - (`managed-read-only-profile`, `native-image-profile`) The managed read-only
   and image profiles; see [native capabilities](../../../docs/managed-native-capabilities.md).
 - (`configured-mcp-startup-wait`) The MCP startup wait below.
+- (`cowboy-prompt-suggestions`) After a completed turn outside plan mode the
+  adapter predicts the next prompt with `thread/sample` (one response on an
+  ephemeral fork of the session's thread, so its context is a cache hit) and
+  publishes it as `session_info_update._meta.promptSuggestions`, the form it
+  keeps for JetBrains AIR. Cowboy's composer offers that form (Desktop ghost
+  text, a Mobile chip; never sent). The Provider package opts in with
+  `COWBOY_CODEX_PROMPT_SUGGESTIONS=1`; a managed call never predicts, and
+  `CODEX_ACP_PROMPT_SUGGESTIONS=false` still turns it off. The worker's ACP
+  schema has no `prompt_suggestions_update`, so the standard form waits for it.
 
 ## Authentication default
 
