@@ -11,6 +11,7 @@ use base64::Engine as _;
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::sync::atomic::AtomicUsize;
+use std::time::Duration;
 use tokio::sync::mpsc;
 
 pub(in crate::server::telemetry_binding) struct Fixture {
@@ -152,7 +153,14 @@ impl Fixture {
             .await
             .unwrap();
         store.migrate().await.unwrap();
-        let control = Arc::new(MachineControl::default());
+        // A lost ACK must reach the uncertain path; wait one second for it
+        // rather than the production commit timeout.
+        let control = MachineControl::default();
+        let control = Arc::new(if lose_ack {
+            control.with_telemetry_commit_timeout(Duration::from_secs(1))
+        } else {
+            control
+        });
         let (tx, mut commands) = mpsc::unbounded_channel();
         let connection =
             control.install("machine-test".into(), "fixture-epoch".into(), false, 17, tx);
@@ -413,8 +421,8 @@ async fn finite_wire_select_revoke_restore_recovers_evidence_without_replay() {
 #[tokio::test]
 async fn lost_wire_ack_queries_original_request_without_resending() {
     let fixture = Fixture::new(true, true).await;
-    // Exercise the real 45-second timeout and original Operator budget. Do not
-    // change Cargo features (and hence detached worker generation) for a clock.
+    // The fixture shortens only the commit ACK wait; the original Operator
+    // budget and query deadlines stay real.
     let select = fixture.select();
     let result = fixture.coordinate(&select).await;
     assert!(
@@ -424,6 +432,16 @@ async fn lost_wire_ack_queries_original_request_without_resending() {
     assert_eq!(fixture.sends.load(Ordering::Relaxed), 1);
     assert_eq!(fixture.queries.load(Ordering::Relaxed), 2);
     assert_eq!(fixture.machine.inventory().unwrap().len(), 1);
+}
+
+#[test]
+fn production_commit_timeout_leaves_operator_budget_for_the_query() {
+    // A lost ACK costs the commit wait plus one bounded query (10 seconds)
+    // inside the one-minute Operator budget.
+    assert!(
+        crate::machine_control::TELEMETRY_BINDING_COMMIT_TIMEOUT + Duration::from_secs(10)
+            < Duration::from_mins(1)
+    );
 }
 
 #[tokio::test]

@@ -305,7 +305,7 @@ mod signed {
         .await;
         let (_, plan) = f.request(Method::POST, PLAN, Some(select(&machine))).await;
         // Real Machine commits, then its ACK is dropped. The HTTP observer
-        // times out well before the coordinator's real 45-second RPC timeout.
+        // times out before the coordinator's (fixture-shortened) ACK wait.
         let response = f
             .client
             .post(format!("{}{CONFIRM}", f.base))
