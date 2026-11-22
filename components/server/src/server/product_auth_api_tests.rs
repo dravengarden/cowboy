@@ -596,8 +596,8 @@ async fn auth_me_accepts_device_proofs_once_and_reuses_middleware_identity_body(
         StatusCode::UNAUTHORIZED
     );
     server.abort();
-    std::fs::remove_dir_all(root).unwrap();
-    std::fs::remove_dir_all(&state.setup.data_dir).unwrap();
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(&state.setup.data_dir);
 }
 
 #[tokio::test]
@@ -656,9 +656,9 @@ async fn auth_me_keeps_automation_policy_scopes_and_expiry_body() {
             .unwrap();
         assert_eq!(response.status(), expected);
         server.abort();
-        std::fs::remove_dir_all(&state.setup.data_dir).unwrap();
+        let _ = std::fs::remove_dir_all(&state.setup.data_dir);
     }
-    std::fs::remove_dir_all(root).unwrap();
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[tokio::test]
@@ -705,8 +705,8 @@ async fn auth_me_rejects_disabled_device_users_body() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     server.abort();
-    std::fs::remove_dir_all(root).unwrap();
-    std::fs::remove_dir_all(&state.setup.data_dir).unwrap();
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(&state.setup.data_dir);
 }
 
 #[tokio::test]
@@ -858,7 +858,7 @@ async fn cardea_device_exchange_reuses_capacity_and_cannot_revive_local_revocati
     );
     server.abort();
     mock_server.abort();
-    std::fs::remove_dir_all(root).unwrap();
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[tokio::test]
@@ -2464,9 +2464,9 @@ async fn core_security_without_auth_plugins_supports_setup_login_and_session_reo
     assert_eq!(me["account"], "owner");
     server.abort();
     let _ = server.await;
-    std::fs::remove_dir_all(&state.setup.data_dir).unwrap();
+    let _ = std::fs::remove_dir_all(&state.setup.data_dir);
     drop(state);
-    std::fs::remove_dir_all(root).unwrap();
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[tokio::test]
