@@ -44,9 +44,15 @@ The shared runtime component remains unchanged. This Provider owns the changes
 - (`managed-read-only-profile`, `native-image-profile`) The managed read-only
   and image profiles; see [native capabilities](../../../docs/managed-native-capabilities.md).
 - (`configured-mcp-startup-wait`) The MCP startup wait below.
-- (`native-codex-version`) The adapter declares the native Codex release this
-  Provider packages (`@openai/codex ^0.169.1`) ahead of upstream's
-  `^0.166.0`, so upstream's suites run against it; see the 2026-11-18 audit.
+- (`cowboy-prompt-suggestions`) After a completed turn outside plan mode the
+  adapter predicts the next prompt with `thread/sample` (one response on an
+  ephemeral fork of the session's thread, so its context is a cache hit) and
+  publishes it as `session_info_update._meta.promptSuggestions`, the form it
+  keeps for JetBrains AIR. Cowboy's composer offers that form (Desktop ghost
+  text, a Mobile chip; never sent). The Provider package opts in with
+  `COWBOY_CODEX_PROMPT_SUGGESTIONS=1`; a managed call never predicts, and
+  `CODEX_ACP_PROMPT_SUGGESTIONS=false` still turns it off. The worker's ACP
+  schema has no `prompt_suggestions_update`, so the standard form waits for it.
 
 ## Authentication default
 
@@ -124,6 +130,36 @@ ACP cannot express them without changing their meaning:
 The launcher and the bridge each list the native servers once, from the same
 arguments; a configuration change between those two reads can only make the
 wait miss a server or end at its timeout.
+
+## Dependency audit (2026-11-22)
+
+The pin moves to ACP `2.9.0` at
+`e3a679f193458f8d4825803a4744063e7d4a5e80` with native Codex `0.171.0`.
+ACP 2.9.0 declares `@openai/codex ^0.171.0`, which meets the drop condition of
+`native-codex-version`, so that delta is gone and the native pin follows the
+adapter's declared range again. 2.8.0 declared `^0.170.0`; no stable 0.170.x
+patch exists.
+
+- The other seven deltas are kept (upstream still lacks each of them) and
+  rebased: `steer-prompt-required` re-applies `idleBehavior` to upstream's
+  AIR initialize fixtures, which now also advertise `auth.status`;
+  `managed-read-only-profile` keeps upstream's MCP-over-ACP config overrides
+  under the managed early return, so no MCP bridge can open for a managed
+  call; `configured-mcp-startup-wait` passes Cowboy's configured servers beside
+  upstream's new pre-start MCP failures. The managed and MCP-wait tests mock
+  `GetAccountResponse.userId`, required since 0.171.0.
+- New on ACP v1: `auth/status` with `auth/status_update`, MCP-over-ACP
+  (advertised only when native lists the still-unreleased `mcp_2026_07_28`),
+  Fast mode in the `speed` category and model-first option order. Cowboy uses
+  none of the first two, applies options by ID and decodes `speed` as an
+  unknown category.
+- The bundled model catalog of 0.170.0 and 0.171.0 equals 0.169.1's, so every
+  Recommended preset stays valid. The app-server schema only adds methods,
+  notifications and fields Cowboy's adapter does not consume, except
+  `Project.position`, which it never read.
+- Type checks and all 2,614 enabled upstream tests pass with the series (39
+  remain skipped upstream). See
+  [the release record](../../../docs/releases/agent-runtimes-2026-11-22.md).
 
 ## Dependency audit (2026-11-18)
 

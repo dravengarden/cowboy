@@ -1,8 +1,7 @@
 //! Session completion notices (docs/agent-api.md, "Session completion
 //! notices"). A session that queues a prompt into another session with
 //! `notify:true` gets one Cowboy notice when that prompt's own turn ends, so
-//! it can end its turn instead of polling. A human-paced sender (Antigravity)
-//! receives the notice as a draft plus a task notification; a person sends it.
+//! it can end its turn instead of polling.
 //!
 //! The watch is Controller-process state: a restart loses pending watches, and
 //! `GET /api/sessions/{id}/prompts/{prompt}` remains the authority, as
@@ -31,16 +30,6 @@ static WATCHES: AtomicUsize = AtomicUsize::new(0);
 /// longer has its watch.
 static GENERATION: LazyLock<String> = LazyLock::new(|| uuid::Uuid::new_v4().to_string());
 
-/// Agent API commands that would start a turn in their target session.
-const DISPATCHING: &[&str] = &[
-    "queue.submit",
-    "queue.send",
-    "queue.force_send",
-    "drafts.activate",
-    "drafts.activate_all",
-    "sessions.retry",
-];
-
 /// One admitted watch slot, released when its watch ends or is never started.
 pub(super) struct Slot(());
 
@@ -54,10 +43,8 @@ fn rejected(code: &str, next: &str) -> Value {
     json!({"status": "rejected", "error": code, "next": next})
 }
 
-/// Admit an Agent API command's dispatch and its `notify` option. `Err` is a
-/// definite refusal receipt: nothing was submitted, and the same operation
-/// cannot run later. An agent never starts a human-paced (Antigravity) turn:
-/// a person sends it (docs/requirements.md, Antigravity boundaries).
+/// Admit an Agent API command's `notify` option. `Err` is a definite refusal
+/// receipt: nothing was submitted, and the same operation cannot run later.
 pub(super) fn admit(
     hub: &crate::core::Hub,
     name: &str,
@@ -65,12 +52,6 @@ pub(super) fn admit(
     sender: &str,
 ) -> Result<Option<Slot>, Value> {
     let target = input["session_id"].as_str().unwrap_or_default().to_owned();
-    if DISPATCHING.contains(&name) && hub.is_human_paced(&target) {
-        return Err(rejected(
-            "human_paced_target",
-            "Antigravity runs human-paced: add the message with drafts.add; a person sends it.",
-        ));
-    }
     if name != "queue.submit" {
         return Ok(None);
     }
@@ -130,9 +111,7 @@ pub(super) fn after_command(
     }
     receipt["prompt"] = json!(prompt);
     receipt["target"] = json!(target);
-    let human_paced = state.hub.is_human_paced(sender);
     receipt["next"] = json!(next_step(
-        human_paced,
         slot.is_some(),
         target == sender,
         &wait_command(target, prompt)
@@ -190,57 +169,15 @@ fn wait_command(target: &str, prompt: &str) -> String {
     )
 }
 
-/// A human-paced parent (Antigravity) never receives a call notice as a
-/// turn, so an admitted call's receipt tells it to wait inside this turn.
-/// The action reply wraps the receipt as `{schema, state:"ok", value}`; the
-/// hint belongs on the receipt the gateway hands to the agent.
-pub(super) fn call_next(hub: &crate::core::Hub, parent: &str, mut reply: Value) -> Value {
-    let wrapped = reply["state"] == "ok" && reply["value"].is_object();
-    let receipt = if wrapped {
-        &mut reply["value"]
-    } else {
-        &mut reply
-    };
-    let Some(call) = receipt["call_id"].as_str().map(str::to_owned) else {
-        return reply;
-    };
-    if !hub.is_human_paced(parent) || !receipt["error"].is_null() {
-        return reply;
-    }
-    receipt["next"] = json!(format!(
-        "Cowboy cannot start your next turn, so a notice would only reach the owner as a \
-         draft. Stay in this turn: RunCommand with wait_seconds 600 and timeout_seconds 600: \
-         cowboy call wait {call} --timeout-ms 580000 . Repeat while the state is not \
-         terminal (if it reports context_unavailable, call cowboy_read \
-         cowboy.calls.wait(\"{call}\",55000) with timeout_ms 60000 instead), then read \
-         cowboy.calls.result(\"{call}\",{{offset:0,chars:4000}}) and continue."
-    ));
-    reply
-}
-
-/// What the sender should do next. A human-paced sender cannot be woken
-/// by Cowboy, so it keeps its own turn open with the blocking wait.
-fn next_step(human_paced: bool, notify: bool, own: bool, wait: &str) -> String {
+/// What the sender should do next.
+fn next_step(notify: bool, own: bool, wait: &str) -> String {
     if own {
         return "This prompt runs after you end this turn.".into();
     }
-    match (human_paced, notify) {
-        (true, _) => format!(
-            "Cowboy cannot start your next turn. To continue when it finishes, stay in this \
-             turn: RunCommand with wait_seconds 600 and timeout_seconds 600: {wait} . Repeat \
-             it while the printed state is queued or running.{}",
-            if notify {
-                " If you end your turn instead, the notice waits as a draft the owner sends."
-            } else {
-                ""
-            }
-        ),
-        (false, true) => {
-            "End your turn; Cowboy posts a notice into this session when that turn ends.".into()
-        }
-        (false, false) => {
-            format!("To act on its result, send with notify:true and end your turn, or run: {wait}")
-        }
+    if notify {
+        "End your turn; Cowboy posts a notice into this session when that turn ends.".into()
+    } else {
+        format!("To act on its result, send with notify:true and end your turn, or run: {wait}")
     }
 }
 
@@ -343,35 +280,7 @@ fn notify(state: &AppState, watch: &Watch, outcome: &Outcome) {
         reply.as_deref(),
     );
     let key = format!("{}:{}", watch.target, watch.prompt);
-    if state.hub.submit_peer_notice(&watch.sender, &key, text)
-        && let Some(category) = category(outcome)
-    {
-        state
-            .hub
-            .record_occurrence(crate::task_notifications::Occurrence::peer(
-                &watch.sender,
-                &watch.target,
-                &watch.prompt,
-                category,
-            ));
-    }
-}
-
-/// The task notification for a parked notice, by the prompt's own stop
-/// reason. A cancellation, a withdrawal or a deleted peer notify nobody.
-fn category(outcome: &Outcome) -> Option<crate::task_notifications::Category> {
-    use crate::task_notifications::Category;
-    // Workers report ACP (`end_turn`) or SDK (`EndTurn`) spellings.
-    let stop = |reason: &str| reason.replace('_', "").to_ascii_lowercase();
-    match outcome {
-        Outcome::Finished { stop_reason, .. } if stop(stop_reason) == "endturn" => {
-            Some(Category::Completion)
-        }
-        Outcome::Finished { stop_reason, .. } if stop(stop_reason) == "cancelled" => None,
-        Outcome::Finished { .. } | Outcome::Stopped(_) => Some(Category::Failure),
-        Outcome::Ended => Some(Category::Completion),
-        Outcome::Withdrawn | Outcome::Gone => None,
-    }
+    state.hub.submit_peer_notice(&watch.sender, &key, text);
 }
 
 fn notice_text(
@@ -565,60 +474,26 @@ mod tests {
     }
 
     #[test]
-    fn an_agent_never_starts_a_human_paced_turn() {
-        let hub = hub();
-        for name in DISPATCHING {
-            let mut input = json!({"session_id":"agy","text":"x","id":"d"});
-            let refusal = admit(&hub, name, &mut input, "me").err().unwrap();
-            assert_eq!(refusal["error"], "human_paced_target", "{name}");
-        }
-        let mut draft = json!({"session_id":"agy","text":"x"});
-        assert!(
-            admit(&hub, "drafts.add", &mut draft, "me")
-                .unwrap()
-                .is_none()
-        );
-    }
-
-    #[test]
     fn the_next_step_fits_the_sender() {
         let wait = wait_command("sess-2", "op-1");
         assert!(wait.contains("cowboy api GET '/api/sessions/sess-2/prompts/op-1?wait_ms=50000'"));
-        let agy = next_step(true, false, false, &wait);
-        assert!(agy.contains("wait_seconds 600 and timeout_seconds 600"));
-        assert!(agy.contains("queued or running"));
-        assert!(next_step(true, true, false, &wait).contains("draft the owner sends"));
-        assert!(next_step(false, true, false, &wait).starts_with("End your turn"));
-        assert!(next_step(false, false, false, &wait).contains(&wait));
-        assert!(next_step(false, false, true, &wait).contains("after you end this turn"));
+        assert!(next_step(true, false, &wait).starts_with("End your turn"));
+        assert!(next_step(false, false, &wait).contains(&wait));
+        assert!(next_step(false, true, &wait).contains("after you end this turn"));
     }
 
     #[test]
-    fn a_human_paced_parent_waits_for_its_call_inside_the_turn() {
+    fn an_agent_dispatches_into_an_antigravity_session_like_any_other() {
         let hub = hub();
-        let admitted = json!({"state":"queued","call_id":"call-1","error":null});
-        let agy = call_next(&hub, "agy", admitted.clone());
-        let next = agy["next"].as_str().unwrap();
-        assert!(next.contains("cowboy call wait call-1 --timeout-ms 580000"));
-        assert!(next.contains("timeout_seconds 600"));
-        assert!(next.contains("cowboy.calls.result(\"call-1\""));
-        assert_eq!(call_next(&hub, "me", admitted.clone()), admitted);
-        let refused = json!({"state":"error","call_id":"call-2","error":{"code":"x"}});
-        assert_eq!(call_next(&hub, "agy", refused.clone()), refused);
-        // start_call replies through the action envelope; the hint must
-        // land on the receipt the gateway unwraps for the agent.
-        let wrapped = json!({"schema":1,"state":"ok","value":admitted});
-        let agy = call_next(&hub, "agy", wrapped.clone());
-        assert!(agy["next"].is_null());
-        assert!(
-            agy["value"]["next"]
-                .as_str()
-                .unwrap()
-                .contains("cowboy call wait call-1")
-        );
-        assert_eq!(call_next(&hub, "me", wrapped.clone()), wrapped);
-        let failed = json!({"schema":1,"state":"ok","value":refused});
-        assert_eq!(call_next(&hub, "agy", failed.clone()), failed);
+        for name in [
+            "queue.submit",
+            "queue.send",
+            "drafts.activate",
+            "sessions.retry",
+        ] {
+            let mut input = json!({"session_id":"agy","text":"x","id":"d"});
+            assert!(admit(&hub, name, &mut input, "me").is_ok(), "{name}");
+        }
     }
 
     #[test]
@@ -669,25 +544,6 @@ mod tests {
             Ok(Outcome::Withdrawn)
         );
         assert_eq!(settle(P::Gone, true, None), Ok(Outcome::Gone));
-    }
-
-    #[test]
-    fn a_parked_notice_notifies_by_the_prompts_own_stop_reason() {
-        use crate::task_notifications::Category;
-        let finished = |stop: &str| Outcome::Finished {
-            stop_reason: stop.into(),
-            echo_seq: 1,
-        };
-        assert_eq!(category(&finished("end_turn")), Some(Category::Completion));
-        assert_eq!(category(&finished("EndTurn")), Some(Category::Completion));
-        assert_eq!(category(&finished("Cancelled")), None);
-        assert_eq!(category(&finished("cancelled")), None);
-        assert_eq!(category(&finished("refusal")), Some(Category::Failure));
-        assert_eq!(
-            category(&Outcome::Stopped(Status::Crashed)),
-            Some(Category::Failure)
-        );
-        assert_eq!(category(&Outcome::Withdrawn), None);
     }
 
     #[test]

@@ -15,7 +15,7 @@ Drop-When: Cowboy image calls stop launching codex-acp with the image-v1 profile
 Tests: src/__tests__/CowboyImageProfile.test.ts
 
 diff --git a/src/CodexAcpClient.ts b/src/CodexAcpClient.ts
-index 4e96e0d64fdb5f5de40116917944f3b2663907c0..145446cdee0987b8122f094d5e755b60166af04d 100644
+index eaa11cb93a813820e048c2db7f91e0dd73059e23..35089bea3599f6c0ad8292689eef6ee7dd123bb9 100644
 --- a/src/CodexAcpClient.ts
 +++ b/src/CodexAcpClient.ts
 @@ -27,7 +27,7 @@ import type {ServiceTier} from "./app-server/ServiceTier";
@@ -27,7 +27,7 @@ index 4e96e0d64fdb5f5de40116917944f3b2663907c0..145446cdee0987b8122f094d5e755b60
  import path from "node:path";
  import {isDeepStrictEqual} from "node:util";
  import {logger} from "./Logger";
-@@ -871,6 +871,7 @@ export class CodexAcpClient {
+@@ -919,6 +919,7 @@ export class CodexAcpClient {
              modelProvider: this.getModelProvider(),
              cwd: request.cwd,
              ...(developerInstructions !== undefined && {developerInstructions}),
@@ -35,7 +35,7 @@ index 4e96e0d64fdb5f5de40116917944f3b2663907c0..145446cdee0987b8122f094d5e755b60
          });
  
          const codexModels = await this.fetchAvailableModels();
-@@ -1417,7 +1418,11 @@ export class CodexAcpClient {
+@@ -1483,7 +1484,11 @@ export class CodexAcpClient {
          // Resolve before any effect: a managed turn without its metadata, or
          // an ordinary turn carrying it, is refused instead of downgraded.
          const managed = managedTurn(request._meta);
@@ -49,10 +49,10 @@ index 4e96e0d64fdb5f5de40116917944f3b2663907c0..145446cdee0987b8122f094d5e755b60
              return null;
          }
 diff --git a/src/CodexAppServerClient.ts b/src/CodexAppServerClient.ts
-index fa5b2f53c0403f4480b4aa6aececd7a29addcdff..afa5622d4e64906cbb9dd545f7ea7ce33d84f078 100644
+index 8db679f23c50e397c3b661f48aa324c9214ec939..916c43948712d27c2ece895e9398424514433aa6 100644
 --- a/src/CodexAppServerClient.ts
 +++ b/src/CodexAppServerClient.ts
-@@ -329,6 +329,19 @@ export class CodexAppServerClient {
+@@ -330,6 +330,19 @@ export class CodexAppServerClient {
          return await this.sendRequest({ method: "turn/start", params: params });
      }
  

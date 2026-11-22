@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { posix } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { inside } from "./facade.mjs";
+import { mapBounded } from "./facade-tools.mjs";
 import { discoverSkills, skillsSection } from "./skills.mjs";
 
 export const PROJECTION_LIMITS = Object.freeze({
@@ -16,6 +17,8 @@ export const PROJECTION_LIMITS = Object.freeze({
   guidanceFile: 16 * 1024,
   guidanceWholeFile: 1024 * 1024,
   gitTimeoutMs: 15_000,
+  // Guidance files read at once (and as many skill reads beside them).
+  concurrency: 3,
 });
 const GUIDANCE_NAMES = ["AGENTS.md", "GEMINI.md"];
 
@@ -39,10 +42,12 @@ export const ROUTING = [
   "below or absolute inside it. The local directory of this process is not the workspace.",
   "Web search (search_web) and reading public http(s) URLs (read_url_content) remain available.",
   "For a multi-step task, keep the owner's checklist current with mcp_cowboy_UpdatePlan.",
-  "Cowboy never starts a turn for you: a notice from a Cowboy call or another session reaches",
-  "the owner only as a draft. After calls.start, review.start or a queue.submit to another",
-  "session, stay in this turn and wait with the command in the receipt's `next`, then use the",
-  "result. Never end the turn to wait for a notice.",
+  "To delegate a self-contained task, use mcp_cowboy_Subagent (mcp_cowboy_StopSubagent stops one):",
+  "it runs in this turn with the same tools and returns its report, so wait for it before you end",
+  "the turn.",
+  "For long work in a Cowboy call (calls.start, review.start) or another session (queue.submit),",
+  "pass notify:true and end your turn: Cowboy starts your next turn with a notice when it",
+  "finishes. Wait inside the turn only when you need the result right away.",
 ].join("\n");
 
 /** Parse the Git probe's tab-separated lines. */
@@ -76,7 +81,7 @@ export function guidanceDirectories(top, cwd) {
  * checks this is a guardrail, not an isolation boundary: `RunCommand` is a
  * shell on the same Machine (design "Revision 5 simplification").
  */
-async function readGuidance(facade, file, room, root) {
+async function readGuidance(facade, file, root) {
   const at = pathToFileURL(file).href;
   const call = (method, params) => facade.connection.call(method, params);
   let metadata;
@@ -88,18 +93,15 @@ async function readGuidance(facade, file, room, root) {
   } catch {
     return undefined;
   }
-  const limit = Math.min(PROJECTION_LIMITS.guidanceFile, room);
+  const limit = PROJECTION_LIMITS.guidanceFile;
   try {
     // The same whole-file read the facade's ReadFile uses; guidance files are
     // small, and every executor generation serves it.
     if (metadata.size <= PROJECTION_LIMITS.guidanceWholeFile) {
       const read = await call("fs/readFile", { path: at });
-      const bytes = Buffer.from(read.dataBase64, "base64");
-      return {
-        text: bytes.subarray(0, limit).toString(),
-        cut: bytes.length > limit,
-        size: bytes.length,
-      };
+      // Only what a projection can show is kept (one byte more tells it
+      // the file was cut), not the whole file.
+      return Buffer.from(Buffer.from(read.dataBase64, "base64").subarray(0, limit + 1));
     }
   } catch {
     return undefined;
@@ -112,9 +114,7 @@ async function readGuidance(facade, file, room, root) {
   }
   try {
     const block = await call("fs/readBlock", { handleId, offset: 0, len: limit + 1 });
-    const bytes = Buffer.from(block.chunk, "base64");
-    const cut = bytes.length > limit;
-    return { text: bytes.subarray(0, limit).toString(), cut, size: bytes.length };
+    return Buffer.from(block.chunk, "base64");
   } catch {
     return undefined;
   } finally {
@@ -165,25 +165,38 @@ export async function buildProjection(
     environment.push(...shown);
     if (git.status.length > PROJECTION_LIMITS.statusLines) environment.push("[truncated]");
   } else environment.push("Git: not a repository");
+  // Candidates are read a few at a time (each is a few round trips to the
+  // target), in order, root first; the shared budget is applied as they
+  // arrive, and once it is spent nothing more is read.
+  const directories = guidanceDirectories(git.top, cwd);
+  const files = directories.flatMap((directory) =>
+    GUIDANCE_NAMES.map((name) => posix.join(directory, name)),
+  );
+  const skilled = listSkills ? discoverSkills(facade, directories, git.top ?? cwd) : [];
   const guidance = [];
   let room = PROJECTION_LIMITS.guidanceTotal;
-  for (const directory of guidanceDirectories(git.top, cwd)) {
-    for (const name of GUIDANCE_NAMES) {
-      const file = posix.join(directory, name);
+  for (let start = 0; start < files.length; start += PROJECTION_LIMITS.concurrency) {
+    const batch = files.slice(start, start + PROJECTION_LIMITS.concurrency);
+    const reads =
+      room > 0
+        ? await mapBounded(batch, PROJECTION_LIMITS.concurrency, (file) =>
+            readGuidance(facade, file, git.top ?? cwd),
+          )
+        : [];
+    for (const [index, file] of batch.entries()) {
       if (room <= 0) {
         guidance.push(`--- ${file} ---\n[truncated: guidance limit reached]`);
         continue;
       }
-      const read = await readGuidance(facade, file, room, git.top ?? cwd);
-      if (!read) continue;
-      const text = read.text.replaceAll(fence, "[fence]");
+      const bytes = reads[index];
+      if (!bytes) continue;
+      const limit = Math.min(PROJECTION_LIMITS.guidanceFile, room);
+      const text = bytes.subarray(0, limit).toString().replaceAll(fence, "[fence]");
       room -= Buffer.byteLength(text);
-      guidance.push(`--- ${file} ---\n${text}${read.cut ? "\n[truncated]" : ""}`);
+      guidance.push(`--- ${file} ---\n${text}${bytes.length > limit ? "\n[truncated]" : ""}`);
     }
   }
-  const skills = listSkills
-    ? await discoverSkills(facade, guidanceDirectories(git.top, cwd), git.top ?? cwd)
-    : [];
+  const skills = await skilled;
   onSkills?.(skills);
   const sections = [
     "<cowboy_routing>",

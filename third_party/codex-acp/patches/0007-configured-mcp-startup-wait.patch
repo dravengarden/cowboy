@@ -15,7 +15,7 @@ Drop-When: upstream awaits natively configured MCP servers, or Cowboy passes its
 Tests: src/__tests__/CodexACPAgent/cowboy-configured-mcp-wait.test.ts
 
 diff --git a/src/CodexAcpServer.ts b/src/CodexAcpServer.ts
-index 82df355a795699d5eff5eaa2d69d2cad46e12de3..02b6c86b45e57cc97a7edff333c8d7c0087a1dfb 100644
+index 866964e3294c54214bd68afea297f4cb0f74b45b..aa6063c5c8f26f22567d0392691ec3f1adca97e3 100644
 --- a/src/CodexAcpServer.ts
 +++ b/src/CodexAcpServer.ts
 @@ -13,6 +13,7 @@ import type {ProviderStartupConfig} from "./CodexConfigOverride";
@@ -26,7 +26,7 @@ index 82df355a795699d5eff5eaa2d69d2cad46e12de3..02b6c86b45e57cc97a7edff333c8d7c0
  import {
      CodexAcpClient,
      type JsonObject,
-@@ -1296,7 +1297,9 @@ export class CodexAcpServer {
+@@ -1334,7 +1335,9 @@ export class CodexAcpServer {
              : null;
          const knownAccount = await this.checkAuthorization();
          const requestedMcpServers = request.mcpServers ?? [];
@@ -37,17 +37,17 @@ index 82df355a795699d5eff5eaa2d69d2cad46e12de3..02b6c86b45e57cc97a7edff333c8d7c0
              ? this.codexAcpClient.getMcpServerStartupVersion()
              : null;
          let mcpServerStartupVersion = readMcpServerStartupVersion();
-@@ -1448,12 +1451,13 @@ export class CodexAcpServer {
+@@ -1485,12 +1488,13 @@ export class CodexAcpServer {
          resumeSubscribed = false;
  
          const canPublishSessionUpdates = operation !== "fork";
 -        if (requestedMcpServers.length > 0 && mcpServerStartupVersion !== null) {
 +        if (awaitsMcpServers && mcpServerStartupVersion !== null) {
-             // A fork publishes no startup report, so nothing waits for the rest of the startup.
              const startupWait = this.mcpSessionStartup.begin(sessionId, requestedMcpServers, mcpServerStartupVersion, {
-                 publish: canPublishSessionUpdates,
+                 publish: canPublishSessionUpdates || this.protocolVersion === 2 || !!sessionMetadata.mcpStartupFailures?.length,
                  awaitTimeoutMs: parseMcpStartupAwaitTimeoutMs(request._meta),
                  skippedServers: sessionMetadata.skippedMcpServers,
+                 failures: sessionMetadata.mcpStartupFailures,
 +                configuredServers: configuredMcpServers,
              });
              if (startupWait !== null) {
@@ -100,7 +100,7 @@ index 0000000000000000000000000000000000000000..6aa7a21d1e8f912648e3db69490bf7a9
 +}
 diff --git a/src/__tests__/CodexACPAgent/cowboy-configured-mcp-wait.test.ts b/src/__tests__/CodexACPAgent/cowboy-configured-mcp-wait.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..d088460d9c109d1187ed390f55ec0d51cb2c872c
+index 0000000000000000000000000000000000000000..9a61ad545229cc90390caeb8d3297e546440666b
 --- /dev/null
 +++ b/src/__tests__/CodexACPAgent/cowboy-configured-mcp-wait.test.ts
 @@ -0,0 +1,142 @@
@@ -123,7 +123,7 @@ index 0000000000000000000000000000000000000000..d088460d9c109d1187ed390f55ec0d51
 +    const agent = fixture.getCodexAcpAgent();
 +    const client = fixture.getCodexAcpClient();
 +    vi.spyOn(client, "readAuthRequirement").mockResolvedValue({required: false, account: null});
-+    vi.spyOn(client, "getAccount").mockResolvedValue({account: null, requiresOpenaiAuth: false});
++    vi.spyOn(client, "getAccount").mockResolvedValue({account: null, userId: null, requiresOpenaiAuth: false});
 +    vi.spyOn(client, "listSkills").mockResolvedValue({data: []});
 +    vi.spyOn(client, "newSession").mockResolvedValue(metadata("new-id"));
 +    vi.spyOn(client, "forkSession").mockResolvedValue(metadata("fork-id"));
@@ -247,37 +247,38 @@ index 0000000000000000000000000000000000000000..d088460d9c109d1187ed390f55ec0d51
 +    return {promise, resolve};
 +}
 diff --git a/src/mcp/McpSessionStartup.ts b/src/mcp/McpSessionStartup.ts
-index 25d29aebe6f727f91af57f3ec8483adfa106c0ec..144ec8a3ce0a5954f79092ff7b200e14def1b5a3 100644
+index 052e0d391e513b3f15a03edbe86de233ba67b7f1..d3ee94b2eb357fe5b015b191fb1a36f75837eb0d 100644
 --- a/src/mcp/McpSessionStartup.ts
 +++ b/src/mcp/McpSessionStartup.ts
-@@ -27,6 +27,8 @@ export interface McpSessionStartupOptions {
-     awaitTimeoutMs?: number | undefined;
-     /** The requested servers that the Codex config already defines. Nothing waits for them, and the report shows them. */
+@@ -29,6 +29,8 @@ export interface McpSessionStartupOptions {
      skippedServers?: Array<string> | undefined;
+     /** Servers that failed before reaching Codex, such as an unavailable bridge listener. */
+     failures?: McpStartupResult["failed"] | undefined;
 +    /** Natively configured servers to await and report beside the requested ones. */
 +    configuredServers?: Array<string> | undefined;
  }
  
  /**
-@@ -72,7 +74,13 @@ export class McpSessionStartup {
+@@ -74,7 +76,14 @@ export class McpSessionStartup {
          afterVersion: number,
          options: McpSessionStartupOptions,
      ): Promise<void> | null {
--        const pendingStartup = this.createPendingSession(sessionId, mcpServers, afterVersion, options.skippedServers ?? []);
+-        const pendingStartup = this.createPendingSession(sessionId, mcpServers, afterVersion, options.skippedServers ?? [], options.failures ?? []);
 +        const pendingStartup = this.createPendingSession(
 +            sessionId,
 +            mcpServers,
 +            afterVersion,
 +            options.skippedServers ?? [],
++            options.failures ?? [],
 +            options.configuredServers ?? [],
 +        );
          if (options.publish) {
              this.pendingSessions.set(sessionId, pendingStartup);
          }
-@@ -127,9 +135,12 @@ export class McpSessionStartup {
-         mcpServers: Array<AcpMcpServer>,
+@@ -130,9 +139,12 @@ export class McpSessionStartup {
          afterVersion: number,
          skippedServers: Array<string>,
+         failures: McpStartupResult["failed"],
 +        configuredServers: Array<string>,
      ): PendingMcpStartupSession {
 -        const requestedServers = new Set(getRequestedMcpServerNames(mcpServers)
@@ -286,6 +287,6 @@ index 25d29aebe6f727f91af57f3ec8483adfa106c0ec..144ec8a3ce0a5954f79092ff7b200e14
 +            ...getRequestedMcpServerNames(mcpServers).filter(server => !skippedServers.includes(server)),
 +            ...configuredServers,
 +        ]);
+         const failedNames = new Set(failures.map(failure => failure.server));
          const abort = new AbortController();
          const startup = this.runWithProcessCheck(() => this.codexAcpClient().awaitMcpServerStartup(
-             Array.from(requestedServers),

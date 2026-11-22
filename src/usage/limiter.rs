@@ -18,6 +18,10 @@ use crate::config::{Config, Handle, Scope, schema};
 pub const QUICK_RETRIES: u32 = 2;
 const QUICK_RETRY_MS: i64 = 60_000;
 
+/// How long a paced confirmed action keeps its Provider priority after the
+/// moment it was told to come back: room for the client to resend.
+const ACTION_PRIORITY_GRACE_MS: i64 = 30_000;
+
 /// The latest a Machine may start a remote poll: its Plugin host reply bound.
 pub const REMOTE_POLL_START_BOUND_MS: i64 = 45_000;
 
@@ -35,6 +39,17 @@ struct State {
     /// Accounts whose latest attempt failed authentication. In memory only:
     /// after a restart the durable backoff simply runs its course.
     authentication_failed: BTreeSet<String>,
+    /// A confirmed action (a reset) the Provider window refused: until the
+    /// deadline, no poll and no other account's action may start for that
+    /// Provider, so background polls of other accounts cannot starve a
+    /// user's reset. In memory only; it lapses on its own.
+    priority: BTreeMap<String, Priority>,
+}
+
+#[derive(Clone)]
+struct Priority {
+    account: String,
+    until_ms: i64,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -138,6 +153,7 @@ impl Limiter {
                 active: BTreeSet::new(),
                 failed_closed,
                 authentication_failed: BTreeSet::new(),
+                priority: BTreeMap::new(),
             })),
             config: Handle::new(Config::defaults(Scope::Service)),
             path,
@@ -163,7 +179,14 @@ impl Limiter {
 
     pub fn view(&self, provider: &str, account: &str, now: i64) -> Budget {
         let config = self.config.current();
-        Self::budget(&config, &self.inner.lock(), provider, account, now, true)
+        Self::budget(
+            &config,
+            &self.inner.lock(),
+            provider,
+            account,
+            now,
+            (true, 1),
+        )
     }
 
     fn budget(
@@ -172,7 +195,7 @@ impl Limiter {
         provider: &str,
         account: &str,
         now: i64,
-        polling: bool,
+        (polling, charged): (bool, usize),
     ) -> Budget {
         let window = super::duration_ms(config.get(&schema::USAGE_PROVIDER_WINDOW));
         let count = config.get(&schema::USAGE_REQUESTS_PER_WINDOW);
@@ -202,14 +225,26 @@ impl Limiter {
             if let Some(last) = attempts.last() {
                 next = next.max(last.saturating_add(spacing));
             }
-            let recent: Vec<_> = attempts
+            let mut recent: Vec<i64> = attempts
                 .iter()
+                .copied()
                 .filter(|time| time.saturating_add(window) > now)
                 .collect();
-            if recent.len() >= usize::try_from(count).unwrap_or(1) {
-                let index = recent.len() - usize::try_from(count).unwrap_or(1);
-                next = next.max(recent[index].saturating_add(window));
+            recent.sort_unstable();
+            // `charged` more starts fit once enough recent ones left the window.
+            let capacity = usize::try_from(count).unwrap_or(1);
+            let excess = (recent.len() + charged.max(1)).saturating_sub(capacity);
+            if excess > recent.len() {
+                next = i64::MAX;
+            } else if excess > 0 {
+                next = next.max(recent[excess - 1].saturating_add(window));
             }
+        }
+        if let Some(priority) = state.priority.get(provider)
+            && priority.until_ms > now
+            && (polling || priority.account != account)
+        {
+            next = next.max(priority.until_ms);
         }
         if state.failed_closed {
             next = i64::MAX;
@@ -320,8 +355,11 @@ impl Limiter {
         let mut state = self.inner.lock();
         // One config snapshot for the budget, window, capacity and spacing.
         let config = self.config.current();
-        let budget = Self::budget(&config, &state, provider, account, now, polling);
+        let budget = Self::budget(&config, &state, provider, account, now, (polling, charged));
         if now < budget.next_allowed_ms {
+            if !polling && !state.failed_closed && budget.next_allowed_ms != i64::MAX {
+                Self::claim_priority(&mut state, provider, account, now, budget.next_allowed_ms);
+            }
             return Err(budget);
         }
         let window = super::duration_ms(config.get(&schema::USAGE_PROVIDER_WINDOW));
@@ -366,12 +404,38 @@ impl Limiter {
         }
         state.durable = next;
         state.active.insert(provider.into());
+        if state
+            .priority
+            .get(provider)
+            .is_some_and(|priority| priority.account == account)
+        {
+            state.priority.remove(provider);
+        }
         Ok(Permit {
             limiter: self.clone(),
             provider: provider.into(),
             account: account.into(),
             finished: false,
         })
+    }
+
+    /// Hold the Provider for a refused confirmed action until a little after
+    /// it may start, unless another account's action already holds it.
+    fn claim_priority(state: &mut State, provider: &str, account: &str, now: i64, retry_at: i64) {
+        let until_ms = retry_at.saturating_add(ACTION_PRIORITY_GRACE_MS);
+        match state.priority.get_mut(provider) {
+            Some(held) if held.until_ms > now && held.account != account => {}
+            Some(held) if held.until_ms > now => held.until_ms = held.until_ms.max(until_ms),
+            _ => {
+                state.priority.insert(
+                    provider.into(),
+                    Priority {
+                        account: account.into(),
+                        until_ms,
+                    },
+                );
+            }
+        }
     }
 
     fn finish(&self, provider: &str, account: &str, outcome: Outcome, now: i64) {
@@ -624,6 +688,61 @@ mod tests {
         assert!(counted.holds(2));
         assert!(!counted.holds(3));
         assert!(counted.start("anthropic", "service", 120_000).is_err());
+    }
+
+    /// Background polls of other accounts cannot starve a confirmed reset:
+    /// a paced refusal names when both starts fit and holds the Provider
+    /// against every other start until the reset's account comes back.
+    #[test]
+    fn a_paced_action_holds_the_provider_until_it_starts() {
+        let limiter = Limiter::new(None);
+        limiter
+            .start("anthropic", "poller", 1_000)
+            .unwrap_or_else(|_| panic!("poll"))
+            .finish(Outcome::Success, 2_000);
+        let window = limiter.spacing_ms() * 2;
+        let refused = limiter
+            .start_action_counted("anthropic", "reset", 70_000, 2)
+            .err()
+            .expect("one recent start leaves no room for two");
+        assert_eq!(refused.next_allowed_ms, 1_000 + window, "exact retry time");
+        // Another account's poll, though spaced and in the window, now waits.
+        assert!(limiter.start("anthropic", "other", 90_000).is_err());
+        assert!(
+            limiter
+                .start_action("anthropic", "other-reset", 90_000)
+                .is_err()
+        );
+        assert!(
+            limiter.view("anthropic", "other", 90_000).next_allowed_ms > 1_000 + window,
+            "polls are held past the reset's slot"
+        );
+        let permit = limiter
+            .start_action_counted("anthropic", "reset", 1_000 + window, 2)
+            .unwrap_or_else(|_| panic!("the held reset starts when the window has room"));
+        permit.finish(Outcome::Success, 1_000 + window);
+        // The hold ends with the reset's start; ordinary pacing resumes.
+        let after = limiter
+            .view("anthropic", "other", 1_000 + window)
+            .next_allowed_ms;
+        assert_eq!(after, 1_000 + window + limiter.spacing_ms() * 2);
+    }
+
+    #[test]
+    fn an_unclaimed_hold_lapses() {
+        let limiter = Limiter::new(None);
+        limiter
+            .start("anthropic", "poller", 1_000)
+            .unwrap_or_else(|_| panic!("poll"))
+            .finish(Outcome::Success, 2_000);
+        let retry = limiter
+            .start_action_counted("anthropic", "reset", 70_000, 2)
+            .err()
+            .expect("paced")
+            .next_allowed_ms;
+        let lapsed = retry + ACTION_PRIORITY_GRACE_MS;
+        assert!(limiter.start("anthropic", "other", lapsed - 1).is_err());
+        assert!(limiter.start("anthropic", "other", lapsed).is_ok());
     }
 
     #[test]

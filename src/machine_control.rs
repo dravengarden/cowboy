@@ -435,7 +435,17 @@ pub struct MachineControl {
     /// offline Machine still shows when it was last observed.
     host_resources: RwLock<HashMap<String, crate::machine_protocol::ObservedHostResources>>,
     browser_observer: RwLock<Option<BrowserObserver>>,
+    /// Test-only replacement for the binding and recovery commit ACK waits.
+    telemetry_commit_timeout: Option<std::time::Duration>,
 }
+
+/// How long a telemetry binding commit waits for the Machine's ACK before the
+/// outcome becomes uncertain and the coordinator queries the original request.
+pub const TELEMETRY_BINDING_COMMIT_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(45);
+/// The same ACK wait for a telemetry binding recovery commit.
+pub const TELEMETRY_RECOVERY_COMMIT_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(15);
 
 #[cfg(any(test, feature = "test-support"))]
 impl Default for MachineControl {
@@ -453,7 +463,22 @@ impl MachineControl {
             next_request: AtomicU64::new(0),
             host_resources: RwLock::default(),
             browser_observer: RwLock::new(None),
+            telemetry_commit_timeout: None,
         }
+    }
+
+    /// Shorten the telemetry commit ACK waits so lost-ACK tests exercise the
+    /// uncertain path without sleeping through the production timeouts. Reply
+    /// queries keep their production deadlines.
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn with_telemetry_commit_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.telemetry_commit_timeout = Some(timeout);
+        self
+    }
+
+    fn telemetry_commit_wait(&self, production: std::time::Duration) -> std::time::Duration {
+        self.telemetry_commit_timeout.unwrap_or(production)
     }
 
     /// Machines whose latest report shows less available disk than their
@@ -1218,7 +1243,12 @@ impl MachineControl {
                     "binding mutation channel or target unavailable",
                 )
             })?;
-        match tokio::time::timeout(std::time::Duration::from_secs(45), rx).await {
+        match tokio::time::timeout(
+            self.telemetry_commit_wait(TELEMETRY_BINDING_COMMIT_TIMEOUT),
+            rx,
+        )
+        .await
+        {
             Ok(Ok(Reply::TelemetryBindingCommit(result))) => match *result {
                 BindingCommitResult::Observed { observation } if observation.matches(step) => {
                     Ok(observation)

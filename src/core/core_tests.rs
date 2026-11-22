@@ -4538,7 +4538,7 @@ async fn session_broadcast_errors_are_persisted_outside_the_transcript() {
 }
 
 #[tokio::test]
-async fn antigravity_drafts_are_never_scheduled_or_fired() {
+async fn antigravity_drafts_are_scheduled_and_notices_queue_like_any_session() {
     let hub = Hub::new();
     hub.create_local_session(
         "agy".to_owned(),
@@ -4548,28 +4548,22 @@ async fn antigravity_drafts_are_never_scheduled_or_fired() {
         SessionOrigin::Web,
         false,
     );
-    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-    hub.set_dispatch_tx(tx);
     hub.schedule_draft(
         "agy",
         None,
         Some("later".into()),
         "later".into(),
         vec![],
-        1,
+        i64::MAX,
         crate::model::Delivery::Back,
     );
     let drafts = hub.queue_and_drafts("agy", |_| true).unwrap().1;
     assert_eq!(drafts.len(), 1);
-    assert!(drafts[0].schedule.is_none());
-    hub.fire_scheduled_draft("agy", &drafts[0].id);
-    assert!(rx.try_recv().is_err());
-    assert_eq!(hub.queue_and_drafts("agy", |_| true).unwrap().1.len(), 1);
-    // Managed-call notices and wakeups park too; a human sends them.
+    assert!(drafts[0].schedule.is_some());
+    // Managed-call notices and wakeups are prompts, not parked drafts.
     hub.submit_call_notice("agy", "call-1", "call finished".into());
     hub.submit_automatic("agy", "wake".into(), "__wakeup-agy".into());
-    assert!(rx.try_recv().is_err());
-    assert_eq!(hub.queue_and_drafts("agy", |_| true).unwrap().1.len(), 3);
+    assert_eq!(hub.queue_and_drafts("agy", |_| true).unwrap().1.len(), 1);
 }
 
 #[test]

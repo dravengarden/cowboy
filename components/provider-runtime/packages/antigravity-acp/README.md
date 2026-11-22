@@ -11,20 +11,21 @@ places its tree below `proxy/` in the account-sandbox runtime archive and adds
 `bin/agy-proxy` and `bin/agy-hook` entry scripts; `policy/hooks.json` and
 `policy/settings.json` come from this package.
 
-| File                          | Role                                                                    |
-| ----------------------------- | ----------------------------------------------------------------------- |
-| `launch.mjs`                  | Proxy entry: readiness, closed `agy` environment, wiring                |
-| `proxy.mjs`                   | ACP relay: runtime method allow-list, session rewrite, turn settlement  |
-| `extensions.mjs`              | The worker's extension tools (Cowboy MCP, bindings, memory) in `cowboy` |
-| `memory.mjs`                  | Matrix memory over the worker's `cowboy/memory` bridge                  |
-| `presentation.mjs`            | Facade calls as native tool calls (kind, title, path, diff, result)     |
-| `facade.mjs`                  | MCP tools over the one execution `Connection`                           |
-| `facade-relay.mjs`            | stdio MCP server `agy` launches; relays to the proxy's socket           |
-| `projection.mjs`              | Target context appended to the system prompt                            |
-| `compaction.mjs`              | `/compact` as a typed compaction; context restated after it             |
-| `evidence.mjs`                | Backend refusal classification from the unit's `agy` log                |
-| `hook.mjs`                    | `PreToolUse` allow-list (`agy-hook`)                                    |
-| `hooks.json`, `settings.json` | Policy the daemon binds read-only over the home                         |
+| File                          | Role                                                                      |
+| ----------------------------- | ------------------------------------------------------------------------- |
+| `launch.mjs`                  | Proxy entry: readiness, closed `agy` environment, wiring                  |
+| `proxy.mjs`                   | ACP relay: runtime method allow-list, session rewrite, turn settlement    |
+| `extensions.mjs`              | The worker's extension tools (Cowboy MCP, bindings, memory) in `cowboy`   |
+| `memory.mjs`                  | Matrix memory over the worker's `cowboy/memory` bridge                    |
+| `presentation.mjs`            | Facade calls as native tool calls (kind, title, path, diff, result)       |
+| `facade.mjs`                  | MCP tools over the one execution `Connection`                             |
+| `facade-relay.mjs`            | stdio MCP server `agy` launches; relays to the proxy's socket             |
+| `projection.mjs`              | Target context appended to the system prompt                              |
+| `compaction.mjs`              | `/compact` as a typed compaction; context restated after it               |
+| `subagents.mjs`               | The `Subagent` tool's host: child `agy` sessions inside the parent's turn |
+| `evidence.mjs`                | Backend refusal classification from the unit's `agy` log                  |
+| `hook.mjs`                    | `PreToolUse` allow-list (`agy-hook`)                                      |
+| `hooks.json`, `settings.json` | Policy the daemon binds read-only over the home                           |
 
 ## Behavior
 
@@ -110,6 +111,16 @@ places its tree below `proxy/` in the account-sandbox runtime archive and adds
   simplification"). Tools work
   only inside a turn; on every turn end the turn is fenced, its admitted
   mutations are awaited and its commands stopped.
+- Subagents (design "Subagents"): `Subagent` starts another `agy` session in
+  the same process inside the calling session's turn (its working directory,
+  projection, mode, model and effort, its own facade channel and turn) and
+  returns its report; `StopSubagent` stops one. It waits at most 600 s, then
+  returns the id to wait for again. They are reported to a worker that
+  declared `clientCapabilities.subagents` as ACP subagents (`subagent_update`,
+  a linked delegation `session_message`, the child's own updates), at most 2
+  at once and 8 per turn, one level deep, none in plan mode or a managed
+  call. A parent's turn end or cancel stops them; a child's gate violation,
+  unknown effect or backend refusal ends the parent's turn.
 - Presentation (design "Feature inventory and Cowboy adaptation"): `agy`
   reports no result for an MCP call, so the facade reports each answer
   before replying and the proxy puts it on `agy`'s terminal update of the

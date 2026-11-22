@@ -16,7 +16,7 @@ export const CLASSES = Object.freeze([
   "unknown_refusal",
 ]);
 // Highest first: the class a turn settles to when several refusals appear.
-const PRECEDENCE = [
+export const PRECEDENCE = [
   "suspended",
   "verification_required",
   "location_unsupported",

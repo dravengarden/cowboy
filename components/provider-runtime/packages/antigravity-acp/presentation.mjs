@@ -18,6 +18,9 @@ const TOOLS = Object.freeze({
   EditFile: { name: "Edit", kind: "edit" },
   RunCommand: { name: "Run", kind: "execute" },
   StopCommand: { name: "Stop", kind: "execute" },
+  // The call that runs a subagent; the subagent itself is its own row.
+  Subagent: { name: "Subagent", kind: "think" },
+  StopSubagent: { name: "StopSubagent", kind: "think" },
   // Shown as the session's plan (`planUpdate`), never as a tool call.
   UpdatePlan: { name: "UpdatePlan", kind: "think" },
 });
@@ -134,6 +137,15 @@ function describe(tool, input, root) {
     }
     case "StopCommand":
       return { title: `Stop ${text(input.command_id) ?? "command"}` };
+    case "Subagent": {
+      const label = text(input.description)?.trim() || text(input.prompt)?.trim();
+      const id = text(input.subagent_id);
+      return {
+        title: label ? line(`Subagent: ${label}`) : id ? `Wait for subagent ${id}` : "Subagent",
+      };
+    }
+    case "StopSubagent":
+      return { title: `Stop subagent ${text(input.subagent_id) ?? ""}`.trim() };
     default:
       return { title: tool };
   }

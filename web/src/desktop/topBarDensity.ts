@@ -57,6 +57,16 @@ export function usagePercentSegmentWidth(windows: number): number {
   return USAGE_SEGMENT_WIDTH_PX +
     Math.max(0, windows - 1) * USAGE_WINDOW_WIDTH_PX;
 }
+/** The account name of a grouped segment, set once beside its groups. */
+export const USAGE_GROUP_NAME_WIDTH_PX = 48;
+/** One quota group: `Claude/GPT 99%` over `Weekly · 6d23h`. The group name
+ *  rides in the column, so it costs a little more than a bare window. */
+export const USAGE_GROUP_WIDTH_PX = 132;
+
+/** Budget for a segment of per-group quotas (Antigravity). */
+export function usageGroupSegmentWidth(groups: number): number {
+  return USAGE_GROUP_NAME_WIDTH_PX + Math.max(1, groups) * USAGE_GROUP_WIDTH_PX;
+}
 /** The widest a balance account (DeepSeek) may grow: spend, partial-pricing,
  *  cache-miss and blocking-error counters. It hugs shorter content and
  *  truncates beyond this, so the budget is an upper bound, not a fixed cell. */

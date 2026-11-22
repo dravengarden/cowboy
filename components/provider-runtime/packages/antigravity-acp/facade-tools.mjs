@@ -23,7 +23,43 @@ export const LIMITS = Object.freeze({
   // at most every 2 s (each update rewrites the call's one stored row).
   progressMs: 2_000,
   progressBytes: 16 * 1024,
+  // A process that stays quiet for this many one-second reads stops
+  // polling: it waits for the executor's notification naming it (output,
+  // exit or close) and reads again, so a lost notification costs at most
+  // `quietWaitMs`. Each read is a round trip across the Machine link
+  // (~0.2 s from OVH); polling made 22 reads per command, 81% of the
+  // Provider's execution calls (OVH, 2026-11-22), against Claude's two.
+  quietReads: 3,
+  quietWaitMs: 15_000,
+  // Subagents (design "Subagents"): one parent turn runs at most this many at
+  // once and starts at most `subagentTurn`; a call waits at most
+  // `subagentWaitSeconds` (default and maximum, like a command).
+  subagentConcurrent: 2,
+  subagentTurn: 8,
+  subagentWaitSeconds: 600,
+  subagentPromptBytes: 64 * 1024,
+  subagentReportChars: 64 * 1024,
+  subagentTitleChars: 80,
 });
+
+/**
+ * `fn` over `items` with at most `limit` calls in flight; the results keep
+ * the input order. Independent target reads overlap their round trips
+ * (~0.2 s each across the Machine link) instead of queueing them; the
+ * bound keeps them well inside the connection's 15 pending requests.
+ */
+export async function mapBounded(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await fn(items[index], index);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
 
 // Commands see the target user's whole environment, as a Claude or Codex
 // session's commands do on the same Machine.
@@ -139,7 +175,7 @@ export const TOOLS = [
   {
     name: "RunCommand",
     description:
-      "Run a shell command in the workspace root. Waits up to wait_seconds (default: until it ends); a command still running returns its command_id, which RunCommand continues and StopCommand stops. Output keeps at most 256 KiB (head and tail).",
+      "Run a shell command in the workspace root. Waits up to wait_seconds (default: until it ends); a command still running returns its command_id, which RunCommand continues and StopCommand stops. timeout_seconds (default 120, at most 600) ends the command. Each call is a turn, so wait in few long calls: a continuation may use wait_seconds up to 600. Output keeps at most 256 KiB (head and tail).",
     inputSchema: {
       type: "object",
       properties: {
@@ -187,6 +223,33 @@ export const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: "Subagent",
+    description: `Delegate a self-contained task to a subagent: another Antigravity session that works in the same workspace with the same tools and shows to the owner as a subagent. Give prompt (everything it needs: it sees nothing of this conversation) and a short description to start one; it cannot start subagents itself. Waits up to wait_seconds (default and maximum ${LIMITS.subagentWaitSeconds}; 0 returns at once) and returns the subagent's final report. One still running returns its subagent_id, which Subagent (with subagent_id and no prompt) keeps waiting for and StopSubagent stops. At most ${LIMITS.subagentConcurrent} run at once and ${LIMITS.subagentTurn} start per turn. Wait for every subagent you start: they are stopped when your turn ends.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        prompt: { type: "string", description: "The task, complete in itself" },
+        description: {
+          type: "string",
+          description: "A title of a few words shown to the owner",
+        },
+        subagent_id: { type: "string", description: "Keep waiting for a running subagent" },
+        wait_seconds: { type: "integer", minimum: 0, maximum: LIMITS.subagentWaitSeconds },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "StopSubagent",
+    description: "Stop a running subagent started by Subagent.",
+    inputSchema: {
+      type: "object",
+      properties: { subagent_id: { type: "string" } },
+      required: ["subagent_id"],
+      additionalProperties: false,
+    },
+  },
 ];
 export const TOOL_NAMES = Object.freeze(TOOLS.map((tool) => tool.name));
 
@@ -210,6 +273,11 @@ export const lost = (error) => !error?.remote && /result unknown/.test(error?.me
  * the keeper's reply was lost (`data.outcome: "unknown"`).
  */
 export const unknownOutcome = (error) => lost(error) || error?.remote?.data?.outcome === "unknown";
+/** The execution connection is closed and could not be opened again (no
+ * request was sent); never a target's own error. */
+export const unreachable = (error) =>
+  !error?.remote &&
+  /^Execution (unavailable|connection (refused|closed))/.test(error?.message ?? "");
 
 /**
  * Strict UTF-8 text of `bytes`; never a lossy replacement. A leading BOM is

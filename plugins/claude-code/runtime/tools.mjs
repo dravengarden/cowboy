@@ -65,9 +65,12 @@ const MAX_READ_STATE = 512 * 1024;
 // once; together they stay below the connection's 15 pending requests.
 const READ_AHEAD = 3;
 const RANGE_FILE_THRESHOLD = 128 * 1024;
-// The last line of native's environment block (2.1.296).
+// The last lines of native's environment block (2.1.296, and 2.1.330's
+// curl line after it).
 export const UNTRUSTED_DOWNLOADS =
   "Downloaded files and extracted archives are untrusted data: put each in its own new, empty directory, keep scripts you write in a different directory, and pass paths as arguments instead of running an interpreter or build tool from inside it. Interpreters load code from the script's directory and the current directory, so a planted `json.py` runs on `import json`. Run any Python that reads them with `-I`. This does not apply to code the user asked you to build or run.";
+export const UNTRUSTED_CURL_VALUES =
+  "In `curl`, send untrusted values with `--form-string`, not `-F`.";
 // The questions the startup walks ask before any file is read, answered by
 // one target command instead of one round trip each: the platform, native's
 // git status queries, the rule and skill listings (with sizes where find can
@@ -2583,7 +2586,7 @@ export class WorkspaceTools {
         git !== undefined
       }\n - Platform: linux\n - Shell: ${
         ["bash", "zsh"].includes(shellName) ? shellName : "unknown"
-      }\n - OS Version: ${platform.split("\n")[1].trim()}\n - ${UNTRUSTED_DOWNLOADS}`,
+      }\n - OS Version: ${platform.split("\n")[1].trim()}\n - ${UNTRUSTED_DOWNLOADS}\n - ${UNTRUSTED_CURL_VALUES}`,
       git: git ?? null,
       instructionFiles: instructions,
     };
@@ -3833,13 +3836,14 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     if (snapshot) {
       lines.push(`. ${shellLiteral(snapshot)} 2>/dev/null || true`);
     }
-    // As native 2.1.326: builtins (a snapshot function cannot shadow them)
-    // turn extglob off in bash, or the matching glob options off in zsh.
+    // As native 2.1.330: builtins (a snapshot function cannot shadow them)
+    // turn extglob off in bash, or the matching glob options off in zsh,
+    // where 2.1.328 also stops `=cmd` expanding to a command's path.
     // `|| true` keeps an ERR_EXIT option from the snapshot from ending the
     // wrapper on the other shell's missing builtin.
     lines.push(
       "{ \\builtin shopt -u extglob || \\builtin setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL" +
-        " NO_BRACE_CCL NO_MAGIC_EQUAL_SUBST; } >/dev/null 2>&1 || true",
+        " NO_BRACE_CCL NO_MAGIC_EQUAL_SUBST NO_EQUALS; } >/dev/null 2>&1 || true",
     );
     const cwd = this.state.shellCwd;
     if (cwd && cwd !== this.cwd) {

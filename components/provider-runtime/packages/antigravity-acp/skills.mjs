@@ -9,12 +9,15 @@
 import { posix } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { inside } from "./facade.mjs";
+import { mapBounded } from "./facade-tools.mjs";
 
 export const SKILL_LIMITS = Object.freeze({
   skills: 64,
   frontmatter: 8 * 1024,
   description: 600,
   section: 24 * 1024,
+  // Skill reads in flight at once (beside the guidance reads).
+  concurrency: 3,
 });
 /** Skill directories, nearest first per level; Codex's before Claude's. */
 export const SKILL_DIRECTORIES = [".agents/skills", ".claude/skills"];
@@ -85,30 +88,39 @@ async function frontmatterOf(call, file, root) {
  */
 export async function discoverSkills(facade, directories, root) {
   const call = (method, params) => facade.connection.call(method, params);
-  const found = new Map();
-  for (const directory of directories) {
-    for (const relative of SKILL_DIRECTORIES) {
-      const skillsDirectory = posix.join(directory, relative);
-      if (!(await canonicalDirectory(call, skillsDirectory, root))) continue;
+  // Independent reads overlap (each is a round trip to the target); the
+  // definitions are then applied in order, so the deepest still wins.
+  const skillsDirectories = directories.flatMap((directory) =>
+    SKILL_DIRECTORIES.map((relative) => posix.join(directory, relative)),
+  );
+  const listed = await mapBounded(
+    skillsDirectories,
+    SKILL_LIMITS.concurrency,
+    async (skillsDirectory) => {
+      if (!(await canonicalDirectory(call, skillsDirectory, root))) return [];
       let entries;
       try {
         entries = (await call("fs/readDirectory", { path: pathToFileURL(skillsDirectory).href }))
           .entries;
       } catch {
-        continue;
+        return [];
       }
-      const names = (Array.isArray(entries) ? entries : [])
+      return (Array.isArray(entries) ? entries : [])
         .filter((entry) => entry?.isDirectory && typeof entry.fileName === "string")
         .map((entry) => entry.fileName)
-        .sort();
-      for (const name of names) {
-        const path = posix.join(skillsDirectory, name, "SKILL.md");
-        const skill = await frontmatterOf(call, path, root);
-        if (!skill) continue;
-        found.delete(skill.name);
-        found.set(skill.name, { ...skill, path });
-      }
-    }
+        .sort()
+        .map((name) => posix.join(skillsDirectory, name, "SKILL.md"));
+    },
+  );
+  const paths = listed.flat();
+  const skills = await mapBounded(paths, SKILL_LIMITS.concurrency, (path) =>
+    frontmatterOf(call, path, root),
+  );
+  const found = new Map();
+  for (const [index, skill] of skills.entries()) {
+    if (!skill) continue;
+    found.delete(skill.name);
+    found.set(skill.name, { ...skill, path: paths[index] });
   }
   return [...found.values()]
     .sort((left, right) => left.name.localeCompare(right.name))

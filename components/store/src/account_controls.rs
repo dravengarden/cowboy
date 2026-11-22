@@ -223,7 +223,7 @@ pub fn fence_revision(fence: &Fence, current: i64) -> Option<u64> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Gate {
     Proceed {
-        /// An explicit owner send after a rate limit ended resumes the account.
+        /// The first dispatch after a rate limit ended resumes the account.
         clears_rate_limit: bool,
     },
     Park(String),
@@ -236,8 +236,6 @@ pub struct GateInput<'a> {
     pub control: Option<&'a Control>,
     /// The method and sequence of an unacknowledged uncertain effect.
     pub uncertain: Option<(&'a str, u64)>,
-    /// An owner pressed send (or send now); automatic drains are not.
-    pub explicit: bool,
     pub now_ms: i64,
 }
 
@@ -261,11 +259,6 @@ pub fn gate(input: &GateInput<'_>) -> Gate {
                         control.state.describe(),
                         format_utc(until)
                     ));
-                }
-                if !input.explicit {
-                    return Gate::Park(
-                        "the account's rate limit ended; send again to resume it".into(),
-                    );
                 }
                 clears_rate_limit = true;
             }
@@ -291,7 +284,6 @@ pub fn revival_allowed(
         admitted,
         control,
         uncertain: None,
-        explicit: true,
         now_ms,
     }) {
         Gate::Proceed { .. } => Ok(()),

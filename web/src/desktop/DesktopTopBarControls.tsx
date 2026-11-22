@@ -124,11 +124,13 @@ import {
   topBarWidth,
   USAGE_BALANCE_SEGMENT_WIDTH_PX,
   usageCountdown,
+  usageGroupSegmentWidth,
   usagePercentSegmentWidth,
   usageRemainingTone,
   type UsageTone,
 } from "./topBarDensity";
 import { lowPriorityInterval } from "../network/bandwidth";
+import { usageWidgetBalanceLabel } from "../usageHostMap";
 
 const EMPTY_CONFIG_OPTIONS: ConfigOption[] = [];
 
@@ -202,22 +204,35 @@ const USAGE_TONE_COLOR: Record<UsageTone, string> = {
 };
 
 // Only facts that need attention earn space: partial pricing and blocking
-// errors appear when they exist, never as "100% priced" or "0 blocked".
-function balanceUsageSummary(provider: UsageBalanceWidget): string {
-  const fullyPriced = provider.spend24hPriceCoverage !== undefined &&
-    provider.spend24hPriceCoverage >= 99.999;
+// errors appear when they exist, never as "100% priced" or "0 blocked". An
+// account that reports only its balance names the figure instead.
+function balanceUsageSummary(
+  provider: UsageBalanceWidget,
+  usageProvider: string,
+): string {
+  const activity = provider.activity;
+  if (!activity) return usageWidgetBalanceLabel(usageProvider);
+  const fullyPriced = activity.spend24hPriceCoverage !== undefined &&
+    activity.spend24hPriceCoverage >= 99.999;
   return [
     `24h ${fullyPriced ? "" : "≥"}${
-      formatCompactCurrency(provider.spend24h, provider.currency)
+      formatCompactCurrency(activity.spend24h, provider.currency)
     }`,
     fullyPriced
       ? undefined
-      : `${provider.spend24hPriceCoverage?.toFixed(0) ?? "0"}% priced`,
-    `Miss ${provider.cacheMissRate.toFixed(1)}%`,
-    provider.blockingErrors > 0
-      ? `${provider.blockingErrors.toLocaleString()} blocked`
+      : `${activity.spend24hPriceCoverage?.toFixed(0) ?? "0"}% priced`,
+    `Miss ${activity.cacheMissRate.toFixed(1)}%`,
+    activity.blockingErrors > 0
+      ? `${activity.blockingErrors.toLocaleString()} blocked`
       : undefined,
   ].filter((part) => part !== undefined).join(" · ");
+}
+
+/** Segment budget for one account, in 100%-scale px. */
+function usageSegmentWidth(provider: UsageWidgetProvider): number {
+  if (usageWidgetHasBalance(provider)) return USAGE_BALANCE_SEGMENT_WIDTH_PX;
+  if (provider.groups) return usageGroupSegmentWidth(provider.groups.length);
+  return usagePercentSegmentWidth(provider.windows?.length ?? 1);
 }
 
 /** One account window as a column: the remaining share over its period and
@@ -239,6 +254,51 @@ function usageWindowColumn(
   };
 }
 
+type UsageColumn = {
+  primary: string;
+  secondary: string;
+  remaining?: number;
+  /** A quota group's name, set before its percentage. */
+  group?: string;
+  /** Every window of a group, for the hover. */
+  detail?: string;
+};
+
+function usageColumns(
+  provider: UsageWidgetProvider,
+  usageProvider: string,
+  now: number,
+): UsageColumn[] {
+  if (usageWidgetHasBalance(provider)) {
+    return [{
+      primary: formatCompactCurrency(provider.balance, provider.currency),
+      secondary: balanceUsageSummary(provider, usageProvider),
+    }];
+  }
+  if (provider.groups) {
+    // One column per group, showing the window that binds it: a group with
+    // 97% of its 5h left but 19% of its week reads 19%, and flips to the 5h
+    // the moment that one runs lower. Every window stays in the hover and
+    // the U panel.
+    return provider.groups.map((group) => ({
+      ...usageWindowColumn(group.binding, now),
+      group: group.label,
+      detail: `${group.label}: ${
+        group.windows.map((window) =>
+          `${window.periodLabel} ${String(window.remaining)}%${
+            usageCountdown(window.resetsAt, now) === undefined
+              ? ""
+              : ` (${usageCountdown(window.resetsAt, now) ?? ""})`
+          }`
+        ).join(" · ")
+      }`,
+    }));
+  }
+  return (provider.windows ?? [provider]).map((window) =>
+    usageWindowColumn(window, now)
+  );
+}
+
 function UsageProviderSummary(
   { provider, first, now, account, refreshing }: {
     provider: UsageWidgetProvider;
@@ -251,37 +311,46 @@ function UsageProviderSummary(
     now: number;
   },
 ): React.JSX.Element {
-  const balance = usageWidgetHasBalance(provider);
   // An account with several windows (Anthropic 5h + Weekly) keeps ONE
   // segment: the provider name heads the first column only and column
   // alignment, not a divider, ties each number to its window. Each column
   // reads like a single-window segment, so the eye learns one pattern.
-  const columns: {
-    primary: string;
-    secondary: string;
-    remaining?: number;
-  }[] = balance
-    ? [{
-      primary: formatCompactCurrency(provider.balance, provider.currency),
-      secondary: balanceUsageSummary(provider),
-    }]
-    : (provider.windows ?? [provider]).map((window) =>
-      usageWindowColumn(window, now)
-    );
-  const width = balance
-    ? USAGE_BALANCE_SEGMENT_WIDTH_PX
-    : usagePercentSegmentWidth(columns.length);
+  const columns = usageColumns(provider, account.usage.provider, now);
+  // Per-group quotas name each column, so the account name moves out of the
+  // first column into its own cell spanning both rows; otherwise it would
+  // read `Husky Gemini 81%`.
+  const grouped = !usageWidgetHasBalance(provider) &&
+    provider.groups !== undefined;
+  const name = account.title.split(" · ").at(-1);
+  const nameText = (
+    <Typography
+      variant="caption"
+      color="text.secondary"
+      fontWeight={700}
+      noWrap
+    >
+      {name}
+    </Typography>
+  );
+  const spinner = refreshing
+    ? <CircularProgress size={10} aria-label="Refreshing usage" />
+    : null;
   return (
     <Box
       data-usage-provider={provider.kind}
       data-usage-account={account.id}
-      title={`${account.title}${refreshing ? " · Refreshing…" : ""}`}
+      {...(grouped ? { "data-usage-grouped": "" } : {})}
+      title={`${account.title}${refreshing ? " · Refreshing…" : ""}${
+        grouped
+          ? `\n${columns.map((column) => column.detail ?? "").join("\n")}`
+          : ""
+      }`}
       aria-label={`${account.title}${refreshing ? " · Refreshing" : ""}`}
       sx={{
         // Every segment hugs its own text. The density decision still reserves
         // each kind's budget, so a segment may use less but never more; past
         // it the text truncates rather than pushing the toolbar.
-        maxWidth: width,
+        maxWidth: usageSegmentWidth(provider),
         px: 0.75,
         py: 0.25,
         textAlign: "left",
@@ -290,7 +359,9 @@ function UsageProviderSummary(
         // percentage sits directly over its own `5h · 30m`. That alignment is
         // the grouping; a rule between windows would split one account into
         // what reads as two segments. Rules mean "next account" only.
-        gridTemplateColumns: `repeat(${String(columns.length)}, auto)`,
+        gridTemplateColumns: `${grouped ? "auto " : ""}repeat(${
+          String(columns.length)
+        }, auto)`,
         columnGap: 1.25,
         // One segmented control, not three floating chips: the group paints the
         // surface and 1px rules separate the accounts, which reads calmer and
@@ -298,6 +369,17 @@ function UsageProviderSummary(
         ...(first ? {} : { borderLeft: 1, borderColor: "divider" }),
       }}
     >
+      {grouped && (
+        <Stack
+          direction="row"
+          spacing={0.55}
+          alignItems="center"
+          sx={{ gridRow: "1 / span 2", minWidth: 0 }}
+        >
+          {nameText}
+          {spinner}
+        </Stack>
+      )}
       {columns.map((column, index) => (
         <Stack
           key={`primary-${String(index)}`}
@@ -305,17 +387,19 @@ function UsageProviderSummary(
           spacing={0.55}
           sx={{ minWidth: 0 }}
         >
-          {index === 0 && (
+          {!grouped && index === 0 && nameText}
+          {!grouped && index === 0 && spinner}
+          {column.group !== undefined && (
             <Typography
               variant="caption"
               color="text.secondary"
-              fontWeight={700}
+              fontWeight={500}
               noWrap
+              sx={{ minWidth: 0 }}
             >
-              {account.title.split(" · ").at(-1)}
+              {column.group}
             </Typography>
           )}
-          {index === 0 && refreshing && <CircularProgress size={10} aria-label="Refreshing usage" />}
           <Typography
             variant="caption"
             fontWeight={800}
@@ -1018,11 +1102,7 @@ export function DesktopTopBarControls({
   // than this strip, the margin collapses and the parent toolbar scrolls instead
   // of compressing controls into one another.
   const usageMinWidth = snapshot === null ? 132 : widgetProviders.reduce(
-    (width, { provider }) =>
-      width +
-      (usageWidgetHasBalance(provider)
-        ? USAGE_BALANCE_SEGMENT_WIDTH_PX
-        : usagePercentSegmentWidth(provider.windows?.length ?? 1)),
+    (width, { provider }) => width + usageSegmentWidth(provider),
     0,
   ) + 44;
   // Compact, Clear and Stop live in the Prompt's delivery row.

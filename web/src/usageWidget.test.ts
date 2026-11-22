@@ -148,11 +148,13 @@ test("usage widget aggregates supported providers and drops unsupported placehol
       label: "DeepSeek",
       currency: "CNY",
       balance: 108.8,
-      spend24h: 2.51,
-      spend24hPriceCoverage: 100,
-      cacheHitRate: 90,
-      cacheMissRate: 10,
-      blockingErrors: 1,
+      activity: {
+        spend24h: 2.51,
+        spend24hPriceCoverage: 100,
+        cacheHitRate: 90,
+        cacheMissRate: 10,
+        blockingErrors: 1,
+      },
     },
   ]);
 });
@@ -202,15 +204,17 @@ test("usage widget marks partial 24h valuation and keeps the same cache window",
     label: "DeepSeek",
     currency: "EUR",
     balance: 12,
-    spend24h: 0.07,
-    spend24hPriceCoverage: 70 / 120 * 100,
-    cacheHitRate: 80,
-    cacheMissRate: 20,
-    blockingErrors: 1,
+    activity: {
+      spend24h: 0.07,
+      spend24hPriceCoverage: 70 / 120 * 100,
+      cacheHitRate: 80,
+      cacheMissRate: 20,
+      blockingErrors: 1,
+    },
   }]);
 });
 
-test("usage widget removes providers without complete account-level core data", () => {
+test("usage widget keeps a balance the account reports without activity", () => {
   const providers = usageWidgetProviders({
     refreshed_at_ms: 1,
     next_refresh_at_ms: 2,
@@ -223,7 +227,80 @@ test("usage widget removes providers without complete account-level core data", 
       account: { balanceInfos: [{ currency: "CNY", total_balance: "12" }] },
     }],
   });
-  assertEquals(providers, []);
+  assertEquals(providers, [{
+    kind: "deepseek-balance",
+    label: "DeepSeek",
+    currency: "CNY",
+    balance: 12,
+  }]);
+  // No balance at all is still no segment.
+  assertEquals(usageWidgetProviders({
+    refreshed_at_ms: 1,
+    next_refresh_at_ms: 2,
+    refresh_interval_ms: 1,
+    providers: [{ provider: "deepseek", status: "available", source: "test", observed_at_ms: 1 }],
+  }), []);
+});
+
+test("usage widget shows per-group quotas by their binding window", () => {
+  const widget = usageWidgetForAccount({
+    provider: "antigravity",
+    status: "available",
+    source: "test",
+    observed_at_ms: 1,
+    rate_limits: { rateLimitsByLimitId: {
+      "0100-claude-and-gpt-models": { limitName: "Claude and GPT models", primary: { usedPercent: 1.3, resetsAt: 300, windowDurationMins: 10080 } },
+      "0101-claude-and-gpt-models": { limitName: "Claude and GPT models", primary: { usedPercent: 0, resetsAt: 200, windowDurationMins: 300 } },
+      "0000-gemini-models": { limitName: "Gemini Models", primary: { usedPercent: 19, resetsAt: 400, windowDurationMins: 10080 } },
+      "0001-gemini-models": { limitName: "Gemini Models", primary: { usedPercent: 66, resetsAt: 100, windowDurationMins: 300 } },
+      "0200-gemini-4-argon": { limitName: "Gemini 4 Argon", primary: { usedPercent: 0, resetsAt: 500, windowDurationMins: 10080 } },
+    } },
+  });
+  assertEquals(widget, {
+    kind: "none",
+    label: "Antigravity",
+    remaining: 34,
+    periodLabel: "5h",
+    resetsAt: 100,
+    groups: [
+      {
+        label: "Gemini",
+        binding: { remaining: 34, periodLabel: "5h", resetsAt: 100 },
+        windows: [
+          { remaining: 34, periodLabel: "5h", resetsAt: 100 },
+          { remaining: 81, periodLabel: "Weekly", resetsAt: 400 },
+        ],
+      },
+      {
+        label: "Claude/GPT",
+        // 99% of the week binds over 100% of the 5h window.
+        binding: { remaining: 99, periodLabel: "Weekly", resetsAt: 300 },
+        windows: [
+          { remaining: 100, periodLabel: "5h", resetsAt: 200 },
+          { remaining: 99, periodLabel: "Weekly", resetsAt: 300 },
+        ],
+      },
+      {
+        label: "Gemini 4 Argon",
+        binding: { remaining: 100, periodLabel: "Weekly", resetsAt: 500 },
+        windows: [{ remaining: 100, periodLabel: "Weekly", resetsAt: 500 }],
+      },
+    ],
+  });
+});
+
+test("usage widget never shows model rows as a declared account window", () => {
+  // Codex declares account windows; a report with only a model bucket is a
+  // schema change and degrades to no segment.
+  assertEquals(usageWidgetForAccount({
+    provider: "openai",
+    status: "available",
+    source: "test",
+    observed_at_ms: 1,
+    rate_limits: { rateLimitsByLimitId: {
+      spark: { limitName: "GPT-5.3-Codex-Spark", primary: { usedPercent: 1, windowDurationMins: 10080 } },
+    } },
+  }), undefined);
 });
 
 test("usage widget projects one available account", () => {

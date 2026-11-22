@@ -120,11 +120,11 @@ export function sessionProviderUsageRows(
         label: usageWidgetBalanceLabel(usage.provider),
         value: formatCompactCurrency(widget.balance, widget.currency),
       },
-      {
+      ...(widget.activity === undefined ? [] : [{
         id: `${usage.provider}-spend`,
         label: usageWidgetSpendLabel(usage.provider),
-        value: formatCompactCurrency(widget.spend24h, widget.currency),
-      },
+        value: formatCompactCurrency(widget.activity.spend24h, widget.currency),
+      }]),
       updated,
     ];
   }

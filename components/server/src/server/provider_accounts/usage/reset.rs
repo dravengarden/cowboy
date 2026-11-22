@@ -164,20 +164,44 @@ const RESET_COLLECTOR_STARTS: usize = 2;
 /// How long a request waits for the account's collection lock.
 const ADMISSION_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// When a reset refused for the account's own in-flight quota read may retry.
+const BUSY_RETRY_MS: i64 = 5_000;
+
+/// Why a reset was not admitted, and for a paced one when the Provider window
+/// has room for it (the limiter holds the Provider for it until then).
+struct Refused {
+    code: &'static str,
+    retry_at_ms: Option<i64>,
+}
+
+impl From<&'static str> for Refused {
+    fn from(code: &'static str) -> Self {
+        Self {
+            code,
+            retry_at_ms: None,
+        }
+    }
+}
+
+fn paced(retry_at_ms: i64) -> Refused {
+    Refused {
+        code: "usage_reset_paced",
+        retry_at_ms: Some(retry_at_ms),
+    }
+}
+
 /// Admit a reset on an eligible route, within the request (bounded): the
 /// Provider window must have room for its starts now. A manual reset obeys
 /// the Provider spacing and backoff, never the account poll interval a
-/// preceding usage read started. Its starts are charged here.
-async fn admit(
-    state: &AppState,
-    owner: &str,
-    id: &ProviderAccountId,
-) -> Result<Admitted, &'static str> {
+/// preceding usage read started. Its starts are charged here. A paced
+/// refusal sent nothing, names when the window has room, and holds the
+/// Provider against other starts until then, so the caller may resend.
+async fn admit(state: &AppState, owner: &str, id: &ProviderAccountId) -> Result<Admitted, Refused> {
     let route = route(state, owner, id).await?;
     let slot = state.usage.native.entry(owner, id.as_str());
     let serial = tokio::time::timeout(ADMISSION_WAIT, Arc::clone(&slot.collection).lock_owned())
         .await
-        .map_err(|_| "usage_reset_paced")?;
+        .map_err(|_| paced(now_ms().saturating_add(BUSY_RETRY_MS)))?;
     let key = crate::usage::limiter::Limiter::account_key(owner, id.as_str());
     let now = now_ms();
     // One config snapshot: the expiry, both reservations and the dispatch.
@@ -192,7 +216,13 @@ async fn admit(
         .usage
         .limiter
         .start_action_bounded(&route.binding.account, &key, now, starts, (first, spacing))
-        .map_err(|_| "usage_reset_paced")?;
+        .map_err(|budget| {
+            if budget.next_allowed_ms == i64::MAX {
+                Refused::from("usage_admission_unavailable")
+            } else {
+                paced(budget.next_allowed_ms.max(now))
+            }
+        })?;
     Ok(Admitted {
         route,
         admitted_at_ms: now,
@@ -476,18 +506,32 @@ async fn log(
         .await;
 }
 
-fn refusal(code: &'static str) -> Response {
+fn refusal(refused: impl Into<Refused>) -> Response {
+    let Refused { code, retry_at_ms } = refused.into();
     let status = match code {
         "account_unavailable" => StatusCode::NOT_FOUND,
+        // A 5xx reads as an unknown outcome to the Web client: only a
+        // Service without a store, which sent nothing, may answer with one.
         "unavailable" => StatusCode::SERVICE_UNAVAILABLE,
         "usage_reset_paced" => StatusCode::TOO_MANY_REQUESTS,
         _ => StatusCode::BAD_REQUEST,
     };
-    (
-        status,
-        Json(json!({"error":{"code":code,"message":error_message(code)}})),
-    )
-        .into_response()
+    let mut error = json!({"code":code,"message":error_message(code)});
+    let retry_after_ms = retry_at_ms.map(|at| at.saturating_sub(now_ms()).max(0));
+    if let Some(after) = retry_after_ms {
+        error["retry_after_ms"] = json!(after);
+    }
+    let mut response = (status, Json(json!({"error":error}))).into_response();
+    if let Some(after) = retry_after_ms {
+        // Whole seconds, rounded up: a client never resends before the slot.
+        let seconds = (after.saturating_add(999) / 1_000).max(1);
+        if let Ok(value) = axum::http::HeaderValue::from_str(&seconds.to_string()) {
+            response
+                .headers_mut()
+                .insert(axum::http::header::RETRY_AFTER, value);
+        }
+    }
+    response
 }
 
 /// A confirmed grant ID: bounded and opaque, like the collector's own.

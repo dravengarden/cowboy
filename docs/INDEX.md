@@ -75,6 +75,8 @@ primary phone/desktop product path.
 - [`releases/antigravity-3-113-rollout-2026-11-18.md`](releases/antigravity-3-113-rollout-2026-11-18.md) — Component release 3.113.0 fleet rollout — 2026-11-18
 - [`releases/antigravity-isolation-3-115-rollout-2026-11-18.md`](releases/antigravity-isolation-3-115-rollout-2026-11-18.md) — Component release 3.115.0 rollout (Antigravity account isolation) — 2026-11-18
 - [`releases/antigravity-plan-3-116-rollout-2026-11-19.md`](releases/antigravity-plan-3-116-rollout-2026-11-19.md) — Component release 3.116.0 rollout (Antigravity plan and Gemini cards) — 2026-11-19
+- [`releases/antigravity-facade-rtt-3-135-rollout-2026-11-22.md`](releases/antigravity-facade-rtt-3-135-rollout-2026-11-22.md) — Component release 3.135.0 rollout (Antigravity facade round trips) — 2026-11-22
+- [`releases/antigravity-subagents-3-134-rollout-2026-11-22.md`](releases/antigravity-subagents-3-134-rollout-2026-11-22.md) — Component release 3.134.0 rollout (Antigravity subagents) — 2026-11-22
 - [`releases/native-calls-images-2026-10-18.md`](releases/native-calls-images-2026-10-18.md) — Native image Calls source, signed Plugin closure, exact-artifact validation, worker maintenance and recovery boundaries
 - [`requirements.md`](requirements.md) — Normative Provider package, authentication, installation, ownership and OVH Remote deployment invariants
 - [`secure-connectivity-design.md`](secure-connectivity-design.md) — Option 1 security/reliability priorities and deferred Option 2 roadmap with unresolved PWA bootstrap questions
@@ -106,6 +108,7 @@ primary phone/desktop product path.
 - [`releases/agent-runtimes-2026-10-30.md`](releases/agent-runtimes-2026-10-30.md) — Claude Code 2.1.314 with ACP 0.99.1, Codex 0.165.0 with ACP 2.5.0 and dsh rc.5; component release 3.71.0
 - [`releases/agent-runtimes-2026-11-10.md`](releases/agent-runtimes-2026-11-10.md) — Claude Code 2.1.321 (Fable 5.2) with ACP 0.102.0, idle compaction kept off; component release 3.107.0
 - [`releases/agent-runtimes-2026-11-17.md`](releases/agent-runtimes-2026-11-17.md) — Claude Code 2.1.326 with ACP 0.107.3 (v1 path, owner-only cycle naming), Grok 1.0.77, dsh 0.2.2-rc.1; component release 3.109.0, installed on all four Machines
+- [`releases/agent-runtimes-2026-11-22.md`](releases/agent-runtimes-2026-11-22.md) — Claude Code 2.1.330 with ACP 0.109.1, Codex 0.171.0 with ACP 2.9.0 (version delta dropped), Grok 1.0.92 (agy 1.5.14 tried and withdrawn); component releases 3.137.0 and 3.138.0
 - [`releases/machine-browser-1.0.7-2026-11-17.md`](releases/machine-browser-1.0.7-2026-11-17.md) — machine-browser 1.0.7 drops Chrome 157 Optimization Guide models (profile 53 → 6.5 MB) and the OVH Machine host update to SDK 1.16.0
 - [`releases/codex-0169-2026-11-18.md`](releases/codex-0169-2026-11-18.md) — Native Codex 0.169.1 (GPT-6.2) ahead of ACP 2.7.0 through the `native-codex-version` delta; component release 3.114.0 and 6.2 Recommended presets
 - [`releases/codex-runtime-2026-11-17.md`](releases/codex-runtime-2026-11-17.md) — Codex 0.166.0 with ACP 2.7.0, rebased adapter patch, 0.169.0 retained until ACP declares it, and Codex remote acceptance

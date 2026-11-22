@@ -15,10 +15,10 @@ Drop-When: upstream fails the prompt on serverOverloaded
 Tests: src/__tests__/CodexACPAgent/auth-error-events.test.ts src/__tests__/CodexACPAgent/review-turn-ids.test.ts
 
 diff --git a/src/CodexEventHandler.ts b/src/CodexEventHandler.ts
-index bf01605ae301f2dd6a239518a258fcbff493c247..cc1165b43003ccdf7a9b6588db0d37e516c2ff39 100644
+index 7c9fd2b200c1a26cc03276b8e5ba50979e4259d5..9d193d8275a683d893b442d076f47e43be377c86 100644
 --- a/src/CodexEventHandler.ts
 +++ b/src/CodexEventHandler.ts
-@@ -1207,7 +1207,10 @@ export class CodexEventHandler {
+@@ -1231,7 +1231,10 @@ export class CodexEventHandler {
              this.recordTypedSessionFailure(params);
              return null;
          }
@@ -84,7 +84,7 @@ index 86759831f21cb0f46a030665c1cea6b5c69256fa..661b27acd4268f57194471795f8ef1ad
      }
    ],
 diff --git a/src/__tests__/CodexACPAgent/review-turn-ids.test.ts b/src/__tests__/CodexACPAgent/review-turn-ids.test.ts
-index ffad2409b7f82ffef448152994294adf8bf7f9ac..63cabfbd4cb856a9344f8e4b9f50a5c1d14a539e 100644
+index 0a21ef5610a9b211181984cb9ad02badaac29fe1..6540f54f55ab51e851837f06b7279768c2ef63d5 100644
 --- a/src/__tests__/CodexACPAgent/review-turn-ids.test.ts
 +++ b/src/__tests__/CodexACPAgent/review-turn-ids.test.ts
 @@ -22,6 +22,15 @@ const overloadedError: ErrorNotification["error"] = {

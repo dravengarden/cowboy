@@ -1,6 +1,6 @@
 {
-  "description": "Offline capture of the pinned Grok CLI 1.0.77 (linux-x86_64 npm tarball, lock integrity verified) answering ACP _x.ai/billing against a loopback fake chat proxy (GROK_CLI_CHAT_PROXY_BASE_URL) in an isolated network namespace with a fake auth.json. No credentials, no internet.",
-  "cli_version": "1.0.77",
+  "description": "Offline capture of the pinned Grok CLI 1.0.92 (linux-x86_64 npm tarball, lock integrity verified) answering ACP _x.ai/billing against a loopback fake chat proxy (GROK_CLI_CHAT_PROXY_BASE_URL) in an isolated network namespace with a fake auth.json. No credentials, no internet.",
+  "cli_version": "1.0.92",
   "request": {
     "method": "GET",
     "path": "/v1/billing?format=credits",
@@ -9,10 +9,10 @@
       "authorization": "Bearer <fixture access token>",
       "x-xai-token-auth": "xai-grok-cli",
       "x-userid": "user-fixture",
-      "x-grok-client-version": "1.0.77",
+      "x-grok-client-version": "1.0.92",
       "x-grok-client-mode": "interactive",
       "accept": "*/*",
-      "user-agent": "grok-shell/1.0.77 (linux; x86_64)",
+      "user-agent": "grok-shell/1.0.92 (linux; x86_64)",
       "accept-encoding": "gzip, br, zstd, deflate"
     },
     "body": ""

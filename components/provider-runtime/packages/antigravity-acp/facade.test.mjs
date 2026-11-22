@@ -129,6 +129,8 @@ test("tools are unavailable outside a turn and after the turn ends", async (t) =
       "RunCommand",
       "StopCommand",
       "UpdatePlan",
+      "Subagent",
+      "StopSubagent",
     ],
   );
 });
@@ -257,6 +259,152 @@ test("RunCommand bounds output and time; StopCommand stops a running command", a
   assert.equal((await call("RunCommand", { command: "x", timeout_seconds: 601 })).error, true);
 });
 
+test("a quiet command stops polling and ends on the executor's exit notification", async (t) => {
+  const { call, endpoint } = await fixture(t);
+  const started = Date.now();
+  const quiet = await call("RunCommand", { command: "sleep 5; echo done" });
+  const elapsed = Date.now() - started;
+  assert.match(quiet.text, /^Exit code: 0\n/);
+  assert.match(quiet.text, /done/);
+  const reads = endpoint.calls.filter((entry) => entry.method === "process/read");
+  // Three one-second reads, then a read that does not wait before the
+  // notification wait (instead of a one-second read each second).
+  assert.deepEqual(
+    reads.slice(0, LIMITS.quietReads + 1).map((entry) => entry.params.waitMs > 900),
+    [true, true, true, false],
+  );
+  assert.ok(reads.length <= LIMITS.quietReads + 4, `${reads.length} reads`);
+  // The exit is seen at once, not at the end of a quiet wait.
+  assert.ok(elapsed < 5000 + 1500, `${elapsed} ms`);
+});
+
+test("output ends a quiet wait and resumes one-second reads", async (t) => {
+  const { call, endpoint } = await fixture(t);
+  const ticking = await call("RunCommand", { command: "sleep 4; echo tick; sleep 2; echo tock" });
+  assert.match(ticking.text, /^Exit code: 0\n/);
+  assert.match(ticking.text, /tick\ntock/);
+  const reads = endpoint.calls.filter((entry) => entry.method === "process/read");
+  const waits = reads.map((entry) => entry.params.waitMs > 900);
+  // Quiet, quiet, quiet, then notification-driven reads until "tick", then
+  // one-second reads again while the command still runs.
+  assert.deepEqual(waits.slice(0, 4), [true, true, true, false]);
+  assert.ok(waits.slice(4).includes(true), JSON.stringify(waits));
+  assert.ok(reads.length <= 10, `${reads.length} reads`);
+});
+
+test("a quiet reader starts no read past its wait when notifications are lost", async (t) => {
+  const { call, endpoint } = await fixture(t, { notifications: false });
+  const started = Date.now();
+  const running = await call("RunCommand", { command: "sleep 30", wait_seconds: 5 });
+  const until = started + 5000;
+  assert.match(running.text, /^Still running \(command_id: /);
+  assert.ok(Date.now() - started < 6500, `${Date.now() - started} ms`);
+  const reads = endpoint.calls.filter((entry) => entry.method === "process/read");
+  assert.equal(reads.filter((entry) => entry.at >= until).length, 0);
+});
+
+test("a stop confirmed by another reader ends a quiet reader's wait", async (t) => {
+  const { call, facade } = await fixture(t, { notifications: false });
+  const started = Date.now();
+  const running = call("RunCommand", { command: "sleep 60", wait_seconds: 30 });
+  await new Promise((done) => setTimeout(done, 4500));
+  const [id] = facade.session("s1").commands.keys();
+  assert.match((await call("StopCommand", { command_id: id })).text, /^Stopped /);
+  const text = (await running).text;
+  assert.match(text, /^Exit code: /);
+  // Without the wake it would sleep to the 15 s quiet bound.
+  assert.ok(Date.now() - started < 9000, `${Date.now() - started} ms`);
+});
+
+test("a connection lost during a quiet wait is an unknown outcome", async (t) => {
+  const { call, endpoint, uncertain } = await fixture(t, { notifications: false });
+  const running = call("RunCommand", { command: "sleep 60", wait_seconds: 30 });
+  await new Promise((done) => setTimeout(done, 4500));
+  endpoint.close();
+  await running;
+  assert.deepEqual(uncertain, [["s1", "process/read"]]);
+});
+
+test("an exit whose notification was lost is still seen before the deadline", async (t) => {
+  const { call } = await fixture(t, { notifications: false });
+  const done = await call("RunCommand", { command: "sleep 4; echo fin", timeout_seconds: 7 });
+  assert.match(done.text, /^Exit code: 0\n/);
+  assert.match(done.text, /fin/);
+});
+
+test("output a stop's drain reads is in its answer", async (t) => {
+  const { call } = await fixture(t);
+  const first = await call("RunCommand", {
+    command: "echo early; sleep 2; echo late; sleep 60",
+    wait_seconds: 1,
+  });
+  const id = /command_id: ([^)]+)\)/.exec(first.text)?.[1];
+  assert.ok(id, first.text);
+  await new Promise((resolve) => setTimeout(resolve, 3000));
+  const stopped = await call("StopCommand", { command_id: id });
+  assert.match(stopped.text, /^Stopped /);
+  assert.match(stopped.text, /late/);
+});
+
+test("ReadFile asks for a file's metadata once", async (t) => {
+  const { call, endpoint } = await fixture(t);
+  assert.match((await call("ReadFile", { path: "hello.txt" })).text, /hello target/);
+  const methods = endpoint.calls.map((entry) => entry.method);
+  assert.equal(methods.filter((method) => method === "fs/getMetadata").length, 1);
+  assert.equal(methods.filter((method) => method === "fs/readFile").length, 1);
+});
+
+test("projection reads guidance and skills concurrently, within a bound, in order", async (t) => {
+  const { root, facade, endpoint } = await fixture(t, {
+    delay: (method) => (method.startsWith("fs/") ? 50 : 0),
+  });
+  execFileSync("git", ["-C", root, "init", "-q", "-b", "main"], { stdio: "pipe" });
+  mkdirSync(join(root, "src", "deep"), { recursive: true });
+  writeFileSync(join(root, "AGENTS.md"), "ROOT_GUIDANCE\n");
+  writeFileSync(join(root, "src", "AGENTS.md"), "SRC_GUIDANCE\n");
+  writeFileSync(join(root, "src", "deep", "GEMINI.md"), "DEEP_GUIDANCE\n");
+  for (const name of ["alpha", "beta", "gamma", "delta"]) {
+    mkdirSync(join(root, ".agents", "skills", name), { recursive: true });
+    writeFileSync(
+      join(root, ".agents", "skills", name, "SKILL.md"),
+      `---\nname: ${name}\ndescription: the ${name} skill\n---\n`,
+    );
+  }
+  const projection = await buildProjection(facade, join(root, "src", "deep"));
+  const order = ["ROOT_GUIDANCE", "SRC_GUIDANCE", "DEEP_GUIDANCE"].map((text) =>
+    projection.indexOf(text),
+  );
+  assert.ok(order.every((index, at) => index > 0 && (at === 0 || index > order[at - 1])));
+  for (const name of ["alpha", "beta", "gamma", "delta"]) {
+    assert.match(projection, new RegExp(`- ${name}: the ${name} skill`));
+  }
+  assert.ok(endpoint.maxInflight() > 1, "reads overlap");
+  assert.ok(endpoint.maxInflight() <= 6, `${endpoint.maxInflight()} in flight`);
+});
+
+test("projection reads no guidance once its budget is spent", async (t) => {
+  const { root, facade, endpoint } = await fixture(t);
+  execFileSync("git", ["-C", root, "init", "-q", "-b", "main"], { stdio: "pipe" });
+  const deep = join(root, "a", "b", "c", "d", "e");
+  mkdirSync(deep, { recursive: true });
+  for (const directory of [
+    root,
+    join(root, "a"),
+    join(root, "a", "b"),
+    join(root, "a", "b", "c"),
+  ]) {
+    writeFileSync(join(directory, "AGENTS.md"), "g".repeat(PROJECTION_LIMITS.guidanceFile + 10));
+  }
+  writeFileSync(join(deep, "AGENTS.md"), "LATE_GUIDANCE\n");
+  const projection = await buildProjection(facade, deep);
+  assert.ok(!projection.includes("LATE_GUIDANCE"));
+  assert.match(projection, /e\/AGENTS\.md ---\n\[truncated: guidance limit reached\]/);
+  const late = endpoint.calls.filter((entry) =>
+    String(entry.params?.path ?? "").endsWith("/e/AGENTS.md"),
+  );
+  assert.equal(late.length, 0);
+});
+
 test("a lost mutation reply reports an unknown outcome and ends the turn", async (t) => {
   let lose = false;
   // The publication's helper start loses its reply.
@@ -370,6 +518,7 @@ test("a command's deadline holds without polling; an unconfirmed stop keeps it",
     wait_seconds: 0,
   });
   assert.match(started.text, /Still running/);
+  assert.match(started.text, /Continue it with wait_seconds 1 to wait for the rest of its 1 s/);
   const session = facade.session("s1");
   assert.equal(session.commands.size, 1);
   const deadline = Date.now() + 8000;

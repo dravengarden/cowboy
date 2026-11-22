@@ -169,6 +169,8 @@ test("the proxy relays ACP through the facade over one execution connection", as
     "RunCommand",
     "StopCommand",
     "UpdatePlan",
+    "Subagent",
+    "StopSubagent",
   ]);
   const server = created.result.seen.params.mcpServers;
   assert.equal(server.length, 1);

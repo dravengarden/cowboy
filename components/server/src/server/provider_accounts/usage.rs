@@ -464,7 +464,7 @@ fn error_message(code: &str) -> &str {
             "This account's Provider does not offer usage resets."
         }
         "usage_reset_paced" => {
-            "Usage requests to this Provider are paced; no reset was sent. Try again in a minute."
+            "Usage requests to this Provider are paced; no reset was sent. Cowboy now holds the Provider for this reset; send it again when the wait ends."
         }
         "native_reset_outcome_unknown" | "reset_outcome_unknown" => {
             "The reset outcome is unknown. Check credits before trying again."

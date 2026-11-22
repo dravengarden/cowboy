@@ -15,7 +15,7 @@ Drop-When: upstream codex-acp accepts caller-supplied native config overrides an
 Tests: src/__tests__/CodexJsonRpcConnection.test.ts
 
 diff --git a/src/CodexJsonRpcConnection.ts b/src/CodexJsonRpcConnection.ts
-index 94fb23bb0598107d06efa90bd45b9d91b1a57cf0..2c3ef07e83e893d147ddee59f65638672b6bbca9 100644
+index 0ed4c4ff3ad476141e22aa5ed8bd047498084044..b70f286e0303dd5fcda47460be1c06dcd2274e3f 100644
 --- a/src/CodexJsonRpcConnection.ts
 +++ b/src/CodexJsonRpcConnection.ts
 @@ -3,6 +3,7 @@ import type {Message} from "vscode-jsonrpc/node";

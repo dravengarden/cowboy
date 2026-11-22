@@ -60,20 +60,25 @@ export const DENIAL_REASON =
  * where the workspace tools are closed and Cowboy cannot show their work;
  * timers and background tasks end with this process, which Cowboy stops
  * when the session idles (design "Feature inventory and Cowboy adaptation").
+ * The proxy's own `Subagent` tool runs the same delegation inside the turn
+ * (design "Subagents").
  */
 const DELEGATION_REASON =
   "Antigravity subagents, swarms and workflows are disabled in Cowboy: they run in the " +
   "background after your turn, where the workspace tools are closed and the owner cannot " +
-  "see them. To delegate read-only work (review, analysis), use Cowboy managed calls " +
+  "see them. To delegate a self-contained task, use mcp_cowboy_Subagent: it works in the " +
+  "same workspace, shows to the owner as a subagent and returns its report; wait for it, " +
+  "because it is stopped when your turn ends (mcp_cowboy_StopSubagent stops one). To delegate " +
+  "read-only work (review, analysis) to another session, use Cowboy managed calls " +
   "(mcp_cowboy_cowboy_execute with action calls.start or review.start); to delegate work " +
   "that edits files, queue it into another Cowboy session (control.apply queue.submit). " +
-  "Either way stay in this turn and wait with the command in the receipt's `next`; " +
-  "otherwise do the work yourself with the cowboy tools.";
+  "Either way pass notify:true and end your turn; Cowboy starts your next turn when it " +
+  "finishes. Otherwise do the work yourself with the cowboy tools.";
 const SCHEDULE_REASON =
   "Timers and background tasks are disabled in Cowboy: they end when this Antigravity " +
   "process stops, which Cowboy does when the session idles. Use RunCommand with " +
-  "wait_seconds for a long command (and the receipt's `next` wait for a Cowboy call or " +
-  "session), and ask the owner to schedule a message in Cowboy for later work.";
+  "wait_seconds for a long command, notify:true on a Cowboy call or session prompt to be " +
+  "woken when it finishes, and a scheduled Cowboy message for later work.";
 const BROWSER_REASON =
   "No browser or desktop is available in a Cowboy session. Use search_web and " +
   "read_url_content, or a browser tool of the cowboy MCP server when one is listed.";

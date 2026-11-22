@@ -50,7 +50,6 @@ pub(super) fn settled(state: &AppState, record: &Record) {
         if !wants_notice(record)
             || info.meta.closing
             || info.meta.trashed_at_ms.is_some()
-            || crate::provider_account::named_only(&info.meta.provider)
             || state.supervisor.has_live_worker(parent)
         {
             Some(false)

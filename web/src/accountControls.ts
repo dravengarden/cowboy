@@ -144,6 +144,7 @@ export function controlReasonText(reason: string | null | undefined): string | u
     owner_unblock: "Unblocked by the owner",
     owner_clear: "Cleared by the owner",
     owner_send_after_rate_limit: "Resumed by an owner send",
+    rate_limit_ended: "Resumed after the rate limit ended",
     unknown_refusal: "A turn ended without a classified backend outcome",
   };
   return known[reason] ?? reason.replaceAll("_", " ");
@@ -167,7 +168,7 @@ export function accountStateBadge(control: AccountControl, signIn: "signed_in" |
     const until = control.until_ms ?? undefined;
     return until !== undefined && until > now
       ? { label: `Rate limited until ${controlTime(until)}`, tone: "warning", detail }
-      : { label: "Rate limit ended · send again to resume", tone: "warning", detail };
+      : { label: "Rate limit ended · resumes with the next prompt", tone: "warning", detail };
   }
   const label = STATE_LABELS[control.state] ?? "Unknown refusal";
   const tone: BadgeTone = control.state === "blocked" || control.state === "suspended" ? "error" : "warning";

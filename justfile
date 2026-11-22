@@ -5,6 +5,13 @@
 # package or feature selection unifies dependency features differently and
 # recompiles the workspace.
 rust_test_args := "-p cowboy -p cowboy-store -p cowboy-server -p cowboy-machine --all-targets --all-features --locked"
+# How every recipe runs that graph. The invoking Codex Plugin exports its own
+# signed package path; Cowboy's unit tests exercise embedded fixtures and must
+# not inherit that runtime. The graph always keeps rustc incremental state,
+# even inside `check-compact`: after a one-file edit it rebuilt in 25s against
+# 114s without (2026-11-21 on Hawk), for about 9G of incremental cache. Each
+# invocation must agree, since the setting is part of Cargo's fingerprint.
+rust_test_env := "env -u COWBOY_PROVIDER_PACKAGE_PATH -u CARGO_INCREMENTAL"
 
 default:
     @just --list
@@ -469,6 +476,15 @@ plugin-runtime-probe RELEASE ARTIFACTS *ARGS:
 agent-worker-conformance RELEASE ARTIFACTS WORKER *ARGS:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec python3 tools/plugin_runtime_conformance.py "$@"' conformance "{{RELEASE}}" "{{ARTIFACTS}}" --worker "{{WORKER}}" {{ARGS}}
 
+# Collector checks for a Grok or native Codex pin change, offline in a loopback-only
+# namespace with fake logins: re-capture the Grok billing fixture the collector
+# reproduces, and show that a refresh-free Codex read reaches no token endpoint.
+grok-billing-capture GROK:
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec python3 tools/grok_billing_capture.py "$@"' capture --grok "{{GROK}}" --fixture plugins/grok-billing-cli.fixture.json --write plugins/grok-billing-cli.fixture.json
+
+codex-refresh-guard-probe CODEX:
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec python3 tools/codex_refresh_guard_probe.py "$@"' probe --codex "{{CODEX}}"
+
 # Native execution interfaces only: closed homes, loopback scripted API, no
 # production credentials/model inference/Provider install or Machine activation.
 execution-codex-turn-conformance CLI VERSION SHA256 RECEIPT:
@@ -591,36 +607,53 @@ provider-release-coverage CATALOG:
     bun tools/check-provider-release-coverage.ts "{{CATALOG}}"
 
 # Cheap Remote Claude feedback before building an upstream upgrade candidate.
-claude-remote-check:
+claude-remote-check: claude-remote-prepare claude-remote-relay claude-remote-scripts
+
+# The execution host and the pinned Claude ACP sources the runtime tests load.
+claude-remote-prepare:
     cargo build --locked --no-default-features --features machine-host -p cowboy-machine --bin cowboy-execution-host
     mkdir -p dist/claude-source-tests
     cp components/provider-runtime/packages/claude-agent-acp/package{,-lock}.json dist/claude-source-tests/
     npm ci --prefer-offline --ignore-scripts --no-audit --no-fund --prefix dist/claude-source-tests
+
+claude-remote-relay:
     cargo fmt --manifest-path plugins/claude-code/relay/Cargo.toml -- --check
     cargo clippy --locked --manifest-path plugins/claude-code/relay/Cargo.toml --all-targets
     cargo test --locked --manifest-path plugins/claude-code/relay/Cargo.toml
     cargo build --locked --release --manifest-path plugins/claude-code/relay/Cargo.toml
     COWBOY_MCP_RELAY="$PWD/plugins/claude-code/relay/target/release/cowboy-mcp-relay" node --test tools/claude-mcp-relay.test.mjs
     bun x --no-install biome format tools/claude-mcp-relay.test.mjs
-    node --import ./tools/register-memory-client.mjs --test plugins/claude-code/runtime/*.test.mjs components/memory-client/*.test.mjs tools/memory-provider.test.mjs tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-context.test.mjs tools/claude-remote-skills.test.mjs tools/claude-remote-mcp.test.mjs tools/claude-remote-native-baseline.test.mjs tools/claude-remote-hooks-baseline.test.mjs tools/claude-remote-mods-baseline.test.mjs tools/claude-remote-permissions-baseline.test.mjs tools/claude-remote-context-baseline.test.mjs tools/claude-remote-tools-baseline.test.mjs
+
+# Node and Python suites over sources and the prepared execution host.
+claude-remote-scripts:
+    node --import ./tools/register-memory-client.mjs --test plugins/claude-code/runtime/*.test.mjs components/memory-client/*.test.mjs tools/memory-provider.test.mjs tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-shell-jobs.test.mjs tools/claude-remote-context.test.mjs tools/claude-remote-skills.test.mjs tools/claude-remote-mcp.test.mjs tools/claude-remote-native-baseline.test.mjs tools/claude-remote-hooks-baseline.test.mjs tools/claude-remote-mods-baseline.test.mjs tools/claude-remote-permissions-baseline.test.mjs tools/claude-remote-context-baseline.test.mjs tools/claude-remote-tools-baseline.test.mjs
     bun x --no-install biome format plugins/claude-code/runtime
     node --import ./tools/register-memory-client.mjs --test tools/claude-remote-privacy.test.mjs
     bun x --no-install biome format tools/claude-remote-privacy.test.mjs
-    bun x --no-install biome format tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-context.test.mjs tools/claude-remote-skills.test.mjs tools/claude-remote-mcp.test.mjs tools/claude-remote-native-baseline.test.mjs tools/claude-remote-hooks-baseline.test.mjs tools/claude-remote-mods-baseline.test.mjs tools/claude-remote-permissions-baseline.test.mjs tools/claude-remote-context-baseline.test.mjs tools/claude-remote-tools-baseline.test.mjs
+    bun x --no-install biome format tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-shell-jobs.test.mjs tools/claude-remote-shell-fixture.mjs tools/claude-remote-context.test.mjs tools/claude-remote-skills.test.mjs tools/claude-remote-mcp.test.mjs tools/claude-remote-native-baseline.test.mjs tools/claude-remote-hooks-baseline.test.mjs tools/claude-remote-mods-baseline.test.mjs tools/claude-remote-permissions-baseline.test.mjs tools/claude-remote-context-baseline.test.mjs tools/claude-remote-tools-baseline.test.mjs
     bun run typecheck
     python3 -m unittest discover -s tools -p remote_impact_test.py
 
 # Cross-language package/linker conformance. This is also the Agent Plugin
 # payload gate used by the generic Plugin release workflow.
-provider-check: plugin-check claude-remote-check
+provider-check: plugin-check claude-remote-check provider-scripts-check provider-build-check
+
+# The Bun, Node and Python suites of `provider-check`; they read sources only,
+# so `check` runs them in the background.
+provider-scripts-check: provider-antigravity-check provider-runtime-scripts
+
+# Its facade suite alone waits out about 50s of real command deadlines.
+provider-antigravity-check:
+    node --import ./tools/register-memory-client.mjs --test components/provider-runtime/packages/antigravity-acp/*.test.mjs
+    bun x --no-install biome format components/provider-runtime/packages/antigravity-acp components/provider-runtime/owned-sources.ts
+
+provider-runtime-scripts:
     bun test ./tools/mcp-bindings_test.ts
     node --import ./tools/register-memory-client.mjs --test tools/execution-probe_test.mjs
     bun x --no-install biome format components/provider-runtime/execution-connection.mjs components/provider-runtime/execution-probe.mjs tools/execution-probe_test.mjs plugins/codex/runtime/bindings.mjs
     bun x --no-install biome format components/provider-runtime/mcp-bindings.mjs tools/mcp-bindings_test.ts
     node --test components/provider-runtime/packages/codex-acp/launch_test.mjs
     node --test components/provider-runtime/packages/deepseek-harness/launch_test.mjs
-    node --import ./tools/register-memory-client.mjs --test components/provider-runtime/packages/antigravity-acp/*.test.mjs
-    bun x --no-install biome format components/provider-runtime/packages/antigravity-acp components/provider-runtime/owned-sources.ts
     bun tools/generate-plan-name-table.ts --check
     bun x --no-install biome format tools/generate-plan-name-table.ts
     node --import ./tools/register-memory-client.mjs --test plugins/codex/runtime/launch.test.mjs
@@ -642,6 +675,9 @@ provider-check: plugin-check claude-remote-check
     python3 -m unittest discover -s tools -p plugin_generation_failure_isolation_test.py
     python3 -m unittest discover -s tools -p catalog_reader_conformance_test.py
     bun components/provider-runtime/check.ts
+
+# The Rust tests, Plugin builds and package checks of `provider-check`.
+provider-build-check:
     cargo test --locked -p cowboy-provider-sdk --all-targets
     cargo test --locked -p cowboy-plugin-sdk --all-targets
     just plugin-build-all
@@ -664,7 +700,7 @@ composition-check:
     bun test ./tools/generate-composition-contract_test.ts
     bun tools/generate-composition-contract.ts
     bun test ./contracts/composition.test.ts ./contracts/composition-check.test.ts ./contracts/widget-v1.test.ts
-    env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test {{rust_test_args}} composition::
+    {{rust_test_env}} cargo test {{rust_test_args}} composition::
     cargo build --locked --bin cowboy
     bun tools/composition-link-conformance.ts "$(realpath target/debug/cowboy)"
 
@@ -680,10 +716,23 @@ fmt-write:
     cd plugins/zed/adapter && cargo fmt
     cd plugins/claude-code/relay && cargo fmt
 
-lint:
-    cd web && bun run lint
+lint: clippy zed-lint lint-plugins
+
+clippy:
     cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+# The Zed adapter is its own Cargo workspace with its own build directory.
+zed-lint:
     cd plugins/zed/adapter && cargo clippy --all-targets --locked -- -D warnings
+
+zed-test:
+    cd plugins/zed/adapter && cargo test --all-targets --locked
+
+zed-check: zed-lint zed-test
+
+# Everything `lint` checks besides workspace Clippy and the Zed adapter.
+lint-plugins:
+    cd web && bun run lint
     cd plugins/claude-code/relay && cargo clippy --all-targets --locked -- -D warnings
 
 dependencies:
@@ -771,27 +820,29 @@ release-sources-check:
     check cowboy-code-adapter-src --no-default-features --features code-adapter \
       --bin cowboy-code-adapter
 
-test:
-    # The invoking Codex Plugin exports its own signed package path. Cowboy's
-    # unit tests exercise embedded fixtures and must not inherit that runtime.
+test: test-rust zed-test test-web
+
+test-web:
+    cd web && bun run test
+
+# The main workspace's Rust test selections, which share its build directory.
+test-rust:
     # nextest builds the same `cargo test` executables but runs every test
     # binary concurrently; libtest runs them one after another, so the slowest
     # library suites used to add up (152s against 62s for the same 3553 tests).
-    env -u COWBOY_PROVIDER_PACKAGE_PATH cargo nextest run {{rust_test_args}}
+    {{rust_test_env}} cargo nextest run {{rust_test_args}}
     # The shared wire crate is a workspace member, so the root package does not run its tests.
     env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked -p cowboy-wire --features full,machine-host --all-targets
     # The standalone Machine ships without Controller modules. Compile and run
     # its test slice too; cargo check alone does not cover cfg(test) boundaries.
     env -u COWBOY_PROVIDER_PACKAGE_PATH cargo nextest run --locked --no-default-features --features machine-host -p cowboy -p cowboy-store -p cowboy-machine --lib
     env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked --no-default-features --features code-adapter --lib
-    cd plugins/zed/adapter && cargo test --all-targets --locked
-    cd web && bun run test
     python3 -m unittest discover -s tools -p ovh_machine_idle_sessions_test.py
 
 # Ignored PostgreSQL tests each get a fresh database in a private, temporary
 # cluster. Never consumes a caller-provided database URL or starts a TCP listener.
 test-postgres:
-    COWBOY_RUST_TEST_ARGS="{{rust_test_args}}" bash tools/test-postgres.sh
+    {{rust_test_env}} COWBOY_RUST_TEST_ARGS="{{rust_test_args}}" bash tools/test-postgres.sh
 
 # Actual immutable private writer ELFs; no production writer or host namespace.
 session-deletion-writer-conformance OLD NEW READER RECEIPT:
@@ -817,7 +868,60 @@ session-deletion-production-conformance OLD NEW READER DEFAULT_READER RECEIPT:
 # the release build. `build-web` keeps the production frontend bundle covered.
 # `feature-check` is not repeated: `release-sources-check` checks the same
 # packages, features and binaries inside the exact release source closures.
-check: toolchain-check fmt structure-check docs-index-check protocol-contract-check typecheck idb-conformance-check site-check native-shell-check dependencies lint plugin-check composition-check provider-check release-sources-check test test-postgres logs-conformance build-web
+# Workspace Clippy, the release-source slices and the Zed adapter have Cargo
+# build directories of their own, and the script suites read sources only, so
+# they run beside the rest of the gate instead of after it: the main graph's
+# compile is a long single-crate chain that leaves most cores idle. Each
+# background log prints once it is collected, before the main Rust tests run.
+check: toolchain-check fmt structure-check docs-index-check protocol-contract-check typecheck
+    #!/usr/bin/env bash
+    set -euo pipefail
+    logs="$(mktemp -d "${TMPDIR:-/tmp}/cowboy-check.XXXXXX")"
+    pending=()
+    cleanup() {
+      local job
+      # Before setsid runs, the job is not yet a group of its own.
+      for job in "${pending[@]}"; do
+        kill -- "-${job%%:*}" 2>/dev/null || kill "${job%%:*}" 2>/dev/null || true
+      done
+      rm -rf "$logs"
+    }
+    trap cleanup EXIT
+    background() {
+      local name="$1"
+      shift
+      # A process group of its own, so an early failure stops the whole job.
+      setsid bash -c 'SECONDS=0; env "${@:2}" just "$1"; status=$?; echo "($1 took ${SECONDS}s)"; exit "$status"' \
+        background "$name" "$@" >"$logs/$name.log" 2>&1 &
+      pending+=("$!:$name")
+    }
+    # Clippy checks the same crates as the test graph but in check mode, which
+    # shares no artifacts with it; in the shared build directory it would only
+    # wait for the build lock. Its own directory lives and dies with the checkout.
+    background clippy CARGO_BUILD_BUILD_DIR="$PWD/target/check-clippy" CARGO_INCREMENTAL=0
+    background release-sources-check
+    background zed-check
+    # Suites that read sources only and share no build directory.
+    background provider-antigravity-check
+    background provider-runtime-scripts
+    background test-web
+    background dependencies
+    just idb-conformance-check site-check native-shell-check lint-plugins plugin-check composition-check claude-remote-prepare
+    # Collected before `test-rust`, the next step that may relink the execution
+    # host these suites run.
+    background claude-remote-scripts
+    just claude-remote-relay provider-build-check
+    while ((${#pending[@]})); do
+      job="${pending[0]}"
+      pending=("${pending[@]:1}")
+      name="${job#*:}"
+      status=0
+      wait "${job%%:*}" || status=$?
+      echo "==> $name (background, exit $status)"
+      cat "$logs/$name.log"
+      if ((status != 0)); then exit "$status"; fi
+    done
+    just test-rust test-postgres logs-conformance build-web
 
 # Real diagnostic CLI, typed OTel fixture, query/metrics/tail/watch/RPC contracts.
 # An optional explicit --ssh in the standalone tool adds same-host SSH acceptance.
@@ -827,13 +931,14 @@ logs-conformance:
     cargo build --locked --bin cowboy
     # Reuse the shared test graph's library executable; the tool's own
     # root-only `cargo test --lib` selection would recompile the workspace.
-    fixture="$(env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test {{rust_test_args}} --no-run --message-format=json-render-diagnostics |
+    fixture="$({{rust_test_env}} cargo test {{rust_test_args}} --no-run --message-format=json-render-diagnostics |
       jq -r 'select(.reason == "compiler-artifact" and .target.name == "cowboy" and .profile.test and (.target.kind | index("lib"))) | .executable // empty')"
     test -x "$fixture"
     python3 tools/logs_conformance.py --cowboy target/debug/cowboy --test-executable "$fixture" --receipt target/logs-conformance.json
 
-# Run the complete quality gate without growing workspace incremental caches,
-# through a compiler cache shared by every worktree of this user. The server is
+# Run the complete quality gate through a compiler cache shared by every
+# worktree of this user. Only the shared test graph (`rust_test_env`) keeps
+# incremental state; every other selection compiles without growing one. The server is
 # private to this checkout (its own socket, started in the caller's cgroup and
 # stopped on exit), so one task's compiles never run in another task's process
 # tree. SCCACHE_BASEDIRS strips the checkout and build paths from cache keys,

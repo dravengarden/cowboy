@@ -45,6 +45,8 @@ const EXPECTED_TOOLS = [
   "RunCommand",
   "StopCommand",
   "UpdatePlan",
+  "Subagent",
+  "StopSubagent",
 ];
 const MAX_FRAME = 32 * 1024 * 1024;
 
@@ -261,6 +263,7 @@ async function connectedRuntime({
   let proxy;
   const facade = await Facade.create(connection, {
     onUncertain: (sessionId, method) => proxy?.uncertain(sessionId, method),
+    onLost: (sessionId, method) => proxy?.lost(sessionId, method),
     onResult: (call, result) => proxy?.toolResult(call, result),
     onProgress: (call, text) => proxy?.toolProgress(call, text),
     managed,
@@ -327,6 +330,8 @@ async function connectedRuntime({
       return channel;
     },
     bindChannel: (channel, sessionId) => channels.set(channel, sessionId),
+    // A settled subagent's channel: a relay that connects with it is refused.
+    unbindChannel: (channel) => channels.delete(channel),
     mcpServer: (channel) => ({
       name: "cowboy",
       command: node,
@@ -454,6 +459,8 @@ export async function runProxy({
     client: write(output),
     runtime,
     log: (line) => process.stderr.write(`cowboy: ${line}\n`),
+    // Nothing can show that a subagent `agy` did not stop has stopped: end it.
+    terminate: () => agy.kill("SIGKILL"),
   });
   runtime.then(
     (ready) => ready.attach(proxy),
@@ -472,7 +479,13 @@ export async function runProxy({
     () => agy.stdin.end(),
   );
   agy.stdin.on("error", () => {});
-  const [code, signal] = await new Promise((done) => agy.once("exit", (...result) => done(result)));
+  // `close`: after agy's last output was read, so nothing it said is lost.
+  const [code, signal] = await new Promise((done) =>
+    agy.once("close", (...result) => done(result)),
+  );
+  // An `agy` the proxy ended answers each prompt still open with what it
+  // already knows, before this process goes: the account's signals survive.
+  proxy.settleExit();
   const ready = await runtime.catch(() => undefined);
   ready?.server.close();
   ready?.connection.close();

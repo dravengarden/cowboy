@@ -127,10 +127,75 @@ export async function consumeNearestReset(
   target: UsageResetTarget,
   expectedCreditId: string | undefined,
   confirm: string,
+  options: ResetPacingOptions = {},
 ): Promise<void> {
-  let response: Response;
+  const sleep = options.sleep ?? sleepUnlessAborted;
+  const deadline = Date.now() + RESET_PACING_LIMIT_MS;
+  for (;;) {
+    const response = await sendNearestReset(target, expectedCreditId, confirm);
+    const wait = await pacedWait(response);
+    if (wait === undefined || Date.now() + wait > deadline) {
+      await settleNearestReset(target, response, expectedCreditId);
+      return;
+    }
+    // A paced refusal sent nothing and the Service now holds the Provider
+    // for this reset: resend once the window has room.
+    options.onPaced?.(Date.now() + wait);
+    await sleep(wait, options.signal);
+  }
+}
+
+export interface ResetPacingOptions {
+  /** Cancels a pacing wait; never an in-flight request. */
+  signal?: AbortSignal;
+  /** A paced refusal: the reset is resent at this time. */
+  onPaced?: (retryAtMs: number) => void;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+}
+
+/** How long one confirmed reset keeps resending through Provider pacing. */
+const RESET_PACING_LIMIT_MS = 6 * 60_000;
+const RESET_PACING_MAX_WAIT_MS = 3 * 60_000;
+
+export class ResetWaitCancelled extends Error {}
+
+export function sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cancelled = (): void => {
+      clearTimeout(timer);
+      reject(new ResetWaitCancelled("Cancelled while waiting; no reset was sent."));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", cancelled);
+      resolve();
+    }, ms);
+    if (signal?.aborted) cancelled();
+    else signal?.addEventListener("abort", cancelled, { once: true });
+  });
+}
+
+/** The wait a readable paced refusal names, if this response is one. */
+async function pacedWait(response: Response): Promise<number | undefined> {
+  if (response.status !== 429) return undefined;
+  const error = await response
+    .clone()
+    .json()
+    .then((body: { error?: { code?: unknown; retry_after_ms?: unknown } }) => body.error)
+    .catch(() => undefined);
+  const after = error?.retry_after_ms;
+  if (error?.code !== "usage_reset_paced" || typeof after !== "number" || !Number.isFinite(after)) {
+    return undefined;
+  }
+  return Math.min(Math.max(after, 1_000), RESET_PACING_MAX_WAIT_MS);
+}
+
+async function sendNearestReset(
+  target: UsageResetTarget,
+  expectedCreditId: string | undefined,
+  confirm: string,
+): Promise<Response> {
   try {
-    response = await fetch(resetEndpoint(target), {
+    return await fetch(resetEndpoint(target), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ confirm, expected_credit_id: expectedCreditId }),
@@ -144,6 +209,13 @@ export async function consumeNearestReset(
     }
     throw new ResetOutcomeUnknown(UNKNOWN_OUTCOME);
   }
+}
+
+async function settleNearestReset(
+  target: UsageResetTarget,
+  response: Response,
+  expectedCreditId: string | undefined,
+): Promise<void> {
   if (response.status === 408 || response.status >= 500) {
     throw new ResetOutcomeUnknown(UNKNOWN_OUTCOME);
   }

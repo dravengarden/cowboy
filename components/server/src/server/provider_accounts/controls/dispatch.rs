@@ -10,7 +10,6 @@ use super::*;
 pub(in crate::server) async fn before_dispatch(
     state: &Arc<AppState>,
     session: &str,
-    explicit: bool,
 ) -> Result<(), String> {
     // A retired legacy card has no credential left anywhere to resume on.
     if let Some(refusal) = super::super::retirement::session_refusal(state, session) {
@@ -23,7 +22,7 @@ pub(in crate::server) async fn before_dispatch(
     }
     of(state)
         .ok_or_else(|| wait("account controls need the durable store"))?
-        .before_dispatch(session, explicit)
+        .before_dispatch(session)
         .await
 }
 
@@ -34,19 +33,15 @@ pub(in crate::server) async fn handoff<T>(
     session: &str,
     send: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, String> {
-    before_dispatch(state, session, false).await?;
+    before_dispatch(state, session).await?;
     send()
 }
 
 impl Controls {
     /// The account gate of one dispatch, read from the store: admission,
-    /// account state (an explicit owner send after a rate limit ended
-    /// resumes the account) and uncertain effects.
-    pub(in crate::server) async fn before_dispatch(
-        &self,
-        session: &str,
-        explicit: bool,
-    ) -> Result<(), String> {
+    /// account state (the first dispatch after a rate limit ended resumes
+    /// the account) and uncertain effects.
+    pub(in crate::server) async fn before_dispatch(&self, session: &str) -> Result<(), String> {
         let Some((meta, _)) = self.env.session(session) else {
             return Ok(());
         };
@@ -57,12 +52,12 @@ impl Controls {
             return Err(wait("a named Antigravity account is required"));
         }
         self.refresh().await.map_err(|reason| wait(&reason))?;
-        match self.gate(&meta, explicit) {
+        match self.gate(&meta) {
             Gate::Park(reason) => Err(wait(&reason)),
             Gate::Proceed {
                 clears_rate_limit: true,
             } => {
-                // Only the expired rate limit that authorized this send is
+                // Only the expired rate limit that admitted this dispatch is
                 // cleared: a newer state (a block) read here is refused, and
                 // one written after this read fails the revision compare in
                 // the store transaction.
@@ -77,14 +72,19 @@ impl Controls {
                 self.enter(
                     &control,
                     AccountState::Ok,
-                    "owner_send_after_rate_limit",
+                    "rate_limit_ended",
                     None,
                     Some(control.revision),
                     false,
                 )
                 .await
-                .map(drop)
-                .map_err(|_| wait("the account's state changed; send again"))
+                .map_err(|_| wait("the account's state changed; send again"))?;
+                // The clear awaited a store write: recheck admission, account
+                // state and pending signals before this dispatch proceeds.
+                match self.gate(&meta) {
+                    Gate::Park(reason) => Err(wait(&reason)),
+                    Gate::Proceed { .. } => Ok(()),
+                }
             }
             Gate::Proceed { .. } => Ok(()),
         }

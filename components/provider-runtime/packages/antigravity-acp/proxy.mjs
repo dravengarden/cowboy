@@ -12,6 +12,7 @@ import {
   managedConfigAllowed,
   managedPrompt,
 } from "./managed.mjs";
+import { PRECEDENCE } from "./evidence.mjs";
 import { EVIDENCE_LIMITS, promptText, recall, updateObservation } from "./memory.mjs";
 import {
   agyNotice,
@@ -33,6 +34,7 @@ import {
   schemaRefusal,
 } from "./managed-output.mjs";
 import { expandSkillCommand, skillCommands } from "./skills.mjs";
+import { Subagents } from "./subagents.mjs";
 
 /** Client requests a `runtime` unit forwards; everything else is refused. */
 export const RUNTIME_REQUESTS = Object.freeze([
@@ -104,6 +106,9 @@ const MAX_TOOL_CALLS = 1024;
 const TERMINAL = new Set(["completed", "failed"]);
 /** `cowboy` server calls announced and not yet answered, per session. */
 const MAX_WAITING = 64;
+
+/** A tool call of one session: another session may reuse an ID. */
+const callKey = (sessionId, id) => `${sessionId}\u0000${id}`;
 
 /** A call's arguments as a comparable key (`agy`'s `toolSummary` dropped). */
 function argumentKey(input) {
@@ -232,13 +237,27 @@ export function stripTier(message) {
  *   newChannel(), evidence: { mark(), settle(cursor, sessionId, stopReason) } }`
  */
 export class AcpProxy {
-  constructor({ agent, client, runtime, log = () => {} }) {
+  constructor({ agent, client, runtime, log = () => {}, terminate = () => {}, subagents = {} }) {
     this.agent = agent;
     this.client = client;
     this.runtime = runtime;
     this.log = log;
+    /** Set once this proxy ended `agy` (a stop it never confirmed). */
+    this.killed = undefined;
+    /** Ends the unit's `agy` (a stop `agy` never confirmed leaves nothing running unseen). */
+    this.terminate = (reason) => {
+      this.killed ??= reason;
+      terminate(reason);
+    };
     this.pending = new Map();
-    this.agentRequests = new Set();
+    /**
+     * Parent prompts `agy` answered whose reply to the worker is not yet
+     * written (settlement still running), by the worker's request id: a forced
+     * exit still has to answer them, exactly once (`finalized`).
+     */
+    this.settling = new Map();
+    /** Permission requests forwarded to the worker, with their session. */
+    this.agentRequests = new Map();
     this.turns = new Map();
     /** Sessions whose structured managed turn ended: native text there is held. */
     this.sealed = new Set();
@@ -275,6 +294,11 @@ export class AcpProxy {
     this.managedSession = undefined;
     /** Whether that `session/new` is still waiting for `agy`'s answer. */
     this.managedOpening = false;
+    /** The subagents this unit runs for its sessions (`subagents.mjs`). */
+    this.subagents = new Subagents(this, {
+      refusalText: (klass) => TURN_ERROR_TEXT[klass] ?? TURN_ERROR_TEXT.unknown_refusal,
+      ...subagents,
+    });
     Promise.resolve(runtime).then(
       (ready) => {
         this.root = ready?.facade?.root;
@@ -282,6 +306,8 @@ export class AcpProxy {
         this.memory = ready?.memory ?? null;
         /** A managed read-only child (`managed.mjs`): its own allow-list. */
         this.managed = ready?.managed === true;
+        // A managed child delegates nothing: its facade has no subagent host.
+        if (ready?.facade && !this.managed) ready.facade.subagents = this.subagents;
       },
       () => {},
     );
@@ -365,14 +391,15 @@ export class AcpProxy {
   }
 
   /** `toolCall` as Cowboy shows it (see presentation.mjs). */
-  present(toolCall) {
+  present(toolCall, sessionId) {
     const id = toolCall?.toolCallId;
+    const key = typeof id === "string" ? callKey(sessionId, id) : undefined;
     const tool = presentedTool(toolCall?.name);
-    if (tool !== undefined && typeof id === "string") {
+    if (tool !== undefined && key !== undefined) {
       if (this.calls.size >= MAX_TOOL_CALLS) this.calls.delete(this.calls.keys().next().value);
-      this.calls.set(id, tool);
+      this.calls.set(key, tool);
     }
-    const known = typeof id === "string" ? this.calls.get(id) : undefined;
+    const known = key !== undefined ? this.calls.get(key) : undefined;
     // An extension tool shows as the MCP call it is (Cowboy, memory, ...).
     const name = typeof toolCall?.name === "string" ? toolCall.name : undefined;
     const route = name?.startsWith("mcp_cowboy_")
@@ -383,9 +410,9 @@ export class AcpProxy {
         ? presentExtension(toolCall, route)
         : presentToolCall(toolCall, { root: this.root, known });
     // The facade's answer, which `agy` never reports for an MCP tool.
-    if (typeof id === "string" && TERMINAL.has(toolCall?.status) && this.results.has(id)) {
-      const content = this.results.get(id);
-      this.results.delete(id);
+    if (key !== undefined && TERMINAL.has(toolCall?.status) && this.results.has(key)) {
+      const content = this.results.get(key);
+      this.results.delete(key);
       return content.length ? { ...shown, content } : shown;
     }
     return shown;
@@ -419,13 +446,15 @@ export class AcpProxy {
     if (!["tool_call", "tool_call_update"].includes(update?.sessionUpdate)) return message;
     this.track(message.params.sessionId, update);
     const id = update.toolCallId;
-    const known = typeof id === "string" ? this.calls.get(id) : undefined;
+    const sessionId = message.params.sessionId;
+    const key = typeof id === "string" ? callKey(sessionId, id) : undefined;
+    const known = key !== undefined ? this.calls.get(key) : undefined;
     if ((presentedTool(update.name) ?? known) === "UpdatePlan") {
-      if (typeof id === "string" && known === undefined) this.calls.set(id, "UpdatePlan");
-      if (typeof id === "string" && TERMINAL.has(update.status)) this.results.delete(id);
+      if (key !== undefined && known === undefined) this.calls.set(key, "UpdatePlan");
+      if (key !== undefined && TERMINAL.has(update.status)) this.results.delete(key);
       return undefined;
     }
-    const shown = this.present(update);
+    const shown = this.present(update, sessionId);
     if (shown === update) return message;
     return { ...message, params: { ...message.params, update: shown } };
   }
@@ -493,7 +522,10 @@ export class AcpProxy {
     const id = this.bind(call);
     if (id === undefined) return;
     if (this.results.size >= MAX_TOOL_CALLS) this.results.delete(this.results.keys().next().value);
-    this.results.set(id, resultContent(call.name, call.args, result, this.root));
+    this.results.set(
+      callKey(call.sessionId, id),
+      resultContent(call.name, call.args, result, this.root),
+    );
   }
 
   /** A running command's output so far, shown on its tool call. */
@@ -533,7 +565,17 @@ export class AcpProxy {
     if (message === null || typeof message !== "object" || Array.isArray(message)) return;
     const { id, method } = message;
     if (typeof method !== "string") {
-      if (this.agentRequests.delete(id)) this.agent(message);
+      if (this.agentRequests.has(id)) {
+        const { child } = this.agentRequests.get(id);
+        this.agentRequests.delete(id);
+        // An answer that arrives after its subagent stopped or answered
+        // grants nothing (the entry holds the child itself, so pruning it
+        // from the host changes nothing).
+        if (child !== undefined && !this.subagents.isOpen(child)) {
+          return this.agent({ jsonrpc: "2.0", id, result: { outcome: { outcome: "cancelled" } } });
+        }
+        this.agent(message);
+      }
       return;
     }
     if (id === undefined) {
@@ -566,9 +608,10 @@ export class AcpProxy {
       this.switches.set(requested.sessionId, (this.switches.get(requested.sessionId) ?? 0) + 1);
     }
     // The reply is handled with this runtime, without awaiting it again.
-    const record = { method, runtime, mode: requested };
+    const record = { method, runtime, mode: requested, params: forwarded.params };
     if (method === "initialize") {
       this.compaction.initialize(forwarded.params);
+      this.subagents.initialize(forwarded.params);
       this.notices = Boolean(forwarded.params?.clientCapabilities?.session?.notices);
       // `agy` must never delegate file or terminal work to the worker: the
       // worker runs on the runtime Machine, not on the session's target.
@@ -582,6 +625,7 @@ export class AcpProxy {
       try {
         if (typeof params.cwd !== "string") throw new Error("session cwd is required");
         params.cwd = runtime.sessionCwd(params.cwd);
+        record.cwd = params.cwd;
         runtime.checkMirror(params.cwd);
         const projection = await runtime.projection(params.cwd);
         record.projection = projection;
@@ -703,10 +747,29 @@ export class AcpProxy {
     if (typeof sessionId === "string" && this.turns.has(sessionId)) {
       // Marked before anything is awaited: no correction starts after a stop.
       this.turns.get(sessionId).cancelled = true;
+      this.subagents.cancelled(sessionId);
+      // A stopped session takes the subagents it started with it, fenced
+      // alongside the session itself (not after it).
+      const children = this.subagents.cancelChildren(sessionId);
       const runtime = await this.runtime;
-      await runtime.facade.endTurn(sessionId, { cancelled: true });
+      const fenced = Promise.all([
+        runtime.facade.endTurn(sessionId, { cancelled: true }),
+        children,
+      ]);
+      if (this.subagents.owns(sessionId)) {
+        // A subagent's Stop reaches `agy` at once and starts its watchdog;
+        // the facade's cleanup drains beside it, never in front of it (it
+        // would also hold the worker's serialized input).
+        this.agent(message);
+        this.subagents.nativeCancelled(sessionId);
+        await fenced;
+        return;
+      }
+      await fenced;
     }
     this.agent(message);
+    // From here `agy` has the cancel: a child it does not answer ends the unit.
+    this.subagents.nativeCancelled(message.params?.sessionId);
   }
 
   /**
@@ -741,6 +804,8 @@ export class AcpProxy {
     turn.violation = name === undefined ? "unknown" : toolCode(name);
     this.log(`built-in tool ${turn.violation} executed; ending the turn`);
     this.agent({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });
+    // A subagent's violation ends its parent's turn as well.
+    this.subagents.violated(sessionId, turn.violation);
   }
 
   /**
@@ -774,7 +839,8 @@ export class AcpProxy {
   remember(params) {
     if (!this.memory?.observe) return;
     const turn = this.turns.get(params?.sessionId);
-    if (!turn) return;
+    // A subagent's words are its report, not the owner's conversation.
+    if (!turn || turn.child) return;
     const update = params.update;
     const observation = updateObservation(update);
     if (!observation) return;
@@ -807,15 +873,82 @@ export class AcpProxy {
 
   /** A facade call's effect became unknown: end that session's turn. */
   uncertain(sessionId, method) {
+    // A subagent's unknown effect ends its parent's turn too.
+    this.subagents.uncertain(sessionId, method);
     const turn = this.turns.get(sessionId);
     if (!turn) return;
     turn.uncertain ??= method;
     this.agent({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });
   }
 
+  /** A subagent's effect was just lost: fence its turn's family at once. */
+  lost(sessionId, method) {
+    this.subagents.lost(sessionId, method);
+  }
+
+  /**
+   * `agy` is gone and this proxy ended it: every parent prompt still open is
+   * answered with what is already known (a latched violation, a child's
+   * refusal, a lost effect, else an unproven outcome), so the Controller still
+   * receives the account's signal. Another exit changes nothing.
+   */
+  settleExit() {
+    if (this.killed === undefined) return;
+    // Rows first: the worker must see every child end before the parent does.
+    this.subagents.exited();
+    const open = [
+      ...[...this.pending].filter(
+        ([, record]) => record.method === "session/prompt" && !record.internal,
+      ),
+      ...this.settling,
+    ];
+    for (const [id, record] of open) {
+      this.pending.delete(id);
+      if (record.finalized) continue;
+      record.finalized = true;
+      const replyId = record.replyId ?? id;
+      this.settling.delete(replyId);
+      const turn = this.turns.get(record.sessionId);
+      const backend = turn?.childBackends?.length
+        ? withChildren(turn, {
+            class: "ok",
+            successes: 0,
+            barrier: false,
+            transient: 0,
+            refusals: [],
+          })
+        : { class: "unknown_refusal", successes: 0, barrier: false, transient: 0, refusals: [] };
+      const cowboy = { antigravity_backend: backend };
+      if (turn?.uncertain !== undefined) cowboy.uncertain_effect = turn.uncertain;
+      const violation = turn?.violation;
+      if (violation !== undefined) cowboy.policy_violation = violation;
+      const text =
+        violation !== undefined
+          ? TURN_ERROR_TEXT.violation
+          : (TURN_ERROR_TEXT[backend.class] ?? TURN_ERROR_TEXT.unknown_refusal);
+      this.client({
+        jsonrpc: "2.0",
+        id: replyId,
+        error: {
+          code: TURN_ERROR_CODE,
+          message:
+            violation !== undefined
+              ? `${VIOLATION_PREFIX}${violation}`
+              : `${REFUSAL_PREFIX}${backend.class}`,
+          data: { message: text, cowboy },
+        },
+      });
+    }
+  }
+
   async fromAgent(message) {
     if (message === null || typeof message !== "object" || Array.isArray(message)) return;
     const { id, method } = message;
+    // A subagent's session the worker has not been told about yet: nothing of
+    // it reaches the worker (it would read as the parent's) until it is.
+    if (typeof method === "string" && this.subagents.holds(message.params?.sessionId)) {
+      return this.subagents.hold(message);
+    }
     if (typeof method === "string") {
       if (id === undefined) {
         if (method === "session/update") {
@@ -840,7 +973,16 @@ export class AcpProxy {
           // agy echoes every prompt block as the owner's message; the blocks
           // Cowboy injected (recalled memory, restated context) are not.
           if (injectedEcho(update)) return;
+          // A subagent's delegation prompt is shown as a linked message of
+          // its parent, and the commands of the owner's session are not its.
+          if (
+            this.subagents.owns(message.params?.sessionId) &&
+            ["user_message_chunk", "available_commands_update"].includes(update?.sessionUpdate)
+          ) {
+            return;
+          }
           this.observe(message.params);
+          this.subagents.collect(message.params);
           // Before presentation, which hides some tool calls (UpdatePlan).
           const answer = this.collectReply(message.params);
           // Evidence and the worker see the same sanitized, presented
@@ -866,7 +1008,11 @@ export class AcpProxy {
       // for any tool but the facade's is rejected here, never shown; so is
       // a managed child's request for any session but its own.
       const name = message.params?.toolCall?.name;
-      if (!this.allows(name) || this.foreignSession(message.params)) {
+      // A subagent that was stopped or answered asks for nothing more.
+      const ended =
+        this.subagents.owns(message.params?.sessionId) &&
+        !this.subagents.active(message.params.sessionId);
+      if (!this.allows(name) || this.foreignSession(message.params) || ended) {
         const options = Array.isArray(message.params?.options) ? message.params.options : [];
         const reject =
           options.find((option) => option?.kind === "reject_once") ??
@@ -885,7 +1031,9 @@ export class AcpProxy {
       // Cowboy's own tools need no prompt, like a Claude session's default
       // bypassPermissions; plan mode still asks.
       const sessionId = message.params?.sessionId;
-      const mode = this.modes.get(sessionId);
+      // A subagent acts in its parent's current mode, so a parent that moved
+      // to plan mode stops approving for its children as well.
+      const mode = this.modes.get(this.subagents.parentOf(sessionId) ?? sessionId);
       // `UpdatePlan` only shows a checklist, in every mode.
       const planning = name === "mcp_cowboy_UpdatePlan";
       // A managed call has nobody to ask: its read tools run, nothing else.
@@ -908,11 +1056,11 @@ export class AcpProxy {
           return this.agent({ jsonrpc: "2.0", id, result: { outcome: { outcome: "cancelled" } } });
         }
       }
-      this.agentRequests.add(id);
+      this.agentRequests.set(id, { sessionId, child: this.subagents.childOf(sessionId) });
       const asked = stripTier(message);
       return this.client({
         ...asked,
-        params: { ...asked.params, toolCall: this.present(asked.params?.toolCall) },
+        params: { ...asked.params, toolCall: this.present(asked.params?.toolCall, sessionId) },
       });
     }
     const record = this.pending.get(id);
@@ -928,6 +1076,9 @@ export class AcpProxy {
     }
     // No result or error leaves the proxy with the raw tier.
     message = stripTier(message);
+    // The proxy's own request (a subagent's session): its host answers, the
+    // worker never sees it.
+    if (record.internal) return record.internal(message);
     const { runtime } = record;
     if (record.mode) {
       const { sessionId, mode } = record.mode;
@@ -946,6 +1097,14 @@ export class AcpProxy {
         const sessionId = message.result?.sessionId ?? record.session;
         this.reportMode(sessionId, message.result);
         this.compaction.opened(sessionId, record.projection);
+        if (!runtime.managed) {
+          this.subagents.opened(sessionId, { cwd: record.cwd, projection: record.projection });
+        }
+      } else if (
+        record.method === "session/set_model" ||
+        record.method === "session/set_config_option"
+      ) {
+        this.subagents.configured(record.method, record.params);
       }
     }
     if (record.channel && typeof message.result?.sessionId === "string") {
@@ -970,10 +1129,17 @@ export class AcpProxy {
     const turn = this.turns.get(record.sessionId);
     // A correction prompt answers the worker's prompt it continues.
     const replyId = record.replyId ?? id;
+    // Registered until its reply is written: a forced exit answers it.
+    this.settling.set(replyId, record);
     // Checked synchronously, and every ending fences the turn's facade calls
     // before anything is awaited; an admitted correction reopens them.
     const problem = this.correction(turn, message);
-    await runtime.facade.endTurn(record.sessionId);
+    // Both start before anything is awaited: the turn's facade calls are
+    // fenced at once, and nothing a turn started outlives it (its subagents
+    // stop, which a later start of theirs already sees).
+    const fenced = runtime.facade.endTurn(record.sessionId);
+    await this.subagents.finish(record.sessionId);
+    await fenced;
     // Every ending is classified, a vendor error too: its log window may
     // hold a refusal; an error without one is `unknown_refusal`, never a
     // vendor message the Controller cannot attribute.
@@ -982,9 +1148,12 @@ export class AcpProxy {
       record.sessionId,
       message.result?.stopReason,
     );
-    if (problem && (await this.correct(record, turn, problem, replyId, settled, message))) return;
+    if (problem && (await this.correct(record, turn, problem, replyId, settled, message))) {
+      this.settling.delete(replyId);
+      return;
+    }
     if (turn?.structured) this.sealed.add(record.sessionId);
-    const backend = attempts(turn, settled);
+    const backend = withChildren(turn, attempts(turn, settled));
     if (this.turns.get(record.sessionId) === turn) this.turns.delete(record.sessionId);
     await this.settleMemory(turn);
     const violation = turn?.violation;
@@ -1217,6 +1386,10 @@ export class AcpProxy {
    * typed compaction; a restating turn that failed restates again next time.
    */
   endPrompt(record, reply) {
+    // Said once: a forced exit may have answered this prompt already.
+    if (record.finalized) return;
+    record.finalized = true;
+    this.settling.delete(reply.id);
     const { sessionId } = record;
     if (record.compaction) {
       const { status, error } = compactionStatus(reply);
@@ -1247,6 +1420,25 @@ function attempts(turn, settled) {
     refusals: all.flatMap((item) => (Array.isArray(item.refusals) ? item.refusals : [])),
     attempts: all.length,
   };
+}
+
+/**
+ * A turn's backend evidence with what its subagents settled to: the worst
+ * class among the parent and every child by the classifier's precedence, so a
+ * child's refusal (or an outcome its log could not prove) is the turn's too,
+ * even when the parent's own window reads clean or milder. The parent's own
+ * evidence counts stay; every refusal seen is listed.
+ */
+function withChildren(turn, backend) {
+  const children = turn?.childBackends;
+  if (!children?.length) return backend;
+  const all = [backend, ...children].filter((item) => item.class !== "ok");
+  if (!all.length) return backend;
+  const rank = (item) => PRECEDENCE.indexOf(item.class);
+  const worst = all.reduce((best, item) => (rank(item) < rank(best) ? item : best));
+  if (worst === backend) return backend;
+  const refusals = all.flatMap((item) => (Array.isArray(item.refusals) ? item.refusals : []));
+  return { ...backend, class: worst.class, refusals };
 }
 
 /** Optional ACP usage counters, published only when every attempt has one. */

@@ -13,8 +13,8 @@
    "description": "11d631d16167ff13"
   },
   "CronCreate": {
-   "input_schema": "dcb40209c5b18a9f",
-   "description": "c9346bfe44b0ea03"
+   "input_schema": "6ccb32658c919aec",
+   "description": "85c9140b178fe4c3"
   },
   "CronDelete": {
    "input_schema": "4c168429a8e44b9b",
@@ -26,7 +26,7 @@
   },
   "DesignSync": {
    "input_schema": "e4b9d0b118bc2ee2",
-   "description": "dc49da0ab4247438"
+   "description": "6b793a920ccc748b"
   },
   "Edit": {
    "input_schema": "934f1e057d134875",
@@ -49,8 +49,8 @@
    "description": "a90269e4a07fde31"
   },
   "ListAgents": {
-   "input_schema": "914feef060a70cb1",
-   "description": "fcef208b39bd163b"
+   "input_schema": "30ca4196805ce64c",
+   "description": "43a03902cf7df5ea"
   },
   "Monitor": {
    "input_schema": "cb6281ac54ea04ec",
@@ -65,7 +65,7 @@
    "description": "98b5f0d4ee26b770"
   },
   "ReportFindings": {
-   "input_schema": "85f7403fc37803e3",
+   "input_schema": "7082b667b633daa9",
    "description": "fefdaf49d466b3b3"
   },
   "ScheduleWakeup": {
@@ -74,7 +74,7 @@
   },
   "SendMessage": {
    "input_schema": "afd48a6d4c972406",
-   "description": "4c77de09e5e6f71c"
+   "description": "1d6cd3355a75a35f"
   },
   "Skill": {
    "input_schema": "a5d702970286c9b3",

@@ -139,3 +139,26 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 debug = 0
+
+# Hashing, TLS root parsing, signatures, compression and SQLite dominate the
+# CPU-bound tests; unoptimized they run an order of magnitude slower.
+[profile.dev.package.sha2]
+opt-level = 3
+
+[profile.dev.package.rustls-pki-types]
+opt-level = 3
+
+[profile.dev.package.ring]
+opt-level = 3
+
+[profile.dev.package.curve25519-dalek]
+opt-level = 3
+
+[profile.dev.package.ed25519-dalek]
+opt-level = 3
+
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+
+[profile.dev.package.libsqlite3-sys]
+opt-level = 3

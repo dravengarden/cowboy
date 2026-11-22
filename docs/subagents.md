@@ -24,6 +24,17 @@ an object (Claude `dist/acp-subagents.js` `clientSupportsSubagents`, Codex
 
 Cowboy's Codex delta series (`third_party/codex-acp`) does not touch subagent routing.
 
+Antigravity (`agy` 1.5.x) declares no subagent capability and its own
+subagents run past the turn, so its proxy hosts them instead (design
+[Subagents](antigravity-real-accounts-design.md#subagents)): the `Subagent`
+facade tool starts another `agy` session inside the parent's turn and the
+proxy sends this same form (`subagent_update` before child traffic, the
+delegation prompt as a linked `session_message`, the child's own updates and
+permission requests under its session id, `idle` with a stop reason at the
+end; `session/cancel` of the child id stops only that child, and a parent
+cancel or turn end stops all). The child's reply is its last message once idle;
+neither a model label nor usage is reported.
+
 ## Routing (worker)
 
 `src/acp_subagents.rs` owns the registry; `handle_session_notification` in

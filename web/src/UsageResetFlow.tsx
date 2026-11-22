@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Button,
   DialogContentText,
@@ -15,7 +15,9 @@ import {
   cancelNearestResetSchedule,
   consumeNearestReset,
   ResetOutcomeUnknown,
+  ResetWaitCancelled,
   scheduleNearestReset,
+  sleepUnlessAborted,
   type UsageResetTarget,
 } from "./usageApi";
 
@@ -30,6 +32,8 @@ export interface UsageResetFlow {
   fireAt: string;
   confirmText: string;
   busy: boolean;
+  /** A paced reset waits for the Provider window; nothing was sent yet. */
+  waiting: string | null;
   error: string | null;
   /** The confirmation and, for a schedule, its time are complete. */
   ready: boolean;
@@ -67,6 +71,15 @@ export function useUsageResetFlow(
   const [confirmText, setConfirmText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** When a paced reset is resent; only then may the dialog close mid-run. */
+  const [waitingUntil, setWaitingUntil] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const pacing = useRef<AbortController | null>(null);
+  useEffect(() => {
+    if (waitingUntil === null) return;
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, [waitingUntil]);
   const scheduleValid = fireAt !== "" && new Date(fireAt).getTime() > Date.now();
   const changed = open && pinned !== null &&
     (pinned.target !== targetKey(target) || (mode === "now" && pinned.creditId !== nearestCreditId));
@@ -85,6 +98,7 @@ export function useUsageResetFlow(
       await action();
       await onUsageChanged();
     } catch (cause) {
+      if (cause instanceof ResetWaitCancelled) return;
       if (cause instanceof ResetOutcomeUnknown) {
         setLocked(true);
         void onUsageChanged().catch(() => undefined);
@@ -92,6 +106,8 @@ export function useUsageResetFlow(
       setError(cause instanceof Error ? cause.message : failure);
     } finally {
       setBusy(false);
+      setWaitingUntil(null);
+      pacing.current = null;
     }
   };
   const submit = async (): Promise<void> => {
@@ -101,8 +117,25 @@ export function useUsageResetFlow(
         if (target.kind !== "service") throw new Error("Only Service resets can be scheduled.");
         await scheduleNearestReset(target, new Date(fireAt).getTime(), confirmText);
       } else {
-        // Exactly the grant confirmed when the dialog opened.
-        await consumeNearestReset(target, pinned.creditId, confirmText);
+        // Exactly the grant confirmed when the dialog opened. A paced
+        // refusal sent nothing: wait for the Provider window and resend.
+        const controller = new AbortController();
+        pacing.current = controller;
+        await consumeNearestReset(target, pinned.creditId, confirmText, {
+          signal: controller.signal,
+          onPaced: (retryAtMs) => {
+            setNow(Date.now());
+            setWaitingUntil(retryAtMs);
+          },
+          sleep: async (ms, signal) => {
+            try {
+              await sleepUnlessAborted(ms, signal);
+            } finally {
+              // Not cancellable again until the next paced refusal.
+              setWaitingUntil(null);
+            }
+          },
+        });
       }
       setOpen(false);
       setMode(initialMode);
@@ -116,6 +149,9 @@ export function useUsageResetFlow(
     fireAt,
     confirmText,
     busy,
+    waiting: waitingUntil === null ? null : `The Provider is pacing usage requests. Cowboy holds it for this reset and sends it in ${
+      Math.max(1, Math.ceil((waitingUntil - now) / 1_000))
+    }s. No reset has been sent yet.`,
     error: error ?? (changed ? "The available reset changed. Close and confirm again." : null),
     ready,
     scheduling,
@@ -128,7 +164,8 @@ export function useUsageResetFlow(
       setOpen(true);
     },
     close: () => {
-      if (busy) return;
+      if (busy && waitingUntil === null) return;
+      pacing.current?.abort();
       setOpen(false);
       clear();
     },
@@ -186,6 +223,11 @@ export function UsageResetFields({ flow }: { flow: UsageResetFlow }): React.JSX.
         onChange={(event) => flow.setConfirmText(event.target.value)}
         sx={{ mt: 2 }}
       />
+      {flow.waiting && (
+        <Typography color="text.secondary" variant="body2" role="status" sx={{ mt: 1 }}>
+          {flow.waiting}
+        </Typography>
+      )}
       {flow.error && (
         <Typography color="error.main" variant="body2" sx={{ mt: 1 }}>
           {flow.error}
@@ -198,9 +240,9 @@ export function UsageResetFields({ flow }: { flow: UsageResetFlow }): React.JSX.
 export function UsageResetActions({ flow }: { flow: UsageResetFlow }): React.JSX.Element {
   return (
     <>
-      <Button onClick={flow.close} disabled={flow.busy}>
+      <Button onClick={flow.close} disabled={flow.busy && !flow.waiting}>
         Cancel
-        <Kbd keys="Esc" availability={flow.busy ? "inactive" : "available"} />
+        <Kbd keys="Esc" availability={flow.busy && !flow.waiting ? "inactive" : "available"} />
       </Button>
       <NetworkButton
         variant="contained"

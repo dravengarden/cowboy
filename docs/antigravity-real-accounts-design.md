@@ -333,8 +333,9 @@ login completion, session creation **and every dispatch and worker revival**
 **Account state.** Durable per account on the Controller: `ok`,
 `verification_required`, `location_unsupported`, `rate_limited_until`,
 `suspended`, `blocked` (kill switch), `unknown_refusal`. Any state other than
-`ok` parks the account's queues; `rate_limited_until` additionally requires a
-new owner send after the time; `suspended` and `blocked` stop the account's
+`ok` parks the account's queues; `rate_limited_until` parks them until that
+time, and the next dispatch after it resumes the account (owner-paced since
+2026-11-22; earlier only a new owner send did); `suspended` and `blocked` stop the account's
 units and need an explicit owner action to clear.
 
 **One active turn per account [R1-8, R2-11].** The Controller reserves the
@@ -543,8 +544,8 @@ R3-4, R3-9, R3-10, R3-13 and R3-16, with these concrete choices:
   cached controls before draining again. Any state but `ok`, a missing
   admission, another session's turn or an unacknowledged uncertain effect
   parks. A rate limit (default one hour; the proxy reports no reset time)
-  parks until `until_ms`; after it only an explicit owner send (send, send
-  now) resumes the account, an automatic drain does not. Admission and the
+  parks until `until_ms`; the first dispatch after it, owner or automatic,
+  resumes the account. Admission and the
   kill switch at login and session creation are read from the store, never
   from the cache; a failed reload marks the cache unloaded, which parks.
 - **One active turn.** Every dispatch of a governed session, user prompts
@@ -862,8 +863,8 @@ query and force release of "Controller account controls (step 5a)" and the
   arrives as `unknown_refusal`. The raise is one transaction compared with
   the stored state: it never lowers a more severe state and never replaces
   `blocked`. `suspended`, `blocked` and `needs_attention` write stop fences.
-  A rate limit holds one hour and only an explicit owner send resumes it,
-  and only the expired rate limit that authorized that send (compared by
+  A rate limit holds one hour and the first dispatch after it resumes it,
+  and only the expired rate limit that admitted that dispatch (compared by
   revision in the write) is cleared. A signal is registered before the
   turn ending is acknowledged; the account's dispatches and revivals park
   until it commits, and a failed write is retried, never dropped.
@@ -1030,8 +1031,8 @@ part of the "Daemon" decision; everything else in Revision 5 holds.
   concurrent writers to shared state is the vendor's, and an `agy` failure
   there would surface as an ordinary turn error (`unknown_refusal`, owner
   clears it).
-- A rate limit is account-wide: an explicit owner send in any session of the
-  account resumes all of them.
+- A rate limit is account-wide: the first dispatch after it ends, in any
+  session of the account, resumes all of them.
 
 ## Antigravity features (0.2.1)
 
@@ -1058,7 +1059,7 @@ request is added for any of it.
   `auto`, `plan`) is already shown per session as "Agent mode" and persists
   as a session preference, so Plan stays one choice away. How `plan` behaves
   with every built-in tool denied is not observed yet; it is an acceptance
-  item for the next human-paced session, not something a card should
+  item for the next owner-driven session, not something a card should
   preselect.
 - **Account plan.** `session/new|load|resume` results carry
   `_meta.antigravity.tier` (`{name: "Antigravity Starter Quota", id:
@@ -1415,8 +1416,8 @@ words. Workflows (`.agents/workflows/*.md`) are not projected.
 | Tool(s) | Reason | Alternative named in the hook's denial |
 | --- | --- | --- |
 | `read_file`, `write_file`, `edit_file`, `run_command` (and `list_dir`, `grep_search`, `find_by_name`, `command_status`, …) | they act on the runtime Machine | the facade tools |
-| `invoke_subagent`, `define_subagent`, `manage_subagents`, `send_message`, `swarm` (`post_message`, `read_board`, `swarm_wait`, `claim_next`), `run_workflow` | see "Subagents" | Cowboy managed calls (`mcp_cowboy_cowboy_execute`, action `calls.start`) when listed |
-| `schedule`, `manage_task` | timers and background tasks live in the `agy` process, which Cowboy stops when the session idles; a fired timer would start a turn no client prompted | `RunCommand` with `wait_seconds`; a scheduled message in Cowboy; for work handed to another session, `cowboy session wait` inside the human's turn ([session completion notices](agent-api.md#session-completion-notices)) |
+| `invoke_subagent`, `define_subagent`, `manage_subagents`, `send_message`, `swarm` (`post_message`, `read_board`, `swarm_wait`, `claim_next`), `run_workflow` | see "Subagents" | `mcp_cowboy_Subagent` (a proxy-hosted subagent); Cowboy managed calls (`mcp_cowboy_cowboy_execute`, action `calls.start`) for work of another session |
+| `schedule`, `manage_task` | timers and background tasks live in the `agy` process, which Cowboy stops when the session idles; a fired timer would start a turn no client prompted | `RunCommand` with `wait_seconds`; a scheduled message in Cowboy; for work handed to another session, `notify:true` and ending the turn after the admission is confirmed ([session completion notices](agent-api.md#session-completion-notices)) |
 | `execute_url`, browser and computer-use tools (`bind_app`, `ax_*`, `focus_app`) | no browser or desktop in the account unit | `search_web`, `read_url_content`, a browser MCP tool of the folder |
 | `generate_image` | writes the image to the account's artifact directory on the runtime Machine, which the session cannot see | none yet |
 
@@ -1441,13 +1442,97 @@ outside any client prompt, a turn the worker never started (no evidence
 settlement, no fencing, no queue ownership); (3) none of its steps are
 visible over ACP, so the Web cannot show it as a subagent row and the
 proxy's detection behind the gate cannot see it; (4) Cowboy stops the idle
-process, killing it. Decision (c) with (b)'s route: native subagents, swarms
-and workflows stay denied; the denial and the installed managed-call
-guidance route delegation to Cowboy managed calls, which run a full,
-visible, cancellable child session through the same execution binding.
-Revisit if a later `agy` holds the prompt open until its children report and
-reports their steps over ACP (e.g. as ACP subagent sessions, which Cowboy's
-`initialize` already advertises).
+process, killing it. Native subagents, swarms and workflows therefore stay
+denied (the hook's denial names the alternatives), and `agy` 1.5.14, the
+newest at 2026-11-22, still declares no subagent capability in its ACP
+`initialize` (`agentCapabilities` is identical to 1.5.9's for a client that
+declared `clientCapabilities.subagents`), so waiting for it reports nothing.
+
+**Proxy-hosted subagents (owner decision, 2026-11-22).** The proxy runs the
+delegation itself, so each of the four problems has an answer inside the
+turn. The facade's `Subagent` tool (`subagents.mjs`) starts another native
+`agy` session in the same process, with the parent's working directory,
+projection (plus the subagent guidance), mode, model and effort settings and
+its own facade channel and turn on the one execution connection, and sends the
+delegation prompt. The tool call stays open while the child works: it waits at
+most `wait_seconds` (default and maximum 600, like a command) and returns the
+child's final report, or its `subagent_id` for another `Subagent` call to keep
+waiting (or `StopSubagent` to stop it). `wait_seconds: 0` starts it without
+waiting, so a model can run two at once and collect both.
+
+- **Reporting.** The worker's `initialize` declared
+  `clientCapabilities.subagents` (the proxy offers the tool only to such a
+  client; otherwise the call fails). The proxy sends the ACP subagent form the
+  worker already routes ([subagents](subagents.md)): a `subagent_update` on the
+  parent before any child traffic (`capabilities.cancel`, `state: running`),
+  the delegation prompt as a linked `session_message`, the child's own
+  `session/update`s and permission requests under its session id (its prompt
+  echo and command list are dropped), and a final `subagent_update` with
+  `idle` and a stop reason (`end_turn`, `cancelled` or `error`). The row, its
+  observed transcript, Stop and the permission attribution need nothing new
+  in the Controller or Web.
+- **Same gate.** The child is a session of the same `agy` process, so the same
+  `PreToolUse` hook, marker, allow-list and violation detection apply; the
+  proxy keeps a turn record per child so a built-in tool that ran is seen. A
+  child approves facade tools in its parent's *current* mode (a parent that
+  moves to plan mode, or whose mode is unconfirmed, makes its children ask the
+  owner); a child's permission admission closes in the same tick it is
+  stopped or its prompt is answered, a request after that is rejected and a
+  late approval answered as cancelled. The mode is rechecked right before the
+  child's prompt is sent, so a switch to plan mode during the start stops it. A child's violation, unknown effect or backend
+  refusal ends the parent's turn the same way: the parent's facade turn, its
+  other children and any start still opening are fenced in the same tick,
+  then `agy` is cancelled; the child's settled backend class is merged into
+  the parent's reply (the worst class among the parent and every child by
+  the classifier's precedence; their backend lines also lie inside the
+  parent's evidence window), and a child starts only with a log cursor. A lost
+  effect is announced the moment it is lost, before the ledger report is
+  awaited, and latches on the exact parent turn that started the child;
+  the parent's end waits for its children's calls, and for any running
+  publish helper (an admitted effect, at most 30 s).
+  Backend evidence is account-scoped: `agy`'s success lines carry no session
+  id, so a child is `ok` with its own barrier, no refusal in its window and a
+  success in the window (its own or a sibling's), and a sibling's refusal
+  fails it too; as for the parent, an errored prompt with otherwise clean
+  evidence is an unproven outcome. A helper process that cannot be confirmed
+  closed (a failed read, a timeout whose termination is not confirmed) is a
+  lost effect.
+- **Bounded.** One level only (a child's `Subagent` call fails), at most 2
+  running at once and 8 started per turn, a prompt of at most 64 KiB, a report
+  of at most 64 K characters, nothing in plan mode or before the mode is known.
+- **Nothing outlives the turn, and a stop fails closed.** The parent's prompt
+  ending, its cancel or its Stop cancels every child (their facade turns are
+  fenced and `agy` is asked to stop in the same tick) after the parent's own
+  fence; a child's own Stop (its row) cancels only that child and reaches
+  `agy` at once, the facade's cleanup draining beside it. `agy` has 10 s
+  from the moment the cancel reached it to confirm a stopped child by ending
+  its prompt (an answer disarms the watchdog at once, whatever its
+  settlement still takes); if it does not, the unit's `agy` process is killed
+  (nothing could show the native work stopped), every parent prompt still open
+  is answered with what is already known (a latched violation, a child's
+  refusal, a lost effect, else an unproven outcome, including one `agy` had
+  already answered and whose settlement was still running, once) after the
+  children's rows are ended and before the process exits, and the row is
+  failed, never reported stopped. A turn's end waits separately for a child
+  `agy` did answer to settle its evidence (it never kills that child). A settled child's native session is
+  closed (also one `agy` opens after its request timed out; if that cannot be
+  closed, or never answers within 2 minutes, the unit's `agy` is ended), its facade
+  channel revoked and its facade session forgotten; `agy` keeps its
+  conversation on disk. The frames of a session still opening are held until
+  the worker has been told of the child, so its setup traffic is never read as
+  the parent's. Child text is never recorded as the owner's memory.
+- **Account risk.** The child's prompts are agent-initiated requests on a
+  consumer subscription inside the owner's own turn: the owner accepted that
+  (requirements, Antigravity consumer-subscription boundary). Managed calls
+  keep the read-only profile and no subagents.
+
+Accepted with real traffic on 2026-11-22 ([rollout](releases/antigravity-subagents-3-134-rollout-2026-11-22.md)):
+`agy` 1.5.9 runs the child session while the parent's tool call is open, sends a
+per-child `model` configuration (the row shows "Gemini 4 Hydrogen"), and
+answers a cancelled child prompt; two children ran at once and a row Stop
+stopped one of them. Not covered: a child's token usage (`agy` reports none per
+session), and real-traffic runs of a parent Stop with children and the
+fail-closed paths (unit tests only).
 
 ### Remaining (needs work outside this adapter)
 

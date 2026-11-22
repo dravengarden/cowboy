@@ -83,6 +83,65 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Codex 3.6.28 changes only its Plugin source on component release 3.138.0: the
+`cowboy-prompt-suggestions` codex-acp delta and `COWBOY_CODEX_PROMPT_SUGGESTIONS=1`
+let the composer offer Codex's predicted next prompt
+([Codex runtime notes](../plugins/codex/runtime/README.md)).
+
+Component release 3.138.0 records provider-runtime 1.3.22, which pins `agy`
+1.5.9 again: 1.5.14 ends its turns without the stream barrier Antigravity's
+backend evidence needs, so its first real turn settled `unknown_refusal`
+([release record](releases/agent-runtimes-2026-11-22.md)). Antigravity 0.2.23
+pins it. The other six Providers pinning provider-runtime advance one patch
+version with unchanged runtime bytes (claude-code 3.20.68, claude-deepseek
+3.1.85, codex 3.6.27, codex-deepseek 3.1.85, deepseek-harness 1.0.43, grok
+3.2.26).
+
+Component release 3.137.0 records provider-runtime 1.3.21: Claude Code 2.1.330
+with Claude Agent ACP 0.109.1, native Codex 0.171.0 with Codex ACP 2.9.0 (whose
+declared range now covers it, so the `native-codex-version` delta is gone),
+Grok 1.0.92 and agy 1.5.14 (withdrawn in 3.138.0)
+([release record](releases/agent-runtimes-2026-11-22.md)). Every Plugin that
+pins it advances one patch version: antigravity 0.2.22, claude-code 3.20.67,
+claude-deepseek 3.1.84, codex 3.6.26, codex-deepseek 3.1.84, deepseek-harness
+1.0.42 and grok 3.2.25. Recommended presets and new-session defaults are
+unchanged.
+
+Component release 3.136.0 records provider-runtime 1.3.20, whose
+`cowboy-antigravity-acp` 1.0.18 follows the owner-paced rule (2026-11-22):
+its routing projection and denial reasons tell Antigravity to pass
+`notify:true` and end the turn, because Cowboy now starts its next turn with
+the notice, and `RunCommand` names how long one continuation may wait.
+Antigravity 0.2.21 pins it. The other six Providers pinning provider-runtime
+advance one patch version (claude-code 3.20.66, claude-deepseek 3.1.83,
+codex 3.6.25, codex-deepseek 3.1.83, deepseek-harness 1.0.41, grok 3.2.24).
+
+Component release 3.135.0 records provider-runtime 1.3.19, whose
+`cowboy-antigravity-acp` 1.0.17 cuts the round trips of Antigravity's tool
+facade across the Machine link: a command quiet for three one-second reads
+waits for the executor's notification naming it instead of polling (reads of
+one process run one at a time, so a stop's drain keeps the final output, and a
+quiet wait leaves one second for a last read before the deadline), `ReadFile`
+reuses the metadata it read, and a projection reads guidance and skills a few
+at a time, reading nothing once its guidance budget is spent. Antigravity
+0.2.20 pins it. The other six Providers pinning provider-runtime advance one
+patch version (claude-code 3.20.65, claude-deepseek 3.1.82, codex 3.6.24,
+codex-deepseek 3.1.82, deepseek-harness 1.0.40, grok 3.2.23).
+
+Antigravity 0.2.19 changes only its host data: it declares the `percent`
+desktop widget shape, so the Desktop top bar shows its per-group quotas (one
+column per group, each at its binding window) without a component release.
+
+Component release 3.134.0 records provider-runtime 1.3.18, whose
+`cowboy-antigravity-acp` 1.0.16 hosts subagents in the proxy: the facade's
+`Subagent` and `StopSubagent` tools start another native `agy` session inside
+the calling session's turn and report it as an ACP subagent, so Antigravity
+sessions get the same rows, stops and observed transcripts as Claude and Codex
+([Subagents](antigravity-real-accounts-design.md#subagents)). Antigravity 0.2.18
+pins it. The other six Providers pinning provider-runtime advance one patch
+version (claude-code 3.20.64, claude-deepseek 3.1.81, codex 3.6.23,
+codex-deepseek 3.1.81, deepseek-harness 1.0.39, grok 3.2.22).
+
 Component release 3.133.0 records provider-runtime 1.3.17, whose
 `cowboy-antigravity-acp` 1.0.15 asks Cloud Code's quota summary with `agy`'s
 own client identity (`antigravity/cli/<version>`), which answers the Gemini

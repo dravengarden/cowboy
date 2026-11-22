@@ -47,7 +47,7 @@ impl Bundle {
     pub(super) fn prepare_signed(manifest: &Path, artifact: &Path, key: &Path) -> Result<Self> {
         let payloads = super::signed_bootstrap::authenticate(manifest, artifact, key)?;
         let mut bundle = Self(Scratch::new()?, Some(payloads), None);
-        std::fs::copy(std::env::current_exe()?, bundle.payload(".verifier"))?;
+        std::fs::copy(verifier_source()?, bundle.payload(".verifier"))?;
         bundle.2 = Some(super::signed_bootstrap::verifier_digest(
             &bundle.payload(".verifier"),
         )?);
@@ -190,6 +190,19 @@ fn bounded_output(path: &Path) -> Result<Vec<u8>> {
         "bootstrap guard probe output exceeds limit"
     );
     Ok(bytes)
+}
+
+/// The installer's own executable, snapshotted as a signed bundle's verifier.
+#[cfg(not(test))]
+fn verifier_source() -> std::io::Result<PathBuf> {
+    std::env::current_exe()
+}
+
+/// Unit tests never run the installed verifier; they snapshot a small stand-in
+/// because copying and hashing the test binary (hundreds of MB) dominated them.
+#[cfg(test)]
+fn verifier_source() -> std::io::Result<PathBuf> {
+    Ok(PathBuf::from("/bin/sh"))
 }
 
 pub(super) fn check(source: &Path) -> Result<()> {

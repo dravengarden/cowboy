@@ -964,8 +964,12 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
-    async fn anchor_package_recovery_cases(release: Option<&Path>, quarantine: bool) {
-        for archive in [false, true] {
+    async fn anchor_package_recovery_cases(
+        release: Option<&Path>,
+        quarantine: bool,
+        archives: &[bool],
+    ) {
+        for &archive in archives {
             let mut cases = vec![
                 "absent",
                 "dangling",
@@ -1446,7 +1450,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn anchor_package_recovery_binds_original_proof_and_never_replaces_damage() {
-        anchor_package_recovery_cases(None, false).await;
+        anchor_package_recovery_cases(None, false, &[false, true]).await;
     }
 
     #[cfg(target_os = "linux")]
@@ -1454,13 +1458,22 @@ mod tests {
     #[ignore = "requires exact current and preceding immutable Machine releases"]
     async fn immutable_anchor_package_recovery_uses_original_floor_proof_without_executing_code() {
         let release = PathBuf::from(std::env::var("COWBOY_TEST_PORTABLE_HOST_RELEASE").unwrap());
-        anchor_package_recovery_cases(Some(&release), false).await;
+        anchor_package_recovery_cases(Some(&release), false, &[false, true]).await;
     }
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn anchor_quarantine_recovery_preserves_damage_and_refuses_unsafe_destinations() {
-        anchor_package_recovery_cases(None, true).await;
+        anchor_package_recovery_cases(None, true, &[false]).await;
+    }
+
+    // The archive payload form of the same cases, split out so the two
+    // halves run concurrently.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn anchor_quarantine_recovery_of_an_archive_preserves_damage_and_refuses_unsafe_destinations()
+     {
+        anchor_package_recovery_cases(None, true, &[true]).await;
     }
 
     #[cfg(target_os = "linux")]
@@ -1468,7 +1481,7 @@ mod tests {
     #[ignore = "requires exact current and preceding immutable Machine releases"]
     async fn immutable_anchor_quarantine_recovery_preserves_damage_without_executing_code() {
         let release = PathBuf::from(std::env::var("COWBOY_TEST_PORTABLE_HOST_RELEASE").unwrap());
-        anchor_package_recovery_cases(Some(&release), true).await;
+        anchor_package_recovery_cases(Some(&release), true, &[false, true]).await;
     }
 
     #[tokio::test]

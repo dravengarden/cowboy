@@ -89,9 +89,11 @@ declared in the request's `mcpServers`, and Cowboy currently configures its
 MCP servers through Codex config instead, so the key is inert until that
 changes. The Web also renders a predicted next prompt published as
 `session_info_update._meta.promptSuggestions` (ghost text Tab fills on
-Desktop, a chip on Mobile; never sent, live only). The pinned Claude and Codex
-adapters publish it only to JetBrains AIR clients, which Cowboy does not claim
-to be, so it stays dormant with those adapters.
+Desktop, a chip on Mobile; never sent, live only). The adapters predict it only
+for JetBrains AIR clients, which Cowboy does not claim to be; Codex publishes it
+to Cowboy through the Provider's `cowboy-prompt-suggestions` delta (outside
+managed calls), and Claude's stays dormant until the worker reads ACP's
+`prompt_suggestions_update`.
 
 Cowboy advertises `subagents` too. Adapters then run each subagent as its own
 child ACP session (updates under the child's `sessionId`, `subagent_update`

@@ -32,6 +32,7 @@ import {
   ToolError,
   UncertainEffect,
   unknownOutcome,
+  unreachable,
   url,
 } from "./facade-tools.mjs";
 import { MANAGED_FACADE_TOOLS } from "./managed.mjs";
@@ -60,6 +61,9 @@ export class Facade {
    * @param root the canonical workspace root on the target
    * @param shell the target user's shell
    * @param onUncertain called with (sessionId, method) when a turn must end
+   * @param onLost called with (sessionId, method) at the moment an effect is
+   *   lost, before anything is awaited, so a subagent's parent turn and its
+   *   other children are fenced at once
    * @param onResult called with (call, result) once a tool call is answered,
    *   before `agy` receives the answer (`call` is `{ sessionId, name, args }`,
    *   one object per call, so a presentation can correlate it)
@@ -74,6 +78,7 @@ export class Facade {
       root,
       shell,
       onUncertain = () => {},
+      onLost = () => {},
       onResult = () => {},
       onProgress = () => {},
       managed = false,
@@ -84,11 +89,18 @@ export class Facade {
     this.root = root;
     this.shell = shell;
     this.onUncertain = onUncertain;
+    this.onLost = onLost;
     this.onResult = onResult;
     this.onProgress = onProgress;
     this.sessions = new Map();
     /** The session's extension tools (`extensions.mjs`), once started. */
     this.extensions = undefined;
+    /**
+     * The proxy's subagent host (`subagents.mjs`): `start(sessionId, {prompt,
+     * description})`, `wait(sessionId, id, ms, signal)` and `stop(sessionId,
+     * id)`. Absent until the proxy attaches (and in a managed child).
+     */
+    this.subagents = undefined;
   }
 
   /** Canonicalize the binding's workspace root and build the facade. */
@@ -125,18 +137,45 @@ export class Facade {
   session(sessionId) {
     let session = this.sessions.get(sessionId);
     if (!session) {
-      session = { turn: undefined, observed: new Map(), commands: new Map() };
+      session = {
+        turn: undefined,
+        observed: new Map(),
+        commands: new Map(),
+        parent: undefined,
+        // The parent's turn that was open when the child started.
+        parentTurn: undefined,
+      };
       this.sessions.set(sessionId, session);
     }
     return session;
   }
 
+  /** `childId` is a subagent of `parentId`: its lost effects end the parent's turn too. */
+  link(childId, parentId) {
+    const session = this.session(childId);
+    session.parent = parentId;
+    session.parentTurn = this.session(parentId).turn;
+  }
+
+  /**
+   * A settled subagent's session is forgotten (its turn already ended): a
+   * command whose termination is not yet confirmed keeps it tracked.
+   */
+  forgetSession(sessionId) {
+    const session = this.sessions.get(sessionId);
+    if (session && !session.turn && session.commands.size === 0) this.sessions.delete(sessionId);
+  }
+
   beginTurn(sessionId) {
     this.session(sessionId).turn = {
+      sessionId,
       cancelled: false,
       ended: false,
       uncertain: undefined,
       inflight: new Set(),
+      // Aborted when the turn ends or is cancelled: a call waiting on a
+      // subagent returns at once instead of holding the end of the turn.
+      abort: new AbortController(),
     };
   }
 
@@ -155,6 +194,7 @@ export class Facade {
         turn.ended = true;
         session.turn = undefined;
       }
+      turn.abort?.abort();
       await Promise.allSettled([...turn.inflight]);
     }
     const commands = [...session.commands.values()];
@@ -176,7 +216,19 @@ export class Facade {
   /** One MCP `tools/call`, answered as an MCP tool result. */
   async call(sessionId, name, args) {
     const call = { sessionId, name, args };
-    const result = await this.answer(call);
+    const running = this.answer(call);
+    // A subagent's call is part of its parent's turn: the parent's end waits
+    // for it, and for the report of an effect it lost.
+    const parentTurn =
+      sessionId === undefined ? undefined : this.sessions.get(sessionId)?.parentTurn;
+    const tracked = parentTurn?.inflight ? running.catch(() => {}) : undefined;
+    if (tracked) parentTurn.inflight.add(tracked);
+    let result;
+    try {
+      result = await running;
+    } finally {
+      if (tracked) parentTurn.inflight.delete(tracked);
+    }
     // Presentation only: it never changes the answer `agy` receives.
     try {
       this.onResult(call, result);
@@ -216,6 +268,8 @@ export class Facade {
           }
         }),
       StopCommand: () => this.stopCommand(session, args),
+      Subagent: () => this.subagent(sessionId, turn, args),
+      StopSubagent: () => this.stopSubagent(sessionId, args),
       // Presentation only (the proxy shows it as the session's plan); it
       // never reaches the target.
       UpdatePlan: async () => {
@@ -245,7 +299,7 @@ export class Facade {
       return { content: [{ type: "text", text: await handlers[name]() }] };
     } catch (error) {
       if (error instanceof UncertainEffect) {
-        turn.uncertain ??= error.method;
+        this.fenceLost(turn, error.method);
         // The worker's trusted ledger records it before this tool answers
         // (so before the turn can end), also when every transport call was
         // answered (a timed-out publish): the session parks until the owner
@@ -269,6 +323,24 @@ export class Facade {
       if (missing(error))
         throw new ToolError(`No such file or directory: ${fileURLToPath(params.path)}`);
       throw error;
+    }
+  }
+
+  /**
+   * An effect of `turn` has an unknown outcome: fence the turn, the parent
+   * turn that was open when a child's effect was lost, and (through
+   * `onLost`) its other children, before anything is awaited. Repeating it
+   * changes nothing.
+   */
+  fenceLost(turn, method) {
+    turn.uncertain ??= method;
+    if (turn.sessionId === undefined) return;
+    const session = this.sessions.get(turn.sessionId);
+    if (session?.parentTurn) session.parentTurn.uncertain ??= method;
+    try {
+      this.onLost(turn.sessionId, method);
+    } catch {
+      // The turn's own fence still ends it.
     }
   }
 
@@ -327,11 +399,13 @@ export class Facade {
     return full;
   }
 
-  /** The whole content of a file, or undefined when it does not exist. */
-  async current(file) {
-    let metadata;
+  /**
+   * The whole content of a file, or undefined when it does not exist. A
+   * caller that has just read its `metadata` passes it, saving a round trip.
+   */
+  async current(file, metadata) {
     try {
-      metadata = await this.connection.call("fs/getMetadata", { path: url(file) });
+      metadata ??= await this.connection.call("fs/getMetadata", { path: url(file) });
     } catch (error) {
       if (missing(error)) return undefined;
       throw error;
@@ -353,7 +427,7 @@ export class Facade {
     let size = metadata.size;
     let bytes;
     if (size <= LIMITS.wholeFile) {
-      const data = (await this.current(file)) ?? Buffer.alloc(0);
+      const data = (await this.current(file, metadata)) ?? Buffer.alloc(0);
       session.observed.set(file, sha256(data));
       size = data.length;
       bytes = data.subarray(offset, offset + length);
@@ -585,8 +659,29 @@ export class Facade {
     return { processId, afterSeq: null, exitCode: null, closed: false };
   }
 
-  /** One `process/read`; returns the chunks and updates the cursor. */
-  async read(process, waitMs, { lostIsUncertain = true } = {}) {
+  /**
+   * One `process/read`; returns the chunks and updates the cursor. Reads of
+   * one process run one at a time, so a stop's drain and a waiting reader
+   * never share a cursor, and a command's chunks land in its retained
+   * output whichever reader took them.
+   */
+  read(process, waitMs, options) {
+    const read = (process.reading ?? Promise.resolve()).then(() =>
+      this.readOnce(process, waitMs, options),
+    );
+    process.reading = read.catch(() => {});
+    return read;
+  }
+
+  async readOnce(process, waitMs, { lostIsUncertain = true, deadline } = {}) {
+    // Checked when this read's turn in the chain comes: a reader ahead of
+    // it may have confirmed the close or used the caller's remaining time.
+    if (process.closed) return [];
+    if (deadline !== undefined) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return [];
+      waitMs = Math.min(waitMs, remaining);
+    }
     let result;
     try {
       result = await this.connection.call("process/read", {
@@ -596,7 +691,13 @@ export class Facade {
         waitMs,
       });
     } catch (error) {
-      if (lostIsUncertain && unknownOutcome(error)) throw new UncertainEffect("process/read");
+      // A started process whose state cannot be read, because the reply was
+      // lost or the connection could not be opened again, has an unknown
+      // outcome: a quiet reader waits with no read in flight, so a close
+      // reaches it as a reconnect failure rather than a lost reply.
+      if (lostIsUncertain && (unknownOutcome(error) || unreachable(error))) {
+        throw new UncertainEffect("process/read");
+      }
       throw error;
     }
     const chunks = [];
@@ -605,11 +706,78 @@ export class Facade {
         throw new ToolError("Repeated process output");
       }
       process.afterSeq = chunk.seq;
-      chunks.push({ stream: chunk.stream, bytes: Buffer.from(chunk.chunk, "base64") });
+      const bytes = Buffer.from(chunk.chunk, "base64");
+      process.output?.push(bytes);
+      chunks.push({ stream: chunk.stream, bytes });
     }
     if (result.exited) process.exitCode = result.exitCode;
-    if (result.closed) process.closed = true;
+    if (result.closed) {
+      process.closed = true;
+      // Another reader (StopCommand, expiry, cleanup) confirmed the close:
+      // a quiet reader waiting on this process ends its wait.
+      process.wake?.();
+    }
     return chunks;
+  }
+
+  /**
+   * Read `process` once within `remaining` ms: a one-second read while it
+   * produces output, and after `LIMITS.quietReads` empty reads in a row a
+   * read that waits for a notification naming the process instead. A quiet
+   * wait ends one second before the deadline, so a one-second read still
+   * sees an exit whose notification was lost.
+   */
+  async poll(process, remaining, options) {
+    const listeners = this.connection.listeners;
+    const deadline = Date.now() + remaining;
+    options = { ...options, deadline };
+    const chunks =
+      (process.quiet ?? 0) >= LIMITS.quietReads && listeners && remaining > 2000
+        ? await this.notifiedRead(
+            process,
+            Math.min(LIMITS.quietWaitMs, remaining - 1000),
+            deadline,
+            options,
+          )
+        : await this.read(process, Math.max(1, Math.min(1000, remaining)), options);
+    process.quiet = chunks.length || process.closed ? 0 : (process.quiet ?? 0) + 1;
+    return chunks;
+  }
+
+  /**
+   * Read without waiting; with nothing new, wait up to `waitMs` for an
+   * executor notification naming the process (or the connection's close,
+   * or another reader confirming its close) and read once more. It listens
+   * before reading, so output arriving in between still ends the wait, and
+   * no read is in flight while it waits. A wait that ends with no
+   * notification returns nothing: the caller reads first on its next poll
+   * if its deadline leaves time, so a lost notification costs one read per
+   * `waitMs` and a reader never starts a read past its deadline.
+   */
+  async notifiedRead(process, waitMs, deadline, options) {
+    const listeners = this.connection.listeners;
+    let listener;
+    let timer;
+    const notified = new Promise((resolve) => {
+      listener = (frame) => {
+        if (frame.method === "closed" || frame.params?.processId === process.processId) {
+          resolve(true);
+        }
+      };
+      process.wake = () => resolve(true);
+      timer = setTimeout(() => resolve(false), waitMs);
+      listeners.add(listener);
+    });
+    try {
+      const chunks = await this.read(process, 0, options);
+      if (chunks.length || process.closed) return chunks;
+      if (!(await notified) || process.closed || Date.now() >= deadline) return [];
+      return await this.read(process, 0, options);
+    } finally {
+      clearTimeout(timer);
+      listeners.delete(listener);
+      process.wake = undefined;
+    }
   }
 
   /** Terminate `process`; `true` only once the target confirmed it closed. */
@@ -624,7 +792,20 @@ export class Facade {
   }
 
   /** Run a process to its end within bounds; stdout and stderr apart. */
-  async runBounded(
+  async runBounded(turn, argv, options) {
+    // The turn's end waits for the process to finish (a publish helper is an
+    // admitted effect like any request), within the call's own timeout.
+    const run = this.runUntracked(turn, argv, options);
+    const tracked = turn?.inflight ? run.catch(() => {}) : undefined;
+    if (tracked) turn.inflight.add(tracked);
+    try {
+      return await run;
+    } finally {
+      if (tracked) turn.inflight.delete(tracked);
+    }
+  }
+
+  async runUntracked(
     turn,
     argv,
     { timeoutMs, maxBytes, maxLines, lostIsUncertain = true, readiness = false },
@@ -634,25 +815,39 @@ export class Facade {
     const deadline = Date.now() + timeoutMs;
     let truncated = false;
     let timedOut = false;
-    while (!process.closed) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) {
-        timedOut = true;
-        break;
+    let failure;
+    try {
+      while (!process.closed) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) {
+          timedOut = true;
+          break;
+        }
+        for (const { stream, bytes } of await this.poll(process, remaining, {
+          lostIsUncertain,
+        })) {
+          const room = Math.max(0, maxBytes - out.size);
+          const kept = bytes.subarray(0, room);
+          out.size += kept.length;
+          (stream === "stderr" ? out.stderr : out.stdout).push(kept);
+          if (stream !== "stderr") out.lines += kept.toString().split("\n").length - 1;
+          if (kept.length < bytes.length || (maxLines && out.lines > maxLines)) truncated = true;
+        }
+        if (truncated) break;
       }
-      for (const { stream, bytes } of await this.read(process, Math.min(1000, remaining), {
-        lostIsUncertain,
-      })) {
-        const room = Math.max(0, maxBytes - out.size);
-        const kept = bytes.subarray(0, room);
-        out.size += kept.length;
-        (stream === "stderr" ? out.stderr : out.stdout).push(kept);
-        if (stream !== "stderr") out.lines += kept.toString().split("\n").length - 1;
-        if (kept.length < bytes.length || (maxLines && out.lines > maxLines)) truncated = true;
-      }
-      if (truncated) break;
+    } catch (error) {
+      failure = error;
+      // Fenced before cleanup is awaited: a concurrent call of the turn
+      // admits no mutation while this helper's outcome is unknown.
+      if (error instanceof UncertainEffect && turn) this.fenceLost(turn, error.method);
     }
-    if (!process.closed) await this.terminate(process).catch(() => {});
+    // Whatever ended the loop, the process is not left running unconfirmed: a
+    // helper that may still publish is an effect of unknown outcome.
+    if (!process.closed) {
+      const closed = await this.terminate(process).catch(() => false);
+      if (!closed && !readiness) throw new UncertainEffect("process/terminate");
+    }
+    if (failure !== undefined) throw failure;
     return {
       exitCode: process.exitCode,
       stdout: Buffer.concat(out.stdout).toString(),
@@ -686,6 +881,7 @@ export class Facade {
       }
       running = await this.start(turn, [this.shell, "-c", command]);
       running.deadline = Date.now() + seconds * 1000;
+      // Every reader's chunks land here (see `read`).
       running.output = new Retained(LIMITS.commandOutput);
       session.commands.set(running.processId, running);
       // The deadline holds even when nobody reads the command again.
@@ -702,9 +898,7 @@ export class Facade {
       let shown = Date.now();
       let changed = false;
       while (!running.closed && Date.now() < until) {
-        const waitMs = Math.max(1, Math.min(1000, until - Date.now()));
-        for (const { bytes } of await this.read(running, waitMs)) {
-          running.output.push(bytes);
+        for (const { bytes } of await this.poll(running, until - Date.now())) {
           changed ||= bytes.length > 0;
         }
         if (changed && !running.closed && Date.now() - shown >= LIMITS.progressMs) {
@@ -719,7 +913,14 @@ export class Facade {
         status = (await this.terminate(running))
           ? "Timed out; the command was stopped."
           : `Timed out; stopping it is not yet confirmed (command_id: ${running.processId}).`;
-      } else status = `Still running (command_id: ${running.processId}).`;
+      } else {
+        // Each continuation costs the agent a whole turn; say how long one
+        // may wait so a long gate is read in few, long waits.
+        const left = Math.max(1, Math.ceil((running.deadline - Date.now()) / 1000));
+        status =
+          `Still running (command_id: ${running.processId}). ` +
+          `Continue it with wait_seconds ${Math.min(left, LIMITS.commandMaxSeconds)} to wait for the rest of its ${left} s.`;
+      }
       if (running.closed) this.forget(session, running);
       return `${status}\n${running.output.take()}`;
     } finally {
@@ -768,6 +969,74 @@ export class Facade {
     if (!closed) return `Stopping ${id} is not yet confirmed; call StopCommand again.`;
     this.forget(session, running);
     return `Stopped ${id}.\n${running.output.take()}`;
+  }
+
+  /**
+   * Start a subagent, or keep waiting for one, and return its report once it
+   * ends. The turn stays open while this waits (the subagent's own tool calls
+   * need it), so a wait never exceeds `LIMITS.subagentWaitSeconds`; a longer
+   * task returns its id to wait for again.
+   */
+  async subagent(sessionId, turn, args) {
+    const { prompt, description, subagent_id: id, wait_seconds: wait } = args;
+    const host = this.subagents;
+    if (host === undefined) throw new ToolError("Subagents are not available in this session.");
+    if (
+      wait !== undefined &&
+      (!Number.isInteger(wait) || wait < 0 || wait > LIMITS.subagentWaitSeconds)
+    ) {
+      throw new ToolError(`wait_seconds must be between 0 and ${LIMITS.subagentWaitSeconds}`);
+    }
+    let childId = id;
+    if (id !== undefined) {
+      if (prompt !== undefined || description !== undefined) {
+        throw new ToolError("Give either prompt or subagent_id");
+      }
+      if (typeof id !== "string" || !id) throw new ToolError("Invalid subagent_id");
+    } else {
+      if (typeof prompt !== "string" || !prompt.trim()) {
+        throw new ToolError("prompt (or the subagent_id of a running subagent) is required");
+      }
+      if (Buffer.byteLength(prompt) > LIMITS.subagentPromptBytes) {
+        throw new ToolError(`prompt is larger than ${LIMITS.subagentPromptBytes} bytes`);
+      }
+      if (description !== undefined && typeof description !== "string") {
+        throw new ToolError("description must be text");
+      }
+      childId = await host.start(sessionId, { prompt, description });
+    }
+    const outcome = await host.wait(
+      sessionId,
+      childId,
+      (wait ?? LIMITS.subagentWaitSeconds) * 1000,
+      turn.abort?.signal,
+    );
+    return renderSubagent(childId, outcome);
+  }
+
+  async stopSubagent(sessionId, { subagent_id: id }) {
+    const host = this.subagents;
+    if (host === undefined) throw new ToolError("Subagents are not available in this session.");
+    if (typeof id !== "string" || !id) throw new ToolError("Invalid subagent_id");
+    return renderSubagent(id, await host.stop(sessionId, id));
+  }
+}
+
+/**
+ * What a subagent call tells the model: its report, or how to keep waiting.
+ * A failed one is a tool error, so the model does not take its text for a
+ * report.
+ */
+export function renderSubagent(id, outcome) {
+  switch (outcome?.state) {
+    case "running":
+      return `Subagent ${id} is still running. Call Subagent with subagent_id "${id}" (and no prompt) to keep waiting, or StopSubagent to stop it. It is stopped when your turn ends.`;
+    case "completed":
+      return `Subagent ${id} finished.\n\n${outcome.report || "(it reported nothing)"}`;
+    case "cancelled":
+      return `Subagent ${id} was stopped${outcome.report ? `. What it had said:\n\n${outcome.report}` : "."}`;
+    default:
+      throw new ToolError(`Subagent ${id} failed: ${outcome?.error ?? "unknown error"}`);
   }
 }
 

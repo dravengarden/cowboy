@@ -1452,7 +1452,7 @@ async fn reconfirm(
     Err(Step::Again)
 }
 
-pub(super) fn call_notice(record: &Record) -> String {
+fn call_notice(record: &Record) -> String {
     let title = record
         .labels
         .get("title")
