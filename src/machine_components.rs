@@ -719,9 +719,9 @@ mod tests {
         assert!(check_portable_host_cache(state.path(), Some(&key)).is_err());
     }
 
-    async fn floor_selection_recovery_cases(release: Option<&Path>) {
+    async fn floor_selection_recovery_cases(release: Option<&Path>, archives: &[bool]) {
         use std::os::unix::fs::PermissionsExt as _;
-        for archive in [false, true] {
+        for &archive in archives {
             for case in [
                 "absent",
                 "active-only",
@@ -926,14 +926,22 @@ mod tests {
 
     #[tokio::test]
     async fn floor_selection_recovery_is_offline_idempotent_and_never_replaces_evidence() {
-        floor_selection_recovery_cases(None).await;
+        floor_selection_recovery_cases(None, &[false]).await;
+    }
+
+    // The archive payload form of the same cases, split out so the two halves
+    // run concurrently.
+    #[tokio::test]
+    async fn floor_selection_recovery_of_an_archive_is_offline_idempotent_and_never_replaces_evidence()
+     {
+        floor_selection_recovery_cases(None, &[true]).await;
     }
 
     #[tokio::test]
     #[ignore = "requires current and preceding immutable Machine releases"]
     async fn immutable_floor_selection_recovery_authenticates_before_any_publisher_code() {
         let release = PathBuf::from(std::env::var("COWBOY_TEST_PORTABLE_HOST_RELEASE").unwrap());
-        floor_selection_recovery_cases(Some(&release)).await;
+        floor_selection_recovery_cases(Some(&release), &[false, true]).await;
     }
 
     #[cfg(target_os = "linux")]
@@ -964,10 +972,13 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
+    /// `parity` selects every other case (0 or 1), so one long table runs as
+    /// tests nextest can schedule concurrently; `None` runs them all.
     async fn anchor_package_recovery_cases(
         release: Option<&Path>,
         quarantine: bool,
         archives: &[bool],
+        parity: Option<usize>,
     ) {
         for &archive in archives {
             let mut cases = vec![
@@ -1005,7 +1016,10 @@ mod tests {
                     "quarantine-file",
                 ]);
             }
-            for case in cases {
+            for (index, case) in cases.into_iter().enumerate() {
+                if parity.is_some_and(|parity| index % 2 != parity) {
+                    continue;
+                }
                 let state = tempfile::tempdir_in("/tmp").unwrap();
                 let identity =
                     MachineIdentity::load_or_create(&state.path().join("signer")).unwrap();
@@ -1450,7 +1464,16 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn anchor_package_recovery_binds_original_proof_and_never_replaces_damage() {
-        anchor_package_recovery_cases(None, false, &[false, true]).await;
+        anchor_package_recovery_cases(None, false, &[false], None).await;
+    }
+
+    // The archive payload form of the same cases, split out so the two halves
+    // run concurrently.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn anchor_package_recovery_of_an_archive_binds_original_proof_and_never_replaces_damage()
+    {
+        anchor_package_recovery_cases(None, false, &[true], None).await;
     }
 
     #[cfg(target_os = "linux")]
@@ -1458,13 +1481,20 @@ mod tests {
     #[ignore = "requires exact current and preceding immutable Machine releases"]
     async fn immutable_anchor_package_recovery_uses_original_floor_proof_without_executing_code() {
         let release = PathBuf::from(std::env::var("COWBOY_TEST_PORTABLE_HOST_RELEASE").unwrap());
-        anchor_package_recovery_cases(Some(&release), false, &[false, true]).await;
+        anchor_package_recovery_cases(Some(&release), false, &[false, true], None).await;
     }
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn anchor_quarantine_recovery_preserves_damage_and_refuses_unsafe_destinations() {
-        anchor_package_recovery_cases(None, true, &[false]).await;
+        anchor_package_recovery_cases(None, true, &[false], Some(0)).await;
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn anchor_quarantine_recovery_preserves_damage_and_refuses_unsafe_destinations_odd_cases()
+    {
+        anchor_package_recovery_cases(None, true, &[false], Some(1)).await;
     }
 
     // The archive payload form of the same cases, split out so the two
@@ -1473,7 +1503,13 @@ mod tests {
     #[tokio::test]
     async fn anchor_quarantine_recovery_of_an_archive_preserves_damage_and_refuses_unsafe_destinations()
      {
-        anchor_package_recovery_cases(None, true, &[true]).await;
+        anchor_package_recovery_cases(None, true, &[true], Some(0)).await;
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn anchor_quarantine_recovery_of_an_archive_refuses_unsafe_destinations_odd_cases() {
+        anchor_package_recovery_cases(None, true, &[true], Some(1)).await;
     }
 
     #[cfg(target_os = "linux")]
@@ -1481,7 +1517,7 @@ mod tests {
     #[ignore = "requires exact current and preceding immutable Machine releases"]
     async fn immutable_anchor_quarantine_recovery_preserves_damage_without_executing_code() {
         let release = PathBuf::from(std::env::var("COWBOY_TEST_PORTABLE_HOST_RELEASE").unwrap());
-        anchor_package_recovery_cases(Some(&release), true, &[false, true]).await;
+        anchor_package_recovery_cases(Some(&release), true, &[false, true], None).await;
     }
 
     #[tokio::test]
