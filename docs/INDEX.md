@@ -74,6 +74,7 @@ primary phone/desktop product path.
 - [`releases/antigravity-3-113-rollout-2026-11-18.md`](releases/antigravity-3-113-rollout-2026-11-18.md) — Component release 3.113.0 fleet rollout — 2026-11-18
 - [`releases/antigravity-isolation-3-115-rollout-2026-11-18.md`](releases/antigravity-isolation-3-115-rollout-2026-11-18.md) — Component release 3.115.0 rollout (Antigravity account isolation) — 2026-11-18
 - [`releases/antigravity-plan-3-116-rollout-2026-11-19.md`](releases/antigravity-plan-3-116-rollout-2026-11-19.md) — Component release 3.116.0 rollout (Antigravity plan and Gemini cards) — 2026-11-19
+- [`releases/antigravity-subagents-3-134-rollout-2026-11-22.md`](releases/antigravity-subagents-3-134-rollout-2026-11-22.md) — Component release 3.134.0 rollout (Antigravity subagents) — 2026-11-22
 - [`releases/native-calls-images-2026-10-18.md`](releases/native-calls-images-2026-10-18.md) — Native image Calls source, signed Plugin closure, exact-artifact validation, worker maintenance and recovery boundaries
 - [`requirements.md`](requirements.md) — Normative Provider package, authentication, installation, ownership and OVH Remote deployment invariants
 - [`secure-connectivity-design.md`](secure-connectivity-design.md) — Option 1 security/reliability priorities and deferred Option 2 roadmap with unresolved PWA bootstrap questions
