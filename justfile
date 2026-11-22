@@ -607,17 +607,25 @@ provider-release-coverage CATALOG:
     bun tools/check-provider-release-coverage.ts "{{CATALOG}}"
 
 # Cheap Remote Claude feedback before building an upstream upgrade candidate.
-claude-remote-check:
+claude-remote-check: claude-remote-prepare claude-remote-relay claude-remote-scripts
+
+# The execution host and the pinned Claude ACP sources the runtime tests load.
+claude-remote-prepare:
     cargo build --locked --no-default-features --features machine-host -p cowboy-machine --bin cowboy-execution-host
     mkdir -p dist/claude-source-tests
     cp components/provider-runtime/packages/claude-agent-acp/package{,-lock}.json dist/claude-source-tests/
     npm ci --prefer-offline --ignore-scripts --no-audit --no-fund --prefix dist/claude-source-tests
+
+claude-remote-relay:
     cargo fmt --manifest-path plugins/claude-code/relay/Cargo.toml -- --check
     cargo clippy --locked --manifest-path plugins/claude-code/relay/Cargo.toml --all-targets
     cargo test --locked --manifest-path plugins/claude-code/relay/Cargo.toml
     cargo build --locked --release --manifest-path plugins/claude-code/relay/Cargo.toml
     COWBOY_MCP_RELAY="$PWD/plugins/claude-code/relay/target/release/cowboy-mcp-relay" node --test tools/claude-mcp-relay.test.mjs
     bun x --no-install biome format tools/claude-mcp-relay.test.mjs
+
+# Node and Python suites over sources and the prepared execution host.
+claude-remote-scripts:
     node --import ./tools/register-memory-client.mjs --test plugins/claude-code/runtime/*.test.mjs components/memory-client/*.test.mjs tools/memory-provider.test.mjs tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-shell-jobs.test.mjs tools/claude-remote-context.test.mjs tools/claude-remote-skills.test.mjs tools/claude-remote-mcp.test.mjs tools/claude-remote-native-baseline.test.mjs tools/claude-remote-hooks-baseline.test.mjs tools/claude-remote-mods-baseline.test.mjs tools/claude-remote-permissions-baseline.test.mjs tools/claude-remote-context-baseline.test.mjs tools/claude-remote-tools-baseline.test.mjs
     bun x --no-install biome format plugins/claude-code/runtime
     node --import ./tools/register-memory-client.mjs --test tools/claude-remote-privacy.test.mjs
@@ -632,15 +640,20 @@ provider-check: plugin-check claude-remote-check provider-scripts-check provider
 
 # The Bun, Node and Python suites of `provider-check`; they read sources only,
 # so `check` runs them in the background.
-provider-scripts-check:
+provider-scripts-check: provider-antigravity-check provider-runtime-scripts
+
+# Its facade suite alone waits out about 50s of real command deadlines.
+provider-antigravity-check:
+    node --import ./tools/register-memory-client.mjs --test components/provider-runtime/packages/antigravity-acp/*.test.mjs
+    bun x --no-install biome format components/provider-runtime/packages/antigravity-acp components/provider-runtime/owned-sources.ts
+
+provider-runtime-scripts:
     bun test ./tools/mcp-bindings_test.ts
     node --import ./tools/register-memory-client.mjs --test tools/execution-probe_test.mjs
     bun x --no-install biome format components/provider-runtime/execution-connection.mjs components/provider-runtime/execution-probe.mjs tools/execution-probe_test.mjs plugins/codex/runtime/bindings.mjs
     bun x --no-install biome format components/provider-runtime/mcp-bindings.mjs tools/mcp-bindings_test.ts
     node --test components/provider-runtime/packages/codex-acp/launch_test.mjs
     node --test components/provider-runtime/packages/deepseek-harness/launch_test.mjs
-    node --import ./tools/register-memory-client.mjs --test components/provider-runtime/packages/antigravity-acp/*.test.mjs
-    bun x --no-install biome format components/provider-runtime/packages/antigravity-acp components/provider-runtime/owned-sources.ts
     bun tools/generate-plan-name-table.ts --check
     bun x --no-install biome format tools/generate-plan-name-table.ts
     node --import ./tools/register-memory-client.mjs --test plugins/codex/runtime/launch.test.mjs
@@ -878,7 +891,8 @@ check: toolchain-check fmt structure-check docs-index-check protocol-contract-ch
       local name="$1"
       shift
       # A process group of its own, so an early failure stops the whole job.
-      setsid env "$@" just "$name" >"$logs/$name.log" 2>&1 &
+      setsid bash -c 'SECONDS=0; env "${@:2}" just "$1"; status=$?; echo "($1 took ${SECONDS}s)"; exit "$status"' \
+        background "$name" "$@" >"$logs/$name.log" 2>&1 &
       pending+=("$!:$name")
     }
     # Clippy checks the same crates as the test graph but in check mode, which
@@ -888,9 +902,15 @@ check: toolchain-check fmt structure-check docs-index-check protocol-contract-ch
     background release-sources-check
     background zed-check
     # Suites that read sources only and share no build directory.
-    background provider-scripts-check
+    background provider-antigravity-check
+    background provider-runtime-scripts
     background test-web
-    just idb-conformance-check site-check native-shell-check dependencies lint-plugins plugin-check composition-check claude-remote-check provider-build-check
+    background dependencies
+    just idb-conformance-check site-check native-shell-check lint-plugins plugin-check composition-check claude-remote-prepare
+    # Collected before `test-rust`, the next step that may relink the execution
+    # host these suites run.
+    background claude-remote-scripts
+    just claude-remote-relay provider-build-check
     while ((${#pending[@]})); do
       job="${pending[0]}"
       pending=("${pending[@]:1}")
