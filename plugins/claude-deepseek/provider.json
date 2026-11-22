@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "claude-deepseek",
-  "version": "3.1.80",
+  "version": "3.1.81",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.7.0",
   "display": {

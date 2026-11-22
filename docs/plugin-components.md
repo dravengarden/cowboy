@@ -83,6 +83,16 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.134.0 records provider-runtime 1.3.18, whose
+`cowboy-antigravity-acp` 1.0.16 hosts subagents in the proxy: the facade's
+`Subagent` and `StopSubagent` tools start another native `agy` session inside
+the calling session's turn and report it as an ACP subagent, so Antigravity
+sessions get the same rows, stops and observed transcripts as Claude and Codex
+([Subagents](antigravity-real-accounts-design.md#subagents)). Antigravity 0.2.18
+pins it. The other six Providers pinning provider-runtime advance one patch
+version (claude-code 3.20.64, claude-deepseek 3.1.81, codex 3.6.23,
+codex-deepseek 3.1.81, deepseek-harness 1.0.39, grok 3.2.22).
+
 Component release 3.133.0 records provider-runtime 1.3.17, whose
 `cowboy-antigravity-acp` 1.0.15 asks Cloud Code's quota summary with `agy`'s
 own client identity (`antigravity/cli/<version>`), which answers the Gemini
