@@ -308,6 +308,23 @@ test("a request's own timeout rejects only it and ignores its late reply", async
   assert.deepEqual(await connection.call("process/terminate", { processId: "p" }), {});
 });
 
+test("a reply after an abandoned request's slot was released is still ignored", async (t) => {
+  const { descriptor } = await fixture(t, "late-read");
+  // The slot is released 10 ms after the local timeout; the reply comes at 300 ms.
+  const connection = await Connection.open(descriptor, { requestTimeoutMs: 60 });
+  t.after(() => connection.close());
+  await assert.rejects(
+    connection.call("process/read", { processId: "p" }, { timeoutMs: 50 }),
+    /timed out/,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(connection.abandoned.size, 0);
+  assert.equal(connection.retired.size, 1);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(connection.closed, false);
+  assert.equal(connection.retired.size, 0);
+});
+
 test("execution endpoints keep ws:// unchanged and validate unix: paths", () => {
   assert.equal(executionUrl("ws://127.0.0.1:9/"), "ws://127.0.0.1:9/");
   assert.equal(executionUrl("unix:/run/cowboy-exec.sock"), "ws+unix:/run/cowboy-exec.sock:/");

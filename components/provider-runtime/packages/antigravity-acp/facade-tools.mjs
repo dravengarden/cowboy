@@ -378,13 +378,15 @@ export class HomeReads {
     this.ready ??= (async () => {
       const [home, root] = await Promise.all([
         this.canonical(this.home),
-        this.send("fs/canonicalize", { path: pathToFileURL(this.root).href }).then(
+        // Bounded like every home request: a stalled lookup skips the home.
+        this.call("fs/canonicalize", { path: pathToFileURL(this.root).href }).then(
           (result) => fileURLToPath(result.path),
           () => undefined,
         ),
       ]);
-      if (root) this.roots.push(root);
-      return Boolean(home) && !this.inRepository(home);
+      if (!home || !root) return false;
+      this.roots.push(root);
+      return !this.inRepository(home);
     })();
     return this.ready;
   }

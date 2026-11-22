@@ -468,7 +468,16 @@ export class Facade {
         `${path} cannot be created: ${parent} cannot be listed to confirm ${name} is absent (it may be a dangling symlink); refused`,
       );
     }
-    if ((listing?.entries ?? []).some((entry) => entry?.fileName === name)) refuse();
+    // Compared case-insensitively: on a case-folding filesystem a dangling
+    // link listed with other casing would resolve to the requested name.
+    const folded = name.toLowerCase();
+    if (
+      (listing?.entries ?? []).some(
+        (entry) => typeof entry?.fileName === "string" && entry.fileName.toLowerCase() === folded,
+      )
+    ) {
+      refuse();
+    }
     return false;
   }
 

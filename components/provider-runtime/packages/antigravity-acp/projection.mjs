@@ -138,6 +138,9 @@ async function readGuidance(facade, file, root, home) {
   } catch {
     return undefined;
   }
+  // A home file is optional and read under deadlines: only a whole-file
+  // read, so a timed-out open or block read can never leave a handle open.
+  if (home) return undefined;
   const handleId = `cowboy-${randomUUID()}`;
   try {
     await call("fs/open", { handleId, path: at });

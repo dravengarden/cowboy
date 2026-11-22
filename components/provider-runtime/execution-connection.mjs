@@ -10,6 +10,9 @@ export class Connection {
   // Requests given up by their own `timeoutMs`: the executor may still
   // answer, and that late reply is consumed instead of failing the socket.
   abandoned = new Map();
+  // Every request id this socket gave up on, so a reply arriving after its
+  // slot was released is still recognized (bounded; cleared per socket).
+  retired = new Set();
   closed = true;
   stopped = false;
   connecting = null;
@@ -63,9 +66,10 @@ export class Connection {
           return;
         }
         const call = connection.pending.get(frame.id);
-        if (!call && connection.abandoned.has(frame.id)) {
+        if (!call && connection.retired.has(frame.id)) {
           clearTimeout(connection.abandoned.get(frame.id));
           connection.abandoned.delete(frame.id);
+          connection.retired.delete(frame.id);
           return;
         }
         if (!call) throw new Error("Unexpected execution reply");
@@ -167,11 +171,17 @@ export class Connection {
       const timer = local
         ? setTimeout(() => {
             if (!this.pending.delete(id)) return;
-            // Forgotten after the connection's own bound, as an unanswered
-            // request would have ended the connection by then.
-            const forget = setTimeout(() => this.abandoned.delete(id), this.requestTimeoutMs);
-            forget.unref?.();
-            this.abandoned.set(id, forget);
+            // Its slot stays taken until the connection's own deadline for
+            // it, as an unanswered request would have ended the connection
+            // by then; its id stays recognized for the socket's life.
+            const release = setTimeout(
+              () => this.abandoned.delete(id),
+              this.requestTimeoutMs - timeoutMs,
+            );
+            release.unref?.();
+            this.abandoned.set(id, release);
+            if (this.retired.size >= 4096) this.retired.delete(this.retired.values().next().value);
+            this.retired.add(id);
             reject(new Error("Target request timed out"));
           }, timeoutMs)
         : setTimeout(() => this.disconnect(), this.requestTimeoutMs);
@@ -197,8 +207,9 @@ export class Connection {
       reject(new Error("Execution unavailable or result unknown; no local fallback and no replay"));
     }
     this.pending.clear();
-    for (const forget of this.abandoned.values()) clearTimeout(forget);
+    for (const release of this.abandoned.values()) clearTimeout(release);
     this.abandoned.clear();
+    this.retired.clear();
     for (const listener of this.listeners) listener({ method: "closed" });
     this.socket?.terminate();
   }

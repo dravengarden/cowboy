@@ -834,7 +834,11 @@ test("a home containing the repository loads its own links; links into the repos
   assert.doesNotMatch(linked, /the user's home guidance/);
 });
 
-test("home reads stop at their deadline and at the discovery budget", async () => {
+test("home reads stop at their deadline and at the discovery budget", async (t) => {
+  // The fake sender never settles and the deadline timer is unreferenced:
+  // keep the event loop alive so the test is not cancelled early.
+  const keepAlive = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(keepAlive));
   const sent = [];
   const never = (method) => {
     sent.push(method);
