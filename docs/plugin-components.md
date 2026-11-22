@@ -83,6 +83,13 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.142.0 records provider-runtime 1.3.26, whose
+`cowboy-antigravity-acp` 1.0.22 lets `SearchFiles` find files by name with only
+a glob and a directory path (Claude's Glob), and measures the home discovery
+budget as wall time with a home request in flight, so a skill-rich repository
+still lists the user's home skills. Antigravity 0.2.27 pins it. The other six
+Providers pinning provider-runtime advance one patch version.
+
 Component release 3.141.0 records provider-runtime 1.3.25, whose
 `cowboy-antigravity-acp` 1.0.21 counts only time spent waiting on home
 requests against the 10 s home discovery budget, so a repository with many
