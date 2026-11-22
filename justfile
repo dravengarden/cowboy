@@ -1072,10 +1072,11 @@ test-graph-bin NAME:
 check-compact: (compact "check")
 
 # Prepare a fresh worktree while reading the task: install the dependencies and
-# compile the gate's long Rust lanes (the shared test graph, Clippy and the
-# feature slices with the execution host) through the same compiler cache, so
-# the first `check-compact` starts warm instead of spending minutes compiling.
-# A lane that fails only stays cold; the gate reports the failure itself.
+# compile every Rust lane of the gate (the shared test graph, Clippy, the
+# feature slices with the execution host, the release-source slices, the Zed
+# adapter and the MCP relay) through the same compiler cache, so the first
+# `check-compact` starts warm instead of spending minutes compiling. A lane
+# that fails only stays cold; the gate reports the failure itself.
 warm: install (compact "warm-lanes")
 
 [private]
@@ -1095,6 +1096,9 @@ warm-lanes:
     lane test-graph-build &
     lane clippy &
     lane test-rust-slices-build &
+    lane release-sources-check &
+    lane zed-check &
+    lane claude-remote-relay &
     wait
 
 # Run RECIPE through the private compiler cache described above.
