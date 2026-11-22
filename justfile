@@ -11,7 +11,11 @@ rust_test_args := "-p cowboy -p cowboy-store -p cowboy-server -p cowboy-machine 
 # even inside `check-compact`: after a one-file edit it rebuilt in 25s against
 # 114s without (2026-11-21 on Hawk), for about 9G of incremental cache. Each
 # invocation must agree, since the setting is part of Cargo's fingerprint.
-rust_test_env := "env -u COWBOY_PROVIDER_PACKAGE_PATH -u CARGO_INCREMENTAL"
+# The graph links its binaries into an artifact directory of its own. Every
+# Cargo run re-links the binaries it uplifts, fresh ones included, so in
+# target/debug it would swap the Machine execution host the script suites run
+# (`claude-remote-prepare`) for the graph's all-feature build, even mid-run.
+rust_test_env := 'env -u COWBOY_PROVIDER_PACKAGE_PATH -u CARGO_INCREMENTAL CARGO_TARGET_DIR="$PWD/target/test-graph"'
 # The wire, standalone Machine and code-adapter test slices select features of
 # their own, so they share no workspace artifacts with the main graph. They
 # compile in their own target directory: Cargo locks the artifact directory for
@@ -624,8 +628,14 @@ provider-release-coverage CATALOG:
 claude-remote-check: claude-remote-prepare claude-remote-relay claude-remote-scripts
 
 # The execution host and the pinned Claude ACP sources the runtime tests load.
+# The host builds with the Machine test slice's directory, beside the main
+# graph, and is linked into target/debug, where the suites run it; no other
+# gate build writes that path. The rename is atomic, so a suite already running
+# never finds the host missing while a later invocation relinks it.
 claude-remote-prepare: claude-source-deps
-    cargo build --locked --no-default-features --features machine-host -p cowboy-machine --bin cowboy-execution-host
+    {{rust_slice_env}} cargo build --locked --no-default-features --features machine-host -p cowboy-machine --bin cowboy-execution-host
+    mkdir -p target/debug
+    ln -f target/check-slices/debug/cowboy-execution-host "target/debug/.cowboy-execution-host.$$" && mv -f "target/debug/.cowboy-execution-host.$$" target/debug/cowboy-execution-host
 
 # The pinned Claude ACP packages that `tools/register-memory-client.mjs`
 # resolves `ws` from. It reinstalls only when the pinned manifest changes, so
@@ -652,7 +662,7 @@ claude-remote-relay:
     bun x --no-install biome format tools/claude-mcp-relay.test.mjs
 
 # Node and Python suites over sources and the prepared execution host.
-claude-remote-scripts:
+claude-remote-scripts: claude-remote-prepare
     node --import ./tools/register-memory-client.mjs --test plugins/claude-code/runtime/*.test.mjs components/memory-client/*.test.mjs tools/memory-provider.test.mjs tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-shell-jobs.test.mjs tools/claude-remote-context.test.mjs tools/claude-remote-skills.test.mjs tools/claude-remote-mcp.test.mjs tools/claude-remote-native-baseline.test.mjs tools/claude-remote-hooks-baseline.test.mjs tools/claude-remote-mods-baseline.test.mjs tools/claude-remote-permissions-baseline.test.mjs tools/claude-remote-context-baseline.test.mjs tools/claude-remote-tools-baseline.test.mjs
     bun x --no-install biome format plugins/claude-code/runtime
     node --import ./tools/register-memory-client.mjs --test tools/claude-remote-privacy.test.mjs
@@ -665,12 +675,12 @@ claude-remote-scripts:
 # payload gate used by the generic Plugin release workflow.
 provider-check: plugin-check claude-remote-check provider-scripts-check provider-build-check
 
-# The Bun, Node and Python suites of `provider-check`; they read sources only,
-# so `check` runs them in the background.
+# The Bun, Node and Python suites of `provider-check`; they share no build
+# directory, so `check` runs them in the background.
 provider-scripts-check: provider-antigravity-check provider-runtime-scripts
 
-# Its facade suite alone waits out about 50s of real command deadlines.
-# The facade tests publish through the real execution host in target/debug.
+# Its facade suite alone waits out about 50s of real command deadlines. Its
+# facade tests publish through the prepared execution host in target/debug.
 provider-antigravity-check: claude-remote-prepare
     node --import ./tools/register-memory-client.mjs --test components/provider-runtime/packages/antigravity-acp/*.test.mjs
     bun x --no-install biome format components/provider-runtime/packages/antigravity-acp components/provider-runtime/owned-sources.ts
@@ -876,8 +886,9 @@ test-rust:
     python3 -m unittest discover -s tools -p ovh_machine_idle_sessions_test.py
 
 # Compiles the test slices `test-rust` runs, so `check` can build them beside
-# the main graph; `test-rust` then only runs them.
-test-rust-slices-build:
+# the main graph; `test-rust` then only runs them. The execution host shares
+# their directory and comes first: the script suites wait for it.
+test-rust-slices-build: claude-remote-prepare
     {{rust_slice_env}} cargo test {{rust_wire_args}} --no-run
     {{rust_slice_env}} cargo test {{rust_machine_args}} --no-run
     {{rust_slice_env}} cargo test {{rust_code_adapter_args}} --no-run
@@ -958,9 +969,13 @@ check: toolchain-check
     }
     # The Node suites resolve `ws` from the prepared Claude ACP packages.
     just claude-source-deps
+    # These three each start with `claude-remote-prepare`: whichever builds the
+    # execution host first, the others find it built. The suites are collected
+    # before `test-rust`, so they never overlap the main test run.
     background provider-antigravity-check
-    background clippy
+    background claude-remote-scripts
     background test-rust-slices-build
+    background clippy
     background release-sources-check
     background zed-check
     background provider-runtime-scripts
@@ -971,11 +986,8 @@ check: toolchain-check
     reap
     just idb-conformance-check site-check native-shell-check lint-plugins plugin-check
     reap
-    just composition-check claude-remote-prepare
+    just composition-check
     reap
-    # Collected before `test-rust`, the next step that may relink the execution
-    # host these suites run.
-    background claude-remote-scripts
     just claude-remote-relay provider-build-check
     while ((${#pending[@]})); do
       job="${pending[0]}"

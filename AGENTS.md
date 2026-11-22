@@ -29,11 +29,14 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   directories or `node_modules`. `check` first starts workspace Clippy, the
   feature-sliced Rust test builds, `release-sources-check` and the Zed adapter
   (each in its own build directory), the script suites and the frontend build
-  in the background, then
-  runs the second-scale static checks and the rest in the foreground; a failed
-  background job stops the gate at the next foreground step. While iterating
-  on one failure, rerun that recipe first, then run the complete gate once
-  before handing off.
+  in the background, then runs the second-scale static checks and the rest in
+  the foreground; a failed background job stops the gate at the next
+  foreground step. The shared test graph links its binaries into
+  `target/test-graph`; `target/debug/cowboy-execution-host` is the
+  Machine-feature host that `claude-remote-prepare` links for the script
+  suites, and nothing else in the gate rewrites it. While iterating on one
+  failure, rerun that recipe first, then run the complete gate once before
+  handing off.
 - Iterate on Rust tests with `nix develop -c just test-rust-filter <filter>`
   (nextest name filters or `-E` expressions) and on lints with `just clippy`.
   Do not run ad-hoc `cargo test -p …`, `cargo nextest run -p …` or
