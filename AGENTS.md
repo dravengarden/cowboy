@@ -40,6 +40,10 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   `claude-remote-prepare` links for the script suites, and nothing else in the
   gate rewrites it. While iterating on one failure, rerun that recipe first,
   then run the complete gate once before handing off.
+- In a fresh worktree, start `nix develop -c just warm` in the background
+  before reading the code. It installs the dependencies and compiles the
+  gate's Rust lanes through the gate's compiler cache (a few minutes cold)
+  while you work, so the first `check-compact` starts warm.
 - Iterate on Rust tests with `nix develop -c just test-rust-filter <filter>`
   (nextest name filters or `-E` expressions) and on lints with `just clippy`.
   Do not run ad-hoc `cargo test -p …`, `cargo nextest run -p …` or
