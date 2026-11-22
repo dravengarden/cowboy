@@ -17,7 +17,7 @@ pages on 2026-11-22 with
 | Claude Agent ACP | 0.107.3 | 0.109.1 | Agent SDK 0.3.330, ACP SDK 2.9.1; the launcher's extension points are unchanged |
 | Codex ACP / Codex | 2.7.0 / 0.169.1 | 2.9.0 / 0.171.0 | ACP 2.9.0 declares `@openai/codex ^0.171.0`; the `native-codex-version` delta is dropped |
 | Grok | 1.0.77 | 1.0.92 | npm `latest` and `x.ai/cli/stable` |
-| agy | 1.5.9 | 1.5.9 (1.5.14 withdrawn in 3.138.0) | The install manifest is `manifests/linux_amd64.json`; `linux_x64.json` answers 404. 1.5.14 ends its turns without the stream barrier the backend evidence needs; see below |
+| agy | 1.5.9 | 1.5.14 (withdrawn in 3.138.0, again in 3.139.0) | The install manifest is `manifests/linux_amd64.json`; `linux_x64.json` answers 404. 1.5.14's stream outlives its turns, so the evidence now settles on a barrier request; see below |
 | dsh | 0.2.2-rc.1 | unchanged | `latest` is 0.2.2-rc.5; not part of this upgrade |
 | Claude/Codex DeepSeek gateways | — | unchanged | No change requested |
 
@@ -257,3 +257,44 @@ and without network, through the production `AgyLog`:
 Component release 3.139.0 records provider-runtime 1.3.23 (agy 1.5.14,
 cowboy-antigravity-acp 1.0.19); Antigravity 0.2.24 pins it and the other six
 Providers advance one patch with unchanged runtime bytes.
+
+Receipts are under `/srv/storage/fast0/agent/tmp/agy-1514-evidence/`.
+
+| Gate | Result |
+| --- | --- |
+| `provider-check`, `check-compact` at `86e29f681` (3.139.0) | Passed; `check-compact` again on each merge with newer `main`, last at `4607db4c2` |
+| `provider-antigravity-check` | 230 passed, among them the launch tests against the stand-in without a stream barrier |
+| `just agy-barrier-probe` | Passed for agy 1.5.9 and 1.5.14 (above) |
+| Runtime bytes of the six other Providers | Every runtime component equals the installed release's (claude-code 3.20.68, claude-deepseek 3.1.85, codex 3.6.28, codex-deepseek 3.1.85, grok 3.2.26, deepseek-harness 1.0.43); Antigravity changes exactly agy and cowboy-antigravity-acp |
+| Old/new coexistence with the resident worker | Passed for the six against those installed releases |
+| Catalog readers before publication | Active (`schcw0zq`) and rollback (`mhd8kxx0`) Controllers each read an isolated copy twice, identically |
+| Public artifact URLs | 36 resolve to their bound digests |
+| `provider-release-coverage` | Passed, isolated and live |
+
+One gate run failed "a lost mutation reply reports an unknown outcome" in the
+facade suite (the fake endpoint runs a request before it drops its reply, so a
+busy gate can see the helper's file); it passed alone three times and in the
+reruns, and `668c49781` now builds the execution host before those tests.
+
+| Plugin | 3.139.0 |
+| --- | --- |
+| antigravity | 0.2.24 `sha256:dc04310b…` |
+| claude-code | 3.20.69 `sha256:e573838b…` |
+| claude-deepseek | 3.1.86 `sha256:988c2d1f…` |
+| codex | 3.6.29 `sha256:64df8368…` |
+| codex-deepseek | 3.1.86 `sha256:6243be5b…` |
+| grok | 3.2.27 `sha256:e6643882…` |
+| deepseek-harness | 1.0.44 `sha256:00bc040e…` |
+
+Columbus `990835b2` lists the 1.5.14 executable again; the allow-list file alone
+was installed on OVH (SHA-256 `23b2d382…`), the daemon kept running.
+`cowboy operator converge --machine hawk --machine ovh --apply` upgraded Hawk
+(claude-deepseek 3.1.86, codex 3.6.29, codex-deepseek 3.1.86, deepseek-harness
+1.0.44, grok 3.2.27) and OVH (claude-code 3.20.69, codex 3.6.29, grok 3.2.27);
+Antigravity 0.2.24 was installed on OVH by exact release
+(`ovh-antigravity-0-2-24-agy-1-5-14-request-barrier`, applied).
+
+Real-account acceptance: one managed analysis call on 0.2.24 (Husky, Gemini 4
+Neon high) read two files through the facade and answered in 41 s; the turn
+ended normally and the account stayed available. The same call on 0.2.22
+settled `unknown_refusal`.
