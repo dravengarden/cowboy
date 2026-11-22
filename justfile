@@ -628,7 +628,11 @@ claude-remote-check:
 
 # Cross-language package/linker conformance. This is also the Agent Plugin
 # payload gate used by the generic Plugin release workflow.
-provider-check: plugin-check claude-remote-check
+provider-check: plugin-check claude-remote-check provider-scripts-check provider-build-check
+
+# The Bun, Node and Python suites of `provider-check`; they read sources only,
+# so `check` runs them in the background.
+provider-scripts-check:
     bun test ./tools/mcp-bindings_test.ts
     node --import ./tools/register-memory-client.mjs --test tools/execution-probe_test.mjs
     bun x --no-install biome format components/provider-runtime/execution-connection.mjs components/provider-runtime/execution-probe.mjs tools/execution-probe_test.mjs plugins/codex/runtime/bindings.mjs
@@ -658,6 +662,9 @@ provider-check: plugin-check claude-remote-check
     python3 -m unittest discover -s tools -p plugin_generation_failure_isolation_test.py
     python3 -m unittest discover -s tools -p catalog_reader_conformance_test.py
     bun components/provider-runtime/check.ts
+
+# The Rust tests, Plugin builds and package checks of `provider-check`.
+provider-build-check:
     cargo test --locked -p cowboy-provider-sdk --all-targets
     cargo test --locked -p cowboy-plugin-sdk --all-targets
     just plugin-build-all
@@ -696,15 +703,23 @@ fmt-write:
     cd plugins/zed/adapter && cargo fmt
     cd plugins/claude-code/relay && cargo fmt
 
-lint: clippy lint-plugins
+lint: clippy zed-lint lint-plugins
 
 clippy:
     cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
-# Everything `lint` checks besides the workspace Clippy run.
+# The Zed adapter is its own Cargo workspace with its own build directory.
+zed-lint:
+    cd plugins/zed/adapter && cargo clippy --all-targets --locked -- -D warnings
+
+zed-test:
+    cd plugins/zed/adapter && cargo test --all-targets --locked
+
+zed-check: zed-lint zed-test
+
+# Everything `lint` checks besides workspace Clippy and the Zed adapter.
 lint-plugins:
     cd web && bun run lint
-    cd plugins/zed/adapter && cargo clippy --all-targets --locked -- -D warnings
     cd plugins/claude-code/relay && cargo clippy --all-targets --locked -- -D warnings
 
 dependencies:
@@ -792,7 +807,13 @@ release-sources-check:
     check cowboy-code-adapter-src --no-default-features --features code-adapter \
       --bin cowboy-code-adapter
 
-test:
+test: test-rust zed-test test-web
+
+test-web:
+    cd web && bun run test
+
+# The main workspace's Rust test selections, which share its build directory.
+test-rust:
     # nextest builds the same `cargo test` executables but runs every test
     # binary concurrently; libtest runs them one after another, so the slowest
     # library suites used to add up (152s against 62s for the same 3553 tests).
@@ -803,8 +824,6 @@ test:
     # its test slice too; cargo check alone does not cover cfg(test) boundaries.
     env -u COWBOY_PROVIDER_PACKAGE_PATH cargo nextest run --locked --no-default-features --features machine-host -p cowboy -p cowboy-store -p cowboy-machine --lib
     env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked --no-default-features --features code-adapter --lib
-    cd plugins/zed/adapter && cargo test --all-targets --locked
-    cd web && bun run test
     python3 -m unittest discover -s tools -p ovh_machine_idle_sessions_test.py
 
 # Ignored PostgreSQL tests each get a fresh database in a private, temporary
@@ -836,10 +855,11 @@ session-deletion-production-conformance OLD NEW READER DEFAULT_READER RECEIPT:
 # the release build. `build-web` keeps the production frontend bundle covered.
 # `feature-check` is not repeated: `release-sources-check` checks the same
 # packages, features and binaries inside the exact release source closures.
-# Workspace Clippy and the release-source slices have Cargo build directories
-# of their own, so they run beside the rest of the gate instead of after it:
-# the main graph's compile is a long single-crate chain that leaves most cores
-# idle. Each background log prints once it is collected, before the tests run.
+# Workspace Clippy, the release-source slices and the Zed adapter have Cargo
+# build directories of their own, and the script suites read sources only, so
+# they run beside the rest of the gate instead of after it: the main graph's
+# compile is a long single-crate chain that leaves most cores idle. Each
+# background log prints once it is collected, before the main Rust tests run.
 check: toolchain-check fmt structure-check docs-index-check protocol-contract-check typecheck
     #!/usr/bin/env bash
     set -euo pipefail
@@ -866,7 +886,11 @@ check: toolchain-check fmt structure-check docs-index-check protocol-contract-ch
     # wait for the build lock. Its own directory lives and dies with the checkout.
     background clippy CARGO_BUILD_BUILD_DIR="$PWD/target/check-clippy" CARGO_INCREMENTAL=0
     background release-sources-check
-    just idb-conformance-check site-check native-shell-check dependencies lint-plugins plugin-check composition-check provider-check
+    background zed-check
+    # Suites that read sources only and share no build directory.
+    background provider-scripts-check
+    background test-web
+    just idb-conformance-check site-check native-shell-check dependencies lint-plugins plugin-check composition-check claude-remote-check provider-build-check
     while ((${#pending[@]})); do
       job="${pending[0]}"
       pending=("${pending[@]:1}")
@@ -877,7 +901,7 @@ check: toolchain-check fmt structure-check docs-index-check protocol-contract-ch
       cat "$logs/$name.log"
       if ((status != 0)); then exit "$status"; fi
     done
-    just test test-postgres logs-conformance build-web
+    just test-rust test-postgres logs-conformance build-web
 
 # Real diagnostic CLI, typed OTel fixture, query/metrics/tail/watch/RPC contracts.
 # An optional explicit --ssh in the standalone tool adds same-host SSH acceptance.

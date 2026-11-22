@@ -26,8 +26,9 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   another package or feature selection recompiles the workspace. A build
   script must not watch build outputs such as nested Cargo `target`
   directories or `node_modules`. `check` runs the second-scale static checks
-  first, then workspace Clippy and `release-sources-check` in the background
-  (each in its own build directory) beside the rest. While iterating on one failure, rerun that recipe first, then run the
+  first, then workspace Clippy, `release-sources-check` and the Zed adapter
+  (each in its own build directory) and the source-only script suites in the
+  background beside the rest. While iterating on one failure, rerun that recipe first, then run the
   complete gate once before handing off.
 - JavaScript and TypeScript run on the pinned Bun. The
   repository root is one Bun workspace (`web` plus the `components/*` packages
