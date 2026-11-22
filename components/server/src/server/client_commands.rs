@@ -601,6 +601,29 @@ pub(super) fn force_cancel_grace(state: &AppState, session_id: &str) -> std::tim
     }
 }
 
+/// A queued row's force push: promote it and interrupt the running turn so
+/// it runs next; on an idle session there's nothing to cancel, so it is just
+/// sent now. A retired session's row stays where it is and no turn is
+/// cancelled.
+pub(super) fn force_push_queued(
+    state: &AppState,
+    session_id: &str,
+    id: &str,
+) -> Result<(), String> {
+    if let Some(refusal) = provider_accounts::retirement::session_refusal(state, session_id) {
+        return Err(refusal.to_owned());
+    }
+    state.hub.request_send_queued(session_id, id); // promote to front either way
+    if matches!(
+        state.hub.status(session_id),
+        Some(Status::Busy | Status::Starting)
+    ) {
+        force_cancel_with_watchdog(state, session_id)
+    } else {
+        Ok(())
+    }
+}
+
 pub(super) fn force_cancel_with_watchdog(state: &AppState, session_id: &str) -> Result<(), String> {
     // Never cancel a retired session's live turn for a send that will only
     // park; an explicit Stop takes its own path.

@@ -85,7 +85,10 @@ pub(super) async fn restore_provider_reset_schedules(
     lanes.retain(|lane| !live.contains(lane));
     // Startup admission: a schedule a rollback could fire must be gone,
     // with its audit, before the Controller serves.
-    let cancelled = store.cancel_retired_resets(&lanes, now_ms()).await?;
+    let cancelled = store
+        .cancel_retired_resets(&lanes, now_ms())
+        .await
+        .context("cancelling retired reset schedules")?;
     if !cancelled.is_empty() {
         tracing::info!(lanes = ?cancelled, "cancelled retired cards' scheduled resets");
     }
