@@ -83,6 +83,18 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.139.0 records provider-runtime 1.3.23, which pins `agy`
+1.5.14 again with cowboy-antigravity-acp 1.0.19: a turn's backend evidence now
+settles on a barrier request the proxy sends `agy` once the turn has replied
+(`_cowboy/evidence_barrier/<nonce>`, which `agy` logs as it reads it), not on
+the conversation stream's end, which from `agy` 1.5.10 outlives the turn
+([evidence contract](../components/provider-runtime/packages/antigravity-acp/README.md#backend-evidence),
+[release record](releases/agent-runtimes-2026-11-22.md)). Antigravity 0.2.24
+pins it. The other six Providers pinning provider-runtime advance one patch
+version with unchanged runtime bytes (claude-code 3.20.69, claude-deepseek
+3.1.86, codex 3.6.29, codex-deepseek 3.1.86, deepseek-harness 1.0.44, grok
+3.2.27).
+
 Codex 3.6.28 changes only its Plugin source on component release 3.138.0: the
 `cowboy-prompt-suggestions` codex-acp delta and `COWBOY_CODEX_PROMPT_SUGGESTIONS=1`
 let the composer offer Codex's predicted next prompt

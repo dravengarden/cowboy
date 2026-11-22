@@ -152,16 +152,16 @@
     },
     "google-antigravity-cli": {
       "kind": "vendor_archive",
-      "version": "1.5.9",
-      "release": "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.9-4515810895593472/",
+      "version": "1.5.14",
+      "release": "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.14-5302690847260672/",
       "probe": [
         "--version"
       ],
       "targets": {
         "linux-x86_64": {
-          "url": "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.9-4515810895593472/linux-x64/cli_linux_x64.tar.gz",
-          "sha512": "d01eb13ba7750eed18907f1ae8860864371e0ad9064415e8d033d22b4bd7b9b4e4c7f962058520b452d67db1c33163d9a889d55a7dffa159596ec6cd91a87b79",
-          "sha256": "8b1f5e56779f2434a0af36f1b715a8392a084de550f8c68bc79821f95fabf3fa",
+          "url": "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.14-5302690847260672/linux-x64/cli_linux_x64.tar.gz",
+          "sha512": "83311d3f354567612dc16c1ae2ea9b503d6f6833aa4e138d39aa229da3f3bb99b0e4d7cca0bce4796b0060d6a51d8113eb7449ed5dc0e7900bf217107ea5bff9",
+          "sha256": "d58386322d2073e96b33f7cc32b4e9ae2db6228f58440369725967b2de48c7b5",
           "entrypoint": "antigravity"
         }
       }
@@ -180,7 +180,7 @@
     },
     "cowboy-antigravity-acp": {
       "kind": "node_npm",
-      "version": "1.0.18",
+      "version": "1.0.19",
       "package_dir": "packages/antigravity-acp",
       "script": "cowboy-launch.mjs",
       "launcher": "packages/antigravity-acp/launch.mjs",

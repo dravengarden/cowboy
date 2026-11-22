@@ -213,3 +213,47 @@ is installed on Hawk and OVH by `cowboy operator converge --plugin codex`, and a
 managed analysis call on it completed (managed calls never predict). An ordinary
 session's first prediction appears after its next completed turn; it costs one
 cached `thread/sample` per completed turn.
+
+## agy 1.5.14 again: a barrier request (components 3.139.0)
+
+Why 1.5.14 left no barrier, from both official executables, read without
+running a model (their pclntab maps each loaded string to its Go function):
+
+- The barrier line is still logged by
+  `backend.(*ServerBackend).StreamConversationUpdates.func3.1` in both. 1.5.14
+  moved the ACP server to `acp/server` and added
+  `(*Server).outOfTurnCallbacks` ("Conversation stream of session %s lost
+  between turns; the next prompt reopens it") and a turn end decided on the
+  stream's IDLE state in `(*Server).promptTurn`: the stream now outlives the
+  turn, so the line marks a session's stream end, not a turn's. This is agy
+  1.5.10's "a background task or subagent that wakes the agent reaches the
+  editor immediately".
+- Every other evidence line is unchanged: the success and request-failure
+  lines in `code_assist_client/http_helpers.go`, the retry and
+  `generating and executing` wrap in `oneharness/internal/core/run.go`, and the
+  agent executor (moved from `gemini_coder/framework/executor` to
+  `oneharness/internal/agentexecutor`) still reports through
+  `errorreport.ReportErrorContext` from the same functions.
+- Both log `ACP Request received: <method>` for every request they read,
+  before handling it, an unknown extension method included (answered
+  `-32601`).
+
+cowboy-antigravity-acp 1.0.19 settles a turn on a request only the proxy
+sends after the turn's reply, `_cowboy/evidence_barrier/<random nonce>`
+([evidence contract](../../components/provider-runtime/packages/antigravity-acp/README.md#backend-evidence)).
+Nothing in Cowboy wakes `agy` between turns: built-in tools are refused (so no
+native background task), subagents are the proxy's own sessions and stop with
+their turn, and facade commands never reach `agy`. An out-of-turn backend
+request would belong to no turn's window, as before.
+
+`just agy-barrier-probe` runs an executable unauthenticated, in a closed HOME
+and without network, through the production `AgyLog`:
+
+| Executable | SHA-512 (the allow-list entry) | Barrier line | Barrier reply |
+| --- | --- | --- | --- |
+| agy 1.5.9 | `800d5ee8…42f3349ea` | `server.go:988] ACP Request received: _cowboy/evidence_barrier/<nonce>` | `-32601` |
+| agy 1.5.14 | `02915d29…8baf38f4` | `server.go:213] ACP Request received: _cowboy/evidence_barrier/<nonce>` | `-32601` |
+
+Component release 3.139.0 records provider-runtime 1.3.23 (agy 1.5.14,
+cowboy-antigravity-acp 1.0.19); Antigravity 0.2.24 pins it and the other six
+Providers advance one patch with unchanged runtime bytes.
