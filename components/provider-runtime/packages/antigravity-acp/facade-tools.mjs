@@ -2,7 +2,8 @@
 // target-side publication script and the error and output types the facade
 // and its tests share (see `facade.mjs`).
 import { createHash } from "node:crypto";
-import { pathToFileURL } from "node:url";
+import { posix } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const LIMITS = Object.freeze({
   readBytes: 256 * 1024,
@@ -320,6 +321,124 @@ export function imageType(path, bytes) {
 
 export function inside(root, path) {
   return path === root || path.startsWith(root === "/" ? "/" : `${root}/`);
+}
+
+/** How long one read of the user's home may take (design: a stalled home
+ * mount must not push `initialize` past the worker's deadline). */
+export const HOME_READ_MS = 3000;
+
+/**
+ * Reads of the target user's home for its guidance and skills. The home is
+ * the user's own, not the repository's, so its symlinks (commonly Home
+ * Manager links into a store) are followed, with two rules on canonical
+ * paths:
+ *
+ * - a home inside the repository, or equal to it, contributes nothing;
+ * - otherwise (the normal case is a repository under the home) a candidate
+ *   is skipped when its canonical path, or that of any directory on its
+ *   path below the home, lies inside the repository, so the repository
+ *   cannot inject content through the home.
+ *
+ * Each request races a `HOME_READ_MS` timer without cancelling it (the
+ * connection has no per-request cancel); a late answer is ignored, and once
+ * one read timed out no further home request is sent.
+ */
+export class HomeReads {
+  /**
+   * The reads of `home` against the repository `root`, or `undefined`
+   * without a home. Nothing is sent until a home candidate is needed: the
+   * overlap check (`usable`) runs with the first one.
+   */
+  static for(call, home, root, { deadlineMs = HOME_READ_MS } = {}) {
+    return home ? new HomeReads(call, home, root, deadlineMs) : undefined;
+  }
+
+  constructor(call, home, root, deadlineMs) {
+    this.send = call;
+    this.home = home;
+    this.root = root;
+    this.roots = [root];
+    this.deadlineMs = deadlineMs;
+    this.stalled = false;
+    this.canonicals = new Map();
+  }
+
+  /**
+   * Whether the home may contribute: its canonical path resolves and is
+   * neither inside nor equal to the repository root (as reported or
+   * canonicalized). Checked once.
+   */
+  usable() {
+    this.ready ??= (async () => {
+      const [home, root] = await Promise.all([
+        this.canonical(this.home),
+        this.send("fs/canonicalize", { path: pathToFileURL(this.root).href }).then(
+          (result) => fileURLToPath(result.path),
+          () => undefined,
+        ),
+      ]);
+      if (root) this.roots.push(root);
+      return Boolean(home) && !this.inRepository(home);
+    })();
+    return this.ready;
+  }
+
+  inRepository(path) {
+    return this.roots.some((root) => inside(root, path));
+  }
+
+  /** One request within the deadline; rejects when the home stalled. */
+  async call(method, params) {
+    if (this.stalled) throw new Error("The home did not answer in time");
+    const request = this.send(method, params);
+    request.catch(() => {});
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        this.stalled = true;
+        reject(new Error("The home did not answer in time"));
+      }, this.deadlineMs);
+      timer.unref?.();
+    });
+    try {
+      return await Promise.race([request, timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** The canonical path of `path`, or `undefined` (cached per path). */
+  canonical(path) {
+    if (!this.canonicals.has(path)) {
+      this.canonicals.set(
+        path,
+        this.call("fs/canonicalize", { path: pathToFileURL(path).href }).then(
+          (result) => fileURLToPath(result.path),
+          () => undefined,
+        ),
+      );
+    }
+    return this.canonicals.get(path);
+  }
+
+  /**
+   * The canonical target of `path` (under the home), or `undefined` when it
+   * or any directory on its path below the home resolves into the
+   * repository, or cannot be resolved.
+   */
+  async target(path) {
+    if (!(await this.usable())) return undefined;
+    const parts = posix.relative(this.home, path).split("/").filter(Boolean);
+    if (!parts.length || parts[0] === "..") return undefined;
+    let prefix = this.home;
+    let canonical;
+    for (const part of parts) {
+      prefix = posix.join(prefix, part);
+      canonical = await this.canonical(prefix);
+      if (!canonical || this.inRepository(canonical)) return undefined;
+    }
+    return canonical;
+  }
 }
 
 export function remoteMessage(error) {

@@ -49,6 +49,9 @@ export const UNCERTAIN_REPORT = "cowboy/uncertainEffect";
  * authorizes the probe from its own state, never from this id). */
 export const READINESS_PREFIX = "cowboy-agy-readiness-";
 
+/** `resolveOnce`: a missing component appeared while it resolved. */
+const APPEARED = Symbol("appeared");
+
 /** Shells whose `-c` script is POSIX shell syntax. */
 const POSIX_SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "mksh"]);
 /** `value` as one single-quoted POSIX shell word. */
@@ -389,6 +392,22 @@ export class Facade {
     if (typeof path !== "string" || !path || path.length > 4096 || path.includes("\0")) {
       throw new ToolError("Invalid path");
     }
+    // A component that appears while this resolves is resolved again.
+    for (let attempt = 0; ; attempt++) {
+      const resolved = await this.resolveOnce(path, allowMissing);
+      if (resolved === APPEARED) {
+        if (attempt < 2) continue;
+        throw new ToolError(`${path} changed while it was resolved; try again`);
+      }
+      if (!outside && !inside(this.root, resolved)) {
+        throw new ToolError(`${path} is outside the workspace root ${this.root}`);
+      }
+      return resolved;
+    }
+  }
+
+  /** One pass of `resolve`: the path, or `APPEARED`. */
+  async resolveOnce(path, allowMissing) {
     let existing = posix.resolve(this.root, path);
     const rest = [];
     let canonical;
@@ -407,12 +426,8 @@ export class Facade {
         existing = posix.dirname(existing);
       }
     }
-    const full = posix.join(canonical, ...rest);
-    if (rest.length) await this.refuseDangling(canonical, rest[0], path);
-    if (!outside && !inside(this.root, full)) {
-      throw new ToolError(`${path} is outside the workspace root ${this.root}`);
-    }
-    return full;
+    if (rest.length && (await this.refuseDangling(canonical, rest[0], path))) return APPEARED;
+    return posix.join(canonical, ...rest);
   }
 
   /**
@@ -420,10 +435,12 @@ export class Facade {
    * of a path, under its existing canonical parent, may be a symlink whose
    * target cannot be canonicalized, so nothing shows it stays inside the
    * root and creating through it could write anywhere. It is refused only
-   * once identified: metadata that reports it (a symlink, or anything at a
-   * path canonicalize called missing), else its name in the parent's
+   * once identified: no-follow metadata reporting a symlink, or (when the
+   * metadata follows links and reports nothing) its name in the parent's
    * listing. A parent that cannot be listed (search and create but no
-   * read permission) identifies nothing.
+   * read permission) identifies nothing. Returns `true` when the component
+   * now exists as a file or directory (it appeared meanwhile): the caller
+   * resolves again, so containment is checked on its canonical path.
    */
   async refuseDangling(parent, name, path) {
     const component = posix.join(parent, name);
@@ -432,13 +449,14 @@ export class Facade {
         `${path} passes through ${component}, a symlink whose target does not exist; refused`,
       );
     };
+    let metadata;
     try {
-      const metadata = await this.connection.call("fs/getMetadata", { path: url(component) });
-      if (metadata) refuse();
+      metadata = await this.connection.call("fs/getMetadata", { path: url(component) });
     } catch (error) {
-      if (error instanceof ToolError) throw error;
       if (!missing(error)) throw error;
     }
+    if (metadata?.isSymlink) refuse();
+    if (metadata) return true;
     let listing;
     try {
       listing = await this.connection.call("fs/readDirectory", { path: url(parent) });
@@ -447,6 +465,7 @@ export class Facade {
       return;
     }
     if ((listing?.entries ?? []).some((entry) => entry?.fileName === name)) refuse();
+    return false;
   }
 
   /**

@@ -738,9 +738,14 @@ test("a home inside the repository is read by the repository's rules", async (t)
   symlinkSync(join(base, "outside", "AGENTS.md"), join(root, "AGENTS.md"));
   mkdirSync(join(root, "nested-home"));
   symlinkSync(join(base, "outside", "AGENTS.md"), join(root, "nested-home", "AGENTS.md"));
+  // Even its own regular files contribute nothing.
+  mkdirSync(join(root, "nested-home", ".gemini"));
+  writeFileSync(join(root, "nested-home", ".gemini", "GEMINI.md"), "NESTED_HOME_GEMINI\n");
   for (const home of [root, join(root, "nested-home")]) {
     facade.connection.info.userHomeDir = pathToFileURL(home).href;
-    assert.doesNotMatch(await buildProjection(facade, root), /OUTSIDE_GUIDANCE/, home);
+    const projection = await buildProjection(facade, root);
+    assert.doesNotMatch(projection, /OUTSIDE_GUIDANCE|NESTED_HOME_GEMINI/, home);
+    assert.doesNotMatch(projection, /the user's home guidance/, home);
   }
 });
 
@@ -757,17 +762,72 @@ test("a managed projection reads no home guidance", async (t) => {
   assert.ok(!endpoint.calls.some((entry) => String(entry.params?.path).includes(home)));
 });
 
-test("a home entry naming a nested repository file keeps its label", async (t) => {
+test("a home containing the repository loads its own links; links into the repository are skipped", async (t) => {
+  const { base, root, facade } = await fixture(t);
+  execFileSync("git", ["-C", root, "init", "-q", "-b", "main"], { stdio: "pipe" });
+  // The normal case: the repository (base/workspace) is under the home (base).
+  facade.connection.info.userHomeDir = pathToFileURL(base).href;
+  mkdirSync(join(base, "store"));
+  writeFileSync(join(base, "store", "AGENTS.md"), "STORE_GUIDANCE\n");
+  symlinkSync(join(base, "store", "AGENTS.md"), join(base, "AGENTS.md"));
+  // ~/.gemini is a second link into the repository.
+  mkdirSync(join(root, "x"));
+  writeFileSync(join(root, "x", "GEMINI.md"), "INJECTED_GEMINI\n");
+  symlinkSync(join(root, "x"), join(base, ".gemini"));
+  const loaded = await buildProjection(facade, root);
+  assert.match(loaded, new RegExp(`--- ${join(base, "AGENTS.md")} ---\nSTORE_GUIDANCE`));
+  assert.doesNotMatch(loaded, /INJECTED_GEMINI/);
+  assert.match(loaded, /the user's home guidance/);
+  // A home file linking straight to a repository file is skipped too; the
+  // file is still shown as the repository's.
+  rmSync(join(base, "AGENTS.md"));
+  writeFileSync(join(root, "src", "AGENTS.md"), "NESTED_GUIDANCE\n");
+  symlinkSync(join(root, "src", "AGENTS.md"), join(base, "AGENTS.md"));
+  const linked = await buildProjection(facade, join(root, "src"));
+  assert.equal(linked.split("NESTED_GUIDANCE").length, 2);
+  assert.match(linked, new RegExp(`--- ${join(root, "src", "AGENTS.md")} ---\nNESTED_GUIDANCE`));
+  assert.doesNotMatch(linked, /the user's home guidance/);
+});
+
+test("a stalled home read gives up within its deadline", async (t) => {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "agy-home-")));
   t.after(() => rmSync(base, { recursive: true, force: true }));
   const { home } = homeFixture(base);
-  const { root, facade } = await fixture(t, { home });
-  execFileSync("git", ["-C", root, "init", "-q", "-b", "main"], { stdio: "pipe" });
-  writeFileSync(join(root, "src", "AGENTS.md"), "NESTED_GUIDANCE\n");
-  symlinkSync(join(root, "src", "AGENTS.md"), join(home, "AGENTS.md"));
-  const projection = await buildProjection(facade, join(root, "src"));
-  assert.equal(projection.split("NESTED_GUIDANCE").length, 2);
-  assert.match(projection, new RegExp(`--- ${join(home, "AGENTS.md")} ---\nNESTED_GUIDANCE`));
+  writeFileSync(join(home, "AGENTS.md"), "HOME_AGENTS\n");
+  const { root, facade } = await fixture(t, {
+    home,
+    delay: (method, params) => (String(params?.path ?? "").includes(home) ? 30_000 : 0),
+  });
+  writeFileSync(join(root, "AGENTS.md"), "ROOT_GUIDANCE\n");
+  const started = Date.now();
+  const projection = await buildProjection(facade, root);
+  assert.ok(Date.now() - started < 3000 + 2000, `${Date.now() - started} ms`);
+  assert.match(projection, /ROOT_GUIDANCE/);
+  assert.doesNotMatch(projection, /HOME_AGENTS/);
+  // The shared connection is still usable.
+  assert.match(
+    (await facade.call("s1", "ReadFile", { path: "hello.txt" })).content[0].text,
+    /hello/,
+  );
+});
+
+test("a component that appears while a write resolves is resolved again", async (t) => {
+  let hidden = true;
+  const { root, call } = await fixture(t, {
+    // The first canonicalize of the new directory misses it, as if it was
+    // created just after.
+    fail: (method, params) => {
+      if (method === "fs/canonicalize" && hidden && String(params.path).endsWith("/appeared")) {
+        hidden = false;
+        return { code: -32004, message: "No such file or directory (os error 2)" };
+      }
+      return undefined;
+    },
+  });
+  mkdirSync(join(root, "appeared"));
+  const written = await call("WriteFile", { path: "appeared/a.txt", content: "a\n" });
+  assert.match(written.text, /^Created/);
+  assert.equal(readFileSync(join(root, "appeared", "a.txt"), "utf8"), "a\n");
 });
 
 test("guidance is cut at a character boundary within its byte bounds", async (t) => {

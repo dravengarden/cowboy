@@ -181,16 +181,39 @@ test("repository skills are kept first when the list is cut", async (t) => {
   assert.equal(skills.filter((entry) => entry.user).length, SKILL_LIMITS.skills - 1);
 });
 
-test("a home inside the repository follows the repository's rules", async (t) => {
+test("a home inside or equal to the repository lists no user skills", async (t) => {
   const { base, root, facade } = await fixture(t);
   mkdirSync(join(base, "outside", "evil"), { recursive: true });
   writeFileSync(join(base, "outside", "evil", "SKILL.md"), "---\nname: evil\n---\n");
   mkdirSync(join(root, ".codex", "skills"), { recursive: true });
   symlinkSync(join(base, "outside", "evil"), join(root, ".codex", "skills", "evil"));
   skill(join(root, ".codex", "skills"), "own", "---\nname: own\n---");
-  const skills = await discoverSkills(facade, [root], root, root);
+  skill(join(root, "sub", ".claude", "skills"), "nested", "---\nname: nested\n---");
+  assert.deepEqual(await discoverSkills(facade, [root], root, root), []);
+  assert.deepEqual(await discoverSkills(facade, [root], root, join(root, "sub")), []);
+});
+
+test("a home containing the repository lists its own skills, never links into the repository", async (t) => {
+  const { base, root, facade } = await fixture(t);
+  // The repository (base/workspace) is under the home (base).
+  skill(join(base, "store", "skills"), "stored", "---\nname: stored\n---");
+  mkdirSync(join(base, ".claude"));
+  symlinkSync(join(base, "store", "skills"), join(base, ".claude", "skills"));
+  // ~/.codex/skills links into the checkout; a ~/.agents skill links into it.
+  skill(join(root, "x", "skills"), "injected", "---\nname: injected\n---");
+  mkdirSync(join(base, ".codex"));
+  symlinkSync(join(root, "x", "skills"), join(base, ".codex", "skills"));
+  skill(join(root, "y"), "linked", "---\nname: linked\n---");
+  mkdirSync(join(base, ".agents", "skills"), { recursive: true });
+  symlinkSync(join(root, "y", "linked"), join(base, ".agents", "skills", "linked"));
+  const skills = await discoverSkills(facade, [root], root, base);
   assert.deepEqual(skills, [
-    { name: "own", description: "", path: join(root, ".codex", "skills", "own", "SKILL.md") },
+    {
+      name: "stored",
+      description: "",
+      path: join(base, ".claude", "skills", "stored", "SKILL.md"),
+      user: true,
+    },
   ]);
 });
 
@@ -252,6 +275,12 @@ test("a repository that supplies enough skills never waits for the home", async 
   assert.equal(skills.length, SKILL_LIMITS.skills);
   assert.ok(!skills.some((entry) => entry.user));
   assert.ok(!endpoint.calls.some((entry) => String(entry.params?.path ?? "").includes(home)));
+  // Reads were sized to the slots left, and the next directory was never
+  // listed ahead: nothing is pending once it returns.
+  assert.equal(endpoint.calls.filter((entry) => entry.method === "fs/readFile").length, 64);
+  assert.ok(
+    !endpoint.calls.some((entry) => String(entry.params?.path ?? "").includes(".agents/skills")),
+  );
 });
 
 test("a home that resolves into the repository gets no symlink handling", async (t) => {

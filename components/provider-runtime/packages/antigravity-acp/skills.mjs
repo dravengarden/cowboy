@@ -9,7 +9,7 @@
 import { posix } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { inside } from "./facade.mjs";
-import { mapBounded } from "./facade-tools.mjs";
+import { HomeReads, mapBounded } from "./facade-tools.mjs";
 
 export const SKILL_LIMITS = Object.freeze({
   skills: 64,
@@ -60,23 +60,22 @@ export function parseFrontmatter(text) {
 }
 
 /**
- * The canonical path of a skills directory, or `undefined`. A repository's
- * must be symlink-free inside `root`; a home one (`follow`) is commonly a
- * symlink into a generated store (Home Manager), so its target is used.
+ * The canonical path of a repository skills directory, which must be
+ * symlink-free inside `root` (a symlinked `.claude/skills` -> `.agents/skills`
+ * is skipped; its target is read under its own name), or of a user's one
+ * through `home` (`HomeReads`), or `undefined`.
  */
-async function canonicalDirectory(call, directory, root, follow) {
+async function canonicalDirectory(call, directory, root, home) {
   try {
-    const canonical = fileURLToPath(
-      (await call("fs/canonicalize", { path: pathToFileURL(directory).href })).path,
-    );
-    // A symlinked repository skills directory (often `.claude/skills` ->
-    // `.agents/skills`) is skipped; its target is read under its own name.
-    // A home one that resolves into the repository (the home, or a link of
-    // it, is inside the checkout) gets no symlink handling: it is refused,
-    // and the repository's own pass reads that directory.
-    if (follow ? inside(root, canonical) : canonical !== directory || !inside(root, canonical)) {
-      return undefined;
+    let canonical;
+    if (home) canonical = await home.target(directory);
+    else {
+      canonical = fileURLToPath(
+        (await call("fs/canonicalize", { path: pathToFileURL(directory).href })).path,
+      );
+      if (canonical !== directory || !inside(root, canonical)) return undefined;
     }
+    if (!canonical) return undefined;
     const metadata = await call("fs/getMetadata", { path: pathToFileURL(canonical).href });
     return metadata?.isDirectory && !metadata.isSymlink ? canonical : undefined;
   } catch {
@@ -84,14 +83,18 @@ async function canonicalDirectory(call, directory, root, follow) {
   }
 }
 
-async function frontmatterOf(call, file, root, follow) {
-  let at = pathToFileURL(file).href;
+async function frontmatterOf(call, file, root, home) {
   try {
-    const canonical = fileURLToPath((await call("fs/canonicalize", { path: at })).path);
-    if (follow) {
-      if (inside(root, canonical)) return undefined;
-      at = pathToFileURL(canonical).href;
-    } else if (canonical !== file || !inside(root, canonical)) return undefined;
+    let source;
+    if (home) source = await home.target(file);
+    else {
+      const canonical = fileURLToPath(
+        (await call("fs/canonicalize", { path: pathToFileURL(file).href })).path,
+      );
+      if (canonical === file && inside(root, canonical)) source = file;
+    }
+    if (!source) return undefined;
+    const at = pathToFileURL(source).href;
     const metadata = await call("fs/getMetadata", { path: at });
     if (!metadata?.isFile || metadata.isSymlink || metadata.size > 1024 * 1024) return undefined;
     const read = await call("fs/readFile", { path: at });
@@ -104,34 +107,36 @@ async function frontmatterOf(call, file, root, follow) {
 
 /**
  * The skills of `directories` (repository root down to the working
- * directory) and of the user's `home` (when given). Candidates are taken in
- * precedence order and the first definition of a name wins: the deepest
- * repository directory first (as a nearer AGENTS.md wins), then the home.
- * A home skills directory inside the repository `root` is read by the
- * repository's rules (no symlinks); one outside it is a user's (`user:
- * true`), whose symlinks are followed and whose path stays under the home.
- * The scan is bounded: at most `perDirectory` entries of a directory, and
- * no more reads once `skills` names are found, so the repository's survive.
- * Unreadable entries are skipped. Never throws.
+ * directory) and of the user's `home` (a path, or `HomeReads`; see there for
+ * its rules and read deadline). Candidates are taken in precedence order and
+ * the first definition of a name wins: the deepest repository directory
+ * first (as a nearer AGENTS.md wins), then the home; a user skill is marked
+ * `user: true` and keeps its path under the home. The scan is bounded: at
+ * most `perDirectory` entries of a directory, the next directory listed
+ * ahead only when this one cannot fill the list, and reads sized to the
+ * remaining slots, so nothing is left pending once `skills` names are
+ * found. Unreadable entries are skipped. Never throws.
  */
 export async function discoverSkills(facade, directories, root, home) {
-  const call = (method, params) => facade.connection.call(method, params);
-  const repository = [...directories]
-    .reverse()
-    .flatMap((directory) =>
-      [...SKILL_DIRECTORIES].reverse().map((relative) => posix.join(directory, relative)),
-    );
-  const homeDirectories = home
-    ? [...HOME_SKILL_DIRECTORIES].reverse().map((relative) => posix.join(home, relative))
+  const send = (method, params) => facade.connection.call(method, params);
+  const homeReads = typeof home === "string" ? HomeReads.for(send, home, root) : home;
+  const repository = [...directories].reverse().flatMap((directory) =>
+    [...SKILL_DIRECTORIES].reverse().map((relative) => ({
+      directory: posix.join(directory, relative),
+      home: undefined,
+    })),
+  );
+  const user = homeReads
+    ? [...HOME_SKILL_DIRECTORIES].reverse().map((relative) => ({
+        directory: posix.join(homeReads.home, relative),
+        home: homeReads,
+      }))
     : [];
-  const skillsDirectories = [];
   // Precedence order: the deepest repository directory first, then the home.
-  for (const directory of [...repository, ...homeDirectories]) {
-    if (skillsDirectories.some((entry) => entry.directory === directory)) continue;
-    skillsDirectories.push({ directory, user: !inside(root, directory) });
-  }
-  const list = async ({ directory, user }) => {
-    const canonical = await canonicalDirectory(call, directory, root, user);
+  const skillsDirectories = [...repository, ...user];
+  const list = async ({ directory, home: reads }) => {
+    const call = reads ? (method, params) => reads.call(method, params) : send;
+    const canonical = await canonicalDirectory(call, directory, root, reads);
     if (!canonical) return [];
     let entries;
     try {
@@ -145,19 +150,14 @@ export async function discoverSkills(facade, directories, root, home) {
         // directory here); its SKILL.md is checked when it is read.
         .filter(
           (entry) =>
-            typeof entry?.fileName === "string" && (entry.isDirectory || (user && !entry.isFile)),
+            typeof entry?.fileName === "string" && (entry.isDirectory || (reads && !entry.isFile)),
         )
         .map((entry) => entry.fileName)
         .sort()
         .slice(0, SKILL_LIMITS.perDirectory)
-        .map((name) => ({ path: posix.join(directory, name, "SKILL.md"), user }))
+        .map((name) => ({ path: posix.join(directory, name, "SKILL.md"), home: reads }))
     );
   };
-  // Directories are listed and read in precedence order. The next listing
-  // is started while this one's skills are read (one listing and
-  // `concurrency - 1` reads in flight); once enough names are found nothing
-  // more is requested, so a slow lower-priority directory (a home mount)
-  // never delays a repository that already supplies them.
   const found = new Map();
   const listings = [];
   const listing = (index) => {
@@ -165,26 +165,27 @@ export async function discoverSkills(facade, directories, root, home) {
     return listings[index];
   };
   const reads = Math.max(1, SKILL_LIMITS.concurrency - 1);
-  for (
-    let index = 0;
-    index < skillsDirectories.length && found.size < SKILL_LIMITS.skills;
-    index++
-  ) {
+  const left = () => SKILL_LIMITS.skills - found.size;
+  for (let index = 0; index < skillsDirectories.length && left() > 0; index++) {
     const candidates = await listing(index);
-    if (index + 1 < skillsDirectories.length) listing(index + 1);
-    for (
-      let start = 0;
-      start < candidates.length && found.size < SKILL_LIMITS.skills;
-      start += reads
-    ) {
-      const batch = candidates.slice(start, start + reads);
-      const skills = await mapBounded(batch, reads, ({ path, user }) =>
-        frontmatterOf(call, path, root, user),
+    // Listed ahead only when this directory cannot fill the list, so the
+    // next one is certainly needed (and awaited).
+    if (index + 1 < skillsDirectories.length && candidates.length < left()) listing(index + 1);
+    for (let start = 0; start < candidates.length && left() > 0; ) {
+      const batch = candidates.slice(start, start + Math.min(reads, left()));
+      start += batch.length;
+      const skills = await mapBounded(batch, reads, ({ path, home: from }) =>
+        frontmatterOf(
+          from ? (method, params) => from.call(method, params) : send,
+          path,
+          root,
+          from,
+        ),
       );
       for (const [at, skill] of skills.entries()) {
-        if (!skill || found.has(skill.name) || found.size >= SKILL_LIMITS.skills) continue;
-        const { path, user } = batch[at];
-        found.set(skill.name, user ? { ...skill, path, user: true } : { ...skill, path });
+        if (!skill || found.has(skill.name) || left() <= 0) continue;
+        const { path, home: from } = batch[at];
+        found.set(skill.name, from ? { ...skill, path, user: true } : { ...skill, path });
       }
     }
   }

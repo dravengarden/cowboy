@@ -174,18 +174,16 @@ test("a facade call's answer becomes its content; a successful edit keeps its di
     [{ type: "content", content: { type: "text", text: "old_string was not found" } }],
   );
   assert.deepEqual(resultContent("ReadFile", {}, { content: [] }, root), []);
-  // An image ReadFile returned is shown with its line; an oversized one is not.
+  // An image ReadFile returned is shown alone; an oversized one shows its line.
   const image = { type: "image", data: "AAAA", mimeType: "image/png" };
   const line = { type: "text", text: "Image /srv/work/repo/a.png (image/png, 3 bytes)" };
   assert.deepEqual(resultContent("ReadFile", { path: "a.png" }, { content: [line, image] }, root), [
-    { type: "content", content: line },
     { type: "content", content: image },
   ]);
   const huge = { ...image, data: "A".repeat(2 * 1024 * 1024) };
-  assert.equal(
-    resultContent("ReadFile", { path: "a.png" }, { content: [line, huge] }, root).length,
-    1,
-  );
+  assert.deepEqual(resultContent("ReadFile", { path: "a.png" }, { content: [line, huge] }, root), [
+    { type: "content", content: line },
+  ]);
 });
 
 test("an extension's MCP result is shown block by block, bounded", () => {

@@ -232,18 +232,20 @@ export function resultContent(tool, input, result, root) {
       .map((block) => (block?.type === "text" && typeof block.text === "string" ? block.text : ""))
       .filter(Boolean)
       .join("\n");
-    const content = answer ? [textBlock(answer)] : [];
-    // An image ReadFile returned is shown too, within the shown-result bound.
-    for (const block of blocks) {
-      if (
+    // An image ReadFile returned is shown alone, as Claude's image Read is
+    // (the transcript's Read card shows images only without text), when it
+    // fits the shown-result bound; the model still gets text and image.
+    const images = blocks.filter(
+      (block) =>
         block?.type === "image" &&
         typeof block.data === "string" &&
         typeof block.mimeType === "string" &&
-        block.data.length <= RESULT_BYTES
-      ) {
-        content.push({ type: "content", content: block });
-      }
+        block.data.length <= RESULT_BYTES,
+    );
+    if (images.length && result?.isError !== true) {
+      return images.map((block) => ({ type: "content", content: block }));
     }
+    const content = answer ? [textBlock(answer)] : [];
     if (result?.isError !== true && isObject(input)) {
       const { toolSummary: _summary, ...rest } = input;
       const described = describe(tool, rest, root);
