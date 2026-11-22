@@ -8,8 +8,8 @@
 )]
 
 mod snapshot;
-pub use snapshot::CrashedWorkerSighting;
 use snapshot::apply_snapshot;
+pub use snapshot::{CrashedWorkerObservation, CrashedWorkerSighting};
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -5264,10 +5264,15 @@ mod tests {
         worker.current_turn_id = None;
         project_snapshot(&runtime.shared, &worker);
         // Not connected: nothing is claimed about the Machine.
-        assert_eq!(runtime.last_crashed_worker("s"), None);
+        assert_eq!(
+            runtime.last_crashed_worker("s"),
+            CrashedWorkerObservation::Unavailable
+        );
         runtime.shared.connected.store(true, Ordering::Release);
         assert!(!runtime.has_worker("s"));
-        let seen = runtime.last_crashed_worker("s").expect("crashed worker");
+        let CrashedWorkerObservation::Seen(seen) = runtime.last_crashed_worker("s") else {
+            panic!("crashed worker");
+        };
         assert_eq!(seen.worker_epoch, worker.worker_epoch);
         assert_eq!(seen.generation, worker.generation);
         // The broker's frame for a worker that disconnected is the same
@@ -5284,17 +5289,26 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(runtime.last_crashed_worker("s"), Some(seen));
+        assert_eq!(
+            runtime.last_crashed_worker("s"),
+            CrashedWorkerObservation::Seen(seen)
+        );
         // The next connection's inventory replaces it with the broker's
         // registry placeholder, which is no worker.
         let mut placeholder = worker.clone();
         placeholder.worker_epoch = "broker-placeholder".to_owned();
         update_worker_snapshots(&runtime.shared, vec![placeholder]).await;
-        assert_eq!(runtime.last_crashed_worker("s"), None);
+        assert_eq!(
+            runtime.last_crashed_worker("s"),
+            CrashedWorkerObservation::Absent
+        );
         // A running worker is no crashed one.
         worker.state = WorkerState::Running;
         project_snapshot(&runtime.shared, &worker);
-        assert_eq!(runtime.last_crashed_worker("s"), None);
+        assert_eq!(
+            runtime.last_crashed_worker("s"),
+            CrashedWorkerObservation::Absent
+        );
     }
 
     #[tokio::test]

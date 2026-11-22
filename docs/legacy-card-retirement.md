@@ -303,10 +303,13 @@ the cutover only verifies them before releasing:
          NR == 1 { worker = $0 ~ /(^|\/)cowboy-acp-worker$/ }
          worker && prev == "--provider" { provider = $0 }
          worker && $0 == "--provider-account-id" { named = 1 }
+         worker && prev == "--session-id" { session = $0 }
+         worker && prev == "--generation" { generation = $0 }
+         worker && prev == "--socket" { socket = $0 }
          { prev = $0 }
          END {
            if (worker && provider ~ /^(claude-code|codex|grok|claude-deepseek|codex-deepseek|deepseek-harness)$/ && !named)
-             print pid, provider
+             print pid, provider, session, generation, socket
          }' || { echo "$pid: argument check failed; the check is inconclusive" >&2; status=1; }
      done
      exit "$status"
@@ -363,22 +366,26 @@ the cutover only verifies them before releasing:
              next;
          }
          next unless $argv->[0] =~ m{(^|/)cowboy-acp-worker$};
-         my ($provider, $named) = ('', 0);
+         my %value = map { $_ => '' } qw(--provider --session-id --generation --socket);
+         my $named = 0;
          for my $i (1 .. $#$argv) {
-             $provider = $argv->[$i + 1] // '' if $argv->[$i] eq '--provider';
+             $value{$argv->[$i]} = $argv->[$i + 1] // '' if exists $value{$argv->[$i]};
              $named = 1 if $argv->[$i] eq '--provider-account-id';
          }
-         print "$pid $provider\n" if $card{$provider} && !$named;
+         print join(' ', $pid, @value{qw(--provider --session-id --generation --socket)}), "\n"
+             if $card{$value{'--provider'}} && !$named;
      }
      exit $status;
      ```
 
-     A listed process is such a worker. The Controller's status rows cannot
-     prove this on their own: a worker can outlive a session recorded as
-     crashed (Settings → Resources lists those after ten minutes). Stop it as
-     described in
-     [crashed sessions with a live worker](machine-operations.md#crashed-sessions-with-a-live-worker),
-     not with Retry, then run the check again.
+     Each listed line is such a worker: `<pid> <provider> <session-id>
+     <generation> <socket>`, read from its verified arguments, so the check
+     works with the current (old) Controller. The Controller's status rows
+     cannot prove this on their own: a worker can outlive a session recorded
+     as crashed. Stop each with the
+     [emergency stop](machine-operations.md#emergency-stop) (pause, verify
+     the exact PID with those values, signal it), not with Retry, then run
+     the check again.
 2. **Web release** (`.#cowboy-web-release`): the new Web works with the old
    Controller and never opens a retired card's sign-in on the device.
 3. **Close or reload every open Cowboy tab**, so no older tab still holds a

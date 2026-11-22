@@ -436,49 +436,119 @@ Choose one of:
 
 ### Emergency stop
 
-Do not stop a worker while a Retry, reload or Provider update of that
-session may be in progress (the session shows Starting or an update). First
-confirm in Cowboy that the session is crashed with its crash detail shown,
-idle (no turn, permission request or background task) and that its Machine
-has been connected for a few minutes. Take the row's `worker_pid` and
-`generation`, then verify the exact process before signalling it.
+A replacement can be launched while you work: pausing the session in Cowboy
+(the queue's ⏸ toggle, `paused`) holds only automatic queue delivery, and a
+crashed session already holds its queue. A manual send, Retry, a reload, an
+automatic reload after its Provider account is signed in again, or a Provider
+update can still start a new worker. No existing control blocks those, so
+this is an accepted risk window, closed by signalling the exact verified
+PID: a replacement runs as another process, so the old PID is already gone
+(the signal fails) or the verifier refuses it.
 
-Linux (user-systemd workers), as the Machine's service user (on OVH prefix
-each `systemctl --user` with
-`sudo -u ubuntu XDG_RUNTIME_DIR=/run/user/$(id -u ubuntu)`):
+1. Pause the session's queue in Cowboy and do not Retry, reload or send to
+   it. Confirm it is crashed with its crash detail shown, idle (no turn,
+   permission request or background task), and that its Machine has been
+   connected for a few minutes.
+2. Take the row's `worker_pid` and `generation` from
+   `GET /api/session-maintenance` (`crashed_workers`), and the Machine
+   service's broker socket (`<state-dir>/run/m`, for example
+   `/home/ubuntu/.local/state/cowboy-machine/services/<service-id>/run/m` on
+   OVH; it is the worker's `--socket` argument).
+3. Run the read-only verifier for the Machine's OS, as the Machine's service
+   user, immediately before signalling. Signal only when it prints
+   `verified`, and only that PID (or, on macOS, that PID's group).
+4. Unpause the session's queue afterwards.
+
+Linux (user-systemd workers; on OVH run both commands as `ubuntu` with
+`sudo -u ubuntu XDG_RUNTIME_DIR=/run/user/$(id -u ubuntu)`). Save as
+`verify-worker.sh`:
 
 ```sh
-session=<session-id> pid=<worker_pid> generation=<generation>
+# Read-only. Exits 0 only when PID is exactly the user-systemd worker of
+# SESSION with GENERATION on broker SOCKET, as Cowboy reported it.
+[ $# -eq 4 ] || { echo 'usage: sh verify-worker.sh PID SESSION GENERATION SOCKET' >&2; exit 2; }
+pid=$1 session=$2 generation=$3 socket=$4
+fail() { echo "refused: $*" >&2; exit 1; }
+case $pid in '' | *[!0-9]*) fail "PID $pid is not a number" ;; esac
+exe=$(readlink "/proc/$pid/exe") || fail "process $pid is gone or unreadable"
+case $exe in */cowboy-acp-worker) ;; *) fail "process $pid runs $exe" ;; esac
 unit=$(systemctl --user list-units --no-legend --plain "cowboy-worker-*-$session.service" | awk '{print $1}')
-test -n "$unit" || { echo 'no worker unit: it already exited' >&2; exit 1; }
-test "$(systemctl --user show -p MainPID --value "$unit")" = "$pid" || { echo 'unit MainPID differs' >&2; exit 1; }
-case $(readlink "/proc/$pid/exe") in */cowboy-acp-worker) ;; *) echo 'not a worker' >&2; exit 1 ;; esac
-args=$(tr '\0' '\n' < "/proc/$pid/cmdline") || exit 1
-printf '%s\n' "$args" | grep -qxF -- "$session" || { echo 'other session' >&2; exit 1; }
-printf '%s\n' "$args" | grep -qxF -- "$generation" || { echo 'other generation' >&2; exit 1; }
-printf '%s\n' "$args" | grep -A1 -xF -- --socket   # the Machine service's run/m socket
-systemctl --user stop "$unit"
+[ -n "$unit" ] || fail "no worker unit for $session"
+main=$(systemctl --user show -p MainPID --value "$unit") || fail "cannot read $unit"
+[ "$main" = "$pid" ] || fail "$unit runs process $main, not $pid"
+# NUL-delimited argv, one argument per line; an embedded newline stays inside
+# its argument as \001, so it can neither forge nor match an argument.
+args=$(tr '\n\0' '\001\n' < "/proc/$pid/cmdline") || fail "arguments of $pid unreadable"
+printf '%s\n' "$args" | awk -v s="$session" -v g="$generation" -v k="$socket" '
+  prev == "--session-id" { sid = $0; ns++ }
+  prev == "--generation" { gen = $0; ng++ }
+  prev == "--socket" { sock = $0; nk++ }
+  { prev = $0 }
+  END { exit !(ns == 1 && ng == 1 && nk == 1 && sid == s && gen == g && sock == k) }' ||
+  fail "arguments of $pid differ from the session, generation or socket given"
+echo "verified: $pid is the worker of $unit"
 ```
-
-macOS (direct child workers of the LaunchAgent, not launchd jobs): the
-worker leads its own process group with the Provider subtree. Verify its
-arguments with the runbook's argument-complete check
-(`docs/legacy-card-retirement.md`, macOS script: the row's PID, the exact
-`--session-id`, `--generation` and `--socket`), then require it to be its
-group's leader and signal only that group:
 
 ```sh
-pid=<worker_pid>
-test "$(ps -o pgid= -p "$pid" | tr -d ' ')" = "$pid" || { echo 'not a group leader' >&2; exit 1; }
-ps -o comm= -p "$pid" | grep -q '/cowboy-acp-worker$' || { echo 'not a worker' >&2; exit 1; }
-kill -TERM -- "-$pid"
-sleep 5; pgrep -g "$pid" && echo 'group still has processes' >&2
+sh verify-worker.sh <pid> <session-id> <generation> <socket> && kill -TERM <pid>
 ```
 
-Verify: the unit is gone or inactive, or `pgrep -g <pid>` prints nothing;
-the Machine logs `declared worker has no running unit; reporting it stopped`
-or the worker's `worker stopped by SIGTERM`; and the session is still crashed
-in Cowboy with its history and crash detail. The row leaves the list when
+The worker exits and systemd ends the rest of its unit's control group.
+
+macOS (direct child workers of the LaunchAgent, not launchd jobs; each
+leads a process group with its Provider subtree). Save as
+`verify-worker.pl`:
+
+```perl
+# Read-only. Exits 0 only when PID is exactly the direct worker of SESSION
+# with GENERATION on broker SOCKET and leads its own process group.
+use strict; use warnings;
+@ARGV == 4 or die "usage: perl verify-worker.pl PID SESSION GENERATION SOCKET\n";
+my ($pid, $session, $generation, $socket) = @ARGV;
+sub refuse { print STDERR "refused: @_\n"; exit 1 }
+$pid =~ /^\d+$/ or refuse("PID $pid is not a number");
+my $name = pack("i3", 1, 49, $pid);  # CTL_KERN, KERN_PROCARGS2
+my $size = 1 << 20;
+my $buf = "\0" x $size;
+my $len = pack("Q", $size);
+syscall(202, $name, 3, $buf, $len, 0, 0) == 0  # __sysctl
+    or refuse("arguments of $pid unreadable: $!");
+$buf = substr($buf, 0, unpack("Q", $len));
+my $argc = unpack("i", $buf);
+my $rest = substr($buf, 4);
+$rest =~ s/^[^\0]*\0+//;                       # executable path and padding
+my @argv;
+for (1 .. $argc) {
+    $rest =~ s/^([^\0]*)\0// or refuse("arguments of $pid truncated");
+    push @argv, $1;
+}
+$argv[0] =~ m{(^|/)cowboy-acp-worker$} or refuse("process $pid runs $argv[0]");
+my %seen;
+for my $i (1 .. $#argv - 1) {
+    push @{ $seen{$argv[$i]} }, $argv[$i + 1]
+        if $argv[$i] =~ /^--(session-id|generation|socket)$/;
+}
+for ([ '--session-id', $session ], [ '--generation', $generation ], [ '--socket', $socket ]) {
+    my ($option, $want) = @$_;
+    my $got = $seen{$option} || [];
+    @$got == 1 && $got->[0] eq $want or refuse("$option of $pid differs from $want");
+}
+my $pgid = `ps -o pgid= -p $pid`;
+$? == 0 or refuse("ps failed for $pid");
+$pgid =~ s/\s+//g;
+$pgid eq $pid or refuse("process $pid is not its process group leader ($pgid)");
+print "verified: $pid is the worker of $session and leads its group\n";
+```
+
+```sh
+perl verify-worker.pl <pid> <session-id> <generation> <socket> && kill -TERM -- -<pid>
+sleep 5; pgrep -g <pid> && echo 'group still has processes' >&2
+```
+
+Verify: the PID is gone (and on macOS `pgrep -g <pid>` prints nothing); the
+Machine logs `worker stopped by SIGTERM` or `declared worker has no running
+unit; reporting it stopped`; and the session is still crashed in Cowboy with
+its history and crash detail. Its row stays, marked possibly stale, until
 the Machine next reports its inventory. The next prompt or Retry starts a
 new worker as usual.
 

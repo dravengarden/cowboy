@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::agent_model::Status;
-use crate::remote_runtime::CrashedWorkerSighting;
+use crate::remote_runtime::{CrashedWorkerObservation, CrashedWorkerSighting};
 
 use super::AppState;
 
@@ -35,13 +35,11 @@ struct Attached {
     warned: bool,
 }
 
-/// One crashed session in one sweep: its last crashed worker on a connected
-/// Machine, or `None` with `connected` telling whether that absence is known.
+/// One crashed session in one sweep, with its runtime's single observation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Candidate {
     pub session_id: String,
-    pub connected: bool,
-    pub worker: Option<CrashedWorkerSighting>,
+    pub worker: CrashedWorkerObservation,
 }
 
 /// Session -> its crashed worker, from when this Controller first saw that
@@ -61,14 +59,18 @@ impl Observed {
         now: Instant,
     ) -> Vec<(String, CrashedWorkerSighting, Duration)> {
         let mut attached = self.0.lock();
+        let by_session: HashMap<&str, &CrashedWorkerObservation> = candidates
+            .iter()
+            .map(|seen| (seen.session_id.as_str(), &seen.worker))
+            .collect();
         attached.retain(|session, _| {
-            candidates.iter().any(|seen| {
-                &seen.session_id == session && (seen.worker.is_some() || !seen.connected)
-            })
+            by_session
+                .get(session.as_str())
+                .is_some_and(|worker| !matches!(worker, CrashedWorkerObservation::Absent))
         });
         let mut warn = Vec::new();
         for seen in candidates {
-            let Some(worker) = &seen.worker else {
+            let CrashedWorkerObservation::Seen(worker) = &seen.worker else {
                 continue;
             };
             let fresh = || Attached {
@@ -153,30 +155,43 @@ fn account(session: &crate::core::SessionMeta) -> &'static str {
     }
 }
 
+/// What the warning names besides the session.
+struct Context {
+    machine: String,
+    provider: String,
+    account: &'static str,
+}
+
 /// The crashed sessions of one sweep, without keeping the session list.
-fn candidates(state: &AppState) -> Vec<(Candidate, String, String, &'static str)> {
-    state
+fn candidates(state: &AppState) -> (Vec<Candidate>, HashMap<String, Context>) {
+    let mut context = HashMap::new();
+    let candidates = state
         .hub
         .session_list()
         .into_iter()
         .filter(|session| session.status == Status::Crashed)
         .map(|session| {
-            let runtime = state.runtime_router.runtime(&session.machine_id);
-            let connected = runtime.as_ref().is_some_and(|runtime| runtime.connected());
-            let worker = runtime.and_then(|runtime| runtime.last_crashed_worker(&session.id));
-            let account = account(&session);
-            (
-                Candidate {
-                    session_id: session.id,
-                    connected,
-                    worker,
+            let worker = state
+                .runtime_router
+                .runtime(&session.machine_id)
+                .map_or(CrashedWorkerObservation::Unavailable, |runtime| {
+                    runtime.last_crashed_worker(&session.id)
+                });
+            context.insert(
+                session.id.clone(),
+                Context {
+                    account: account(&session),
+                    machine: session.machine_id,
+                    provider: session.provider,
                 },
-                session.machine_id,
-                session.provider,
-                account,
-            )
+            );
+            Candidate {
+                session_id: session.id,
+                worker,
+            }
         })
-        .collect()
+        .collect();
+    (candidates, context)
 }
 
 pub(in crate::server) fn start(state: &Arc<AppState>) {
@@ -188,19 +203,17 @@ pub(in crate::server) fn start(state: &Arc<AppState>) {
                 if *state.shutdown.borrow() {
                     return;
                 }
-                let swept = candidates(&state);
-                let sightings: Vec<_> = swept
-                    .iter()
-                    .map(|(candidate, ..)| candidate.clone())
-                    .collect();
+                let (candidates, context) = candidates(&state);
                 let warn = state
                     .session_maintenance
                     .crashed_workers
-                    .observe(&sightings, Instant::now());
+                    .observe(&candidates, Instant::now());
                 for (session_id, worker, age) in warn {
-                    let Some((_, machine, provider, account)) = swept
-                        .iter()
-                        .find(|(candidate, ..)| candidate.session_id == session_id)
+                    let Some(Context {
+                        machine,
+                        provider,
+                        account,
+                    }) = context.get(&session_id)
                     else {
                         continue;
                     };
@@ -223,8 +236,7 @@ mod tests {
     fn seen(session: &str, epoch: &str) -> Candidate {
         Candidate {
             session_id: session.to_owned(),
-            connected: true,
-            worker: Some(CrashedWorkerSighting {
+            worker: CrashedWorkerObservation::Seen(CrashedWorkerSighting {
                 worker_epoch: epoch.to_owned(),
                 generation: "gen-1".to_owned(),
             }),
@@ -234,8 +246,11 @@ mod tests {
     fn gone(session: &str, connected: bool) -> Candidate {
         Candidate {
             session_id: session.to_owned(),
-            connected,
-            worker: None,
+            worker: if connected {
+                CrashedWorkerObservation::Absent
+            } else {
+                CrashedWorkerObservation::Unavailable
+            },
         }
     }
 

@@ -111,6 +111,17 @@ pub(super) fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
     true
 }
 
+/// What one runtime says about a crashed session's worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CrashedWorkerObservation {
+    /// The Machine is not connected: nothing is known.
+    Unavailable,
+    /// The connected Machine reports no crashed worker for the session.
+    Absent,
+    /// The connected Machine last reported this crashed worker.
+    Seen(CrashedWorkerSighting),
+}
+
 /// The last worker this Controller saw for a session it recorded crashed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CrashedWorkerSighting {
@@ -130,18 +141,21 @@ impl super::RemoteRuntime {
     /// itself as Crashed with the same epoch (or, for an undeclared session,
     /// says nothing), and only the inventory of the next connection drops it.
     /// Read-only evidence for an operator, who verifies the process first.
-    pub fn last_crashed_worker(&self, session_id: &str) -> Option<CrashedWorkerSighting> {
+    pub fn last_crashed_worker(&self, session_id: &str) -> CrashedWorkerObservation {
+        // One read: the worker map is held while the connection state is
+        // checked, so "absent" always comes from a connected runtime.
+        let workers = self.shared.workers.lock();
         if !self.connected() {
-            return None;
+            return CrashedWorkerObservation::Unavailable;
         }
-        self.shared
-            .workers
-            .lock()
+        workers
             .get(session_id)
             .filter(|worker| worker.has_connected_owner() && worker.state == WorkerState::Crashed)
-            .map(|worker| CrashedWorkerSighting {
-                worker_epoch: worker.worker_epoch.clone(),
-                generation: worker.generation.clone(),
+            .map_or(CrashedWorkerObservation::Absent, |worker| {
+                CrashedWorkerObservation::Seen(CrashedWorkerSighting {
+                    worker_epoch: worker.worker_epoch.clone(),
+                    generation: worker.generation.clone(),
+                })
             })
     }
 }
