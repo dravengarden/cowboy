@@ -201,7 +201,15 @@ A confirmed or scheduled usage reset runs the same collector with its native
 usage read, the reset preflight and the reset request. It takes a start from the
 same Provider window, spacing and single-active-collector rule, and delays the
 account's next poll, but it does not wait for that account's polling interval.
-A paced reset is refused before any Provider call ("no reset was sent"). Resets
+A paced reset is refused before any Provider call ("no reset was sent"). The
+refusal names the exact time the window has room for all of the reset's starts
+(`retry_after_ms` and `Retry-After` on a named reset's `429 usage_reset_paced`)
+and holds the Provider for that account until shortly after it: polls of every
+account and other accounts' resets wait, so background quota reads cannot
+starve a confirmed reset. The hold is in memory, ends when the reset starts and
+otherwise lapses 30 seconds after the named time. The Web dialog shows the wait,
+resends the same confirmed reset then, and lets Cancel stop a wait (never an
+in-flight request). Resets
 are serialized before their start is charged and hold that serialization until
 the invocation ends, so the charged time is the actual call time. A scheduled
 reset reserves its start before any one-shot claim, so pacing only delays it. A refused or changed reset records no failure backoff; an

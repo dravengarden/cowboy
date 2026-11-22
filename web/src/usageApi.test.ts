@@ -18,6 +18,7 @@ import {
   readUsage,
   readUsageExecutors,
   ResetOutcomeUnknown,
+  ResetWaitCancelled,
   refreshSessionUsage,
   refreshUsage,
   setUsageExecutor,
@@ -370,4 +371,43 @@ test("a named reset body that never finishes is unknown, not a busy dialog", asy
   assertEquals(await readBoundedJson(stalled, 1024, 20), undefined);
   const ok = Response.json({ a: 1 });
   assertEquals(await readBoundedJson(ok, 1024, 1000), { a: 1 });
+});
+
+test("a paced reset waits for the named slot and resends; a cancelled wait sends nothing", async () => {
+  const original = globalThis.fetch;
+  const account = { kind: "account", accountId: "11111111-1111-4111-8111-111111111111" } as const;
+  try {
+    let sent = 0;
+    globalThis.fetch = () => {
+      sent += 1;
+      return Promise.resolve(sent === 1
+        ? Response.json({ error: { code: "usage_reset_paced", retry_after_ms: 42_000 } }, { status: 429 })
+        : Response.json({ outcome: "reset", credit_id: "g:1" }));
+    };
+    const waits: number[] = [];
+    const paced: number[] = [];
+    await consumeNearestReset(account, "g:1", "confirm", {
+      onPaced: (at) => paced.push(at),
+      sleep: (ms) => {
+        waits.push(ms);
+        return Promise.resolve();
+      },
+    });
+    assertEquals(sent, 2);
+    assertEquals(waits, [42_000]);
+    assertEquals(paced.length, 1);
+
+    sent = 0;
+    const controller = new AbortController();
+    controller.abort();
+    let caught: unknown;
+    await consumeNearestReset(account, "g:1", "confirm", { signal: controller.signal })
+      .catch((error: unknown) => {
+        caught = error;
+      });
+    assertEquals(caught instanceof ResetWaitCancelled, true);
+    assertEquals(sent, 1, "a cancelled wait never resends");
+  } finally {
+    globalThis.fetch = original;
+  }
 });

@@ -607,17 +607,25 @@ provider-release-coverage CATALOG:
     bun tools/check-provider-release-coverage.ts "{{CATALOG}}"
 
 # Cheap Remote Claude feedback before building an upstream upgrade candidate.
-claude-remote-check:
+claude-remote-check: claude-remote-prepare claude-remote-relay claude-remote-scripts
+
+# The execution host and the pinned Claude ACP sources the runtime tests load.
+claude-remote-prepare:
     cargo build --locked --no-default-features --features machine-host -p cowboy-machine --bin cowboy-execution-host
     mkdir -p dist/claude-source-tests
     cp components/provider-runtime/packages/claude-agent-acp/package{,-lock}.json dist/claude-source-tests/
     npm ci --prefer-offline --ignore-scripts --no-audit --no-fund --prefix dist/claude-source-tests
+
+claude-remote-relay:
     cargo fmt --manifest-path plugins/claude-code/relay/Cargo.toml -- --check
     cargo clippy --locked --manifest-path plugins/claude-code/relay/Cargo.toml --all-targets
     cargo test --locked --manifest-path plugins/claude-code/relay/Cargo.toml
     cargo build --locked --release --manifest-path plugins/claude-code/relay/Cargo.toml
     COWBOY_MCP_RELAY="$PWD/plugins/claude-code/relay/target/release/cowboy-mcp-relay" node --test tools/claude-mcp-relay.test.mjs
     bun x --no-install biome format tools/claude-mcp-relay.test.mjs
+
+# Node and Python suites over sources and the prepared execution host.
+claude-remote-scripts:
     node --import ./tools/register-memory-client.mjs --test plugins/claude-code/runtime/*.test.mjs components/memory-client/*.test.mjs tools/memory-provider.test.mjs tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-shell-jobs.test.mjs tools/claude-remote-context.test.mjs tools/claude-remote-skills.test.mjs tools/claude-remote-mcp.test.mjs tools/claude-remote-native-baseline.test.mjs tools/claude-remote-hooks-baseline.test.mjs tools/claude-remote-mods-baseline.test.mjs tools/claude-remote-permissions-baseline.test.mjs tools/claude-remote-context-baseline.test.mjs tools/claude-remote-tools-baseline.test.mjs
     bun x --no-install biome format plugins/claude-code/runtime
     node --import ./tools/register-memory-client.mjs --test tools/claude-remote-privacy.test.mjs
@@ -628,15 +636,24 @@ claude-remote-check:
 
 # Cross-language package/linker conformance. This is also the Agent Plugin
 # payload gate used by the generic Plugin release workflow.
-provider-check: plugin-check claude-remote-check
+provider-check: plugin-check claude-remote-check provider-scripts-check provider-build-check
+
+# The Bun, Node and Python suites of `provider-check`; they read sources only,
+# so `check` runs them in the background.
+provider-scripts-check: provider-antigravity-check provider-runtime-scripts
+
+# Its facade suite alone waits out about 50s of real command deadlines.
+provider-antigravity-check:
+    node --import ./tools/register-memory-client.mjs --test components/provider-runtime/packages/antigravity-acp/*.test.mjs
+    bun x --no-install biome format components/provider-runtime/packages/antigravity-acp components/provider-runtime/owned-sources.ts
+
+provider-runtime-scripts:
     bun test ./tools/mcp-bindings_test.ts
     node --import ./tools/register-memory-client.mjs --test tools/execution-probe_test.mjs
     bun x --no-install biome format components/provider-runtime/execution-connection.mjs components/provider-runtime/execution-probe.mjs tools/execution-probe_test.mjs plugins/codex/runtime/bindings.mjs
     bun x --no-install biome format components/provider-runtime/mcp-bindings.mjs tools/mcp-bindings_test.ts
     node --test components/provider-runtime/packages/codex-acp/launch_test.mjs
     node --test components/provider-runtime/packages/deepseek-harness/launch_test.mjs
-    node --import ./tools/register-memory-client.mjs --test components/provider-runtime/packages/antigravity-acp/*.test.mjs
-    bun x --no-install biome format components/provider-runtime/packages/antigravity-acp components/provider-runtime/owned-sources.ts
     bun tools/generate-plan-name-table.ts --check
     bun x --no-install biome format tools/generate-plan-name-table.ts
     node --import ./tools/register-memory-client.mjs --test plugins/codex/runtime/launch.test.mjs
@@ -658,6 +675,9 @@ provider-check: plugin-check claude-remote-check
     python3 -m unittest discover -s tools -p plugin_generation_failure_isolation_test.py
     python3 -m unittest discover -s tools -p catalog_reader_conformance_test.py
     bun components/provider-runtime/check.ts
+
+# The Rust tests, Plugin builds and package checks of `provider-check`.
+provider-build-check:
     cargo test --locked -p cowboy-provider-sdk --all-targets
     cargo test --locked -p cowboy-plugin-sdk --all-targets
     just plugin-build-all
@@ -696,15 +716,23 @@ fmt-write:
     cd plugins/zed/adapter && cargo fmt
     cd plugins/claude-code/relay && cargo fmt
 
-lint: clippy lint-plugins
+lint: clippy zed-lint lint-plugins
 
 clippy:
     cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
-# Everything `lint` checks besides the workspace Clippy run.
+# The Zed adapter is its own Cargo workspace with its own build directory.
+zed-lint:
+    cd plugins/zed/adapter && cargo clippy --all-targets --locked -- -D warnings
+
+zed-test:
+    cd plugins/zed/adapter && cargo test --all-targets --locked
+
+zed-check: zed-lint zed-test
+
+# Everything `lint` checks besides workspace Clippy and the Zed adapter.
 lint-plugins:
     cd web && bun run lint
-    cd plugins/zed/adapter && cargo clippy --all-targets --locked -- -D warnings
     cd plugins/claude-code/relay && cargo clippy --all-targets --locked -- -D warnings
 
 dependencies:
@@ -792,7 +820,13 @@ release-sources-check:
     check cowboy-code-adapter-src --no-default-features --features code-adapter \
       --bin cowboy-code-adapter
 
-test:
+test: test-rust zed-test test-web
+
+test-web:
+    cd web && bun run test
+
+# The main workspace's Rust test selections, which share its build directory.
+test-rust:
     # nextest builds the same `cargo test` executables but runs every test
     # binary concurrently; libtest runs them one after another, so the slowest
     # library suites used to add up (152s against 62s for the same 3553 tests).
@@ -803,8 +837,6 @@ test:
     # its test slice too; cargo check alone does not cover cfg(test) boundaries.
     env -u COWBOY_PROVIDER_PACKAGE_PATH cargo nextest run --locked --no-default-features --features machine-host -p cowboy -p cowboy-store -p cowboy-machine --lib
     env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked --no-default-features --features code-adapter --lib
-    cd plugins/zed/adapter && cargo test --all-targets --locked
-    cd web && bun run test
     python3 -m unittest discover -s tools -p ovh_machine_idle_sessions_test.py
 
 # Ignored PostgreSQL tests each get a fresh database in a private, temporary
@@ -836,10 +868,11 @@ session-deletion-production-conformance OLD NEW READER DEFAULT_READER RECEIPT:
 # the release build. `build-web` keeps the production frontend bundle covered.
 # `feature-check` is not repeated: `release-sources-check` checks the same
 # packages, features and binaries inside the exact release source closures.
-# Workspace Clippy and the release-source slices have Cargo build directories
-# of their own, so they run beside the rest of the gate instead of after it:
-# the main graph's compile is a long single-crate chain that leaves most cores
-# idle. Each background log prints once it is collected, before the tests run.
+# Workspace Clippy, the release-source slices and the Zed adapter have Cargo
+# build directories of their own, and the script suites read sources only, so
+# they run beside the rest of the gate instead of after it: the main graph's
+# compile is a long single-crate chain that leaves most cores idle. Each
+# background log prints once it is collected, before the main Rust tests run.
 check: toolchain-check fmt structure-check docs-index-check protocol-contract-check typecheck
     #!/usr/bin/env bash
     set -euo pipefail
@@ -858,7 +891,8 @@ check: toolchain-check fmt structure-check docs-index-check protocol-contract-ch
       local name="$1"
       shift
       # A process group of its own, so an early failure stops the whole job.
-      setsid env "$@" just "$name" >"$logs/$name.log" 2>&1 &
+      setsid bash -c 'SECONDS=0; env "${@:2}" just "$1"; status=$?; echo "($1 took ${SECONDS}s)"; exit "$status"' \
+        background "$name" "$@" >"$logs/$name.log" 2>&1 &
       pending+=("$!:$name")
     }
     # Clippy checks the same crates as the test graph but in check mode, which
@@ -866,7 +900,17 @@ check: toolchain-check fmt structure-check docs-index-check protocol-contract-ch
     # wait for the build lock. Its own directory lives and dies with the checkout.
     background clippy CARGO_BUILD_BUILD_DIR="$PWD/target/check-clippy" CARGO_INCREMENTAL=0
     background release-sources-check
-    just idb-conformance-check site-check native-shell-check dependencies lint-plugins plugin-check composition-check provider-check
+    background zed-check
+    # Suites that read sources only and share no build directory.
+    background provider-antigravity-check
+    background provider-runtime-scripts
+    background test-web
+    background dependencies
+    just idb-conformance-check site-check native-shell-check lint-plugins plugin-check composition-check claude-remote-prepare
+    # Collected before `test-rust`, the next step that may relink the execution
+    # host these suites run.
+    background claude-remote-scripts
+    just claude-remote-relay provider-build-check
     while ((${#pending[@]})); do
       job="${pending[0]}"
       pending=("${pending[@]:1}")
@@ -877,7 +921,7 @@ check: toolchain-check fmt structure-check docs-index-check protocol-contract-ch
       cat "$logs/$name.log"
       if ((status != 0)); then exit "$status"; fi
     done
-    just test test-postgres logs-conformance build-web
+    just test-rust test-postgres logs-conformance build-web
 
 # Real diagnostic CLI, typed OTel fixture, query/metrics/tail/watch/RPC contracts.
 # An optional explicit --ssh in the standalone tool adds same-host SSH acceptance.
