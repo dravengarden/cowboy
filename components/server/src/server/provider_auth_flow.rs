@@ -398,10 +398,10 @@ const DISTRIBUTION_RETRY_DELAYS: [Duration; 6] = [
     Duration::from_secs(3600),
 ];
 
-/// Deliver `status`'s generation again until no connected Machine fails it,
-/// it is superseded (the mark is refused as stale), or the backoff ends.
-/// Offline Machines are repaired at reconnect from their reported state.
-fn retry_distribution(
+/// Deliver `status`'s generation again until no connected Machine fails it
+/// or it is superseded (the mark is refused as stale): backoff up to an
+/// hour, then hourly. Offline Machines are repaired at reconnect.
+pub(super) fn retry_distribution(
     state: &Arc<AppState>,
     scope: &Arc<crate::provider_service::ProviderAuthService>,
     account: &crate::provider_account::ProviderAccountId,
@@ -410,7 +410,11 @@ fn retry_distribution(
     let (state, scope, account) = (Arc::clone(state), Arc::clone(scope), account.clone());
     let (provider_id, generation) = (status.provider_id.clone(), status.auth_generation);
     tokio::spawn(async move {
-        for delay in DISTRIBUTION_RETRY_DELAYS {
+        let last = DISTRIBUTION_RETRY_DELAYS[DISTRIBUTION_RETRY_DELAYS.len() - 1];
+        for delay in DISTRIBUTION_RETRY_DELAYS
+            .into_iter()
+            .chain(std::iter::repeat(last))
+        {
             tokio::time::sleep(delay).await;
             if *state.shutdown.borrow() {
                 return;
@@ -426,8 +430,8 @@ fn retry_distribution(
                 tracing::info!(%provider_id, generation, "Provider auth replica sync recovered");
                 return;
             }
+            tracing::warn!(%provider_id, generation, failed = outcome.failed, "Provider auth replica sync still failing");
         }
-        tracing::warn!(%provider_id, generation, "Provider auth replica sync still failing; waiting for the next Machine report");
     });
 }
 

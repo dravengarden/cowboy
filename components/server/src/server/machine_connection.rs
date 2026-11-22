@@ -1197,7 +1197,30 @@ fn spawn_machine_reconnect_sync(
     for authentication in state.provider_auth.replica_statuses() {
         let sync_state = Arc::clone(state);
         let machine_id = hello.machine_id.clone();
+        // The wipe of a moved root generation this Machine still holds
+        // waits for its first credential observation (an offline rotation).
+        let deferred = state
+            .provider_auth
+            .legacy_move(&authentication.provider_id)
+            .filter(|moved| {
+                let reported = hello
+                    .plugins
+                    .iter()
+                    .find(|plugin| plugin.plugin_id == authentication.provider_id)
+                    .and_then(|plugin| plugin.auth_generation);
+                provider_accounts::retirement::reconnect::holds_moved_generation(
+                    reported,
+                    moved.root_generation,
+                )
+            })
+            .map(|_| provider_accounts::retirement::reconnect::defer(&machine_id));
         tokio::spawn(async move {
+            if let Some(observation) = deferred {
+                use provider_accounts::retirement::reconnect::{
+                    COMPATIBILITY_WAIT, SETTLE, released,
+                };
+                released(observation, SETTLE, COMPATIBILITY_WAIT).await;
+            }
             let outcome = distribute_provider_auth(&sync_state, &authentication.provider_id).await;
             match sync_state.provider_auth.mark_distribution(
                 &authentication.provider_id,
@@ -1205,6 +1228,14 @@ fn spawn_machine_reconnect_sync(
                 outcome.state(),
             ) {
                 Ok(marked) => {
+                    if outcome.failed > 0 {
+                        retry_distribution(
+                            &sync_state,
+                            &sync_state.provider_auth,
+                            &Default::default(),
+                            &marked,
+                        );
+                    }
                     let replicas = BTreeMap::from([(marked.provider_id.clone(), outcome)]);
                     recover_failed_provider_sessions(&sync_state, &[marked], &replicas);
                 }

@@ -8,6 +8,8 @@ use crate::provider_service::{
 };
 use crate::store::provider_accounts::legacy_cards;
 
+pub(in crate::server) mod reconnect;
+
 /// The visible wait of a prompt to a retired `default` session.
 pub(in crate::server) const SESSION_RETIRED: &str = "This session ran on a retired legacy default account; continue it in a new agent on a named account";
 

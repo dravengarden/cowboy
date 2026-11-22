@@ -3034,6 +3034,17 @@ impl MachinePluginStore {
             }
             let provider_id = entry.file_name().to_string_lossy().into_owned();
             let mut failed = BTreeSet::new();
+            // An interrupted wipe is reported every scan until it is
+            // complete, so the Controller sends it again.
+            if self
+                .latest_auth_envelope(&provider_id)
+                .ok()
+                .flatten()
+                .is_some_and(|envelope| envelope.action == ProviderAuthAction::Wipe)
+                && !self.wipe_complete(&provider_id)
+            {
+                failed.insert(provider_id.clone());
+            }
             match self.auth_refresh_candidates_for_provider(&provider_id, &mut failed) {
                 Ok(mut candidates) => observations.candidates.append(&mut candidates),
                 Err(error) => {
@@ -7619,8 +7630,38 @@ mod tests {
         fs::create_dir_all(&left).unwrap();
         fs::write(left.join("auth.json"), b"old").unwrap();
         assert!(!store.wipe_complete("codex"));
+        // Recorded as the current replica: every scan reports it failed.
+        let wipe = SealedProviderAuth {
+            envelope_schema: 1,
+            account_id: crate::provider_account::ProviderAccountId::default(),
+            provider_id: "codex".to_owned(),
+            auth_generation: 16,
+            auth_contract_fingerprint: format!("sha256:{}", "ab".repeat(32)),
+            projection_schema: "codex-auth-v1".to_owned(),
+            action: ProviderAuthAction::Wipe,
+            ephemeral_public_key: String::new(),
+            nonce: String::new(),
+            ciphertext: String::new(),
+            service_public_key: String::new(),
+            signature: String::new(),
+        };
+        fs::write(
+            store
+                .auth_provider_root("codex")
+                .join("replica-current.json"),
+            serde_json::to_vec(&wipe).unwrap(),
+        )
+        .unwrap();
+        let failed = |store: &MachinePluginStore| {
+            store
+                .auth_refresh_observations()
+                .failed_provider_ids
+                .contains(&(wipe.account_id.clone(), "codex".to_owned()))
+        };
+        assert!(failed(&store));
         remove_projection::remove(&store.auth_provider_root("codex").join("runtime")).unwrap();
         assert!(store.wipe_complete("codex"));
+        assert!(!failed(&store));
     }
 
     #[test]
