@@ -46,6 +46,7 @@ struct GrantEntry {
 mod context_only;
 mod observation;
 mod readiness;
+mod turn_budget;
 pub(in crate::server) use observation::touch as touch_code_observation;
 pub(in crate::server) use observation::{changes as code_changes, head as code_observation_head};
 pub(super) use readiness::{child_runtime, child_runtime_pinned, runtime_readiness};
@@ -831,7 +832,7 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             "max_wait_ms": crate::managed_calls::protocol::MAX_WAIT_MS,
             "max_context_files": 32,
             "max_concurrent": policy.max_concurrent,
-            "max_per_session": policy.max_per_session,
+            "max_per_turn": policy.max_per_turn,
         },
         "placement": {
             "runtime_machine_id": meta.machine_id,
@@ -987,24 +988,12 @@ async fn start(
             target.options = None;
         }
     }
-    // A soft per-session budget: concurrent admissions may pass it together.
-    match state
-        .store
-        .as_ref()
-        .map(|store| store.managed_call_counts(&meta.id))
-    {
-        Some(counts) => match counts.await {
-            Ok((active, _)) if active >= u64::from(policy.max_concurrent) => {
-                return error("concurrency_limit", "not_submitted");
-            }
-            Ok((_, total)) if total >= u64::from(policy.max_per_session) => {
-                return error("call_limit", "not_submitted");
-            }
-            Ok(_) => {}
-            Err(_) => return error("capacity", "not_submitted"),
-        },
-        None => return error("capacity", "not_submitted"),
-    }
+    // Soft budgets: concurrent admissions may pass them together.
+    let owner_turn =
+        match turn_budget::admit(&state.hub, state.store.as_ref(), &meta.id, &policy).await {
+            Ok(turn) => turn,
+            Err(refusal) => return refusal,
+        };
     let (mut target, generation) = match first_ready(state, meta, ledger, targets, &request).await {
         Ok(ready) => ready,
         Err(reason) => return error(reason, "not_submitted"),
@@ -1044,7 +1033,7 @@ async fn start(
         preset: target.recorded_preset(),
         selection,
         generation: generation.filter(|_| request.purpose.is_review()),
-        owner_turn: None,
+        owner_turn: Some(owner_turn),
     };
     // Continuation admission holds the child lifecycle fence while it
     // rechecks the child and inserts, so retirement cannot interleave.

@@ -131,9 +131,8 @@ pub(super) struct MemoryTools {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(from = "CallsPolicyWire")]
 pub(super) struct CallsPolicy {
-    #[serde(default)]
     pub review: ReviewPreferences,
     pub enabled: bool,
     /// Agents this session may call, in Auto's preference order.
@@ -141,13 +140,63 @@ pub(super) struct CallsPolicy {
     /// `auto` or one of the targets' agents.
     pub default: String,
     pub max_concurrent: u16,
-    pub max_per_session: u16,
+    /// Calls one owner turn may admit. A turn starts at the latest prompt a
+    /// person sent to the session; there is no lifetime cap.
+    pub max_per_turn: u16,
     /// Image calls may run at all (docs/call-capabilities.md).
-    #[serde(default = "enabled_by_default")]
     pub images: bool,
     /// Image calls may also use the caller's own family, and its account.
-    #[serde(default)]
     pub self_images: bool,
+}
+
+/// The built-in calls an owner turn may admit.
+pub(super) const DEFAULT_MAX_PER_TURN: u16 = 16;
+/// The valid calls-per-turn range.
+pub(super) const MAX_PER_TURN: std::ops::RangeInclusive<u16> = 1..=256;
+
+/// What a stored or submitted `calls` object may carry: the current fields,
+/// and the lifetime cap `max_per_session` that per-turn budgets replaced.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CallsPolicyWire {
+    #[serde(default)]
+    review: ReviewPreferences,
+    enabled: bool,
+    targets: Vec<CallTarget>,
+    default: String,
+    max_concurrent: u16,
+    #[serde(default)]
+    max_per_turn: Option<u16>,
+    #[serde(default)]
+    max_per_session: Option<u16>,
+    #[serde(default = "enabled_by_default")]
+    images: bool,
+    #[serde(default)]
+    self_images: bool,
+}
+
+impl From<CallsPolicyWire> for CallsPolicy {
+    fn from(wire: CallsPolicyWire) -> Self {
+        Self {
+            review: wire.review,
+            enabled: wire.enabled,
+            targets: wire.targets,
+            default: wire.default,
+            max_concurrent: wire.max_concurrent,
+            max_per_turn: wire
+                .max_per_turn
+                .or(wire.max_per_session.map(legacy_turn_limit))
+                .unwrap_or(DEFAULT_MAX_PER_TURN),
+            images: wire.images,
+            self_images: wire.self_images,
+        }
+    }
+}
+
+/// A lifetime cap stored before per-turn budgets becomes the per-turn limit:
+/// the new default, unless a person had lowered it below that, which is kept.
+pub(super) fn legacy_turn_limit(lifetime: u16) -> u16 {
+    lifetime.min(DEFAULT_MAX_PER_TURN)
 }
 
 fn enabled_by_default() -> bool {
@@ -373,6 +422,101 @@ mod review_preferences_tests {
     }
 }
 
+#[cfg(test)]
+mod turn_limit_tests {
+    use super::*;
+
+    /// A stored or submitted document as a predecessor wrote it.
+    fn legacy_document(cap: serde_json::Value) -> serde_json::Value {
+        let mut document = serde_json::to_value(AgentTools::builtin("codex")).unwrap();
+        let calls = document["calls"].as_object_mut().unwrap();
+        calls.remove("max_per_turn");
+        calls.insert("max_per_session".into(), cap);
+        document
+    }
+
+    #[test]
+    fn a_stored_lifetime_cap_becomes_the_default_unless_a_person_lowered_it() {
+        for (cap, limit) in [
+            (64, 16),
+            (1000, 16),
+            (256, 16),
+            (128, 16),
+            (32, 16),
+            (17, 16),
+            (16, 16),
+            (15, 15),
+            (8, 8),
+            (1, 1),
+        ] {
+            let tools: AgentTools = serde_json::from_value(legacy_document(json!(cap))).unwrap();
+            assert_eq!(tools.calls.max_per_turn, limit, "cap {cap}");
+            assert!(tools.validate(), "cap {cap}");
+            assert_eq!(legacy_turn_limit(cap), limit);
+        }
+    }
+
+    #[test]
+    fn the_limit_wins_over_a_cap_and_only_it_is_written() {
+        let mut document = legacy_document(json!(8));
+        document["calls"]["max_per_turn"] = json!(32);
+        let tools: AgentTools = serde_json::from_value(document).unwrap();
+        assert_eq!(tools.calls.max_per_turn, 32);
+        let written = serde_json::to_value(&tools).unwrap();
+        assert_eq!(written["calls"]["max_per_turn"], 32);
+        assert!(written["calls"].get("max_per_session").is_none());
+        // A document naming neither gets the built-in limit.
+        let mut neither = legacy_document(json!(8));
+        neither["calls"]
+            .as_object_mut()
+            .unwrap()
+            .remove("max_per_session");
+        let tools: AgentTools = serde_json::from_value(neither).unwrap();
+        assert_eq!(tools.calls.max_per_turn, DEFAULT_MAX_PER_TURN);
+        assert_eq!(AgentTools::builtin("claude-code").calls.max_per_turn, 16);
+        // Other unknown fields are still refused.
+        let mut unknown = legacy_document(json!(8));
+        unknown["calls"]["max_per_lifetime"] = json!(8);
+        assert!(serde_json::from_value::<AgentTools>(unknown).is_err());
+    }
+
+    #[test]
+    fn the_limit_is_valid_from_one_to_two_hundred_fifty_six() {
+        let mut tools = AgentTools::builtin("codex");
+        for (limit, valid) in [(0, false), (1, true), (16, true), (256, true), (257, false)] {
+            tools.calls.max_per_turn = limit;
+            assert_eq!(tools.validate(), valid, "{limit}");
+        }
+    }
+
+    #[test]
+    fn a_stale_client_still_saves_through_the_legacy_field() {
+        // A Web bundle from before the change submits `max_per_session`.
+        let update: AgentUpdate =
+            serde_json::from_value(json!({"settings": legacy_document(json!(64))})).unwrap();
+        let settings = update.settings.unwrap();
+        assert!(settings.validate());
+        assert_eq!(settings.calls.max_per_turn, 16);
+    }
+
+    #[test]
+    fn a_policy_stored_before_per_turn_budgets_keeps_loading() {
+        let hub = crate::core::Hub::new();
+        for (cap, limit) in [(64, 16), (128, 16), (8, 8)] {
+            let mut document = legacy_document(json!(cap));
+            document["calls"]["enabled"] = json!(false);
+            hub.with_settings_mut(|settings| {
+                settings.insert("agent_tools:codex".into(), document);
+            });
+            let (tools, customized) = hub_agent_defaults(&hub, "codex");
+            assert!(customized, "cap {cap}");
+            assert_eq!(tools.calls.max_per_turn, limit, "cap {cap}");
+            // Everything else a person set survives the migration.
+            assert!(!tools.calls.enabled);
+        }
+    }
+}
+
 fn valid_agent(agent: &str) -> bool {
     !agent.is_empty()
         && agent.len() <= 64
@@ -433,7 +577,7 @@ impl AgentTools {
                 targets,
                 default: AUTO.to_owned(),
                 max_concurrent: 4,
-                max_per_session: 64,
+                max_per_turn: DEFAULT_MAX_PER_TURN,
                 images: true,
                 self_images: false,
             },
@@ -446,7 +590,7 @@ impl AgentTools {
             && valid_targets(&self.calls.targets)
             && valid_default(&self.calls.default, &self.calls.targets)
             && (1..=16).contains(&self.calls.max_concurrent)
-            && (1..=1000).contains(&self.calls.max_per_session)
+            && MAX_PER_TURN.contains(&self.calls.max_per_turn)
     }
 
     /// Drop targets of the caller's own family (stored before this rule, or

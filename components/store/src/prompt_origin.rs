@@ -250,6 +250,16 @@ pub fn take_matching_inbound_prompt_echo(update: &Value, remaining: &mut Vec<Val
     false
 }
 
+/// Whether a recorded timeline event is a prompt a person sent: a user-role
+/// chunk whose client message id and stamped origin are both the owner's.
+/// Cowboy completion notices, peer-session messages, scheduled wakeups and
+/// agent-side injections are user-role chunks too, but never an owner prompt.
+pub fn is_owner_prompt_event(cmid: Option<&str>, update: &Value) -> bool {
+    update.get("sessionUpdate").and_then(Value::as_str) == Some("user_message_chunk")
+        && origin_from_cmid(cmid).is_human()
+        && is_human_prompt_update(update)
+}
+
 pub fn is_human_prompt_update(update: &Value) -> bool {
     if update.get("autoResumed").and_then(Value::as_bool) == Some(true) {
         return false;
@@ -277,6 +287,50 @@ mod tests {
         assert_eq!(origin.source, "managed_call");
     }
     use super::*;
+
+    #[test]
+    fn only_a_person_sends_an_owner_prompt() {
+        let chunk = |cmid: Option<&str>, text: &str| {
+            let mut update = serde_json::json!({
+                "sessionUpdate": "user_message_chunk",
+                "content": { "type": "text", "text": text }
+            });
+            apply_prompt_origin(&mut update, &origin_from_cmid(cmid));
+            (cmid.map(str::to_owned), update)
+        };
+        let peer = format!("agent-{}", "a".repeat(64));
+        for cmid in [
+            Some("call-notice:call-1"),
+            Some("managed-call:call-1:round-1"),
+            Some("session-notice:peer-1"),
+            Some("__wake__s-1"),
+            Some("__sched__s-draft"),
+            Some("__cont__abc"),
+            Some(peer.as_str()),
+            Some("cowboy-superagent:op"),
+        ] {
+            let (cmid, update) = chunk(cmid, "done");
+            assert!(
+                !is_owner_prompt_event(cmid.as_deref(), &update),
+                "{cmid:?} must not be an owner prompt"
+            );
+        }
+        for cmid in [Some("cmid-1"), Some("acp-1-2"), None] {
+            let (cmid, update) = chunk(cmid, "please review");
+            assert!(is_owner_prompt_event(cmid.as_deref(), &update), "{cmid:?}");
+        }
+        // The second block of a prompt carries no cmid; its stamped origin
+        // keeps a notice's later blocks from reading as the owner's.
+        let (_, notice_block) = chunk(Some("call-notice:call-1"), "second block");
+        assert!(!is_owner_prompt_event(None, &notice_block));
+        // Runtime markup and non-prompt updates are never owner prompts.
+        let (cmid, update) = chunk(Some("cmid-1"), "<system-reminder>x</system-reminder>");
+        assert!(!is_owner_prompt_event(cmid.as_deref(), &update));
+        assert!(!is_owner_prompt_event(
+            Some("cmid-1"),
+            &serde_json::json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi"}})
+        ));
+    }
 
     #[test]
     fn cmid_prefixes_select_cowboy_sources() {

@@ -485,7 +485,8 @@ fn review_line(value: &Value) -> String {
         "calls_disabled" | "policy_denied" | "calls_declined" | "same_agent" => {
             format!("skipped: reviews are off for this session ({code})")
         }
-        "concurrency_limit" | "call_limit" => format!("skipped: review budget reached ({code})"),
+        "concurrency_limit" => format!("skipped: review budget reached ({code})"),
+        "call_limit" => format!("skipped: review budget for this turn reached ({code})"),
         _ => format!("review unavailable: {code}"),
     }
 }

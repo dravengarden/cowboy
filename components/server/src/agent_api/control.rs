@@ -193,7 +193,7 @@ export interface Cowboy {
 const TOOLS_TYPES: &str = r#"
 type CallTarget={agent:string,preset?:string,options?:Record<string,string>}; // preset/options mutually exclusive
 type ReviewPreferences={claude:('opus'|'fable')[],gpt:('astra'|'sol')[],claude_effort?:'max'|'standard',gpt_effort?:'max'|'standard'}; // orders nonempty, unique, preferred first; defaults opus→fable and astra→sol. *_effort orders effort inside a family for reviews not declared risk:'high': max (default) tries Max first, standard starts at medium/default
-type AgentTools={schema:1,matrix:{tools:boolean,recall:boolean},calls:{enabled:boolean,targets:CallTarget[],default:string,max_concurrent:number,max_per_session:number,review?:ReviewPreferences,images?:boolean,self_images?:boolean}}; // an agent may only turn the image switches off
+type AgentTools={schema:1,matrix:{tools:boolean,recall:boolean},calls:{enabled:boolean,targets:CallTarget[],default:string,max_concurrent:number,max_per_turn:number,review?:ReviewPreferences,images?:boolean,self_images?:boolean}}; // an agent may only turn the image switches off
 type SessionTools={schema:1,matrix?:{tools?:boolean,recall?:boolean},calls?:{enabled?:boolean,targets?:CallTarget[],default?:string,review?:Partial<ReviewPreferences>}};
 // Review only; each omitted family inherits the agent-kind Settings default.
 // Never widen calls permissions when changing a preference. Read the current document and preserve unrelated fields.
