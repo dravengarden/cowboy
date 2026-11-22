@@ -19,6 +19,7 @@
 import { randomUUID } from "node:crypto";
 import { LIMITS, ToolError } from "./facade-tools.mjs";
 import { agyNotice } from "./presentation.mjs";
+import { childProjection } from "./projection.mjs";
 
 /** What a child is told beside the projection its parent got. */
 export const SUBAGENT_GUIDANCE = [
@@ -26,8 +27,9 @@ export const SUBAGENT_GUIDANCE = [
   "self-contained task, in the same workspace and with the same Cowboy tools.",
   "Do the task, then finish with a message that is your complete report: what you did or found,",
   "with file paths, and anything left undone. That message is all the session that started you",
-  "sees. You cannot start subagents or ask the owner anything; if something blocks you, say so in",
-  "the report.",
+  "sees. You cannot start subagents (mcp_cowboy_Subagent will refuse) or ask the owner anything;",
+  "swarm and run-workflow are unavailable to you as well, so do the work yourself with the cowboy",
+  "tools. If something blocks you, say so in the report.",
 ].join("\n");
 
 /** How long a native request waits for `agy` before the start fails. */
@@ -409,7 +411,9 @@ export class Subagents {
         mcpServers: [runtime.mcpServer(child.channel)],
         _meta: {
           antigravity: {
-            systemPrompt: { append: [setup.projection, SUBAGENT_GUIDANCE].join("\n\n") },
+            systemPrompt: {
+              append: [childProjection(setup.projection), SUBAGENT_GUIDANCE].join("\n\n"),
+            },
           },
         },
       });

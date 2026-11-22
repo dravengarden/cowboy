@@ -59,6 +59,9 @@ test("a denied built-in with a Cowboy alternative names it", () => {
   assert.match(delegation, /queue\.submit/);
   assert.match(delegation, /notify:true and end your turn/);
   assert.match(delegation, /mcp_cowboy_Subagent/);
+  // The denial is shown to subagents too: it must not send them to a tool that
+  // refuses them.
+  assert.match(delegation, /A subagent\s+cannot start one: it does the work itself/);
   assert.match(decide(input("execute_url")).reason, /search_web/);
   assert.equal(decide(input("read_file")).reason, DENIAL_REASON);
   // An inherited property name is no reason.

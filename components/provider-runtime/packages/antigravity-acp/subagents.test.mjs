@@ -6,6 +6,12 @@ import { allowedTool } from "./hook.mjs";
 import { MANAGED_FACADE_TOOLS } from "./managed.mjs";
 import { presentToolCall } from "./presentation.mjs";
 import { AcpProxy, TURN_ERROR_TEXT, VIOLATION_PREFIX } from "./proxy.mjs";
+import {
+  childProjection,
+  ROOT_DELEGATION,
+  ROUTING,
+  UNAVAILABLE_SKILLS_NOTE,
+} from "./projection.mjs";
 import { SUBAGENT_GUIDANCE } from "./subagents.mjs";
 
 const tick = () => new Promise((done) => setImmediate(done));
@@ -21,6 +27,7 @@ const request = (id, method, params = {}) => ({ jsonrpc: "2.0", id, method, para
 function unit({
   backend = () => ({ class: "ok", successes: 1, barrier: true, refusals: [] }),
   subagents = { settleMs: 40, requestMs: 60 },
+  projection = async (cwd) => `PROJECTION ${cwd}`,
 } = {}) {
   /** What the fake `agy` does besides answering every request. */
   const control = {
@@ -64,7 +71,7 @@ function unit({
     },
     sessionCwd: (cwd) => cwd,
     checkMirror: () => {},
-    projection: async (cwd) => `PROJECTION ${cwd}`,
+    projection,
     newChannel: () => `channel-${channels.size}`,
     bindChannel: (channel, sessionId) => channels.set(channel, sessionId),
     unbindChannel: (channel) => unbound.push(channel),
@@ -227,6 +234,25 @@ test("the facade offers Subagent and StopSubagent to ordinary sessions only", ()
   );
   assert.equal(shown.title, "Subagent: Bug hunt");
   assert.equal(shown.name, "Subagent");
+});
+
+test("only the owner's session is told to delegate; a subagent is told it cannot", async () => {
+  const made = await parent({ projection: async () => `${ROUTING}\n<cowboy_environment>` });
+  const root = made.everything.find(
+    (message) => message.method === "session/new" && message.id === 2,
+  );
+  const rootPrompt = root.params._meta.antigravity.systemPrompt.append;
+  assert.ok(rootPrompt.includes(ROOT_DELEGATION));
+  assert.ok(rootPrompt.includes(UNAVAILABLE_SKILLS_NOTE));
+  await startChild(made);
+  const [created] = sent(made.agent, "session/new");
+  const childPrompt = created.params._meta.antigravity.systemPrompt.append;
+  // The note stays, the delegation paragraph that names an unusable tool goes.
+  assert.ok(childPrompt.includes(UNAVAILABLE_SKILLS_NOTE));
+  assert.equal(childPrompt.includes(ROOT_DELEGATION), false);
+  assert.equal(/use\s+mcp_cowboy_Subagent/.test(childPrompt.replaceAll("\n", " ")), false);
+  assert.equal(childPrompt, `${childProjection(rootPrompt)}\n\n${SUBAGENT_GUIDANCE}`);
+  assert.match(SUBAGENT_GUIDANCE, /swarm and run-workflow are unavailable to you/);
 });
 
 test("starting a subagent opens a native session and reports it as an ACP subagent", async () => {

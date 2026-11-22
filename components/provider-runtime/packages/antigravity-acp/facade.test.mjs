@@ -17,12 +17,16 @@ import { pathToFileURL } from "node:url";
 import { Connection } from "../../execution-connection.mjs";
 import { Facade, LIMITS, Retained, ToolError } from "./facade.mjs";
 import { decodeText, HomeReads, imageType, splice } from "./facade-tools.mjs";
+import { UNAVAILABLE_COMMANDS } from "./presentation.mjs";
 import {
   buildProjection,
+  childProjection,
   guidanceDirectories,
   PROJECTION_LIMITS,
   parseGit,
   READINESS_PROBE,
+  ROOT_DELEGATION,
+  UNAVAILABLE_SKILLS_NOTE,
 } from "./projection.mjs";
 import { fakeEndpoint } from "./test-endpoint.mjs";
 
@@ -636,6 +640,13 @@ test("projection fences repository guidance and bounds Git status", async (t) =>
   for (let index = 0; index < 250; index++) writeFileSync(join(root, `u${index}`), "");
   const projection = await buildProjection(facade, join(root, "src"));
   assert.ok(/^<cowboy_routing>/.test(projection));
+  // The skills Cowboy cannot run are named once, for every recipient; the
+  // delegation paragraph (a tool only the owner's session can use) is separate.
+  for (const name of UNAVAILABLE_COMMANDS) assert.ok(UNAVAILABLE_SKILLS_NOTE.includes(name));
+  assert.equal(projection.split(UNAVAILABLE_SKILLS_NOTE).length, 2);
+  assert.equal(projection.split(ROOT_DELEGATION).length, 2);
+  assert.equal(childProjection(projection).includes(ROOT_DELEGATION), false);
+  assert.ok(childProjection(projection).includes(UNAVAILABLE_SKILLS_NOTE));
   assert.ok(/Git branch: main/.test(projection));
   assert.ok(/Git status --short \(200 lines\):/.test(projection));
   assert.ok(/\n\[truncated\]\n/.test(projection));
