@@ -10,6 +10,7 @@ import {
   overrideFor,
   saveSessionTools,
   subscribeSessionTools,
+  TURN_LIMIT_CHOICES,
   withMemoryKey,
   withTarget,
   withWireKey,
@@ -23,7 +24,7 @@ const defaults: AgentTools = {
     targets: [{ agent: "claude-code" }, { agent: "codex" }],
     default: "auto",
     max_concurrent: 4,
-    max_per_session: 64,
+    max_per_turn: 16,
   },
 };
 
@@ -200,4 +201,14 @@ test("memory switches travel under the schema-1 matrix key", () => {
   if (withMemoryKey(wire).memory?.recall !== false) {
     throw new Error("round trip lost the switch");
   }
+});
+
+test("the call budget is per owner turn, with the new default among its choices", () => {
+  assertEquals([...TURN_LIMIT_CHOICES], [4, 8, 16, 32, 64]);
+  assert(TURN_LIMIT_CHOICES.includes(defaults.calls.max_per_turn as 16));
+  // A session override never carries the limit: it is an agent-kind default.
+  assertEquals(
+    overrideFor(defaults, { ...defaults, calls: { ...defaults.calls, max_per_turn: 4 } }),
+    { schema: 1 },
+  );
 });

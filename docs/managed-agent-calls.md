@@ -224,8 +224,9 @@ kind (`codex`, `claude-code`):
   A stored global default wins over the built-in one, so a Service that saved
   "off" keeps it until an Owner changes it.
   Built-in defaults: calls on, both targets allowed with the other agent kind
-  first, default `auto`, at most 4 concurrent and 64 total calls per parent
-  session; Matrix memory tools and automatic recall on.
+  first, default `auto`, at most 4 concurrent calls and 16 calls per owner
+  turn (see [Call budgets](#call-budgets)); Matrix memory tools and automatic
+  recall on.
 - **Session override** (`session_tools:<session>`; the session's **Tools**
   section in the mobile session sheet and the desktop Run configuration modal;
   `GET`/`PUT /api/sessions/{id}/tools` for users who can mutate the session).
@@ -266,9 +267,66 @@ Refusals happen before anything is recorded (`admission: not_submitted`):
 `calls_disabled` when calls are off, `policy_denied` when the requested kind is
 not an allowed target, `concurrency_limit` when the parent already has its
 maximum running calls (safe to resubmit the same request later) and
-`call_limit` when its total budget is spent. The limits are a soft admission
-budget; concurrent submissions may pass them together. `cowboy call
-capabilities` reports `enabled`, `default`, the limits and a per-Provider reason.
+`call_limit` when the budget of the current owner turn is spent (also
+`not_submitted`: resubmit after the owner's next prompt). The limits are a soft
+admission budget; concurrent submissions may pass them together. `cowboy call
+capabilities` reports `enabled`, `default`, the limits (`max_concurrent`,
+`max_per_turn`) and a per-Provider reason.
+
+### Call budgets
+
+Two limits bound a parent's calls. `max_concurrent` (default 4, 1–16) is the
+number of calls running at once. `max_per_turn` (default 16, valid 1–256;
+Settings offers 4, 8, 16, 32 and 64) is the number of calls one **owner turn**
+may admit. There is no lifetime cap: a long-lived session that talks with its
+owner for many turns gets a fresh budget with each of the owner's prompts.
+It replaced `max_per_session` (default 64), which ran out in long sessions and
+forced new sessions just to get review budget.
+
+A turn starts at the latest prompt a person sent to the session: a user-role
+event whose client message id and stamped origin are the owner's
+(`prompt_origin::is_owner_prompt_event`, the predicate the superagent causal
+budget also uses). The Web composer, an API token, an ACP client and the
+Retry button start one. These never do, because otherwise a notice that
+wakes the agent into one more call would hand it a new budget each time
+(notice → new turn → new call): Cowboy call completion notices and call
+results (`call-notice:`, `managed-call:`), peer-session notices
+(`session-notice:`), a `queue.submit` from another session (`agent-<digest>`),
+scheduled wakeups and scheduled drafts (`__wake__`, `__sched__`), legacy
+auto-continuations, superagent and code-intelligence prompts, and runtime
+markup injected by the agent. A session no person ever prompted (only peers or
+automation drive it) is one turn for its whole life, so its budget is a
+lifetime cap of `max_per_turn`.
+
+Each admitted call is stamped with its turn, the event sequence of the owner
+prompt (`managed_agent_calls.owner_turn`, `-1` for a session without one), and
+the budget counts the calls that share the current turn, in every state: a
+failed or cancelled call, a dismissed call and a continuation round all spent
+budget. A replayed `request_id` returns the original call and keeps its turn.
+A call admitted before the column existed carries `NULL` and counts in no turn.
+Admission finds the turn in the Hub's hot log, else in durable history (200
+events per page, three seconds). When it cannot, it refuses with the retryable
+`capacity` code and a `reason` (`session_unavailable`, `owner_turn_scan_timeout`
+or `owner_turn_history_unavailable`) rather than guess; nothing is recorded.
+
+**Migration and compatibility window.** Stored Tools defaults that carry
+`max_per_session` keep loading: the lifetime cap becomes `max_per_turn` 16
+(the new default) unless a person had lowered it below 16, which is kept
+(`legacy_turn_limit`; 64 → 16, 128 → 16, 8 → 8). Session overrides never
+carried the field. The same mapping reads a `PUT /api/agent-tools/{agent}` from
+a Web bundle that predates the change; every response carries only
+`max_per_turn`. A Controller that predates the change parses the stored
+document with `deny_unknown_fields` and falls back to the built-in policy on any
+failure, which would re-enable calls a person had turned off. So the stored
+`agent_tools:<agent>` document keeps a `max_per_session` for as long as
+rollback to such a Controller is supported (the one it already had, else 64)
+and the limit is saved under `agent_turn_budget:<agent>`, the way review effort
+is. A rollback keeps every other setting and returns to its own lifetime cap;
+re-upgrading restores the saved per-turn limit. The ledger column is additive
+(PostgreSQL 0087, SQLite 0061) and the call `Record` is unchanged, so a
+predecessor reads every row. The window ends when no predecessor remains a
+rollback target; then the legacy field, its fixed write and the input mapping
+can be removed together.
 
 ### Agents know to use it
 

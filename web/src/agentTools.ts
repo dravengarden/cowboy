@@ -24,7 +24,8 @@ export interface CallsPolicy {
   targets: CallTarget[];
   default: string;
   max_concurrent: number;
-  max_per_session: number;
+  /** Calls one owner turn may admit; a turn starts at the owner's latest prompt. */
+  max_per_turn: number;
   /** Image calls may run at all. Absent from older Controllers. */
   images?: boolean;
   /** Image calls may also use the caller's own family. */
@@ -157,7 +158,7 @@ export interface AgentToolsList {
 
 export const AUTO = "auto";
 export const CONCURRENCY_CHOICES = [1, 2, 4, 8] as const;
-export const SESSION_LIMIT_CHOICES = [16, 32, 64, 128, 256] as const;
+export const TURN_LIMIT_CHOICES = [4, 8, 16, 32, 64] as const;
 
 export function agentLabel(agent: string): string {
   if (agent === "codex") return "Codex";

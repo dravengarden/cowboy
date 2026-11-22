@@ -31,7 +31,7 @@ import {
   saveSessionTools,
   subscribeSessionTools,
   useSessionToolsSaving,
-  SESSION_LIMIT_CHOICES,
+  TURN_LIMIT_CHOICES,
   callableTargets,
   choiceFor,
   choiceValues,
@@ -533,18 +533,18 @@ export function AgentToolsEditor(
         </Select>
       </Row>
       <Row
-        label="Calls per session"
-        description="Total budget before calls are refused"
+        label="Calls per turn"
+        description="Calls allowed after each of your prompts; notices do not reset it"
       >
         <Select
           size="small"
-          value={calls.max_per_session}
+          value={calls.max_per_turn}
           disabled={disabled || !calls.enabled}
           onChange={(event): void =>
-            setCalls({ max_per_session: Number(event.target.value) })}
-          inputProps={{ "aria-label": "Calls per session" }}
+            setCalls({ max_per_turn: Number(event.target.value) })}
+          inputProps={{ "aria-label": "Calls per turn" }}
         >
-          {choices(SESSION_LIMIT_CHOICES, calls.max_per_session).map((
+          {choices(TURN_LIMIT_CHOICES, calls.max_per_turn).map((
             limit,
           ) => <MenuItem key={limit} value={limit}>{limit}</MenuItem>)}
         </Select>
