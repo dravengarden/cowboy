@@ -466,6 +466,9 @@ test("projection fences repository guidance and bounds Git status", async (t) =>
   assert.match(fenced[2], /ROOT_GUIDANCE/);
   assert.match(fenced[2], /SUB_GUIDANCE/);
   assert.ok(fenced[2].length < 64 * 1024);
+  // A real AGENTS.md (18-23 KB) keeps its tail.
+  assert.match(fenced[2], /y{20000}\n/);
+  assert.doesNotMatch(fenced[2], /\[truncated\]/);
   assert.ok(fenced[0].indexOf("ROOT_GUIDANCE") < 0);
   await assert.rejects(
     buildProjection(facade, join(base, "outside")),

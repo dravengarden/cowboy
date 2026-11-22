@@ -13,8 +13,8 @@ import { discoverSkills, skillsSection } from "./skills.mjs";
 
 export const PROJECTION_LIMITS = Object.freeze({
   statusLines: 200,
-  guidanceTotal: 64 * 1024,
-  guidanceFile: 16 * 1024,
+  guidanceTotal: 192 * 1024,
+  guidanceFile: 64 * 1024,
   guidanceWholeFile: 1024 * 1024,
   gitTimeoutMs: 15_000,
   // Guidance files read at once (and as many skill reads beside them).
