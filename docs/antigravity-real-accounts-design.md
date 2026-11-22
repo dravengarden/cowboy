@@ -1525,10 +1525,13 @@ waiting, so a model can run two at once and collect both.
   (requirements, Antigravity consumer-subscription boundary). Managed calls
   keep the read-only profile and no subagents.
 
-Not covered: a child's token usage (agy reports none per session), the model
-label of its row (`agy` sends no per-child model configuration), and any
-acceptance with real traffic before the first rollout (the unit tests drive a
-fake `agy`; the rollout runs one subagent on the admitted account).
+Accepted with real traffic on 2026-11-22 ([rollout](releases/antigravity-subagents-3-134-rollout-2026-11-22.md)):
+`agy` 1.5.9 runs the child session while the parent's tool call is open, sends a
+per-child `model` configuration (the row shows "Gemini 4 Hydrogen"), and
+answers a cancelled child prompt; two children ran at once and a row Stop
+stopped one of them. Not covered: a child's token usage (`agy` reports none per
+session), and real-traffic runs of a parent Stop with children and the
+fail-closed paths (unit tests only).
 
 ### Remaining (needs work outside this adapter)
 

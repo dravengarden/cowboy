@@ -20,7 +20,7 @@ pages on 2026-11-22 with
 | Claude/Codex DeepSeek gateways | — | unchanged | No change requested |
 
 Component release 3.135.0 records provider-runtime 1.3.19. Every Plugin that
-pins it advances one patch version: antigravity 0.2.19, claude-code 3.20.65,
+pins it advances one patch version: antigravity 0.2.20, claude-code 3.20.65,
 claude-deepseek 3.1.82, codex 3.6.24, codex-deepseek 3.1.82, deepseek-harness
 1.0.40 and grok 3.2.23. Recommended presets and new-session defaults are
 unchanged.

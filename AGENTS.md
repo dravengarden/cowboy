@@ -13,18 +13,21 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   Node's built-in assertions; retain type checking as a separate gate.
 - Run Rust, Bun, build, lint, and test commands from the repository root in
   the pinned shell, for example `nix develop -c just check-compact`. Ordinary
-  interactive Cargo commands retain incremental state; the complete gate avoids
-  growing another incremental generation. `check-compact` shares one sccache
-  across worktrees (2026-11-21 on Hawk: a fresh worktree's cold gate hit 56%,
-  996s to 893s); interactive Cargo commands keep incremental state instead. Do not use host
+  interactive Cargo commands retain incremental state. The complete gate keeps
+  it only for the shared test graph, where an edit's rebuild drops from about
+  114s to 25s, and otherwise compiles through one sccache shared across
+  worktrees (2026-11-21 on Hawk: a fresh worktree's cold gate hit 56%, 996s to
+  893s). Do not use host
   `cargo` or `bun` as a preliminary check; a missing tool or stale Rustup linker
   wrapper is an environment failure, not a product-code failure.
 - Keep the gate cheap to rerun. A rerun without source changes must not
-  recompile the Rust graphs. Rust test recipes share `rust_test_args` because
+  recompile the Rust graphs. Rust test recipes share `rust_test_args` and
+  `rust_test_env` because
   another package or feature selection recompiles the workspace. A build
   script must not watch build outputs such as nested Cargo `target`
   directories or `node_modules`. `check` runs the second-scale static checks
-  first. While iterating on one failure, rerun that recipe first, then run the
+  first, then workspace Clippy and `release-sources-check` in the background
+  (each in its own build directory) beside the rest. While iterating on one failure, rerun that recipe first, then run the
   complete gate once before handing off.
 - JavaScript and TypeScript run on the pinned Bun. The
   repository root is one Bun workspace (`web` plus the `components/*` packages
@@ -126,9 +129,16 @@ list and the affected paths, and give a reason for `high`.
   (`models/`), Plugin presets and copy, and CLI help. Deterministic gates
   (`just check`, the structure and layering ratchets, wire generation
   checks) carry those areas; size alone is not risk.
-- Both tiers choose Sol Max for Codex reviews. Astra Max and Fable are never
-  automatic: name one only when the user asked for that model, with
-  `risk: high` and that request as the reason.
+- Both tiers choose Sol Max for Codex reviews. Astra Max and Fable cost about
+  twice as much and are never automatic. Name one, with `risk: high`, only
+  when the user asked for it or the change redesigns one of these
+  strongest-reviewer areas, and cite the request or the area as the reason:
+  - a durable deletion, incarnation or cleanup protocol in the Machine
+    broker, or a store migration that rewrites existing rows;
+  - the account-isolation boundary itself: provider account sandboxes,
+    credential storage or Operator delegation scope.
+  Touching those files without changing the protocol or boundary, and every
+  other high-risk change, uses the automatic Sol Max.
 - A fix-confirmation round is routine. Continue the review child when it
   runs a routine-tier preset; a child on Astra Max refuses a routine round, so
   start a fresh routine review with the same task and base (it reuses the

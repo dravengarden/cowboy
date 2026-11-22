@@ -523,7 +523,9 @@ async fn an_open_never_reuses_a_unit_with_another_network_policy() {
         .await;
     assert_eq!(reused.instance.incarnation, fixture.instance.incarnation);
     assert!(fixture.units.terminations().is_empty());
-    // An IPv4-only open replaces the unrestricted unit.
+    // An IPv4-only open replaces the unrestricted unit. The fake launcher
+    // hangs up rather than leaving the stop request to its 20-second timeout.
+    drop(fixture.launcher);
     fixture.units.make_stoppable("cowboy-browser-inst-1");
     let replaced = fixture
         .manager
@@ -565,7 +567,9 @@ async fn an_ipv4_only_device_runs_every_unit_ipv4_only_and_reports_it() {
     assert!(fixture.manager.complies(Some(BrowserNetwork::Ipv4OnlyV1)));
     assert!(!fixture.manager.complies(None));
     // The fixture's unit is unrestricted: whatever an open names (here
-    // nothing, as for a share's member), it is replaced, never reused.
+    // nothing, as for a share's member), it is replaced, never reused. The
+    // fake launcher hangs up rather than leaving its stop to time out.
+    drop(fixture.launcher);
     fixture.units.make_stoppable("cowboy-browser-inst-1");
     let replaced = fixture
         .manager

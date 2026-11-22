@@ -1,6 +1,7 @@
 import { activityCacheStats, activityCostStats } from "./activityUsage";
 import {
   usageProductLabel,
+  usageTopBarWindowMinutes,
   usageWidgetKind,
   usageWidgetShape,
   usageWidgetWindow,
@@ -11,6 +12,7 @@ import {
   record,
   topBarUsageLimits,
   usageCardProviders,
+  usageLimits,
   type UsageLimit,
   type UsageSnapshot,
 } from "./usageLimits";
@@ -21,6 +23,16 @@ export type UsageWidgetWindow = {
   resetsAt?: number;
 };
 
+/** One provider quota group (Antigravity `Gemini Models`) whose windows are
+ *  counted together. `binding` is the window with the least remaining: the
+ *  one that stops the next request. */
+export type UsageWidgetGroup = {
+  label: string;
+  binding: UsageWidgetWindow;
+  /** Every window of the group, shortest first. */
+  windows: UsageWidgetWindow[];
+};
+
 export type UsagePercentWidget = UsageWidgetWindow & {
   kind: string;
   label: string;
@@ -28,6 +40,19 @@ export type UsagePercentWidget = UsageWidgetWindow & {
    *  more than the anchor. The anchor fields above stay the declared widget
    *  window so a single-window account keeps its exact shape. */
   windows?: UsageWidgetWindow[];
+  /** Present when the account reports no account-wide window, only per-group
+   *  quotas. The anchor fields then mirror the first group's binding window. */
+  groups?: UsageWidgetGroup[];
+};
+
+/** Rolling 24h activity behind a balance. Absent when the account reports a
+ *  balance but no priced activity (a named account's own collector). */
+export type UsageBalanceActivity = {
+  spend24h: number;
+  spend24hPriceCoverage: number | undefined;
+  cacheHitRate: number;
+  cacheMissRate: number;
+  blockingErrors: number;
 };
 
 export type UsageBalanceWidget = {
@@ -35,11 +60,7 @@ export type UsageBalanceWidget = {
   label: string;
   currency: string;
   balance: number;
-  spend24h: number;
-  spend24hPriceCoverage: number | undefined;
-  cacheHitRate: number;
-  cacheMissRate: number;
-  blockingErrors: number;
+  activity?: UsageBalanceActivity;
 };
 
 export type UsageWidgetProvider = UsagePercentWidget | UsageBalanceWidget;
@@ -135,6 +156,14 @@ function widgetWindow(limit: UsageLimit): UsageWidgetWindow {
 function percentWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
   const limits = topBarUsageLimits(usage);
   const wanted = usageWidgetWindow(usage.provider);
+  // A Provider that declares account windows (Claude, Codex) never falls back
+  // to its model-scoped rows: a missing account bucket is a schema change and
+  // must degrade to no segment, not to a model quota posing as the account.
+  if (limits.length === 0) {
+    return usageTopBarWindowMinutes(usage.provider) === undefined
+      ? groupedWidget(usage)
+      : undefined;
+  }
   const limit = wanted === undefined
     ? limits[0]
     : limits.find((candidate) => candidate.windowMinutes === wanted);
@@ -157,33 +186,112 @@ function percentWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
   };
 }
 
-function balanceWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
+/** `Gemini Models` → `Gemini`, `Claude and GPT models` → `Claude/GPT`. */
+export function usageGroupShortLabel(label: string): string {
+  const short = label
+    .replace(/\s+models?$/i, "")
+    .replace(/\s+and\s+/gi, "/")
+    .trim();
+  return short.length > 0 ? short : label;
+}
+
+/** Per-group quotas (Antigravity) when the account has no account-wide
+ *  window. Groups keep the Provider's report order; each shows its binding
+ *  window, so the strip spends one column per group rather than per window. */
+function groupedWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
+  const groups = new Map<string, { order: string; windows: UsageLimit[] }>();
+  for (const limit of usageLimits(usage)) {
+    const split = limit.label.lastIndexOf(" · ");
+    if (split <= 0) continue;
+    const label = limit.label.slice(0, split);
+    const group = groups.get(label);
+    if (group) {
+      group.windows.push(limit);
+      if (limit.id < group.order) group.order = limit.id;
+    } else {
+      groups.set(label, { order: limit.id, windows: [limit] });
+    }
+  }
+  const projected = [...groups.entries()]
+    .sort(([, left], [, right]) => left.order.localeCompare(right.order))
+    .map(([label, group]): UsageWidgetGroup => {
+      const windows = [...group.windows].sort((left, right) =>
+        (left.windowMinutes ?? Number.MAX_SAFE_INTEGER) -
+        (right.windowMinutes ?? Number.MAX_SAFE_INTEGER)
+      );
+      // Least remaining binds; on a tie the longer window, which takes longer
+      // to come back, is the one worth showing.
+      const binding = windows.reduce((best, candidate) =>
+        candidate.remaining < best.remaining ||
+          (candidate.remaining === best.remaining &&
+            (candidate.windowMinutes ?? 0) > (best.windowMinutes ?? 0))
+          ? candidate
+          : best
+      );
+      return {
+        label: usageGroupShortLabel(label),
+        binding: groupWindow(binding),
+        windows: windows.map(groupWindow),
+      };
+    });
+  const first = projected[0];
+  if (!first) return undefined;
+  return {
+    kind: usageWidgetKind(usage.provider),
+    label: usageProductLabel(usage.provider),
+    ...first.binding,
+    groups: projected,
+  };
+}
+
+/** A grouped row's label is `Gemini Models · Weekly`; the column already
+ *  names the group, so its windows carry only the period. */
+function groupWindow(limit: UsageLimit): UsageWidgetWindow {
+  const window = widgetWindow(limit);
+  const split = window.periodLabel.lastIndexOf(" · ");
+  return split < 0
+    ? window
+    : { ...window, periodLabel: window.periodLabel.slice(split + 3) };
+}
+
+function balanceActivity(
+  usage: ProviderUsage,
+  currency: string,
+): UsageBalanceActivity | undefined {
   const spend24h = activitySpend24h(usage);
-  const balance = spend24h
-    ? accountBalances(usage).get(spend24h.currency)
-    : undefined;
   const rolling = record(usage.activity?.last24Hours);
   const rollingSummary = record(rolling?.summary);
   const cache = activityCacheStats(rollingSummary);
   const requests = num(rollingSummary?.requests);
-  const blockingErrors = num(rollingSummary?.blockingErrors) ?? 0;
   if (
-    balance === undefined ||
     spend24h === undefined ||
+    spend24h.currency !== currency ||
     cache.hitRate === undefined ||
     cache.missRate === undefined ||
     requests === undefined
   ) return undefined;
   return {
-    kind: usageWidgetKind(usage.provider),
-    label: usageProductLabel(usage.provider),
-    currency: spend24h.currency,
-    balance,
     spend24h: spend24h.amount,
     spend24hPriceCoverage: spend24h.priceCoverage,
     cacheHitRate: cache.hitRate,
     cacheMissRate: cache.missRate,
-    blockingErrors,
+    blockingErrors: num(rollingSummary?.blockingErrors) ?? 0,
+  };
+}
+
+/** The balance is the account fact; 24h activity rides along when reported.
+ *  A named account's collector reports only the balance, and that alone is
+ *  worth the strip's space. */
+function balanceWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
+  const balance = usageBalanceForAccount(usage);
+  if (!balance) return undefined;
+  const activity = balanceActivity(usage, balance.currency);
+  return {
+    kind: usageWidgetKind(usage.provider),
+    label: usageProductLabel(usage.provider),
+    currency: balance.currency,
+    balance: balance.balance,
+    ...(activity ? { activity } : {}),
   };
 }
 

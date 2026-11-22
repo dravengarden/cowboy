@@ -28029,7 +28029,7 @@
         "review": "1.0.16",
         "deepseek-harness": "1.0.40",
         "machine-browser": "1.0.12",
-        "antigravity": "0.2.19"
+        "antigravity": "0.2.20"
       },
       "closure": {
         "component_dependencies": {
