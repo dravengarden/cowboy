@@ -22,14 +22,24 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   wrapper is an environment failure, not a product-code failure.
 - Keep the gate cheap to rerun. A rerun without source changes must not
   recompile the Rust graphs. Rust test recipes share `rust_test_args` and
-  `rust_test_env` because
-  another package or feature selection recompiles the workspace. A build
+  `rust_test_env` because another package or feature selection recompiles the
+  workspace; a recipe that needs a built CLI takes the shared graph's
+  executable (`test-graph-bin`) instead of a separate `cargo build`. A build
   script must not watch build outputs such as nested Cargo `target`
-  directories or `node_modules`. `check` runs the second-scale static checks
-  first, then workspace Clippy, `release-sources-check` and the Zed adapter
-  (each in its own build directory) and the source-only script suites in the
-  background beside the rest. While iterating on one failure, rerun that recipe first, then run the
-  complete gate once before handing off.
+  directories or `node_modules`. `check` first starts workspace Clippy,
+  `release-sources-check` and the Zed adapter (each in its own build
+  directory), the script suites and the frontend build in the background, then
+  runs the second-scale static checks and the rest in the foreground; a failed
+  background job stops the gate at the next foreground step. While iterating
+  on one failure, rerun that recipe first, then run the complete gate once
+  before handing off.
+- Iterate on Rust tests with `nix develop -c just test-rust-filter <filter>`
+  (nextest name filters or `-E` expressions) and on lints with `just clippy`.
+  Do not run ad-hoc `cargo test -p …`, `cargo nextest run -p …` or
+  `cargo clippy -p …` selections: each compiles the workspace again in another
+  configuration, for minutes and then again on every edit, and leaves another
+  multi-gigabyte copy in the build directory, which the host evicts under disk
+  pressure.
 - JavaScript and TypeScript run on the pinned Bun. The
   repository root is one Bun workspace (`web` plus the `components/*` packages
   it links): `just install` creates `node_modules`, `bun.lock` is the only

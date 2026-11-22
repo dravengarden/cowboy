@@ -714,8 +714,7 @@ composition-check:
     bun tools/generate-composition-contract.ts
     bun test ./contracts/composition.test.ts ./contracts/composition-check.test.ts ./contracts/widget-v1.test.ts
     {{rust_test_env}} cargo test {{rust_test_args}} composition::
-    cargo build --locked --bin cowboy
-    bun tools/composition-link-conformance.ts "$(realpath target/debug/cowboy)"
+    cowboy="$(just test-graph-bin cowboy)" && bun tools/composition-link-conformance.ts "$cowboy"
 
 fmt:
     cargo fmt --check
@@ -731,8 +730,12 @@ fmt-write:
 
 lint: clippy zed-lint lint-plugins
 
+# Clippy checks the same crates as the test graph but in check mode, which
+# shares no artifacts with it: in the main build directory it would wait for the
+# build lock and grow another incremental cache. Its own directory lives and dies
+# with the checkout, so `check` and an interactive `just clippy` reuse each other.
 clippy:
-    cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+    CARGO_BUILD_BUILD_DIR="$PWD/target/check-clippy" CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
 # The Zed adapter is its own Cargo workspace with its own build directory.
 zed-lint:
@@ -874,19 +877,21 @@ session-deletion-production-conformance OLD NEW READER DEFAULT_READER RECEIPT:
       --default-reader-release "{{DEFAULT_READER}}" --receipt "{{RECEIPT}}" \
       --host-mount-ns "$host_mount" --host-net-ns "$host_net"
 
-# Complete gate. Recipes run in order, so second-scale static checks come
-# first and a formatting, ratchet or lint failure surfaces within a minute
-# instead of after the Rust builds. Release binaries are not rebuilt here: the
-# debug graphs above compile the same code, and the Nix release packages are
-# the release build. `build-web` keeps the production frontend bundle covered.
-# `feature-check` is not repeated: `release-sources-check` checks the same
-# packages, features and binaries inside the exact release source closures.
+# Complete gate. Release binaries are not rebuilt here: the debug graphs above
+# compile the same code, and the Nix release packages are the release build.
+# `build-web` keeps the production frontend bundle covered. `feature-check` is
+# not repeated: `release-sources-check` checks the same packages, features and
+# binaries inside the exact release source closures.
 # Workspace Clippy, the release-source slices and the Zed adapter have Cargo
-# build directories of their own, and the script suites read sources only, so
-# they run beside the rest of the gate instead of after it: the main graph's
-# compile is a long single-crate chain that leaves most cores idle. Each
-# background log prints once it is collected, before the main Rust tests run.
-check: toolchain-check fmt structure-check docs-index-check protocol-contract-check typecheck
+# build directories of their own, and the script suites and the frontend build
+# share none, so they start first and run beside the rest of the gate: the main
+# graph's compile is a long single-crate chain that leaves most cores idle. The
+# second-scale static checks then run in the foreground, so a formatting,
+# ratchet or lint failure still surfaces within seconds. A failed background
+# job stops the gate at the next foreground step instead of after the Rust
+# builds. Each background log prints once it is collected, before the main Rust
+# tests run.
+check: toolchain-check
     #!/usr/bin/env bash
     set -euo pipefail
     logs="$(mktemp -d "${TMPDIR:-/tmp}/cowboy-check.XXXXXX")"
@@ -904,24 +909,42 @@ check: toolchain-check fmt structure-check docs-index-check protocol-contract-ch
       local name="$1"
       shift
       # A process group of its own, so an early failure stops the whole job.
-      setsid bash -c 'SECONDS=0; env "${@:2}" just "$1"; status=$?; echo "($1 took ${SECONDS}s)"; exit "$status"' \
-        background "$name" "$@" >"$logs/$name.log" 2>&1 &
+      # The status file lets `reap` see the outcome before the job is collected.
+      setsid bash -c 'SECONDS=0; env "${@:3}" just "$2"; status=$?; echo "($2 took ${SECONDS}s)"; echo "$status" >"$1.status"; exit "$status"' \
+        background "$logs/$name" "$name" "$@" >"$logs/$name.log" 2>&1 &
       pending+=("$!:$name")
     }
-    # Clippy checks the same crates as the test graph but in check mode, which
-    # shares no artifacts with it; in the shared build directory it would only
-    # wait for the build lock. Its own directory lives and dies with the checkout.
-    background clippy CARGO_BUILD_BUILD_DIR="$PWD/target/check-clippy" CARGO_INCREMENTAL=0
-    background release-sources-check
-    background zed-check
-    # Suites that share no build directory. They resolve `ws` from the
-    # prepared Claude ACP packages, so install those before they start.
+    collect() {
+      local job="$1" status=0
+      wait "${job%%:*}" || status=$?
+      echo "==> ${job#*:} (background, exit $status)"
+      cat "$logs/${job#*:}.log"
+      if ((status != 0)); then exit "$status"; fi
+    }
+    # Between foreground steps: stop at a background job that already failed.
+    reap() {
+      local job status
+      for job in "${pending[@]}"; do
+        status="$(cat "$logs/${job#*:}.status" 2>/dev/null || true)"
+        if [[ -n "$status" && "$status" != 0 ]]; then collect "$job"; fi
+      done
+    }
+    # The Node suites resolve `ws` from the prepared Claude ACP packages.
     just claude-source-deps
     background provider-antigravity-check
+    background clippy
+    background release-sources-check
+    background zed-check
     background provider-runtime-scripts
     background test-web
+    background build-web
     background dependencies
-    just idb-conformance-check site-check native-shell-check lint-plugins plugin-check composition-check claude-remote-prepare
+    just fmt structure-check docs-index-check protocol-contract-check typecheck
+    reap
+    just idb-conformance-check site-check native-shell-check lint-plugins plugin-check
+    reap
+    just composition-check claude-remote-prepare
+    reap
     # Collected before `test-rust`, the next step that may relink the execution
     # host these suites run.
     background claude-remote-scripts
@@ -929,27 +952,35 @@ check: toolchain-check fmt structure-check docs-index-check protocol-contract-ch
     while ((${#pending[@]})); do
       job="${pending[0]}"
       pending=("${pending[@]:1}")
-      name="${job#*:}"
-      status=0
-      wait "${job%%:*}" || status=$?
-      echo "==> $name (background, exit $status)"
-      cat "$logs/$name.log"
-      if ((status != 0)); then exit "$status"; fi
+      collect "$job"
     done
-    just test-rust test-postgres logs-conformance build-web
+    just test-rust test-postgres logs-conformance
 
 # Real diagnostic CLI, typed OTel fixture, query/metrics/tail/watch/RPC contracts.
 # An optional explicit --ssh in the standalone tool adds same-host SSH acceptance.
 logs-conformance:
     #!/usr/bin/env bash
     set -euo pipefail
-    cargo build --locked --bin cowboy
-    # Reuse the shared test graph's library executable; the tool's own
-    # root-only `cargo test --lib` selection would recompile the workspace.
-    fixture="$({{rust_test_env}} cargo test {{rust_test_args}} --no-run --message-format=json-render-diagnostics |
-      jq -r 'select(.reason == "compiler-artifact" and .target.name == "cowboy" and .profile.test and (.target.kind | index("lib"))) | .executable // empty')"
+    # Reuse the shared test graph's library test and CLI executables; the
+    # tool's own root-only `cargo test --lib` selection, like a separate
+    # `cargo build --bin cowboy`, would compile the workspace again.
+    artifacts="$({{rust_test_env}} cargo test {{rust_test_args}} --no-run --message-format=json-render-diagnostics)"
+    fixture="$(jq -r 'select(.reason == "compiler-artifact" and .target.name == "cowboy" and .profile.test and (.target.kind | index("lib"))) | .executable // empty' <<<"$artifacts")"
+    cowboy="$(jq -r 'select(.reason == "compiler-artifact" and .target.name == "cowboy" and (.profile.test | not) and (.target.kind | index("bin"))) | .executable // empty' <<<"$artifacts")"
     test -x "$fixture"
-    python3 tools/logs_conformance.py --cowboy target/debug/cowboy --test-executable "$fixture" --receipt target/logs-conformance.json
+    test -x "$cowboy"
+    python3 tools/logs_conformance.py --cowboy "$cowboy" --test-executable "$fixture" --receipt target/logs-conformance.json
+
+# The shared test graph's executable for binary NAME. Recipes run it instead of
+# a `cargo build --bin`, whose own feature selection compiles the workspace again.
+[private]
+test-graph-bin NAME:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    executable="$({{rust_test_env}} cargo test {{rust_test_args}} --no-run --message-format=json-render-diagnostics |
+      jq -r --arg name '{{NAME}}' 'select(.reason == "compiler-artifact" and .target.name == $name and (.profile.test | not) and (.target.kind | index("bin"))) | .executable // empty')"
+    test -x "$executable"
+    printf '%s\n' "$executable"
 
 # Run the complete quality gate through a compiler cache shared by every
 # worktree of this user. Only the shared test graph (`rust_test_env`) keeps
@@ -998,8 +1029,18 @@ plugin-local-operator-conformance MATRIX RECEIPT:
     cargo test --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib --no-run
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_LOCAL_OPERATOR_MATRIX="$1" COWBOY_TEST_LOCAL_OPERATOR_RECEIPT="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib immutable_local_operator_installation -- --ignored --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
 
-test-fast:
-    cargo nextest run -p cowboy -p cowboy-store --all-features --locked
+# Iterate on part of the shared test graph: `just test-rust-filter <nextest
+# filters or options>`, for example `just test-rust-filter admin_api` or
+# `just test-rust-filter -E 'package(cowboy-machine)'`. A narrower `cargo test
+# -p` or feature selection compiles the workspace again, for minutes and then
+# for every edit, and leaves another multi-gigabyte copy in the build directory.
+[positional-arguments]
+test-rust-filter *ARGS:
+    {{rust_test_env}} cargo nextest run {{rust_test_args}} "$@"
+
+[positional-arguments]
+test-fast *ARGS:
+    {{rust_test_env}} cargo nextest run {{rust_test_args}} -E 'package(cowboy) | package(cowboy-store)' "$@"
 
 # Compact-control-plane memory fixture against a local SQLite Durable Object.
 do-memory-mock:
