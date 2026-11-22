@@ -196,11 +196,7 @@ fn paced(retry_at_ms: i64) -> Refused {
 /// preceding usage read started. Its starts are charged here. A paced
 /// refusal sent nothing, names when the window has room, and holds the
 /// Provider against other starts until then, so the caller may resend.
-async fn admit(
-    state: &AppState,
-    owner: &str,
-    id: &ProviderAccountId,
-) -> Result<Admitted, Refused> {
+async fn admit(state: &AppState, owner: &str, id: &ProviderAccountId) -> Result<Admitted, Refused> {
     let route = route(state, owner, id).await?;
     let slot = state.usage.native.entry(owner, id.as_str());
     let serial = tokio::time::timeout(ADMISSION_WAIT, Arc::clone(&slot.collection).lock_owned())

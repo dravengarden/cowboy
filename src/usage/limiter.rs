@@ -179,7 +179,14 @@ impl Limiter {
 
     pub fn view(&self, provider: &str, account: &str, now: i64) -> Budget {
         let config = self.config.current();
-        Self::budget(&config, &self.inner.lock(), provider, account, now, (true, 1))
+        Self::budget(
+            &config,
+            &self.inner.lock(),
+            provider,
+            account,
+            now,
+            (true, 1),
+        )
     }
 
     fn budget(
@@ -715,7 +722,9 @@ mod tests {
             .unwrap_or_else(|_| panic!("the held reset starts when the window has room"));
         permit.finish(Outcome::Success, 1_000 + window);
         // The hold ends with the reset's start; ordinary pacing resumes.
-        let after = limiter.view("anthropic", "other", 1_000 + window).next_allowed_ms;
+        let after = limiter
+            .view("anthropic", "other", 1_000 + window)
+            .next_allowed_ms;
         assert_eq!(after, 1_000 + window + limiter.spacing_ms() * 2);
     }
 
