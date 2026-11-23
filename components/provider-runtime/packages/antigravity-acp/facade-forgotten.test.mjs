@@ -203,14 +203,17 @@ test("the readiness probe runs again when it was forgotten", async (t) => {
   assert.match(projection, /Git repository root:/);
 });
 
-test("a lost reply to a command's deadline stop is an uncertain effect", async (t) => {
-  const { call, uncertain } = await fixture(t, {
+test("a lost reply to a command's deadline stop is an uncertain effect, and no second stop follows", async (t) => {
+  const { facade, call, uncertain, methods } = await fixture(t, {
     lose: (method) => method === "process/terminate",
   });
   const ran = await call("RunCommand", { command: "sleep 5", timeout_seconds: 1 });
   assert.equal(ran.error, true);
   assert.match(ran.text, /^outcome unknown/);
   assert.deepEqual(uncertain, [["s1", "process/terminate"]]);
+  // The turn's cleanup only observes the command it may already have stopped.
+  await facade.endTurn("s1", { cancelled: true });
+  assert.equal(methods().filter((method) => method === "process/terminate").length, 1);
 });
 
 test("a helper whose process tree exits slowly after its stop is confirmed, not uncertain", async (t) => {
@@ -219,7 +222,11 @@ test("a helper whose process tree exits slowly after its stop is confirmed, not 
   // Exits 7 s after SIGTERM, beyond the former 5 s confirmation.
   const result = await facade.runBounded(
     turn,
-    ["/bin/sh", "-c", 'trap "sleep 7; exit 0" TERM; sleep 100 >/dev/null 2>&1 & wait'],
+    [
+      "/bin/sh",
+      "-c",
+      'sleep 100 >/dev/null 2>&1 & child=$!; trap \'kill "$child"; wait "$child"; sleep 7; exit 0\' TERM; wait',
+    ],
     { timeoutMs: 300, maxBytes: 1024 },
   );
   assert.equal(result.timedOut, true);
