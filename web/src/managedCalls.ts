@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { SessionMeta } from "./protocol";
-import { providerDisplayName } from "./providerDisplayName";
+import { providerDisplayName, useProviderLabels } from "./providerDisplayName";
 import { useStoreSelector } from "./store";
 
 /** A parent-scoped managed call summary. Execution state, a structured review
@@ -589,6 +589,8 @@ export function useManagedCalls(parent: string | null): {
   error: string | null;
   refresh: () => void;
 } {
+  // The labels this list shows read the Provider Catalog cache.
+  useProviderLabels();
   const clearedAt = useStoreSelector((snapshot) => {
     const timeline = parent ? snapshot.timelines.get(parent) : undefined;
     for (let index = (timeline?.length ?? 0) - 1; index >= 0; index -= 1) {
@@ -638,6 +640,7 @@ export function useManagedCall(
   detail: ManagedCallDetail | null;
   error: string | null;
 } {
+  useProviderLabels();
   const [detail, setDetail] = useState<ManagedCallDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {

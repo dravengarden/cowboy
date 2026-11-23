@@ -11,7 +11,6 @@ import {
   useCallApprovalAnswer,
 } from "./callApproval";
 import { agentLabel } from "./agentTools";
-import { useProviderLabels } from "./providerDisplayName";
 import { requestStickToBottom, useSticky } from "./stickyStore";
 import { frostedPanel, frostedPill } from "./frostedGlass";
 import { haptic } from "./haptic";
@@ -37,7 +36,6 @@ export function CallApprovalOverlay({
     keycap: (index: number, available: boolean) => ReactNode;
   };
 }): React.JSX.Element {
-  useProviderLabels();
   const sticky = useSticky(sessionId);
   const expanded = sticky || desktop !== undefined;
   const { busy, failure, answer: decide } = useCallApprovalAnswer(sessionId, approval);

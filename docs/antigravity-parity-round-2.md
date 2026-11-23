@@ -175,9 +175,12 @@ dedicated free-tier account and are outside this round.
   loaded Catalog carries it (`web/src/providerDisplayName.ts`, newest compatible
   manifest), and otherwise keep today's text. Claude and Codex keep their short
   names, so `claude-code` stays "Claude" and `codex` "Codex".
-- The components that show these labels subscribe to the Catalog cache without
-  starting a read (`useProviderLabels`), so a label updates when the Catalog loads
-  even inside a memoized dock.
+- The managed-call data hooks (`useManagedCalls`, `useManagedCall`) and the
+  agent-tools components subscribe to the Catalog cache without starting a read
+  (`useProviderLabels`), so a label updates when the Catalog loads even inside the
+  memoized dock. The dock and approval overlay files are structure-ratchet
+  offenders and are not edited; the approval overlay reads the cache when it
+  renders.
 - Tests: the display name of a Provider from entries (newest release wins), labels
   before and after the Catalog loads, the two short names unchanged, an unknown id
   falling back.
