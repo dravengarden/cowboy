@@ -13,6 +13,9 @@
 // whose reply is lost after it may have been admitted is never retried or
 // resolved by observation: the tool reports `outcome unknown` and the proxy
 // ends the turn (the worker's trusted ledger records `uncertain_effect`).
+// A process the executor itself reports forgotten has ended (evidence rule
+// E1, docs/uncertain-effect-recovery.md); that answered request is not a
+// lost one.
 import { randomUUID } from "node:crypto";
 import { posix } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +23,7 @@ import {
   APPLY,
   decodeText,
   ENV_POLICY,
+  forgotten,
   imageType,
   INLINE_APPLY,
   inside,
@@ -48,6 +52,10 @@ export const UNCERTAIN_REPORT = "cowboy/uncertainEffect";
 /** The process id prefix of readiness probes (diagnostic only: the worker
  * authorizes the probe from its own state, never from this id). */
 export const READINESS_PREFIX = "cowboy-agy-readiness-";
+
+/** A publish settled by the file's bytes alone (E1, see `publishOnce`). */
+const VERIFIED =
+  "the requested content is verified on the target; the write helper's own report was lost";
 
 /** `resolveOnce`: a missing component appeared while it resolved. */
 const APPEARED = Symbol("appeared");
@@ -604,6 +612,11 @@ export class Facade {
       maxBytes: LIMITS.searchBytes,
       maxLines: LIMITS.searchMatches,
     });
+    if (result.forgotten) {
+      throw new ToolError(
+        "The search ended while the connection to the workspace Machine was interrupted and its output is unavailable; run it again.",
+      );
+    }
     if (result.exitCode === 1 && !result.stdout) return "No matches.";
     if (result.exitCode === 127) throw new ToolError("ripgrep (rg) is not installed on the target");
     const lines = result.stdout.split("\n").filter(Boolean);
@@ -629,8 +642,9 @@ export class Facade {
     if (observed !== undefined && observed !== base) {
       throw new ToolError(`${path} changed since it was read; read it again first.`);
     }
-    await this.publish(turn, file, current, bytes);
+    const verified = await this.publish(turn, file, current, bytes);
     session.observed.set(file, sha256(bytes));
+    if (verified) return `${current ? "Replaced" : "Created"} ${file}: ${VERIFIED}`;
     return `${current ? "Replaced" : "Created"} ${file} (${bytes.length} bytes)`;
   }
 
@@ -665,8 +679,9 @@ export class Facade {
     const next = Buffer.from(
       all === true ? text.replaceAll(before, () => after) : text.replace(before, () => after),
     );
-    await this.publish(turn, file, current, next);
+    const verified = await this.publish(turn, file, current, next);
     session.observed.set(file, sha256(next));
+    if (verified) return `Edited ${file}: ${VERIFIED}`;
     return `Edited ${file} (${replaced} replacement${replaced === 1 ? "" : "s"})`;
   }
 
@@ -677,6 +692,21 @@ export class Facade {
    * is, and a failure leaves the file unchanged or exactly at the result.
    */
   async publish(turn, file, base, bytes) {
+    try {
+      return await this.publishOnce(turn, file, base, bytes);
+    } catch (error) {
+      // Its outcome is unknown: no session of this facade (the parent or a
+      // subagent) may edit the file before reading it again.
+      if (error instanceof UncertainEffect) {
+        for (const session of this.sessions.values()) session.observed.delete(file);
+      }
+      throw error;
+    }
+  }
+
+  /** `publish`; `true` when only the file's bytes, not the helper's own
+   * report, show the result. */
+  async publishOnce(turn, file, base, bytes) {
     const expect = sha256(bytes);
     const request = JSON.stringify({
       schema: 1,
@@ -710,12 +740,19 @@ export class Facade {
     } catch {
       outcome = undefined;
     }
-    if (outcome?.status === "applied") return;
+    if (outcome?.status === "applied") return false;
     if (outcome?.status === "conflict") {
       throw new ToolError("The file changed on the target since it was read; read it again.");
     }
     if (result.timedOut) {
       // The helper may still publish: its outcome is unknown.
+      throw new UncertainEffect("file publish");
+    }
+    if (result.forgotten) {
+      // The helper ended unseen (E1) and its report is lost; it can never
+      // publish now. Only the requested bytes on the target settle it.
+      const now = await this.current(file).catch(() => null);
+      if (now && sha256(now) === expect) return true;
       throw new UncertainEffect("file publish");
     }
     if (result.exitCode === 127) {
@@ -731,7 +768,7 @@ export class Facade {
     // read it again to tell which.
     const now = await this.current(file).catch(() => null);
     if (now === null) throw new UncertainEffect("file publish");
-    if (now !== undefined && sha256(now) === expect) return;
+    if (now !== undefined && sha256(now) === expect) return false;
     throw new ToolError(
       `Writing ${file} failed: ${String(outcome?.error ?? result.stderr.trim()).slice(0, 500)}`,
     );
@@ -808,6 +845,14 @@ export class Facade {
         waitMs,
       });
     } catch (error) {
+      if (forgotten(error, process.processId)) {
+        // E1: the executor forgot it, so it ended; its exit status and any
+        // unread output are lost. Nothing more is sent for it.
+        process.closed = true;
+        process.forgotten = true;
+        process.wake?.();
+        return [];
+      }
       // A started process whose state cannot be read, because the reply was
       // lost or the connection could not be opened again, has an unknown
       // outcome: a quiet reader waits with no read in flight, so a close
@@ -958,6 +1003,9 @@ export class Facade {
       // admits no mutation while this helper's outcome is unknown.
       if (error instanceof UncertainEffect && turn) this.fenceLost(turn, error.method);
     }
+    // Only the ordinary poll's E1 settles an outcome; during cleanup below it
+    // merely confirms the close and never replaces a timeout or failure.
+    const ended = failure === undefined && !timedOut && !truncated && process.forgotten === true;
     // Whatever ended the loop, the process is not left running unconfirmed: a
     // helper that may still publish is an effect of unknown outcome.
     if (!process.closed) {
@@ -971,6 +1019,8 @@ export class Facade {
       stderr: Buffer.concat(out.stderr).toString(),
       truncated,
       timedOut,
+      // The process ended unseen (E1): its output may be incomplete.
+      forgotten: ended,
     };
   }
 
@@ -1025,9 +1075,21 @@ export class Facade {
         }
       }
       let status;
-      if (running.closed) status = `Exit code: ${running.exitCode ?? "unknown"}`;
-      else if (Date.now() >= running.deadline) {
-        status = (await this.terminate(running))
+      if (running.closed) {
+        status = `Exit code: ${running.exitCode ?? "unknown"}`;
+        if (running.forgotten) {
+          status +=
+            " (the command's process ended while the connection to the workspace Machine was interrupted; its remaining output is unavailable)";
+        }
+      } else if (Date.now() >= running.deadline) {
+        let stopped;
+        try {
+          stopped = await this.terminate(running);
+        } catch (error) {
+          if (unknownOutcome(error)) throw new UncertainEffect("process/terminate");
+          throw error;
+        }
+        status = stopped
           ? "Timed out; the command was stopped."
           : `Timed out; stopping it is not yet confirmed (command_id: ${running.processId}).`;
       } else {

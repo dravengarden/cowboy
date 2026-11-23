@@ -224,17 +224,20 @@ export async function buildProjection(
   if (!posix.isAbsolute(cwd) || !inside(facade.root, cwd)) {
     throw new Error("Session directory is outside the bound workspace");
   }
-  const probe = await facade.runBounded(
-    { cancelled: false },
-    ["/bin/sh", "-c", READINESS_PROBE, "sh", cwd],
-    {
+  const runProbe = () =>
+    facade.runBounded({ cancelled: false }, ["/bin/sh", "-c", READINESS_PROBE, "sh", cwd], {
       timeoutMs: PROJECTION_LIMITS.gitTimeoutMs,
       maxBytes: 256 * 1024,
       // A bounded readiness probe: it runs before any turn (at startup and at
       // session/new), which the worker's ledger admits only for this purpose.
       readiness: true,
-    },
-  );
+    });
+  let probe = await runProbe();
+  // A probe that ended unseen (the executor forgot it) may have lost its
+  // output; the read-only probe runs once more rather than report a clean
+  // tree or no repository from missing output.
+  if (probe.forgotten) probe = await runProbe();
+  if (probe.forgotten) throw new Error("The workspace Git state could not be read");
   const git = parseGit(probe.stdout);
   const fence = `COWBOY_UNTRUSTED_${randomUUID().replaceAll("-", "")}`;
   const environment = [

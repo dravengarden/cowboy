@@ -290,6 +290,18 @@ export const unknownOutcome = (error) => lost(error) || error?.remote?.data?.out
 export const unreachable = (error) =>
   !error?.remote &&
   /^Execution (unavailable|connection (refused|closed))/.test(error?.message ?? "");
+/**
+ * Evidence rule E1 (docs/uncertain-effect-recovery.md): the executor itself
+ * answered that it no longer knows `processId`. The pinned executor forgets a
+ * process only 30 s after it closed (or when a stop cancels a start, which
+ * cannot follow a received start reply), so for a process whose start this
+ * facade saw succeed it proves the process ended. Never a transport loss and
+ * never the worker's or ledger's own refusal (`-32000`).
+ */
+export const forgotten = (error, processId) =>
+  error?.remote !== undefined &&
+  error.remote.code !== -32000 &&
+  error.remote.message === `unknown process id ${processId}`;
 
 /**
  * Strict UTF-8 text of `bytes`; never a lossy replacement. A leading BOM is

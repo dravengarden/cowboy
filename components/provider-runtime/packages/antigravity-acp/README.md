@@ -158,6 +158,14 @@ places its tree below `proxy/` in the account-sandbox runtime archive and adds
   `outcome unknown`, the proxy sends `session/cancel` and adds
   `cowboy.uncertain_effect` to the turn's result `_meta`, or to its error's
   `data` when the turn ends with an error. Nothing is retried.
+- A process the executor reports as `unknown process id` after its start was
+  answered has ended: the executor forgets a process 30 s after it closed, as
+  during a long Controller restart. It is never an unconfirmed termination. A
+  forgotten write helper whose report is lost is settled by the requested
+  bytes on the target, otherwise it stays `outcome unknown` and the file must
+  be read again; a forgotten command reports `Exit code: unknown`; a
+  forgotten search asks to run it again
+  ([design](../../../../docs/uncertain-effect-recovery.md)).
 
 ## Backend evidence
 
