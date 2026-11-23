@@ -1,0 +1,19 @@
+# Prioritize the longest-running tests so they start immediately instead of
+# straggling on 1-3 cores at the end of a nextest run.
+[profile.default]
+
+[[profile.default.overrides]]
+filter = '''
+  test(signed_provider_installs_exact_runtime_and_uninstalls_as_one_unit)
+  | test(anchor_quarantine_recovery)
+  | test(anchor_package_recovery)
+  | test(floor_selection_recovery)
+  | test(sqlite_replacement_login_preserves_existing_session_binding)
+  | test(signed_publication_is_adopted_and_a_rejected_candidate_keeps_original_leases)
+  | test(all_install_reader_fixtures_exercise_the_exact_startup_contract)
+  | test(releasing_native_receipts_recovers_capacity_without_ending_the_connection)
+  | test(deadline_stops_retry_for_every_otlp_signal_without_cancelling_the_first_attempt)
+  | test(a_failing_resumed_cleanup_releases_its_handles_and_keeps_the_nomination)
+  | test(deletion_reaps_a_direct_owner_after_its_ipc_peer_disappears)
+'''
+priority = 100

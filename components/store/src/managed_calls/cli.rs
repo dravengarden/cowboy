@@ -592,10 +592,20 @@ async fn run_review(context: &Wiring, args: &ReviewArgs, focus: &str) -> Result<
 }
 
 /// Resolve a start whose response was lost by its request identity.
+const OBSERVE_RETRY_DELAY: Duration = Duration::from_secs(2);
+
 async fn observe(context: &Wiring, request_id: &str) -> Option<Value> {
+    observe_with_delay(context, request_id, OBSERVE_RETRY_DELAY).await
+}
+
+async fn observe_with_delay(
+    context: &Wiring,
+    request_id: &str,
+    retry_delay: Duration,
+) -> Option<Value> {
     for attempt in 0..4 {
-        if attempt > 0 {
-            tokio::time::sleep(Duration::from_secs(2)).await;
+        if attempt > 0 && !retry_delay.is_zero() {
+            tokio::time::sleep(retry_delay).await;
         }
         let value = exchange(
             context.clone(),
@@ -764,15 +774,23 @@ mod tests {
 
     #[tokio::test]
     async fn a_lost_start_response_resolves_by_observing_its_request() {
+        assert_eq!(OBSERVE_RETRY_DELAY, Duration::from_secs(2));
         let (_dir, wiring, seen) = gateway(|action| {
             assert_eq!(action["kind"], "observe", "observing must never resubmit");
             json!({"schema":1,"state":"running","call_id":"call-1","error":null})
         });
-        let observed = observe(&wiring, "request-1").await.unwrap();
+        let observed = observe_with_delay(&wiring, "request-1", Duration::from_millis(1))
+            .await
+            .unwrap();
         assert_eq!(observed["call_id"], "call-1");
         assert_eq!(seen.lock()[0]["request_id"], "request-1");
-        let (_dir, wiring, _) = gateway(|_| error("not_found", "not_submitted"));
-        assert!(observe(&wiring, "request-1").await.is_none());
+        let (_dir, wiring, seen) = gateway(|_| error("not_found", "not_submitted"));
+        assert!(
+            observe_with_delay(&wiring, "request-1", Duration::from_millis(1))
+                .await
+                .is_none()
+        );
+        assert_eq!(seen.lock().len(), 4);
     }
 
     fn review_args(design: bool) -> ReviewArgs {

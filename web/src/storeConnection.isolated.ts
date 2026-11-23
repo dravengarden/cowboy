@@ -71,7 +71,56 @@ mock.module("./browserDevice.ts", () => ({
   ...realDevice,
   browserDeviceProtocol: () => Promise.resolve("cowboy-device-test"),
 }));
+// Virtual timer clock so backoff and capacity-retry delays are verified at
+// their exact millisecond boundaries without sleeping 10+ real seconds per run.
+const realSetTimeout = globalThis.setTimeout.bind(globalThis);
+const realDateNow = Date.now.bind(Date);
+let virtualNow = 1_700_000_000_000;
+let nextTimerId = 1;
+const pendingTimers = new Map<number, { due: number; fn: () => void }>();
+
+async function flushMicrotasks(): Promise<void> {
+  for (let i = 0; i < 6; i++) {
+    await new Promise<void>((resolve) => {
+      realSetTimeout(resolve, 0);
+    });
+  }
+}
+
+async function advanceTime(ms: number): Promise<void> {
+  const target = virtualNow + ms;
+  await flushMicrotasks();
+  while (true) {
+    let earliestId: number | undefined;
+    let earliestDue = Infinity;
+    for (const [id, entry] of pendingTimers) {
+      if (entry.due <= target && entry.due < earliestDue) {
+        earliestDue = entry.due;
+        earliestId = id;
+      }
+    }
+    if (earliestId === undefined) break;
+    const entry = pendingTimers.get(earliestId)!;
+    pendingTimers.delete(earliestId);
+    virtualNow = Math.max(virtualNow, entry.due);
+    entry.fn();
+    await flushMicrotasks();
+  }
+  virtualNow = target;
+  await flushMicrotasks();
+}
+
 const globals = globalThis as Record<string, unknown>;
+globals.Date = Object.assign(Date, { now: () => virtualNow });
+globals.setTimeout = ((callback: (...args: unknown[]) => void, delay = 0, ...args: unknown[]) => {
+  const id = nextTimerId++;
+  const due = virtualNow + Math.max(0, Number(delay) || 0);
+  pendingTimers.set(id, { due, fn: () => callback(...args) });
+  return id as unknown as ReturnType<typeof setTimeout>;
+}) as typeof setTimeout;
+globals.clearTimeout = ((handle: unknown) => {
+  pendingTimers.delete(Number(handle));
+}) as typeof clearTimeout;
 globals.WebSocket = FakeSocket;
 globals.location = { protocol: "https:", host: "cowboy.test" };
 // UI modules the store reaches probe the DOM at import; install the document
@@ -79,8 +128,8 @@ globals.location = { protocol: "https:", host: "cowboy.test" };
 const store = await import("./store.ts");
 globals.window = globalThis;
 globals.requestAnimationFrame = (callback: FrameRequestCallback): number =>
-  setTimeout(() => callback(performance.now()), 16) as unknown as number;
-globals.cancelAnimationFrame = (handle: number): void => clearTimeout(handle);
+  globalThis.setTimeout(() => callback(performance.now()), 16) as unknown as number;
+globals.cancelAnimationFrame = (handle: number): void => globalThis.clearTimeout(handle);
 globals.document = Object.assign(new EventTarget(), {
   visibilityState: "visible",
   hidden: false,
@@ -89,13 +138,13 @@ globals.document = Object.assign(new EventTarget(), {
 });
 
 async function until(condition: () => boolean, timeoutMs = 3000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = realDateNow() + timeoutMs;
   while (!condition()) {
-    if (Date.now() > deadline) throw new Error("condition not reached");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    if (realDateNow() > deadline) throw new Error("condition not reached");
+    await new Promise((resolve) => realSetTimeout(resolve, 2));
   }
 }
-const settle = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+const settle = (ms: number): Promise<void> => advanceTime(ms);
 
 test("a user retry opens one socket bound to the dataset and device proof", async () => {
   store.retrySyncNow();
@@ -129,6 +178,7 @@ test("losing the current socket reconnects after the first backoff, not before",
   current.drop();
   await settle(700);
   expect(FakeSocket.all.length).toBe(before);
+  await settle(3_000);
   await until(() => FakeSocket.all.length === before + 1, 3000);
   expect(new URL(FakeSocket.all.at(-1)!.url).searchParams.get("dataset")).toBe(dataset.dataset_id);
 });
@@ -190,8 +240,9 @@ test("a capacity close waits for the admission retry delay before reconnecting",
   const before = FakeSocket.all.length;
   current.drop(4429);
   // No retry_after_ms was announced, so the Controller default of 5 s applies.
-  await settle(3_000);
+  await settle(4_999);
   expect(FakeSocket.all.length).toBe(before);
+  await settle(1);
   await until(() => FakeSocket.all.length === before + 1, 4_000);
 }, 10_000);
 

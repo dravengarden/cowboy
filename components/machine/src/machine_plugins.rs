@@ -6664,12 +6664,12 @@ mod tests {
             &release.artifact_digest,
             Some(1),
             PluginHostOperation::CollectUsage,
-            serde_json::json!({"delay_ms": 1000}),
+            serde_json::json!({"delay_ms": 350}),
         );
         let serialized_legacy = async {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
             assert!(
-                tokio::time::timeout(Duration::from_millis(200), store.lifecycle.lock())
+                tokio::time::timeout(Duration::from_millis(150), store.lifecycle.lock())
                     .await
                     .is_err(),
                 "legacy observation must remain serialized without an incarnation fence"
@@ -6683,12 +6683,12 @@ mod tests {
             &release.artifact_digest,
             Some(1),
             PluginHostOperation::ResetUsage,
-            serde_json::json!({"delay_ms": 1000}),
+            serde_json::json!({"delay_ms": 350}),
         );
         let serialized = async {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
             assert!(
-                tokio::time::timeout(Duration::from_millis(200), store.lifecycle.lock())
+                tokio::time::timeout(Duration::from_millis(150), store.lifecycle.lock())
                     .await
                     .is_err(),
                 "usage reset must retain lifecycle authority while mutating state"

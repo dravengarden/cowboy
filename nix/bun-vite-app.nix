@@ -87,5 +87,8 @@ pkgs.stdenvNoCC.mkDerivation {
   installPhase = ''
     cp -R dist $out
   '';
+  passthru = {
+    inherit webDeps;
+  };
   dontFixup = true;
 }

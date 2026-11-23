@@ -32,8 +32,12 @@ export PGPASSFILE=/dev/null PGSERVICEFILE=/dev/null
 # feature graph reuses those test executables instead of recompiling the
 # workspace under a different dependency feature unification.
 read -r -a fixture_cargo_args <<< "${COWBOY_RUST_TEST_ARGS:---all-features --locked -p cowboy -p cowboy-store -p cowboy-server --lib}"
-fixture_artifacts="$(cargo test "${fixture_cargo_args[@]}" --no-run \
-  --message-format=json-render-diagnostics)"
+if [[ -n "${COWBOY_TEST_GRAPH_ARTIFACTS:-}" && -r "$COWBOY_TEST_GRAPH_ARTIFACTS" ]]; then
+  fixture_artifacts="$(cat "$COWBOY_TEST_GRAPH_ARTIFACTS")"
+else
+  fixture_artifacts="$(cargo test "${fixture_cargo_args[@]}" --no-run \
+    --message-format=json-render-diagnostics)"
+fi
 fixture_binary_for() {
   local target="$1"
   jq -r --arg target "$target" 'select(.reason == "compiler-artifact" and .target.name == $target
