@@ -11,9 +11,10 @@ fn frame_bytes(frame: &Frame) -> Vec<u8> {
 /// A hub whose clock started `age` ago, so silences can exceed the threshold
 /// without sleeping.
 fn aged_hub(age: Duration) -> Hub {
-    let mut hub = Hub::default();
-    hub.origin = Instant::now() - age;
-    hub
+    Hub {
+        origin: Instant::now() - age,
+        ..Hub::default()
+    }
 }
 
 fn take_rx(hub: &Hub) -> mpsc::Receiver<Notice> {
@@ -23,7 +24,7 @@ fn take_rx(hub: &Hub) -> mpsc::Receiver<Notice> {
 fn next_gap(rx: &mut mpsc::Receiver<Notice>) -> GapNotice {
     loop {
         match rx.try_recv() {
-            Ok(Notice::Gap(gap)) => return gap,
+            Ok(Notice::Gap(gap)) => return *gap,
             Ok(Notice::Bind(_)) => {}
             Err(error) => panic!("gap notice expected: {error:?}"),
         }

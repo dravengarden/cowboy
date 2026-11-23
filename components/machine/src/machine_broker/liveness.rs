@@ -376,7 +376,7 @@ impl Connection {
             unread_bytes,
             detail,
         );
-        self.send(Notice::Gap(notice));
+        self.send(Notice::Gap(Box::new(notice)));
     }
 
     fn send(&self, notice: Notice) {
@@ -428,7 +428,7 @@ struct GapNotice {
 
 enum Notice {
     Bind(Arc<Connection>),
-    Gap(GapNotice),
+    Gap(Box<GapNotice>),
 }
 
 /// Broker-owned entry point. `connect` runs once per admitted worker
@@ -830,7 +830,7 @@ impl Sampler {
             tokio::select! {
                 notice = rx.recv() => match notice {
                     Some(Notice::Bind(connection)) => self.bind(&connection),
-                    Some(Notice::Gap(gap)) => self.queue(gap),
+                    Some(Notice::Gap(gap)) => self.queue(*gap),
                     None => return,
                 },
                 Some(result) = results.recv() => self.bound(result),
