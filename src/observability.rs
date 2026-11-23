@@ -843,10 +843,15 @@ pub fn sanitize_attributes(value: &serde_json::Value) -> serde_json::Value {
     )
 }
 
+struct ExportItem {
+    batch: ExportBatch,
+    metrics_delivered: Option<tokio::sync::oneshot::Sender<bool>>,
+}
+
 async fn run_writer(
     file: Box<dyn EvidenceSink>,
     mut rx: mpsc::Receiver<PendingBatch>,
-    export_tx: Option<mpsc::Sender<ExportBatch>>,
+    export_tx: Option<mpsc::Sender<ExportItem>>,
     incident_tx: Option<mpsc::Sender<TelemetryBatch>>,
     health: Arc<ObservabilityHealth>,
     mut shutdown: watch::Receiver<bool>,
@@ -930,7 +935,12 @@ async fn run_writer(
             );
         }
         if let Some(tx) = export_tx.as_ref()
-            && tx.try_send(export).is_err()
+            && tx
+                .try_send(ExportItem {
+                    batch: export,
+                    metrics_delivered: None,
+                })
+                .is_err()
         {
             health
                 .dropped_export_batches
@@ -943,11 +953,18 @@ async fn run_writer(
 
 async fn run_exporter(
     exporter: TelemetryExporter,
-    mut rx: mpsc::Receiver<ExportBatch>,
+    mut rx: mpsc::Receiver<ExportItem>,
     health: Arc<ObservabilityHealth>,
 ) {
-    while let Some(batch) = rx.recv().await {
+    while let Some(ExportItem {
+        batch,
+        metrics_delivered,
+    }) = rx.recv().await
+    {
         if batch.logs.is_empty() && batch.metrics.is_empty() && batch.otlp.is_none() {
+            if let Some(ack) = metrics_delivered {
+                let _ = ack.send(false);
+            }
             continue;
         }
         let signal = batch.otlp.as_ref().map(|export| export.signal);
@@ -969,48 +986,93 @@ async fn run_exporter(
         health
             .rejected_export_items
             .fetch_add(receipt.rejected_items, Ordering::Relaxed);
+        if let Some(ack) = metrics_delivered {
+            let _ = ack.send(receipt.metrics_delivered);
+        }
     }
 }
 
 async fn export_wait_cache_days(
     directory: std::path::PathBuf,
-    tx: mpsc::Sender<ExportBatch>,
+    tx: mpsc::Sender<ExportItem>,
+    health: Arc<ObservabilityHealth>,
+    shutdown: watch::Receiver<bool>,
+) {
+    export_wait_cache_days_inner(
+        tx,
+        health,
+        shutdown,
+        Duration::from_secs(15),
+        Duration::from_mins(30),
+        move || chrono::Utc::now().timestamp_millis(),
+        move |yesterday, now| {
+            let directory = directory.clone();
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    crate::logs::storage::SqliteStore::open(directory, false)?
+                        .wait_cache_otlp(yesterday, now, true)
+                })
+                .await
+                .map_err(anyhow::Error::from)?
+            }
+        },
+    )
+    .await;
+}
+
+async fn export_wait_cache_days_inner<F, Fut>(
+    tx: mpsc::Sender<ExportItem>,
     health: Arc<ObservabilityHealth>,
     mut shutdown: watch::Receiver<bool>,
-) {
+    initial_retry: Duration,
+    steady_poll: Duration,
+    now_ms: impl Fn() -> i64,
+    fetch: F,
+) where
+    F: Fn(i64, i64) -> Fut,
+    Fut: Future<Output = anyhow::Result<Vec<u8>>>,
+{
     use crate::logs::wait_cache::{DAY_MS, utc_day};
-    let mut interval = tokio::time::interval(Duration::from_mins(30));
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut last_queued = None;
+    let mut last_delivered: Option<i64> = None;
+    let mut retry_day: Option<i64> = None;
+    let mut retry_delay = initial_retry;
+    // Wait one short startup interval so Machine connections (which host the
+    // signed telemetry plugin) can settle before the first closed-day export.
+    let mut next_wait = initial_retry;
     loop {
         tokio::select! {
             _ = shutdown.changed() => return,
-            _ = interval.tick() => {}
+            () = tokio::time::sleep(next_wait) => {}
         }
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = now_ms();
         let today = utc_day(now);
         let yesterday = today.saturating_sub(DAY_MS);
+        if retry_day != Some(yesterday) {
+            retry_day = Some(yesterday);
+            retry_delay = initial_retry;
+        }
         // Give native diagnostic batches and the local writer a chance to
-        // finish the cohort. Repeat after queue backpressure, using the same
-        // cumulative sample timestamp (no replay of a delta).
-        if now - today < 30 * 60 * 1000 || last_queued == Some(yesterday) {
+        // finish the cohort. Only mark `yesterday` done after the exporter
+        // confirms `metrics_delivered == true`; transient startup/disconnect
+        // failures retry with bounded backoff using the same cumulative sample
+        // timestamp (no replay of a delta).
+        if now - today < 30 * 60 * 1000 || last_delivered == Some(yesterday) {
+            next_wait = steady_poll;
             continue;
         }
-        let directory = directory.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            crate::logs::storage::SqliteStore::open(directory, false)?
-                .wait_cache_otlp(yesterday, now, true)
-        })
-        .await;
-        let Ok(Ok(bytes)) = result else {
+        let Ok(bytes) = fetch(yesterday, now).await else {
             health.failed_file_batches.fetch_add(1, Ordering::Relaxed);
+            next_wait = retry_delay;
+            retry_delay = retry_delay.saturating_mul(2).min(steady_poll);
             continue;
         };
         if bytes.is_empty() {
+            next_wait = steady_poll;
             continue;
         }
         let Ok(request) = crate::otlp::Request::decode(crate::otlp::Signal::Metrics, &bytes) else {
             health.failed_metric_batches.fetch_add(1, Ordering::Relaxed);
+            next_wait = steady_poll;
             continue;
         };
         let batch = ExportBatch {
@@ -1018,12 +1080,32 @@ async fn export_wait_cache_days(
             metrics: String::new(),
             otlp: Some(request.export()),
         };
-        if tx.try_send(batch).is_ok() {
-            last_queued = Some(yesterday);
-        } else {
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        if tx
+            .try_send(ExportItem {
+                batch,
+                metrics_delivered: Some(ack_tx),
+            })
+            .is_err()
+        {
             health
                 .dropped_export_batches
                 .fetch_add(1, Ordering::Relaxed);
+            next_wait = retry_delay;
+            retry_delay = retry_delay.saturating_mul(2).min(steady_poll);
+            continue;
+        }
+        let delivered = tokio::select! {
+            _ = shutdown.changed() => return,
+            res = ack_rx => res.unwrap_or(false),
+        };
+        if delivered {
+            last_delivered = Some(yesterday);
+            retry_delay = initial_retry;
+            next_wait = steady_poll;
+        } else {
+            next_wait = retry_delay;
+            retry_delay = retry_delay.saturating_mul(2).min(steady_poll);
         }
     }
 }
@@ -1479,13 +1561,16 @@ mod tests {
                 }
             })
         });
-        tx.send(ExportBatch {
-            logs: String::new(),
-            metrics: String::new(),
-            otlp: Some(crate::otlp::Export {
-                signal: crate::otlp::Signal::Metrics,
-                protobuf: String::new(),
-            }),
+        tx.send(ExportItem {
+            batch: ExportBatch {
+                logs: String::new(),
+                metrics: String::new(),
+                otlp: Some(crate::otlp::Export {
+                    signal: crate::otlp::Signal::Metrics,
+                    protobuf: String::new(),
+                }),
+            },
+            metrics_delivered: None,
         })
         .await
         .unwrap();
@@ -1494,6 +1579,59 @@ mod tests {
         assert_eq!(health.failed_metric_batches(), 1);
         assert_eq!(health.rejected_export_items(), 1);
         assert_eq!(health.failed_log_batches(), 0);
+    }
+
+    #[tokio::test]
+    async fn wait_cache_daily_export_retries_until_metrics_delivered_then_stops_for_same_day() {
+        let health = Arc::new(ObservabilityHealth::default());
+        let (tx, rx) = mpsc::channel(4);
+        let attempts = Arc::new(AtomicU64::new(0));
+        let exporter_attempts = Arc::clone(&attempts);
+        let export: TelemetryExporter = Arc::new(move |batch| {
+            let exporter_attempts = Arc::clone(&exporter_attempts);
+            Box::pin(async move {
+                assert_eq!(batch.otlp.unwrap().signal, crate::otlp::Signal::Metrics);
+                let n = exporter_attempts.fetch_add(1, Ordering::SeqCst) + 1;
+                ExportReceipt {
+                    metrics_delivered: n >= 2,
+                    ..Default::default()
+                }
+            })
+        });
+        let exporter_task = tokio::spawn(run_exporter(export, rx, Arc::clone(&health)));
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (_signal, fixture_bytes) = crate::otlp::client_fixtures()
+            .into_iter()
+            .find(|(signal, _)| *signal == crate::otlp::Signal::Metrics)
+            .expect("metrics OTLP fixture");
+        let fixed_now = crate::logs::wait_cache::DAY_MS * 10 + 3_600_000;
+        let wait_task = tokio::spawn(export_wait_cache_days_inner(
+            tx,
+            Arc::clone(&health),
+            shutdown_rx,
+            Duration::from_millis(10),
+            Duration::from_secs(60),
+            move || fixed_now,
+            move |_yesterday, _now| {
+                let bytes = fixture_bytes.clone();
+                async move { Ok(bytes) }
+            },
+        ));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while attempts.load(Ordering::SeqCst) < 2 && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // Let another retry interval pass to prove delivery stopped retrying the same UTC day.
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        let _ = shutdown_tx.send(true);
+        wait_task.await.unwrap();
+        exporter_task.await.unwrap();
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            2,
+            "failed startup delivery must retry once and stop after metrics_delivered == true"
+        );
+        assert_eq!(health.failed_metric_batches(), 1);
     }
 
     #[tokio::test]
