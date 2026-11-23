@@ -26,6 +26,48 @@ fn restore_rehydrates_folder_placements_into_the_live_tree() {
 }
 
 #[test]
+fn a_restored_session_remembers_its_owner_turn_through_a_clear() {
+    let chunk = |seq: u64, cmid: Option<&str>| {
+        let mut update = serde_json::json!({"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"go"}});
+        crate::prompt_origin::apply_prompt_origin(
+            &mut update,
+            &crate::prompt_origin::origin_from_cmid(cmid),
+        );
+        Envelope {
+            session_id: "remembered".to_owned(),
+            seq,
+            event: Event::Update { update },
+            cmid: cmid.map(str::to_owned),
+        }
+    };
+    let hub = Hub::new();
+    let mut restored = restored_busy("remembered");
+    restored.log = vec![
+        chunk(7, Some("cmid-1")),
+        chunk(8, None),
+        chunk(9, Some("call-notice:call-1")),
+    ];
+    restored.event_count = 3;
+    restored.next_seq = 10;
+    hub.restore_reconciling_runtime(vec![restored]);
+    let turn = |hub: &Hub| {
+        hub.newest_in_retained_log("remembered", crate::prompt_origin::newest_owner_turn)
+            .unwrap()
+            .newest_match
+    };
+    // The send's two blocks are one turn, anchored at its first; the notice
+    // after it is not a turn.
+    assert_eq!(turn(&hub), Some(7));
+    // Clearing the transcript keeps what the budget was counted against.
+    hub.clear_transcript("remembered");
+    assert_eq!(turn(&hub), Some(7));
+    // A person's next send is the next turn, and live pushes track it.
+    let next = chunk(10, Some("cmid-2"));
+    hub.push_tagged("remembered", next.event, next.cmid);
+    assert_eq!(turn(&hub), hub.last_event_seq("remembered"));
+}
+
+#[test]
 fn worker_replays_do_not_reset_the_idle_clock() {
     let hub = Hub::new();
     let mut idle = restored_busy("idle");

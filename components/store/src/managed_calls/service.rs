@@ -19,7 +19,13 @@ pub struct Choice {
     /// refuses to pin another one, so the admitted values are the executed
     /// values; the call is resubmitted instead.
     pub generation: Option<(String, String)>,
+    /// The owner turn the call counts against (`OWNER_TURN_NONE` when the
+    /// session has no owner prompt); `None` records no turn.
+    pub owner_turn: Option<i64>,
 }
+
+/// The owner turn of a session that has had no prompt from a person.
+pub const OWNER_TURN_NONE: i64 = -1;
 
 impl Choice {
     #[must_use]
@@ -28,6 +34,7 @@ impl Choice {
             preset: None,
             selection: "explicit",
             generation: None,
+            owner_turn: None,
         }
     }
 }
@@ -181,7 +188,9 @@ impl Ledger {
             preset,
             selection,
         };
-        self.store.admit_managed_call(&record, request).await
+        self.store
+            .admit_managed_call_in_turn(&record, request, choice.owner_turn)
+            .await
     }
 
     /// Only one claimant receives the original request. Losing a response after
@@ -393,6 +402,7 @@ mod tests {
             preset: Some("luna-6-max".into()),
             selection: "explicit",
             generation: None,
+            owner_turn: None,
         };
         let first = ledger
             .admit("codex", &analysis, "call-1", "child-1", &luna)
@@ -461,6 +471,7 @@ mod tests {
                     preset: Some("astra-max".into()),
                     selection: "explicit",
                     generation: None,
+                    owner_turn: None,
                 },
             )
             .await
@@ -520,6 +531,7 @@ mod tests {
                     preset: Some("weaker-default".into()),
                     selection: "auto",
                     generation: None,
+                    owner_turn: None,
                 },
             )
             .await

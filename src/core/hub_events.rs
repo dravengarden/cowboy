@@ -151,6 +151,15 @@ impl Hub {
                 event,
                 cmid,
             };
+            // A send begins one turn at its first chunk, however many blocks follow.
+            if crate::prompt_origin::is_owner_chunk(&envelope)
+                && !s
+                    .log
+                    .last()
+                    .is_some_and(crate::prompt_origin::is_owner_chunk)
+            {
+                s.owner_turn_seq = Some(seq);
+            }
             if is_user_message_chunk(&envelope)
                 && let Some(cmid) = envelope.cmid.as_deref()
                 && let Some(dispatched) =

@@ -222,6 +222,10 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "0086_wait_cache_observation.sql",
         "d67debb361744d49e23a5f901bb78d79c86376ce54f38f03915ffdf3ea8a71a1",
     ),
+    (
+        "0087_managed_call_owner_turn.sql",
+        "bafc2413dfcc68927f37cc0a32d306377c447ccee7c9e1bc9be49318e0256927",
+    ),
 ];
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
@@ -435,6 +439,10 @@ const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "0060_wait_cache_observation.sql",
         "c70b72caff417816f62e944d902bf16bae0a036083708f1b8776f2e8f219ff77",
+    ),
+    (
+        "0061_managed_call_owner_turn.sql",
+        "14af0d5850ecd5cfafbe9c3d9c7ec548f72dc184c8fe3b10e10475f574437e30",
     ),
 ];
 

@@ -191,7 +191,7 @@ export async function runDormantSessionBrowserConformance(
           targets: [],
           default: "auto",
           max_concurrent: 2,
-          max_per_session: 32,
+          max_per_turn: 32,
         },
       };
       return Response.json({

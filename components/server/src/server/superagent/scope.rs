@@ -85,10 +85,8 @@ pub(super) fn editable(
 }
 
 fn human_prompt(e: &crate::core::Envelope) -> bool {
-    crate::prompt_origin::origin_from_cmid(e.cmid.as_deref()).is_human()
-        && matches!(&e.event, crate::core::Event::Update { update }
-            if update["sessionUpdate"] == "user_message_chunk"
-            && crate::prompt_origin::is_human_prompt_update(update))
+    matches!(&e.event, crate::core::Event::Update { update }
+        if crate::prompt_origin::is_owner_prompt_event(e.cmid.as_deref(), update))
 }
 
 pub(super) async fn current_evidence(state: &AppState, id: &str) -> Result<Evidence, &'static str> {

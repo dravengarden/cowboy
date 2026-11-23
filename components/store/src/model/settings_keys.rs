@@ -68,6 +68,10 @@ pub const SESSION_TOOLS_PREFIX: &str = "session_tools:";
 pub const AGENT_REVIEW_EFFORT_PREFIX: &str = "agent_review_effort:";
 /// A session's routine review effort override; the session id follows.
 pub const SESSION_REVIEW_EFFORT_PREFIX: &str = "session_review_effort:";
+/// The calls-per-owner-turn limit of one agent kind, kept beside the
+/// schema-one Tools document (which keeps its legacy `max_per_session` for a
+/// predecessor Controller); the agent id follows.
+pub const AGENT_TURN_BUDGET_PREFIX: &str = "agent_turn_budget:";
 /// Explicit MCP selections are session-owned; cloning a session grants none.
 pub const SESSION_MCP_BINDINGS_PREFIX: &str = "session_mcp_bindings:";
 /// The directory MCP default resolved at creation and its visible outcome.
@@ -124,6 +128,7 @@ pub fn is_persisted_setting_key(key: &str) -> bool {
             SESSION_TOOLS_PREFIX,
             AGENT_REVIEW_EFFORT_PREFIX,
             SESSION_REVIEW_EFFORT_PREFIX,
+            AGENT_TURN_BUDGET_PREFIX,
             SESSION_MCP_BINDINGS_PREFIX,
             SESSION_MCP_DEFAULT_PREFIX,
             SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX,
@@ -165,6 +170,7 @@ pub fn examples() -> Vec<String> {
         format!("{SESSION_TOOLS_PREFIX}sess-1"),
         format!("{AGENT_REVIEW_EFFORT_PREFIX}codex"),
         format!("{SESSION_REVIEW_EFFORT_PREFIX}sess-1"),
+        format!("{AGENT_TURN_BUDGET_PREFIX}codex"),
         format!("{SESSION_MCP_BINDINGS_PREFIX}sess-1"),
         format!("{SESSION_MCP_DEFAULT_PREFIX}sess-1"),
         format!("{SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX}sess-1"),
@@ -190,6 +196,7 @@ mod tests {
             SESSION_TOOLS_PREFIX,
             AGENT_REVIEW_EFFORT_PREFIX,
             SESSION_REVIEW_EFFORT_PREFIX,
+            AGENT_TURN_BUDGET_PREFIX,
             SESSION_MCP_BINDINGS_PREFIX,
             SESSION_MCP_DEFAULT_PREFIX,
             SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX,

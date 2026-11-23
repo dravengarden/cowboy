@@ -620,7 +620,7 @@ export async function mountRunConfigKeyboardAcceptance(): Promise<void> {
       targets: [{ agent: "codex" }],
       default: "auto",
       max_concurrent: 4,
-      max_per_session: 64,
+      max_per_turn: 16,
       images: true,
       self_images: false,
     },
