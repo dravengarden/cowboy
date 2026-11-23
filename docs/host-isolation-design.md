@@ -1,30 +1,34 @@
-# Host isolation: liveness split now, identity boundary next
+# Host isolation: heartbeat attribution now, liveness split and identity boundary next
 
-Status: **design, revision 2, not implemented.** Nothing here is activated on
+Status: **design, revision 3, not implemented.** Nothing here is activated on
 any host. Every step that touches networking, firewall rules, sudo policy or a
 deployment activation needs explicit owner confirmation before switching (see
 [Flags](#flags-needing-explicit-owner-confirmation)).
 
-Revision 1 proposed the whole boundary at once: a `cowboy` control UID, a root
-spawner, peer credentials on every socket, an agent-identity workspace bridge,
-and a migration of Machine and Controller state. Design review round 1,
-`call-2e66a341853f6559a49f6e30` (Codex Astra Max, risk high), ended
-`review_incomplete`, because the Columbus host files were outside the review
-root. It reported 3 critical and about 20 high findings. Almost all of them
-were in the identity migration, which is too large to converge in the remaining
-rounds. Revision 2 therefore narrows the scope:
+Review history (Codex Astra Max, risk high):
 
-- **[Part L](#part-l-liveness-split-same-uid), the liveness split, is the
-  surviving implementable scope.**
-  - It moves the heartbeat sender out of the task cgroup subtree.
-  - It bounds the heartbeat behind bulk output.
-  - It keeps one UID and makes no security claim, so the round-1 identity
-    findings do not apply to it.
-- **[Part I](#part-i-identity-boundary-target-and-binding-requirements), the
-  identity boundary, is reduced to a target and binding requirements.**
-  - Every round-1 finding is recorded there, along with the owner decisions
-    it needs.
-  - Each sub-part needs its own design round before any implementation.
+- **Revision 1** proposed the whole boundary at once: a `cowboy` control UID, a
+  root spawner, peer credentials on every socket, an agent-identity workspace
+  bridge, and a migration of Machine and Controller state.
+  - Round 1, `call-2e66a341853f6559a49f6e30`, ended `review_incomplete`: the
+    Columbus host files were outside the review root.
+  - It still reported 3 critical and about 20 high findings, almost all in the
+    identity migration.
+- **Revision 2** reduced the identity boundary to requirements and kept a
+  same-UID worker/adapter split as the implementable scope.
+  - Round 2, `call-26a3d3cda3ad9354de781d50`, ended `review_incomplete`: the
+    round-1 findings were not in its input.
+  - It reported 1 critical and about 14 high findings, all in that split and
+    its heartbeat lane.
+- **Revision 3 (this one)** narrows again:
+  - **[L0](#l0-requirements), heartbeat stall attribution, is the only
+    implementable scope.** It is broker-side observation with no behavior
+    change, and it ships as a resident Machine release.
+  - The split and the lane become
+    [deferred requirements](#l-split-requirements-deferred), gated on L0 data.
+  - **[Part I](#part-i-identity-boundary-target-and-binding-requirements)**
+    stays a target with binding requirements, and is not
+    implementation-ready.
 
 ## Why
 
@@ -67,186 +71,181 @@ The provider adapter is a child process of its worker
   - a guarded broker `Permission`/`SetConfigOption`;
   - any user-MCP sandbox.
 
-## Part L: liveness split (same UID)
+## Part L: heartbeat liveness
 
-### Goal and non-goals
+Part L has three pieces, and only the first is implementable:
 
-**Goal.** Task load inside the task subtree, whether CPU, memory or I/O, never
-delays a worker heartbeat past the broker's timeout. Neither does adapter
-output, however large.
+- **L0, stall attribution.** This is the surviving scope. It is broker-side
+  observation with no behavior change.
+- **The split and the lane.** The same-UID worker/adapter unit split and the
+  heartbeat lane from revision 2 are deferred. They stay as binding
+  requirements until L0 data selects a remedy.
 
-**Non-goals.**
+### Why L0 first
 
-- Part L makes no security claim. A tool can still stop a worker unit with
-  `systemctl --user stop`, or read secrets, as it can today.
-- Part L does not move the execution keeper. That split needs the
-  execution-lifetime work in [I-7](#i-7-lifetime-and-recovery).
+Design review round 2 (`call-26a3d3cda3ad9354de781d50`) found 1 critical and
+about 14 high findings in revision 2's unit split and heartbeat lane. They are
+recorded in [L-split](#l-split-requirements-deferred) and
+[L-lane](#l-lane-requirements-deferred).
 
-### Cgroup layout (user manager of the Machine user)
+The mechanism behind the 48-58 s heartbeat gaps is also **not established**.
+It could be any of these, and each calls for a different remedy:
 
-systemd derives slice nesting from dashes. The existing `cowboy-agents.slice`
-is already `cowboy.slice/cowboy-agents.slice`, so Part L adds a sibling to it
-rather than a new root:
+| Candidate | Remedy it would call for |
+|---|---|
+| Throttling at the shared `cowboy-agents.slice` `MemoryHigh` | A memory policy change, or the split |
+| CPU competition at equal weight | Weights, or the split |
+| I/O pressure | IO weights, or the split |
+| One large data frame blocking `write_all` (up to `MAX_FRAME_BYTES`, `components/wire/src/runtime_wire.rs:47,1082-1109`), or the broker's read of it | An independent liveness transport |
+| A broker-side stall | Neither the split nor the lane helps |
 
-```text
-user@1000.service
-├── app.slice                         MemoryLow=1G (unchanged)
-│   └── cowboy-machine.service        CPUWeight/IOWeight=1000, MemoryLow=1G (unchanged)
-├── cowboy.slice                      no MemoryHigh/MemoryMax (asserted)
-│   ├── cowboy-control.slice          NEW: CPUWeight=1000, IOWeight=1000, MemoryLow=<D5>
-│   │   └── cowboy-worker-<h>-<sess>.service    worker process only; no Delegate
-│   └── cowboy-agents.slice           unchanged budget: MemoryHigh=48G, MemoryMax=64G, MemorySwapMax=4G;
-│       │                             add CPUWeight=100, IOWeight=100
-│       ├── cowboy-agent-<h>-<sess>.service     NEW: provider adapter + tools, Delegate=yes
-│       ├── cowboy-execution-<inc>.service      unchanged (keeper+exec+commands; gap stays documented)
-│       └── cowboy-browser-<instance>.service   unchanged
-└── (other user services, rootless Docker)
-```
+So L0 measures the mechanism before committing to the expensive, review-heavy
+remedies.
 
-- **CPU.** Inside `cowboy.slice`, workers have weight 1000 and tasks 100, so
-  workers get at least about 90% of the slice whenever they are runnable.
-  `cowboy.slice` itself still competes with `app.slice` and other user
-  services at weight 100; Part L does not change that level. The heartbeat
-  needs microseconds of CPU. Its starvation came from the shared `MemoryHigh`
-  throttling and the equal weights, not from the `user@1000` level.
-  [Acceptance](#acceptance-part-l) measures this.
-- **Memory.** No ancestor of a worker carries `MemoryHigh` or `MemoryMax`.
-  `cowboy-control.slice` gets a `MemoryLow` sized from the measured worker RSS
-  times `--max-sessions` (D5). The Columbus assertions propagate it through
-  `cowboy.slice` and `user@1000`.
-- **Columbus.** The `critical-resources` assertions gain three checks:
-  - the worker unit's exact `ControlGroup` is under `cowboy-control.slice`;
-  - no task unit name is in that slice;
-  - `cowboy.slice` and `cowboy-control.slice` carry no `MemoryHigh` or
-    `MemoryMax`.
+### L0 requirements
 
-  The deployment check reads the effective `memory.low`, `memory.max` and
-  `cpu.weight` at each ancestor. The working rule "never place task processes
-  in a protected control service" holds, because the worker unit contains only
-  `cowboy-acp-worker`.
+- **L0-1. Gap record.** On every worker heartbeat gap above 20 s, and on every
+  heartbeat-timeout isolation, the broker records one structured event
+  (Machine telemetry and journal). It records no secrets. The fields are:
+  - the session, worker epoch and unit name;
+  - the gap, and the last and current heartbeat receive times;
+  - broker read state for that connection: whether a frame is in progress,
+    its declared length and bytes read so far, the unread backlog, and
+    whether the backlog deferral (`WORKER_BACKLOG_ISOLATION_LIMIT`) was
+    applied;
+  - for the worker unit's cgroup and each ancestor up to `user@<uid>.service`:
+    the `cpu.pressure`, `memory.pressure` and `io.pressure` totals and the
+    delta since the previous heartbeat, `memory.events` (`high`, `max`, `oom`)
+    deltas, and `memory.current`;
+  - the same pressure totals for the broker's own cgroup, plus the host
+    `/proc/pressure/*`, so a broker stall is distinguishable;
+  - the broker's own event-loop lag over the gap, measured by a periodic tick.
+- **L0-2. Baseline sampler.** For PSI deltas to cover the gap, the broker
+  keeps the previous sample of each live worker's cgroup counters at heartbeat
+  receive. It reads only files below the worker's verified unit cgroup
+  (`ControlGroup` from the user manager). It reads with
+  `openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS)` under
+  `/sys/fs/cgroup`, and fails closed per field (`unavailable`), never per
+  session.
+- **L0-3. Bounded cost.** The sampler reads about a dozen small files per
+  worker per heartbeat (10 s). At `--max-sessions 128` that is well under 1%
+  of one CPU. A configured kill switch disables it.
+- **L0-4. No behavior change.** L0 changes none of these:
+  - isolation decisions, timeouts or the backlog limit;
+  - the wire, worker or adapter;
+  - units or slices.
 
-### Unit split
+  It also changes no `Cargo.toml`, `Cargo.lock`, `components/wire/src` or SDK
+  file. Those are the retained-worker interface inputs that host releases
+  require to be byte-identical (`flake.nix:956-969`). L0 therefore ships as a
+  resident Machine fix.
+- **L0-5. Reproduction.** In a NixOS test VM with the same slice settings
+  (not on production), run `stress-ng` CPU, VM at `MemoryHigh`, I/O, and a
+  32 MiB-frame flood separately. Record which loads reproduce gaps above 45 s
+  and what L0-1 shows for each. The Hawk record from production then
+  classifies real incidents against this matrix.
+- **L0-6. Decision gate.** After two weeks, or after five recorded gaps, the
+  owner selects the remedy from the data:
+  - shared memory throttling → first apply the policy the execution units
+    already use: drop the slice `MemoryHigh` in favor of `MemoryMax` with
+    per-unit limits, and measure again; take the split only if that is
+    insufficient;
+  - frame blocking → L-lane;
+  - CPU or I/O → weights, then the split;
+  - broker stall → a broker-side design.
 
-The worker starts its adapter as a separate transient unit instead of a child
-process:
-
-```text
-systemd-run --user --quiet --collect --pipe --service-type=exec \
-  --unit=cowboy-agent-<h>-<sess> --slice=cowboy-agents.slice \
-  -p KillMode=control-group -p Restart=no -p Delegate=yes -p TimeoutStopSec=15s \
-  -p BindsTo=cowboy-worker-<h>-<sess>.service -p After=cowboy-worker-<h>-<sess>.service \
-  [-p RestrictAddressFamilies=… from the signed network policy] \
-  -- <provider command> <args>
-```
-
-Requirements:
-
-- **L-1. Stdio.** `--pipe` hands the worker's pipe descriptors to the service
-  directly, with no relay process. The ACP wire and the worker's framing are
-  unchanged.
-- **L-2. Placement is verified before use.** After the start, the worker reads
-  the unit's `ControlGroup` and `InvocationID` from the user manager. If the
-  unit is not active in `cowboy-agents.slice`, the worker refuses to send the
-  first ACP frame. This mode does not use the fail-open leaf cgroup
-  (`src/cgroup.rs:14-17`).
-- **L-3. Teardown.**
-  - "Kill the agent subtree" (`cgroup::kill_and_remove`,
-    `src/acp_process.rs:245,314`) becomes `systemctl --user kill
-    --signal=SIGKILL` on the exact unit, followed by waiting for `inactive`.
-  - `BindsTo=` stops the agent unit whenever the worker unit stops, for any
-    reason.
-  - The worker reports exit only once the agent unit is inactive, or is gone
-    and the recorded invocation is not running.
-- **L-4. Containment parity.** The fail-closed owner for named authentication
-  (`src/cgroup/containment`) and the proc-watcher (which reads the agent
-  cgroup) both switch to the agent unit's verified `ControlGroup`. A worker
-  that cannot establish that containment refuses the launch.
-- **L-5. Network policy follows the socket owner.** The signed Provider
-  network policy (`worker_launch::network_property`, `machine_broker.rs:3296`)
-  moves from the worker unit to the agent unit, which is where sockets are
-  opened. The broker keeps refusing it outside `systemd-user` mode. A worker
-  that cannot apply the policy to the agent unit refuses the launch.
-- **L-6. Environment.**
-  - The agent unit gets exactly the environment the adapter gets as a child
-    today, passed by `--setenv` or a 0600 environment file. It does not get
-    the user manager's default environment. Shell-init guards are removed as
-    they are today.
-  - No secret appears in argv or in any `systemd-run` property visible on the
-    user bus. A secret is only ever passed as a path to a 0600 file.
-- **L-7. Mode selection and rollback.**
-  - A Machine flag, `worker_agent_unit = true|false`, selects the mode for
-    each launch. It lives in Device configuration and is readable through
-    Cowboy MCP.
-  - The worker records the mode in its launch receipt, and live sessions keep
-    the mode they launched with.
-  - Rolling back means setting the flag to false. Split sessions then drain on
-    their next revive.
-  - A release that does not understand split sessions must never be
-    activated while any are live. The rollback runbook checks for this.
-- **L-8. Recovery.**
-  - A broker restart re-adopts workers by unit name, as it does today.
-  - Each agent unit belongs to its worker through `BindsTo=`. After a Machine
-    restart, a live worker still holds its agent's pipes, so nothing on the
-    agent side needs re-adoption.
-  - After a host reboot both units are gone, and the session recovers through
-    its existing revive path.
-  - A stale `cowboy-agent-*` unit whose worker is gone is stopped by
-    `BindsTo=`. If one outlives that, the broker's existing
-    `prepare_transient_unit` cleanup removes it before relaunch.
-
-### Heartbeat lane
-
-Slice weights do not help when the heartbeat waits behind bulk output on the
-same writer. Today `heartbeat.tick()` writes the heartbeat frame and then the
-entire outbox (`src/worker.rs:812-813`). The broker also defers isolation for
-up to 300 s while it has unread bytes (`WORKER_BACKLOG_ISOLATION_LIMIT`).
-
-- **L-9. Bounded outbox writes.** `send_outbox` writes at most a bounded batch,
-  in bytes and in events, per wakeup, and yields between batches.
-- **L-10. Liveness is never queued behind data.** When a `Heartbeat` is due,
-  the writer sends it before the next data batch. Frames are never
-  interleaved.
-- **L-11. Broker side.** The broker acts on heartbeat frames ahead of data
-  frames it has already read from the same connection. A heartbeat counts as
-  liveness even while that backlog is still being processed.
-- **L-12. Worker memory bound.** The outbox has a byte ceiling.
-  - Reaching it applies backpressure to the read of the adapter's stdout.
-  - The existing delivery ledger keeps ordering.
-  - The protected worker never buffers unbounded adapter output.
-
-### Acceptance (Part L)
-
-- **Load.** Run `stress-ng` (CPU, VM at `MemoryHigh`, I/O) and a fork storm
-  bounded by `TasksMax` inside `cowboy-agents.slice`, at load above 400 for 30
-  minutes.
-  - Expect zero heartbeat-timeout isolations.
-  - Expect a maximum heartbeat gap under 15 s.
-  - Repeat with the same load in a non-Cowboy `user@1000` service, and again
-    in a Nix build.
-- **Output flood.** An adapter writes 1 GiB to stdout while the broker reader
-  is deliberately slowed. Heartbeats still arrive within 15 s, worker RSS
-  stays under the ceiling, and no events are lost.
-- **Lifecycle.**
-  - Killing the worker stops the agent unit.
-  - Killing the agent makes the worker report exit.
-  - Restarting the Machine leaves workers and agents running.
-  - Rebooting a NixOS test VM converges the units with no human step.
-- **Policy.**
-  - With the IPv4-only network policy, a tool cannot open `AF_INET6`.
-  - A session whose agent unit cannot be placed is refused, never started
-    uncontained.
-
-### Rollout (Part L)
+### L0 rollout
 
 | Step | What | Deploys via | Rollback | Flags |
 |---|---|---|---|---|
-| L-a | Worker code (L-1 to L-12) with `worker_agent_unit` defaulting to false | The **worker pin advance** (`docs/machine-worker-pin-advance-runbook.md`), because the worker binary is in the retained `cowboy-workers` bundle. The resident fix then uses `.#cowboy-machine-writer-host-release`, because Hawk has an active deletion writer. **Never `.#cowboy-machine-release` on Hawk while the writer is active** (it builds `writer=false`) | Previous pin, per the runbook | Machine maintenance; owner go for the pin advance (it replaces every live Hawk worker generation) |
-| L-b | Columbus: `cowboy-control.slice` and its assertions, plus `CPUWeight`/`IOWeight` on `cowboy-agents.slice` | Columbus machine transaction from a fresh Columbus worktree | Descendant revert | Activation (user units only; no network change) |
-| L-c | Set `worker_agent_unit = true` on Hawk | Device configuration (run `cowboy config check` first) | Set the flag to false | None |
-| L-d | The same on OVH, then Falcon | OVH maintenance by `ovh-operator`; Falcon machine transaction | Set the flag to false | Activation |
+| L0-a | Broker gap record and sampler | `.#cowboy-machine-writer-host-release` on Hawk (active deletion writer; resident-only, because `machine_broker.rs` is not among the host-release byte-identity inputs). OVH and Falcon use the resident-fix output that their maintenance runbooks select. **Never `.#cowboy-machine-release` on Hawk while the writer is active** | Previous resident release | Machine component activation (restarts only the resident Machine; workers are retained) |
+| L0-b | VM reproduction | No host | n/a | None |
 
-L-a and L-b are independent. L-b alone only creates an empty slice, and L-a
-alone is inert at its default. Each step can be rolled back on its own.
+L0 needs no worker pin advance, no Columbus change and no network change.
+
+### L-split requirements (deferred)
+
+These requirements bind any future unit split. They come from revision 2 plus
+round 2.
+
+- **L-S1. Exit proof covers both trees.** Persist the worker's and the
+  agent's boot, launch, `InvocationID` and cgroup identities. Require
+  broker-confirmed exit of both trees before revocation, cleanup or
+  replacement. A killed worker cannot report its agent's exit.
+  - Today named-account tree exit checks only the worker cgroup
+    (`machine_broker/systemd_exit.rs:308-319`, `machine_broker.rs:1684-1692,1751-1759`).
+- **L-S2. Scope.** The new launcher applies only to the local-child branch in
+  `SystemdUser` mode. `account_sandbox_v1` sessions keep daemon-owned launch,
+  network restrictions and exit handling (`src/acp_process.rs:75-81`,
+  `components/provider-sdk/src/runtime_policy.rs:17-27`).
+- **L-S3. Gate before Provider code.** A trusted gate runs first in the agent
+  unit, binds the observed invocation and placement to the reserved launch,
+  then releases the Provider. A failed gate is reconciled by exact
+  invocation. The named-worker precedent is `systemd_exit.rs:18-41`.
+- **L-S4. Working directory.** Pass the exact admitted runtime cwd as
+  `WorkingDirectory`. Managed Codex reads `process.cwd()` before ACP
+  initialization for ExecPolicy and MCP enumeration
+  (`src/acp_process.rs:111-116`, `plugins/codex/runtime/launch.mjs:172-184`).
+- **L-S5. Sidecars.** Gateway sidecars (`src/provider/mod.rs:524-529,876-913`,
+  `src/worker.rs:597-601`) move under the task budget with their readiness,
+  network and teardown contracts. Otherwise those launches stay in legacy
+  mode.
+- **L-S6. Environment.** Build a clean exec environment from the effective
+  launch spec, not an overlay of the manager environment. Carry secret values
+  privately through both unit launches. Note that the broker already exports
+  projected credentials in the worker's `Environment` property
+  (`machine_broker.rs:3364-3366,3394-3398`), which is itself an I-2 concern.
+- **L-S7. Containment owners.** Keep the independent native-auth and
+  Direct-worker containment owners (`machine_cli/native_login.rs:128-135`,
+  `src/cgroup/containment/linux.rs:92-115,212-241`). Add a separate owner for
+  split systemd sessions.
+- **L-S8. Selected executable.** Check split capability on the actually
+  selected worker executable, including the generation fallback, before
+  assigning slice and policy (`machine_broker.rs:2567-2585`,
+  `worker_launch.rs:24-43`).
+- **L-S9. Rollback.**
+  - Older Machines reject unknown Device keys (`docs/configuration.md:45-69`).
+  - Specify a drain, verify both units have exited, and remove the key before
+    a downgrade.
+  - Validate the previous writer and cold-recovery binaries against the
+    resulting config and persisted receipts.
+- **L-S10. Adoption is not cleanup.** Keep Hello/snapshot adoption of a
+  surviving worker. `prepare_transient_unit` must not stop a late reconnect.
+  Reconcile a leftover agent by exact invocation after fencing its prior
+  launch (`machine_broker.rs:3337-3345,3685-3697,4179-4208`).
+- **L-S11. OVH.** Both user slices descend from OVH's capped
+  `user-1000.slice`. Gate any OVH rollout on a resource transaction that
+  places the task limit below the split and verifies every worker ancestor
+  (`machine_cli/host_resources.rs:375-383`, `docs/ovh-machine-maintenance.md:39-55`).
+- **L-S12. Placement and slices.** Revision 2's layout remains the target:
+  `cowboy.slice/cowboy-control.slice` for workers,
+  `cowboy.slice/cowboy-agents.slice` for tasks, and no `MemoryHigh` or
+  `MemoryMax` on any worker ancestor. So do its network-policy-follows-socket
+  rule and its fail-closed placement.
+
+### L-lane requirements (deferred)
+
+- **L-L1. Independent liveness transport.** One legal 32 MiB frame can hold
+  `write_all` past 45 s, and the broker must read the whole payload before it
+  sees the next heartbeat. Batch priority cannot meet a 15 s bound.
+  - Liveness needs an independently serviced transport bound to the worker
+    epoch and connection, including during replay.
+  - Stalled data progress is tracked separately, so heartbeats cannot mask
+    the 300 s limit (`runtime_wire.rs:47,1082-1109`,
+    `machine_broker.rs:996-1023,4848-4850`).
+- **L-L2. ACK ordering.** `CommandAck` is released only after its required
+  runtime sequence (for example `TurnStarted`) has been sent
+  (`src/worker.rs:755-763,1086-1101`).
+- **L-L3. No self-deadlock.**
+  - Reserve outbox capacity for command and terminal events.
+  - Keep ACK processing runnable while adapter stdout is paused.
+  - Account for deliberate read pauses in the prompt watchdog
+    (`src/worker.rs:746-768,1086-1094`, `src/acp.rs:3463-3509`).
+- **L-L4. Ingress bounds.** Bound individual records at ingress on both pipes,
+  including an unterminated stderr line and the ACP decoder before event
+  admission. Serialization must check size before allocating the payload.
+  Define how oversized records truncate or terminate
+  (`src/acp.rs:2901-2904,2940`, `runtime_wire.rs:1071-1078`).
 
 ## Part I: identity boundary (target and binding requirements)
 
@@ -327,9 +326,12 @@ identity, including a prompt-injected one.
 - **Trusted launch reservation.** The target unit, exact executable,
   arguments, environment and credential source come from a reservation the
   trusted Machine records, never from caller fields.
-  - Keep the account daemon's fixed command table and its separate
-    administrative verbs (`packaging/account-sandbox/src/units.rs:14`,
-    `protocol.rs:57`).
+  - Keep the account daemon's fixed command table
+    (`packaging/account-sandbox/src/units.rs:14`, `protocol.rs:57`).
+- **Every verb, not just start.** Account-wide stop, admission, logout
+  cleanup and removal (`packaging/account-sandbox/src/daemon.rs:253-291`) are
+  deny-by-default, each with a defined caller and account scope. Lifecycle
+  administration is reserved to its trusted owner.
 - **Secrets.**
   - Deliver them only through `LoadCredential` from a spawner-owned private
     file or descriptor.
@@ -499,7 +501,7 @@ Nothing beyond placement is designed here.
 ### Hosts
 
 - **Hawk.** Runs the Controller and a Machine, and executes work for OVH
-  runtimes through its keepers. Part L comes first, then Part I.
+  runtimes through its keepers. L0 comes first, then any split, then Part I.
 - **OVH.** Runs the Machine and the runtime, with no Controller. The agent
   identity is `ubuntu`, which already has no sudo.
   - Today the account-sandbox control socket is `root:ubuntu 0660`, and the
@@ -508,23 +510,26 @@ Nothing beyond placement is designed here.
     therefore request account units.
   - I-2 closes this. An interim fix that authorizes `uid == ubuntu` does not
     help while tools share `ubuntu`, so the fix waits for Part I.
-- **Falcon (Machine only).** Part L follows Hawk. Part I is a follow-up.
+- **Falcon (Machine only).** L0 follows Hawk. Part I is a follow-up.
 - **macbook-air.** A non-goal: it runs no Cowboy component.
 
 ## Flags needing explicit owner confirmation
 
-- **Part L.**
-  - The worker pin advance (L-a) replaces every live Hawk worker generation.
-  - The Columbus transaction (L-b) changes user units only. It makes no
-    network, firewall, DNS, routing or Stormbird change.
-  - The OVH maintenance (L-d).
+- **L0.** A resident Machine component activation on each host. It restarts
+  only the resident Machine and retains workers. It needs no network,
+  firewall, Columbus or worker pin change.
+- **A later split or lane.** These need a worker pin advance, which replaces
+  every live Hawk worker generation. They also need a Columbus machine
+  transaction, which changes user units only, and OVH maintenance with its
+  resource transaction (L-S11).
 - **Part I.** Every sub-part, because they touch sudo policy, SSH identities,
   durable Machine namespaces, a Controller restart, nftables and per-unit
   network policy.
 
 ## Owner decisions needed
 
-- **Part L go**, including the worker pin advance.
+- **L0 go.** Resident Machine release on Hawk, then OVH.
+- **L0-6.** The remedy selection once the data is in.
 - **D1. Agent identity on Hawk.** Either:
   - keep `draven`, with the operator SSH identity and owner credentials moved
     out (I-1); or
@@ -534,7 +539,7 @@ Nothing beyond placement is designed here.
   owner devices (mirroring OVH's `ovh-operator`), or `pam_u2f`.
 - **D3. R1.** Accept agent-initiated activation as recorded authority, or
   require owner approval for it.
-- **D5. Budgets.** The `cowboy-control.slice` `MemoryLow`, the task
-  `TasksMax`, and the OVH numbers.
+- **D5. Budgets for a later split.** The `cowboy-control.slice` `MemoryLow`,
+  the task `TasksMax`, and the OVH numbers.
 - **D6. Origin ordering.** Whether per-session agent identities (I-5) must
   exist before Antigravity round 3 uses `agent(S)` as an origin.
