@@ -202,6 +202,66 @@ fn a_purged_earlier_spawn_does_not_reverse_the_visible_order() {
 }
 
 #[test]
+fn spawns_filed_out_of_order_still_read_in_creation_order() {
+    let hub = Hub::new();
+    filed_creator(&hub, "work");
+    // Ids come from one counter; overlapping creations can be filed in any order.
+    for id in ["sess-11", "sess-12", "sess-13"] {
+        session(&hub, id, "me", "cowboy");
+    }
+    for id in ["sess-12", "sess-11", "sess-13"] {
+        assert!(hub.place_spawned("creator", id, &me()).unwrap());
+    }
+    assert_eq!(
+        displayed(&hub),
+        [
+            "above", "creator", "sess-11", "sess-12", "sess-13", "foreign", "below"
+        ]
+    );
+    let rows = workspace(&hub);
+    let at = rows
+        .iter()
+        .position(|row| row == "session:creator")
+        .unwrap();
+    assert_eq!(
+        rows[at..at + 4],
+        [
+            "session:creator",
+            "session:sess-11",
+            "session:sess-12",
+            "session:sess-13"
+        ]
+    );
+}
+
+#[test]
+fn a_session_in_trash_between_the_spawns_does_not_break_their_order() {
+    let hub = Hub::new();
+    filed_creator(&hub, "work");
+    for id in ["first", "stray", "second"] {
+        session(&hub, id, "me", "cowboy");
+    }
+    hub.place_spawned("creator", "first", &me()).unwrap();
+    // An unrelated session moved in among them, then trashed.
+    apply(
+        &hub,
+        "order",
+        "reorder",
+        json!({"order": ["below", "foreign", "first", "stray", "creator", "above"]}),
+    );
+    hub.trash_items(&me(), &[], &["stray".into()], 1).unwrap();
+    hub.place_spawned("creator", "second", &me()).unwrap();
+    let list: Vec<_> = displayed(&hub)
+        .into_iter()
+        .filter(|id| id != "stray")
+        .collect();
+    assert_eq!(
+        list,
+        ["above", "creator", "first", "second", "foreign", "below"]
+    );
+}
+
+#[test]
 fn a_creator_at_the_top_level_keeps_its_spawns_there() {
     let hub = Hub::new();
     session(&hub, "creator", "me", "cowboy");

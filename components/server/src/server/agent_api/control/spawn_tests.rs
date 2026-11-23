@@ -3,7 +3,7 @@ use crate::core::{Hub, SessionOrigin, SessionRegistration};
 
 fn prepared(body: Value) -> Result<(Spawn, Value), &'static str> {
     let mut input = json!({"body": body});
-    Spawn::parse(&mut input).map(|spawn| (spawn, input))
+    Spawn::prepare(&mut input).map(|spawn| (spawn, input))
 }
 
 fn actor() -> FolderActor {
@@ -217,31 +217,27 @@ fn a_malformed_body_is_refused_before_admission() {
         Err("invalid_argument")
     );
     assert_eq!(Spawn::check(&json!({"body":{"title":"Fine"}})), Ok(()));
+    // The product handler's own request type decides the rest, so nothing it
+    // would reject is admitted first.
+    for body in [
+        json!({"folder_id":true}),
+        json!({"context_sources":"one"}),
+        json!({"machine_id":7}),
+    ] {
+        assert_eq!(
+            Spawn::check(&json!({ "body": body })),
+            Err("invalid_argument"),
+            "{body}"
+        );
+    }
+    assert_eq!(
+        Spawn::check(
+            &json!({"body":{"folder_id":"","preset":"codex/fast","context_sources":["sess-1"]}})
+        ),
+        Ok(())
+    );
     // The check never changes the caller's input.
     let input = json!({"body":{"title":" Fine "}});
     Spawn::check(&input).unwrap();
     assert_eq!(input["body"]["title"], " Fine ");
-}
-
-#[tokio::test]
-async fn one_creators_creations_wait_for_each_other_but_not_for_other_creators() {
-    use std::time::Duration;
-    let input = |body: Value| json!({"body": body});
-    let (mut a, mut b, mut c) = (input(json!({})), input(json!({})), input(json!({})));
-    let first = Spawn::admit(&mut a, "turn-creator").await.unwrap();
-    let mut second = Box::pin(Spawn::admit(&mut b, "turn-creator"));
-    assert!(
-        tokio::time::timeout(Duration::from_millis(50), &mut second)
-            .await
-            .is_err(),
-        "a second creation must wait for the first to be filed"
-    );
-    // Another creator is never held up.
-    Spawn::admit(&mut c, "turn-other").await.unwrap();
-    drop(first);
-    let second = tokio::time::timeout(Duration::from_secs(5), second)
-        .await
-        .expect("the turn passes on once the first is filed")
-        .unwrap();
-    assert!(second._turn.is_some());
 }

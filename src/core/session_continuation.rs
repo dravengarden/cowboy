@@ -183,13 +183,14 @@ impl Hub {
         // throughout so filling in unranked rows never reverses the user's list.
         let mut display_order: Vec<_> = self.inner.order.lock().iter().rev().cloned().collect();
         // `display_order` is a copy: no order lock is held while settings are read.
-        // The run also steps over rows of sessions deleted since: the workspace
-        // order keeps their keys, and stopping at one would put this spawn
-        // ahead of the live ones.
+        // Rows hidden from the sidebar (deleted or in Trash) never break the
+        // creator's run: the workspace order keeps their keys. Spawns are
+        // ordered by creation, not by the order they happen to be filed in.
         let spawned = |id: &str| {
             mode == Beside::Spawn
-                && (self.spawned_from(id).as_deref() == Some(source)
-                    || !self.inner.sessions.lock().contains_key(id))
+                && (self.hidden(id)
+                    || (self.spawned_from(id).as_deref() == Some(source)
+                        && created_before(id, destination)))
         };
         insert_after(&mut display_order, source, destination, &spawned);
         let order: Vec<_> = display_order.iter().rev().cloned().collect();
@@ -273,6 +274,16 @@ impl Hub {
             );
         }
         Ok(source_meta.title)
+    }
+
+    /// Whether the sidebar shows no row for the session: it is deleted or in
+    /// Trash.
+    fn hidden(&self, session: &str) -> bool {
+        self.inner
+            .sessions
+            .lock()
+            .get(session)
+            .is_none_or(|session| session.meta.trashed_at_ms.is_some())
     }
 
     /// The creator a session was filed beside as a spawn, if any.
@@ -406,6 +417,18 @@ fn resumed_key(session_id: &str) -> String {
         "{}{session_id}",
         settings_keys::SESSION_HANDOFF_RESUMED_PREFIX
     )
+}
+
+/// Whether `earlier` was created before `later`. Session ids come from one
+/// increasing counter, so their numbers are the order in which creations began
+/// even when overlapping creations are filed in another order. An id outside
+/// that form is taken as older.
+fn created_before(earlier: &str, later: &str) -> bool {
+    let number = |id: &str| id.strip_prefix("sess-")?.parse::<u64>().ok();
+    match (number(earlier), number(later)) {
+        (Some(earlier), Some(later)) => earlier < later,
+        _ => true,
+    }
 }
 
 /// Move `destination` right after `source` and the run of `follows` rows

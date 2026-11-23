@@ -1202,7 +1202,7 @@ async fn dispatch(
         ));
     }
     let spawn = if name == "sessions.create" {
-        Some(spawn::Spawn::admit(&mut input, &parent.id).await?)
+        Some(spawn::Spawn::prepare(&mut input)?)
     } else {
         None
     };

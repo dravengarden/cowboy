@@ -376,14 +376,13 @@ the session whose agent made the call.
   level when a folder bound to the spawn's own project would otherwise claim it.
 - **Position.** Both the flat order and the mixed workspace order place the
   session right after its creator and after the creator's earlier spawns, so
-  several spawns read in creation order. `session_spawned_from:<id>` records
-  the creator of each placed spawn so that order survives a Controller restart;
-  it is internal and never reaches the Web. A spawn the user moved away from the
-  creator breaks that run: the next spawn goes right after the creator. Rows of
-  sessions deleted since do not break it. One creator's creations are admitted
-  one at a time, so overlapping calls are filed in the order they were admitted,
-  not in the order their handlers finish; a creation that outlasts 30 seconds
-  stops holding up the creator's later ones.
+  several spawns read in creation order. Creation order is the session id
+  counter, so overlapping calls whose creations finish in another order are
+  still filed in the order they began. `session_spawned_from:<id>` records the
+  creator of each placed spawn so the run survives a Controller restart; it is
+  internal and never reaches the Web. A spawn the user moved away from the
+  creator breaks that run: the next spawn goes right after the creator. Rows
+  hidden from the sidebar (deleted or in Trash) do not break it.
 - **Explicit `folder_id`** wins and nothing is moved. `""` names the top level.
   This is the only case in which the folder's defaults (project, Machine,
   runtime Machine, agent, preset, MCP bindings) apply.
@@ -398,9 +397,10 @@ the session whose agent made the call.
   into a failure that invites a duplicate retry. The same holds for any other
   refusal of the move, which is logged.
 - `title` is optional, trimmed, and cannot be empty, as for `sessions.rename`;
-  an invalid one is refused before the call is admitted, so nothing is created.
-  It is applied through the synchronized title writer the Web's own rename uses.
-  Without it the title is derived from the initial prompt as before.
+  a body the creation handler would reject, such as an invalid title, is refused
+  before the call is admitted, so nothing is created. The title is set right
+  after creation, the way `sessions.rename`, fork and copy set one. Without it
+  the title is derived from the initial prompt as before.
 
 The move uses the ordinary `folders`, `order` and `workspace-order` writers, so
 open Web clients see the row appear in place through their live sync patches,
