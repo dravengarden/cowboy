@@ -188,7 +188,13 @@ impl Store {
         ensure!(within_budget(), "uninstall approval expired");
         dispatch!(
             self,
-            advance_plugin_uninstall(id, from, to, problem, Some(((machine, epoch), within_budget)))
+            advance_plugin_uninstall(
+                id,
+                from,
+                to,
+                problem,
+                Some(((machine, epoch), within_budget))
+            )
         )
     }
 

@@ -103,7 +103,7 @@ its own redesign:
   the removal (`components/machine/src/machine_broker.rs:3296`).
 - Native login dispatch after cancellation: the sandbox can still start the
   vendor login after the request was cancelled or expired
-  (`components/machine/src/machine_cli/native_sandbox.rs:40`).
+  (`components/machine/src/machine_cli/native_sandbox.rs:41`).
 - Native profile reservation after the deadline: preparation can reserve a
   profile after the login's deadline passed
   (`components/machine/src/machine_plugins/native_profile.rs:254`).
@@ -113,7 +113,7 @@ its own redesign:
 - Connection teardown vs terminal transaction: socket teardown removes the
   live token before the asynchronous epoch clear, so a terminal transaction
   can still match a retired connection's epoch
-  (`components/server/src/server/machine_connection.rs:1110`).
+  (`components/server-runtime/src/server/machine_connection.rs:1066`).
 
 ## Read-only observation protocol
 
