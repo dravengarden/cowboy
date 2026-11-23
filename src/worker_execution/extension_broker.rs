@@ -530,6 +530,13 @@ impl Server {
         line.push(b'\n');
         let chunk = base64::engine::general_purpose::STANDARD.encode(line);
         let write_id = format!("{:032x}", rand::random::<u128>());
+        // A new write is an effect: refused while effects cannot be recorded
+        // durably (retries of one already sent keep going).
+        if client.ledger().is_some_and(|ledger| ledger.unwritable()) {
+            return Err(Failure::NotSent(
+                "the execution ledger cannot be written".into(),
+            ));
+        }
         for _ in 0..50 {
             let reply = client
                 .invoke_classified(

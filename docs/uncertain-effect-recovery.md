@@ -259,46 +259,88 @@ These residuals have one cause: the worker stops the unit while that unit
 still has relayed requests in flight. The facade cannot close every
 interleaving from its side, so they are left to L1c.
 
-### L1c: the worker drains a unit's relays before stopping it (proposed)
+### L1c: drain in-flight requests at a graceful unit stop
 
-At teardown (generation cutover, hibernation, stop), the worker fences the
-unit's new mutations as today, then waits a bounded time (10 s, inside the
-existing 60 s `TEARDOWN_SETTLE`) until the endpoint has no relay in flight,
-and only then stops the account sandbox unit. Replies then reach the facade,
-nothing is undelivered, and the ledger records nothing. A unit that keeps
-issuing requests is stopped at the bound, and its cut-off requests park the
-session as today (fail closed). No durable state, wire or Controller change
-is involved. Worker code: `.#cowboy-machine-release` with a worker pin advance.
-It needs its own short design review.
+Status: implemented, unmerged. Revised after design review
+(`call-4b479734`). Ships with the next worker pin advance, except for the
+proxy half, which is Plugin code (see Release).
 
-Tests: a command whose process tree exits 7 s after SIGTERM is confirmed and
-forgotten at turn end with a single `process/terminate`; the turn's end joins
-a stop whose reply is held; a command whose start is pending when the turn
-ends is registered, stopped and forgotten.
+Where the cut happens. When the worker ends a session, the ACP connection
+drops the proxy's stdio. The proxy ends `agy`'s stdin, and once `agy` exits
+it closes its execution connection at once (`launch.mjs`), with any facade
+request still in flight. The worker then stops the unit
+(`SandboxUnit::stop`). Either close can cut off a reply. The worker ledger
+then records it as undelivered and parks the session. In the 04:50 case the
+endpoint disconnected 60 ms after the turn ended, before the unit stopped
+(+150 ms). So the proxy's own close was the cut, and both halves are needed.
 
-### Worker-side settlement (L1w): not adopted
+Proxy half (Antigravity Plugin):
 
-The design deferred publishing a lost stop behind a durable pending record in
-the worker ledger and settled it by observation. Design review (high,
-`call-830719b8`) found it unsound in ways that need changes well beyond this
-fix:
+- At exit, `facade.quiesce()` stops every command's expiry timer and makes
+  expiry and turn cleanup start no new stop or read.
+- `Connection.idle(10 s)` then admits no new request at the connection
+  boundary (except a report of an unknown outcome), and waits until no
+  request awaits its reply, twice in a row, so a report caused by a late
+  reply is sent and answered too.
+- It first waits for the facade's admitted turn work to settle
+  (`facade.settled`), including a publish that is waiting for a notification
+  with no request pending, through its verification and report. Only then,
+  within the same 10 s, does the proxy send `cowboy/drained`, its
+  acknowledgement that every reply it awaited arrived, and close the
+  connection. If time runs out, it sends no acknowledgement.
+- A closed ACP output pipe (the worker closed it first) no longer ends the
+  proxy before the drain: late writes are dropped.
 
-- `exited` precedes `closed`, and a process id alone cannot prove permanent
-  absence across a keeper replacement or a late start;
-- the worker's own cleanup paths (`cancel_turn`, `finish_turn`, `settle_all`)
-  send their own stops, so "one stop per process" needs a worker-wide stop
-  admission;
-- a crash between the keeper's admission and the loss classification leaves
-  no record, and the existing `mark_uncertain` publishes even when its write
-  failed, so a sequence can be reused after acknowledgement;
-- prompt admission can race a late publication, both after `TurnEnded` and at
-  a successor's handshake;
-- a helper's stop can hide an unknown publish outcome;
-- an older worker launched as a fallback drops unknown record fields.
+Worker half (worker release):
 
-Two of these are pre-existing ledger weaknesses, independent of L1w: publishing
-a sequence whose write failed, and the multiple worker stop paths. They are
-recorded under Open items and belong with L2.
+- `account_sandbox::RelayQuiet` counts the unit's relays from
+  `Relays::spawn` until the reply is written or recorded undelivered. It
+  travels in `ExecutionBridge`, so no module edge is added.
+- `SandboxUnit::stop` first enters the drain state. From then on the endpoint
+  relays only `process/read`, `process/terminate` and the unit's
+  `cowboy/uncertainEffect` report (recorded, never forwarded). It refuses
+  everything else, including `process/write` and `process/signal`, before
+  forwarding. Admission and counting are one step (`RelayQuiet::try_enter`
+  counts first, then checks the drain), so a stop that saw zero after
+  raising the drain cannot miss a later request.
+- It then waits, within 10 s overall, for the count to reach zero and for the
+  unit's `cowboy/drained`, which the endpoint answers itself and never
+  forwards. Only that acknowledgement proves receipt. A unit exit, a
+  disconnect or the bound does not.
+- Every reply written while draining is classified at once with the
+  ledger's undelivered rules (`unread_effects`). These cover mutations,
+  result-carrying reads and stops, and extension results, and a definite
+  refusal leaves no effect. Only the effects' names are kept, at most 256;
+  beyond that they are recorded at once. They stay unproven until the
+  acknowledgement arrives on the same socket. If the stop is forced, or the
+  socket ends while draining, they are recorded as uncertain. So is a reply
+  written after either, or after the acknowledgement. A reopened socket can
+  never acknowledge an earlier socket's replies.
+- A replacement unit (initialize retry) has its drain state reset before its
+  listener is published.
+
+Scope and residuals:
+
+- Graceful stops through `process.shutdown()` only: cutover, owner stop,
+  ACP end. A forced stop stays immediate: the watchdog's hard recycle, an
+  external systemd stop of the worker, account quiesce or kill switch, or a
+  daemon stop on owner disconnect.
+- Pre-existing and unchanged: `Relays::drop` records undelivered replies on a
+  detached task, so a worker that exits before a late reply arrives records
+  nothing. The drain makes this much rarer, but only worker-side durable
+  relay accounting removes it. That is an open item.
+- The count is per execution client. After an initialize retry, a new unit
+  can wait on an old unit's relays, which only delays it, bounded.
+- The Antigravity Plugin's owned-source integrity must be refreshed by the
+  component release for these bytes.
+- A cleanup read admitted after the count reached zero but before the stop
+  can still be cut off, and parks the session.
+
+Tests: in the worker, a held relay keeps the count until its reply was
+handled; a relay whose socket closed counts until it is recorded undelivered,
+which still parks; a draining unit relays only cleanup. In the proxy, the
+connection waits for a held reply, bounded, and a quiesced facade's expiry
+sends nothing.
 
 ## L3: shorter Controller outages (Machine host release)
 
@@ -337,6 +379,120 @@ Activator quiet moment: not adopted. The component activator is
 Columbus-owned. Waiting for "no in-flight execution" on a busy Controller would
 delay releases without bound. L1 removes the observed false positive, and
 serializing concurrent activations is the coordinator's existing policy.
+
+## L2a: worker ledger hardening (worker release)
+
+Pre-existing worker bugs found by the reviews. All are in
+`src/worker_execution{,/ledger}.rs`, and L2a ships these four, narrowed after
+three review rounds (`call-8a6c5e81`, `call-b856f2db`, `call-878a5459`):
+
+- Send counting (F7). The worker counts each request's sends at the frame's
+  own write boundary (`Client::sending`). A response to a request sent more
+  than once answers a resend, and the keeper may have admitted an earlier
+  send whose reply was lost, so `invoke_classified` treats a later refusal as
+  possible admission. A refusal of the only send keeps meaning "not
+  admitted". A batch entry never written is not a send. Retries after
+  `Unavailable`/`Capacity` count, because the Controller can report
+  `Unavailable` after the Machine received the request.
+- Resends below the worker. When a bulk lane fails, the Machine resends
+  unanswered requests itself (`machine_cli`), and the worker never sees those
+  resends. So any keeper refusal of an effectful request (a mutation,
+  `process/write`, `process/signal` or `process/terminate`) counts as possible
+  admission, whatever the send count. That includes `Capacity`, which one
+  copy can receive while another copy was admitted (round 2). A refused read
+  stays a plain refusal. This was chosen over a "resent by the Machine" flag
+  on `RuntimeReply`: that type denies unknown fields, so the flag would need
+  protocol gating in both the broker and `machine_cli`, where this needs a
+  worker change only. Cost, accepted: an effectful request refused on its
+  only send now parks.
+- Relay accounting. A relayed `process/write` or `process/signal` with an
+  unknown outcome, or answered but never delivered to the unit, is recorded
+  like a mutation (the same `effectful` rule).
+- Worker-owned writes. Each new `process/write` from the extension broker
+  checks the unwritable latch first, while retries of a write already sent
+  continue. Extension server starts are unchanged from before L2a (a
+  redesign item in L2, below).
+- Time-based sequence. Uncertain-effect sequences are
+  `max(previous + 1, now in Unix ms)`. The Controller only compares them
+  (`observed`, `acknowledged`, `merge_uncertain_effect`), so no reader changes.
+  An older worker reading a newer record continues with `+1`, which stays
+  monotonic.
+- A failed write refuses later effects. `mark_uncertain` still publishes when
+  its ledger write fails (fail closed), and it latches the ledger unwritable.
+- The unwritable latch refuses every effectful admission for the worker's
+  lifetime: `MUTATIONS`, `process/write`, `process/signal`, extension calls
+  (`admit_call`) and the worker's own server starts (`record_server`).
+  `process/read` and `process/terminate` remain for cleanup.
+
+Stop handling is unchanged from before L2a: no stop claims and no ownership
+table. Stop ownership moved to L2 as a redesign item (below).
+
+Tests: a resend followed by `WorkspaceChanged` is uncertain. A refused
+effect is possibly admitted, while a refused read is not. A batch entry never
+written is not a send. An unwritable ledger, made unwritable by a directory
+occupying its path so the rename fails whatever the privileges, publishes
+the effect to its observer with its sequence. It then refuses mutations,
+extension calls, server starts, `process/write` and `process/signal`, but not
+reads and stops. The sequence assertions are time-based.
+
+Release: worker code, so `.#cowboy-machine-release` with a worker pin advance.
+
+## L2 redesign item: stop ownership
+
+L2a's stop-claim mechanism was dropped after three review rounds left high
+findings. The redesign has to satisfy all of these:
+
+- One stop per process lifetime across the unit's relayed stop and the
+  worker's `cancel_turn`, `finish_turn` and `settle_all`, so a process
+  handling a first signal never gets a second.
+- Every caller learns one typed outcome, `Confirmed` (with the executor's
+  result), `NotSent` (retryable, understood by the facade and the worker) or
+  `Unknown`. The owner gets the same typed outcome rather than a raw
+  executor error.
+- The stop owner and the exit observer finalize the outcome together. A
+  worker stop that becomes `Unknown` after the bounded exit wait must still
+  be recorded.
+- A stop must never reach a later process that reuses its id. That includes
+  an untracked stop (an id this ledger never recorded) whose delivery stalls
+  while a start of the id is admitted. Two options: reserve such ids in a
+  bounded in-flight table that start admission checks, or answer
+  "already gone" without forwarding when absence is authoritative.
+- Claims are bounded and retire with their lifetime, including a claim
+  whose process exit was observed while its stop was still pending.
+- Teardown includes stops queued by its own final `terminate_all` pass.
+- Executor-side lifetime binding, the robust option: the keeper (or the
+  executor) binds a stop to a process incarnation, so a stop for an older
+  incarnation is a no-op whatever its delivery order. This removes the
+  worker-side id-reuse tables.
+
+## L2 redesign item: an uncertain extension server start
+
+L2a's review rounds tried twice to classify an extension server's start
+(`extension_broker::start`) and dropped it. The redesign must cover all
+three findings:
+
+- The start must be classified (`invoke_classified`). A possibly admitted
+  start is recorded uncertain, stops counting as starting, and keeps its
+  process recorded so teardown ends it (narrowed round 1).
+- The 40 s discovery timeout must not leave a start recorded as starting.
+  The start needs a completion owner that survives the discovery's
+  cancellation (narrowed round 2).
+- Worker teardown waits at most 60 s (`TEARDOWN_SETTLE`) and blocks on
+  starting processes. Before that deadline it must finalize every unresolved
+  start as uncertain, publishing the uncertainty before it clears starting,
+  so runtime shutdown never drops a start without a record (narrowed
+  round 3).
+
+## L2 redesign item: a Controller-provided sequence floor
+
+From round 1 of L2a: if a ledger write fails, the Controller can acknowledge
+a sequence the disk never recorded. A successor whose wall clock was set
+back, or that follows a burst of increments, can then reuse that sequence.
+A floor in `StartSession` alone is not enough, because Machine-owned
+relaunches (generation cutover, fallback) reuse a cached `StartSession`.
+Every launch path must obtain a fresh authoritative floor,
+`max(observed, acknowledged)` from the Controller's durable record, or hold
+effect admission until it can.
 
 ## L2: trusted receipts in the worker (design only; Machine release)
 
@@ -438,13 +594,13 @@ post-reconnect check and Check-and-resume follow L2 as designed below.
   with staggered attempts across the resolved addresses (Happy Eyeballs), so
   a blackholed first address cannot starve a reachable fallback. Today a dial
   outside the window is unbounded, as it always was.
-- F7 worker fix (with L2).
-- Worker ledger: `mark_uncertain` publishes a sequence even when the ledger
-  write failed, so a successor can reuse an acknowledged sequence. Publish
-  only after the write commits, and hold dispatch on failure (with L2).
-- Worker stop paths (`cancel_turn`, `finish_turn`, `settle_all`) each send
-  their own `process/terminate`: give the worker one stop admission per
-  process (with L2).
+- L1c's worker half ships with the next worker pin advance (not the current
+  L0 one); its proxy half with the next Antigravity Plugin release.
+- L2: worker-side durable relay accounting, so a reply arriving after the
+  worker exited still parks. Pre-existing: `Relays::drop` records undelivered
+  replies on a detached task, so a worker that exits first records nothing.
+- L2: a cleanup read admitted after the drain count reached zero but before
+  the unit stops can be cut off. It parks (fail closed), but needlessly.
 
 ## Release artifacts
 

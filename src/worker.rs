@@ -737,7 +737,7 @@ async fn connected(
     let mut agent_done = false;
     if let Some(execution) = &shared.execution {
         for frame in execution.frames(true) {
-            write_frame(&mut writer, &frame).await?;
+            write_frame(&mut writer, execution.sending(&frame)).await?;
         }
     }
     send_outbox(&shared, &mut writer, &mut last_sent).await?;
@@ -778,7 +778,7 @@ async fn connected(
                         // frames(true) retains request and effect identities.
                         if let Some(execution) = &shared.execution {
                             for frame in execution.frames(true) {
-                                write_frame(&mut writer, &frame).await?;
+                                write_frame(&mut writer, execution.sending(&frame)).await?;
                             }
                         }
                         send_outbox(&shared, &mut writer, &mut last_sent).await?;
@@ -856,7 +856,7 @@ pub async fn send_outbox<W: tokio::io::AsyncWrite + Unpin>(
     }
     if let Some(execution) = &shared.execution {
         for frame in execution.frames(false) {
-            write_frame(writer, &frame).await?;
+            write_frame(writer, execution.sending(&frame)).await?;
         }
     }
     Ok(())

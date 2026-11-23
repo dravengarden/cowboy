@@ -31,6 +31,10 @@ import { callGuidance, openMemory } from "./memory.mjs";
 import { buildProjection, withUnavailableSkills } from "./projection.mjs";
 import { AcpProxy } from "./proxy.mjs";
 
+/** How long the proxy waits for in-flight execution requests before it
+ * closes the connection at exit (design L1c). */
+const DRAIN_MS = 10_000;
+
 export const AGY_ARGUMENTS = Object.freeze([
   "acp",
   "--disable-telemetry",
@@ -462,7 +466,14 @@ export async function runProxy({
   runtime.catch((error) =>
     process.stderr.write(`cowboy: Antigravity unavailable: ${error.message}\n`),
   );
-  const write = (stream) => (message) => stream.write(`${JSON.stringify(message)}\n`);
+  // The worker may close the ACP output first at exit; a late update must not
+  // end this process while its execution replies still drain.
+  output.on?.("error", () => {});
+  const write = (stream) => (message) => {
+    if (!stream.destroyed && stream.writable !== false) {
+      stream.write(`${JSON.stringify(message)}\n`);
+    }
+  };
   const proxy = new AcpProxy({
     agent: write(agy.stdin),
     client: write(output),
@@ -497,6 +508,21 @@ export async function runProxy({
   proxy.settleExit();
   const ready = await runtime.catch(() => undefined);
   ready?.server.close();
+  // Requests still in flight (a turn's command stops and their confirming
+  // reads) get their replies before the connection closes: a reply cut off
+  // here would leave its effect unknown to the worker (design L1c). No new
+  // facade work starts meanwhile.
+  ready?.facade.quiesce();
+  // Acknowledged only once the facade's admitted work settled (a publish
+  // waiting for a notification included) and no reply is owed; otherwise the
+  // worker records its drained replies as possibly unread (fail closed).
+  const deadline = Date.now() + DRAIN_MS;
+  if (
+    (await ready?.facade.settled(DRAIN_MS)) &&
+    (await ready.connection.idle(Math.max(0, deadline - Date.now())))
+  ) {
+    await ready.connection.drained(Math.max(1, deadline - Date.now()));
+  }
   ready?.connection.close();
   return signal ? 1 : (code ?? 1);
 }

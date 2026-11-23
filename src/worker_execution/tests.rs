@@ -83,6 +83,8 @@ impl Target {
         let task = tokio::spawn(async move {
             while notified.recv().await.is_some() {
                 for frame in relay.frames(false) {
+                    // Delivered to the scripted relay: one send attempt.
+                    relay.sending(&frame);
                     let Frame::ExecutionRequest { request } = frame else {
                         continue;
                     };
@@ -388,7 +390,7 @@ async fn lost_mutation_replies_mark_the_effect_uncertain_durably() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("session.json");
     let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
-        "fs/remove" => Reply::Answer(Response::Refused {
+        "fs/getMetadata" => Reply::Answer(Response::Refused {
             reason: wire::Refusal::Capacity,
         }),
         "fs/writeFile" | "process/terminate" => Reply::Answer(Response::Operation {
@@ -403,10 +405,10 @@ async fn lost_mutation_replies_mark_the_effect_uncertain_durably() {
     ledger.set_observer(Box::new(move |method, sequence| {
         seen.lock().push((method.to_owned(), sequence));
     }));
-    // A refusal before admission had no effect.
+    // A refused read had no effect (a refused effect may have had one).
     let refused = target
         .client
-        .relay("fs/remove".into(), json!({"path": "file:///target/a"}))
+        .relay("fs/getMetadata".into(), json!({"path": "file:///target/a"}))
         .await;
     assert!(refused.get("error").is_some());
     assert!(ledger.uncertain_effect().is_none());
@@ -427,7 +429,13 @@ async fn lost_mutation_replies_mark_the_effect_uncertain_durably() {
     assert_eq!(lost.pointer("/error/data/outcome"), Some(&json!("unknown")));
     assert!(refused.pointer("/error/data").is_none());
     assert_eq!(ledger.uncertain_effect().as_deref(), Some("fs/writeFile"));
-    assert_eq!(*observed.lock(), [("fs/writeFile".to_owned(), 1)]);
+    let first = {
+        let seen = observed.lock();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0, "fs/writeFile");
+        seen[0].1
+    };
+    assert!(first > 1, "time-based: never reused after a lost write");
     // A lost termination result is uncertain too.
     target
         .client
@@ -444,7 +452,7 @@ async fn lost_mutation_replies_mark_the_effect_uncertain_durably() {
         Some("process/terminate")
     );
     // Each lost reply advances the sequence the owner acknowledges.
-    assert_eq!(reopened.uncertain_sequence(), 2);
+    assert!(reopened.uncertain_sequence() > first);
     assert!(Ledger::open("other", Some(root.path().join("session.json"))).is_err());
 }
 
@@ -785,7 +793,7 @@ async fn an_uncertain_effect_reported_by_the_agent_side_is_recorded_unforwarded(
         .await;
     assert!(reply.get("result").is_some());
     assert_eq!(ledger.uncertain_effect().as_deref(), Some("file publish"));
-    assert_eq!(ledger.uncertain_sequence(), 1);
+    assert!(ledger.uncertain_sequence() > 0);
     assert!(target.log().is_empty(), "never forwarded to the target");
 }
 
@@ -997,4 +1005,400 @@ async fn the_broker_runs_target_servers_for_the_unit_inside_turns() {
         .relay("cowboy/extensionCall".into(), json!({"name": "nope"}))
         .await;
     assert!(unknown.get("error").is_some());
+}
+
+#[tokio::test]
+async fn a_refusal_after_a_resend_does_not_hide_a_possible_admission() {
+    // F7: the first send's reply is lost; the resend is refused. The keeper
+    // may have admitted the first send, so the effect is uncertain.
+    let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
+        "fs/writeFile" => Reply::Hold,
+        _ => completed(json!({"result": {}})),
+    }));
+    let ledger = ledger(&target.client, None);
+    ledger.begin_turn("turn-1");
+    let client = Arc::clone(&target.client);
+    let relay = tokio::spawn(async move {
+        client
+            .relay(
+                "fs/writeFile".into(),
+                json!({"path": "file:///target/a", "dataBase64": ""}),
+            )
+            .await
+    });
+    eventually(|| !target.held.lock().is_empty()).await;
+    // A reconnect resends the same request under its identity.
+    let resent = target.client.frames(true);
+    assert_eq!(resent.len(), 1);
+    target.client.sending(&resent[0]);
+    let request = target.held.lock().pop().unwrap();
+    answer(
+        &target.client,
+        request,
+        Response::Refused {
+            reason: wire::Refusal::WorkspaceChanged,
+        },
+    );
+    let reply = relay.await.unwrap();
+    assert_eq!(
+        reply.pointer("/error/data/outcome"),
+        Some(&json!("unknown"))
+    );
+    assert_eq!(ledger.uncertain_effect().as_deref(), Some("fs/writeFile"));
+}
+
+#[tokio::test]
+async fn a_relay_counts_in_flight_until_its_reply_is_handled() {
+    // Design L1c: a unit's stop waits for this count.
+    let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
+        "fs/readFile" => Reply::Hold,
+        _ => completed(json!({"result": {}})),
+    }));
+    let _ledger = ledger(&target.client, None);
+    let quiet = Arc::clone(&target.client.relays);
+    assert!(
+        quiet.drained(Duration::from_millis(10)).await,
+        "idle: immediate"
+    );
+    let mut relays = relay::Relays::new(Arc::clone(&target.client));
+    relays.spawn(
+        json!(1),
+        "fs/readFile".into(),
+        json!({"path": "file:///target/a"}),
+        quiet.try_enter("fs/readFile").unwrap(),
+    );
+    eventually(|| !target.held.lock().is_empty()).await;
+    assert_eq!(quiet.in_flight(), 1);
+    assert!(
+        !quiet.drained(Duration::from_millis(50)).await,
+        "held past the bound"
+    );
+    let waiting = {
+        let quiet = Arc::clone(&quiet);
+        tokio::spawn(async move { quiet.drained(Duration::from_secs(10)).await })
+    };
+    target.release(json!({"result": {"dataBase64": ""}}));
+    // Finished but not yet handed to the unit: still owed.
+    let done = relays.next().await;
+    assert_eq!(quiet.in_flight(), 1);
+    drop(done);
+    assert!(waiting.await.unwrap(), "drained once the reply was handled");
+    assert_eq!(quiet.in_flight(), 0);
+}
+
+#[tokio::test]
+async fn a_relay_whose_socket_closed_counts_until_recorded_undelivered() {
+    let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
+        "process/terminate" => Reply::Hold,
+        _ => completed(json!({"result": {}})),
+    }));
+    let ledger = ledger(&target.client, None);
+    let quiet = Arc::clone(&target.client.relays);
+    let mut relays = relay::Relays::new(Arc::clone(&target.client));
+    relays.spawn(
+        json!(1),
+        "process/terminate".into(),
+        json!({"processId": "p1"}),
+        quiet.try_enter("process/terminate").unwrap(),
+    );
+    eventually(|| !target.held.lock().is_empty()).await;
+    // The unit's connection ends with the stop in flight.
+    drop(relays);
+    assert_eq!(quiet.in_flight(), 1);
+    target.release(json!({"result": {"running": false}}));
+    assert!(quiet.drained(Duration::from_secs(10)).await);
+    // Answered after the socket closed: recorded as undelivered (fail closed).
+    assert_eq!(
+        ledger.uncertain_effect().as_deref(),
+        Some("process/terminate")
+    );
+}
+
+#[test]
+fn a_draining_unit_relays_only_cleanup() {
+    let quiet = Arc::new(crate::account_sandbox::RelayQuiet::default());
+    assert!(quiet.try_enter("fs/writeFile").is_some());
+    assert_eq!(quiet.in_flight(), 0, "a dropped guard leaves no count");
+    quiet.begin_drain();
+    for method in [
+        "process/read",
+        "process/terminate",
+        "cowboy/uncertainEffect",
+    ] {
+        assert!(quiet.try_enter(method).is_some(), "{method}");
+    }
+    for method in [
+        "fs/writeFile",
+        "process/start",
+        "process/write",
+        "process/signal",
+        "fs/readFile",
+    ] {
+        assert!(quiet.try_enter(method).is_none(), "{method}");
+    }
+    assert_eq!(quiet.in_flight(), 0, "a refused entry leaves no count");
+    // A replacement unit relays everything again.
+    quiet.end_drain();
+    assert!(quiet.try_enter("fs/writeFile").is_some());
+}
+
+fn recorded_quiet() -> (
+    Arc<crate::account_sandbox::RelayQuiet>,
+    Arc<Mutex<Vec<String>>>,
+) {
+    let quiet = Arc::new(crate::account_sandbox::RelayQuiet::default());
+    let recorded = Arc::new(Mutex::new(Vec::<String>::new()));
+    let sink = Arc::clone(&recorded);
+    quiet.set_recorder(Box::new(move |effects| {
+        sink.lock().extend_from_slice(effects)
+    }));
+    (quiet, recorded)
+}
+
+#[test]
+fn only_the_units_acknowledgement_proves_a_drained_reply_was_read() {
+    let (quiet, recorded) = recorded_quiet();
+    // Before the drain the unit reads its replies as usual.
+    quiet.written(&["process/read"]);
+    // Acknowledged: nothing is recorded.
+    quiet.begin_drain();
+    quiet.written(&["process/terminate"]);
+    quiet.acknowledge();
+    assert!(recorded.lock().is_empty());
+    // A reply after the acknowledgement is unread (the unit is closing).
+    quiet.written(&["process/read"]);
+    assert_eq!(*recorded.lock(), ["process/read"]);
+    // Stopped without an acknowledgement: every drained reply, also one
+    // written after the forced stop, is recorded.
+    quiet.begin_drain();
+    quiet.written(&["fs/writeFile"]);
+    quiet.forced();
+    quiet.written(&["tools/call"]);
+    quiet.acknowledge();
+    assert_eq!(
+        *recorded.lock(),
+        ["process/read", "fs/writeFile", "tools/call"]
+    );
+}
+
+#[test]
+fn a_replacement_socket_cannot_acknowledge_an_earlier_sockets_replies() {
+    let (quiet, recorded) = recorded_quiet();
+    quiet.begin_drain();
+    quiet.written(&["process/terminate"]);
+    // The socket ends before the unit read it; a new socket acknowledges.
+    quiet.socket_ended();
+    quiet.acknowledge();
+    assert_eq!(*recorded.lock(), ["process/terminate"]);
+}
+
+#[test]
+fn unproven_receipts_are_bounded() {
+    let (quiet, recorded) = recorded_quiet();
+    quiet.begin_drain();
+    for _ in 0..300 {
+        quiet.written(&["process/read"]);
+    }
+    // Beyond the bound they are recorded at once instead of kept.
+    assert!(!recorded.lock().is_empty());
+    quiet.acknowledge();
+    assert!(recorded.lock().len() <= 300);
+}
+
+#[test]
+fn an_unread_refusal_leaves_no_effect_and_an_answered_mutation_does() {
+    use super::ledger::unread_effects;
+    let refusal = json!({"error": {"code": -32000, "message": "refused"}});
+    assert!(unread_effects("fs/writeFile", false, &refusal).is_empty());
+    assert_eq!(
+        unread_effects("fs/writeFile", false, &json!({"result": {}})),
+        ["fs/writeFile"]
+    );
+    assert!(unread_effects("fs/readFile", false, &json!({"result": {}})).is_empty());
+}
+
+#[tokio::test]
+async fn a_drain_acknowledgement_is_answered_by_the_endpoint_and_never_forwarded() {
+    let target = Target::new(processes());
+    let _ledger = ledger(&target.client, None);
+    target.client.relays.begin_drain();
+    let reply = target
+        .client
+        .relay(crate::account_sandbox::DRAINED.into(), json!({}))
+        .await;
+    assert!(reply.get("result").is_some());
+    assert!(
+        target
+            .client
+            .relays
+            .wait_acknowledged(Duration::from_millis(10))
+            .await
+    );
+    assert!(target.log().is_empty());
+}
+
+#[tokio::test]
+async fn a_batch_entry_never_written_is_not_a_send() {
+    // The second entry of a batch whose first write failed was never sent:
+    // its later refusal on its first actual send is not an admission.
+    let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
+        "fs/readFile" => Reply::Hold,
+        _ => completed(json!({"result": {}})),
+    }));
+    let ledger = ledger(&target.client, None);
+    ledger.begin_turn("turn-1");
+    let client = Arc::clone(&target.client);
+    let relay = tokio::spawn(async move {
+        client
+            .relay("fs/readFile".into(), json!({"path": "file:///target/a"}))
+            .await
+    });
+    eventually(|| !target.held.lock().is_empty()).await;
+    // A reconnect batch is built but its write fails before this entry.
+    assert_eq!(target.client.frames(true).len(), 1);
+    let request = target.held.lock().pop().unwrap();
+    answer(
+        &target.client,
+        request,
+        Response::Refused {
+            reason: wire::Refusal::WorkspaceChanged,
+        },
+    );
+    let reply = relay.await.unwrap();
+    assert!(reply.pointer("/error/data").is_none());
+    assert!(ledger.uncertain_effect().is_none());
+}
+
+/// What a ledger's observer was told: each published method and sequence.
+type Published = Arc<Mutex<Vec<(String, u64)>>>;
+
+/// A ledger whose next durable write fails: a directory now occupies its
+/// path, so the atomic rename cannot replace it (whatever the privileges).
+fn unwritable_ledger(target: &Target, root: &std::path::Path) -> (Arc<Ledger>, Published) {
+    let path = root.join("session.json");
+    let ledger = ledger(&target.client, Some(path.clone()));
+    std::fs::create_dir(&path).unwrap();
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&observed);
+    ledger.set_observer(Box::new(move |method, sequence| {
+        seen.lock().push((method.to_owned(), sequence));
+    }));
+    (ledger, observed)
+}
+
+#[tokio::test]
+async fn an_unwritable_ledger_publishes_then_refuses_every_effect_but_cleanup() {
+    let root = tempfile::tempdir().unwrap();
+    let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
+        "fs/writeFile" => Reply::Answer(Response::Operation {
+            outcome: Outcome::Unknown,
+        }),
+        _ => completed(json!({"result": {}})),
+    }));
+    let (ledger, observed) = unwritable_ledger(&target, root.path());
+    ledger.begin_turn("turn-1");
+    target
+        .client
+        .relay(
+            "fs/writeFile".into(),
+            json!({"path": "file:///target/a", "dataBase64": ""}),
+        )
+        .await;
+    // Published although its write failed.
+    {
+        let seen = observed.lock();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0, "fs/writeFile");
+        assert_eq!(seen[0].1, ledger.uncertain_sequence());
+    }
+    assert!(ledger.unwritable());
+    for (method, params) in [
+        ("fs/createDirectory", json!({"path": "file:///target/b"})),
+        ("process/write", json!({"processId": "p1"})),
+        ("process/signal", json!({"processId": "p1"})),
+    ] {
+        let refused = target.client.relay(method.into(), params).await;
+        assert!(
+            refused["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("cannot be written"),
+            "{method}"
+        );
+    }
+    assert!(ledger.admit_call().is_err());
+    assert!(ledger.record_server("cowboy-worker-mcp-x").is_err());
+    // Observation and stopping remain.
+    for method in ["process/read", "process/terminate"] {
+        let reply = target
+            .client
+            .relay(method.into(), json!({"processId": "p1"}))
+            .await;
+        assert!(reply.get("result").is_some(), "{method}");
+    }
+}
+
+#[tokio::test]
+async fn a_refused_effect_is_possibly_admitted_but_a_refused_read_is_not() {
+    // The Machine may resend below the worker (a bulk-lane retry), so a
+    // refusal of an effectful request cannot prove it had no effect.
+    let target = Target::new(Arc::new(|_| {
+        Reply::Answer(Response::Refused {
+            reason: wire::Refusal::WorkspaceChanged,
+        })
+    }));
+    let ledger = ledger(&target.client, None);
+    ledger.begin_turn("turn-1");
+    let read = target
+        .client
+        .relay("fs/readFile".into(), json!({"path": "file:///target/a"}))
+        .await;
+    assert!(read.get("error").is_some());
+    assert!(read.pointer("/error/data").is_none());
+    assert!(ledger.uncertain_effect().is_none());
+    let write = target
+        .client
+        .relay(
+            "fs/writeFile".into(),
+            json!({"path": "file:///target/a", "dataBase64": ""}),
+        )
+        .await;
+    assert_eq!(
+        write.pointer("/error/data/outcome"),
+        Some(&json!("unknown"))
+    );
+    assert_eq!(ledger.uncertain_effect().as_deref(), Some("fs/writeFile"));
+}
+
+#[tokio::test]
+async fn an_unknown_process_write_or_signal_parks_the_session() {
+    for method in ["process/write", "process/signal"] {
+        let target = Target::new(Arc::new(|_| {
+            Reply::Answer(Response::Operation {
+                outcome: Outcome::Unknown,
+            })
+        }));
+        let ledger = ledger(&target.client, None);
+        ledger.begin_turn("turn-1");
+        let reply = target
+            .client
+            .relay(method.into(), json!({"processId": "p1"}))
+            .await;
+        assert_eq!(
+            reply.pointer("/error/data/outcome"),
+            Some(&json!("unknown"))
+        );
+        assert_eq!(ledger.uncertain_effect().as_deref(), Some(method));
+    }
+}
+
+#[test]
+fn an_answered_write_or_signal_the_unit_never_read_is_unknown() {
+    use super::ledger::unread_effects;
+    for method in ["process/write", "process/signal"] {
+        assert_eq!(
+            unread_effects(method, false, &json!({"result": {}})),
+            [method]
+        );
+    }
 }

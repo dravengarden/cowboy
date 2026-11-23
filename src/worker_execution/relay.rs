@@ -20,6 +20,9 @@ pub(super) struct Done {
     /// Decided before the request ran (an exit forgets the process).
     carries_result: bool,
     reply: Value,
+    /// Counted in flight until this reply was handled (written to the unit,
+    /// or recorded undelivered): dropped with it.
+    _in_flight: crate::account_sandbox::RelayGuard,
 }
 
 impl Done {
@@ -57,8 +60,15 @@ impl Relays {
         self.pending
     }
 
-    /// Relay one request on its own task.
-    pub fn spawn(&mut self, id: Value, method: String, params: Value) {
+    /// Relay one request on its own task, counted by `in_flight` until its
+    /// reply was handled.
+    pub fn spawn(
+        &mut self,
+        id: Value,
+        method: String,
+        params: Value,
+        in_flight: crate::account_sandbox::RelayGuard,
+    ) {
         let (client, sender) = (Arc::clone(&self.client), self.sender.clone());
         self.pending += 1;
         tokio::spawn(async move {
@@ -69,6 +79,7 @@ impl Relays {
                 method,
                 carries_result,
                 reply,
+                _in_flight: in_flight,
             };
             if let Err(mpsc::error::SendError(done)) = sender.send(done) {
                 client.undelivered(&done.method, done.carries_result, &done.reply);
@@ -87,6 +98,19 @@ impl Relays {
                 done
             }
             None => std::future::pending().await,
+        }
+    }
+
+    /// `done`'s reply was written to the agent side: one written while the
+    /// unit drains is proven read only by the unit's own exit (design L1c).
+    pub fn delivered(&self, done: &Done) {
+        if self.client.relays.draining() {
+            // Classified now: only the effects' names are kept.
+            self.client.relays.written(&super::ledger::unread_effects(
+                &done.method,
+                done.carries_result,
+                &done.reply,
+            ));
         }
     }
 

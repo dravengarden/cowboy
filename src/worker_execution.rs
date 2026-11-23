@@ -49,8 +49,10 @@ const RETRY: Duration = Duration::from_secs(30);
 
 pub struct Pending {
     request: RuntimeRequest,
-    sender: oneshot::Sender<MachineResponse>,
+    /// The response and how often the request was sent before it.
+    sender: oneshot::Sender<(MachineResponse, u32)>,
     sent: Option<Instant>,
+    sends: u32,
     pub bytes: usize,
 }
 
@@ -67,6 +69,8 @@ pub struct Client {
     memory: OnceLock<MemoryBridge>,
     /// The session's extension servers, run by the worker for the unit.
     extensions: OnceLock<Arc<ExtensionBroker>>,
+    /// Relays whose reply the unit is still owed (design L1c).
+    relays: Arc<crate::account_sandbox::RelayQuiet>,
 }
 
 /// Wire calls at least this slow are logged individually.
@@ -89,6 +93,7 @@ impl Client {
             ledger: OnceLock::new(),
             memory: OnceLock::new(),
             extensions: OnceLock::new(),
+            relays: Arc::default(),
         })
     }
 
@@ -108,6 +113,18 @@ impl Client {
                 }
             })
             .collect()
+    }
+
+    /// `frame` is about to be written: one send attempt of its request. A
+    /// write that fails part-way still counts (it may have reached the
+    /// broker); frames after it in the batch are never attempted.
+    pub fn sending<'frame>(&self, frame: &'frame Frame) -> &'frame Frame {
+        if let Frame::ExecutionRequest { request } = frame
+            && let Some(pending) = self.pending.lock().get_mut(&request.request_id)
+        {
+            pending.sends = pending.sends.saturating_add(1);
+        }
+        frame
     }
 
     pub fn complete(&self, reply: RuntimeReply) {
@@ -136,7 +153,7 @@ impl Client {
             return;
         }
         if let Some(pending) = self.pending.lock().remove(&reply.request_id) {
-            let _ = pending.sender.send(reply.response);
+            let _ = pending.sender.send((reply.response, pending.sends));
         }
     }
 
@@ -146,6 +163,15 @@ impl Client {
 
     /// The outer error means the request was never queued for sending.
     async fn call_queued(&self, command: Command) -> Result<Result<Response>> {
+        Ok(self
+            .call_counted(command)
+            .await?
+            .map(|(response, _)| response))
+    }
+
+    /// `call_queued`, with how often the request was sent before its
+    /// response arrived.
+    async fn call_counted(&self, command: Command) -> Result<Result<(Response, u32)>> {
         let started = Instant::now();
         let operation = match &command {
             Command::Invoke { invocation, .. } => Some(invocation.operation_id.clone()),
@@ -191,6 +217,7 @@ impl Client {
                     request,
                     sender,
                     sent: None,
+                    sends: 0,
                     bytes,
                 },
             );
@@ -199,7 +226,7 @@ impl Client {
         let response = tokio::time::timeout(Duration::from_secs(180), receiver).await;
         self.pending.lock().remove(&id);
         match response {
-            Ok(Ok(MachineResponse::Call { response })) => {
+            Ok(Ok((MachineResponse::Call { response }, sends))) => {
                 if let Some(operation) = operation {
                     // A transport-level failure is a WARN; a tool that ran
                     // and reported its own error is ordinary agent traffic.
@@ -228,7 +255,7 @@ impl Client {
                         tracing::info!(event_name = "cowboy.execution.call_observed", session = %self.session, environment_id = %self.binding.environment.id, %operation, duration_ms = started.elapsed().as_secs_f64() * 1000.0, "slow execution invocation observed");
                     }
                 }
-                Ok(Ok(response))
+                Ok(Ok((response, sends)))
             }
             _ => {
                 tracing::warn!(event_name = "cowboy.execution.response_timeout", session = %self.session, environment_id = %self.binding.environment.id, reason = "response_unavailable", duration_ms = started.elapsed().as_secs_f64() * 1000.0, "execution response unavailable");
@@ -319,9 +346,15 @@ impl Client {
         loop {
             // A request the transport refused to queue was never sent; any
             // later loss may follow admission.
-            let queued = self.call_queued(command).await;
+            let queued = self.call_counted(command).await;
             let response = match queued {
-                Ok(Ok(response)) => response,
+                Ok(Ok((response, sends))) => {
+                    // Sent more than once: an earlier send's reply was lost
+                    // after the keeper may have admitted it, so a refusal of
+                    // a later send proves nothing about the effect (F7).
+                    admitted |= sends > 1;
+                    response
+                }
                 Ok(Err(_)) => return Err(true),
                 Err(_) => return Err(admitted),
             };
@@ -341,7 +374,15 @@ impl Client {
                         wait_ms: wire::MAX_WAIT_MS,
                     };
                 }
-                Response::Refused { .. } => return Err(admitted),
+                // The Machine resends a request itself when a bulk lane
+                // fails, below this count: a refusal of an effectful request
+                // may answer such a resend while an earlier send was admitted.
+                // Fail closed: any refusal of an effectful request may answer
+                // a copy the worker cannot see (a Machine resend) while
+                // another copy was admitted.
+                Response::Refused { .. } => {
+                    return Err(admitted || ledger::effectful(&method));
+                }
                 _ => return Err(true),
             }
         }
@@ -448,11 +489,15 @@ impl Admission {
         self.tasks.spawn(async move {
             let _permit = permit;
             let session = client.session.clone();
+            let relays = Arc::clone(&client.relays);
             if serve(socket, &token, client).await.is_err() {
                 // Do not log frames, capabilities or arbitrary
                 // native error text from the private endpoint.
                 tracing::warn!(event_name = "cowboy.execution.disconnected", %session, reason = "endpoint_failed", "execution endpoint disconnected");
             }
+            // Receipts belong to this socket: another one can never
+            // acknowledge what this one wrote (design L1c).
+            relays.socket_ended();
         });
     }
 
@@ -524,6 +569,13 @@ impl Endpoint {
             descriptor["extensions"] = extensions;
         }
         let descriptor = serde_json::to_vec(&descriptor)?;
+        let relays = Arc::clone(&client.relays);
+        let weak = Arc::downgrade(&client);
+        relays.set_recorder(Box::new(move |effects| {
+            if let Some(client) = weak.upgrade() {
+                client.unread(effects);
+            }
+        }));
         let (listeners, mut received) = mpsc::unbounded_channel::<OwnedFd>();
         let mut admission = Admission::new(token, Arc::clone(&client));
         let listener = tokio::spawn(async move {
@@ -560,6 +612,7 @@ impl Endpoint {
             crate::account_sandbox::ExecutionBridge {
                 descriptor,
                 listeners,
+                relays,
             },
         ))
     }
@@ -678,19 +731,19 @@ where
                             tracing::warn!(event_name = "cowboy.execution.request_rejected", session = %client.session, reason = "request_capacity", pending = ids.len(), "execution request not admitted");
                             // No effect was admitted. Limit this request, not
                             // the transport carrying other commands/results.
-                            writer.send(Message::Text(json!({"id":id,"error":{"code":-32000,"message":"Execution request capacity reached; this request was not admitted"}}).to_string().into())).await?;
+                            writer.send(refusal(&id, "Execution request capacity reached; this request was not admitted")).await?;
                             continue;
                         }
                         ids.insert(id.to_string());
                         let method = message["method"].as_str().context("execution method missing")?.to_owned();
-                        // Native sends parameterless requests such as
-                        // environment/info with `"params": null`; the wire
-                        // contract carries an object.
-                        let params = match message.get("params") {
-                            None | Some(Value::Null) => json!({}),
-                            Some(params) => params.clone(),
+                        let params = native_params(&message);
+                        // A unit being stopped sends only cleanup (L1c).
+                        let Some(in_flight) = client.relays.try_enter(&method) else {
+                            ids.remove(&id.to_string());
+                            writer.send(refusal(&id, "The session is ending; this request was not admitted")).await?;
+                            continue;
                         };
-                        relays.spawn(id, method, params);
+                        relays.spawn(id, method, params, in_flight);
                     }
                     _ => bail!("unsupported execution frame"),
                 }
@@ -701,6 +754,7 @@ where
                     relays.undelivered(&done);
                     return Err(error.into());
                 }
+                relays.delivered(&done);
             }
             result = &mut events => {
                 match result? {
@@ -736,6 +790,24 @@ where
         }
     }
     Ok(())
+}
+
+/// A refusal of one native request that admitted no effect.
+fn refusal(id: &Value, message: &str) -> Message {
+    Message::Text(
+        json!({"id": id, "error": {"code": -32000, "message": message}})
+            .to_string()
+            .into(),
+    )
+}
+
+/// A native request's params as the wire contract carries them: native sends
+/// parameterless requests such as environment/info with `"params": null`.
+fn native_params(message: &Value) -> Value {
+    match message.get("params") {
+        None | Some(Value::Null) => json!({}),
+        Some(params) => params.clone(),
+    }
 }
 
 /// A fresh keeper operation id; the suffix asks the keeper for the backend's

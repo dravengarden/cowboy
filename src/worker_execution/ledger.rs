@@ -107,6 +107,16 @@ const TERMINATE_BOUND: Duration = Duration::from_secs(5);
 /// Requests that change the target: admitted only inside an active turn,
 /// drained before the turn's completion, and uncertain when their reply is
 /// lost.
+/// Requests whose refusal cannot prove they had no effect: a resend below
+/// the worker (a Machine bulk-lane retry) may be what was refused.
+pub(super) fn effectful(method: &str) -> bool {
+    MUTATIONS.contains(&method)
+        || matches!(
+            method,
+            "process/write" | "process/signal" | "process/terminate"
+        )
+}
+
 const MUTATIONS: &[&str] = &[
     "fs/writeFile",
     "fs/remove",
@@ -150,6 +160,9 @@ struct State {
     servers: HashSet<String>,
     /// Extension calls admitted and not yet settled.
     calls: usize,
+    /// The durable record could not be written: an uncertain effect may be
+    /// published but not durable, so no further effect is admitted.
+    unwritable: bool,
     /// When the last turn was fenced (its evidence may still be delivered).
     turn_ended: Option<std::time::Instant>,
     closed: bool,
@@ -235,6 +248,9 @@ impl Ledger {
         if state.closed {
             return Err("the session is ending");
         }
+        if state.unwritable {
+            return Err("the execution ledger cannot be written; the server start was refused");
+        }
         if state.processes.len() >= MAX_PROCESSES {
             return Err("session process limit reached; process start refused");
         }
@@ -289,6 +305,9 @@ impl Ledger {
     /// a turn, drained before the turn's completion.
     pub(super) fn admit_call(&self) -> Result<Admitted, &'static str> {
         let mut state = self.state.lock();
+        if state.unwritable {
+            return Err("the execution ledger cannot be written; the tool call was refused");
+        }
         let turn = state
             .active_turn()
             .ok_or("no Cowboy turn is running; the tool call was refused")?;
@@ -346,6 +365,13 @@ impl Ledger {
         params: &Value,
     ) -> Result<Option<Admitted>, &'static str> {
         let mut state = self.state.lock();
+        // Only observation and stopping remain while effects cannot be
+        // recorded durably.
+        if state.unwritable
+            && (MUTATIONS.contains(&method) || matches!(method, "process/write" | "process/signal"))
+        {
+            return Err("the execution ledger cannot be written; the change was refused");
+        }
         // The worker's own MCP servers are not the unit's processes, also
         // those an earlier worker of the session started.
         if process_id(params).is_some_and(|process| {
@@ -433,13 +459,22 @@ impl Ledger {
         !self.state.lock().probes.contains(process)
     }
 
+    /// Whether the ledger refuses new effects (its durable write failed).
+    pub(super) fn unwritable(&self) -> bool {
+        self.state.lock().unwritable
+    }
+
     pub(super) fn mark_uncertain(&self, method: &str) {
         let mut state = self.state.lock();
         state.record.uncertain_effect = Some(method.to_owned());
-        state.record.uncertain_sequence = state.record.uncertain_sequence.saturating_add(1);
+        state.record.uncertain_sequence = next_sequence(state.record.uncertain_sequence);
         let sequence = state.record.uncertain_sequence;
         if let Err(error) = self.persist(&state.record) {
-            tracing::warn!(%error, "execution ledger update failed");
+            // Published all the same (fail closed). The time-based sequence
+            // keeps a successor that reloads the older record from reusing
+            // this one, and no further effect is admitted.
+            tracing::warn!(%error, "execution ledger update failed; effects refused");
+            state.unwritable = true;
         }
         drop(state);
         if let Some(observer) = self.observer.get() {
@@ -542,6 +577,57 @@ fn read(path: &Path) -> Result<Option<Record>> {
 }
 
 /// A refused native request; nothing was forwarded.
+/// The next uncertain-effect sequence: above the previous one and at least
+/// the current Unix time in milliseconds. A record whose write was lost
+/// after its sequence was published therefore never makes a successor reuse
+/// that sequence, which the Controller may already have acknowledged; the
+/// Controller only compares sequences.
+fn next_sequence(previous: u64) -> u64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+        });
+    previous.saturating_add(1).max(now)
+}
+
+/// The effects a reply the agent side never read leaves unknown: a mutation
+/// or a result-carrying request the target answered (or whose outcome is
+/// already unknown), and an extension call that ran (an unknown outcome was
+/// already recorded by its broker). A definite refusal leaves none.
+pub(super) fn unread_effects(
+    method: &str,
+    carries_result: bool,
+    reply: &Value,
+) -> Vec<&'static str> {
+    let answered = reply.get("result").is_some()
+        || reply.pointer("/error/data/outcome") == Some(&json!("unknown"));
+    let mut effects = Vec::new();
+    if (effectful(method) || carries_result)
+        && answered
+        && let Some(known) = KNOWN_EFFECTS.iter().find(|known| **known == method)
+    {
+        effects.push(*known);
+    }
+    if method == super::extension_broker::EXTENSION_CALL && reply.get("result").is_some() {
+        effects.push("tools/call");
+    }
+    effects
+}
+
+/// Methods an unread reply can leave uncertain (a static name each).
+const KNOWN_EFFECTS: &[&str] = &[
+    "fs/writeFile",
+    "fs/remove",
+    "fs/copy",
+    "fs/createDirectory",
+    "process/start",
+    "process/terminate",
+    "process/read",
+    "process/write",
+    "process/signal",
+];
+
 fn refused(message: &str) -> Value {
     json!({"error": {"code": -32000, "message": message}})
 }
@@ -632,6 +718,11 @@ impl Client {
                 None => refused("this session has no extensions"),
             };
         }
+        if method == crate::account_sandbox::DRAINED {
+            // The unit read every reply it awaited before its stop (L1c).
+            self.relays.acknowledge();
+            return json!({"result": {}});
+        }
         if method == UNCERTAIN_REPORT {
             // The facade detected an unknown outcome every transport call
             // of which was answered (a timed-out publish): recorded like a
@@ -683,7 +774,7 @@ impl Client {
                     }
                     return refused("Execution unavailable; the request was not sent");
                 }
-                if MUTATIONS.contains(&method.as_str()) || result_carrying {
+                if effectful(&method) || result_carrying {
                     ledger.mark_uncertain(&method);
                 }
                 unavailable()
@@ -711,15 +802,18 @@ impl Client {
         let Some(ledger) = self.ledger() else {
             return;
         };
-        let answered = reply.get("result").is_some()
-            || reply.pointer("/error/data/outcome") == Some(&json!("unknown"));
-        if (MUTATIONS.contains(&method) || carries_result) && answered {
-            ledger.mark_uncertain(method);
+        for effect in unread_effects(method, carries_result, reply) {
+            ledger.mark_uncertain(effect);
         }
-        // An extension call that ran but whose result never reached the
-        // unit (an unknown outcome was already recorded by the broker).
-        if method == super::extension_broker::EXTENSION_CALL && reply.get("result").is_some() {
-            ledger.mark_uncertain("tools/call");
+    }
+
+    /// Record effects whose replies the unit may never have read, as
+    /// classified by [`unread_effects`].
+    pub(super) fn unread(&self, effects: &[String]) {
+        if let Some(ledger) = self.ledger() {
+            for effect in effects {
+                ledger.mark_uncertain(effect);
+            }
         }
     }
 
