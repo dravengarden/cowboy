@@ -37,7 +37,10 @@ type Socket =
 /// [`Unreachable`].
 pub(super) async fn dial(
     request: tokio_tungstenite::tungstenite::handshake::client::Request,
-) -> anyhow::Result<(Socket, tokio_tungstenite::tungstenite::handshake::client::Response)> {
+) -> anyhow::Result<(
+    Socket,
+    tokio_tungstenite::tungstenite::handshake::client::Response,
+)> {
     match tokio::time::timeout(DIAL_BOUND, tokio_tungstenite::connect_async(request)).await {
         Ok(Ok(connected)) => Ok(connected),
         Ok(Err(error)) => Err(anyhow::Error::new(error).context(Unreachable)),
