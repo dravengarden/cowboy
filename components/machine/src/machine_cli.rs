@@ -1253,9 +1253,7 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
         crate::machine_lanes::LANES.parse()?,
     );
     let lane_endpoint = endpoint.clone();
-    let (mut socket, response) = tokio_tungstenite::connect_async(request)
-        .await
-        .context("connecting Machine WebSocket")?;
+    let (mut socket, response) = reconnect::dial(request, retry.dial_bound()).await?;
     let chunked = response
         .headers()
         .get(crate::machine_transport::HEADER)

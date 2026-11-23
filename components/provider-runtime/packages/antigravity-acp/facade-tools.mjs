@@ -22,6 +22,9 @@ export const LIMITS = Object.freeze({
   // invocation admits at most 7 MiB, so 3 MiB (~5.6 MB encoded) fits.
   writeBytes: 3 * 1024 * 1024,
   publishTimeoutMs: 30_000,
+  // How long a helper's stop is observed before its outcome counts as
+  // unknown: a process tree may take a while to exit after its signal.
+  stopConfirmMs: 60_000,
   // A running command's output shown in the transcript: its last 16 KiB,
   // at most every 2 s (each update rewrites the call's one stored row).
   progressMs: 2_000,
@@ -290,6 +293,24 @@ export const unknownOutcome = (error) => lost(error) || error?.remote?.data?.out
 export const unreachable = (error) =>
   !error?.remote &&
   /^Execution (unavailable|connection (refused|closed))/.test(error?.message ?? "");
+/** The connection refused a request before sending it: no connection could
+ * be opened, or every request slot was taken. Never a lost reply. */
+export const notSent = (error) =>
+  !error?.remote &&
+  !unknownOutcome(error) &&
+  (unreachable(error) || /^Too many execution requests$/.test(error?.message ?? ""));
+/**
+ * Evidence rule E1 (docs/uncertain-effect-recovery.md): the executor itself
+ * answered that it no longer knows `processId`. The pinned executor forgets a
+ * process only 30 s after it closed (or when a stop cancels a start, which
+ * cannot follow a received start reply), so for a process whose start this
+ * facade saw succeed it proves the process ended. Never a transport loss and
+ * never the worker's or ledger's own refusal (`-32000`).
+ */
+export const forgotten = (error, processId) =>
+  error?.remote !== undefined &&
+  error.remote.code !== -32000 &&
+  error.remote.message === `unknown process id ${processId}`;
 
 /**
  * Strict UTF-8 text of `bytes`; never a lossy replacement. A leading BOM is

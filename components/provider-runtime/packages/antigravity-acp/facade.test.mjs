@@ -605,6 +605,9 @@ test("a lost mutation reply reports an unknown outcome and ends the turn", async
   // The publication's helper start loses its reply.
   const { root, call, uncertain } = await fixture(t, {
     lose: (method) => lose && method === "process/start",
+    // The fake runs a start before losing its reply: with no helper, the
+    // started process cannot publish, so the check below is deterministic.
+    fileHelper: null,
   });
   lose = true;
   const result = await call("WriteFile", { path: "lost.txt", content: "maybe\n" });
@@ -614,7 +617,7 @@ test("a lost mutation reply reports an unknown outcome and ends the turn", async
   lose = false;
   const after = await call("ReadFile", { path: "hello.txt" });
   assert.match(after.text, /unknown outcome/);
-  // The fake never ran the lost start; nothing was published or retried.
+  // Nothing was published or retried.
   assert.throws(() => readFileSync(join(root, "lost.txt")));
 });
 
