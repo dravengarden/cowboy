@@ -1711,14 +1711,23 @@ test("a lost effect latches on the exact parent turn, before the ledger report",
 });
 
 test("the turn's end waits for a running publish helper", async () => {
-  let closeAt = 0;
+  // The helper closes only when the test says so, never on a wall-clock
+  // deadline a loaded host could pass early.
+  let release;
+  const released = new Promise((done) => {
+    release = done;
+  });
+  let closed = false;
+  released.then(() => {
+    closed = true;
+  });
   const connection = {
     descriptor: { binding: { workspace: { cwd: "/w" } } },
     call: async (method, params) => {
       if (method === "process/start") return { processId: params.processId };
       if (method === "process/read") {
-        await new Promise((done) => setTimeout(done, 20));
-        if (Date.now() >= closeAt) return { chunks: [], exited: true, exitCode: 0, closed: true };
+        await Promise.race([released, new Promise((done) => setTimeout(done, 20))]);
+        if (closed) return { chunks: [], exited: true, exitCode: 0, closed: true };
         return { chunks: [] };
       }
       return {};
@@ -1727,8 +1736,7 @@ test("the turn's end waits for a running publish helper", async () => {
   const facade = new Facade(connection, { root: "/w", shell: "/bin/sh" });
   facade.beginTurn("s");
   const turn = facade.session("s").turn;
-  closeAt = Date.now() + 120;
-  const running = facade.runBounded(turn, ["helper"], { timeoutMs: 2000, maxBytes: 100 });
+  const running = facade.runBounded(turn, ["helper"], { timeoutMs: 60_000, maxBytes: 100 });
   await flush(2);
   assert.equal(turn.inflight.size >= 1, true);
   let ended = false;
@@ -1737,6 +1745,7 @@ test("the turn's end waits for a running publish helper", async () => {
   });
   await new Promise((done) => setTimeout(done, 40));
   assert.equal(ended, false);
+  release();
   await running;
   await ending;
   assert.equal(ended, true);

@@ -865,40 +865,101 @@ test("a home containing the repository loads its own links; links into the repos
   assert.doesNotMatch(linked, /the user's home guidance/);
 });
 
-test("home reads stop at their deadline and at the discovery budget", async (t) => {
-  // The fake sender never settles and the deadline timer is unreferenced:
-  // keep the event loop alive so the test is not cancelled early.
-  const keepAlive = setInterval(() => {}, 1000);
-  t.after(() => clearInterval(keepAlive));
+/**
+ * A manual clock for `HomeReads`: time moves only through `advance`, which
+ * fires due timers in order and lets their continuations run, so deadline
+ * and budget accounting is exact on a loaded host.
+ */
+function manualClock() {
+  let now = 0;
+  const timers = [];
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  return {
+    now: () => now,
+    after(ms, fire) {
+      const timer = { at: now + ms, fire };
+      timers.push(timer);
+      return () => {
+        const index = timers.indexOf(timer);
+        if (index >= 0) timers.splice(index, 1);
+      };
+    },
+    async advance(ms) {
+      const end = now + ms;
+      for (;;) {
+        timers.sort((a, b) => a.at - b.at);
+        if (!timers.length || timers[0].at > end) break;
+        const timer = timers.shift();
+        now = timer.at;
+        timer.fire();
+        await settle();
+      }
+      now = end;
+      await settle();
+    },
+  };
+}
+
+/** Whether `promise` is still pending once ready continuations ran. */
+async function pending(promise) {
+  const marker = Symbol("pending");
+  await new Promise((resolve) => setImmediate(resolve));
+  return (await Promise.race([promise.then(String, String), marker])) === marker;
+}
+
+test("home reads stop at their deadline and at the discovery budget", async () => {
+  const clock = manualClock();
   const sent = [];
-  const never = (method) => {
-    sent.push(method);
+  const never = (method, _params, options) => {
+    sent.push([method, options.timeoutMs]);
     return new Promise(() => {});
   };
-  const reads = HomeReads.for(never, "/h", "/r", { deadlineMs: 50, budgetMs: 1000 });
-  const started = Date.now();
-  await assert.rejects(reads.call("fs/getMetadata", {}), /did not answer in time/);
-  assert.ok(Date.now() - started < 500);
+  const reads = HomeReads.for(never, "/h", "/r", { deadlineMs: 50, budgetMs: 1000, clock });
+  const first = reads.call("fs/getMetadata", {});
+  // The request carries the deadline and is given up exactly at it.
+  await clock.advance(49);
+  assert.ok(await pending(first));
+  await clock.advance(1);
+  await assert.rejects(first, /did not answer in time/);
+  assert.equal(reads.elapsed(), 50);
   // Stalled: nothing more is sent.
   await assert.rejects(reads.call("fs/getMetadata", {}), /did not answer in time/);
-  assert.equal(sent.length, 1);
+  assert.deepEqual(sent, [["fs/getMetadata", 50]]);
   // Time between home reads (repository reads) does not use the budget.
   const quick = async () => ({ path: "file:///x" });
-  const idle = HomeReads.for(quick, "/h", "/r", { deadlineMs: 50, budgetMs: 80 });
+  const idle = HomeReads.for(quick, "/h", "/r", { deadlineMs: 50, budgetMs: 80, clock });
   await idle.call("fs/getMetadata", {});
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  await clock.advance(100);
+  assert.equal(idle.elapsed(), 0);
   assert.deepEqual(await idle.call("fs/getMetadata", {}), { path: "file:///x" });
   // Concurrent home reads share the wall time instead of each adding theirs.
-  const pair = () => new Promise((resolve) => setTimeout(() => resolve({ path: "file:///x" }), 45));
-  const shared = HomeReads.for(pair, "/h", "/r", { deadlineMs: 100, budgetMs: 80 });
-  await Promise.all([shared.call("fs/getMetadata", {}), shared.call("fs/getMetadata", {})]);
-  assert.ok(shared.elapsed() < 80, `${shared.elapsed()} ms`);
-  // Time spent waiting on home reads does: a slow home exhausts it.
-  const slow = () => new Promise((resolve) => setTimeout(() => resolve({ path: "file:///x" }), 45));
-  const budgeted = HomeReads.for(slow, "/h", "/r", { deadlineMs: 100, budgetMs: 80 });
-  await budgeted.call("fs/getMetadata", {});
+  const after45 = () =>
+    new Promise((resolve) => clock.after(45, () => resolve({ path: "file:///x" })));
+  const shared = HomeReads.for(after45, "/h", "/r", { deadlineMs: 100, budgetMs: 80, clock });
+  const pair = Promise.all([shared.call("fs/getMetadata", {}), shared.call("fs/getMetadata", {})]);
+  await clock.advance(45);
+  await pair;
+  assert.equal(shared.elapsed(), 45);
+  // Time spent waiting on home reads does: the next read gets only what is
+  // left of the budget, and a slow home exhausts it.
+  const timeouts = [];
+  const slow = (_method, _params, options) => {
+    timeouts.push(options.timeoutMs);
+    return after45();
+  };
+  const budgeted = HomeReads.for(slow, "/h", "/r", { deadlineMs: 100, budgetMs: 80, clock });
+  const one = budgeted.call("fs/getMetadata", {});
+  await clock.advance(45);
+  await one;
+  assert.equal(budgeted.elapsed(), 45);
+  const two = budgeted.call("fs/getMetadata", {});
+  await clock.advance(34);
+  assert.ok(await pending(two));
+  await clock.advance(1);
+  await assert.rejects(two, /did not answer in time/);
+  assert.equal(budgeted.elapsed(), 80);
   await assert.rejects(budgeted.call("fs/getMetadata", {}), /did not answer in time/);
-  await assert.rejects(budgeted.call("fs/getMetadata", {}), /did not answer in time/);
+  assert.deepEqual(timeouts, [80, 35]);
 });
 
 test("a stalled home read gives up within its deadline", async (t) => {

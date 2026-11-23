@@ -352,17 +352,33 @@ export const HOME_BUDGET_MS = 10_000;
  * ignored, and once one read timed out or the budget is spent no further
  * home request is sent.
  */
+/** Wall-clock time and unreferenced timers; tests substitute a manual clock. */
+export const REAL_CLOCK = {
+  now: () => Date.now(),
+  after(ms, fire) {
+    const timer = setTimeout(fire, ms);
+    timer.unref?.();
+    return () => clearTimeout(timer);
+  },
+};
+
 export class HomeReads {
   /**
    * The reads of `home` against the repository `root`, or `undefined`
    * without a home. Nothing is sent until a home candidate is needed: the
    * overlap check (`usable`) runs with the first one.
    */
-  static for(call, home, root, { deadlineMs = HOME_READ_MS, budgetMs = HOME_BUDGET_MS } = {}) {
-    return home ? new HomeReads(call, home, root, deadlineMs, budgetMs) : undefined;
+  static for(
+    call,
+    home,
+    root,
+    { deadlineMs = HOME_READ_MS, budgetMs = HOME_BUDGET_MS, clock = REAL_CLOCK } = {},
+  ) {
+    return home ? new HomeReads(call, home, root, deadlineMs, budgetMs, clock) : undefined;
   }
 
-  constructor(call, home, root, deadlineMs, budgetMs) {
+  constructor(call, home, root, deadlineMs, budgetMs, clock) {
+    this.clock = clock;
     this.budgetMs = budgetMs;
     // Wall time with at least one home request in flight: concurrent home
     // reads share it instead of each adding its own wait.
@@ -401,7 +417,7 @@ export class HomeReads {
   }
 
   elapsed() {
-    return this.spent + (this.inFlight > 0 ? Date.now() - this.since : 0);
+    return this.spent + (this.inFlight > 0 ? this.clock.now() - this.since : 0);
   }
 
   inRepository(path) {
@@ -418,24 +434,23 @@ export class HomeReads {
       this.stalled = true;
       throw new Error("The home did not answer in time");
     }
-    if (this.inFlight++ === 0) this.since = Date.now();
+    if (this.inFlight++ === 0) this.since = this.clock.now();
     // The connection rejects only this request at its deadline and ignores
     // a late reply, so a stalled home never ends the shared connection.
     const request = this.send(method, params, { timeoutMs: wait });
     request.catch(() => {});
-    let timer;
+    let cancel;
     const timeout = new Promise((_, reject) => {
-      timer = setTimeout(() => {
+      cancel = this.clock.after(wait, () => {
         this.stalled = true;
         reject(new Error("The home did not answer in time"));
-      }, wait);
-      timer.unref?.();
+      });
     });
     try {
       return await Promise.race([request, timeout]);
     } finally {
-      clearTimeout(timer);
-      if (--this.inFlight === 0) this.spent += Date.now() - this.since;
+      cancel();
+      if (--this.inFlight === 0) this.spent += this.clock.now() - this.since;
     }
   }
 
