@@ -750,11 +750,26 @@ provider-check: plugin-check claude-remote-check provider-scripts-check provider
 # directory, so `check` runs them in the background.
 provider-scripts-check: provider-antigravity-check provider-runtime-scripts
 
-# Its facade suite alone waits out about 50s of real command deadlines. Its
-# facade tests publish through the prepared execution host in target/debug.
+# Its facade suite waits out real command deadlines; sharding facade.test.mjs
+# across processes keeps the hashed plugin source untouched while cutting the
+# suite's wall clock nearly in half. Facade tests publish through the prepared
+# execution host in target/debug.
 provider-antigravity-check: claude-remote-prepare
-    node --import ./tools/register-memory-client.mjs --test components/provider-runtime/packages/antigravity-acp/*.test.mjs
-    bun x --no-install biome format components/provider-runtime/packages/antigravity-acp components/provider-runtime/owned-sources.ts
+    #!/usr/bin/env bash
+    set -euo pipefail
+    other=()
+    for f in components/provider-runtime/packages/antigravity-acp/*.test.mjs; do
+      if [[ "$f" != */facade.test.mjs ]]; then other+=("$f"); fi
+    done
+    node --import ./tools/register-memory-client.mjs --test "${other[@]}" &
+    p_other=$!
+    node tools/run-sharded-node-test.mjs --shards 8 components/provider-runtime/packages/antigravity-acp/facade.test.mjs &
+    p_facade=$!
+    status=0
+    wait "$p_other" || status=$?
+    wait "$p_facade" || status=$?
+    if ((status != 0)); then exit "$status"; fi
+    bun x --no-install biome format components/provider-runtime/packages/antigravity-acp components/provider-runtime/owned-sources.ts tools/shard-node-test.mjs tools/shard-node-test-proxy.mjs tools/run-sharded-node-test.mjs
 
 provider-runtime-scripts: claude-source-deps
     bun test ./tools/mcp-bindings_test.ts
@@ -1075,7 +1090,7 @@ check: toolchain-check
       for job in "${pending[@]}"; do
         kill -- "-${job%%:*}" 2>/dev/null || kill "${job%%:*}" 2>/dev/null || true
       done
-      exec 9>&- 2>/dev/null || true
+      { exec 9>&-; } 2>/dev/null || true
       rm -rf "$logs"
     }
     trap cleanup EXIT
@@ -1152,7 +1167,7 @@ check: toolchain-check
     done
     # Stop sharing the compile jobserver before timing-sensitive test suites run.
     unset MAKEFLAGS
-    exec 9>&- 2>/dev/null || true
+    { exec 9>&-; } 2>/dev/null || true
     # Run the two full-core nextest suites alone first, then overlap the small
     # post-suites (wire, code-adapter, python, postgres, logs-conformance).
     {{rust_test_env}} cargo nextest run {{rust_test_args}}
@@ -1254,7 +1269,7 @@ warm-lanes:
     tokens=$((cores > 4 ? cores - 4 : 2))
     printf "%${tokens}s" "" | tr ' ' '+' >&9
     export MAKEFLAGS="--jobserver-auth=fifo:$js_fifo"
-    trap 'exec 9>&- 2>/dev/null || true; rm -rf "$js_dir"' EXIT
+    trap '{ exec 9>&-; } 2>/dev/null || true; rm -rf "$js_dir"' EXIT
     lane() {
       local log status
       log="$(mktemp "${TMPDIR:-/tmp}/cowboy-warm.XXXXXX")"
