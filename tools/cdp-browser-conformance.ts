@@ -30,7 +30,7 @@ const ENTRIES: Readonly<Record<string, [string, number]>> = {
   "managed-calls": ["runManagedCallsBrowserConformance", 22],
   "session-fold": ["runSessionFoldBrowserConformance", 8],
   "session-move": ["runSessionMoveBrowserConformance", 4],
-  "composer-surfaces": ["runComposerSurfacesBrowserConformance", 10],
+  "composer-surfaces": ["runComposerSurfacesBrowserConformance", 12],
   "sheet-keyboard": ["runCoverKeyboardBrowserConformance", 4],
   "tool-inspector": ["runToolInspectorBrowserConformance", 13],
   "workspace-picker": ["runWorkspacePickerBrowserConformance", 10],

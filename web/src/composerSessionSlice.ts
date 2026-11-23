@@ -1,4 +1,4 @@
-import { recordedContextUsageAt } from "./contextUsageRecord";
+import { contextStaleAfterCompaction, recordedContextUsageAt } from "./contextUsageRecord";
 import type { SessionMeta } from "./protocol";
 
 export interface ComposerDestination {
@@ -17,6 +17,8 @@ export interface ComposerSessionSlice {
   paused: boolean;
   contextUsed: number;
   contextSize: number;
+  /** A completed compaction left the reading as history. */
+  contextStale: boolean;
   /** Set while the reading is a persisted one from a stopped worker. */
   contextRecordedAtMs: number | undefined;
   destinations: ComposerDestination[];
@@ -44,6 +46,7 @@ export function composerSessionSlice(
     paused: active?.paused ?? false,
     contextUsed: active?.context_used ?? 0,
     contextSize: active?.context_size ?? 0,
+    contextStale: contextStaleAfterCompaction(active),
     contextRecordedAtMs: recordedContextUsageAt(active),
     destinations: sessions
       .filter((session) => session.id !== sessionId)
@@ -65,6 +68,7 @@ export function sameComposerSessionSlice(
       a.paused === b.paused &&
       a.contextUsed === b.contextUsed &&
       a.contextSize === b.contextSize &&
+      a.contextStale === b.contextStale &&
       a.contextRecordedAtMs === b.contextRecordedAtMs &&
       a.destinations.length === b.destinations.length &&
       a.destinations.every((destination, index) => {

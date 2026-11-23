@@ -1,7 +1,11 @@
 import { test } from "bun:test";
 import { assertEquals } from "../../tools/test-assert";
 import { recordedContextNote, recordedContextUsageAt } from "./contextUsageRecord";
-import { compactTooltip } from "./contextUsageRecord";
+import {
+  COMPACTED_CONTEXT_HINT,
+  compactTooltip,
+  contextStaleAfterCompaction,
+} from "./contextUsageRecord";
 
 const usage = { used: 780_000, size: 1_000_000, raw: null, observed_at_ms: 1_000 };
 
@@ -32,4 +36,16 @@ test("the Compact tooltip appends the recorded note only when given", () => {
     true,
   );
   assertEquals(compactTooltip({ used: 0, size: 0 }, 1), "Compact conversation");
+});
+
+test("a reading a compaction left as history is stale until replaced", () => {
+  assertEquals(contextStaleAfterCompaction(undefined), false);
+  assertEquals(contextStaleAfterCompaction({ usage }), false);
+  assertEquals(contextStaleAfterCompaction({ usage: { ...usage, compacted_at_ms: 2_000 } }), true);
+  // The tooltip names the unknown state, never the old percentage.
+  assertEquals(
+    compactTooltip({ used: 780_000, size: 1_000_000, stale: true }, 1_000),
+    `Compact conversation · ${COMPACTED_CONTEXT_HINT}`,
+  );
+  assertEquals(COMPACTED_CONTEXT_HINT, "Compacted · updates after the next reply");
 });

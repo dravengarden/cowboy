@@ -102,3 +102,16 @@ test("session sheet rerenders for a new or scheduled Provider update", () => {
     ),
   );
 });
+
+test("composer session slice follows the compaction mark on the reading", () => {
+  const usage = { used: 10, size: 100, raw: null, observed_at_ms: 2 };
+  const fresh = composerSessionSlice([{ ...active, usage }], active.id);
+  const stale = composerSessionSlice([
+    { ...active, usage: { ...usage, compacted_at_ms: 3 } },
+  ], active.id);
+  assertEquals(fresh.contextStale, false);
+  assertEquals(stale.contextStale, true);
+  // Same counters, different meaning: the meter must rerender.
+  assertEquals(stale.contextUsed, fresh.contextUsed);
+  assert(!sameComposerSessionSlice(fresh, stale));
+});

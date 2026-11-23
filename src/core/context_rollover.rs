@@ -11,6 +11,40 @@ pub(super) struct UsageEvidence {
     used: u64,
 }
 
+/// Whether the agent reported usage while the current compaction ran. A
+/// Provider that measures the compacted context (Codex recomputes it before
+/// the compaction's completion, Claude Code reports the retained tokens at
+/// its boundary) needs nothing more; one that reports nothing (`agy` runs
+/// `/compact` as an ordinary prompt) leaves its pre-compaction reading, which
+/// the completion then marks as history. Transient: a Controller restart
+/// mid-compaction only marks a reading stale that a later report replaces.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum CompactionUsage {
+    Idle,
+    Running { reported: bool },
+}
+
+/// The lifecycle step a session event takes for [`CompactionUsage`].
+enum CompactionStep {
+    Started,
+    Completed,
+    Ended,
+}
+
+fn compaction_step(event: &Event) -> Option<CompactionStep> {
+    match event {
+        Event::Update { update } if update["sessionUpdate"] == "compaction_update" => {
+            match update["status"].as_str()? {
+                "in_progress" => Some(CompactionStep::Started),
+                "completed" => Some(CompactionStep::Completed),
+                _ => Some(CompactionStep::Ended),
+            }
+        }
+        Event::TurnEnd { .. } => Some(CompactionStep::Ended),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) enum HistoryBoundary {
     Unknown,
@@ -49,6 +83,55 @@ impl HistoryBoundary {
 }
 
 impl Hub {
+    /// Follow a compaction's lifecycle from the session's own events. A
+    /// completion with no usage reported since the compaction began marks the
+    /// reading stale (persisted, so a reload or restart shows the same): the
+    /// meter shows it as unknown and no renewal decision reads it, until the
+    /// agent's next real `usage_update` replaces it.
+    pub(super) fn observe_compaction(&self, session_id: &str, event: &Event) {
+        let Some(step) = compaction_step(event) else {
+            return;
+        };
+        let stale = {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            let previous = std::mem::replace(&mut s.compaction_usage, CompactionUsage::Idle);
+            match step {
+                CompactionStep::Started => {
+                    s.compaction_usage = CompactionUsage::Running { reported: false };
+                    return;
+                }
+                CompactionStep::Ended => return,
+                CompactionStep::Completed
+                    if previous == (CompactionUsage::Running { reported: true }) =>
+                {
+                    return;
+                }
+                CompactionStep::Completed => {}
+            }
+            let Some(usage) = s
+                .meta
+                .usage
+                .as_mut()
+                .filter(|usage| !usage.stale_after_compaction())
+            else {
+                return;
+            };
+            usage.compacted_at_ms = Some(crate::logs::now_ms());
+            s.usage_evidence = None;
+            usage.clone()
+        };
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::UpdateSessionUsage {
+                session_id: session_id.to_owned(),
+                usage: Some(stale),
+            });
+        }
+        self.broadcast_sessions();
+    }
+
     /// A committed boundary stays known when the hot tail rolls forward.
     /// A restored, truncated tail may need the newest durable marker.
     pub fn observes_rollover_boundary(&self, session_id: &str, boundary: u64) -> Option<bool> {
@@ -99,6 +182,21 @@ impl Hub {
             let mut sessions = self.inner.sessions.lock();
             match sessions.get_mut(session_id) {
                 Some(s) => {
+                    // A counter-only snapshot (a worker reconnecting) repeats
+                    // what the worker last saw, not a measurement of the
+                    // compacted context; only a live report replaces a stale one.
+                    let live = !usage.raw.is_null();
+                    if live && let CompactionUsage::Running { reported } = &mut s.compaction_usage {
+                        *reported = true;
+                    }
+                    if !live
+                        && s.meta.usage.as_ref().is_some_and(|stored| {
+                            stored.stale_after_compaction()
+                                && (stored.used, stored.size) == (usage.used, usage.size)
+                        })
+                    {
+                        return;
+                    }
                     if let Some(native_id) = s.meta.agent_session_id.as_ref()
                         && !s.meta.provider_generation_digest.is_empty()
                         && usage.size > 0

@@ -18,6 +18,10 @@ interface CompactRequest {
 }
 
 /**
+ * The Controller marks a reading that a completed compaction left without a
+ * fresh report (`serverStale`): the meter then shows unknown, on every device
+ * and after a reload, until the agent's next usage report replaces it.
+ *
  * Bridge the short gap between an agent finishing `/compact` and the canonical
  * sessions broadcast reaching the client. The per-session info endpoint reads
  * the same live Hub metadata, so it is a safe read-through while WebSocket
@@ -28,16 +32,20 @@ export function useCompactionContext({
   status,
   serverUsed,
   serverSize,
+  serverStale = false,
   completionSeq,
 }: {
   sessionId: string;
   status: Status;
   serverUsed: number;
   serverSize: number;
+  serverStale?: boolean;
   completionSeq: number;
 }): {
   used: number;
   size: number;
+  /** The reading is history after a compaction; show it as unknown. */
+  stale: boolean;
   refreshing: boolean;
   beginRefresh: () => void;
   /** A refused command never starts, so nothing would end the refresh. */
@@ -57,6 +65,13 @@ export function useCompactionContext({
       startedAt: Date.now(),
     });
   }, [completionSeq, serverSize, serverUsed]);
+
+  // The canonical mark settles a refresh: nothing newer exists to poll for.
+  useEffect(() => {
+    if (!serverStale) return;
+    setRequest(null);
+    setOverride(null);
+  }, [serverStale]);
 
   useEffect(() => {
     if (request && status === "busy" && !request.sawBusy) {
@@ -151,9 +166,20 @@ export function useCompactionContext({
     };
   }, [request, serverSize, serverUsed, sessionId, status]);
 
+  if (serverStale) {
+    return {
+      used: serverUsed,
+      size: serverSize,
+      stale: true,
+      refreshing: false,
+      beginRefresh,
+      cancelRefresh,
+    };
+  }
   return {
     used: override?.used ?? serverUsed,
     size: override?.size ?? serverSize,
+    stale: false,
     // An override with no size is the honest "awaiting the provider's next
     // usage frame" state after Codex compaction. Keep the tooltip explicit
     // until a subsequent model turn supplies canonical token usage.

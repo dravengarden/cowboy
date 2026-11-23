@@ -651,19 +651,33 @@ function contextPercent(
 
 /** Compact's face at every width: the gauge with its percentage beside it. */
 function ContextReading(
-  { used, size, running }: { used: number; size: number; running: boolean },
+  { used, size, stale, running }: {
+    used: number;
+    size: number;
+    stale: boolean;
+    running: boolean;
+  },
 ): React.JSX.Element {
-  const pct = contextPercent({ used, size });
+  // A reading a compaction left as history is unknown: an empty ring, "—".
+  const pct = stale ? null : contextPercent({ used, size });
   return (
     <>
-      <ContextGauge used={used} size={size} running={running} />
-      {pct !== null && (
+      <ContextGauge
+        used={stale ? 0 : used}
+        size={stale ? 1 : size}
+        running={running}
+      />
+      {(pct !== null || stale) && (
         <Box
           component="span"
           data-context-reading
-          sx={{ fontVariantNumeric: "tabular-nums" }}
+          data-context-stale={stale || undefined}
+          sx={{
+            fontVariantNumeric: "tabular-nums",
+            color: stale ? "text.disabled" : undefined,
+          }}
         >
-          {pct}%
+          {stale ? "—" : `${pct}%`}
         </Box>
       )}
     </>

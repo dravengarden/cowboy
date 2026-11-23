@@ -8,6 +8,7 @@ import { type SessionAction } from "./agentCommands";
 import { ConfirmConsequence } from "./ConfirmConsequence";
 import { currentProviderEntry, useProviderCatalog } from "./providerCatalog";
 import { providerName } from "./providerPresentation";
+import { COMPACTED_CONTEXT_HINT, contextStaleAfterCompaction } from "./contextUsageRecord";
 import { SessionProviderAccess } from "./ProviderManagement";
 import { SessionAccountDetails } from "./SessionAccountDetails";
 import { resolveProviderAuthenticationPresentation } from "@cowboy/provider-ui";
@@ -756,7 +757,9 @@ export function SessionInfoSection({
   const contextUsed = session.context_used ?? 0;
   const contextSize = session.context_size ?? 0;
   const hasContext = contextSize > 0;
-  const contextPercent = hasContext
+  // A completed compaction left the reading as history: unknown until the next report.
+  const contextStale = hasContext && contextStaleAfterCompaction(session);
+  const contextPercent = hasContext && !contextStale
     ? Math.min(100, Math.max(0, contextUsed / contextSize * 100))
     : 0;
   const providerEntry = currentProviderEntry(
@@ -872,7 +875,9 @@ export function SessionInfoSection({
             Context
           </Typography>
           <Typography variant="body2" sx={{ fontWeight: 600 }}>
-            {hasContext
+            {contextStale
+              ? "Unknown"
+              : hasContext
               ? `${Math.round(contextPercent)}% used`
               : "Waiting for usage"}
           </Typography>
@@ -899,6 +904,7 @@ export function SessionInfoSection({
             color="text.secondary"
             sx={{ textAlign: "right" }}
           >
+            {contextStale && `${COMPACTED_CONTEXT_HINT} · before: `}
             {contextUsed.toLocaleString()} / {contextSize.toLocaleString()}{" "}
             tokens
           </Typography>

@@ -1428,6 +1428,7 @@ async fn run_storage_contract(store: &Store, session_id: &str) -> Result<()> {
         size: 1_000_000,
         raw: serde_json::json!({"sessionUpdate": "usage_update", "cost": {"amount": 1.5}}),
         observed_at_ms: 1_700_000_000_123,
+        compacted_at_ms: None,
     };
     store
         .update_session_usage(session_id, Some(&last_usage))

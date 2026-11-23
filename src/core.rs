@@ -553,6 +553,7 @@ struct Session {
     pending_actions: session_attention::PendingActions,
     meta: SessionMeta,
     usage_evidence: Option<context_rollover::UsageEvidence>,
+    compaction_usage: context_rollover::CompactionUsage,
     history_boundary: context_rollover::HistoryBoundary,
     // A Controller-local observation lifetime, not the native worker lifetime.
     code_incarnation: code_scope::CodeIncarnation,
@@ -2187,6 +2188,7 @@ impl Hub {
                         meta,
                         code_incarnation: code_scope::CodeIncarnation::default(),
                         usage_evidence: None,
+                        compaction_usage: context_rollover::CompactionUsage::Idle,
                         history_boundary,
                         machine_lineage: None,
                         log,
@@ -2990,6 +2992,7 @@ impl Hub {
                     meta: meta.clone(),
                     code_incarnation: code_scope::CodeIncarnation::default(),
                     usage_evidence: None,
+                    compaction_usage: context_rollover::CompactionUsage::Idle,
                     history_boundary: context_rollover::HistoryBoundary::Known(None),
                     machine_lineage: None,
                     log: Vec::new(),
@@ -3549,6 +3552,7 @@ impl Hub {
                 s.meta.context_size = 0;
                 s.meta.usage = None;
                 s.usage_evidence = None;
+                s.compaction_usage = context_rollover::CompactionUsage::Idle;
                 s.meta.background_tasks = 0;
                 changed
             })
@@ -4100,6 +4104,9 @@ mod runtime_reconciliation_tests;
 
 #[cfg(test)]
 mod core_tests;
+
+#[cfg(test)]
+mod compaction_usage_tests;
 
 #[cfg(all(test, feature = "full"))]
 mod session_meta_wire_tests;

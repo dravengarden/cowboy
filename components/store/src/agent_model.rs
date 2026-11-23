@@ -33,6 +33,20 @@ pub struct SessionUsage {
     pub raw: serde_json::Value,
     #[serde(default)]
     pub observed_at_ms: i64,
+    /// Epoch ms of a completed compaction that this reading predates. The
+    /// counters stay only as history: the compacted context's size is
+    /// unknown until the agent's next `usage_update`, which replaces the
+    /// whole reading and so clears this. Persisted with the reading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compacted_at_ms: Option<i64>,
+}
+
+impl SessionUsage {
+    /// Whether a completed compaction made this reading history.
+    #[must_use]
+    pub fn stale_after_compaction(&self) -> bool {
+        self.compacted_at_ms.is_some()
+    }
 }
 
 pub use crate::runtime_wire::TurnUsage;

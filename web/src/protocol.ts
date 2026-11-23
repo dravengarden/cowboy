@@ -232,6 +232,10 @@ export interface SessionMeta {
     size: number;
     raw: Record<string, unknown> | null;
     observed_at_ms: number;
+    /** Epoch ms of a completed compaction this reading predates: the counters
+     *  are history and the context ring shows unknown until the agent's next
+     *  `usage_update` replaces the reading. */
+    compacted_at_ms?: number;
   };
   /** Soonest fire time (epoch ms) across this session's SCHEDULED DRAFTS, or
    *  absent if none. Drives the session-row clock badge. Transient. */

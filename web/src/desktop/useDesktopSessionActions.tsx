@@ -10,7 +10,11 @@ import {
 } from "@mui/material";
 import { resolveSessionAction, type SessionAction } from "../agentCommands";
 import { StopConfirmDialog } from "../Composer";
-import { compactTooltip, recordedContextUsageAt } from "../contextUsageRecord";
+import {
+  compactTooltip,
+  contextStaleAfterCompaction,
+  recordedContextUsageAt,
+} from "../contextUsageRecord";
 import { ConfirmConsequence } from "../ConfirmConsequence";
 import { importantHaptic } from "../haptic";
 import { Kbd, useConfirmEnter } from "../Kbd";
@@ -31,6 +35,8 @@ export interface DesktopSessionActions {
   compact?: {
     used: number;
     size: number;
+    /** A completed compaction left the reading as history. */
+    stale: boolean;
     running: boolean;
     title: string;
     open: () => void;
@@ -98,6 +104,7 @@ export function useDesktopSessionActions(sessionId: string, status: Status): Des
     status,
     serverUsed: session?.context_used ?? 0,
     serverSize: session?.context_size ?? 0,
+    serverStale: contextStaleAfterCompaction(session),
     completionSeq: timeline.completionSeq,
   });
   const queuedAfterTurn = status === "busy" || status === "starting";
@@ -244,6 +251,7 @@ export function useDesktopSessionActions(sessionId: string, status: Status): Des
       compact: {
         used: context.used,
         size: context.size,
+        stale: context.stale,
         running: compacting,
         title: context.refreshing
           ? "Updating context usage…"

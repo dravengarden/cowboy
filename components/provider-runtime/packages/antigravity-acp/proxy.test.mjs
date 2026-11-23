@@ -1049,6 +1049,28 @@ test("/compact reaches agy unchanged and settles as a typed compaction", async (
   assert.equal(client.at(-1).result._meta.cowboy.antigravity_backend.class, "ok");
 });
 
+test("a usage reading during a /compact turn is not the compacted context", async () => {
+  const { proxy, client } = harness();
+  await openedSession(proxy);
+  const usage = () =>
+    client.filter((message) => message.params?.update?.sessionUpdate === "usage_update");
+  await proxy.fromClient(
+    request(3, "session/prompt", { sessionId: "s", prompt: text("/compact") }),
+  );
+  // agy measures the history its summary request carries.
+  await proxy.fromAgent(updateIn("usage_update", { used: 488_059, size: 1_048_576 }));
+  assert.equal(usage().length, 0);
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 3, result: { stopReason: "end_turn" } });
+  assert.equal(compactionUpdates(client).at(-1).status, "completed");
+  // The next turn's reading measures the compacted context again.
+  await proxy.fromClient(request(4, "session/prompt", { sessionId: "s", prompt: text("hi") }));
+  await proxy.fromAgent(updateIn("usage_update", { used: 60_000, size: 1_048_576 }));
+  assert.deepEqual(
+    usage().map((message) => message.params.update.used),
+    [60_000],
+  );
+});
+
 test("the first owner prompt after a compaction restates the session context", async () => {
   const { proxy, agent } = harness();
   await openedSession(proxy);

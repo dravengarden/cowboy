@@ -3089,6 +3089,7 @@ fn context_reset_forgets_the_discarded_context_usage() {
             size: 1000,
             raw: serde_json::Value::Null,
             observed_at_ms: 1,
+            compacted_at_ms: None,
         },
     );
     hub.set_background_tasks("clear-usage", 2);
@@ -3120,6 +3121,7 @@ fn relaunched_worker_seed_keeps_the_resumed_context_usage() {
         size: 1_000_000,
         raw: serde_json::Value::Null,
         observed_at_ms: 1,
+        compacted_at_ms: None,
     };
     hub.set_session_usage("usage-relaunch", usage.clone());
     while rx.try_recv().is_ok() {}
@@ -3133,6 +3135,7 @@ fn relaunched_worker_seed_keeps_the_resumed_context_usage() {
             size: 0,
             raw: serde_json::Value::Null,
             observed_at_ms: 0,
+            compacted_at_ms: None,
         },
     );
 
@@ -3160,6 +3163,7 @@ fn counter_only_snapshot_keeps_the_stored_raw_reading() {
         size: 1_048_576,
         raw: serde_json::json!({"_meta": {"cowboy": {"sanitizer": 1}}}),
         observed_at_ms: 7,
+        compacted_at_ms: None,
     };
     hub.set_session_usage("usage-raw", usage.clone());
     while rx.try_recv().is_ok() {}
@@ -3169,6 +3173,7 @@ fn counter_only_snapshot_keeps_the_stored_raw_reading() {
         size: 1_048_576,
         raw: serde_json::Value::Null,
         observed_at_ms: 0,
+        compacted_at_ms: None,
     };
     // A reconnect snapshot with the same counters is not a newer reading.
     hub.set_session_usage("usage-raw", counters(492_536));
@@ -3207,6 +3212,7 @@ fn context_usage_is_persisted_once_per_change_and_cleared_by_reset() {
         size: 1000,
         raw: serde_json::Value::Null,
         observed_at_ms: 1,
+        compacted_at_ms: None,
     };
     hub.set_session_usage("usage-durable", usage.clone());
     // A re-emitted identical reading is neither broadcast nor written again.
@@ -4585,6 +4591,7 @@ fn wait_cache_context_sample_requires_the_same_native_id_and_provider_generation
                 size,
                 raw: serde_json::Value::Null,
                 observed_at_ms: 1,
+                compacted_at_ms: None,
             },
         )
     };

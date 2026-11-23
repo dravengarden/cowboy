@@ -191,9 +191,9 @@ const TOOLBAR_MIN_H = {
 // proportionally if the toolbar icon size changes instead of relying on a
 // viewport/root-font-dependent CSS size.
 function CompactReading(
-  { value, muted = false }: { value: number; muted?: boolean },
+  { value, muted = false }: { value: number | "—"; muted?: boolean },
 ): React.JSX.Element {
-  const fontSize = value < 10 ? 10.5 : value < 100 ? 9.5 : 8.25;
+  const fontSize = value === "—" || value < 10 ? 10.5 : value < 100 ? 9.5 : 8.25;
   return (
     <Box
       component="svg"
@@ -235,9 +235,16 @@ const COMPACT_GAUGE_SIZE = "min(1.75rem, 32px)";
 // token counts live in the Compact tooltip. Before the agent reports a size it's
 // just the bare Compress icon.
 export function CompactIcon(
-  { used, size, active }: { used: number; size: number; active: boolean },
+  { used, size, active, stale = false }: {
+    used: number;
+    size: number;
+    active: boolean;
+    /** A completed compaction left the reading as history: draw the empty
+     *  ring around a dimmed "—" instead of the old percentage. */
+    stale?: boolean;
+  },
 ): React.JSX.Element {
-  const hasSize = size > 0;
+  const hasSize = size > 0 && !stale;
   const pct = hasSize
     ? (used > 0
       ? Math.max(1, Math.round(Math.min(100, (used / size) * 100)))
@@ -271,7 +278,7 @@ export function CompactIcon(
       </Box>
     );
   }
-  if (!hasSize) return <Compress fontSize="small" />;
+  if (!hasSize && !stale) return <Compress fontSize="small" />;
   const color = pct >= 90
     ? "error.main"
     : pct >= 70
@@ -328,7 +335,7 @@ export function CompactIcon(
           />
         )}
       </Box>
-      <CompactReading value={pct} />
+      <CompactReading value={stale ? "—" : pct} muted={stale} />
     </Box>
   );
 }
@@ -825,6 +832,7 @@ export function ComposerWorkspace({
     status,
     serverUsed: sessionState.contextUsed,
     serverSize: sessionState.contextSize,
+    serverStale: sessionState.contextStale,
     completionSeq: timelineState.completionSeq,
   });
   function runSessionAction(a: SessionAction): Promise<void> {
@@ -2141,6 +2149,7 @@ export function ComposerWorkspace({
                           <CompactIcon
                             used={compactContext.used}
                             size={compactContext.size}
+                            stale={compactContext.stale}
                             active={compacting}
                           />
                         </IconButton>

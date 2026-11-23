@@ -144,7 +144,10 @@ places its tree below `proxy/` in the account-sandbox runtime archive and adds
   `clientCapabilities.session.compaction`, is shown as ACP's typed
   `compaction_update` (`in_progress` before the prompt, then `completed`,
   `cancelled` or `failed` with the turn error, sent before the turn's
-  reply). After a completed compaction the first owner prompt that is not a
+  reply). A `usage_update` `agy` sends during that turn measures the history
+  being summarized, so the proxy drops it: with no report during the
+  compaction, the Controller shows the context as unknown until the next
+  turn's reading. After a completed compaction the first owner prompt that is not a
   slash command is prefixed with `<cowboy_context_restated>`, the projection
   the session was opened with (routing, environment, repository and
   extension guidance), so it stays in effect even if a summary drops it;
