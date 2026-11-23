@@ -19,31 +19,16 @@
 //! that admission still denies now cancels its reset: the stop never leaves
 //! and the running worker is kept.
 
-use super::{
-    CoreCommand, Duration, Frame, HashMap, HashSet, Mutex, Result, Shared, Status, WorkerState,
-};
+use super::{CoreCommand, Duration, Frame, HashMap, HashSet, Mutex, Result, Shared, Status};
 
 /// Longer than the MCP launch recovery pass needs (5-second ticks); after it
 /// the declaration meets ordinary admission, as before.
 const PLAN_WAIT: Duration = Duration::from_secs(60);
 const RECHECK: Duration = Duration::from_secs(2);
+const CLEARED_CANCEL_DETAIL: &str = "The conversation was cleared, but its fresh agent could not start yet; send a message or Retry to start it";
 
 static WAITING: std::sync::LazyLock<Mutex<HashMap<String, std::time::Instant>>> =
     std::sync::LazyLock::new(Default::default);
-
-/// Each session's newest reset command and the context generation it started
-/// in. Cancelling that exact reset may readmit the kept worker only into that
-/// same context (`Hub::readmit_runtime_epoch`).
-static RESET_CONTEXTS: std::sync::LazyLock<Mutex<HashMap<String, (String, u64)>>> =
-    std::sync::LazyLock::new(Default::default);
-
-pub(super) fn record_context(shared: &Shared, session_id: &str, command_id: &str) {
-    if let Some(generation) = shared.hub.runtime_context_generation(session_id) {
-        RESET_CONTEXTS
-            .lock()
-            .insert(session_id.to_owned(), (command_id.to_owned(), generation));
-    }
-}
 
 /// The command to admit now, or `None` while it waits. `deferred` holds the
 /// sessions whose reset declaration waits in this pass (it is ordered first).
@@ -212,24 +197,25 @@ fn cancel(shared: &Shared, session_id: &str) -> bool {
         );
     }
     let kept = shared.workers.lock().get(session_id).cloned();
-    let context = RESET_CONTEXTS
-        .lock()
-        .remove(session_id)
-        .filter(|(command, _)| withdrawn_stops.contains(command));
-    if let (Some(worker), Some((_, generation))) = (&kept, context)
-        && !matches!(worker.state, WorkerState::Exited | WorkerState::Crashed)
-    {
-        // A cancelled Clear keeps this live worker's context running.
-        shared.hub.readmit_runtime_epoch(
+    // A Clear fenced the kept worker's context for good: it fails closed, and
+    // the next prompt or Retry recycles the session into a fresh worker.
+    let cleared = kept.as_ref().is_some_and(|worker| {
+        !shared.hub.admit_runtime_epoch(
             session_id,
             &worker.worker_epoch,
             worker.agent_session_id.as_deref(),
-            generation,
-        );
-    }
-    let status = kept.map_or(Status::Crashed, |worker| super::worker_status(worker.state));
+        )
+    });
+    let (status, detail) = if cleared {
+        (Status::Crashed, Some(CLEARED_CANCEL_DETAIL.to_owned()))
+    } else {
+        (
+            kept.map_or(Status::Crashed, |worker| super::worker_status(worker.state)),
+            None,
+        )
+    };
     tracing::warn!(session = %session_id, ?status, "reset declaration denied; reset cancelled");
-    shared.hub.set_status(session_id, status, None);
+    shared.hub.set_status(session_id, status, detail);
     true
 }
 
@@ -371,7 +357,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_cancelled_clear_readmits_the_worker_it_keeps() {
+    async fn a_cancelled_clear_fails_closed_and_keeps_the_old_context_fenced() {
         let hub = Hub::new();
         bound_session(&hub, "kept");
         let worker = super::super::tests::snapshot("kept");
@@ -386,7 +372,9 @@ mod tests {
         WAITING.lock().insert("kept".to_owned(), expired);
         let commands = wire(&runtime).await;
         assert!(!commands.iter().any(reset_stop), "{commands:?}");
-        // The kept worker still runs the only live context.
+        // No fresh agent yet: the session needs a restart instead of
+        // silently running the cleared context.
+        assert_eq!(hub.status("kept"), Some(super::super::Status::Crashed));
         super::super::handle_frame(
             &runtime.shared,
             Frame::WorkerEvent {
@@ -405,7 +393,9 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(hub.session_info("kept").unwrap().meta.context_used, 7);
+        let meta = hub.session_info("kept").unwrap().meta;
+        assert_eq!(meta.context_used, 0);
+        assert_eq!(meta.agent_session_id, None);
     }
 
     #[tokio::test]

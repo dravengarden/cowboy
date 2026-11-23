@@ -6030,18 +6030,8 @@ impl PostgresStorage {
     /// Delete one session's durable transcript while preserving its metadata
     /// and monotonic `next_seq` watermark.
     pub async fn clear_events(&self, session_id: &str, calls_before_ms: i64) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("DELETE FROM events WHERE session_id = $1")
-            .bind(session_id)
-            .execute(&mut *tx)
+        self.clear_conversation(session_id, calls_before_ms, None)
             .await
-            .with_context(|| format!("DELETE events for {session_id}"))?;
-        session_widgets::clear_transcript_projections_pg(&mut tx, session_id).await?;
-        // Archive old Calls while keeping unconfirmed opted-in notices visible.
-        managed_calls::clear_calls_on_transcript_clear_pg(&mut tx, session_id, calls_before_ms)
-            .await?;
-        tx.commit().await?;
-        Ok(())
     }
 
     pub fn artifact_path(&self, name: &str) -> Option<std::path::PathBuf> {

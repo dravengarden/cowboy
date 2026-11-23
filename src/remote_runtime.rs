@@ -1342,7 +1342,6 @@ impl RemoteRuntime {
             queue_persisted_config_for_session(&self.shared, &session_id, true);
         }
         let command_id = self.next_id("reset");
-        reset_admission::record_context(&self.shared, &session_id, &command_id);
         self.shared
             .active_reset_commands
             .lock()

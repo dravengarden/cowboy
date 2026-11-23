@@ -20,6 +20,21 @@
 //! Projection holds [`Hub::runtime_projection_guard`] from admission until it
 //! has written, and Clear takes it exclusively while it advances the fence, so
 //! a frame admitted before Clear cannot write after it.
+//!
+//! Durability: Clear deletes the transcript, forgets the native id and records
+//! this fence in one store transaction (`StoreWrite::ClearEvents`); if it
+//! fails, the store keeps both the transcript and the old context. Context
+//! renewal and a fork reset persist the id and fence together without the
+//! transcript (`StoreWrite::ClearAgentSession`).
+//!
+//! The fence is final. A Clear whose reset is cancelled (its replacement's
+//! launch admission denied before the stop left) does not readmit the worker
+//! it kept: the session fails closed as Crashed, and the next prompt or Retry
+//! recycles it into a fresh worker.
+//!
+//! Known limit: an old epoch this Controller first sees after a restart, that
+//! has not yet reported a discarded native id, can project frames that carry
+//! no id until it does. Closing it needs a context identity on the wire.
 
 use std::collections::HashMap;
 
@@ -171,13 +186,12 @@ impl Hub {
         (key, fence)
     }
 
-    /// The session's current context generation (see [`EpochFence`]).
-    pub fn runtime_context_generation(&self, session_id: &str) -> Option<u64> {
-        self.inner
-            .sessions
-            .lock()
-            .get(session_id)
-            .map(|session| session.runtime_epochs.generation)
+    /// The fence setting as Clear persists it with the transcript deletion.
+    pub(super) fn cleared_fence(&self, session_id: &str) -> (String, serde_json::Value) {
+        (
+            cleared_key(session_id),
+            serde_json::json!(self.cleared_native(session_id)),
+        )
     }
 
     /// Whether a runtime frame or snapshot from `epoch` may project into the
@@ -199,13 +213,10 @@ impl Hub {
         let Some(session) = sessions.get_mut(session_id) else {
             return RuntimeEpoch::Current;
         };
-        // The id the session runs now is never discarded (a cancelled Clear
-        // re-adopts the worker it keeps).
         let discarded = native.is_some_and(|native| {
-            session.meta.agent_session_id.as_deref() != Some(native)
-                && cleared
-                    .as_ref()
-                    .is_some_and(|ids| ids.iter().any(|id| id == native))
+            cleared
+                .as_ref()
+                .is_some_and(|ids| ids.iter().any(|id| id == native))
         });
         if placeholder(epoch) {
             return if discarded {
@@ -215,47 +226,6 @@ impl Hub {
             };
         }
         session.runtime_epochs.classify(epoch, discarded)
-    }
-
-    /// Re-admit the live worker a cancelled reset keeps: it still runs, so its
-    /// frames and native id describe the session's only context again. Only
-    /// while the session is still in `generation`, the context the cancelled
-    /// reset's Clear started; a newer Clear keeps its fence. The kept native id
-    /// becomes the session's own again, so a later Clear discards it anew.
-    pub fn readmit_runtime_epoch(
-        &self,
-        session_id: &str,
-        epoch: &str,
-        native: Option<&str>,
-        generation: u64,
-    ) -> bool {
-        if placeholder(epoch) {
-            return false;
-        }
-        // Serialized with Clear, which records discarded ids under the same guard.
-        let _guard = self.runtime_projection_exclusive();
-        {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(session) = sessions.get_mut(session_id) else {
-                return false;
-            };
-            if session.runtime_epochs.generation != generation {
-                return false;
-            }
-            session.runtime_epochs.bind(epoch, generation);
-            if let Some(native) = native {
-                session.meta.agent_session_id = Some(native.to_owned());
-            }
-        }
-        if let Some(native) = native {
-            let mut cleared = self.cleared_native(session_id);
-            let before = cleared.len();
-            cleared.retain(|id| id != native);
-            if cleared.len() != before {
-                self.set_setting(cleared_key(session_id), serde_json::json!(cleared));
-            }
-        }
-        true
     }
 }
 
@@ -319,23 +289,7 @@ mod tests {
         assert!(!hub.admit_runtime_epoch("s", "broker-s", Some("agent-1")));
         assert!(hub.admit_runtime_epoch("s", "new", Some("agent-2")));
         assert!(hub.admit_runtime_epoch("s", "broker-s", None));
-        // A cancelled reset of an older context cannot reopen this one.
-        let current = hub.runtime_context_generation("s").unwrap();
-        assert!(!hub.readmit_runtime_epoch("s", "old", Some("agent-1"), current.wrapping_add(1)));
-        assert!(!hub.readmit_runtime_epoch("s", "broker-s", Some("agent-1"), current));
-        assert!(!hub.admit_runtime_epoch("s", "old", Some("agent-1")));
-        // Re-adopting the id (a cancelled Clear) lifts its fence, and the
-        // session runs it again, so the next Clear discards it anew.
-        assert!(hub.readmit_runtime_epoch("s", "old", Some("agent-1"), current));
-        assert!(hub.admit_runtime_epoch("s", "old", Some("agent-1")));
-        assert_eq!(
-            hub.session_info("s")
-                .unwrap()
-                .meta
-                .agent_session_id
-                .as_deref(),
-            Some("agent-1")
-        );
+        // Fenced for good: a later Clear keeps the id discarded.
         hub.prepare_context_reset("s");
         assert!(!hub.admit_runtime_epoch("s", "old", Some("agent-1")));
     }

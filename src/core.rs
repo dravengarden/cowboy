@@ -1202,9 +1202,11 @@ pub enum StoreWrite {
         session_id: String,
         usage: Option<crate::agent_model::SessionUsage>,
     },
+    /// Clear conversation, with the restart fence (`None` keeps the native id).
     ClearEvents {
         session_id: String,
         calls_before_ms: i64,
+        fence: Option<(String, serde_json::Value)>,
     },
     DeleteSession(String),
     /// Persist a session's queue + drafts (whole lists, as JSONB) so staged
@@ -3614,9 +3616,12 @@ impl Hub {
             ledger.latest.clear();
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
+            // One transaction with the native id's removal and its fence: a
+            // failed write keeps both the transcript and the old context.
             let _ = tx.send(StoreWrite::ClearEvents {
                 session_id: session_id.to_owned(),
                 calls_before_ms: chrono::Utc::now().timestamp_millis(),
+                fence: Some(self.cleared_fence(session_id)),
             });
         }
     }

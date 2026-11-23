@@ -779,7 +779,13 @@ pub(super) async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyh
         StoreWrite::ClearEvents {
             session_id,
             calls_before_ms,
-        } => store.clear_events(session_id, *calls_before_ms).await,
+            fence,
+        } => {
+            let fence = fence.as_ref().map(|(key, value)| (key.as_str(), value));
+            store
+                .clear_conversation(session_id, *calls_before_ms, fence)
+                .await
+        }
         StoreWrite::DeleteSession(id) => store.delete_session(id).await,
         StoreWrite::UpdatePending {
             session_id,
