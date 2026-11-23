@@ -107,7 +107,7 @@ impl Hub {
         &self,
         session_id: &str,
         event: Event,
-        cmid: Option<String>,
+        mut cmid: Option<String>,
         from_worker: bool,
     ) {
         let mut event = self.prepare_attention_event(session_id, event);
@@ -129,7 +129,7 @@ impl Hub {
                     None => return,
                 }
             }
-            Self::annotate_dispatched_prompt(s, &mut event, cmid.as_deref(), from_worker);
+            Self::annotate_dispatched_prompt(s, &mut event, &mut cmid, from_worker);
             // A permission answered on two devices at once resolves once. The
             // second answer is the same fact: the first row stays and no
             // duplicate is appended (docs/offline-first-sync.md, conflict 7).

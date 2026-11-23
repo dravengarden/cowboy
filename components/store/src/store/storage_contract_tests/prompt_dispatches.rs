@@ -76,11 +76,25 @@ async fn assert_prompt_dispatches_contract(store: &Store) {
         None
     );
 
-    // Immutability & compatibility: identical retry returns Ok(true); a
-    // conflicting caller reusing an existing cmid returns Ok(false).
+    // Immutability & compatibility: identical retry returns Ok(true);
+    // accelerating a non-owner record with a different trigger keeps the same
+    // origin and returns Ok(true); a conflicting origin returns Ok(false).
     assert!(
         store
             .record_prompt_dispatch_if_compatible(&records[0])
+            .await
+            .unwrap()
+    );
+    let accelerated_notice = PromptDispatchRecord {
+        session_id: active.into(),
+        cmid: "cmid-cowboy".into(),
+        origin: DeliveryOrigin::cowboy("schedule"),
+        trigger: DeliveryOrigin::Owner,
+        dispatched_at_ms: 450,
+    };
+    assert!(
+        store
+            .record_prompt_dispatch_if_compatible(&accelerated_notice)
             .await
             .unwrap()
     );
@@ -191,12 +205,20 @@ async fn assert_prompt_dispatches_hydration_and_queue_contract(
     // flushes must succeed, survive purge_deleted of unrelated expired sessions,
     // and hydrate once InsertSession lands.
     let unflushed = "pd-unflushed";
+    let now_ms = chrono::Utc::now().timestamp_millis();
     let early = PromptDispatchRecord {
         session_id: unflushed.into(),
         cmid: "initial:pd-unflushed".into(),
         origin: DeliveryOrigin::peer("creator-1"),
         trigger: DeliveryOrigin::peer("creator-1"),
-        dispatched_at_ms: 600,
+        dispatched_at_ms: now_ms,
+    };
+    let stale_orphan = PromptDispatchRecord {
+        session_id: "pd-never-flushed-old".into(),
+        cmid: "initial:old-orphan".into(),
+        origin: DeliveryOrigin::Owner,
+        trigger: DeliveryOrigin::Owner,
+        dispatched_at_ms: now_ms - crate::store::prompt_dispatches::ORPHAN_GRACE_MS - 60_000,
     };
     assert!(
         store
@@ -204,11 +226,24 @@ async fn assert_prompt_dispatches_hydration_and_queue_contract(
             .await
             .unwrap()
     );
-    // Purging expired soft-deleted sessions drops `deleted`'s dispatches but
-    // preserves both active and not-yet-flushed sessions.
+    assert!(
+        store
+            .record_prompt_dispatch_if_compatible(&stale_orphan)
+            .await
+            .unwrap()
+    );
+    // Purging drops expired soft-deleted sessions and aged orphans while
+    // preserving fresh not-yet-flushed sessions inside the grace window.
     let _ = store.purge_deleted(0).await.unwrap();
     assert_eq!(
         store.prompt_dispatch(deleted, "cmid-del").await.unwrap(),
+        None
+    );
+    assert_eq!(
+        store
+            .prompt_dispatch("pd-never-flushed-old", "initial:old-orphan")
+            .await
+            .unwrap(),
         None
     );
     assert_eq!(

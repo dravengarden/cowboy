@@ -2839,7 +2839,13 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
                 .filter_map(|value| value.get("text").and_then(serde_json::Value::as_str))
                 .collect::<Vec<_>>()
                 .join("\n");
-            hub.requeue_prompt(session_id, text, content, cmid, None, None);
+            let (origin, initiator) = cmid
+                .as_deref()
+                .and_then(|id| hub.prompt_dispatch_record(session_id, id))
+                .map_or((None, None), |record| {
+                    (Some(record.origin), Some(record.trigger))
+                });
+            hub.requeue_prompt(session_id, text, content, cmid, origin, initiator);
             hub.broadcast_error(Some(session_id.to_owned()), error);
         }
         RuntimeEvent::CommandRejected { message, .. } | RuntimeEvent::Error { message } => {
@@ -2998,7 +3004,13 @@ fn handle_rejected_command(
             .filter_map(|value| value.get("text").and_then(serde_json::Value::as_str))
             .collect::<Vec<_>>()
             .join("\n");
-        hub.requeue_prompt(session_id, text, content, cmid, None, None);
+        let (origin, initiator) = cmid
+            .as_deref()
+            .and_then(|id| hub.prompt_dispatch_record(session_id, id))
+            .map_or((None, None), |record| {
+                (Some(record.origin), Some(record.trigger))
+            });
+        hub.requeue_prompt(session_id, text, content, cmid, origin, initiator);
     }
     hub.broadcast_error(Some(session_id.to_owned()), reason);
 }
@@ -5915,6 +5927,80 @@ mod tests {
             Some("failed".to_owned()),
         );
         assert_eq!(hub.session_info("s").expect("session").queue_count, 1);
+    }
+
+    #[test]
+    fn undelivered_and_rejected_prompts_preserve_recorded_provenance() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::model::SessionOrigin::Web,
+            false,
+        );
+        hub.set_paused("s", true);
+        hub.set_status("s", Status::Running, None);
+        hub.record_prompt_dispatch(
+            "s",
+            "owner-cmid".to_owned(),
+            crate::prompt_origin::DeliveryOrigin::Owner,
+            crate::prompt_origin::DeliveryOrigin::Owner,
+            100,
+        );
+        apply_event(
+            &hub,
+            "s",
+            RuntimeEvent::UndeliveredPrompt {
+                command_id: "cmd-1".to_owned(),
+                content: vec![serde_json::json!({"type": "text", "text": "owner prompt"})],
+                cmid: Some("owner-cmid".to_owned()),
+                error: "busy".to_owned(),
+            },
+        );
+        hub.record_prompt_dispatch(
+            "s",
+            "call-notice:cid-9".to_owned(),
+            crate::prompt_origin::DeliveryOrigin::cowboy("managed_call"),
+            crate::prompt_origin::DeliveryOrigin::cowboy("managed_call"),
+            200,
+        );
+        handle_rejected_command(
+            &hub,
+            "s",
+            Some(CoreCommand::Prompt {
+                session_id: "s".to_owned(),
+                trace: None,
+                command_id: "cmd-2".to_owned(),
+                turn_id: "turn-2".to_owned(),
+                content: vec![serde_json::json!({"type": "text", "text": "notice body"})],
+                cmid: Some("call-notice:cid-9".to_owned()),
+                echo_artifacts: false,
+                observe_subagents: false,
+            }),
+            Some("rejected".to_owned()),
+        );
+        let (queue, _) = hub.queue_and_drafts("s", |_| true).expect("queue");
+        assert_eq!(queue.len(), 2);
+        assert_eq!(queue[0].cmid.as_deref(), Some("call-notice:cid-9"));
+        assert_eq!(
+            queue[0].origin,
+            Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call"))
+        );
+        assert_eq!(
+            queue[0].initiator,
+            Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call"))
+        );
+        assert_eq!(queue[1].cmid.as_deref(), Some("owner-cmid"));
+        assert_eq!(
+            queue[1].origin,
+            Some(crate::prompt_origin::DeliveryOrigin::Owner)
+        );
+        assert_eq!(
+            queue[1].initiator,
+            Some(crate::prompt_origin::DeliveryOrigin::Owner)
+        );
     }
 
     #[tokio::test]

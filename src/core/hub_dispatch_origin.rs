@@ -2,8 +2,9 @@
 //!
 //! Keeps an in-memory bounded cache of `PromptDispatchRecord` per session
 //! (hydrated from `prompt_dispatches` on startup and updated before every
-//! handoff). Echoes from workers are authoritatively stamped from these
-//! records so legacy or untrusted workers can never mint Owner turns.
+//! handoff), plus a single-use `pending_echoes` set with exact dispatched block
+//! counts so untrusted or legacy workers can never replay historical Owner
+//! cmids or append forged untagged Owner chunks.
 
 use super::*;
 use crate::prompt_origin::{
@@ -12,12 +13,43 @@ use crate::prompt_origin::{
 };
 
 const MAX_SESSION_DISPATCH_ORIGINS: usize = 512;
+const MAX_PENDING_ECHOES: usize = 64;
+/// Upper bound on continuation blocks for a single prompt that was already in
+/// flight across a Controller restart (whose exact block count was not saved).
+const HYDRATED_PENDING_ECHO_MAX_BLOCKS: usize = 16;
 pub(super) const DISPATCH_CMID_PREFIX: &str = "cowboy-dispatch:";
 
 pub(super) fn ensure_dispatch_cmid(cmid: Option<String>) -> String {
     match cmid {
         Some(value) if !value.is_empty() => value,
         _ => format!("{DISPATCH_CMID_PREFIX}{}", uuid::Uuid::new_v4().simple()),
+    }
+}
+
+pub(super) fn note_pending_echo(
+    s: &mut Session,
+    cmid: &str,
+    origin: DeliveryOrigin,
+    expected_blocks: usize,
+) {
+    let blocks = expected_blocks.max(1);
+    if let Some((existing_origin, existing_blocks)) = s.pending_echoes.get_mut(cmid) {
+        *existing_origin = origin;
+        *existing_blocks = (*existing_blocks).max(blocks);
+        return;
+    }
+    while s.pending_echo_order.len() >= MAX_PENDING_ECHOES {
+        if let Some(oldest) = s.pending_echo_order.pop_front() {
+            s.pending_echoes.remove(&oldest);
+        }
+    }
+    s.pending_echo_order.push_back(cmid.to_owned());
+    s.pending_echoes.insert(cmid.to_owned(), (origin, blocks));
+}
+
+pub(super) fn remove_pending_echo(s: &mut Session, cmid: &str) {
+    if s.pending_echoes.remove(cmid).is_some() {
+        s.pending_echo_order.retain(|id| id != cmid);
     }
 }
 
@@ -28,7 +60,9 @@ pub(super) fn note_dispatch_origin(
     origin: DeliveryOrigin,
     trigger: DeliveryOrigin,
     dispatched_at_ms: i64,
+    expected_blocks: usize,
 ) {
+    note_pending_echo(s, cmid, origin.clone(), expected_blocks);
     if s.dispatched_origins.contains_key(cmid) {
         return;
     }
@@ -51,8 +85,8 @@ pub(super) fn note_dispatch_origin(
 }
 
 impl Hub {
-    /// Record an authoritative dispatch origin in the Hub's per-session cache.
-    /// Immutable once recorded for a given `(session_id, cmid)`.
+    /// Record an authoritative dispatch origin in the Hub's per-session cache
+    /// and arm its single-use pending worker echo.
     pub fn record_prompt_dispatch(
         &self,
         session_id: &str,
@@ -65,23 +99,61 @@ impl Hub {
         let Some(s) = sessions.get_mut(session_id) else {
             return;
         };
-        note_dispatch_origin(s, session_id, &cmid, origin, trigger, dispatched_at_ms);
+        note_dispatch_origin(s, session_id, &cmid, origin, trigger, dispatched_at_ms, 1);
     }
 
-    /// Seed the Hub's per-session dispatch caches from durable `prompt_dispatches`
-    /// rows loaded during Controller startup.
+    /// Record the exact number of content blocks (including any prepended
+    /// session-context preamble) handed to a worker for `(session_id, cmid)` so
+    /// continuation-chunk stamping is strictly bounded to that count.
+    pub fn set_pending_echo_blocks(&self, session_id: &str, cmid: &str, blocks: usize) {
+        let mut sessions = self.inner.sessions.lock();
+        let Some(s) = sessions.get_mut(session_id) else {
+            return;
+        };
+        let blocks = blocks.max(1);
+        if let Some((_, existing_blocks)) = s.pending_echoes.get_mut(cmid) {
+            *existing_blocks = blocks;
+        } else if let Some(record) = s.dispatched_origins.get(cmid) {
+            let origin = record.origin.clone();
+            note_pending_echo(s, cmid, origin, blocks);
+        }
+    }
+
+    /// Seed the Hub's per-session dispatch caches from durable
+    /// `prompt_dispatches` rows loaded during Controller startup.
+    ///
+    /// Historical dispatches are placed in `dispatched_origins` for history
+    /// scans and Retry lookups, NOT in `pending_echoes` (so a compromised
+    /// worker cannot replay historical Owner cmids). Only the single newest
+    /// hydrated record per session whose `cmid` has not yet echoed into the
+    /// retained log is armed in `pending_echoes`, preserving in-flight echoes
+    /// across Controller restarts.
     pub fn hydrate_prompt_dispatches(&self, records: Vec<PromptDispatchRecord>) {
         let mut sessions = self.inner.sessions.lock();
+        let mut newest_per_session: HashMap<String, (String, DeliveryOrigin)> = HashMap::new();
         for record in records {
             if let Some(s) = sessions.get_mut(&record.session_id) {
-                note_dispatch_origin(
-                    s,
-                    &record.session_id,
-                    &record.cmid,
-                    record.origin,
-                    record.trigger,
-                    record.dispatched_at_ms,
-                );
+                if !s.dispatched_origins.contains_key(&record.cmid) {
+                    while s.dispatched_origin_order.len() >= MAX_SESSION_DISPATCH_ORIGINS {
+                        if let Some(oldest) = s.dispatched_origin_order.pop_front() {
+                            s.dispatched_origins.remove(&oldest);
+                        }
+                    }
+                    s.dispatched_origin_order.push_back(record.cmid.clone());
+                    s.dispatched_origins
+                        .insert(record.cmid.clone(), record.clone());
+                }
+                newest_per_session.insert(record.session_id, (record.cmid, record.origin));
+            }
+        }
+        for (session_id, (cmid, origin)) in newest_per_session {
+            if let Some(s) = sessions.get_mut(&session_id)
+                && !s
+                    .log
+                    .iter()
+                    .any(|env| env.cmid.as_deref() == Some(cmid.as_str()))
+            {
+                note_pending_echo(s, &cmid, origin, HYDRATED_PENDING_ECHO_MAX_BLOCKS);
             }
         }
     }
@@ -131,9 +203,6 @@ impl Hub {
             s.dispatched_origins.get(c).map(|r| &r.origin)
         });
         let first_seq = s.log.first().map(|e| e.seq);
-        // A match at the log's first event may be a send whose first chunks
-        // were trimmed: the turn the Hub saw begin is that send's start, and
-        // one it never saw begin (restored from a cut tail) is not known here.
         let cut = !s.reached_start && in_log.is_some() && in_log == first_seq;
         Some(RetainedLogScan {
             newest_match: if cut {
@@ -148,16 +217,24 @@ impl Hub {
 
     /// Authoritatively stamp `promptOrigin` on a `user_message_chunk` from
     /// Controller dispatch truth, overriding any worker-guessed cmid label.
-    /// Multi-block prompts carry `cmid` only on block 0; trailing blocks inherit
-    /// `s.active_echo_origin` across contiguous `user_message_chunk` events.
+    ///
+    /// For live worker frames (`from_worker == true`):
+    /// - A `cmid`-bearing chunk is accepted ONLY if `cmid` is currently armed
+    ///   in `s.pending_echoes` (consumed on first echo so historical Owner
+    ///   cmids can never be replayed).
+    /// - Trailing chunks are accepted ONLY while contiguous with the active
+    ///   echo AND within the exact dispatched block count.
+    /// - Any replayed, unknown, or excess chunk fails closed as
+    ///   `Cowboy("unverified_worker")` and has its `cmid` stripped so durable
+    ///   scans can never match a spoofed echo to a prior Owner dispatch.
     pub(super) fn annotate_dispatched_prompt(
         s: &mut Session,
         event: &mut Event,
-        cmid: Option<&str>,
+        cmid: &mut Option<String>,
         from_worker: bool,
     ) {
         let Event::Update { update } = event else {
-            s.active_echo_origin = None;
+            s.active_echo = None;
             return;
         };
         if update
@@ -165,7 +242,7 @@ impl Hub {
             .and_then(serde_json::Value::as_str)
             != Some("user_message_chunk")
         {
-            s.active_echo_origin = None;
+            s.active_echo = None;
             return;
         }
         // Preserve runtime-injected `<system-reminder>` / review prompts.
@@ -174,31 +251,57 @@ impl Hub {
             .and_then(serde_json::Value::as_str)
             == Some("agent")
         {
-            s.active_echo_origin = None;
+            s.active_echo = None;
             return;
         }
-        if let Some(cmid) = cmid {
-            if let Some(record) = s.dispatched_origins.get(cmid) {
-                let origin = record.origin.clone();
+        if let Some(id) = cmid.as_deref() {
+            if let Some((origin, expected_blocks)) = s.pending_echoes.remove(id) {
+                s.pending_echo_order.retain(|seen| seen != id);
                 apply_authoritative_prompt_origin(update, &origin);
-                s.active_echo_origin = Some(origin);
+                s.active_echo = Some((
+                    Some(id.to_owned()),
+                    origin,
+                    expected_blocks.saturating_sub(1),
+                ));
                 return;
             }
-            s.active_echo_origin = None;
+            if s.log.last().is_some_and(is_user_message_chunk)
+                && let Some((active_cmid, origin, remaining)) = s.active_echo.clone()
+                && remaining > 0
+                && active_cmid.as_deref() == Some(id)
+            {
+                apply_authoritative_prompt_origin(update, &origin);
+                s.active_echo = Some((active_cmid, origin, remaining - 1));
+                return;
+            }
+            if !from_worker && let Some(record) = s.dispatched_origins.get(id) {
+                let origin = record.origin.clone();
+                apply_authoritative_prompt_origin(update, &origin);
+                s.active_echo = Some((
+                    Some(id.to_owned()),
+                    origin,
+                    HYDRATED_PENDING_ECHO_MAX_BLOCKS,
+                ));
+                return;
+            }
+            s.active_echo = None;
             if from_worker {
                 let unverified = DeliveryOrigin::cowboy("unverified_worker");
                 apply_authoritative_prompt_origin(update, &unverified);
+                *cmid = None;
             }
             return;
         }
         // Continuation block (`cmid == None`) of a multi-block dispatched prompt.
-        if let Some(origin) = s.active_echo_origin.clone()
-            && s.log.last().is_some_and(is_user_message_chunk)
+        if s.log.last().is_some_and(is_user_message_chunk)
+            && let Some((active_cmid, origin, remaining)) = s.active_echo.clone()
+            && remaining > 0
         {
             apply_authoritative_prompt_origin(update, &origin);
+            s.active_echo = Some((active_cmid, origin, remaining - 1));
             return;
         }
-        s.active_echo_origin = None;
+        s.active_echo = None;
         if from_worker {
             let unverified = DeliveryOrigin::cowboy("unverified_worker");
             apply_authoritative_prompt_origin(update, &unverified);

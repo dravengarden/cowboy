@@ -534,6 +534,8 @@ impl Supervisor {
         if self.hub.clear_pending(session_id) {
             return Err("the conversation is being cleared; send after it finishes".into());
         }
+        self.hub
+            .set_pending_echo_blocks(session_id, &cmid, content.len().max(1));
         // Do not prepare, wake or replace a worker for this operation.
         self.runtime_for_session(session_id)?.start_steer_targeted(
             session_id,
@@ -700,6 +702,10 @@ impl Supervisor {
                     );
                 }
                 let session = self.start_session(session_id)?;
+                if let Some(id) = cmid.as_deref() {
+                    self.hub
+                        .set_pending_echo_blocks(session_id, id, content.len().max(1));
+                }
                 if self.is_dormant(&runtime, session_id) {
                     // Project Starting and enqueue the prompt atomically with
                     // `disconnect()` so a disconnect between revive and prompt

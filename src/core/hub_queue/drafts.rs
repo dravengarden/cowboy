@@ -232,6 +232,7 @@ impl Hub {
                     dispatch_origin.clone(),
                     trigger.clone(),
                     now_ms(),
+                    m.content.len().max(1),
                 );
                 dispatch = Some(DispatchReq {
                     ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),

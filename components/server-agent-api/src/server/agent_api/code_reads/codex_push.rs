@@ -384,6 +384,12 @@ async fn deliver(
         super::super::super::send_delivery::record_steer_dispatch(state, session, &cmid, &caller)
             .await
     {
+        super::deliveries::finish(
+            session,
+            &delivery_id,
+            super::deliveries::State::Refused,
+            Some(&error),
+        );
         tracing::warn!(%error, session, "code intelligence dispatch record failed");
         return;
     }

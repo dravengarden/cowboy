@@ -159,6 +159,7 @@ impl Hub {
                 dispatch_origin.clone(),
                 origin.clone(),
                 now_ms(),
+                content.len().max(1),
             );
             DispatchReq {
                 ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
@@ -308,6 +309,7 @@ impl Hub {
                 dispatch_origin.clone(),
                 record_trigger.clone(),
                 now_ms(),
+                head.content.len().max(1),
             );
             DispatchReq {
                 ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
@@ -522,8 +524,18 @@ impl Hub {
             s.dispatch_pending = None;
             // The prompt never ran: it is no longer "delivered", so the drain (or
             // a client resend) may hand it to a worker again.
+            let (recovered_origin, recovered_initiator) = if origin.is_none() && initiator.is_none()
+            {
+                cmid.as_deref()
+                    .and_then(|c| s.dispatched_origins.get(c))
+                    .map(|record| (Some(record.origin.clone()), Some(record.trigger.clone())))
+                    .unwrap_or((None, None))
+            } else {
+                (origin, initiator)
+            };
             if let Some(c) = cmid.as_deref() {
                 s.dispatched_cmids.retain(|seen| seen.cmid != c);
+                hub_dispatch_origin::remove_pending_echo(s, c);
             }
             if let Some(c) = cmid.as_deref()
                 && s.queue.iter().any(|m| m.cmid.as_deref() == Some(c))
@@ -539,8 +551,8 @@ impl Hub {
                         content,
                         cmid,
                         schedule: None,
-                        origin,
-                        initiator,
+                        origin: recovered_origin,
+                        initiator: recovered_initiator,
                     },
                 );
                 true
@@ -690,6 +702,7 @@ impl Hub {
                     dispatch_origin.clone(),
                     initiator.clone(),
                     now_ms(),
+                    content.len().max(1),
                 );
                 dispatch = Some(DispatchReq {
                     ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
@@ -929,9 +942,6 @@ impl Hub {
             };
             if let Some(pos) = s.queue.iter().position(|m| m.id == id) {
                 let mut m = s.queue.remove(pos);
-                if m.initiator.as_ref() != Some(&trigger) {
-                    m.cmid = None;
-                }
                 m.initiator = Some(trigger);
                 s.queue.insert(0, m);
             } else {

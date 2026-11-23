@@ -1749,7 +1749,10 @@ impl Store {
     pub async fn purge_deleted(&self, retention_days: i64) -> Result<u64> {
         self.purge_prompt_dispatches_for_expired_sessions(retention_days)
             .await?;
-        dispatch_storage!(self, purge_deleted(retention_days))
+        let purged = dispatch_storage!(self, purge_deleted(retention_days))?;
+        self.purge_orphaned_prompt_dispatches(prompt_dispatches::ORPHAN_GRACE_MS)
+            .await?;
+        Ok(purged)
     }
 
     /// Hand free database pages back to the filesystem after a purge. Only

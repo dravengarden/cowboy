@@ -293,12 +293,24 @@ pub(crate) async fn record_dispatch_provenance_in(
     dispatch_origin: crate::prompt_origin::DeliveryOrigin,
     trigger: crate::prompt_origin::DeliveryOrigin,
 ) -> Result<(String, i64), (String, &'static str)> {
+    let is_reserved_cmid = |id: &str| {
+        crate::agent_model::is_reserved_call_notice_cmid(id)
+            || id.starts_with(crate::core::MANAGED_CALL_CMID_PREFIX)
+            || id.starts_with(crate::agent_model::PEER_NOTICE_PREFIX)
+            || id.starts_with("cowboy-superagent:")
+    };
     let fresh_cmid = || format!("cowboy-dispatch:{}", uuid::Uuid::new_v4().simple());
     let mut dispatch_cmid = preferred_cmid.unwrap_or_else(fresh_cmid);
     if hub
         .prompt_dispatch_record(session_id, &dispatch_cmid)
-        .is_some_and(|existing| existing.origin != dispatch_origin || existing.trigger != trigger)
+        .is_some_and(|existing| existing.origin != dispatch_origin)
     {
+        if is_reserved_cmid(&dispatch_cmid) {
+            return Err((
+                dispatch_cmid,
+                "conflicting provenance for reserved message id",
+            ));
+        }
         dispatch_cmid = fresh_cmid();
     }
     let dispatched_at_ms = chrono::Utc::now().timestamp_millis();
@@ -313,6 +325,12 @@ pub(crate) async fn record_dispatch_provenance_in(
         match store.record_prompt_dispatch_if_compatible(&record).await {
             Ok(true) => {}
             Ok(false) => {
+                if is_reserved_cmid(&dispatch_cmid) {
+                    return Err((
+                        dispatch_cmid,
+                        "conflicting provenance for reserved message id",
+                    ));
+                }
                 dispatch_cmid = fresh_cmid();
                 record.cmid = dispatch_cmid.clone();
                 if let Err(error) = store.record_prompt_dispatch(&record).await {

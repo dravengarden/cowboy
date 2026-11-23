@@ -74,6 +74,7 @@ impl Hub {
                     dispatch_origin.clone(),
                     initiator.clone(),
                     now_ms(),
+                    content.len().max(1),
                 );
                 dispatch = Some(DispatchReq {
                     ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
@@ -176,6 +177,7 @@ impl Hub {
                 dispatch_origin.clone(),
                 trigger.clone(),
                 now_ms(),
+                head.content.len().max(1),
             );
             DispatchReq {
                 ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),

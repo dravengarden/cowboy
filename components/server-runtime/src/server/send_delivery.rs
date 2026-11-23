@@ -96,7 +96,7 @@ pub(crate) async fn record_steer_dispatch_in(
     let dispatched_at_ms = chrono::Utc::now().timestamp_millis();
     if hub
         .prompt_dispatch_record(session, cmid)
-        .is_some_and(|existing| existing.origin != origin || existing.trigger != origin)
+        .is_some_and(|existing| existing.origin != origin)
     {
         return Err("conflicting dispatch provenance for message id".to_owned());
     }
@@ -167,7 +167,7 @@ pub fn begin(
     if state
         .hub
         .prompt_dispatch_record(session, &cmid)
-        .is_some_and(|existing| existing.origin != origin || existing.trigger != origin)
+        .is_some_and(|existing| existing.origin != origin)
     {
         return Err("conflicting dispatch provenance for message id".into());
     }

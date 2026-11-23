@@ -458,3 +458,50 @@ async fn superagent_evidence_and_turn_budget_consult_durable_prompt_dispatches()
     );
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[tokio::test]
+async fn requeued_call_notice_accelerated_by_person_keeps_exact_cmid_and_reserved_conflicts_refuse()
+{
+    let (store, root) = test_store("notice-accel").await;
+    let hub = Hub::new();
+    let meta = add_owned_session(&hub, "s-not", "owner-1", false);
+    store.insert_session(&meta).await.unwrap();
+
+    let (cmid1, _) = background_jobs::record_dispatch_provenance_in(
+        &hub,
+        Some(&store),
+        "s-not",
+        Some("call-notice:cid-accel".into()),
+        DeliveryOrigin::cowboy("managed_call"),
+        DeliveryOrigin::cowboy("managed_call"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(cmid1, "call-notice:cid-accel");
+
+    let (cmid2, _) = background_jobs::record_dispatch_provenance_in(
+        &hub,
+        Some(&store),
+        "s-not",
+        Some("call-notice:cid-accel".into()),
+        DeliveryOrigin::cowboy("managed_call"),
+        DeliveryOrigin::Owner,
+    )
+    .await
+    .unwrap();
+    assert_eq!(cmid2, "call-notice:cid-accel");
+
+    let err = background_jobs::record_dispatch_provenance_in(
+        &hub,
+        Some(&store),
+        "s-not",
+        Some("call-notice:cid-accel".into()),
+        DeliveryOrigin::Owner,
+        DeliveryOrigin::Owner,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err.0, "call-notice:cid-accel");
+    assert_eq!(err.1, "conflicting provenance for reserved message id");
+    let _ = std::fs::remove_dir_all(root);
+}

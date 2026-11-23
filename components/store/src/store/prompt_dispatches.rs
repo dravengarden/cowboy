@@ -14,6 +14,10 @@ use crate::prompt_origin::{DeliveryOrigin, PromptDispatchRecord};
 
 /// Default per-session hot dispatch rows hydrated into Hub on startup.
 pub const STARTUP_HYDRATE_PER_SESSION: i64 = 256;
+/// Grace window before sweeping `prompt_dispatches` rows whose session has no
+/// matching row in `sessions`, protecting brand-new sessions whose
+/// `StoreWrite::InsertSession` is still in the write-behind queue.
+pub const ORPHAN_GRACE_MS: i64 = 3_600_000;
 
 macro_rules! dispatch {
     ($store:expr, $method:ident($($arg:expr),* $(,)?)) => {
@@ -67,10 +71,7 @@ impl Store {
         let existing = self
             .prompt_dispatch(&record.session_id, &record.cmid)
             .await?;
-        Ok(
-            existing
-                .is_some_and(|row| row.origin == record.origin && row.trigger == record.trigger),
-        )
+        Ok(existing.is_some_and(|row| row.origin == record.origin))
     }
 
     async fn record_prompt_dispatch_inserted(&self, record: &PromptDispatchRecord) -> Result<bool> {
@@ -163,6 +164,16 @@ impl Store {
             purge_prompt_dispatches_for_expired_sessions_raw(retention_days)
         )
     }
+
+    /// Sweep orphaned `prompt_dispatches` older than `grace_ms` whose session
+    /// no longer exists (covering sessions purged between statements or failed
+    /// `InsertSession` writes without touching freshly created unflushed rows).
+    pub(super) async fn purge_orphaned_prompt_dispatches(&self, grace_ms: i64) -> Result<()> {
+        let cutoff_ms = chrono::Utc::now()
+            .timestamp_millis()
+            .saturating_sub(grace_ms.max(0));
+        dispatch!(self, purge_orphaned_prompt_dispatches_raw(cutoff_ms))
+    }
 }
 
 macro_rules! shared_impl {
@@ -208,6 +219,19 @@ macro_rules! shared_impl {
                 .fetch_optional(&self.pool)
                 .await
                 .with_context(|| format!("SELECT prompt_dispatches ({session_id}, {cmid})"))
+            }
+
+            async fn purge_orphaned_prompt_dispatches_raw(&self, cutoff_ms: i64) -> Result<()> {
+                sqlx::query(
+                    "DELETE FROM prompt_dispatches \
+                     WHERE dispatched_at_ms <= $1 \
+                     AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = prompt_dispatches.session_id)",
+                )
+                .bind(cutoff_ms)
+                .execute(&self.pool)
+                .await
+                .context("purge orphaned prompt_dispatches")?;
+                Ok(())
             }
 
             async fn recent_prompt_dispatches_raw(

@@ -357,6 +357,10 @@ where
         .pointer("/promptOrigin/actor")
         .and_then(Value::as_str)
         == Some("agent")
+        || update
+            .pointer("/promptOrigin/source")
+            .and_then(Value::as_str)
+            == Some("unverified_worker")
     {
         return false;
     }
@@ -388,6 +392,10 @@ where
         .pointer("/promptOrigin/actor")
         .and_then(Value::as_str)
         == Some("agent")
+        || update
+            .pointer("/promptOrigin/source")
+            .and_then(Value::as_str)
+            == Some("unverified_worker")
     {
         return false;
     }
@@ -761,6 +769,14 @@ mod tests {
             DeliveryOrigin::cowboy("legacy_queue")
         );
         assert_eq!(compute_dispatch_origin(None, Some(&peer)), peer);
+        // Accelerating already non-owner content preserves its non-owner content origin.
+        let notice = DeliveryOrigin::cowboy("managed_call");
+        assert_eq!(compute_dispatch_origin(Some(&notice), Some(&owner)), notice);
+        assert_eq!(compute_dispatch_origin(Some(&notice), Some(&peer)), notice);
+        assert_eq!(
+            compute_dispatch_origin(Some(&peer), Some(&DeliveryOrigin::peer("parent-2"))),
+            peer
+        );
     }
 
     #[test]

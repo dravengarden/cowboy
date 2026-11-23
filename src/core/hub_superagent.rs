@@ -157,6 +157,7 @@ impl Hub {
                 origin.clone(),
                 origin.clone(),
                 now_ms(),
+                1,
             );
             DispatchReq {
                 ownership: DispatchOwnership::supervised(

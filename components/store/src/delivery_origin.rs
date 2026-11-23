@@ -120,8 +120,8 @@ pub fn compute_dispatch_origin(
 ) -> DeliveryOrigin {
     match (content_origin, trigger) {
         (Some(DeliveryOrigin::Owner), Some(DeliveryOrigin::Owner)) => DeliveryOrigin::Owner,
-        (_, Some(trigger)) if !trigger.is_owner() => trigger.clone(),
         (Some(content), _) if !content.is_owner() => content.clone(),
+        (_, Some(trigger)) if !trigger.is_owner() => trigger.clone(),
         _ => DeliveryOrigin::cowboy("legacy_queue"),
     }
 }

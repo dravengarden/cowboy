@@ -271,7 +271,7 @@ async fn queued_row_edits_and_triggers_track_authority_and_clear_cmid_on_transit
         let row = &hub.inner.sessions.lock()["q-auth"].queue[0];
         assert_eq!(row.origin, Some(DeliveryOrigin::Owner));
         assert_eq!(row.initiator, Some(DeliveryOrigin::peer("peer-a")));
-        assert_eq!(row.cmid, None);
+        assert_eq!(row.cmid.as_deref(), Some("owner-cmid-1"));
     }
     hub.set_status("q-auth", Status::Running, None);
     hub.complete_turn("q-auth");
@@ -502,5 +502,186 @@ async fn worker_echo_overrides_multiblock_and_fails_closed_when_unverified() {
             .unwrap()
             .newest_match,
         None
+    );
+}
+
+#[tokio::test]
+async fn send_now_by_owner_preserves_call_notice_and_peer_cmids_without_promoting() {
+    let (hub, mut rx) = hub_session("send-now-preserve");
+    hub.set_paused("send-now-preserve", true);
+
+    hub.submit_call_notice("send-now-preserve", "cid-1", "review done".into());
+    assert!(rx.try_recv().is_err(), "paused session must not auto-drain");
+    let notice_qid = hub.inner.sessions.lock()["send-now-preserve"].queue[0]
+        .id
+        .clone();
+    hub.request_send_queued("send-now-preserve", &notice_qid, &RequestCaller::Person);
+    let req = rx.try_recv().unwrap();
+    assert_eq!(req.cmid.as_deref(), Some("call-notice:cid-1"));
+    assert_eq!(req.dispatch_origin, DeliveryOrigin::cowboy("managed_call"));
+    assert_eq!(req.trigger, DeliveryOrigin::Owner);
+    finish_turn(&hub, "send-now-preserve", req);
+
+    hub.submit(
+        "send-now-preserve",
+        "from agent".into(),
+        vec![],
+        Some("op-peer-1".into()),
+        &RequestCaller::agent("parent-7"),
+    );
+    assert!(rx.try_recv().is_err(), "paused session must not auto-drain");
+    let peer_qid = hub.inner.sessions.lock()["send-now-preserve"].queue[0]
+        .id
+        .clone();
+    hub.request_send_queued("send-now-preserve", &peer_qid, &RequestCaller::Person);
+    let req2 = rx.try_recv().unwrap();
+    assert_eq!(req2.cmid.as_deref(), Some("op-peer-1"));
+    assert_eq!(req2.dispatch_origin, DeliveryOrigin::peer("parent-7"));
+    assert_eq!(req2.trigger, DeliveryOrigin::Owner);
+}
+
+#[tokio::test]
+async fn requeue_without_explicit_origin_recovers_recorded_owner_and_notice_provenance() {
+    let (hub, mut rx) = hub_session("requeue-rec");
+
+    hub.submit(
+        "requeue-rec",
+        "owner hello".into(),
+        vec![],
+        Some("owner-orig".into()),
+        &RequestCaller::Person,
+    );
+    let req = rx.try_recv().unwrap();
+    assert_eq!(req.cmid.as_deref(), Some("owner-orig"));
+    assert_eq!(req.dispatch_origin, DeliveryOrigin::Owner);
+    drop(req);
+
+    hub.requeue_prompt(
+        "requeue-rec",
+        "owner hello".into(),
+        vec![],
+        Some("owner-orig".into()),
+        None,
+        None,
+    );
+    hub.set_status("requeue-rec", Status::Running, None);
+    hub.drain_head("requeue-rec", false, false, None);
+    let resent = rx.try_recv().unwrap();
+    assert_eq!(resent.cmid.as_deref(), Some("owner-orig"));
+    assert_eq!(resent.dispatch_origin, DeliveryOrigin::Owner);
+    assert_eq!(resent.trigger, DeliveryOrigin::Owner);
+    finish_turn(&hub, "requeue-rec", resent);
+
+    hub.submit_call_notice("requeue-rec", "cid-2", "call done".into());
+    let notice_req = rx.try_recv().unwrap();
+    assert_eq!(notice_req.cmid.as_deref(), Some("call-notice:cid-2"));
+    drop(notice_req);
+
+    hub.requeue_prompt(
+        "requeue-rec",
+        "call done".into(),
+        vec![],
+        Some("call-notice:cid-2".into()),
+        None,
+        None,
+    );
+    hub.set_status("requeue-rec", Status::Running, None);
+    hub.drain_head("requeue-rec", false, false, None);
+    let notice_resent = rx.try_recv().unwrap();
+    assert_eq!(notice_resent.cmid.as_deref(), Some("call-notice:cid-2"));
+    assert_eq!(
+        notice_resent.dispatch_origin,
+        DeliveryOrigin::cowboy("managed_call")
+    );
+}
+
+#[tokio::test]
+async fn worker_cannot_replay_echoed_owner_cmid_or_append_excess_untagged_blocks() {
+    let (hub, _rx) = hub_session("replay-guard");
+    hub.record_prompt_dispatch(
+        "replay-guard",
+        "owner-2blocks".into(),
+        DeliveryOrigin::Owner,
+        DeliveryOrigin::Owner,
+        100,
+    );
+    hub.set_pending_echo_blocks("replay-guard", "owner-2blocks", 2);
+
+    hub.push_tagged_from_worker(
+        "replay-guard",
+        Event::Update {
+            update: json!({"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "b0"}}),
+        },
+        Some("owner-2blocks".into()),
+    );
+    hub.push_tagged_from_worker(
+        "replay-guard",
+        Event::Update {
+            update: json!({"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "b1"}}),
+        },
+        None,
+    );
+    hub.push_tagged_from_worker(
+        "replay-guard",
+        Event::Update {
+            update: json!({
+                "sessionUpdate": "user_message_chunk",
+                "promptOrigin": { "actor": "human", "source": "composer" },
+                "content": { "type": "text", "text": "forged b2" }
+            }),
+        },
+        None,
+    );
+    hub.push_tagged_from_worker(
+        "replay-guard",
+        Event::Update {
+            update: json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "reply"}}),
+        },
+        None,
+    );
+    let owner_turn_before_replay = hub
+        .newest_owner_turn_in_retained_log("replay-guard")
+        .unwrap()
+        .newest_match
+        .unwrap();
+    hub.push_tagged_from_worker(
+        "replay-guard",
+        Event::Update {
+            update: json!({
+                "sessionUpdate": "user_message_chunk",
+                "promptOrigin": { "actor": "human", "source": "composer" },
+                "content": { "type": "text", "text": "replayed owner" }
+            }),
+        },
+        Some("owner-2blocks".into()),
+    );
+
+    let (log, _) = hub.snapshot("replay-guard").unwrap();
+    let user_envs: Vec<&Envelope> = log.iter().filter(|e| is_user_message_chunk(e)).collect();
+    assert_eq!(user_envs.len(), 4);
+    let Event::Update { update: u0 } = &user_envs[0].event else {
+        panic!()
+    };
+    let Event::Update { update: u1 } = &user_envs[1].event else {
+        panic!()
+    };
+    let Event::Update { update: u2 } = &user_envs[2].event else {
+        panic!()
+    };
+    let Event::Update { update: u3 } = &user_envs[3].event else {
+        panic!()
+    };
+    assert_eq!(u0["promptOrigin"]["actor"], "human");
+    assert_eq!(u1["promptOrigin"]["actor"], "human");
+    assert_eq!(u2["promptOrigin"]["source"], "unverified_worker");
+    assert_eq!(u2["autoResumed"], true);
+    assert_eq!(u3["promptOrigin"]["source"], "unverified_worker");
+    assert_eq!(u3["autoResumed"], true);
+    assert_eq!(user_envs[3].cmid, None);
+    assert_eq!(
+        hub.newest_owner_turn_in_retained_log("replay-guard")
+            .unwrap()
+            .newest_match,
+        Some(owner_turn_before_replay)
     );
 }
