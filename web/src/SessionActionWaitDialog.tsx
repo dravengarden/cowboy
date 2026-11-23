@@ -4,10 +4,11 @@ import { sessionActionSnapshot, subscribeSessionAction } from "./sessionActionWa
 
 export function SessionActionWaitDialog() {
   const pending = useSyncExternalStore(subscribeSessionAction, sessionActionSnapshot);
-  const waiting = pending?.phase === "waiting";
+  if (pending === null) return null;
+  const waiting = pending.phase === "waiting";
   return (
-    <Dialog open={pending !== null} disableRestoreFocus onClose={waiting ? pending?.cancel : undefined}>
-      <DialogTitle>{pending?.label}</DialogTitle>
+    <Dialog open disableRestoreFocus onClose={waiting ? pending.cancel : undefined}>
+      <DialogTitle>{pending.label}</DialogTitle>
       <DialogContent aria-live="polite">
         <CircularProgress size={24} />
         <DialogContentText>
@@ -16,7 +17,7 @@ export function SessionActionWaitDialog() {
             : "Waiting for confirmation…"}
         </DialogContentText>
       </DialogContent>
-      {waiting && <DialogActions><Button onClick={pending?.cancel}>Cancel</Button></DialogActions>}
+      {waiting && <DialogActions><Button onClick={pending.cancel}>Cancel</Button></DialogActions>}
     </Dialog>
   );
 }

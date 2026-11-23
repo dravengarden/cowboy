@@ -75,18 +75,44 @@ function regionFromTarget(target: EventTarget | null): string | null {
   return target.closest<HTMLElement>("[data-desktop-region]")?.dataset.desktopRegion ?? null;
 }
 
+function syncFocusedRegionMarker(region: string, target: EventTarget | null): void {
+  const currentEl = target instanceof Element
+    ? target.closest<HTMLElement>("[data-desktop-region]")
+    : null;
+  if (currentEl && currentEl.dataset.desktopFocused === "true") return;
+  for (const element of document.querySelectorAll<HTMLElement>("[data-desktop-region]")) {
+    if (element.dataset.desktopRegion === region) {
+      if (element.dataset.desktopFocused !== "true") element.dataset.desktopFocused = "true";
+    } else if (element.dataset.desktopFocused !== undefined) {
+      delete element.dataset.desktopFocused;
+    }
+  }
+}
+
+let cachedWorkspaceEl: Element | null = null;
+function desktopWorkspaceElement(): Element | null {
+  if (!cachedWorkspaceEl?.isConnected) {
+    const pane = document.querySelector("[data-desktop-pane]");
+    cachedWorkspaceEl = pane?.parentElement ?? null;
+  }
+  return cachedWorkspaceEl;
+}
+
 function syncDesktopPaneChrome(
   focusedPane: DesktopPane,
   focusedRegion: string | null,
 ): void {
-  for (const element of document.querySelectorAll<HTMLElement>("[data-desktop-pane]")) {
+  const scope = desktopWorkspaceElement() ?? document;
+  for (const element of scope.querySelectorAll<HTMLElement>("[data-desktop-pane]")) {
     const pane = element.dataset.desktopPane;
     if (
       pane === "sessions" || pane === "prompt" || pane === "conversation"
     ) {
       if (paneChromeOwnsFocus(focusedPane, focusedRegion, pane)) {
-        element.dataset.desktopPaneFocused = "true";
-      } else {
+        if (element.dataset.desktopPaneFocused !== "true") {
+          element.dataset.desktopPaneFocused = "true";
+        }
+      } else if (element.dataset.desktopPaneFocused !== undefined) {
         delete element.dataset.desktopPaneFocused;
       }
     }
@@ -284,22 +310,14 @@ export function DesktopWorkspaceProvider({
       }
       if (region) {
         setFocusedRegion(region);
-        // The default region state can be established before its lazy Desktop
-        // subtree mounts. Update the marker in the input event as well as the
-        // state effect so the very first focus reveals contextual keycaps.
-        for (const element of document.querySelectorAll<HTMLElement>("[data-desktop-region]")) {
-          if (element.dataset.desktopRegion === region) {
-            element.dataset.desktopFocused = "true";
-          } else {
-            delete element.dataset.desktopFocused;
-          }
-        }
+        syncFocusedRegionMarker(region, event.target);
       }
       if (pane || region === "topbar.controls") {
-        syncDesktopPaneChrome(
-          pane ?? "prompt",
-          region === "topbar.controls" ? "topbar.controls" : region,
-        );
+        const nextPane = pane ?? "prompt";
+        const nextRegion = region === "topbar.controls" ? "topbar.controls" : region;
+        if (nextPane !== focusedPaneRef.current || nextRegion === "topbar.controls") {
+          syncDesktopPaneChrome(nextPane, nextRegion);
+        }
       }
     };
     document.addEventListener("pointerdown", syncPane, true);

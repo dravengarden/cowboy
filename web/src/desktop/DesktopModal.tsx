@@ -8,7 +8,16 @@ import {
   Typography,
 } from "@mui/material";
 import { Close } from "@mui/icons-material";
-import type { KeyboardEventHandler, ReactNode } from "react";
+import {
+  cloneElement,
+  forwardRef,
+  type KeyboardEventHandler,
+  type ReactElement,
+  type ReactNode,
+  type Ref,
+  useCallback,
+  useEffect,
+} from "react";
 import { isImeKeyEvent } from "../imeKey";
 import { HintTooltip } from "../HintTooltip";
 import {
@@ -23,6 +32,49 @@ import {
   desktopModalShortcutGroups,
   useDesktopModalMode,
 } from "./DesktopModalKeyHint";
+
+function assignRef<T>(target: Ref<T> | undefined, value: T | null): void {
+  if (typeof target === "function") target(value);
+  else if (target && typeof target === "object") {
+    (target as { current: T | null }).current = value;
+  }
+}
+
+/** Desktop dialogs open immediately without MUI Fade's synchronous
+ *  `node.scrollTop` reflow on mount. */
+const InstantModalTransition = forwardRef<
+  HTMLElement,
+  {
+    in?: boolean;
+    children: ReactElement<{ ref?: Ref<HTMLElement> }>;
+    onEnter?: () => void;
+    onEntered?: () => void;
+    onExit?: () => void;
+    onExited?: () => void;
+  }
+>(function InstantModalTransition(
+  { in: open, children, onEnter, onEntered, onExit, onExited },
+  ref,
+) {
+  const childRef = children.props.ref;
+  const mergedRef = useCallback(
+    (node: HTMLElement | null): void => {
+      assignRef(ref, node);
+      assignRef(childRef, node);
+    },
+    [ref, childRef],
+  );
+  useEffect(() => {
+    if (open) {
+      onEnter?.();
+      onEntered?.();
+    } else {
+      onExit?.();
+      onExited?.();
+    }
+  }, [open, onEnter, onEntered, onExit, onExited]);
+  return open ? cloneElement(children, { ref: mergedRef }) : null;
+});
 
 export function DesktopModal({
   open,
@@ -66,6 +118,8 @@ export function DesktopModal({
       }}
       fullWidth
       maxWidth={false}
+      disableScrollLock
+      slots={{ transition: InstantModalTransition }}
       slotProps={{
         ...(onShortcutKeyDown
           ? { root: { onKeyDown: onShortcutKeyDown } }
@@ -88,7 +142,10 @@ export function DesktopModal({
               }),
           },
         },
-        backdrop: { sx: desktopModalBackdropSx() },
+        backdrop: {
+          slots: { transition: InstantModalTransition },
+          sx: desktopModalBackdropSx(),
+        },
       }}
     >
       <Stack direction="row" alignItems="center" spacing={1.25} sx={{ px: 2.25, py: 1.55 }}>
@@ -111,7 +168,7 @@ export function DesktopModal({
           : { minHeight: 0, overflow: "auto" }}
       >
         {children}
-      <ScrollEdges /></Box>
+      {!fill && <ScrollEdges />}</Box>
       {footer && <><Divider />{footer}</>}
       {shortcutGroups
         ? <DesktopShortcutBar groups={shortcutGroups} />

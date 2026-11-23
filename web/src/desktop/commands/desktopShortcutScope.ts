@@ -5,15 +5,47 @@ interface QueryRoot {
   querySelector(selectors: string): unknown;
 }
 
+const OVERLAY_SELECTOR =
+  "[data-desktop-shortcut-scope='exclusive'], [role='dialog'][aria-modal='true'], .MuiPopover-root";
+
+let cachedAppHost: Element | null = null;
+
+function appHostChild(root: Document): Element | null {
+  const byId = root.getElementById("root");
+  if (byId) return byId;
+  if (cachedAppHost?.isConnected && cachedAppHost.parentElement === root.body) {
+    return cachedAppHost;
+  }
+  const pane = root.querySelector("[data-desktop-pane]");
+  let node: Element | null = pane;
+  while (node && node.parentElement !== root.body) node = node.parentElement;
+  cachedAppHost = node;
+  return node;
+}
+
 /**
  * The topmost Desktop overlay owns keyboard input before the workspace below.
  * Explicit scopes cover custom overlays; MUI Dialog/Popover roots make the
  * invariant automatic for ordinary product surfaces and menus.
  */
 export function desktopOverlayOwnsShortcuts(root: QueryRoot): boolean {
-  return root.querySelector(
-    "[data-desktop-shortcut-scope='exclusive'], [role='dialog'][aria-modal='true'], .MuiPopover-root",
-  ) !== null;
+  if (typeof Document !== "undefined" && root instanceof Document && root.body) {
+    const active = root.activeElement;
+    if (active instanceof Element && active.closest(OVERLAY_SELECTOR) !== null) {
+      return true;
+    }
+    const appRoot = appHostChild(root);
+    const children = root.body.children;
+    for (let i = children.length - 1; i >= 0; i -= 1) {
+      const child = children[i];
+      if (!child || child === appRoot) continue;
+      if (child.matches(OVERLAY_SELECTOR) || child.querySelector(OVERLAY_SELECTOR) !== null) {
+        return true;
+      }
+    }
+    return false;
+  }
+  return root.querySelector(OVERLAY_SELECTOR) !== null;
 }
 
 /** A printable CodeMirror input can bypass workspace navigation. Preserve any

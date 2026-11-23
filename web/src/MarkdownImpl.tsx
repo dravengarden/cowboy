@@ -29,7 +29,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Box, IconButton, Link, Menu, MenuItem, useMediaQuery, useTheme } from "@mui/material";
+import { Box, IconButton, Link, Menu, MenuItem, useTheme } from "@mui/material";
 import { BrokenImageOutlined, Check, ContentCopy } from "@mui/icons-material";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeKatex from "rehype-katex";
@@ -706,36 +706,59 @@ function headingText(children: ReactNode): string {
 }
 
 function makeHeading(
-  fontSize: string,
-  lineHeight: number,
-  component: "h1" | "h2" | "h3" | "h4" | "h5" | "h6",
+  _fontSize: string,
+  _lineHeight: number,
+  Tag: "h1" | "h2" | "h3" | "h4" | "h5" | "h6",
 ): (props: { children?: ReactNode }) => React.JSX.Element {
   return function Heading({ children }): React.JSX.Element {
-    // A slug id, so a `#fragment` link has something to land on and the
-    // resolver (reviewLinkTarget.ts) and the document agree on the name. The
-    // element is also a real heading tag now — previously every heading was a
-    // `div`, which cost assistive technology the outline for a styling detail.
     const slug = headingSlug(headingText(children));
-    return (
-      <Box
-        component={component}
-        {...(slug === "" ? {} : { id: slug })}
-        sx={{
-          fontSize,
-          fontWeight: 600,
-          lineHeight,
-          mt: 1.2,
-          mb: 0.5,
-          // The tag change must not bring the browser's own heading metrics
-          // back: sizes stay em-relative and margins stay uniform.
-          scrollMarginTop: "3rem",
-        }}
-      >
-        {children}
-      </Box>
-    );
+    return <Tag {...(slug === "" ? {} : { id: slug })}>{children}</Tag>;
   };
 }
+
+const MARKDOWN_HEADINGS = {
+  h1: makeHeading("1.35em", 1.3, "h1"),
+  h2: makeHeading("1.2em", 1.3, "h2"),
+  h3: makeHeading("1.08em", 1.35, "h3"),
+  h4: makeHeading("1em", 1.4, "h4"),
+  h5: makeHeading("0.92em", 1.4, "h5"),
+  h6: makeHeading("0.85em", 1.4, "h6"),
+} as const;
+const MarkdownP = ({ children }: { children?: ReactNode }): React.JSX.Element => <div data-md-p="true">{children}</div>;
+const MarkdownUl = ({ children }: { children?: ReactNode }): React.JSX.Element => <ul data-md-list="true">{children}</ul>;
+const MarkdownOl = ({ children }: { children?: ReactNode }): React.JSX.Element => <ol data-md-list="true">{children}</ol>;
+const MarkdownBlockquote = ({ children }: { children?: ReactNode }): React.JSX.Element => <blockquote data-md-quote="true">{children}</blockquote>;
+
+const MARKDOWN_BASE_SX = {
+  wordBreak: "break-word",
+  "& :first-child": { mt: 0 },
+  "& :last-child": { mb: 0 },
+  "& [data-md-p='true']": { my: 0.5, lineHeight: "inherit" },
+  "& [data-md-list='true']": { pl: 3, my: 0.5 },
+  "& [data-md-inline-code='true']": {
+    px: 0.5, py: 0.1, borderRadius: 0.5, bgcolor: "action.hover", fontSize: "0.85em",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", wordBreak: "break-word",
+  },
+  "& [data-md-quote='true']": {
+    m: 0, borderLeft: 3, borderColor: "primary.light", pl: 1.5, my: 1, color: "text.secondary", fontStyle: "italic",
+  },
+  "& h1, & h2, & h3, & h4, & h5, & h6": { fontWeight: 600, mt: 1.2, mb: 0.5, scrollMarginTop: "3rem" },
+  "& h1": { fontSize: "1.35em", lineHeight: 1.3 },
+  "& h2": { fontSize: "1.2em", lineHeight: 1.3 },
+  "& h3": { fontSize: "1.08em", lineHeight: 1.35 },
+  "& h4": { fontSize: "1em", lineHeight: 1.4 },
+  "& h5": { fontSize: "0.92em", lineHeight: 1.4 },
+  "& h6": { fontSize: "0.85em", lineHeight: 1.4 },
+  "& .katex": { maxWidth: "100%" },
+  "& .katex-display": { maxWidth: "100%", overflowX: "auto", overflowY: "hidden", py: 0.25, my: 1, WebkitOverflowScrolling: "touch" },
+  "& .katex-error": { color: "inherit !important", overflowWrap: "anywhere", whiteSpace: "normal" },
+} as const;
+
+const MARKDOWN_INVERT_SX = {
+  ...MARKDOWN_BASE_SX,
+  "& [data-md-inline-code='true']": { ...MARKDOWN_BASE_SX["& [data-md-inline-code='true']"], bgcolor: "rgba(255,255,255,0.18)" },
+  "& [data-md-quote='true']": { ...MARKDOWN_BASE_SX["& [data-md-quote='true']"], borderColor: "rgba(255,255,255,0.4)", color: "rgba(255,255,255,0.85)" },
+} as const;
 
 /// Render markdown text. Memoized on `text` so streamed updates don't
 /// re-parse from scratch on every chunk (React reconciliation already helps,
@@ -774,11 +797,11 @@ const MarkdownImpl = memo(function MarkdownImpl({
   const dark = theme.palette.mode === "dark" || invert;
   const codeTheme = dark ? oneDark : oneLight;
   const renderedText = useMemo(() => normalizeMarkdownMath(text), [text]);
-  // Touch-wrapped documents live inside a swiping peek: fit tables to the
-  // column rather than giving each one a nested iOS ScrollView. `noSsr` reads
-  // the query on the first render, so a large document is not re-rendered
-  // just to learn it is on a touch screen.
-  const coarse = useMediaQuery("(hover:none), (pointer:coarse)", { noSsr: true });
+  const surface = useContext(SurfaceContext);
+  const coarse = surface
+    ? surface.kind !== "desktop"
+    : typeof globalThis.matchMedia === "function" &&
+      globalThis.matchMedia("(hover:none), (pointer:coarse)").matches;
   const fitTables = touchWrap && coarse;
   const rootRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -845,23 +868,7 @@ const MarkdownImpl = memo(function MarkdownImpl({
       const text = String(children).replace(/\n$/, "");
       const inline = !className?.startsWith("language-") && !text.includes("\n");
       if (inline) {
-        return (
-          <Box
-            component="code"
-            sx={{
-              px: 0.5,
-              py: 0.1,
-              borderRadius: 0.5,
-              bgcolor: invert ? "rgba(255,255,255,0.18)" : "action.hover",
-              fontSize: "0.85em",
-              fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-              wordBreak: "break-word",
-            }}
-            {...rest}
-          >
-            {children}
-          </Box>
-        );
+        return <code data-md-inline-code="true" {...rest}>{children}</code>;
       }
       const lang = className?.replace("language-", "") ?? "";
       // A fence still being streamed is not final, so it cannot be copied yet.
@@ -942,74 +949,20 @@ const MarkdownImpl = memo(function MarkdownImpl({
     table: MarkdownTable,
     th: MarkdownTableHead,
     td: MarkdownTableCell,
-    // Headings were unstyled, so they fell back to the browser's `<h1>`/`<h2>`
-    // defaults (2em / 1.5em + large margins) — oversized in a chat bubble and
-    // especially heavy on a phone. Render them em-relative (so they still scale
-    // with the OS base size) but tighter, with compact margins. Sizes step down
-    // h1→h4; h5/h6 collapse to body weight-only emphasis.
-    h1: makeHeading("1.35em", 1.3, "h1"),
-    h2: makeHeading("1.2em", 1.3, "h2"),
-    h3: makeHeading("1.08em", 1.35, "h3"),
-    h4: makeHeading("1em", 1.4, "h4"),
-    h5: makeHeading("0.92em", 1.4, "h5"),
-    h6: makeHeading("0.85em", 1.4, "h6"),
-    p({ children }) {
-      // Inherit the reading line-height set on the transcript scroll container
-      // (Settings → Reading), instead of a fixed 1.5. Default container leading
-      // is still 1.5, so unset reads unchanged.
-      return <Box sx={{ my: 0.5, lineHeight: "inherit" }}>{children}</Box>;
-    },
-    ul({ children }) {
-      return <Box component="ul" sx={{ pl: 3, my: 0.5 }}>{children}</Box>;
-    },
-    ol({ children }) {
-      return <Box component="ol" sx={{ pl: 3, my: 0.5 }}>{children}</Box>;
-    },
-    blockquote({ children }) {
-      return (
-        <Box
-          sx={{
-            borderLeft: 3,
-            borderColor: invert ? "rgba(255,255,255,0.4)" : "primary.light",
-            pl: 1.5,
-            my: 1,
-            color: invert ? "rgba(255,255,255,0.85)" : "text.secondary",
-            fontStyle: "italic",
-          }}
-        >
-          {children}
-        </Box>
-      );
-    },
+    ...MARKDOWN_HEADINGS,
+    p: MarkdownP,
+    ul: MarkdownUl,
+    ol: MarkdownOl,
+    blockquote: MarkdownBlockquote,
   }), [centerCopy, codeTheme, dark, invert, touchWrap, nativeLinkMenu]);
 
   return (
     <>
       <Box
         ref={rootRef}
-        sx={{
-          ...(fitTables && markdownTableFitSx),
-          wordBreak: "break-word",
-          "& :first-child": { mt: 0 },
-          "& :last-child": { mb: 0 },
-          "& .katex": { maxWidth: "100%" },
-          "& .katex-display": {
-            maxWidth: "100%",
-            overflowX: "auto",
-            overflowY: "hidden",
-            py: 0.25,
-            my: 1,
-            WebkitOverflowScrolling: "touch",
-          },
-          // KaTeX deliberately emits malformed formulas as `.katex-error`.
-          // Keep the source readable and theme-aware rather than painting an
-          // entire model-generated paragraph bright red.
-          "& .katex-error": {
-            color: "inherit !important",
-            overflowWrap: "anywhere",
-            whiteSpace: "normal",
-          },
-        }}
+        sx={fitTables
+          ? { ...(fitTables && markdownTableFitSx), ...(invert ? MARKDOWN_INVERT_SX : MARKDOWN_BASE_SX) }
+          : (invert ? MARKDOWN_INVERT_SX : MARKDOWN_BASE_SX)}
       >
         <ReactMarkdown
           remarkPlugins={markdownRemarkPlugins(frontmatter)}
@@ -1019,30 +972,32 @@ const MarkdownImpl = memo(function MarkdownImpl({
           {renderedText}
         </ReactMarkdown>
       </Box>
-      <Menu
-        open={linkMenu !== null}
-        onClose={() => setLinkMenu(null)}
-        anchorReference="anchorPosition"
-        anchorPosition={linkMenu ? { top: linkMenu.top, left: linkMenu.left } : undefined}
-      >
-        <MenuItem onClick={() => {
-          if (linkMenu) openExternalUrl(linkMenu.url);
-          setLinkMenu(null);
-        }}>Open in browser</MenuItem>
-        <MenuItem onClick={() => {
-          if (linkMenu) void copyText(linkMenu.url);
-          setLinkMenu(null);
-        }}>Copy link</MenuItem>
-      </Menu>
-      {/* plate={false}: chat images are screenshots/photos, not white-bg
-          diagrams, so no white framing behind them. */}
-      <ImageLightbox
-        images={galleryImages}
-        index={lbIndex}
-        onIndex={setLbIndex}
-        onClose={() => setLbIndex(null)}
-        plate={false}
-      />
+      {linkMenu !== null && (
+        <Menu
+          open
+          onClose={() => setLinkMenu(null)}
+          anchorReference="anchorPosition"
+          anchorPosition={{ top: linkMenu.top, left: linkMenu.left }}
+        >
+          <MenuItem onClick={() => {
+            openExternalUrl(linkMenu.url);
+            setLinkMenu(null);
+          }}>Open in browser</MenuItem>
+          <MenuItem onClick={() => {
+            void copyText(linkMenu.url);
+            setLinkMenu(null);
+          }}>Copy link</MenuItem>
+        </Menu>
+      )}
+      {lbIndex !== null && (
+        <ImageLightbox
+          images={galleryImages}
+          index={lbIndex}
+          onIndex={setLbIndex}
+          onClose={() => setLbIndex(null)}
+          plate={false}
+        />
+      )}
     </>
   );
 });

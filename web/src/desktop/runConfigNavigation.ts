@@ -315,9 +315,25 @@ export function trackRunConfigCursor(
   };
 }
 
-/** A Select list or menu above the panel. */
+/** A Select list or menu above the panel. Check MUI portal children of
+ *  document.body first so we never walk the whole transcript DOM tree. */
 function popupOpen(): boolean {
-  return document.querySelector("[role='listbox'], [role='menu']") !== null;
+  const active = document.activeElement;
+  if (active instanceof Element && active.closest("[role='listbox'], [role='menu']") !== null) {
+    return true;
+  }
+  const body = document.body;
+  if (!body) return false;
+  const appRoot = document.getElementById("root");
+  for (let i = body.children.length - 1; i >= 0; i -= 1) {
+    const child = body.children[i];
+    if (!child || child === appRoot) continue;
+    if (
+      child.matches("[role='listbox'], [role='menu']") ||
+      child.querySelector("[role='listbox'], [role='menu']") !== null
+    ) return true;
+  }
+  return false;
 }
 
 /** The last cursor, or its replacement when a save re-rendered it. */
@@ -413,6 +429,80 @@ export function runConfigKey(
   return true;
 }
 
+function watchInitialRunConfigCursor(
+  panelRef: RefObject<HTMLDivElement | null>,
+  start: "first" | "new_from",
+): { settle: () => void; cleanup: () => void } {
+  let settled = false;
+  let focusFirst = 0;
+  let observer: MutationObserver | null = null;
+  const stopObserving = (): void => {
+    cancelAnimationFrame(focusFirst);
+    focusFirst = 0;
+    observer?.disconnect();
+    observer = null;
+    document.removeEventListener("focusin", onFocusTrap, true);
+  };
+  const schedule = (): void => {
+    if (settled || focusFirst !== 0) return;
+    focusFirst = requestAnimationFrame(placeCursor);
+  };
+  const placeCursor = (): void => {
+    focusFirst = 0;
+    if (settled || popupOpen()) return;
+    const panel = panelRef.current;
+    if (!panel) {
+      focusFirst = requestAnimationFrame(placeCursor);
+      return;
+    }
+    if (!observer) {
+      observer = new MutationObserver(schedule);
+      observer.observe(panel, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["disabled", "aria-disabled", "aria-pressed", "aria-selected"],
+      });
+    }
+    if (start === "new_from") {
+      const form = panel.querySelector<HTMLElement>("[data-new-session-editor]");
+      if (form && !form.contains(document.activeElement)) {
+        const stop = modalStops(form)[0];
+        if (stop) focusModalStop(stop);
+      }
+    } else {
+      const firstRow = panel.querySelector<HTMLElement>("[data-config-row]");
+      if (firstRow && !firstRow.contains(document.activeElement)) {
+        focusConfigRow(firstRow);
+      }
+    }
+  };
+  const onFocusTrap = (event: FocusEvent): void => {
+    const panel = panelRef.current;
+    const target = event.target;
+    if (!settled && panel && target instanceof Node) {
+      const want = panel.querySelector<HTMLElement>(
+        start === "new_from" ? "[data-new-session-editor]" : "[data-config-row]",
+      );
+      if (want && !want.contains(target)) schedule();
+    }
+  };
+  document.addEventListener("focusin", onFocusTrap, true);
+  focusFirst = requestAnimationFrame(placeCursor);
+  const maxWait = setTimeout(stopObserving, start === "new_from" ? 10_000 : 4_000);
+  const settle = (): void => {
+    settled = true;
+    stopObserving();
+  };
+  return {
+    settle,
+    cleanup: (): void => {
+      clearTimeout(maxWait);
+      stopObserving();
+    },
+  };
+}
+
 /** The panel's keymap while the dialog is open: the cursor starts on the
  *  first field (or, for Replace or fork, on its form) and keys resolve
  *  through `runConfigKey`. */
@@ -423,52 +513,16 @@ export function useRunConfigKeyboard(
 ): void {
   useEffect(() => {
     if (!open) return undefined;
-    // Open on the first field, the presets when they exist. Provider options
-    // and presets can arrive a moment after the dialog, so keep following
-    // the first field until the user moves. Replace or fork waits for its
-    // form, which appears once the session's context has loaded.
-    let settled = false;
-    let tries = 0;
-    let focusFirst = 0;
-    const placeCursor = (): void => {
-      // A frame already queued when the user acted must not run: it would
-      // pull focus out of a list they just opened, and the menu's focus trap
-      // then parks it on the popup frame where j/k start nowhere.
-      if (settled || popupOpen()) return;
-      if (start === "new_from") {
-        const form = panelRef.current?.querySelector<HTMLElement>(
-          "[data-new-session-editor]",
-        );
-        const stop = form ? modalStops(form)[0] : undefined;
-        if (form && stop && !form.contains(document.activeElement)) {
-          focusModalStop(stop);
-        }
-      } else {
-        const firstRow = panelRef.current?.querySelector<HTMLElement>(
-          "[data-config-row]",
-        );
-        if (firstRow && !firstRow.contains(document.activeElement)) {
-          focusConfigRow(firstRow);
-        }
-      }
-      tries += 1;
-      if (!settled && tries < (start === "new_from" ? 600 : 90)) {
-        focusFirst = requestAnimationFrame(placeCursor);
-      }
-    };
-    focusFirst = requestAnimationFrame(placeCursor);
-    const settle = (): void => {
-      settled = true;
-    };
+    const { settle, cleanup } = watchInitialRunConfigCursor(panelRef, start);
     globalThis.addEventListener("pointerdown", settle, true);
     const untrack = trackRunConfigCursor(() => panelRef.current);
     const onKeyDown = (event: KeyboardEvent): void => {
-      settled = true;
+      settle();
       if (desktopImeOwnsKey(event)) return;
       const panel = panelRef.current;
       if (!panel) return;
       // A picker, menu or nested dialog above the panel keeps its own keys.
-      if (document.querySelector("[role='listbox']") !== null) return;
+      if (popupOpen()) return;
       const target = event.target instanceof HTMLElement ? event.target : null;
       // The dialog's frame (or the body) holds focus when the control under
       // the cursor was disabled; the panel still owns the key.
@@ -530,7 +584,7 @@ export function useRunConfigKeyboard(
     };
     globalThis.addEventListener("keydown", onKeyDown, true);
     return (): void => {
-      cancelAnimationFrame(focusFirst);
+      cleanup();
       globalThis.removeEventListener("pointerdown", settle, true);
       untrack();
       globalThis.removeEventListener("keydown", onKeyDown, true);

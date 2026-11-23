@@ -36,14 +36,20 @@ function px(value: number): string {
 export function useFloatingComposerGeometry({
   surfaceRef,
   navbarAtBottom,
+  enabled = true,
 }: {
   surfaceRef: RefObject<HTMLDivElement | null>;
   navbarAtBottom: boolean;
+  /** Desktop has no floating bottom composer stack; skip global focus/viewport
+   *  reflows and settle timers when disabled. */
+  enabled?: boolean;
 }): {
   appBarRef: RefCallback<HTMLElement>;
   composerRef: RefCallback<HTMLElement>;
 } {
   const observerRef = useRef<ResizeObserver | null>(null);
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
   const navbarAtBottomRef = useRef(navbarAtBottom);
   navbarAtBottomRef.current = navbarAtBottom;
   const appBarElementRef = useRef<HTMLElement | null>(null);
@@ -62,6 +68,7 @@ export function useFloatingComposerGeometry({
   }, [surfaceRef]);
 
   const measure = useCallback((): void => {
+    if (!enabledRef.current) return;
     const surface = surfaceRef.current;
     if (!surface) return;
 
@@ -139,17 +146,11 @@ export function useFloatingComposerGeometry({
 
   const observe = useCallback(
     (slot: "appbar" | "composer", element: HTMLElement | null): void => {
-      // ResizeObserver delivery is a read-only notification boundary. Writing
-      // the measured CSS variables from inside its callback can make iOS WebKit
-      // defer a descendant notification and report an observer loop. Publish on
-      // the next animation frame, coalescing AppBar + Composer changes.
-      observerRef.current ??= new ResizeObserver(queueMeasurementFrame);
-      const observer = observerRef.current;
       const previous = slot === "appbar"
         ? appBarElementRef.current
         : composerElementRef.current;
 
-      if (previous) observer.unobserve(previous);
+      if (previous) observerRef.current?.unobserve(previous);
       if (slot === "composer" && previous) {
         previous.removeEventListener("transitionrun", disclosureTransition, true);
         previous.removeEventListener("transitionend", disclosureTransition, true);
@@ -159,6 +160,13 @@ export function useFloatingComposerGeometry({
 
       if (slot === "appbar") appBarElementRef.current = element;
       else composerElementRef.current = element;
+
+      if (!enabledRef.current) return;
+      // ResizeObserver delivery is a read-only notification boundary. Writing
+      // the measured CSS variables from inside its callback can make iOS WebKit
+      // defer a descendant notification and report an observer loop. Publish on
+      // the next animation frame, coalescing AppBar + Composer changes.
+      const observer = observerRef.current ??= new ResizeObserver(queueMeasurementFrame);
 
       if (element) {
         // iOS safe-area changes alter padding without altering the content box.
@@ -194,6 +202,10 @@ export function useFloatingComposerGeometry({
   );
 
   useEffect(() => {
+    if (!enabled) {
+      clearSettledMeasurements();
+      return undefined;
+    }
     const viewport = globalThis.visualViewport;
     const document = globalThis.document;
     const onViewportChange = (): void => scheduleSettledMeasurement();
@@ -218,7 +230,7 @@ export function useFloatingComposerGeometry({
         measurementFrameRef.current = 0;
       }
     };
-  }, [clearSettledMeasurements, scheduleSettledMeasurement]);
+  }, [clearSettledMeasurements, enabled, scheduleSettledMeasurement]);
 
   useEffect(() => (): void => {
     observerRef.current?.disconnect();

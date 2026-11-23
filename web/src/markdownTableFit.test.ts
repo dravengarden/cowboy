@@ -85,7 +85,9 @@ test("fit mode never leaves a table wrapper as a scroll container", () => {
 
 test("only touch-wrapped Markdown on a coarse pointer fits its tables", () => {
   assert(markdownImpl.includes("const fitTables = touchWrap && coarse;"));
-  assert(markdownImpl.includes("{ noSsr: true }"));
+  // Reads SurfaceContext / matchMedia synchronously on first render instead of
+  // registering a per-bubble useMediaQuery listener.
+  assert(markdownImpl.includes("useContext(SurfaceContext)"));
   assert(markdownImpl.includes("...(fitTables && markdownTableFitSx)"));
   assert(markdownImpl.includes("return bindMarkdownTableFit(root);"));
   // The shared table renderer keeps its native scroller everywhere else, and

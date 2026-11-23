@@ -33,8 +33,8 @@ export function DraftMoveSurfaces({
         }}
       />
     )}
-    <Snackbar
-      open={moveUndo !== null}
+    {moveUndo !== null && <Snackbar
+      open
       autoHideDuration={6000}
       onClose={(_e, reason): void => {
         // Keep it up until autohide / Undo — a stray tap (clickaway) shouldn't
@@ -105,7 +105,7 @@ export function DraftMoveSurfaces({
           </Button>
         </Stack>
       }
-    />
+    />}
     </>
   );
 }
