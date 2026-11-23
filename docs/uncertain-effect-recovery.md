@@ -279,8 +279,11 @@ Proxy half (Antigravity Plugin):
 - At exit, `facade.quiesce()` stops every command's expiry timer and makes
   expiry and turn cleanup start no new stop or read.
 - `Connection.idle(10 s)` then admits no new request at the connection
-  boundary, waits until no request awaits its reply, and only then does the
-  proxy close the connection. A reply that arrived resolved its facade call.
+  boundary (except a report of an unknown outcome), and waits until no
+  request awaits its reply, twice in a row, so a report caused by a late
+  reply is sent and answered too.
+- Only then does the proxy send `cowboy/drained`, its acknowledgement that
+  every reply it awaited arrived, and close the connection.
 - A closed ACP output pipe (the worker closed it first) no longer ends the
   proxy before the drain: late writes are dropped.
 
@@ -296,14 +299,18 @@ Worker half (worker release):
   forwarding. Admission and counting are one step (`RelayQuiet::try_enter`
   counts first, then checks the drain), so a stop that saw zero after
   raising the drain cannot miss a later request.
-- It then waits, within 10 s overall, for the count to reach zero and then
-  for the unit to exit on its own. The proxy exits only after its own drain,
-  so that exit proves every reply was read.
-- If the unit must be stopped first (bound reached), any result-carrying
-  reply written during the drain may be unread, so it is recorded as an
-  uncertain effect (fail closed). A reply cut off in flight is recorded
-  undelivered as before.
-- A replacement unit (initialize retry) starts with the drain state reset.
+- It then waits, within 10 s overall, for the count to reach zero and for the
+  unit's `cowboy/drained`, which the endpoint answers itself and never
+  forwards. Only that acknowledgement proves receipt. A unit exit, a
+  disconnect or the bound does not.
+- Every reply written while draining is held as unproven until the
+  acknowledgement arrives. Without one, the stop is forced, and each unproven
+  reply goes through the ledger's existing undelivered classification. That
+  covers mutations, result-carrying reads and stops, and extension results,
+  while a definite refusal does not park. The same applies to a reply written
+  after the forced transition or after the acknowledgement.
+- A replacement unit (initialize retry) has its drain state reset before its
+  listener is published.
 
 Scope and residuals:
 

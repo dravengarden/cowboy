@@ -513,7 +513,7 @@ export async function runProxy({
   // here would leave its effect unknown to the worker (design L1c). No new
   // facade work starts meanwhile.
   ready?.facade.quiesce();
-  await ready?.connection.idle(DRAIN_MS);
+  if (await ready?.connection.idle(DRAIN_MS)) await ready.connection.drained(DRAIN_MS);
   ready?.connection.close();
   return signal ? 1 : (code ?? 1);
 }

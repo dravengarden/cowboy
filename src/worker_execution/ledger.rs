@@ -670,6 +670,11 @@ impl Client {
                 None => refused("this session has no extensions"),
             };
         }
+        if method == crate::account_sandbox::DRAINED {
+            // The unit read every reply it awaited before its stop (L1c).
+            self.relays.acknowledge();
+            return json!({"result": {}});
+        }
         if method == UNCERTAIN_REPORT {
             // The facade detected an unknown outcome every transport call
             // of which was answered (a timed-out publish): recorded like a

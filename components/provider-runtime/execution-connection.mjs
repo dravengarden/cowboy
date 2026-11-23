@@ -5,6 +5,9 @@ import WebSocket from "ws";
 
 // One authenticated connection per native process. New calls can reconnect to
 // the same executor session. A lost reply is never resubmitted here.
+/** Requests still sent while a connection drains (`idle`). */
+const DRAIN_REQUESTS = new Set(["cowboy/uncertainEffect", "cowboy/drained"]);
+
 export class Connection {
   pending = new Map();
   // Requests given up by their own `timeoutMs`: the executor may still
@@ -157,7 +160,10 @@ export class Connection {
    * reads whose outcome does not matter.
    */
   request(method, params, { timeoutMs } = {}) {
-    if (this.closed || this.stopped || this.draining) {
+    // While draining only a report of an unknown outcome and the drain's own
+    // acknowledgement are sent (answered by the worker, never forwarded).
+    const draining = this.draining && !DRAIN_REQUESTS.has(method);
+    if (this.closed || this.stopped || draining) {
       return Promise.reject(new Error("Execution unavailable; no replay"));
     }
     // Abandoned requests may still run on the executor, so they count.
@@ -203,11 +209,29 @@ export class Connection {
     // From now on nothing new is sent: only replies already owed drain.
     this.draining = true;
     const deadline = Date.now() + ms;
-    while (this.pending.size > 0 && !this.closed) {
+    // Quiet twice in a row: a reply that just arrived may still make its
+    // caller report an unknown outcome, which is waited for too.
+    for (let quiet = 0; quiet < 2; ) {
+      if (this.closed) return false;
       if (Date.now() >= deadline) return false;
+      quiet = this.pending.size === 0 ? quiet + 1 : 0;
       await new Promise((done) => setTimeout(done, 20));
     }
     return true;
+  }
+
+  /**
+   * After `idle`: tell the worker every reply was read, the only proof it
+   * accepts before it stops the unit (design L1c). Best effort: without it
+   * the worker records its drained replies as possibly unread.
+   */
+  async drained(ms) {
+    try {
+      await this.request("cowboy/drained", {}, { timeoutMs: ms });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   close() {

@@ -104,8 +104,16 @@ impl Relays {
     /// `done`'s reply was written to the agent side: one written while the
     /// unit drains is proven read only by the unit's own exit (design L1c).
     pub fn delivered(&self, done: &Done) {
-        if done.carries_result {
-            self.client.relays.written(&done.method);
+        if self.client.relays.draining() {
+            let (client, method, carries_result, reply) = (
+                Arc::clone(&self.client),
+                done.method.clone(),
+                done.carries_result,
+                done.reply.clone(),
+            );
+            self.client.relays.written(Box::new(move || {
+                client.undelivered(&method, carries_result, &reply);
+            }));
         }
     }
 

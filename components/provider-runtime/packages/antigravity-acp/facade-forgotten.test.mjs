@@ -316,11 +316,15 @@ test("at exit the connection waits for in-flight requests, bounded, and the faca
   assert.equal(await connection.idle(50), false, "a held reply bounds the wait");
   assert.equal(await connection.idle(5000), true, "then drains once answered");
   await read;
-  // Draining: nothing new is sent, only replies already owed arrive.
+  // Draining: nothing new is sent, only replies already owed arrive, a
+  // report of an unknown outcome, and finally the drain's acknowledgement.
   await assert.rejects(
     connection.call("fs/getMetadata", { path: "file:///" }),
     /Execution unavailable/,
   );
+  await connection.call("cowboy/uncertainEffect", { method: "file publish" });
+  assert.equal(await connection.drained(1000), true);
+  assert.ok(endpoint.calls.some((entry) => entry.method === "cowboy/drained"));
   // Quiesced: the command's expiry starts no stop or read.
   facade.quiesce();
   const before = endpoint.calls.length;

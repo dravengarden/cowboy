@@ -1232,21 +1232,49 @@ fn a_draining_unit_relays_only_cleanup() {
 }
 
 #[test]
-fn a_forced_stop_records_a_reply_written_while_draining_as_unknown() {
+fn only_the_units_acknowledgement_proves_a_drained_reply_was_read() {
     let quiet = Arc::new(crate::account_sandbox::RelayQuiet::default());
-    let recorded = Arc::new(Mutex::new(Vec::<String>::new()));
-    let sink = Arc::clone(&recorded);
-    quiet.set_unreceived(Box::new(move |method| sink.lock().push(method.to_owned())));
-    // Written before the drain: the proxy read it as usual.
-    quiet.written("process/read");
+    let recorded = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+    let record = |name: &'static str| -> crate::account_sandbox::Unreceived {
+        let sink = Arc::clone(&recorded);
+        Box::new(move || sink.lock().push(name))
+    };
+    // Before the drain the unit reads its replies as usual.
+    quiet.written(record("before"));
+    // Acknowledged: nothing is recorded.
     quiet.begin_drain();
-    quiet.written("process/terminate");
-    quiet.forced();
-    assert_eq!(*recorded.lock(), ["process/terminate"]);
-    // A unit that exited on its own proved receipt: nothing to record.
+    quiet.written(record("read"));
+    quiet.acknowledge();
+    assert!(recorded.lock().is_empty());
+    // A reply after the acknowledgement is unread (the unit is closing).
+    quiet.written(record("after-ack"));
+    assert_eq!(*recorded.lock(), ["after-ack"]);
+    // Stopped without an acknowledgement: every drained reply, also one
+    // written after the forced stop, is recorded.
     quiet.begin_drain();
-    quiet.written("process/terminate");
-    quiet.end_drain();
+    quiet.written(record("unproven"));
     quiet.forced();
-    assert_eq!(recorded.lock().len(), 1);
+    quiet.written(record("late"));
+    quiet.acknowledge();
+    assert_eq!(*recorded.lock(), ["after-ack", "unproven", "late"]);
+}
+
+#[tokio::test]
+async fn a_drain_acknowledgement_is_answered_by_the_endpoint_and_never_forwarded() {
+    let target = Target::new(processes());
+    let _ledger = ledger(&target.client, None);
+    target.client.relays.begin_drain();
+    let reply = target
+        .client
+        .relay(crate::account_sandbox::DRAINED.into(), json!({}))
+        .await;
+    assert!(reply.get("result").is_some());
+    assert!(
+        target
+            .client
+            .relays
+            .wait_acknowledged(Duration::from_millis(10))
+            .await
+    );
+    assert!(target.log().is_empty());
 }

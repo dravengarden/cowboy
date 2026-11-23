@@ -149,19 +149,31 @@ pub struct ExecutionBridge {
     pub relays: std::sync::Arc<RelayQuiet>,
 }
 
+/// Records one reply the unit may never have read as the ledger would an
+/// undelivered one.
+pub type Unreceived = Box<dyn FnOnce() + Send>;
+
+/// Replies written while the unit drains and what is known of their receipt.
+#[derive(Default)]
+struct Receipts {
+    unproven: Vec<Unreceived>,
+    /// The unit acknowledged its drain: every earlier reply was read.
+    acknowledged: bool,
+    /// The unit is stopped without that acknowledgement.
+    forced: bool,
+}
+
 /// Relays of one unit's execution endpoint whose reply has not yet been
-/// written to the unit or recorded undelivered (design L1c).
+/// written to the unit or recorded undelivered, and the unit's drain at a
+/// graceful stop (design L1c).
 #[derive(Default)]
 pub struct RelayQuiet {
     count: std::sync::atomic::AtomicUsize,
     idle: tokio::sync::Notify,
     /// The unit is being stopped: only cleanup requests relay.
     draining: std::sync::atomic::AtomicBool,
-    /// Result-carrying replies written while draining: proven received only
-    /// when the unit exits on its own (the proxy exits after its replies).
-    written: parking_lot::Mutex<Vec<String>>,
-    /// Records a reply the unit may never have read as an unknown outcome.
-    unreceived: std::sync::OnceLock<Box<dyn Fn(&str) + Send + Sync>>,
+    receipts: parking_lot::Mutex<Receipts>,
+    acknowledged: tokio::sync::Notify,
 }
 
 impl std::fmt::Debug for RelayQuiet {
@@ -189,12 +201,17 @@ impl Drop for RelayGuard {
     }
 }
 
+/// The unit's acknowledgement that every reply it awaited arrived; answered
+/// by the worker endpoint itself, never forwarded.
+pub const DRAINED: &str = "cowboy/drained";
+
 /// Requests a draining unit may still send: reading and stopping what it
-/// started, and its report of an unknown outcome (recorded, never relayed).
+/// started, its report of an unknown outcome and its drain acknowledgement
+/// (both answered by the worker, never forwarded).
 fn cleanup(method: &str) -> bool {
     matches!(
         method,
-        "process/read" | "process/terminate" | "cowboy/uncertainEffect"
+        "process/read" | "process/terminate" | "cowboy/uncertainEffect" | DRAINED
     )
 }
 
@@ -211,9 +228,10 @@ impl RelayQuiet {
             .then_some(guard)
     }
 
-    /// The unit is being stopped: from now on only cleanup requests relay.
+    /// The unit is being stopped: from now on only cleanup requests relay,
+    /// and every reply's receipt needs the unit's acknowledgement.
     pub fn begin_drain(&self) {
-        self.written.lock().clear();
+        *self.receipts.lock() = Receipts::default();
         self.draining
             .store(true, std::sync::atomic::Ordering::SeqCst);
     }
@@ -222,7 +240,7 @@ impl RelayQuiet {
     pub fn end_drain(&self) {
         self.draining
             .store(false, std::sync::atomic::Ordering::SeqCst);
-        self.written.lock().clear();
+        *self.receipts.lock() = Receipts::default();
     }
 
     /// Whether the unit is being stopped.
@@ -231,24 +249,63 @@ impl RelayQuiet {
         self.draining.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// A result-carrying reply of `method` was written while draining.
-    pub fn written(&self, method: &str) {
-        if self.draining() {
-            self.written.lock().push(method.to_owned());
+    /// A reply was written to the unit. While draining its receipt is proven
+    /// only by the unit's later acknowledgement; once the unit is stopped
+    /// without one (or acknowledged before this reply), `unreceived` runs.
+    pub fn written(&self, unreceived: Unreceived) {
+        if !self.draining() {
+            return;
+        }
+        let mut receipts = self.receipts.lock();
+        if receipts.forced || receipts.acknowledged {
+            drop(receipts);
+            unreceived();
+        } else {
+            receipts.unproven.push(unreceived);
         }
     }
 
-    /// Where a reply the unit may never have read is recorded.
-    pub fn set_unreceived(&self, record: Box<dyn Fn(&str) + Send + Sync>) {
-        let _ = self.unreceived.set(record);
+    /// The unit acknowledged its drain: every reply written so far was read.
+    pub fn acknowledge(&self) {
+        if !self.draining() {
+            return;
+        }
+        let mut receipts = self.receipts.lock();
+        if !receipts.forced {
+            receipts.acknowledged = true;
+            receipts.unproven.clear();
+        }
+        drop(receipts);
+        self.acknowledged.notify_waiters();
     }
 
-    /// The unit is stopped before it exited on its own: every
-    /// result-carrying reply written while draining may be unread.
+    /// Wait at most `bound` for the unit's drain acknowledgement.
+    pub async fn wait_acknowledged(&self, bound: Duration) -> bool {
+        tokio::time::timeout(bound, async {
+            loop {
+                let acknowledged = self.acknowledged.notified();
+                tokio::pin!(acknowledged);
+                acknowledged.as_mut().enable();
+                if self.receipts.lock().acknowledged {
+                    return;
+                }
+                acknowledged.await;
+            }
+        })
+        .await
+        .is_ok()
+    }
+
+    /// The unit is stopped without its acknowledgement: every reply written
+    /// while draining, also one written from now on, may be unread.
     pub fn forced(&self) {
-        let written = std::mem::take(&mut *self.written.lock());
-        if let (Some(record), Some(method)) = (self.unreceived.get(), written.last()) {
-            record(method);
+        let unproven = {
+            let mut receipts = self.receipts.lock();
+            receipts.forced = true;
+            std::mem::take(&mut receipts.unproven)
+        };
+        for unreceived in unproven {
+            unreceived();
         }
     }
 

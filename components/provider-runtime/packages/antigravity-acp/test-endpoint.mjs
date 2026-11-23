@@ -208,6 +208,8 @@ export async function fakeEndpoint(
     },
     // Answered by the worker endpoint itself (its ledger), never the target.
     "cowboy/uncertainEffect": () => ({}),
+    // The proxy's drain acknowledgement, answered by the worker endpoint.
+    "cowboy/drained": () => ({}),
   };
   wss.on("connection", (socket) => {
     socket.on("message", async (bytes) => {

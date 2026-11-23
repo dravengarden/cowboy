@@ -547,14 +547,6 @@ impl Endpoint {
         }
         let descriptor = serde_json::to_vec(&descriptor)?;
         let relays = Arc::clone(&client.relays);
-        // A reply a force-stopped unit may never have read is an unknown
-        // outcome, recorded by the session's ledger (design L1c).
-        let weak = Arc::downgrade(&client);
-        relays.set_unreceived(Box::new(move |method| {
-            if let Some(ledger) = weak.upgrade().as_ref().and_then(|client| client.ledger()) {
-                ledger.mark_uncertain(method);
-            }
-        }));
         let (listeners, mut received) = mpsc::unbounded_channel::<OwnedFd>();
         let mut admission = Admission::new(token, Arc::clone(&client));
         let listener = tokio::spawn(async move {

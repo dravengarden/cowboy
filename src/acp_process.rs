@@ -185,6 +185,9 @@ impl AgentProcess {
         // listening socket the daemon bound into it (design R3-11). Without
         // an execution binding nothing serves it and it is closed here.
         if let (Some(bridge), Some(listener)) = (&bridge, started.exec_listener) {
+            // A replacement unit relays everything again, from its first
+            // request on.
+            bridge.relays.end_drain();
             bridge
                 .listeners
                 .send(listener)
@@ -204,11 +207,7 @@ impl AgentProcess {
         let owner = Owner::Sandbox(SandboxUnit {
             client: Arc::new(Mutex::new(client)),
             handle: started.handle,
-            relays: bridge.as_ref().map(|bridge| {
-                // A replacement unit relays everything again.
-                bridge.relays.end_drain();
-                Arc::clone(&bridge.relays)
-            }),
+            relays: bridge.as_ref().map(|bridge| Arc::clone(&bridge.relays)),
         });
         Ok((
             Self {
@@ -287,17 +286,13 @@ impl SandboxUnit {
         if let Some(relays) = &self.relays {
             relays.begin_drain();
             let started = tokio::time::Instant::now();
-            let drained = relays.drained(UNIT_RELAY_DRAIN).await;
-            // The proxy exits only once every reply it awaited arrived, so
-            // its own exit proves the drained replies were read.
-            let exited = drained
-                && tokio::time::timeout(
-                    UNIT_RELAY_DRAIN.saturating_sub(started.elapsed()),
-                    self.ended(),
-                )
-                .await
-                .is_ok();
-            if !exited {
+            // Only the unit's own acknowledgement proves its replies were
+            // read; an exit, a disconnect or the bound does not.
+            let acknowledged = relays.drained(UNIT_RELAY_DRAIN).await
+                && relays
+                    .wait_acknowledged(UNIT_RELAY_DRAIN.saturating_sub(started.elapsed()))
+                    .await;
+            if !acknowledged {
                 relays.forced();
                 tracing::warn!(
                     unit = %self.handle.unit,
