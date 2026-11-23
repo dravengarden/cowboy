@@ -394,35 +394,109 @@
       # it to the source commit time: it grows along main and is identical for
       # an identical rebuild, so web/public/sw.js is never bumped by hand.
       service-worker-generation = toString self.lastModified;
-      cowboy-web = (buildBunViteApp {
+      web-workspaces = [
+        "web"
+        "components/app-shell"
+        "components/provider-authoring"
+        "components/provider-ui"
+        "components/state-store"
+        "components/state-sync"
+        "components/state-sync-idb"
+      ];
+      # Narrow frontend build closure: Rust, docs, and unrelated plugin edits
+      # never invalidate the Vite/TypeScript bundle.
+      web-build-fileset = pkgs.lib.fileset.unions [
+        ./package.json
+        ./bun.lock
+        ./bunfig.toml
+        ./web
+        ./components/app-shell
+        ./components/provider-authoring
+        ./components/provider-ui
+        ./components/state-store
+        ./components/state-sync
+        ./components/state-sync-idb
+        ./contracts/widget-v1.ts
+        ./contracts/widget-v1.examples.ts
+        ./contracts/strict-json.ts
+        ./plugins/codex/provider.json
+        ./plugins/claude-code/provider.json
+        ./tests/fixtures/plugin-lifecycle-history.json
+        ./contracts/code-buffer-client.fixture.json
+        ./contracts/code-buffer-destination.fixture.json
+        ./contracts/code-buffer-navigation.fixture.json
+        ./contracts/code-buffer-sync.fixture.json
+        ./plugins/zed/adapter/fixtures/content.json
+      ];
+      web-build-src = pkgs.lib.fileset.toSource {
+        root = ./.;
+        fileset = web-build-fileset;
+      };
+      # Narrow web unit-test closure: adds only the repository fixtures and
+      # contract files web/src/*.test.ts read directly, excluding almost all
+      # Rust code. Runs concurrently with cowboy-web-bundle during releases.
+      web-test-src = pkgs.lib.fileset.toSource {
+        root = ./.;
+        fileset = pkgs.lib.fileset.unions [
+          web-build-fileset
+          ./tools/test-assert.ts
+          ./contracts
+          ./tests/fixtures
+          ./plugins
+          ./examples
+          ./apps/native-shell
+          ./apps/macos-installer/Resources/Cowboy.icns
+          ./components/plugin-api/types.ts
+          ./components/server/src/server.rs
+          ./components/server/src/server/routes.rs
+          ./components/server/src/server/startup_tasks.rs
+          ./assets/brand
+          ./site/assets
+          ./README.md
+          ./README.zh-CN.md
+          ./docs/architecture/09-frontend.md
+          ./docs/mobile-spatial-presentation.md
+        ];
+      };
+      cowboy-web-bundle = buildBunViteApp {
         pname = "cowboy";
         version = "0.1.0";
-        src = pkgs.lib.cleanSource ./.;
-        workspaces = [
-          "web"
-          "components/app-shell"
-          "components/provider-authoring"
-          "components/provider-ui"
-          "components/state-store"
-          "components/state-sync"
-          "components/state-sync-idb"
-        ];
+        src = web-build-src;
+        workspaces = web-workspaces;
         depsHash = "sha256-NbNMuY6PUMZF1wvMbshXGEyA/zm0HU/wcKx1rCq1A7I=";
-      }).overrideAttrs (previous: {
-        # A Web release cannot be built from a commit that grows a structure
-        # offender or breaks a web unit test (both also run in just check,
-        # which web-only changes have skipped). The build starts in web/.
-        buildPhase = previous.buildPhase + ''
-          (cd .. && bun tools/check-structure.ts)
+      };
+      cowboy-web-check = pkgs.stdenvNoCC.mkDerivation {
+        pname = "cowboy-web-check";
+        version = "0.1.0";
+        src = web-test-src;
+        nativeBuildInputs = [ bun ];
+        dontConfigure = true;
+        buildPhase = ''
+          export HOME=$TMPDIR
+          cp -R ${cowboy-web-bundle.webDeps}/. .
+          chmod -R u+w node_modules
+          mkdir -p $TMPDIR/bin
+          ln -s ${bun}/bin/bun $TMPDIR/bin/node
+          export PATH=$TMPDIR/bin:$PATH
+          patchShebangs node_modules
+          cd web
           bun test src
           bun test ./src/storeConnection.isolated.ts
         '';
-        installPhase = previous.installPhase + ''
-          test "${service-worker-generation}" -gt 2108
-          sed -i -E 's/^const VERSION = "cowboy-v[0-9]+";$/const VERSION = "cowboy-v${service-worker-generation}";/' "$out/sw.js"
-          grep -qx 'const VERSION = "cowboy-v${service-worker-generation}";' "$out/sw.js"
+        installPhase = ''
+          touch "$out"
         '';
-      });
+        dontFixup = true;
+      };
+      # Stamp the commit's service-worker generation onto the cached bundle in
+      # milliseconds so non-web commits never rebuild Vite.
+      cowboy-web = pkgs.runCommand "cowboy-web-0.1.0" { } ''
+        cp -R ${cowboy-web-bundle} "$out"
+        chmod -R u+w "$out"
+        test "${service-worker-generation}" -gt 2108
+        sed -i -E 's/^const VERSION = "cowboy-v[0-9]+";$/const VERSION = "cowboy-v${service-worker-generation}";/' "$out/sw.js"
+        grep -qx 'const VERSION = "cowboy-v${service-worker-generation}";' "$out/sw.js"
+      '';
 
       # This host's pinned Nixpkgs still has the first fetchCargoVendor
       # implementation, which downloads through crates.io's rate-limited API.
@@ -708,26 +782,29 @@
         meta.description = "Nondeployable immutable private Session deletion broker fixtures";
       };
 
-      cowboy-code-adapter = rustPlatform.buildRustPackage {
+      cowboy-code-adapter-common = {
         pname = "cowboy-code-adapter";
         version = "0.1.0";
         src = code-adapter-src;
-        cargoDeps = cowboy-cargo-deps;
-        cargoBuildFlags = [
-          "--no-default-features"
-          "--features"
-          "code-adapter"
-          "--bin"
-          "cowboy-code-adapter"
-        ];
+        strictDeps = true;
+        CFLAGS = "-O1";
         nativeBuildInputs = [ pkgs.pkg-config ];
         buildInputs = [ pkgs.openssl ];
+        cargoVendorDir = cowboy-crane-vendor;
+        cargoExtraArgs =
+          "--locked --no-default-features --features code-adapter --bin cowboy-code-adapter";
         doCheck = false;
+      };
+      cowboy-code-adapter-deps = craneLib.buildDepsOnly (cowboy-code-adapter-common // {
+        cargoCheckCommand = "true";
+      });
+      cowboy-code-adapter = craneLib.buildPackage (cowboy-code-adapter-common // {
+        cargoArtifacts = cowboy-code-adapter-deps;
         meta = {
           description = "Filesystem and Git adapter for Cowboy Machine";
           mainProgram = "cowboy-code-adapter";
         };
-      };
+      });
 
       # Independent immutable release tooling for external Plugin publishers
       # such as Cardea. Its SDK validator and Ed25519 tool are closure-pinned.
@@ -778,9 +855,35 @@
       # source. A Controller release depends on it, so a commit that grows a
       # Rust offender or a cycle cannot be built even when just check was
       # skipped (the Web release runs the structure ratchet the same way).
+      structure-check-src = pkgs.lib.fileset.toSource {
+        root = ./.;
+        fileset = pkgs.lib.fileset.unions [
+          ./tools/check-structure.ts
+          ./tools/check-module-layers.ts
+          ./tools/lib/command.ts
+          ./tools/structure-baseline.json
+          ./tools/module-edges-baseline.json
+          (pkgs.lib.fileset.fileFilter (file:
+            file.hasExt "rs" || file.hasExt "ts" || file.hasExt "tsx"
+          ) ./src)
+          (pkgs.lib.fileset.fileFilter (file:
+            file.hasExt "rs" || file.hasExt "ts" || file.hasExt "tsx"
+          ) ./components)
+          (pkgs.lib.fileset.fileFilter (file:
+            file.hasExt "rs" || file.hasExt "ts" || file.hasExt "tsx"
+          ) ./web/src)
+          (pkgs.lib.fileset.fileFilter (file:
+            file.hasExt "rs" || file.hasExt "ts" || file.hasExt "tsx"
+          ) ./plugins)
+          (pkgs.lib.fileset.fileFilter (file:
+            file.hasExt "rs" || file.hasExt "ts" || file.hasExt "tsx"
+          ) ./tools)
+        ];
+      };
+
       cowboy-structure-check =
         pkgs.runCommand "cowboy-structure-check" {
-          src = pkgs.lib.cleanSource ./.;
+          src = structure-check-src;
           nativeBuildInputs = [ bun ];
         } ''
           cd "$src"
@@ -800,7 +903,12 @@
           EOF
         '';
 
+      # A Web release cannot be built from a commit that grows a structure
+      # offender or breaks a web unit test; bundle, tests and structure check
+      # run concurrently in Nix.
       cowboy-web-release = pkgs.runCommand "cowboy-web-release" { } ''
+        test -e ${cowboy-structure-check}
+        test -e ${cowboy-web-check}
         mkdir -p "$out/share/cowboy" "$out/etc/cowboy-release"
         ln -s ${cowboy-web} "$out/share/cowboy/web"
         cat >"$out/etc/cowboy-release/source.json" <<'EOF'
@@ -1128,7 +1236,7 @@
       checks.${system} = {
         inherit cowboy-tests;
         inherit cowboy cowboy-machine cowboy-code-adapter cowboy-source-boundary
-          cowboy-web cowboy-controller-release cowboy-web-release
+          cowboy-web cowboy-web-check cowboy-controller-release cowboy-web-release
           cowboy-zed-integration cowboy-zed-adapter cowboy-zed-server;
         cowboy-worker-registry-input = worker-registry-check;
       } // machine-release-checks;
