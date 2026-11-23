@@ -73,6 +73,10 @@ async fn reconcile(
         .plugin_uninstall_recovery(&connection, &step)
         .await
         .map_err(|_| anyhow::anyhow!("Machine evidence unavailable"))?;
+    ensure!(
+        state.machine_control.is_current(&connection),
+        "Machine connection changed during the observation"
+    );
     let intent = ResolutionIntent::complete_removal(
         format!("complete-{:032x}", rand::random::<u128>()),
         approval.actor().clone(),
@@ -87,9 +91,24 @@ async fn reconcile(
             intent,
         )
         .await?;
+    // The observation is evidence only while its connection is current.
+    ensure!(
+        state.machine_control.is_current(&connection),
+        "Machine connection changed before the resolution"
+    );
     // The local transaction repeats the complete saved-operation CAS. No
     // session deletion is necessary or permitted for this zero-session action.
     // The admitted transaction survives HTTP observer cancellation. The shared
     // resolver also checks our durable result after an ambiguous COMMIT ACK.
-    tokio::spawn(resolution::resolve_no_effect(store.clone(), permit, fence)).await?
+    let observed = (
+        connection.machine_id().to_owned(),
+        connection.epoch().to_owned(),
+    );
+    tokio::spawn(resolution::resolve_no_effect(
+        store.clone(),
+        permit,
+        fence,
+        Some(observed),
+    ))
+    .await?
 }

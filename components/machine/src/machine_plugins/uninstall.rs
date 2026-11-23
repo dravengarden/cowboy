@@ -93,6 +93,9 @@ impl MachinePluginStore {
         if remove_active {
             fs::remove_file(&active_link)
                 .with_context(|| format!("removing {}", active_link.display()))?;
+            // Durable before any credential cleanup, so an active link that
+            // is still present after a crash proves no effect happened.
+            fs::File::open(&plugin_root)?.sync_all()?;
         }
         if active.plugin_kind != cowboy_plugin_sdk::PluginKind::AgentProvider {
             return Ok(());
@@ -128,41 +131,62 @@ impl MachinePluginStore {
         remove_projection::ensure_absent_below_named_providers(&self.auth_base, &|_| true, named)
     }
 
+    /// Refuse while a named account holds `provider_id` credentials, or while
+    /// any credential tree the uninstall cleans is malformed (see
+    /// [`named_credential_refusal`]).
     pub(super) fn ensure_no_named_auth_materializations(&self, provider_id: &str) -> Result<()> {
-        let accounts = self.auth_base.join("accounts");
-        if !accounts.exists() {
-            return Ok(());
-        }
-        for entry in fs::read_dir(accounts)? {
-            let entry = entry?;
-            ensure!(
-                entry.file_type()?.is_dir(),
-                "invalid Provider account directory"
-            );
-            let provider = entry.path().join("providers").join(provider_id);
-            ensure!(
-                !provider.join("materialized").try_exists()?
-                    && !provider.join("runtime").try_exists()?
-                    && no_private_copies(&provider.join(native_usage::PRIVATE_HOMES))?,
-                "Revoke named Provider account projections before uninstalling this Plugin"
-            );
-            native_profile::ensure_revoked(
-                &provider.join("native"),
-                &entry.file_name().to_string_lossy(),
-                provider_id,
-            )?;
-        }
-        Ok(())
+        named_credential_refusal(&self.auth_base, provider_id)
     }
 }
 
-/// Whether a named account holds no private credential copy: its private
-/// homes directory is absent or a real, empty directory.
-fn no_private_copies(homes: &Path) -> Result<bool> {
-    match fs::symlink_metadata(homes) {
-        Ok(metadata) if metadata.is_dir() => Ok(fs::read_dir(homes)?.next().is_none()),
-        Ok(_) => Ok(false),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
-        Err(error) => Err(error.into()),
+/// Login candidate homes below a Provider's credential directory.
+const CANDIDATES: &str = "candidates";
+
+/// The uninstall's refusal check over a Machine's `provider-auth` base:
+/// refuse while a named account holds a `provider_id` projection (materialized,
+/// runtime, a private copy) or an unrevoked native profile, or while a
+/// credential tree the uninstall cleans is malformed. It uses the cleanup's own
+/// no-follow descriptor traversal and reads only, so a journaled uninstall can
+/// refuse definitely before its intent, and offline completion runs the same
+/// check. Named credentials are never an uninstall's to delete, and neither
+/// is an outstanding login candidate home (default scope or named).
+pub(super) fn named_credential_refusal(auth: &Path, provider_id: &str) -> Result<()> {
+    remove_projection::ensure_provider_traversable(auth, provider_id)?;
+    // An outstanding login candidate home may hold plaintext until its own
+    // finalization or discard, which needs the installed Provider.
+    remove_projection::ensure_empty_below_provider(auth, provider_id, CANDIDATES)?;
+    for (leaf, empty_directory) in [
+        ("materialized", false),
+        ("runtime", false),
+        (native_usage::PRIVATE_HOMES, true),
+        (CANDIDATES, true),
+    ] {
+        remove_projection::ensure_clear_below_named_providers(
+            auth,
+            provider_id,
+            leaf,
+            empty_directory,
+        )?;
     }
+    let accounts = auth.join("accounts");
+    if !accounts.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(accounts)? {
+        let entry = entry?;
+        ensure!(
+            entry.file_type()?.is_dir(),
+            "invalid Provider account directory"
+        );
+        native_profile::ensure_revoked(
+            &entry
+                .path()
+                .join("providers")
+                .join(provider_id)
+                .join("native"),
+            &entry.file_name().to_string_lossy(),
+            provider_id,
+        )?;
+    }
+    Ok(())
 }

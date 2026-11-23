@@ -1,9 +1,13 @@
 # Plugin recovery assessment
 
-## Offline completion of a failed, already-deactivated uninstall
+## Offline completion of an uncertain uninstall
 
-The 2026-10-01 maintenance path handles an uninstall whose active link was
-removed before read-only runtime caches caused cleanup to fail. This is an
+The 2026-10-01 maintenance path rolls an uncertain uninstall forward to its
+intended removal, for example one whose active link was removed before
+read-only runtime caches caused cleanup to fail, or one that refused named
+account credentials after beginning its installation intent (Machines before
+the definite pre-effect rejection). It never claims that an uncertain step
+did nothing. This is an
 explicit host-maintenance action; the observation protocol below remains
 read-only and startup never retries it.
 
@@ -14,8 +18,8 @@ cowboy operator uninstall-operations --machine hawk --plugin claude-code
 ```
 
 Only a zero-session operation interrupted in `uninstalling` can subsequently
-be completed by the Controller. This path cannot restore workers, finish an
-active installation or recover a different installation incarnation. Follow
+be completed by the Controller. This path cannot restore workers or recover a different installation
+incarnation. Follow
 the host's Machine maintenance boundary: verify no target Plugin workers,
 arrange an independent restart, then stop only the resident Machine. Keep
 unrelated detached worker services running.
@@ -30,16 +34,25 @@ cowboy-machine --state-dir /path/to/machine-state \
 
 Repeat with `--confirm-uninstall-digest` set to the exact reported request
 digest to apply. The command acquires the resident Machine's exclusive journal
-owner lock. It verifies the failed effect receipt, exact uninstall predecessor
-and request digest, absent active link, private state/auth directories, and absence
-of an unresolved installation attempt. A matching stable removal tombstone also
+owner lock. It verifies the uncertain receipt, the slot's pending removal for the exact
+predecessor and request digest (or the exact original installation, when the
+forward step stopped between its uncertain receipt and its slot intent), an active link that is absent or still the
+original generation, private state/auth directories, and absence of an
+unresolved installation attempt. It runs the live uninstall's named-account
+refusal check first and again before completion: any named `materialized`,
+`runtime` or non-empty private-copy projection, an outstanding login
+candidate home (default scope or named), an unrevoked native profile,
+or a malformed credential tree refuses it. Named account credentials belong to
+account revocation and are never deleted here. A matching stable removal tombstone also
 permits finishing an interrupted maintenance pass. Empty inventory alone is
 never authority. A package directory may be 0755, matching the ordinary installer,
 but it must be owned by the invoking UID and not writable by other users.
 
 Before effects it durably archives the original failed receipt and invoking UID
 under `plugin-maintenance/`. Every explicit invocation has a 60-second budget.
-It deletes only `materialized` and `runtime`; directory permissions are repaired
+It removes the active link if present and flushes its directory before any
+credential cleanup (also when the link was already absent), then deletes only the default scope's `materialized`,
+`runtime` and private copies (and empty named private-copy directories); directory permissions are repaired
 through opened descriptors, symlinks are unlinked without following them, and
 file permissions stay unchanged. Filesystem boundaries, excessive nesting and
 expired budgets fail closed. Verified absence and directory fsync precede the
@@ -54,9 +67,13 @@ cowboy operator reconcile-uninstall --machine MACHINE --plugin PLUGIN \
   --operation-id ORIGINAL_OPERATION_ID
 ```
 
-This captures fresh host Operator authority, holds the Service slot fence,
-queries the exact Machine receipt and current tombstone on one authenticated
-connection, and requires `MatchingRemoval`. Its bounded local transaction
+It applies to a zero-session operation that needs attention after
+`uninstalling` with an unknown Machine outcome, an interruption, or a storage
+failure while recording either. It captures fresh host Operator authority,
+holds the Service slot fence, queries the exact Machine receipt and current
+tombstone on one authenticated connection, and requires `MatchingRemoval`.
+Its bounded local transaction also requires that connection's epoch to still
+be the Machine's recorded current one,
 compares the entire original operation and atomically records the confirming
 actor, Machine evidence and `completed`. It performs no Machine mutation,
 session deletion, worker restoration or replay. Unknown receipts, changed
@@ -75,12 +92,36 @@ Signed retained packages, sealed replicas and audit/history retention keep their
 existing lifecycle. This completes the normal uninstall contract; it is not a
 global Provider credential revocation or source/worktree deletion.
 
+## Known open races (pre-existing)
+
+The uninstall refusal and recovery above do not yet serialize these launch,
+login and connection paths with an uninstall. Each predates this work and needs
+its own redesign:
+
+- Prepared worker launch vs uninstall: the broker spawns after its launch
+  context returned, so a worker can start with credentials projected before
+  the removal (`components/machine/src/machine_broker.rs:3296`).
+- Native login dispatch after cancellation: the sandbox can still start the
+  vendor login after the request was cancelled or expired
+  (`components/machine/src/machine_cli/native_sandbox.rs:40`).
+- Native profile reservation after the deadline: preparation can reserve a
+  profile after the login's deadline passed
+  (`components/machine/src/machine_plugins/native_profile.rs:254`).
+- Command login release mixing: a login reads its method before reserving its
+  candidate home, so an install in between can mix two signed releases
+  (`components/machine/src/machine_cli.rs:3272`).
+- Connection teardown vs terminal transaction: socket teardown removes the
+  live token before the asynchronous epoch clear, so a terminal transaction
+  can still match a retired connection's epoch
+  (`components/server/src/server/machine_connection.rs:1110`).
+
 ## Read-only observation protocol
 
 Status: seventh spatiotemporal slice, 2026-09-10. Protocol 12 adds a **read-only**
 recovery observation to the existing core uninstall lifecycle. It does not add
 a restore command, grant, automatic retry, new journal format or SQL migration.
-Installation CAS remains enabled; durable compensation remains disabled.
+Installation CAS remains enabled; durable compensation remains disabled except
+for the verified no-effect compensation of a zero-session definite rejection.
 
 ## Historical outcome and current installation are different facts
 

@@ -77,6 +77,74 @@ pub(super) fn ensure_absent_below_named_providers(
     )
 }
 
+/// Refuse unless every Provider directory [`remove_below_named_providers`]
+/// would visit for `provider` is reachable without following a symlink and
+/// `leaf` below it is absent, or with `empty_directory` a real, empty
+/// directory. The same descriptor traversal as cleanup, so a tree cleanup
+/// would refuse is refused before an uninstall begins.
+pub(super) fn ensure_clear_below_named_providers(
+    base: &Path,
+    provider: &str,
+    leaf: &str,
+    empty_directory: bool,
+) -> Result<()> {
+    visit_named_providers(base, &|_| true, Some(provider), &mut |directory| {
+        ensure_clear(directory, leaf, empty_directory)
+    })
+}
+
+/// `leaf` below `directory` is absent, or with `empty_directory` a real,
+/// empty directory; never followed.
+fn ensure_clear(directory: impl AsFd, leaf: &str, empty_directory: bool) -> Result<()> {
+    match rustix::fs::statat(&directory, leaf, AtFlags::SYMLINK_NOFOLLOW) {
+        Err(Errno::NOENT) => return Ok(()),
+        Err(error) => return Err(error.into()),
+        Ok(stat)
+            if empty_directory
+                && rustix::fs::FileType::from_raw_mode(stat.st_mode)
+                    == rustix::fs::FileType::Directory =>
+        {
+            let child = openat(&directory, leaf, DIRECTORY, Mode::empty())?;
+            if entries(&child)?.is_empty() {
+                return Ok(());
+            }
+        }
+        Ok(_) => {}
+    }
+    anyhow::bail!("Revoke named Provider account projections before uninstalling this Plugin")
+}
+
+/// Refuse unless `leaf` below `base`'s own `providers/<provider>` directory is
+/// absent or a real, empty directory, looked up without following a link.
+pub(super) fn ensure_empty_below_provider(base: &Path, provider: &str, leaf: &str) -> Result<()> {
+    let base = match open(base, DIRECTORY, Mode::empty()) {
+        Ok(base) => base,
+        Err(Errno::NOENT) => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let Some(providers) = enrolled_child(&base, "providers")? else {
+        return Ok(());
+    };
+    let Some(provider) = enrolled_child(&providers, provider)? else {
+        return Ok(());
+    };
+    ensure_clear(&provider, leaf, true)
+}
+
+/// Refuse unless `base`'s own `providers/<provider>` directory is absent or
+/// reachable without following a symlink, as [`remove_below_provider`] needs.
+pub(super) fn ensure_provider_traversable(base: &Path, provider: &str) -> Result<()> {
+    let base = match open(base, DIRECTORY, Mode::empty()) {
+        Ok(base) => base,
+        Err(Errno::NOENT) => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if let Some(providers) = enrolled_child(&base, "providers")? {
+        enrolled_child(&providers, provider)?;
+    }
+    Ok(())
+}
+
 /// Remove `leaf` below `base`'s own `providers/<provider>` directory from
 /// opened descriptors; a linked level is refused, a linked `leaf` unlinked.
 pub(super) fn remove_below_provider(base: &Path, provider: &str, leaf: &str) -> Result<()> {
@@ -120,10 +188,15 @@ fn visit_named_providers(
         let Some(providers) = enrolled_child(&root, "providers")? else {
             continue;
         };
-        for name in entries(&providers)? {
-            if provider.is_some_and(|only| name.to_bytes() != only.as_bytes()) {
-                continue;
+        // A named Provider is looked up, never matched bytewise: on a
+        // case-insensitive filesystem the lookup also finds a case alias.
+        if let Some(only) = provider {
+            if let Some(directory) = enrolled_child(&providers, only)? {
+                visit(&directory)?;
             }
+            continue;
+        }
+        for name in entries(&providers)? {
             if let Some(directory) = enrolled_child(&providers, name.as_c_str())? {
                 visit(&directory)?;
             }

@@ -1,6 +1,8 @@
 //! Explicit offline recovery under the existing journal owner lock. This is
 //! host maintenance, never startup replay or a remote command. Original failed
 //! evidence is archived before effects; a new host invocation is the authority.
+//! Recovery only rolls an uncertain uninstall forward to its intended effect;
+//! it never claims that an uncertain step did nothing.
 
 use super::*;
 use std::os::unix::fs::MetadataExt as _;
@@ -34,18 +36,53 @@ fn package_directory(path: &Path, uid: u32) -> Result<()> {
     Ok(())
 }
 
-fn sync_removal(plugin: &Path, projection: &Path) -> Result<()> {
+fn sync_removal(plugin: &Path, projection: Option<&Path>) -> Result<()> {
     absent(&plugin.join("active"))?;
-    for name in ["materialized", "runtime"] {
-        absent(&projection.join(name))?;
+    if let Some(projection) = projection {
+        for name in ["materialized", "runtime"] {
+            absent(&projection.join(name))?;
+        }
     }
     // The failed forward step may never have flushed its active-link removal.
     // Persist both deletion boundaries before either completion journal.
     fs::File::open(plugin)?.sync_all()?;
-    fs::File::open(projection)?.sync_all()?;
+    if let Some(projection) = projection {
+        fs::File::open(projection)?.sync_all()?;
+    }
     Ok(())
 }
 
+/// The active link of an uncertain uninstall: absent, or still the exact
+/// generation it was removing (the pending intent fences every install).
+fn active_is_original(plugin: &Path, step: &UninstallStep) -> Result<bool> {
+    match super::active_digest(plugin)? {
+        None => Ok(false),
+        Some(digest) => {
+            ensure!(
+                digest == step.generation_digest,
+                "active installation changed; maintenance refused"
+            );
+            Ok(true)
+        }
+    }
+}
+
+/// Whether `path` is present (a symlink counts); errors other than absence
+/// propagate.
+fn present(path: &Path) -> Result<bool> {
+    match path.symlink_metadata() {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Finish one uncertain uninstall whose installation slot still holds this
+/// request's pending removal (or its matching tombstone after an interrupted
+/// pass): run the live uninstall's named-credential refusal check, remove and
+/// flush the active link if it is still the original generation, remove the
+/// default-scope projections, verify and flush their absence, then complete
+/// the tombstone and record the step `applied`. Preview without confirmation.
 pub fn complete_absent_uninstall(
     state_dir: &Path,
     service: &str,
@@ -79,13 +116,8 @@ pub fn complete_absent_uninstall(
         .cloned()
         .context("exact uninstall receipt not found")?;
     ensure!(
-        matches!(
-            original.outcome,
-            StepOutcome::Unknown {
-                reason: StepUncertainty::EffectFailure
-            }
-        ),
-        "maintenance only accepts a recorded failed uninstall effect"
+        matches!(original.outcome, StepOutcome::Unknown { .. }),
+        "maintenance only accepts an uncertain uninstall receipt"
     );
     let step = &original.step;
     let request_digest = step.request_digest()?;
@@ -96,15 +128,24 @@ pub fn complete_absent_uninstall(
     let auth = state_dir.join("provider-auth");
     let providers = auth.join("providers");
     let projection = providers.join(&step.plugin_id);
-    for path in [&plugins, &auth, &providers, &projection] {
-        private_directory(path, uid)?;
+    private_directory(&plugins, uid)?;
+    // A Plugin without credentials (not an Agent Provider) has no projection.
+    for path in [&auth, &providers, &projection] {
+        if present(path)? {
+            private_directory(path, uid)?;
+        }
     }
+    let projection = present(&projection)?.then_some(projection);
     package_directory(&plugin, uid)?;
-    absent(&plugin.join("active"))?;
+    let active = active_is_original(&plugin, step)?;
+    // The live uninstall's own refusal check: named account credentials are
+    // account revocation's to remove, never this maintenance's.
+    super::super::uninstall::named_credential_refusal(&auth, &step.plugin_id)?;
     let mut report = serde_json::json!({
         "schema": 1, "operation_id": operation, "service_id": service,
         "machine_id": machine, "plugin_id": step.plugin_id,
         "request_digest": request_digest, "applied": false,
+        "removes_active_link": active,
         "requires_controller_reconciliation": true,
     });
     let Some(confirmation) = confirmation else {
@@ -131,16 +172,7 @@ pub fn complete_absent_uninstall(
     });
     atomic_write(&audit_path, &serde_json::to_vec(&audit)?, 0o600)?;
     fs::File::open(&audit_root)?.sync_all()?;
-    for name in [
-        "materialized",
-        "runtime",
-        super::super::native_usage::PRIVATE_HOMES,
-    ] {
-        checkpoint()?;
-        super::super::remove_projection::remove_checked(&projection.join(name), &checkpoint)?;
-    }
-    remove_named_private_homes(&auth, &step.plugin_id, &checkpoint)?;
-    sync_removal(&plugin, &projection)?;
+    roll_forward(&plugin, projection.as_deref(), &auth, step, &checkpoint)?;
     checkpoint()?;
     // A failure after either write remains recoverable with a new explicit
     // host invocation. The original step is never re-executed.
@@ -156,6 +188,42 @@ pub fn complete_absent_uninstall(
     report["applied"] = true.into();
     report["audit_id"] = audit_id.into();
     Ok(report)
+}
+
+/// Roll the original step forward exactly as the live uninstall does: its
+/// refusal check, then the active link (flushed before any credential
+/// cleanup), the default scope's projections and empty named private-copy
+/// directories, then the refusal check and flushed absence again.
+fn roll_forward(
+    plugin: &Path,
+    projection: Option<&Path>,
+    auth: &Path,
+    step: &UninstallStep,
+    checkpoint: &dyn Fn() -> Result<()>,
+) -> Result<()> {
+    checkpoint()?;
+    super::super::uninstall::named_credential_refusal(auth, &step.plugin_id)?;
+    if active_is_original(plugin, step)? {
+        fs::remove_file(plugin.join("active"))?;
+    }
+    // Also when the link was already absent: the failed forward step may have
+    // unlinked it without flushing, and no credential deletion may persist
+    // ahead of that unlink.
+    fs::File::open(plugin)?.sync_all()?;
+    if let Some(projection) = projection {
+        for name in [
+            "materialized",
+            "runtime",
+            super::super::native_usage::PRIVATE_HOMES,
+        ] {
+            checkpoint()?;
+            super::super::remove_projection::remove_checked(&projection.join(name), &checkpoint)?;
+        }
+    }
+    // Only empty private-copy directories remain (the refusal check above).
+    remove_named_private_homes(auth, &step.plugin_id, checkpoint)?;
+    super::super::uninstall::named_credential_refusal(auth, &step.plugin_id)?;
+    sync_removal(plugin, projection)
 }
 
 /// Every named account's private credential copies of `plugin_id`, under the

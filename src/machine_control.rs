@@ -84,6 +84,12 @@ impl ConnectionToken {
         &self.0.machine_id
     }
 
+    /// The authenticated handshake's epoch, also recorded as the Machine's
+    /// current `connection_epoch` before this token is installed.
+    pub fn epoch(&self) -> &str {
+        &self.0.epoch
+    }
+
     pub fn same(&self, other: &Self) -> bool {
         self.0.epoch == other.0.epoch && Arc::ptr_eq(&self.0, &other.0)
     }

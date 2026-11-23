@@ -333,3 +333,171 @@ async fn recovery_is_serialized_with_lifecycle_and_does_not_adopt_untracked_stat
             .exists()
     );
 }
+
+/// Named account credentials refuse the uninstall before its first
+/// effect: read-only preflight already refuses, and execution records a
+/// definite rejection without beginning an installation intent, so nothing is
+/// fenced and the Controller can prove the installation unchanged.
+#[tokio::test]
+async fn named_credentials_reject_before_any_effect() {
+    let (_root, store, _desired, request) = installed().await;
+    let account = store
+        .auth_base
+        .join("accounts/11111111-1111-4111-8111-111111111111");
+    let projection = account.join("providers/victoria/runtime");
+    fs::create_dir_all(&projection).unwrap();
+    fs::write(projection.join("credential"), b"fixture-only").unwrap();
+    let preflight = store
+        .fixture_uninstall_step(&request, Some("service-a"), "machine-a", true, true)
+        .await;
+    assert_eq!(
+        preflight.result,
+        unavailable(StepUnavailable::InvalidRequest)
+    );
+    let slots = journal_bytes(&store.operations.root.join(installations::DIRECTORY));
+    let executed = store
+        .fixture_uninstall_step(&request, Some("service-a"), "machine-a", true, false)
+        .await;
+    assert_eq!(
+        receipt(executed.result).outcome,
+        StepOutcome::Rejected {
+            reason: StepRejection::TargetChanged
+        }
+    );
+    assert_eq!(
+        slots,
+        journal_bytes(&store.operations.root.join(installations::DIRECTORY)),
+        "no installation intent began"
+    );
+    store
+        .operations
+        .ensure_unfenced(&request.plugin_id)
+        .unwrap();
+    let active = store.inventory_one(&request.plugin_id).unwrap().unwrap();
+    assert_eq!(active.state, PluginInstallationState::Active);
+    assert_eq!(active.installation_revision, request.installation_revision);
+    assert!(projection.join("credential").is_file());
+    // The Controller's verified-compensation evidence: the rejected receipt,
+    // the same incarnation and generation, and no fence.
+    let RecoveryObservation::Observed { snapshot } = inspect(&store, &request).await else {
+        panic!("recovery evidence unavailable")
+    };
+    assert!(!snapshot.slot_fenced);
+    assert_eq!(
+        snapshot.installation,
+        InstallationEvidence::Installed {
+            revision: request.installation_revision.clone().unwrap(),
+            generation_digest: request.generation_digest.clone(),
+        }
+    );
+    // The definite receipt is final for this request; a new request runs once
+    // the credentials are gone.
+    fs::remove_dir_all(&account).unwrap();
+    assert_eq!(
+        receipt(
+            store
+                .fixture_uninstall_step(&request, Some("service-a"), "machine-a", true, false)
+                .await
+                .result
+        )
+        .outcome,
+        StepOutcome::Rejected {
+            reason: StepRejection::TargetChanged
+        }
+    );
+    let mut next = request.clone();
+    next.operation_id.push('2');
+    removed(&store, &next).await;
+}
+
+/// A credential tree cleanup would refuse (here a dangling accounts link,
+/// which a path lookup reads as absent) is refused by the same no-follow
+/// validation before any intent, never after the active link is gone.
+#[tokio::test]
+async fn malformed_credential_trees_reject_before_any_effect() {
+    let (_root, store, _desired, request) = installed().await;
+    let accounts = store.auth_base.join("accounts");
+    if accounts.exists() {
+        fs::remove_dir_all(&accounts).unwrap();
+    }
+    symlink(store.auth_base.join("missing"), &accounts).unwrap();
+    let preflight = store
+        .fixture_uninstall_step(&request, Some("service-a"), "machine-a", true, true)
+        .await;
+    assert_eq!(
+        preflight.result,
+        unavailable(StepUnavailable::InvalidRequest)
+    );
+    assert_eq!(
+        receipt(
+            store
+                .fixture_uninstall_step(&request, Some("service-a"), "machine-a", true, false)
+                .await
+                .result
+        )
+        .outcome,
+        StepOutcome::Rejected {
+            reason: StepRejection::TargetChanged
+        }
+    );
+    store
+        .operations
+        .ensure_unfenced(&request.plugin_id)
+        .unwrap();
+    assert!(
+        store
+            .plugin_root(&request.plugin_id)
+            .join("active")
+            .exists()
+    );
+}
+
+/// Offline completion rolls an uncertain uninstall forward to exactly the
+/// evidence the Controller's receipt completion requires: an applied receipt
+/// and the matching, unfenced removal tombstone.
+#[tokio::test]
+async fn offline_completion_yields_the_controller_completion_evidence() {
+    let (root, store, _desired, request) = installed().await;
+    let result = store.operations.fixture_execute(
+        &request,
+        || true,
+        || {
+            store.operations.installations.begin(
+                &request.plugin_id,
+                Some(&request.generation_digest),
+                None,
+                installations::Effect::Uninstall,
+                Some(request.request_digest()?),
+            )?;
+            bail!("fixture failure before any mutation")
+        },
+    );
+    assert!(matches!(
+        receipt(result).outcome,
+        StepOutcome::Unknown { .. }
+    ));
+    drop(store);
+    let state = root.path().join("machine");
+    // Production state directories are private; this fixture's umask is not.
+    for directory in ["", "plugins", "provider-auth", "provider-auth/providers"] {
+        let path = state.join(directory);
+        if path.exists() {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+    let applied = crate::machine_plugins::complete_absent_uninstall(
+        &state,
+        &request.service_id,
+        &request.machine_id,
+        &request.operation_id,
+        Some(&request.request_digest().unwrap()),
+    )
+    .unwrap();
+    assert_eq!(applied["applied"], true);
+    let reader = MachinePluginStore::new(&state, Platform::Linux, "x86_64".into()).unwrap();
+    assert!(reader.inventory().unwrap().is_empty());
+    assert!(matches!(
+        inspect(&reader, &request).await.basis(&request),
+        RecoveryBasis::MatchingRemoval { .. }
+    ));
+}

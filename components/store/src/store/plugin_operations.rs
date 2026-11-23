@@ -164,7 +164,32 @@ impl Store {
             from.permits(to) && to != Phase::Completed,
             "invalid uninstall transition"
         );
-        dispatch!(self, advance_plugin_uninstall(id, from, to, problem))
+        dispatch!(self, advance_plugin_uninstall(id, from, to, problem, None))
+    }
+
+    /// [`Self::advance_plugin_uninstall`] decided on Machine evidence observed
+    /// over one connection: the same transaction requires that connection's
+    /// epoch to still be the Machine's recorded current one, serializing with
+    /// a replacement handshake (which records its epoch first) and revocation.
+    /// `within_budget` (the original approval's budget) is rechecked after
+    /// every lock is held, immediately before the commit.
+    pub async fn advance_plugin_uninstall_on_connection(
+        &self,
+        id: &str,
+        (from, to): (Phase, Phase),
+        problem: Option<Problem>,
+        (machine, epoch): (&str, &str),
+        within_budget: &(dyn Fn() -> bool + Sync),
+    ) -> Result<()> {
+        ensure!(
+            from.permits(to) && to != Phase::Completed,
+            "invalid uninstall transition"
+        );
+        ensure!(within_budget(), "uninstall approval expired");
+        dispatch!(
+            self,
+            advance_plugin_uninstall(id, from, to, problem, Some(((machine, epoch), within_budget)))
+        )
     }
 
     /// Completion and the exact Service-side deletion are one local commit.
@@ -188,12 +213,28 @@ impl Store {
     ) -> Result<ResolutionReceipt> {
         permit.intent().validate()?;
         ensure!(permit.within_budget(), "resolution approval expired");
-        dispatch!(self, resolve_plugin_uninstall(permit))
+        dispatch!(self, resolve_plugin_uninstall(permit, None))
+    }
+
+    /// [`Self::resolve_plugin_uninstall`] for a resolution decided on Machine
+    /// evidence observed over one connection, bound to its epoch in the same
+    /// transaction (see [`Self::advance_plugin_uninstall_on_connection`]).
+    pub async fn resolve_plugin_uninstall_on_connection(
+        &self,
+        permit: &ResolutionPermit,
+        (machine, epoch): (&str, &str),
+    ) -> Result<ResolutionReceipt> {
+        permit.intent().validate()?;
+        ensure!(permit.within_budget(), "resolution approval expired");
+        dispatch!(
+            self,
+            resolve_plugin_uninstall(permit, Some((machine, epoch)))
+        )
     }
 }
 
 macro_rules! implement_journal {
-    ($backend:ty, $durability:literal, $lock:literal, $delete:literal) => {
+    ($backend:ty, $durability:literal, $lock:literal, $delete:literal, $current:literal) => {
         impl $backend {
             async fn plugin_uninstall_resolution(&self, operation: &str) -> Result<Option<ResolutionReceipt>> {
                 sqlx::query_as::<_, ResolutionRecord>(
@@ -202,11 +243,19 @@ macro_rules! implement_journal {
                     .map(ResolutionRecord::decode).transpose()
             }
 
-            async fn resolve_plugin_uninstall(&self, permit: &ResolutionPermit) -> Result<ResolutionReceipt> {
+            async fn resolve_plugin_uninstall(&self, permit: &ResolutionPermit, connection: Option<(&str, &str)>) -> Result<ResolutionReceipt> {
                 let intent = permit.intent();
                 let mut tx = self.pool.begin().await?;
                 sqlx::query($durability).execute(&mut *tx).await?;
                 sqlx::query($lock).execute(&mut *tx).await?;
+                if let Some((machine, epoch)) = connection {
+                    // The observed connection's epoch is still the Machine's
+                    // recorded current one. The row update takes the Machine
+                    // row's write lock, so a replacement handshake or a
+                    // revocation commits first (and this refuses) or waits.
+                    let current = sqlx::query($current).bind(machine).bind(epoch).execute(&mut *tx).await?;
+                    ensure!(current.rows_affected() == 1, "Machine connection changed; observe it again");
+                }
                 // Acquire the row/write lock BEFORE reading (also on SQLite).
                 // The ordinary executor cannot advance this phase. A late live
                 // Prepared -> StoppingSessions CAS loses to this resolution.
@@ -304,10 +353,19 @@ macro_rules! implement_journal {
                 Ok(operations)
             }
 
-            async fn advance_plugin_uninstall(&self, id: &str, from: Phase, to: Phase, problem: Option<Problem>) -> Result<()> {
+            async fn advance_plugin_uninstall(&self, id: &str, from: Phase, to: Phase, problem: Option<Problem>,
+                connection: Option<((&str, &str), &(dyn Fn() -> bool + Sync))>) -> Result<()> {
                 let mut tx = self.pool.begin().await?;
                 sqlx::query($durability).execute(&mut *tx).await?;
                 sqlx::query($lock).execute(&mut *tx).await?;
+                if let Some(((machine, epoch), _)) = connection {
+                    // The observed connection's epoch is still the Machine's
+                    // recorded current one. The row update takes the Machine
+                    // row's write lock, so a replacement handshake or a
+                    // revocation commits first (and this refuses) or waits.
+                    let current = sqlx::query($current).bind(machine).bind(epoch).execute(&mut *tx).await?;
+                    ensure!(current.rows_affected() == 1, "Machine connection changed; observe it again");
+                }
                 let changed = sqlx::query(
                     "UPDATE plugin_uninstall_operations SET attention_from = CASE WHEN $3 = 'needs_attention' AND phase <> 'needs_attention' THEN phase ELSE attention_from END, \
                      cause = CASE WHEN $3 = 'restoring_machine' THEN $4 ELSE cause END, phase = $3, problem = $4, updated_at_ms = $5 \
@@ -316,6 +374,9 @@ macro_rules! implement_journal {
                     .bind(problem.map(|p| serde_json::to_string(&p)).transpose()?)
                     .bind(chrono::Utc::now().timestamp_millis()).execute(&mut *tx).await?;
                 ensure!(changed.rows_affected() == 1, "uninstall phase changed; reconcile the same operation");
+                if let Some((_, within_budget)) = connection {
+                    ensure!(within_budget(), "uninstall approval expired before commit");
+                }
                 tx.commit().await.context("committing uninstall progress")
             }
 
@@ -350,7 +411,8 @@ implement_journal!(
     "SET LOCAL synchronous_commit = on",
     "LOCK TABLE plugin_uninstall_operations, plugin_install_operations, plugin_install_staging_resolutions IN SHARE ROW EXCLUSIVE MODE",
     "UPDATE sessions SET deleted_at = to_timestamp($2::bigint::double precision / 1000), purge_after_at = to_timestamp($3::bigint::double precision / 1000) \
-     WHERE id = $1 AND machine_id = $4 AND provider = $5 AND deleted_at IS NULL"
+     WHERE id = $1 AND machine_id = $4 AND provider = $5 AND deleted_at IS NULL",
+    "UPDATE machines SET id = id WHERE id = $1 AND connection_epoch = $2 AND revoked_at IS NULL"
 );
 implement_journal!(
     SqliteStorage,
@@ -361,7 +423,8 @@ implement_journal!(
     // sweepers write concurrently. This statement changes no rows.
     "UPDATE plugin_uninstall_operations SET phase = phase WHERE 0",
     "UPDATE sessions SET deleted_at_ms = $2, purge_after_at_ms = $3 \
-     WHERE id = $1 AND machine_id = $4 AND provider = $5 AND deleted_at_ms IS NULL"
+     WHERE id = $1 AND machine_id = $4 AND provider = $5 AND deleted_at_ms IS NULL",
+    "UPDATE machines SET id = id WHERE id = $1 AND connection_epoch = $2 AND revoked_at_ms IS NULL"
 );
 
 #[cfg(test)]

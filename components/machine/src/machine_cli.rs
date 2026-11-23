@@ -328,8 +328,8 @@ pub struct Args {
         value_delimiter = ','
     )]
     execution_env: Vec<String>,
-    /// Offline host maintenance: finish one failed uninstall whose active
-    /// link is already absent. Requires stopping the resident Machine first.
+    /// Offline host maintenance: roll one uncertain uninstall forward to its
+    /// intended removal. Requires stopping the resident Machine first.
     /// Without --confirm-uninstall-digest this only validates and reports.
     #[arg(long, requires = "service_id", conflicts_with_all = ["controller_url", "provider_usage_status", "check_telemetry_writer_policy", "cache_runtime_artifact"])]
     complete_absent_uninstall: Option<String>,

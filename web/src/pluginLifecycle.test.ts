@@ -33,6 +33,20 @@ test("completed removal evidence retains failure history without claiming a repl
       "victoria",
     );
   assertEquals(decode(entry).entries[0].operation.phase, "completed");
+  // A storage failure recording the uncertain outcome is completed alike.
+  assertEquals(
+    decode({
+      ...entry,
+      operation: { ...entry.operation, problem: "storage_failure" },
+    }).entries[0].operation.problem,
+    "storage_failure",
+  );
+  assertThrows(() =>
+    decode({
+      ...entry,
+      operation: { ...entry.operation, problem: "preconditions_changed" },
+    })
+  );
   assertThrows(() =>
     decode({
       ...entry,

@@ -56,8 +56,21 @@ about flush completion. An old pre-journal binary does not know the lock.
 
 Before removal, the Machine commits an uncertain intent. Only a successful
 effect and durable final receipt can return `applied`. A failed precondition or
-expiry returns a durable `rejected` with a closed reason and no Plugin effect. A
-partial removal/error returns `unknown/effect_failure`. Interruption at an
+expiry returns a durable `rejected` with a closed reason and no Plugin effect.
+The precondition includes every refusal the removal would make before its first
+mutation: a named account holding a credential projection of the Plugin, an
+unrevoked native profile, or a credential tree the cleanup would refuse (a
+symlinked or non-directory level). It uses the same no-follow descriptor
+traversal as the cleanup and yields `rejected/target_changed` before any
+installation intent begins; read-only preflight already refuses it before the
+Service stops workers. Removing the active link is always the first Plugin or
+credential mutation, and its directory is flushed before any credential
+cleanup. A partial removal/error after the precondition returns
+`unknown/effect_failure`. Named account credentials are never deleted by an
+uninstall; they belong to account revocation. An outstanding login
+candidate home of the Plugin (default scope or named) also refuses it. The named
+Provider directory is looked up by name, never matched bytewise, so a
+case-insensitive filesystem's alias is found too. Interruption at an
 intent/effect/receipt boundary retains `unknown/interrupted`; startup never
 replays it or guesses success from an absent active link. A write/flush failure
 poisons local admission/observation until a clean reopen validates the evidence.
@@ -86,7 +99,17 @@ uninstall feeds the existing atomic session-soft-delete/completion transaction.
 Missing, mismatched or non-applied evidence retains the Service recovery fence.
 If the later Service commit needs compensation, the durable path does **not**
 fall back to unjournaled `ReactivatePlugin`: a verified, separately authorized
-Machine recovery step with installation CAS is still required.
+Machine recovery step with installation CAS is still required. The one inverse
+that needs no Machine step is a definite rejection of an operation that
+affected no session (the stop phase may already have deleted approved sessions
+terminally). The Controller compensates only after a fresh recovery observation
+on the still-current connection shows the original `rejected` receipt, the
+same installation incarnation and generation, and no slot fence, and it
+rechecks its authority and that connection before the terminal phase, whose
+transaction also requires that connection's epoch to still be the Machine's
+recorded current one. It sends
+no Machine mutation; any other evidence keeps the fence with
+`compensation_failed`.
 
 An Operator may make the read-only request:
 

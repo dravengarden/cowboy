@@ -189,7 +189,8 @@ function resolution(
   } else if (
     op.phase !== "completed" || op.attention_from !== "uninstalling" ||
     op.affected_session_count !== 0 ||
-    (op.problem !== "interrupted" && op.problem !== "unknown_machine_outcome")
+    (op.problem !== "interrupted" && op.problem !== "unknown_machine_outcome" &&
+      op.problem !== "storage_failure")
   ) invalid();
   return Object.freeze({
     resolution_id: id(row.resolution_id),

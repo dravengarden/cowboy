@@ -174,12 +174,23 @@ fn receipt_response(receipt: &ResolutionReceipt) -> Response {
     .into_response()
 }
 
+/// `connection` (`(machine, epoch)`) binds a resolution decided on Machine
+/// evidence to the connection that evidence came over, in the same
+/// transaction; a pre-effect abort has none.
 pub(super) async fn resolve_no_effect(
     store: Store,
     permit: ResolutionPermit,
     mut fence: OperationFence,
+    connection: Option<(String, String)>,
 ) -> Result<ResolutionReceipt> {
-    let result = store.resolve_plugin_uninstall(&permit).await;
+    let result = match &connection {
+        Some((machine, epoch)) => {
+            store
+                .resolve_plugin_uninstall_on_connection(&permit, (machine, epoch))
+                .await
+        }
+        None => store.resolve_plugin_uninstall(&permit).await,
+    };
     let receipt = match result {
         Ok(receipt) => receipt,
         Err(error) => {
@@ -252,7 +263,7 @@ pub async fn api_resolve(
             .await?;
         // HTTP cancellation ends only observation; shutdown leaves either the
         // atomic receipt+Aborted pair or the original NeedsAttention record.
-        tokio::spawn(resolve_no_effect(store, permit, fence)).await?
+        tokio::spawn(resolve_no_effect(store, permit, fence, None)).await?
     }
     .await;
     match result {

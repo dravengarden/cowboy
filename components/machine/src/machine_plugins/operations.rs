@@ -288,6 +288,40 @@ impl Journal {
     }
 }
 
+// Unlike the legacy inventory helper, malformed/dangling links and regular
+// files must not be mistaken for an absent installation during recovery.
+fn active_digest(root: &Path) -> Result<Option<String>> {
+    match root.symlink_metadata() {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        metadata => ensure!(metadata?.is_dir(), "invalid Plugin root"),
+    }
+    let active = root.join("active");
+    match active.symlink_metadata() {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        metadata => ensure!(metadata?.file_type().is_symlink(), "invalid active link"),
+    }
+    let target = fs::read_link(active)?;
+    let generation = target
+        .to_str()
+        .and_then(|t| t.strip_prefix("generations/"))
+        .context("invalid active target")?;
+    let digest = format!("sha256:{generation}");
+    ensure!(
+        digest_generation_name(&digest)? == generation,
+        "invalid active generation"
+    );
+    for directory in [
+        root.join("generations"),
+        root.join("generations").join(generation),
+    ] {
+        ensure!(
+            directory.symlink_metadata()?.is_dir(),
+            "invalid active generation directory"
+        );
+    }
+    Ok(Some(digest))
+}
+
 fn unavailable(reason: StepUnavailable) -> StepLookup {
     StepLookup::Unavailable { reason }
 }
@@ -369,39 +403,8 @@ impl MachinePluginStore {
         }
     }
 
-    // Unlike the legacy inventory helper, malformed/dangling links and regular
-    // files must not be mistaken for an absent installation during recovery.
     pub(super) fn recovery_active_digest(&self, plugin: &str) -> Result<Option<String>> {
-        let root = self.plugin_root(plugin);
-        match root.symlink_metadata() {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            metadata => ensure!(metadata?.is_dir(), "invalid Plugin root"),
-        }
-        let active = root.join("active");
-        match active.symlink_metadata() {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            metadata => ensure!(metadata?.file_type().is_symlink(), "invalid active link"),
-        }
-        let target = fs::read_link(active)?;
-        let generation = target
-            .to_str()
-            .and_then(|t| t.strip_prefix("generations/"))
-            .context("invalid active target")?;
-        let digest = format!("sha256:{generation}");
-        ensure!(
-            digest_generation_name(&digest)? == generation,
-            "invalid active generation"
-        );
-        for directory in [
-            root.join("generations"),
-            root.join("generations").join(generation),
-        ] {
-            ensure!(
-                directory.symlink_metadata()?.is_dir(),
-                "invalid active generation directory"
-            );
-        }
-        Ok(Some(digest))
+        active_digest(&self.plugin_root(plugin))
     }
 
     pub async fn uninstall_step(
@@ -477,7 +480,7 @@ impl MachinePluginStore {
             unavailable(StepUnavailable::SlotFenced)
         } else if found == (StepLookup::NotFound {})
             && step.installation_revision.is_some()
-            && !self.step_target_matches(step).unwrap_or(false)
+            && !self.step_admissible(step)
         {
             // Read-only preflight can reject a stale preview before the Service
             // stops workers; execution still repeats the CAS.
@@ -505,7 +508,7 @@ impl MachinePluginStore {
                 && step.installation_revision.is_none())
             && self.operations.installations.admits(step)
             && self.operations.ensure_unfenced(&step.plugin_id).is_ok()
-            && self.step_target_matches(step).unwrap_or(false)
+            && self.step_admissible(step)
     }
 
     fn execute_uninstall_step(
@@ -536,7 +539,9 @@ impl MachinePluginStore {
         self.operations.execute(
             step,
             lease,
-            || self.step_target_matches(step).unwrap_or(false),
+            // A refusal here is a definite rejection: no installation intent
+            // has begun and nothing changed, so the slot stays unfenced.
+            || self.step_admissible(step),
             || {
                 let pending = self.operations.installations.begin(
                     &step.plugin_id,
@@ -560,6 +565,26 @@ impl MachinePluginStore {
                 Ok(())
             },
         )
+    }
+
+    /// The exact target is current and the uninstall would not have to
+    /// refuse once it began (credentials it cannot re-derive). Reads only.
+    fn step_admissible(&self, step: &UninstallStep) -> bool {
+        if !self.step_target_matches(step).unwrap_or(false) {
+            return false;
+        }
+        match self.ensure_no_named_auth_materializations(&step.plugin_id) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(
+                    error = %format!("{error:#}"),
+                    plugin = %step.plugin_id,
+                    operation = %step.operation_id,
+                    "uninstall refused before any effect"
+                );
+                false
+            }
+        }
     }
 
     fn step_target_matches(&self, step: &UninstallStep) -> Result<bool> {

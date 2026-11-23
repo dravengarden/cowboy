@@ -24,17 +24,48 @@ impl ResolutionAction {
 }
 
 pub fn can_complete_removal(operation: &Operation) -> bool {
+    // A storage failure while recording the uncertain Machine outcome leaves
+    // the same zero-session operation after `uninstalling`; completion still
+    // needs the exact applied receipt and matching current tombstone.
     operation.phase == Phase::NeedsAttention
         && operation.attention_from == Some(Phase::Uninstalling)
         && matches!(
             operation.problem,
-            Some(Problem::UnknownMachineOutcome | Problem::Interrupted)
+            Some(Problem::UnknownMachineOutcome | Problem::Interrupted | Problem::StorageFailure)
         )
         && operation.cause.is_none()
         && operation.intent.session_ids.is_empty()
         && operation.intent.live_session_ids.is_empty()
         && operation.intent.active_session_ids.is_empty()
         && operation.intent.installation_revision.is_some()
+}
+
+/// Whether `evidence` proves a definite forward rejection that left the exact
+/// installation current: the original step's receipt is `Rejected`, the
+/// CAS-tracked slot still holds the same incarnation and generation, and no
+/// other step fences it. Such a step changed nothing, so it owes no inverse.
+/// Untracked (legacy) installations are never proven unchanged.
+pub fn rejection_left_installation_unchanged(
+    evidence: &crate::machine_protocol::plugin_recovery::RecoveryObservation,
+    step: &crate::machine_protocol::plugin_step::UninstallStep,
+) -> bool {
+    use crate::machine_protocol::plugin_recovery::{
+        InstallationEvidence, RecoveryBasis, RecoveryObservation,
+    };
+    if !matches!(evidence.basis(step), RecoveryBasis::ForwardRejected { .. }) {
+        return false;
+    }
+    let RecoveryObservation::Observed { snapshot } = evidence else {
+        return false;
+    };
+    !snapshot.slot_fenced
+        && matches!(
+            (&snapshot.installation, &step.installation_revision),
+            (
+                InstallationEvidence::Installed { revision, generation_digest },
+                Some(expected),
+            ) if revision == expected && *generation_digest == step.generation_digest
+        )
 }
 
 pub fn can_abort_before_effects(operation: &Operation) -> bool {
@@ -305,6 +336,11 @@ mod tests {
             )
         };
         assert!(make(&op, snapshot.clone()).is_ok());
+        let mut stored = op.clone();
+        stored.problem = Some(Problem::StorageFailure);
+        assert!(make(&stored, snapshot.clone()).is_ok());
+        stored.problem = Some(Problem::PreconditionsChanged);
+        assert!(make(&stored, snapshot.clone()).is_err());
         let mut changed = op.clone();
         changed
             .intent
@@ -318,6 +354,106 @@ mod tests {
             reason: StepUncertainty::EffectFailure,
         };
         assert!(make(&op, snapshot).is_err());
+    }
+
+    #[test]
+    fn only_a_rejection_with_the_exact_installation_current_is_unchanged() {
+        use crate::machine_protocol::plugin_recovery::{
+            InstallationEvidence, RecoveryObservation, RecoverySnapshot,
+        };
+        use crate::machine_protocol::plugin_step::{
+            StepOutcome, StepReceipt, StepRejection, StepUnavailable, StepUncertainty,
+            UninstallStep,
+        };
+        let revision =
+            |value: char| -> crate::machine_protocol::installation_revision::InstallationRevision {
+                format!("installation-{}", value.to_string().repeat(64))
+                    .try_into()
+                    .unwrap()
+            };
+        let mut op = fixture();
+        op.intent.schema = 2;
+        op.intent.installation_revision = Some(revision('a'));
+        let step = op.intent.machine_step().unwrap();
+        let installed = |value: char, generation: &str| InstallationEvidence::Installed {
+            revision: revision(value),
+            generation_digest: generation.to_owned(),
+        };
+        let snapshot = RecoverySnapshot {
+            request_digest: step.request_digest().unwrap(),
+            receipt: Some(Box::new(StepReceipt {
+                step: step.clone(),
+                request_digest: step.request_digest().unwrap(),
+                outcome: StepOutcome::Rejected {
+                    reason: StepRejection::TargetChanged,
+                },
+            })),
+            installation: installed('a', &step.generation_digest),
+            slot_fenced: false,
+        };
+        let unchanged = |snapshot: RecoverySnapshot, step: &UninstallStep| {
+            rejection_left_installation_unchanged(
+                &RecoveryObservation::Observed {
+                    snapshot: Box::new(snapshot),
+                },
+                step,
+            )
+        };
+        assert!(unchanged(snapshot.clone(), &step));
+        // Not the applied, uncertain or missing forward receipt.
+        for outcome in [
+            Some(StepOutcome::Applied {}),
+            Some(StepOutcome::Unknown {
+                reason: StepUncertainty::EffectFailure,
+            }),
+            None,
+        ] {
+            let mut changed = snapshot.clone();
+            match outcome {
+                Some(outcome) => changed.receipt.as_mut().unwrap().outcome = outcome,
+                None => changed.receipt = None,
+            }
+            assert!(!unchanged(changed, &step));
+        }
+        // Not another incarnation, another generation, a tombstone or a fence.
+        let other_generation = format!("sha256:{}", "e".repeat(64));
+        for installation in [
+            installed('c', &step.generation_digest),
+            installed('a', &other_generation),
+            InstallationEvidence::Removed {
+                revision: revision('b'),
+                previous_revision: revision('a'),
+                uninstall_request_digest: step.request_digest().unwrap(),
+            },
+            InstallationEvidence::Untracked {},
+        ] {
+            let mut changed = snapshot.clone();
+            changed.installation = installation;
+            assert!(!unchanged(changed, &step));
+        }
+        let mut changed = snapshot.clone();
+        changed.slot_fenced = true;
+        assert!(!unchanged(changed, &step));
+        assert!(!rejection_left_installation_unchanged(
+            &RecoveryObservation::Unavailable {
+                reason: StepUnavailable::Storage
+            },
+            &step
+        ));
+        // A legacy step without an installation revision is never unchanged.
+        let mut legacy = step.clone();
+        legacy.schema = 1;
+        legacy.installation_revision = None;
+        let mut snapshot = snapshot;
+        snapshot.request_digest = legacy.request_digest().unwrap();
+        snapshot.receipt = Some(Box::new(StepReceipt {
+            step: legacy.clone(),
+            request_digest: snapshot.request_digest.clone(),
+            outcome: StepOutcome::Rejected {
+                reason: StepRejection::TargetChanged,
+            },
+        }));
+        assert!(!unchanged(snapshot, &legacy));
     }
 
     #[test]

@@ -186,7 +186,7 @@ async fn detached_resolution_closes_only_its_slot_and_replay_is_evidence_only() 
     let (done, observed) = tokio::sync::oneshot::channel();
     let task_store = store.clone();
     let observer = tokio::spawn(async move {
-        let result = resolve_no_effect(task_store, permit, fence).await;
+        let result = resolve_no_effect(task_store, permit, fence, None).await;
         let _ = done.send(result);
     });
     drop(observer);
@@ -217,6 +217,7 @@ async fn detached_resolution_closes_only_its_slot_and_replay_is_evidence_only() 
         store.clone(),
         ResolutionPermit::for_test(resolution.clone()),
         OperationFence::acquire_resolution(&fences, key.clone()).unwrap(),
+        None,
     )
     .await
     .unwrap();
@@ -237,7 +238,8 @@ async fn detached_resolution_closes_only_its_slot_and_replay_is_evidence_only() 
         resolve_no_effect(
             store,
             ResolutionPermit::for_test(wrong),
-            OperationFence::acquire_resolution(&fences, key.clone()).unwrap()
+            OperationFence::acquire_resolution(&fences, key.clone()).unwrap(),
+            None
         )
         .await
         .is_err()
@@ -287,7 +289,8 @@ async fn changed_or_expired_resolution_never_clears_a_fence() {
             resolve_no_effect(
                 store.clone(),
                 permit,
-                OperationFence::acquire_resolution(&fences, key.clone()).unwrap()
+                OperationFence::acquire_resolution(&fences, key.clone()).unwrap(),
+                None
             )
             .await
             .is_err()

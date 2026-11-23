@@ -1,6 +1,11 @@
 use super::*;
 
 fn fixture(root: &Path) -> UninstallStep {
+    fixture_with(root, true)
+}
+
+/// `intent`: whether the failed forward step began its slot intent.
+fn fixture_with(root: &Path, intent: bool) -> UninstallStep {
     fs::set_permissions(root, fs::Permissions::from_mode(0o700)).unwrap();
     for path in [
         "plugins",
@@ -42,13 +47,15 @@ fn fixture(root: &Path) -> UninstallStep {
         &lease,
         || true,
         || {
-            journal.installations.begin(
-                &step.plugin_id,
-                Some(&step.generation_digest),
-                None,
-                installations::Effect::Uninstall,
-                Some(step.request_digest()?),
-            )?;
+            if intent {
+                journal.installations.begin(
+                    &step.plugin_id,
+                    Some(&step.generation_digest),
+                    None,
+                    installations::Effect::Uninstall,
+                    Some(step.request_digest()?),
+                )?;
+            }
             bail!("fixture cleanup failure")
         },
     );
@@ -159,11 +166,12 @@ fn writable_packages_and_public_credential_directories_are_refused() {
     super::super::super::remove_projection::remove(&auth.join("runtime")).unwrap();
 }
 
-/// Offline completion removes every named account's private credential
-/// copies of the Provider (and the default scope's) before it records the
-/// uninstall applied; a linked named Provider directory refuses it.
+/// Offline completion runs the live uninstall's refusal check: a named
+/// account's private credential copy (or any named projection) refuses it and
+/// is never deleted here; an empty private-copy directory goes with the
+/// default scope's copies. A linked named Provider directory refuses it.
 #[test]
-fn offline_completion_removes_named_private_copies_first() {
+fn offline_completion_refuses_named_credentials_and_removes_only_empty_copies() {
     let root = tempfile::tempdir().unwrap();
     let step = fixture(root.path());
     let account = root
@@ -176,6 +184,23 @@ fn offline_completion_removes_named_private_copies_first() {
         .path()
         .join("provider-auth/providers/victoria/private-homes/4567");
     fs::create_dir_all(&default_copy).unwrap();
+    assert!(call(root.path(), &step, false).is_err());
+    assert!(call(root.path(), &step, true).is_err());
+    assert!(
+        copy.join("auth.json").is_file(),
+        "named copies are not ours"
+    );
+    fs::remove_dir_all(account.join("victoria/private-homes/0123")).unwrap();
+    for leaf in ["runtime", "native/generations/1"] {
+        fs::create_dir_all(account.join("victoria").join(leaf)).unwrap();
+        assert!(call(root.path(), &step, true).is_err(), "{leaf}");
+        fs::remove_dir_all(
+            account
+                .join("victoria")
+                .join(leaf.split('/').next().unwrap()),
+        )
+        .unwrap();
+    }
     let outside = root.path().join("outside");
     fs::create_dir_all(outside.join("private-homes/kept")).unwrap();
     let other = root
@@ -189,6 +214,63 @@ fn offline_completion_removes_named_private_copies_first() {
     assert_eq!(call(root.path(), &step, true).unwrap()["applied"], true);
     assert!(!account.join("victoria/private-homes").exists());
     assert!(!default_copy.exists());
+}
+
+/// Roll forward: an uncertain uninstall that never removed its active link
+/// (or lost that removal) is finished, link first, and recorded applied with
+/// the matching tombstone; an interrupted receipt is accepted too.
+#[test]
+fn offline_completion_rolls_a_present_active_link_forward() {
+    let root = tempfile::tempdir().unwrap();
+    let step = fixture(root.path());
+    let generation = digest_generation_name(&step.generation_digest).unwrap();
+    let plugin = root.path().join("plugins/victoria");
+    fs::create_dir_all(plugin.join("generations").join(&generation)).unwrap();
+    symlink(format!("generations/{generation}"), plugin.join("active")).unwrap();
+    {
+        let journal = Journal::open(root.path()).unwrap();
+        let mut state = journal.state.lock();
+        let key = step.key().unwrap();
+        let receipt = state.receipts.get_mut(&key).unwrap();
+        receipt.outcome = StepOutcome::Unknown {
+            reason: StepUncertainty::Interrupted,
+        };
+        journal.persist(&key, receipt).unwrap();
+    }
+    let preview = call(root.path(), &step, false).unwrap();
+    assert_eq!(preview["removes_active_link"], true);
+    assert!(plugin.join("active").is_symlink());
+    assert_eq!(call(root.path(), &step, true).unwrap()["applied"], true);
+    assert!(plugin.join("active").symlink_metadata().is_err());
+    assert!(plugin.join("generations").join(&generation).is_dir());
+    assert!(
+        !root
+            .path()
+            .join("provider-auth/providers/victoria/runtime")
+            .exists()
+    );
+    let reopened = Journal::open(root.path()).unwrap();
+    assert!(
+        matches!(reopened.query(&step), StepLookup::Found { receipt } if receipt.outcome == StepOutcome::Applied {})
+    );
+    reopened.ensure_unfenced(&step.plugin_id).unwrap();
+}
+
+/// Another generation as the active link is never removed.
+#[test]
+fn offline_completion_refuses_a_different_active_generation() {
+    let root = tempfile::tempdir().unwrap();
+    let step = fixture(root.path());
+    let other = digest_generation_name(&digest(b"other release")).unwrap();
+    let plugin = root.path().join("plugins/victoria");
+    fs::create_dir_all(plugin.join("generations").join(&other)).unwrap();
+    symlink(format!("generations/{other}"), plugin.join("active")).unwrap();
+    assert!(call(root.path(), &step, true).is_err());
+    assert!(plugin.join("active").is_symlink());
+    super::super::super::remove_projection::remove(
+        &root.path().join("provider-auth/providers/victoria/runtime"),
+    )
+    .unwrap();
 }
 
 /// A linked accounts root is refused, never read as absent: no completion
@@ -210,5 +292,57 @@ fn offline_completion_refuses_a_linked_accounts_root() {
     );
     drop(journal);
     fs::remove_file(root.path().join("provider-auth/accounts")).unwrap();
+    assert_eq!(call(root.path(), &step, true).unwrap()["applied"], true);
+}
+
+/// The forward step records its uncertain receipt before it begins the slot
+/// intent; a crash between the two leaves the original stable installation.
+/// Roll-forward accepts exactly that and writes the matching tombstone.
+#[test]
+fn offline_completion_rolls_forward_a_step_interrupted_before_its_intent() {
+    let root = tempfile::tempdir().unwrap();
+    let step = fixture_with(root.path(), false);
+    {
+        let journal = Journal::open(root.path()).unwrap();
+        assert!(journal.ensure_unfenced(&step.plugin_id).is_err());
+        assert!(
+            journal
+                .installations
+                .revision(&step.plugin_id, &step.generation_digest)
+                .is_ok(),
+            "the original installation is still stable"
+        );
+    }
+    assert_eq!(call(root.path(), &step, true).unwrap()["applied"], true);
+    let reopened = Journal::open(root.path()).unwrap();
+    reopened.ensure_unfenced(&step.plugin_id).unwrap();
+    assert!(
+        reopened
+            .installations
+            .revision(&step.plugin_id, &step.generation_digest)
+            .is_err(),
+        "the slot now holds the removal tombstone"
+    );
+    reopened
+        .installations
+        .maintenance_removal(&step, false)
+        .unwrap();
+}
+
+/// An outstanding login candidate home, default scope or named, refuses
+/// offline completion as it refuses the live uninstall.
+#[test]
+fn offline_completion_refuses_outstanding_login_candidates() {
+    let root = tempfile::tempdir().unwrap();
+    let step = fixture(root.path());
+    for candidates in [
+        "provider-auth/providers/victoria/candidates",
+        "provider-auth/accounts/11111111-1111-4111-8111-111111111111/providers/victoria/candidates",
+    ] {
+        let home = root.path().join(candidates).join("request-1/home");
+        fs::create_dir_all(&home).unwrap();
+        assert!(call(root.path(), &step, true).is_err(), "{candidates}");
+        fs::remove_dir_all(root.path().join(candidates).join("request-1")).unwrap();
+    }
     assert_eq!(call(root.path(), &step, true).unwrap()["applied"], true);
 }

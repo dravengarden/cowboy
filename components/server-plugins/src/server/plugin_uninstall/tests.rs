@@ -135,6 +135,8 @@ struct MockEffects {
     deny_at: Option<Phase>,
     deny_after_checks: Option<usize>,
     gate: Option<Arc<tokio::sync::Semaphore>>,
+    connection: Option<(String, String)>,
+    expired: bool,
 }
 
 impl MockEffects {
@@ -151,6 +153,8 @@ impl MockEffects {
             deny_at: None,
             deny_after_checks: None,
             gate: None,
+            connection: None,
+            expired: false,
         }
     }
 }
@@ -168,6 +172,12 @@ impl Effects for MockEffects {
         self.deny_at != Some(phase) && self.deny_after_checks.is_none_or(|limit| count < limit)
     }
 
+    fn evidence_connection(&self) -> Option<(String, String)> {
+        self.connection.clone()
+    }
+    fn within_budget(&self) -> bool {
+        !self.expired
+    }
     fn stop(&self, _: &str) -> bool {
         self.stops.fetch_add(1, Ordering::SeqCst);
         false
@@ -696,4 +706,82 @@ fn foreign_or_incomplete_confirmation_does_not_consume_the_owner_preview() {
     )
     .unwrap();
     assert!(plans.is_empty());
+}
+
+/// The terminal compensated phase releases the fence, so authority (and the
+/// observed connection) is checked again right before it.
+#[tokio::test]
+async fn compensation_rechecks_authority_before_releasing_the_fence() {
+    let (_root, store, intent) = setup("final-authority").await;
+    let mut effects = MockEffects::new(store.clone(), Some(CommandFailure::Rejected));
+    effects.deny_at = Some(Phase::RestoringSessions);
+    assert_eq!(
+        execute(&store, &intent, &effects).await.unwrap(),
+        Phase::NeedsAttention
+    );
+    assert_eq!(effects.restorations.load(Ordering::SeqCst), 1);
+    let saved = store
+        .plugin_uninstall_operation(&intent.operation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.problem, Some(Problem::CompensationFailed));
+    assert_eq!(saved.attention_from, Some(Phase::RestoringSessions));
+}
+
+/// A no-effect compensation's terminal phase is bound, in its transaction,
+/// to the epoch of the connection its evidence came over: a replacement
+/// recorded meanwhile keeps the operation for reconciliation.
+#[tokio::test]
+async fn compensation_is_bound_to_the_observed_connection_epoch() {
+    for (recorded, expired, expected) in [
+        ("epoch-1", false, Phase::Compensated),
+        ("epoch-2", false, Phase::NeedsAttention),
+        // An approval that expired while the transaction waited never commits.
+        ("epoch-1", true, Phase::NeedsAttention),
+    ] {
+        let (_root, store, intent) = setup("epoch-bound").await;
+        let token = store
+            .create_machine_enrollment(&intent.machine_id, "Machine", 60)
+            .await
+            .unwrap();
+        store
+            .consume_machine_enrollment(&token, "ssh-ed25519 QUJD", &encryption_key())
+            .await
+            .unwrap();
+        store
+            .machine_connected(
+                &intent.machine_id,
+                recorded,
+                "linux",
+                "x86_64",
+                "outbound_wss",
+                &serde_json::json!({}),
+            )
+            .await
+            .unwrap();
+        let mut effects = MockEffects::new(store.clone(), Some(CommandFailure::Rejected));
+        effects.connection = Some((intent.machine_id.clone(), "epoch-1".into()));
+        effects.expired = expired;
+        assert_eq!(
+            execute(&store, &intent, &effects).await.unwrap(),
+            expected,
+            "{recorded}"
+        );
+        if expected == Phase::NeedsAttention {
+            let saved = store
+                .plugin_uninstall_operation(&intent.operation_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(saved.problem, Some(Problem::CompensationFailed));
+        }
+    }
+}
+
+fn encryption_key() -> String {
+    use base64::Engine as _;
+    let secret = x25519_dalek::StaticSecret::from([0x24_u8; 32]);
+    base64::engine::general_purpose::STANDARD
+        .encode(x25519_dalek::PublicKey::from(&secret).as_bytes())
 }
