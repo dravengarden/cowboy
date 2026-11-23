@@ -1302,7 +1302,9 @@ compact RECIPE:
     # Full gates from parallel task worktrees share one host. Unbounded, they
     # drove Hawk's load past 400 and timed out worker heartbeats, so a gate
     # takes one of COWBOY_GATE_SLOTS host-wide slots (default 2; 0 disables)
-    # and waits for a free one. The lock is released when this script exits.
+    # and waits for a free one. Hold the lock on FD 8 and close 8>&- on every
+    # child (especially daemonized sccache) so orphaned children can never pin
+    # a slot after this script exits.
     slots="${COWBOY_GATE_SLOTS:-2}"
     if [[ "$slots" =~ ^[1-9][0-9]*$ ]] && command -v flock >/dev/null; then
       slot_dir="${XDG_RUNTIME_DIR:-/tmp}/cowboy-gate-slots"
@@ -1310,9 +1312,9 @@ compact RECIPE:
       announced=""
       while :; do
         for ((i = 0; i < slots; i++)); do
-          exec {slot_fd}>"$slot_dir/$i.lock"
-          if flock -n "$slot_fd"; then break 2; fi
-          exec {slot_fd}>&-
+          exec 8>"$slot_dir/$i.lock"
+          if flock -n 8; then break 2; fi
+          exec 8>&-
         done
         if [[ -z "$announced" ]]; then
           echo "{{RECIPE}}: all $slots gate slots are busy; waiting (COWBOY_GATE_SLOTS)" >&2
@@ -1321,7 +1323,7 @@ compact RECIPE:
         sleep 5
       done
     fi
-    build_dir() { (cd "$1" && cargo metadata --format-version 1 --no-deps --locked | jq -r '.build_directory // .target_directory'); }
+    build_dir() { (cd "$1" && cargo metadata --format-version 1 --no-deps --locked | jq -r '.build_directory // .target_directory') 8>&-; }
     root="$PWD"
     main_build="$(build_dir .)"
     zed_build="$(build_dir plugins/zed/adapter)"
@@ -1333,21 +1335,21 @@ compact RECIPE:
     # gate in the same checkout neither stops nor reuses this one.
     unset RUSTC_WRAPPER
     stop() {
-      sccache --show-stats --stats-format json 2>/dev/null | jq -c '{requests: .stats.compile_requests, hits: ([.stats.cache_hits.counts[]?] | add // 0), misses: ([.stats.cache_misses.counts[]?] | add // 0)}' || true
-      sccache --stop-server >/dev/null 2>&1 || true
+      (sccache --show-stats --stats-format json 2>/dev/null | jq -c '{requests: .stats.compile_requests, hits: ([.stats.cache_hits.counts[]?] | add // 0), misses: ([.stats.cache_misses.counts[]?] | add // 0)}' || true) 8>&-
+      sccache --stop-server >/dev/null 2>&1 8>&- || true
       rm -rf "$socket_dir"
     }
     # The cache only speeds the gate up: if its server cannot start, run the
     # same gate uncached instead of failing it.
     if socket_dir="$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/cowboy-sccache.XXXXXX" 2>/dev/null)" &&
-      SCCACHE_SERVER_UDS="$socket_dir/server.sock" sccache --start-server >/dev/null 2>&1; then
+      SCCACHE_SERVER_UDS="$socket_dir/server.sock" sccache --start-server >/dev/null 2>&1 8>&-; then
       export SCCACHE_SERVER_UDS="$socket_dir/server.sock" RUSTC_WRAPPER=sccache
       trap stop EXIT
     else
       echo "{{RECIPE}}: sccache unavailable; running uncached" >&2
       if [[ -n "${socket_dir:-}" ]]; then rm -rf "$socket_dir"; fi
     fi
-    just {{RECIPE}}
+    just {{RECIPE}} 8>&-
 
 # Exercise the actual private Operator CLI/Controller and enrolled Machine.
 # Only active entries write; other matrix entries are resolved, not reader-tested.
