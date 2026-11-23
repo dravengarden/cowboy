@@ -5,12 +5,12 @@
 //! echo proves delivery, and re-queued after a Controller restart. One
 //! confirmation (`occurrence`) is one message: two confirmed sends of the same
 //! text are two prompts, a retried one is one.
-use super::widget_interactions::{admissible, digest, refusal, unavailable};
+use super::widget_interactions::{admissible, digest, refusal, require_person_caller, unavailable};
 use super::*;
 use crate::store::session_widgets::interactions::StoredInteraction;
 use crate::widgets::interactions;
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse as _, Response};
 
@@ -39,9 +39,13 @@ fn valid_occurrence(occurrence: &str) -> bool {
 /// `POST /api/sessions/{id}/widgets/{widget_id}/apps/{node_id}/messages`.
 pub(in crate::server) async fn api_widget_app_message(
     State(state): State<Arc<AppState>>,
+    Extension(authenticated): Extension<super::super::AuthenticatedProductRequest>,
     Path((session_id, widget_id, node_id)): Path<(String, String, String)>,
     Json(request): Json<AppMessageRequest>,
 ) -> Response {
+    if let Err(response) = require_person_caller(&authenticated.caller) {
+        return response;
+    }
     if !valid_occurrence(&request.occurrence) {
         return refusal(StatusCode::BAD_REQUEST, "invalid_occurrence", json!({}));
     }
@@ -71,6 +75,7 @@ pub(in crate::server) async fn api_widget_app_message(
             request.text.clone(),
             Vec::new(),
             Some(cmid.clone()),
+            &authenticated.caller,
         );
     };
     let sent = || {

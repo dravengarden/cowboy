@@ -33,6 +33,7 @@ async fn agent_approval_retains_parent_identity_and_cannot_survive_permission_re
         let parent = h.hub.session_info("parent").unwrap().meta;
         let authenticated = AuthenticatedProductRequest {
             principal: product_principal(&h.hub, &h.user),
+            caller: crate::prompt_origin::RequestCaller::agent(&parent.id),
             cookie_session: None,
             device_identity: None,
             permissions: None,
@@ -503,6 +504,7 @@ impl Harness {
             headers,
             AuthenticatedProductRequest {
                 principal: product_principal(&self.hub, &self.user),
+                caller: crate::prompt_origin::RequestCaller::Person,
                 cookie_session: Some(session),
                 device_identity: None,
                 permissions: None,
@@ -855,6 +857,7 @@ async fn explicit_local_mode_is_not_a_reusable_authentication_bypass() {
     let h = Harness::new().await;
     let verified = AuthenticatedProductRequest {
         principal: crate::product_auth::local_product_principal(),
+        caller: crate::prompt_origin::RequestCaller::Person,
         cookie_session: None,
         device_identity: None,
         permissions: None,

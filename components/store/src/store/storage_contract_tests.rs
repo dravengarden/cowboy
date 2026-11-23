@@ -2,6 +2,7 @@ use super::*;
 
 mod account_controls;
 mod clear_agent_session;
+mod prompt_dispatches;
 mod rollover_observation;
 mod test_support;
 
@@ -1464,6 +1465,8 @@ async fn run_storage_contract(store: &Store, session_id: &str) -> Result<()> {
                 content: Vec::new(),
                 cmid: Some("contract-cmid".to_owned()),
                 schedule: None,
+                origin: None,
+                initiator: None,
             }],
             &[QueuedMessage {
                 id: "draft-1".to_owned(),
@@ -1471,6 +1474,8 @@ async fn run_storage_contract(store: &Store, session_id: &str) -> Result<()> {
                 content: Vec::new(),
                 cmid: None,
                 schedule: None,
+                origin: None,
+                initiator: None,
             }],
         )
         .await?;

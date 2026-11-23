@@ -1008,6 +1008,8 @@ async fn conformance(url: &str) {
         content: Vec::new(),
         cmid: Some("call-notice:call-reopen".into()),
         schedule: None,
+        origin: None,
+        initiator: None,
     };
     assert!(
         store
@@ -1052,6 +1054,8 @@ async fn conformance(url: &str) {
         content: Vec::new(),
         cmid: None,
         schedule: None,
+        origin: None,
+        initiator: None,
     };
     store
         .update_pending("parent-a", std::slice::from_ref(&sentinel), &[])

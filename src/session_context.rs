@@ -597,7 +597,13 @@ mod tests {
             .unwrap(),
         )]);
         assert!(promotion(&hub, "destination", Some("c-old")).is_none());
-        hub.submit("destination", "retry".into(), vec![], Some("c-old".into()));
+        hub.submit(
+            "destination",
+            "retry".into(),
+            vec![],
+            Some("c-old".into()),
+            &crate::prompt_origin::RequestCaller::Person,
+        );
         assert!(promotion(&hub, "destination", Some("c-next")).is_none());
         drop(rx.try_recv());
         let row = hub.queue_and_drafts("destination", |_| true).unwrap().0[0]
@@ -949,12 +955,19 @@ mod tests {
             "original".into(),
             vec![],
             "context-op".into(),
+            &crate::prompt_origin::RequestCaller::Person,
         );
         let row = hub.queue_and_drafts("destination", |_| true).unwrap().0[0]
             .id
             .clone();
         assert!(hub.remove_queued("destination", &row));
-        hub.submit("destination", "继续".into(), vec![], Some("c-next".into()));
+        hub.submit(
+            "destination",
+            "继续".into(),
+            vec![],
+            Some("c-next".into()),
+            &crate::prompt_origin::RequestCaller::Person,
+        );
         hub.set_status(
             "destination",
             crate::core::Status::Crashed,
@@ -990,6 +1003,7 @@ mod tests {
             "later".into(),
             vec![],
             Some("c-later".into()),
+            &crate::prompt_origin::RequestCaller::Person,
         );
         assert!(!carries_links(&hub, &dispatched(&hub, &mut rx)));
     }
@@ -1003,13 +1017,15 @@ mod tests {
             "original".into(),
             vec![],
             "context-op".into(),
+            &crate::prompt_origin::RequestCaller::Person,
         );
         assert!(!hub.force_submit(
             "destination",
             "first".into(),
             vec![],
             Some("c-front".into()),
-            false
+            false,
+            &crate::prompt_origin::RequestCaller::Person
         ));
         hub.set_status("destination", crate::core::Status::Exited, None);
         hub.retry_resource_wait("destination");
@@ -1031,12 +1047,14 @@ mod tests {
             "original".into(),
             vec![],
             "context-op".into(),
+            &crate::prompt_origin::RequestCaller::Person,
         );
         hub.submit(
             "destination",
             "queued".into(),
             vec![],
             Some("c-queued".into()),
+            &crate::prompt_origin::RequestCaller::Person,
         );
         hub.set_status(
             "destination",
@@ -1068,6 +1086,8 @@ mod tests {
             "joined".into(),
             std::mem::take(&mut content),
             Some("context-op".into()),
+            None,
+            None,
         );
         let queue = hub.queue_and_drafts("destination", |_| true).unwrap().0;
         assert_eq!(queue[0].cmid.as_deref(), Some("context-op"));
@@ -1081,7 +1101,13 @@ mod tests {
         let (hub, mut rx) = starting_destination();
         accepted(&hub, "context-op", false);
         hub.set_status("destination", crate::core::Status::Running, None);
-        hub.submit("destination", "next".into(), vec![], Some("c-next".into()));
+        hub.submit(
+            "destination",
+            "next".into(),
+            vec![],
+            Some("c-next".into()),
+            &crate::prompt_origin::RequestCaller::Person,
+        );
         assert!(!carries_links(&hub, &dispatched(&hub, &mut rx)));
         // A delivered bootstrap whose echo is retained never moves either.
         let (hub, mut rx) = starting_destination();
@@ -1092,10 +1118,17 @@ mod tests {
             "original".into(),
             vec![],
             "context-op".into(),
+            &crate::prompt_origin::RequestCaller::Person,
         );
         assert!(carries_links(&hub, &dispatched(&hub, &mut rx)));
         finish_turn(&hub);
-        hub.submit("destination", "next".into(), vec![], Some("c-next".into()));
+        hub.submit(
+            "destination",
+            "next".into(),
+            vec![],
+            Some("c-next".into()),
+            &crate::prompt_origin::RequestCaller::Person,
+        );
         assert!(!carries_links(&hub, &dispatched(&hub, &mut rx)));
     }
 
@@ -1113,6 +1146,7 @@ mod tests {
             "human".into(),
             vec![],
             Some("c-human".into()),
+            &crate::prompt_origin::RequestCaller::Person,
         );
         assert!(carries_links(&hub, &dispatched(&hub, &mut rx)));
     }
@@ -1130,6 +1164,8 @@ mod tests {
                 serde_json::json!({"type":"text","text":"original"}),
             ],
             Some("context-op".into()),
+            None,
+            None,
         );
         let queue = hub.queue_and_drafts("destination", |_| true).unwrap().0;
         assert_eq!(queue[0].content.len(), 2);

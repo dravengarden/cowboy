@@ -93,6 +93,23 @@ impl Hub {
     /// used to tag a dispatched prompt's user-message echo so the originating
     /// client reconciles its optimistic bubble (see Envelope::cmid).
     pub fn push_tagged(&self, session_id: &str, event: Event, cmid: Option<String>) {
+        self.push_tagged_inner(session_id, event, cmid, false);
+    }
+
+    /// Like [`Self::push_tagged`] for live worker-emitted events: any
+    /// `user_message_chunk` not backed by a Controller dispatch fails closed as
+    /// non-owner.
+    pub fn push_tagged_from_worker(&self, session_id: &str, event: Event, cmid: Option<String>) {
+        self.push_tagged_inner(session_id, event, cmid, true);
+    }
+
+    fn push_tagged_inner(
+        &self,
+        session_id: &str,
+        event: Event,
+        cmid: Option<String>,
+        from_worker: bool,
+    ) {
         let mut event = self.prepare_attention_event(session_id, event);
         // A subagent snapshot is fenced by its producer identity (I4) before
         // it receives a seq: an exact duplicate or an older revision of the
@@ -112,7 +129,7 @@ impl Hub {
                     None => return,
                 }
             }
-            Self::annotate_dispatched_prompt(s, &mut event, cmid.as_deref());
+            Self::annotate_dispatched_prompt(s, &mut event, cmid.as_deref(), from_worker);
             // A permission answered on two devices at once resolves once. The
             // second answer is the same fact: the first row stays and no
             // duplicate is appended (docs/offline-first-sync.md, conflict 7).
@@ -152,11 +169,11 @@ impl Hub {
                 cmid,
             };
             // A send begins one turn at its first chunk, however many blocks follow.
-            if crate::prompt_origin::is_owner_chunk(&envelope)
+            if Self::is_owner_envelope_for_session(s, &envelope)
                 && !s
                     .log
                     .last()
-                    .is_some_and(crate::prompt_origin::is_owner_chunk)
+                    .is_some_and(|prev| Self::is_owner_envelope_for_session(s, prev))
             {
                 s.owner_turn_seq = Some(seq);
             }

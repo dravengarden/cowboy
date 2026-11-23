@@ -968,7 +968,15 @@ async fn abort_failed_execution_recovery(
                 }
             }
         } else {
-            shared.hub.requeue_prompt(session_id, text, content, cmid);
+            let (origin, initiator) = cmid
+                .as_deref()
+                .and_then(|c| shared.hub.prompt_dispatch_record(session_id, c))
+                .map_or((None, None), |record| {
+                    (Some(record.origin), Some(record.trigger))
+                });
+            shared
+                .hub
+                .requeue_prompt(session_id, text, content, cmid, origin, initiator);
         }
     }
     shared

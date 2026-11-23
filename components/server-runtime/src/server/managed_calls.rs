@@ -15,9 +15,9 @@ pub use coordinator::{
 };
 pub use history::pin_bounds;
 pub use notice_delivery::{
-    DispatchGate, after_notice_dispatch_error, before_notice_dispatch, prepare_windowed_result,
-    prune_settled_restored_notices, read_windowed_result, spawn_commit_windowed_result,
-    wake_notices_for_machine,
+    DispatchGate, NoticeDispatchToken, after_notice_dispatch_error, before_notice_dispatch,
+    prepare_windowed_result, prune_settled_restored_notices, read_windowed_result,
+    spawn_commit_windowed_result, wake_notices_for_machine,
 };
 
 use super::{AppState, AuthenticatedProductRequest, session_is_visible};
@@ -264,3 +264,6 @@ pub async fn decide_approval(
         .broadcast_call_approval(&parent, approvals.view(&parent, &info.meta.provider));
     StatusCode::NO_CONTENT.into_response()
 }
+
+#[cfg(test)]
+pub(in crate::server) use coordinator::turn_budget_current_turn;

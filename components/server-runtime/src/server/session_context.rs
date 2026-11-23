@@ -785,9 +785,13 @@ async fn deliver(
     }
     // No retry ever reaches this dispatch twice: the durable intent above is
     // observation-only, even if the process dies before recording acceptance.
-    state
-        .hub
-        .submit_context(&target_id, request.text, request.content, cmid);
+    state.hub.submit_context(
+        &target_id,
+        request.text,
+        request.content,
+        cmid,
+        &auth.caller,
+    );
     delivery.state = "accepted".into();
     target_context.remember_links(links);
     if target_id != id {

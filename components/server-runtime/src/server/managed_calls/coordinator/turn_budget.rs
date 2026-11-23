@@ -78,7 +78,7 @@ async fn owner_turn(
     newer: i64,
 ) -> Result<i64, &'static str> {
     let scan = hub
-        .newest_in_retained_log(session, crate::prompt_origin::newest_owner_turn)
+        .newest_owner_turn_in_retained_log(session)
         .ok_or("session_unavailable")?;
     if let Some(turn) = scan.newest_match {
         return Ok(stamp(turn));
@@ -93,7 +93,7 @@ async fn owner_turn(
     // A Clear while the history was read removed what was read: its result,
     // a fragment of a cleared send or an absence, means nothing now.
     let after = hub
-        .newest_in_retained_log(session, crate::prompt_origin::newest_owner_turn)
+        .newest_owner_turn_in_retained_log(session)
         .ok_or("session_unavailable")?;
     if after.whole {
         return Ok(after.newest_match.map_or(OWNER_TURN_NONE, stamp));
@@ -134,8 +134,15 @@ async fn durable_turn(
                 .map_err(|_| "owner_turn_scan_timeout")?
                 .map_err(|_| "owner_turn_history_unavailable")?;
         page.append(&mut run);
-        let found = crate::prompt_origin::newest_owner_turn(&page)
-            .filter(|seq| floor.is_none_or(|floor| *seq > floor));
+        let cmids: Vec<String> = page.iter().filter_map(|e| e.cmid.clone()).collect();
+        let dispatches =
+            tokio::time::timeout_at(deadline, store.prompt_dispatches_by_cmids(parent, &cmids))
+                .await
+                .map_err(|_| "owner_turn_scan_timeout")?
+                .map_err(|_| "owner_turn_history_unavailable")?;
+        let found =
+            crate::prompt_origin::newest_owner_turn_with_dispatches(&page, |c| dispatches.get(c))
+                .filter(|seq| floor.is_none_or(|floor| *seq > floor));
         // A run that begins the page may have begun on the page before it.
         let open = found.is_some_and(|seq| page.first().is_some_and(|first| first.seq == seq));
         match found {

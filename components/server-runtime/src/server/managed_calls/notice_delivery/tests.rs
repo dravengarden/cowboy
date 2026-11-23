@@ -186,6 +186,7 @@ async fn live_event_writer_advances_and_async_requeue_releases_exact_claim() {
         "spoof".into(),
         Vec::new(),
         Some("call-notice:call-live-1".into()),
+        &crate::prompt_origin::RequestCaller::Person,
     );
     assert!(ctrl.dispatch_rx.try_recv().is_err());
 
@@ -222,7 +223,7 @@ async fn live_event_writer_advances_and_async_requeue_releases_exact_claim() {
 
     // Simulate asynchronous runtime non-delivery (UndeliveredPrompt -> hub.requeue_prompt) (Finding 2).
     ctrl.hub
-        .requeue_prompt(PARENT, req.text, req.content, req.cmid.clone());
+        .requeue_prompt(PARENT, req.text, req.content, req.cmid.clone(), None, None);
     let DispatchGate::Proceed(Some(token3)) =
         before_notice_dispatch_in(&ctrl.hub, Some(&store), PARENT, req.cmid.as_deref()).await
     else {
@@ -294,6 +295,8 @@ async fn restart_recovery_replays_pre_send_fences_post_send_and_respects_owner_w
             "notice pre-q".into(),
             Vec::new(),
             Some("call-notice:call-pre-q".into()),
+            None,
+            None,
         );
         ctrl.hub
             .set_status("parent-pre-queued", Status::Exited, None);
@@ -317,7 +320,11 @@ async fn restart_recovery_replays_pre_send_fences_post_send_and_respects_owner_w
             .0[0]
             .id
             .clone();
-        ctrl.hub.queued_to_draft("parent-withdrawn", &qid);
+        ctrl.hub.queued_to_draft(
+            "parent-withdrawn",
+            &qid,
+            &crate::prompt_origin::RequestCaller::Person,
+        );
         assert!(
             ctrl.hub
                 .queue_and_drafts("parent-withdrawn", |_| true)
@@ -458,7 +465,7 @@ async fn native_session_rollover_and_late_machine_reconnect_deliver_notice_once(
                 .is_some()
         );
         ctrl.hub
-            .requeue_prompt(PARENT, first.text, first.content, first.cmid);
+            .requeue_prompt(PARENT, first.text, first.content, first.cmid, None, None);
         ctrl.hub.set_status(PARENT, Status::Exited, None);
         ctrl.stop().await;
     }
@@ -680,8 +687,13 @@ async fn round2_owner_withdrawal_edit_fence_and_recovery_park() {
         DispatchGate::Requeue(_)
     ));
     // Overlapping ordinary draft mutation while commit is in flight!
-    ctrl.hub
-        .add_draft(PARENT, "concurrent draft".into(), Vec::new(), None);
+    ctrl.hub.add_draft(
+        PARENT,
+        "concurrent draft".into(),
+        Vec::new(),
+        None,
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     ack_rx.await.unwrap().unwrap();
     assert!(ctrl.hub.commit_owner_notice_withdrawal(&mut preview, &op));
     let (queue, drafts) = ctrl.hub.queue_and_drafts(PARENT, |_| true).unwrap();
@@ -754,6 +766,7 @@ async fn round2_reserved_cmid_nul_and_interrupt_rejected() {
         "forged nul".into(),
         Vec::new(),
         Some("ca\0ll-notice:call-1".into()),
+        &crate::prompt_origin::RequestCaller::Person,
     );
     assert!(
         ctrl.hub
@@ -770,6 +783,7 @@ async fn round2_reserved_cmid_nul_and_interrupt_rejected() {
         "call-notice:forged",
         "forged interrupt".into(),
         Vec::new(),
+        &crate::prompt_origin::RequestCaller::Person,
     ));
     ctrl.stop().await;
 
@@ -813,7 +827,7 @@ async fn round2_live_claim_survives_recovery_and_reconnect_wakes_pending_release
     // Authoritative non-delivery requeue records pending_releases + atomic UpdatePending (R2 #7).
     drop(req.ownership);
     ctrl.hub
-        .requeue_prompt(&req.session_id, req.text, req.content, req.cmid);
+        .requeue_prompt(&req.session_id, req.text, req.content, req.cmid, None, None);
     assert!(
         ctrl.hub
             .has_pending_notice_release(PARENT, "call-notice:call-r2-live")
@@ -1080,6 +1094,8 @@ async fn round3_fifo_withdrawal_clear_queue_claim_guard_and_legacy_draft_activat
         content: Vec::new(),
         cmid: Some("call-notice:old-call".into()),
         schedule: None,
+        origin: None,
+        initiator: None,
     };
     store
         .update_pending(PARENT, &[], &[legacy_draft])
@@ -1091,7 +1107,9 @@ async fn round3_fifo_withdrawal_clear_queue_claim_guard_and_legacy_draft_activat
     let (_, drafts) = ctrl2.hub.queue_and_drafts(PARENT, |_| true).unwrap();
     assert_eq!(drafts.len(), 1);
     assert_eq!(drafts[0].cmid, None);
-    ctrl2.hub.activate_all_drafts(PARENT);
+    ctrl2
+        .hub
+        .activate_all_drafts(PARENT, &crate::prompt_origin::RequestCaller::Person);
     let (queue, drafts) = ctrl2.hub.queue_and_drafts(PARENT, |_| true).unwrap();
     assert!(drafts.is_empty());
     assert!(queue.iter().any(|m| m.text == "legacy parked notice"));
@@ -1269,8 +1287,13 @@ async fn round5_redesign_invariants_atomic_clear_staged_consume_legacy_adopt_and
 
     // 1. Atomic apply_or_preview_owner_notice_withdrawal applies plain ClearQueue
     //    synchronously under ONE sessions lock with no second-pass race window.
-    ctrl.hub
-        .submit(PARENT, "plain user msg".into(), Vec::new(), None);
+    ctrl.hub.submit(
+        PARENT,
+        "plain user msg".into(),
+        Vec::new(),
+        None,
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     assert!(matches!(
         ctrl.hub.apply_or_preview_owner_notice_withdrawal(
             PARENT,
@@ -1543,6 +1566,7 @@ async fn v2_review_findings_invariants() {
         "newer user prompt".into(),
         Vec::new(),
         Some("user-newer-1".into()),
+        &crate::prompt_origin::RequestCaller::Person,
     );
     assert!(ctrl.hub.session_has_in_flight_prompt(PARENT));
     ctrl.hub
@@ -1682,8 +1706,13 @@ async fn v2_round2_findings_invariants() {
 
     // High #1: Mixed-queue ClearQueue fences plain prompts ahead of the notice
     // so `drain_now` cannot pop/execute the removed plain prompt before commit.
-    ctrl.hub
-        .submit(PARENT, "plain before notice".into(), Vec::new(), None);
+    ctrl.hub.submit(
+        PARENT,
+        "plain before notice".into(),
+        Vec::new(),
+        None,
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     notify_parent_in(&ctrl.hub, Some(&store), &rec_mix).await;
     let crate::core::OwnerQueueMutation::CommitPending(mut withdrawal, clear_rx) =
         ctrl.hub.apply_or_preview_owner_notice_withdrawal(
@@ -1708,7 +1737,8 @@ async fn v2_round2_findings_invariants() {
     );
     // Even if session becomes Running while commit is in flight, drain must NOT pop it.
     ctrl.hub.set_status(PARENT, Status::Running, None);
-    ctrl.hub.drain_now(PARENT);
+    ctrl.hub
+        .drain_now(PARENT, &crate::prompt_origin::RequestCaller::Person);
     assert!(
         !ctrl.hub.session_has_in_flight_prompt(PARENT),
         "drain_now must not dispatch a plain prompt fenced by in-flight ClearQueue"

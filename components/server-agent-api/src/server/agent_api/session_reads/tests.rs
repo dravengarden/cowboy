@@ -22,7 +22,13 @@ fn session(hub: &Hub, id: &str, owner: Option<&str>, system: bool) {
         owner_user_id: owner.map(str::to_owned),
         owner_username: None,
     });
-    hub.add_draft(id, "other session draft".into(), vec![], None);
+    hub.add_draft(
+        id,
+        "other session draft".into(),
+        vec![],
+        None,
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     hub.push(id, Event::Update { update: json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"other session reply"}}) });
 }
 

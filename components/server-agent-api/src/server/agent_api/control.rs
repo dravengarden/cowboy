@@ -47,6 +47,7 @@ async fn identity(
     }
     let auth = web::AuthenticatedProductRequest {
         principal: web::product_principal(&state.hub, &user),
+        caller: crate::prompt_origin::RequestCaller::agent(&parent.id),
         cookie_session: None,
         device_identity: None,
         permissions: None,
@@ -739,6 +740,7 @@ async fn run_command(
     let accepted = web::handle_command(
         state,
         &principal,
+        &auth.caller,
         &value.to_string(),
         &mut HashMap::new(),
         None,
@@ -1119,22 +1121,34 @@ async fn dispatch(
             }
             request.operation = Some(operation.ok_or("invalid_operation")?.to_owned());
             return response_value(
-                web::send_delivery::submit(Arc::clone(state), session.to_owned(), request).await,
+                web::send_delivery::submit(
+                    Arc::clone(state),
+                    session.to_owned(),
+                    auth.caller.clone(),
+                    request,
+                )
+                .await,
                 true,
             )
             .await;
         }
-        let effect = web::send_delivery::begin(
+        let effect = web::send_delivery::begin_recorded(
             state,
             session,
+            &auth.caller,
             &request.text,
             &request.content,
             operation.ok_or("invalid_operation")?.to_owned(),
             request.target.as_ref(),
             request.delivery == Some(crate::send_delivery::SendDelivery::NextCheckpoint),
-        )?;
+        )
+        .await?;
         let mut receipt = web::send_delivery::result(&effect.outcome().await);
         receipt["delivery"] = json!(request.delivery);
+        receipt["caller"] = json!(&auth.caller);
+        receipt["origin"] = json!(crate::prompt_origin::DeliveryOrigin::from_caller(
+            &auth.caller
+        ));
         return Ok(receipt);
     }
     if name == "usage.refresh" {

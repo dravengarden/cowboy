@@ -103,7 +103,7 @@ impl Hub {
     /// The id makes a repeat a no-op.
     pub fn submit_peer_notice(&self, session_id: &str, key: &str, text: String) {
         let cmid = format!("{}{key}", crate::agent_model::PEER_NOTICE_PREFIX);
-        self.submit_automatic(session_id, text, cmid);
+        self.submit_automatic(session_id, text, cmid, "session_notice");
     }
 }
 
@@ -153,8 +153,20 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel(8);
         hub.set_dispatch_tx(tx);
         hub.set_status("peer", Status::Busy, None);
-        hub.submit("peer", "a".into(), vec![], Some("op-a".into()));
-        hub.submit("peer", "b".into(), vec![], Some("op-b".into()));
+        hub.submit(
+            "peer",
+            "a".into(),
+            vec![],
+            Some("op-a".into()),
+            &crate::prompt_origin::RequestCaller::Person,
+        );
+        hub.submit(
+            "peer",
+            "b".into(),
+            vec![],
+            Some("op-b".into()),
+            &crate::prompt_origin::RequestCaller::Person,
+        );
         assert_eq!(hub.prompt_progress("peer", "op-a"), PromptProgress::Queued);
         assert_eq!(
             hub.prompt_progress("peer", "other"),
@@ -194,7 +206,13 @@ mod tests {
     fn a_withdrawn_prompt_is_unknown() {
         let hub = hub_with("peer", "codex");
         hub.set_status("peer", Status::Busy, None);
-        hub.submit("peer", "land it".into(), vec![], Some("op-1".into()));
+        hub.submit(
+            "peer",
+            "land it".into(),
+            vec![],
+            Some("op-1".into()),
+            &crate::prompt_origin::RequestCaller::Person,
+        );
         assert!(hub.remove_queued_by_cmid("peer", "op-1"));
         assert_eq!(hub.prompt_progress("peer", "op-1"), PromptProgress::Unknown);
     }

@@ -62,9 +62,23 @@ pub fn policy(hub: &Hub, config: &crate::config::Handle, machine: &str) -> Polic
 }
 
 /// A new session's first prompt waits durably for its workspace.
-pub fn queue_initial_prompt(hub: &Hub, session: &str, prompt: Option<String>, cmid: String) {
+pub fn queue_initial_prompt(
+    hub: &Hub,
+    session: &str,
+    prompt: Option<String>,
+    cmid: String,
+    caller: &crate::prompt_origin::RequestCaller,
+) {
     if let Some(prompt) = prompt.filter(|text| !text.trim().is_empty()) {
-        hub.requeue_prompt(session, prompt, vec![], Some(cmid));
+        let origin = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
+        hub.requeue_prompt(
+            session,
+            prompt,
+            vec![],
+            Some(cmid),
+            Some(origin.clone()),
+            Some(origin),
+        );
         wait(hub, session, "preparing the workspace");
     }
 }
@@ -346,7 +360,7 @@ pub fn start(state: &Arc<AppState>) {
                         }
                     }
                     if explicit {
-                        state.hub.drain_now(&meta.id);
+                        state.hub.retry_explicit_wait(&meta.id);
                     } else {
                         state.hub.retry_resource_wait(&meta.id);
                     }

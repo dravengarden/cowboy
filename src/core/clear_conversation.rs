@@ -236,7 +236,13 @@ mod tests {
         let mut dispatched = submit_during_clear(&hub);
         let (_ack, commit) = hub.begin_clear_conversation("s").unwrap().unwrap();
         assert!(hub.clear_pending("s"));
-        hub.submit("s", "next".into(), vec![], Some("cmid-next".into()));
+        hub.submit(
+            "s",
+            "next".into(),
+            vec![],
+            Some("cmid-next".into()),
+            &crate::prompt_origin::RequestCaller::Person,
+        );
         assert!(
             dispatched.try_recv().is_err(),
             "dispatched into the old context"
@@ -257,7 +263,13 @@ mod tests {
         let (hub, _writes) = hub_with_writes();
         let mut dispatched = submit_during_clear(&hub);
         let (ack, _commit) = hub.begin_clear_conversation("s").unwrap().unwrap();
-        hub.submit("s", "next".into(), vec![], Some("cmid-next".into()));
+        hub.submit(
+            "s",
+            "next".into(),
+            vec![],
+            Some("cmid-next".into()),
+            &crate::prompt_origin::RequestCaller::Person,
+        );
         assert!(dispatched.try_recv().is_err());
         hub.store_ack_sink().fail_all("disk full");
         assert!(matches!(ack.await, Ok(Err(_))));

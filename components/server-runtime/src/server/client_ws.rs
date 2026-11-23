@@ -147,6 +147,7 @@ pub async fn ws_upgrade(
     let cookie_token = crate::product_auth::user_cookie_token(&headers);
     let bearer = crate::product_auth::bearer_token(&headers);
     let device_identity = authenticated.device_identity;
+    let caller = authenticated.caller;
     ws.on_upgrade(move |socket| {
         handle_ws(
             socket,
@@ -154,6 +155,7 @@ pub async fn ws_upgrade(
             lazy_bootstrap,
             WebSocketAuthentication {
                 principal,
+                caller,
                 via_cookie,
                 cookie_token,
                 bearer,
@@ -393,6 +395,7 @@ pub async fn handle_ws(
     };
     let WebSocketAuthentication {
         principal,
+        caller,
         via_cookie,
         cookie_token,
         bearer,
@@ -503,7 +506,7 @@ pub async fn handle_ws(
                             }
                             continue;
                         }
-                        dispatch_ws_command(&state, &principal, &text, &mut held).await;
+                        dispatch_ws_command(&state, &principal, &caller, &text, &mut held).await;
                     }
                     // Other frame types (ping/pong/binary) are ignored.
                     Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Binary(_))) => {}
@@ -544,6 +547,7 @@ async fn admit_active_client(
 ) -> Option<Option<i64>> {
     let WebSocketAuthentication {
         principal,
+        caller: _,
         via_cookie,
         cookie_token,
         bearer,
@@ -678,11 +682,13 @@ async fn admit_active_client(
 async fn dispatch_ws_command(
     state: &Arc<AppState>,
     principal: &ProductPrincipal,
+    caller: &crate::prompt_origin::RequestCaller,
     text: &str,
     held: &mut HashMap<String, (String, u64)>,
 ) {
     let command_trace = Observability::begin_command_trace(text);
-    let accepted = handle_command(state, principal, text, held, command_trace.as_ref()).await;
+    let accepted =
+        handle_command(state, principal, caller, text, held, command_trace.as_ref()).await;
     if let Some(trace) = command_trace {
         state
             .observability
@@ -693,6 +699,7 @@ async fn dispatch_ws_command(
 pub async fn handle_command(
     state: &Arc<AppState>,
     principal: &ProductPrincipal,
+    caller: &crate::prompt_origin::RequestCaller,
     text: &str,
     held: &mut HashMap<String, (String, u64)>,
     command_trace: Option<&crate::runtime_trace::SpanTimer>,
@@ -714,6 +721,7 @@ pub async fn handle_command(
     if let Some(done) = prehandle_command(state, principal, &cmd, &session_id_for_err).await {
         return done;
     }
+    let retry_original = resolve_retry_original(state, &cmd).await;
     // Serialize runtime admission against Provider lifecycle changes. Holding
     // this read guard through the command match closes the check-then-dispatch
     // race with uninstall's active-turn snapshot.
@@ -746,7 +754,7 @@ pub async fn handle_command(
             session_id,
             text,
             content,
-        } => match prompt_command(state, session_id, text, content) {
+        } => match prompt_command(state, caller, session_id, text, content) {
             ControlFlow::Break(done) => return done,
             ControlFlow::Continue(result) => result,
         },
@@ -829,9 +837,7 @@ pub async fn handle_command(
             Ok(())
         }
         Inbound::RetryTurn { session_id } => {
-            state.supervisor.prepare_session(&session_id).map(|_| {
-                state.hub.retry_turn(&session_id);
-            })
+            retry_turn_command(state, caller, &session_id, retry_original)
         }
         Inbound::SetConfigOption {
             session_id,
@@ -868,7 +874,7 @@ pub async fn handle_command(
         | Inbound::UnscheduleDraft { .. }
         | Inbound::ReorderQueue { .. }
         | Inbound::ReorderDrafts { .. }) => {
-            match queue_command(state, principal, command_trace, held, cmd) {
+            match queue_command(state, principal, caller, command_trace, held, cmd) {
                 ControlFlow::Break(done) => return done,
                 ControlFlow::Continue(result) => result,
             }
@@ -891,6 +897,7 @@ pub async fn handle_command(
 pub fn queue_command(
     state: &Arc<AppState>,
     principal: &ProductPrincipal,
+    caller: &crate::prompt_origin::RequestCaller,
     command_trace: Option<&crate::runtime_trace::SpanTimer>,
     held: &mut HashMap<String, (String, u64)>,
     cmd: Inbound,
@@ -910,6 +917,7 @@ pub fn queue_command(
             return submit_command(
                 state,
                 principal,
+                caller,
                 command_trace,
                 session_id,
                 text,
@@ -936,7 +944,10 @@ pub fn queue_command(
             content,
             cmid,
         } => {
-            if !state.hub.client_edit(&session_id, &id, text, content) {
+            if !state
+                .hub
+                .client_edit(&session_id, &id, text, content, caller)
+            {
                 report_stale_row(state, &session_id, cmid.as_deref());
             }
             Ok(())
@@ -946,27 +957,43 @@ pub fn queue_command(
             Ok(())
         }
         Inbound::RequestSendQueued { session_id, id, .. } => {
-            state.hub.request_send_queued(&session_id, &id);
+            state.hub.request_send_queued(&session_id, &id, caller);
             Ok(())
         }
         Inbound::ForcePushQueued { session_id, id, .. } => {
-            force_push_queued(state, &session_id, &id)
+            force_push_queued(state, caller, &session_id, &id)
         }
         Inbound::QueuedToDraft { session_id, id } => {
-            state.hub.queued_to_draft(&session_id, &id);
+            state.hub.queued_to_draft(&session_id, &id, caller);
             Ok(())
         }
         Inbound::SetQueueEditing { session_id, id } => {
             set_queue_editing_command(state, held, session_id, id)
         }
+        Inbound::ReorderQueue { session_id, order } => {
+            state.hub.reorder_queue(&session_id, &order);
+            Ok(())
+        }
+        draft_cmd => draft_command(state, caller, draft_cmd),
+    };
+    ControlFlow::Continue(result)
+}
+
+fn draft_command(
+    state: &Arc<AppState>,
+    caller: &crate::prompt_origin::RequestCaller,
+    cmd: Inbound,
+) -> Result<(), String> {
+    match cmd {
         Inbound::AddDraft {
             session_id,
             text,
             content,
             cmid,
         } => {
-            state.hub.add_draft(&session_id, text, content, cmid);
-            Ok(())
+            state
+                .hub
+                .add_draft(&session_id, text, content, cmid, caller);
         }
         Inbound::EditDraft {
             session_id,
@@ -975,10 +1002,12 @@ pub fn queue_command(
             content,
             cmid,
         } => {
-            if !state.hub.edit_draft(&session_id, &id, text, content) {
+            if !state
+                .hub
+                .edit_draft(&session_id, &id, text, content, caller)
+            {
                 report_stale_row(state, &session_id, cmid.as_deref());
             }
-            Ok(())
         }
         Inbound::RemoveDraft {
             session_id,
@@ -988,32 +1017,21 @@ pub fn queue_command(
             if !state.hub.remove_draft(&session_id, &id) {
                 report_stale_row(state, &session_id, cmid.as_deref());
             }
-            Ok(())
         }
-        Inbound::ClearDrafts { session_id } => {
-            state.hub.clear_drafts(&session_id);
-            Ok(())
-        }
+        Inbound::ClearDrafts { session_id } => state.hub.clear_drafts(&session_id),
         Inbound::ActivateDraft {
             session_id,
             id,
             cmid,
-        } => {
-            state.hub.activate_draft(&session_id, &id, cmid);
-            Ok(())
-        }
+        } => state.hub.activate_draft(&session_id, &id, cmid, caller),
         Inbound::ActivateAllDrafts { session_id } => {
-            state.hub.activate_all_drafts(&session_id);
-            Ok(())
+            state.hub.activate_all_drafts(&session_id, caller);
         }
         Inbound::MoveDraft {
             session_id,
             id,
             to_session,
-        } => {
-            state.hub.move_draft(&session_id, &id, &to_session);
-            Ok(())
-        }
+        } => state.hub.move_draft(&session_id, &id, &to_session, caller),
         Inbound::ScheduleDraft {
             session_id,
             id,
@@ -1022,27 +1040,25 @@ pub fn queue_command(
             content,
             fire_at_ms,
             delivery,
-        } => {
-            state
-                .hub
-                .schedule_draft(&session_id, id, cmid, text, content, fire_at_ms, delivery);
-            Ok(())
-        }
+        } => state.hub.schedule_draft(
+            &session_id,
+            id,
+            cmid,
+            text,
+            content,
+            fire_at_ms,
+            delivery,
+            caller,
+        ),
         Inbound::UnscheduleDraft { session_id, id } => {
             state.hub.unschedule_draft(&session_id, &id);
-            Ok(())
-        }
-        Inbound::ReorderQueue { session_id, order } => {
-            state.hub.reorder_queue(&session_id, &order);
-            Ok(())
         }
         Inbound::ReorderDrafts { session_id, order } => {
             state.hub.reorder_drafts(&session_id, &order);
-            Ok(())
         }
-        _ => unreachable!("handle_command routes only queue and draft commands here"),
-    };
-    ControlFlow::Continue(result)
+        _ => unreachable!("queue_command routes only draft commands here"),
+    }
+    Ok(())
 }
 
 pub fn apply_inbound_sync(

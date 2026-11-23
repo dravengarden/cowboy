@@ -80,9 +80,32 @@ pub fn editable(
     Ok(())
 }
 
-fn human_prompt(e: &crate::core::Envelope) -> bool {
-    matches!(&e.event, crate::core::Event::Update { update }
-        if crate::prompt_origin::is_owner_prompt_event(e.cmid.as_deref(), update))
+fn human_prompt_with_dispatches(
+    e: &crate::core::Envelope,
+    hub: &crate::core::Hub,
+    dispatches: &std::collections::HashMap<String, crate::prompt_origin::DeliveryOrigin>,
+) -> bool {
+    matches!(&e.event, crate::core::Event::Update { update } if {
+        if let Some(cmid) = e.cmid.as_deref()
+            && let Some(origin) = dispatches.get(cmid)
+        {
+            crate::prompt_origin::is_owner_prompt_event_with_dispatches(
+                Some(cmid),
+                update,
+                |_| Some(origin),
+            )
+        } else if let Some(cmid) = e.cmid.as_deref()
+            && let Some(origin) = hub.prompt_dispatch_origin(&e.session_id, cmid)
+        {
+            crate::prompt_origin::is_owner_prompt_event_with_dispatches(
+                Some(cmid),
+                update,
+                |_| Some(&origin),
+            )
+        } else {
+            crate::prompt_origin::is_owner_prompt_event(e.cmid.as_deref(), update)
+        }
+    })
 }
 
 pub async fn current_evidence(state: &AppState, id: &str) -> Result<Evidence, &'static str> {
@@ -96,7 +119,23 @@ pub async fn history_evidence(
 ) -> Result<Evidence, &'static str> {
     let info = hub.session_info(id).ok_or("not_found")?;
     let (mut log, _) = hub.snapshot(id).ok_or("not_found")?;
-    if !log.iter().any(human_prompt) {
+    let mut dispatches = std::collections::HashMap::new();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    if let Some(store) = store {
+        let hot_cmids: Vec<String> = log.iter().filter_map(|e| e.cmid.clone()).collect();
+        if !hot_cmids.is_empty() {
+            let loaded =
+                tokio::time::timeout_at(deadline, store.prompt_dispatches_by_cmids(id, &hot_cmids))
+                    .await
+                    .map_err(|_| "causal_history_scan_timeout")?
+                    .map_err(|_| "causal_history_unavailable")?;
+            dispatches.extend(loaded);
+        }
+    }
+    if !log
+        .iter()
+        .any(|e| human_prompt_with_dispatches(e, hub, &dispatches))
+    {
         let store = store.ok_or("unavailable")?;
         let mut before = log.first().map_or(info.event_count, |e| e.seq);
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -116,7 +155,22 @@ pub async fn history_evidence(
             {
                 log.insert(0, end.clone());
             }
-            if let Some(human) = page.iter().rev().find(|e| human_prompt(e)) {
+            let page_cmids: Vec<String> = page.iter().filter_map(|e| e.cmid.clone()).collect();
+            if !page_cmids.is_empty() {
+                let loaded = tokio::time::timeout_at(
+                    deadline,
+                    store.prompt_dispatches_by_cmids(id, &page_cmids),
+                )
+                .await
+                .map_err(|_| "causal_history_scan_timeout")?
+                .map_err(|_| "causal_history_unavailable")?;
+                dispatches.extend(loaded);
+            }
+            if let Some(human) = page
+                .iter()
+                .rev()
+                .find(|e| human_prompt_with_dispatches(e, hub, &dispatches))
+            {
                 log.insert(0, human.clone());
                 break;
             }
@@ -135,17 +189,20 @@ pub async fn history_evidence(
     {
         return Err("evidence_changed");
     }
-    evidence_from_log(&info, id, &log)
+    evidence_from_log(hub, &dispatches, &info, id, &log)
 }
 
 #[cfg(test)]
 pub fn evidence(hub: &crate::core::Hub, id: &str) -> Result<Evidence, &'static str> {
     let info = hub.session_info(id).ok_or("not_found")?;
     let (log, _) = hub.snapshot(id).ok_or("not_found")?;
-    evidence_from_log(&info, id, &log)
+    let dispatches = std::collections::HashMap::new();
+    evidence_from_log(hub, &dispatches, &info, id, &log)
 }
 
 fn evidence_from_log(
+    hub: &crate::core::Hub,
+    dispatches: &std::collections::HashMap<String, crate::prompt_origin::DeliveryOrigin>,
     info: &crate::core::SessionInfo,
     id: &str,
     log: &[crate::core::Envelope],
@@ -158,7 +215,7 @@ fn evidence_from_log(
     let human = log
         .iter()
         .rev()
-        .find(|e| human_prompt(e))
+        .find(|e| human_prompt_with_dispatches(e, hub, dispatches))
         .ok_or("causal_history_unavailable")?;
     let end = log
         .iter()

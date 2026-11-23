@@ -3784,3 +3784,215 @@ fn passkey_management_requires_a_recent_session_local_step_up() {
     session.passkey_verified_at_ms = Some(now + 60_001);
     assert!(!product_session_has_recent_step_up(&session, now));
 }
+
+#[allow(clippy::too_many_lines)]
+async fn resolve_product_api_request_caller_classifies_every_credential_body() {
+    let (store, root) = test_store().await;
+    let user = me_test_user(&store, false).await;
+    let hub = Hub::new();
+    let mut state = auth_state(hub, Some(store.clone()));
+    let mut authentication = crate::auth_plugins::ProductAuthentication::test_default(None);
+    authentication.automation.enabled = true;
+    state.product_authentication = Arc::new(authentication);
+    let uri: Uri = "/api/sessions/s1/prompt".parse().unwrap();
+
+    let now = auth_now_ms();
+    let human_cookie = "human-cookie-token-0001";
+    store
+        .insert_user_session(&crate::store::ProductUserSession {
+            token_hash: crate::admin::hex_sha256(human_cookie.as_bytes()),
+            session_id: "sess-human-000001".into(),
+            user_id: user.id.clone(),
+            client_kind: "browser".into(),
+            principal_class: "human".into(),
+            created_at_ms: now,
+            expires_at_ms: now + 60_000,
+            last_seen_at_ms: now,
+            user_agent: None,
+            passkey_verified_at_ms: None,
+            primary_authenticated_at_ms: now,
+            primary_auth_method: Some(crate::auth_plugins::PASSWORD_LOGIN_METHOD.into()),
+            revoked_at_ms: None,
+            revoke_reason: None,
+            auth_provider_id: None,
+            auth_issuer: None,
+            auth_subject: None,
+            auth_sid: None,
+            id_token_ciphertext: None,
+        })
+        .await
+        .unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::COOKIE,
+        format!("{USER_SESSION_COOKIE}={human_cookie}")
+            .parse()
+            .unwrap(),
+    );
+    let resolved = resolve_product_api_request_principal(
+        ProductRequestAuth::from(&state),
+        &Method::POST,
+        &uri,
+        &headers,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(resolved.caller, crate::prompt_origin::RequestCaller::Person);
+
+    let auto_cookie = "auto-cookie-token-0001";
+    store
+        .insert_user_session(&crate::store::ProductUserSession {
+            token_hash: crate::admin::hex_sha256(auto_cookie.as_bytes()),
+            session_id: "sess-auto-0000001".into(),
+            user_id: user.id.clone(),
+            client_kind: "browser".into(),
+            principal_class: "automation".into(),
+            created_at_ms: now,
+            expires_at_ms: now + 60_000,
+            last_seen_at_ms: now,
+            user_agent: None,
+            passkey_verified_at_ms: None,
+            primary_authenticated_at_ms: now,
+            primary_auth_method: None,
+            revoked_at_ms: None,
+            revoke_reason: None,
+            auth_provider_id: None,
+            auth_issuer: None,
+            auth_subject: None,
+            auth_sid: None,
+            id_token_ciphertext: None,
+        })
+        .await
+        .unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::COOKIE,
+        format!("{USER_SESSION_COOKIE}={auto_cookie}")
+            .parse()
+            .unwrap(),
+    );
+    let resolved = resolve_product_api_request_principal(
+        ProductRequestAuth::from(&state),
+        &Method::POST,
+        &uri,
+        &headers,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        resolved.caller,
+        crate::prompt_origin::RequestCaller::Automation
+    );
+
+    let api_token = "cow_static_automation_token_test";
+    store
+        .insert_user_api_token(&crate::store::ProductApiToken {
+            id: "11111111111111111111111111111111".into(),
+            user_id: user.id.clone(),
+            name: "ci".into(),
+            token_prefix: "cow_stat".into(),
+            token_hash: crate::admin::hex_sha256(api_token.as_bytes()),
+            created_at_ms: now,
+            last_used_at_ms: None,
+            expires_at_ms: Some(now + 60_000),
+            revoked_at_ms: None,
+        })
+        .await
+        .unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::AUTHORIZATION,
+        format!("Bearer {api_token}").parse().unwrap(),
+    );
+    let resolved = resolve_product_api_request_principal(
+        ProductRequestAuth::from(&state),
+        &Method::POST,
+        &uri,
+        &headers,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        resolved.caller,
+        crate::prompt_origin::RequestCaller::Automation
+    );
+
+    let key = crate::client_auth::new_signing_key().unwrap();
+    let public = crate::client_auth::public_key_to_base64(&key);
+    let device = "11111111111111111111111111111111";
+    persist_fixture_device(&store, &user.id, device, &public).await;
+    let (human_token, _) = state
+        .device_access
+        .issue(device, &user.id, &public, now)
+        .unwrap();
+    let headers = me_proof_headers(&key, device, &human_token, "POST", uri.path(), now);
+    let resolved = resolve_product_api_request_principal(
+        ProductRequestAuth::from(&state),
+        &Method::POST,
+        &uri,
+        &headers,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(resolved.caller, crate::prompt_origin::RequestCaller::Person);
+
+    let auto_device = "22222222222222222222222222222222";
+    let (auto_token, _) = state
+        .device_access
+        .issue_automation(
+            auto_device,
+            &user.id,
+            &public,
+            vec!["sessions:write".into()],
+            now,
+            60_000,
+        )
+        .unwrap();
+    let headers = me_proof_headers(&key, auto_device, &auto_token, "POST", uri.path(), now);
+    let resolved = resolve_product_api_request_principal(
+        ProductRequestAuth::from(&state),
+        &Method::POST,
+        &uri,
+        &headers,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        resolved.caller,
+        crate::prompt_origin::RequestCaller::Automation
+    );
+
+    state.product_auth_enabled = false;
+    let resolved = resolve_product_api_request_principal(
+        ProductRequestAuth::from(&state),
+        &Method::POST,
+        &uri,
+        &HeaderMap::new(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(resolved.caller, crate::prompt_origin::RequestCaller::Person);
+
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(&state.setup.data_dir);
+}
+
+#[tokio::test]
+async fn resolve_product_api_request_caller_classifies_every_credential() {
+    Box::pin(resolve_product_api_request_caller_classifies_every_credential_body()).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_resolve_product_api_request_caller_classifies_every_credential() {
+    on_postgres(Box::pin(
+        resolve_product_api_request_caller_classifies_every_credential_body(),
+    ))
+    .await;
+}

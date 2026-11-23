@@ -320,3 +320,6 @@ pub async fn activity(
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
+
+#[cfg(test)]
+pub(crate) use scope::history_evidence as scope_history_evidence;

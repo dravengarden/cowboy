@@ -61,6 +61,15 @@ pub fn refuse_command(
     }
     // A view-only system session rejects user-driven turns; only the backend
     // wake endpoint (POST /api/sessions/{id}/prompt) drives it.
+    if let Inbound::MoveDraft {
+        session_id,
+        to_session,
+        ..
+    } = cmd
+        && refuse_move_draft_target(state, principal, session_id, to_session, authored_cmid)
+    {
+        return true;
+    }
     if let Some(sid) = &session_id_for_err
         && matches!(&cmd, Inbound::Prompt { .. } | Inbound::Submit { .. })
         && state.hub.session_is_system(sid)
@@ -224,6 +233,7 @@ pub fn set_queue_editing_command(
 pub fn submit_command(
     state: &Arc<AppState>,
     principal: &ProductPrincipal,
+    caller: &crate::prompt_origin::RequestCaller,
     command_trace: Option<&crate::runtime_trace::SpanTimer>,
     session_id: String,
     text: String,
@@ -260,9 +270,10 @@ pub fn submit_command(
             // running turn so it runs next (same end-state as a queued row's
             // force-push). force_submit returns true when it queued (vs a direct
             // idle dispatch); only then, and only on a live turn, do we Cancel.
-            let queued = state
-                .hub
-                .force_submit_once(&session_id, text, content, cmid, true);
+            let queued =
+                state
+                    .hub
+                    .force_submit_once(&session_id, text, content, cmid, true, caller);
             if queued.is_none() {
                 return ControlFlow::Break(true);
             }
@@ -280,7 +291,7 @@ pub fn submit_command(
                 // drain the head MANUALLY here: bypass the hold and run it now,
                 // WITHOUT resuming the rest of the held queue. No-op when the
                 // head already dispatched (idle + empty queue).
-                state.hub.drain_now(&session_id);
+                state.hub.drain_now(&session_id, caller);
                 Ok(())
             }
         } else if front {
@@ -289,10 +300,10 @@ pub fn submit_command(
             // front placement as force, but no Cancel.
             let _ = state
                 .hub
-                .force_submit(&session_id, text, content, cmid, false);
+                .force_submit(&session_id, text, content, cmid, false, caller);
             Ok(())
         } else {
-            state.hub.submit(&session_id, text, content, cmid);
+            state.hub.submit(&session_id, text, content, cmid, caller);
             Ok(())
         }
     })
@@ -481,6 +492,7 @@ pub fn open_session_command(state: &Arc<AppState>, session_id: String) -> Result
 #[allow(clippy::too_many_arguments)]
 pub fn prompt_command(
     state: &Arc<AppState>,
+    caller: &crate::prompt_origin::RequestCaller,
     session_id: String,
     text: String,
     content: Vec<serde_json::Value>,
@@ -511,7 +523,7 @@ pub fn prompt_command(
         if state.hub.has_dispatch_tx() {
             // Route through Hub's single-in-flight queue guard so a legacy
             // WebSocket `Prompt` can never race with a draining completion notice.
-            state.hub.submit(&session_id, text, content, None);
+            state.hub.submit(&session_id, text, content, None, caller);
             return ControlFlow::Break(true);
         }
         let blocks: Vec<ContentBlock> = if content.is_empty() {
@@ -528,10 +540,18 @@ pub fn prompt_command(
                 })
                 .collect()
         };
-        // API direct prompt — no optimistic client, so no cmid.
+        let cmid = format!("cowboy-dispatch:{}", uuid::Uuid::new_v4().simple());
+        let origin = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
+        state.hub.record_prompt_dispatch(
+            &session_id,
+            cmid.clone(),
+            origin.clone(),
+            origin,
+            chrono::Utc::now().timestamp_millis(),
+        );
         let result = state
             .supervisor
-            .send(&session_id, AgentCommand::Prompt(blocks, None, None));
+            .send(&session_id, AgentCommand::Prompt(blocks, Some(cmid), None));
         if result.is_ok()
             && let Some(title) = auto
         {
@@ -655,13 +675,18 @@ pub fn force_cancel_grace(state: &AppState, session_id: &str) -> std::time::Dura
 /// it runs next; on an idle session there's nothing to cancel, so it is just
 /// sent now. A retired session's row stays where it is and no turn is
 /// cancelled.
-pub fn force_push_queued(state: &AppState, session_id: &str, id: &str) -> Result<(), String> {
+pub fn force_push_queued(
+    state: &AppState,
+    caller: &crate::prompt_origin::RequestCaller,
+    session_id: &str,
+    id: &str,
+) -> Result<(), String> {
     if let Some(refusal) =
         provider_accounts::retirement::session_refusal(&state.accounts, session_id)
     {
         return Err(refusal.to_owned());
     }
-    state.hub.request_send_queued(session_id, id); // promote to front either way
+    state.hub.request_send_queued(session_id, id, caller); // promote to front either way
     if matches!(
         state.hub.status(session_id),
         Some(Status::Busy | Status::Starting)
@@ -898,4 +923,101 @@ fn report_withdrawal_failure(
             .hub
             .command_result(session_id, cmid, CommandOutcome::Rejected, message);
     }
+}
+
+/// Authorize the destination session of a WebSocket `MoveDraft` command so a
+/// caller cannot move drafts into a foreign, missing, trashed, system, or
+/// managed-child session.
+fn refuse_move_draft_target(
+    state: &AppState,
+    principal: &ProductPrincipal,
+    from_session: &str,
+    to_session: &str,
+    authored_cmid: &Option<String>,
+) -> bool {
+    refuse_move_draft_target_in(
+        &state.hub,
+        principal,
+        from_session,
+        to_session,
+        authored_cmid,
+    )
+}
+
+pub(crate) fn refuse_move_draft_target_in(
+    hub: &Hub,
+    principal: &ProductPrincipal,
+    from_session: &str,
+    to_session: &str,
+    authored_cmid: &Option<String>,
+) -> bool {
+    let reject = |outcome: CommandOutcome, message: &str| {
+        hub.broadcast_error(Some(from_session.to_owned()), message.to_owned());
+        if let Some(cmid) = authored_cmid.as_deref() {
+            hub.command_result(from_session, cmid, outcome, message);
+        }
+        true
+    };
+    let Some(info) = hub.session_info(to_session) else {
+        return reject(
+            CommandOutcome::NotFound,
+            "destination session no longer exists",
+        );
+    };
+    if !principal.can_mutate(info.meta.owner_user_id.as_deref()) {
+        return reject(
+            CommandOutcome::Rejected,
+            "not allowed to mutate destination session",
+        );
+    }
+    if info.meta.system || hub.is_managed_child(to_session) {
+        return reject(
+            CommandOutcome::Rejected,
+            "cannot move drafts into this destination session",
+        );
+    }
+    if info.meta.trashed_at_ms.is_some() {
+        return reject(CommandOutcome::Rejected, session_trash::TRASHED_REFUSAL);
+    }
+    false
+}
+
+/// Resolve the original prompt's durable `(cmid, origin)` before acquiring
+/// synchronous runtime fences for `Inbound::RetryTurn`. Missing or unreadable
+/// records fail closed as non-owner.
+pub async fn resolve_retry_original(
+    state: &AppState,
+    cmd: &Inbound,
+) -> Option<(String, crate::prompt_origin::DeliveryOrigin)> {
+    resolve_retry_original_in(&state.hub, state.store.as_ref(), cmd).await
+}
+
+pub(crate) async fn resolve_retry_original_in(
+    hub: &Hub,
+    store: Option<&Store>,
+    cmd: &Inbound,
+) -> Option<(String, crate::prompt_origin::DeliveryOrigin)> {
+    let Inbound::RetryTurn { session_id } = cmd else {
+        return None;
+    };
+    let cmid = hub.last_user_prompt_cmid(session_id)?;
+    if let Some(origin) = hub.prompt_dispatch_origin(session_id, &cmid) {
+        return Some((cmid, origin));
+    }
+    let store = store?;
+    let record = store.prompt_dispatch(session_id, &cmid).await.ok()??;
+    Some((cmid, record.origin))
+}
+
+/// Retry the last prompt using its proven original dispatch origin (if
+/// recorded) and the retrying caller as trigger.
+pub fn retry_turn_command(
+    state: &AppState,
+    caller: &crate::prompt_origin::RequestCaller,
+    session_id: &str,
+    resolved_original: Option<(String, crate::prompt_origin::DeliveryOrigin)>,
+) -> Result<(), String> {
+    state.supervisor.prepare_session(session_id).map(|_| {
+        state.hub.retry_turn(session_id, caller, resolved_original);
+    })
 }

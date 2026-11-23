@@ -119,6 +119,7 @@ impl Approval {
             Some(&AuthenticatedProductRequest {
                 permissions: None,
                 principal: crate::product_auth::local_product_principal(),
+                caller: cowboy::prompt_origin::RequestCaller::Person,
                 cookie_session: None,
                 device_identity: None,
             }),

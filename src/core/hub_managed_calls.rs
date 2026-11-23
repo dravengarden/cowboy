@@ -189,7 +189,17 @@ impl Hub {
     /// managed children; only the Controller-owned call runner reaches here.
     pub fn submit_managed_prompt(&self, session_id: &str, call_id: &str, text: String) {
         let cmid = format!("{MANAGED_CALL_CMID_PREFIX}{call_id}");
-        self.submit_inner(session_id, text, Vec::new(), Some(cmid), true, false);
+        let origin = crate::prompt_origin::DeliveryOrigin::cowboy("managed_call");
+        self.submit_inner(
+            session_id,
+            text,
+            Vec::new(),
+            Some(cmid),
+            true,
+            false,
+            Some(origin.clone()),
+            origin,
+        );
     }
 
     /// What `find` makes of a session's retained log (an event's sequence), with the
@@ -259,8 +269,10 @@ impl Hub {
         id: &str,
         text: String,
         content: Vec<serde_json::Value>,
+        caller: &crate::prompt_origin::RequestCaller,
     ) -> bool {
-        !self.is_managed_child(session_id) && self.edit_queued(session_id, id, text, content)
+        !self.is_managed_child(session_id)
+            && self.edit_queued(session_id, id, text, content, caller)
     }
 
     /// Queued managed prompts as `(child, parent, call)`. Withdrawal is
@@ -847,6 +859,8 @@ impl Hub {
                 content,
                 cmid: Some(cmid.clone()),
                 schedule: None,
+                origin: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
+                initiator: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
             };
             next_queue.insert(0, msg.clone());
             Some(msg)
@@ -1224,6 +1238,10 @@ impl Hub {
                         content,
                         cmid: Some(req.cmid.clone()),
                         schedule: None,
+                        origin: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
+                        initiator: Some(crate::prompt_origin::DeliveryOrigin::cowboy(
+                            "managed_call",
+                        )),
                     },
                 );
             }
@@ -1290,6 +1308,8 @@ impl Hub {
                 content,
                 cmid: Some(cmid.to_owned()),
                 schedule: None,
+                origin: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
+                initiator: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
             };
             next_queue.insert(0, msg.clone());
             Some(msg)
@@ -1430,7 +1450,7 @@ impl Hub {
             .filter(|id| id.starts_with(crate::agent_model::CALL_NOTICE_PREFIX))
             .map(str::to_owned)
         else {
-            self.add_draft(session_id, text, content, cmid);
+            self.add_draft_with_origin(session_id, text, content, cmid, None);
             return;
         };
         {
@@ -1445,6 +1465,8 @@ impl Hub {
                 content,
                 cmid: None,
                 schedule: None,
+                origin: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
+                initiator: None,
             });
             let mut claims = self.inner.notice_claims.lock();
             let key = (session_id.to_owned(), notice_cid.clone());

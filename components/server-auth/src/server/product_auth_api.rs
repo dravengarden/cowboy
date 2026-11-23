@@ -444,6 +444,7 @@ pub async fn resolve_product_api_request_principal(
     if !state.product_auth_enabled {
         return Ok(Some(AuthenticatedProductRequest {
             principal: crate::product_auth::local_product_principal(),
+            caller: crate::prompt_origin::RequestCaller::Person,
             cookie_session: None,
             device_identity: None,
             permissions: None,
@@ -509,8 +510,14 @@ pub async fn resolve_product_api_request_principal(
                     .await;
             });
         }
+        let caller = if identity.is_automation() {
+            crate::prompt_origin::RequestCaller::Automation
+        } else {
+            crate::prompt_origin::RequestCaller::Person
+        };
         return AuthenticatedProductRequest {
             principal: product_principal(state.hub, &user),
+            caller,
             cookie_session: None,
             device_identity: Some(identity),
             permissions: None,
@@ -521,8 +528,15 @@ pub async fn resolve_product_api_request_principal(
     resolve_product_request_principal(state.product_auth_enabled, state.store, state.hub, headers)
         .await
         .map(|(principal, cookie_session)| {
+            let caller = match cookie_session.as_ref() {
+                Some(session) if session.principal_class == "human" => {
+                    crate::prompt_origin::RequestCaller::Person
+                }
+                _ => crate::prompt_origin::RequestCaller::Automation,
+            };
             AuthenticatedProductRequest {
                 principal,
+                caller,
                 cookie_session,
                 device_identity: None,
                 permissions: None,

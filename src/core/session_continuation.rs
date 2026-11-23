@@ -1,5 +1,5 @@
 //! A continuation remains beside its source in both sidebar orderings.
-use super::{Hub, settings_keys};
+use super::{Hub, QueuedMessage, settings_keys};
 use crate::session_folders::{FolderActor, defaults::DefaultKey};
 use serde_json::json;
 
@@ -44,11 +44,7 @@ impl Hub {
 
     /// Take back a continuation's first message while it is the only queued
     /// prompt. `None` once it was dispatched, or while other work is queued.
-    pub fn take_sole_queued(
-        &self,
-        session_id: &str,
-        cmid: &str,
-    ) -> Option<(String, Vec<serde_json::Value>)> {
+    pub fn take_sole_queued(&self, session_id: &str, cmid: &str) -> Option<QueuedMessage> {
         let taken = {
             let mut sessions = self.inner.sessions.lock();
             let s = sessions.get_mut(session_id)?;
@@ -58,8 +54,7 @@ impl Hub {
             if s.editing.as_deref() == Some(s.queue[0].id.as_str()) {
                 s.editing = None;
             }
-            let message = s.queue.remove(0);
-            (message.text, message.content)
+            s.queue.remove(0)
         };
         self.emit_pending(session_id);
         Some(taken)

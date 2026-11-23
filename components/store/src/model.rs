@@ -381,6 +381,14 @@ pub struct QueuedMessage {
     /// (the startup re-arm scans drafts for it). Queue items never carry one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule: Option<DraftSchedule>,
+    /// Authoritative origin of this message's last content writer (C-auth).
+    /// `None` on legacy rows persisted before C-auth (treated as non-owner).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<crate::delivery_origin::DeliveryOrigin>,
+    /// Authoritative trigger that queued/activated this row for sending.
+    /// `None` on parked drafts and legacy rows persisted before C-auth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initiator: Option<crate::delivery_origin::DeliveryOrigin>,
 }
 
 /// A draft's future auto-send instruction. Server-controlled (fires even with

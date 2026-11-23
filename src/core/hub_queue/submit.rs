@@ -2,6 +2,7 @@
 use super::*;
 
 impl Hub {
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::core) fn submit_inner(
         &self,
         session_id: &str,
@@ -10,6 +11,8 @@ impl Hub {
         cmid: Option<String>,
         managed: bool,
         front: bool,
+        content_origin: Option<crate::prompt_origin::DeliveryOrigin>,
+        initiator: crate::prompt_origin::DeliveryOrigin,
     ) {
         // One controller owns a managed child conversation: its parent call.
         if !managed && self.is_managed_child(session_id) {
@@ -19,9 +22,14 @@ impl Hub {
             );
             return;
         }
-        // Only a human submit resets the scheduler's runaway guard; automated
-        // coordination and completion notices stay in the unattended streak.
-        if crate::prompt_origin::origin_from_cmid(cmid.as_deref()).is_human() {
+        let dispatch_origin = crate::prompt_origin::compute_dispatch_origin(
+            content_origin.as_ref(),
+            Some(&initiator),
+        );
+        // Only a verified owner submit resets the scheduler's runaway guard;
+        // automation, delegated agents, legacy rows, and internal notices stay
+        // in the unattended streak.
+        if dispatch_origin.is_owner() {
             self.notify_human_turn(session_id);
         }
         let wired = self.inner.dispatch_tx.lock().is_some();
@@ -57,14 +65,27 @@ impl Hub {
                 s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
                 s.in_flight = true;
                 s.dispatch_pending = Some(s.in_flight_epoch);
-                Self::note_dispatched(s, cmid.as_deref());
+                let dispatch_cmid = hub_dispatch_origin::ensure_dispatch_cmid(cmid);
+                Self::note_dispatched(s, Some(&dispatch_cmid));
+                hub_dispatch_origin::note_dispatch_origin(
+                    s,
+                    session_id,
+                    &dispatch_cmid,
+                    dispatch_origin.clone(),
+                    initiator.clone(),
+                    now_ms(),
+                );
                 dispatch = Some(DispatchReq {
                     ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
                     session_id: session_id.to_owned(),
                     text,
                     content,
-                    cmid,
+                    cmid: Some(dispatch_cmid),
                     explicit: !managed, // never an owner send (account gates)
+                    origin: content_origin,
+                    initiator: Some(initiator.clone()),
+                    dispatch_origin,
+                    trigger: initiator,
                 });
             } else {
                 let id = self.next_qid();
@@ -74,6 +95,8 @@ impl Hub {
                     content,
                     cmid,
                     schedule: None,
+                    origin: content_origin,
+                    initiator: Some(initiator),
                 };
                 if front {
                     s.queue.insert(0, message);
@@ -141,14 +164,30 @@ impl Hub {
             s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
             s.in_flight = true;
             s.dispatch_pending = Some(s.in_flight_epoch);
-            Self::note_dispatched(s, head.cmid.as_deref());
+            let trigger = crate::prompt_origin::DeliveryOrigin::cowboy("managed_call");
+            let dispatch_origin =
+                crate::prompt_origin::compute_dispatch_origin(head.origin.as_ref(), Some(&trigger));
+            let dispatch_cmid = hub_dispatch_origin::ensure_dispatch_cmid(head.cmid);
+            Self::note_dispatched(s, Some(&dispatch_cmid));
+            hub_dispatch_origin::note_dispatch_origin(
+                s,
+                session_id,
+                &dispatch_cmid,
+                dispatch_origin.clone(),
+                trigger.clone(),
+                now_ms(),
+            );
             DispatchReq {
                 ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
                 session_id: session_id.to_owned(),
                 text: head.text,
                 content: head.content,
-                cmid: head.cmid,
+                cmid: Some(dispatch_cmid),
                 explicit: false,
+                origin: head.origin,
+                initiator: head.initiator.or_else(|| Some(trigger.clone())),
+                dispatch_origin,
+                trigger,
             }
         };
         self.emit_pending(session_id);

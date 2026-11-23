@@ -26,6 +26,8 @@ fn a_permanent_refusal_ends_an_earlier_retried_wait() {
         "p".into(),
         vec![],
         Some("c1".into()),
+        None,
+        None,
         &not_ready,
     );
     assert!(hub.setting(&key).is_some());
@@ -35,6 +37,8 @@ fn a_permanent_refusal_ends_an_earlier_retried_wait() {
         "p".into(),
         vec![],
         Some("c1".into()),
+        None,
+        None,
         "Execution target unavailable or identity changed; retained prompt was not delivered",
     );
     assert!(hub.setting(&key).is_none());
@@ -46,6 +50,8 @@ fn a_permanent_refusal_ends_an_earlier_retried_wait() {
         "p".into(),
         vec![],
         Some("c1".into()),
+        None,
+        None,
         "Machine is not connected",
     );
     assert!(hub.setting(&key).is_none());
@@ -73,6 +79,8 @@ fn an_explicit_send_keeps_its_intent_across_a_transient_machine_wait() {
         "p".into(),
         vec![],
         Some("c1".into()),
+        None,
+        None,
         "Machine is not connected",
     );
     retain_explicit_intent(&hub, "s", "Machine is not connected");
@@ -92,6 +100,8 @@ fn an_explicit_send_keeps_its_intent_across_a_transient_machine_wait() {
         "p".into(),
         vec![],
         Some("c1".into()),
+        None,
+        None,
         &busy,
     );
     retain_explicit_intent(&hub, "s", &busy);
@@ -105,6 +115,8 @@ fn an_explicit_send_keeps_its_intent_across_a_transient_machine_wait() {
         "p".into(),
         vec![],
         Some("c1".into()),
+        None,
+        None,
         refused,
     );
     retain_explicit_intent(&hub, "s", refused);
@@ -131,6 +143,7 @@ async fn shutdown_returns_a_preflight_owned_prompt_before_writer_drain() {
         "never delivered".into(),
         vec![],
         Some("original-cmid".into()),
+        &crate::prompt_origin::RequestCaller::Person,
     );
     let request = requests.recv().await.unwrap();
     let (shutdown, mut stopping) = watch::channel(false);
@@ -151,6 +164,8 @@ async fn shutdown_returns_a_preflight_owned_prompt_before_writer_drain() {
             request.text.clone(),
             request.content.clone(),
             request.cmid.clone(),
+            None,
+            None,
             &error,
         );
     });
@@ -186,6 +201,8 @@ fn failed_remote_dispatch_retains_the_original_prompt() {
         "current status?".to_owned(),
         Vec::new(),
         Some("client-message-1".to_owned()),
+        None,
+        None,
         "machine is not connected",
     );
 
@@ -215,6 +232,8 @@ fn restore_timeout_hold_does_not_look_like_a_send_failure() {
         "再上传 tempfiles 吧".to_owned(),
         Vec::new(),
         Some("client-message-hold".to_owned()),
+        None,
+        None,
         crate::provider_behavior::NATIVE_RESTORE_TIMEOUT_HOLD,
     );
 

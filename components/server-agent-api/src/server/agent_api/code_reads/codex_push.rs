@@ -379,10 +379,19 @@ async fn deliver(
         return;
     };
     let cmid = format!("{CMID_PREFIX}{}", uuid::Uuid::new_v4().simple());
+    let caller = crate::prompt_origin::RequestCaller::cowboy("code_intelligence");
+    if let Err(error) =
+        super::super::super::send_delivery::record_steer_dispatch(state, session, &cmid, &caller)
+            .await
+    {
+        tracing::warn!(%error, session, "code intelligence dispatch record failed");
+        return;
+    }
     let steer = |next_checkpoint| {
         super::super::super::send_delivery::begin(
             state,
             session,
+            &caller,
             &text,
             &[],
             cmid.clone(),

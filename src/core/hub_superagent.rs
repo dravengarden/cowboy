@@ -85,20 +85,6 @@ impl Hub {
                     .any(|p| p.cmid == cmid && p.epoch == s.in_flight_epoch)
         })
     }
-    /// Old retained workers may label a new Controller-origin prompt as human.
-    /// Normalize its admitted echo before persistence, without a worker upgrade.
-    pub(super) fn annotate_dispatched_prompt(s: &Session, event: &mut Event, cmid: Option<&str>) {
-        let Some(cmid) = cmid.filter(|id| s.dispatched_cmids.iter().any(|p| p.cmid == *id)) else {
-            return;
-        };
-        let origin = crate::prompt_origin::origin_from_cmid(Some(cmid));
-        if !origin.is_human()
-            && let Event::Update { update } = event
-            && update["sessionUpdate"] == "user_message_chunk"
-        {
-            crate::prompt_origin::apply_prompt_origin(update, &origin);
-        }
-    }
     #[must_use]
     pub fn session_has_in_flight_prompt(&self, session_id: &str) -> bool {
         self.inner
@@ -162,7 +148,16 @@ impl Hub {
             s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
             s.in_flight = true;
             s.dispatch_pending = Some(s.in_flight_epoch);
+            let origin = crate::prompt_origin::DeliveryOrigin::cowboy("superagent");
             Self::note_dispatched(s, Some(&cmid));
+            hub_dispatch_origin::note_dispatch_origin(
+                s,
+                session_id,
+                &cmid,
+                origin.clone(),
+                origin.clone(),
+                now_ms(),
+            );
             DispatchReq {
                 ownership: DispatchOwnership::supervised(
                     self,
@@ -175,6 +170,10 @@ impl Hub {
                 content: vec![],
                 cmid: Some(cmid),
                 explicit: false,
+                origin: Some(origin.clone()),
+                initiator: Some(origin.clone()),
+                dispatch_origin: origin.clone(),
+                trigger: origin,
             }
         };
         permit.send(req);
@@ -276,6 +275,8 @@ mod tests {
                         content: vec![],
                         cmid: None,
                         schedule: None,
+                        origin: Some(crate::prompt_origin::DeliveryOrigin::Owner),
+                        initiator: Some(crate::prompt_origin::DeliveryOrigin::Owner),
                     }),
                     "hold" => s.delivery_hold = Some("interruption".into()),
                     _ => unreachable!(),
@@ -317,7 +318,14 @@ mod tests {
             session.in_flight = true;
             session.dispatch_pending = Some(session.in_flight_epoch);
         }
-        hub.requeue_prompt("worker", "late failure".into(), vec![], Some(cmid.into()));
+        hub.requeue_prompt(
+            "worker",
+            "late failure".into(),
+            vec![],
+            Some(cmid.into()),
+            None,
+            None,
+        );
         assert!(hub.session_has_in_flight_prompt("worker"));
         assert_eq!(hub.session_info("worker").unwrap().queue_count, 0);
         assert!(!hub.superagent_dispatch_current(&context(), cmid));
@@ -350,7 +358,14 @@ mod tests {
         assert_eq!(update["promptOrigin"]["source"], "superagent");
         assert!(!crate::prompt_origin::is_human_prompt_update(update));
         assert!(!hub.dispatch_superagent_once("worker", "follow".into(), cmid.into(), context()));
-        hub.requeue_prompt("worker", "must not retry".into(), vec![], Some(cmid.into()));
+        hub.requeue_prompt(
+            "worker",
+            "must not retry".into(),
+            vec![],
+            Some(cmid.into()),
+            None,
+            None,
+        );
         assert!(!hub.session_has_in_flight_prompt("worker"));
         assert_eq!(hub.session_info("worker").unwrap().queue_count, 0);
     }

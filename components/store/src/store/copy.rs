@@ -62,6 +62,7 @@ const TABLES: &[&str] = &[
     "external_passkey_ceremonies",
     "session_folders",
     "sessions",
+    "prompt_dispatches",
     "managed_agent_calls",
     "managed_call_notices",
     "managed_review_inputs",

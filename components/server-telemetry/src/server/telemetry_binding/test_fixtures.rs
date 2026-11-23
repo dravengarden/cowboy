@@ -51,6 +51,7 @@ impl FixtureEffects {
         let verified = AuthenticatedProductRequest {
             permissions: None,
             principal: crate::product_auth::local_product_principal(),
+            caller: crate::prompt_origin::RequestCaller::Person,
             cookie_session: None,
             device_identity: None,
         };
@@ -147,6 +148,7 @@ pub fn resolution_authority(
     let verified = AuthenticatedProductRequest {
         permissions: None,
         principal: crate::product_auth::local_product_principal(),
+        caller: crate::prompt_origin::RequestCaller::Person,
         cookie_session: None,
         device_identity: None,
     };

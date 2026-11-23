@@ -53,6 +53,8 @@ pub use observation::{changes as code_changes, head as code_observation_head};
 pub(super) use readiness::{child_runtime, child_runtime_pinned, runtime_readiness};
 use replay::replay;
 pub use turn_budget::creator_grants;
+#[cfg(test)]
+pub(in crate::server) use turn_budget::current_turn as turn_budget_current_turn;
 
 impl GrantEntry {
     fn accepts_installation(

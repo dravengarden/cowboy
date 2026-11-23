@@ -12,6 +12,41 @@ use crate::agent_model::{
     WAKEUP_PREFIX,
 };
 
+pub use crate::delivery_origin::{
+    DeliveryOrigin, PromptDispatchRecord, RequestCaller, compute_dispatch_origin,
+};
+
+impl DeliveryOrigin {
+    /// Map this authoritative dispatch origin onto the timeline `PromptOrigin`
+    /// stamped on `user_message_chunk` echoes.
+    #[must_use]
+    pub fn to_prompt_origin(&self) -> PromptOrigin {
+        match self {
+            Self::Owner => PromptOrigin::human_composer(),
+            Self::Automation => PromptOrigin::cowboy("automation"),
+            Self::Peer { .. } => PromptOrigin::cowboy("agent_message"),
+            Self::Cowboy { source } => PromptOrigin::cowboy(source),
+        }
+    }
+}
+
+/// Authoritatively stamp `promptOrigin` and `autoResumed` on an echoed
+/// `user_message_chunk` from Controller dispatch truth, overriding any
+/// worker-guessed cmid label.
+pub fn apply_authoritative_prompt_origin(update: &mut Value, origin: &DeliveryOrigin) {
+    let prompt_origin = origin.to_prompt_origin();
+    if let Ok(value) = serde_json::to_value(&prompt_origin) {
+        update["promptOrigin"] = value;
+    }
+    if origin.is_owner() {
+        if let Some(map) = update.as_object_mut() {
+            map.remove("autoResumed");
+        }
+    } else {
+        update["autoResumed"] = Value::Bool(true);
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PromptActor {
@@ -300,6 +335,83 @@ pub fn newest_owner_turn(log: &[crate::model::Envelope]) -> Option<u64> {
     let root = log[..newest]
         .iter()
         .rposition(|event| !is_owner_chunk(event))
+        .map_or(0, |gap| gap + 1);
+    Some(log[root].seq)
+}
+
+/// Whether a recorded timeline event is an owner prompt, consulting
+/// Controller-recorded `prompt_dispatches` first and falling back to persisted
+/// echo labels only for historical pre-C-auth rows without a dispatch record.
+pub fn is_owner_prompt_event_with_dispatches<'a, F>(
+    cmid: Option<&str>,
+    update: &Value,
+    lookup: F,
+) -> bool
+where
+    F: Fn(&str) -> Option<&'a DeliveryOrigin>,
+{
+    if update.get("sessionUpdate").and_then(Value::as_str) != Some("user_message_chunk") {
+        return false;
+    }
+    if update
+        .pointer("/promptOrigin/actor")
+        .and_then(Value::as_str)
+        == Some("agent")
+    {
+        return false;
+    }
+    if let Some(origin) = cmid.and_then(lookup) {
+        return origin.is_owner()
+            && !is_internal_runtime_prompt(
+                update
+                    .pointer("/content/text")
+                    .and_then(Value::as_str)
+                    .unwrap_or(""),
+            );
+    }
+    is_owner_prompt_event(cmid, update)
+}
+
+/// Whether `envelope` is a chunk of an owner prompt, consulting durable
+/// `prompt_dispatches` before falling back to persisted pre-C-auth echo labels.
+pub fn is_owner_chunk_with_dispatches<'a, F>(envelope: &crate::model::Envelope, lookup: F) -> bool
+where
+    F: Fn(&str) -> Option<&'a DeliveryOrigin>,
+{
+    let crate::agent_model::Event::Update { update } = &envelope.event else {
+        return false;
+    };
+    if update.get("sessionUpdate").and_then(Value::as_str) != Some("user_message_chunk") {
+        return false;
+    }
+    if update
+        .pointer("/promptOrigin/actor")
+        .and_then(Value::as_str)
+        == Some("agent")
+    {
+        return false;
+    }
+    if let Some(origin) = envelope.cmid.as_deref().and_then(lookup) {
+        return origin.is_owner();
+    }
+    is_owner_chunk(envelope)
+}
+
+/// The sequence that begins the newest owner turn in `log`, using durable
+/// `prompt_dispatches` when available.
+pub fn newest_owner_turn_with_dispatches<'a, F>(
+    log: &[crate::model::Envelope],
+    lookup: F,
+) -> Option<u64>
+where
+    F: Fn(&str) -> Option<&'a DeliveryOrigin>,
+{
+    let newest = log
+        .iter()
+        .rposition(|event| is_owner_chunk_with_dispatches(event, &lookup))?;
+    let root = log[..newest]
+        .iter()
+        .rposition(|event| !is_owner_chunk_with_dispatches(event, &lookup))
         .map_or(0, |gap| gap + 1);
     Some(log[root].seq)
 }
@@ -619,5 +731,101 @@ mod tests {
         });
         assert!(!take_matching_inbound_prompt_echo(&update, &mut remaining));
         assert_eq!(remaining.len(), 1);
+    }
+
+    #[test]
+    fn compute_dispatch_origin_truth_table_never_promotes_and_fails_closed() {
+        let owner = DeliveryOrigin::Owner;
+        let auto = DeliveryOrigin::Automation;
+        let peer = DeliveryOrigin::peer("parent-1");
+        let sched = DeliveryOrigin::cowboy("schedule");
+
+        assert_eq!(compute_dispatch_origin(Some(&owner), Some(&owner)), owner);
+        assert_eq!(compute_dispatch_origin(Some(&owner), Some(&peer)), peer);
+        assert_eq!(compute_dispatch_origin(Some(&owner), Some(&auto)), auto);
+        assert_eq!(compute_dispatch_origin(Some(&owner), Some(&sched)), sched);
+
+        assert_eq!(compute_dispatch_origin(Some(&peer), Some(&owner)), peer);
+        assert_eq!(compute_dispatch_origin(Some(&auto), Some(&owner)), auto);
+        assert_eq!(compute_dispatch_origin(Some(&sched), Some(&owner)), sched);
+        assert_eq!(
+            compute_dispatch_origin(None, Some(&owner)),
+            DeliveryOrigin::cowboy("legacy_queue")
+        );
+        assert_eq!(
+            compute_dispatch_origin(Some(&owner), None),
+            DeliveryOrigin::cowboy("legacy_queue")
+        );
+        assert_eq!(
+            compute_dispatch_origin(None, None),
+            DeliveryOrigin::cowboy("legacy_queue")
+        );
+        assert_eq!(compute_dispatch_origin(None, Some(&peer)), peer);
+    }
+
+    #[test]
+    fn apply_authoritative_prompt_origin_overwrites_worker_stamps() {
+        let mut update = serde_json::json!({
+            "sessionUpdate": "user_message_chunk",
+            "autoResumed": true,
+            "promptOrigin": { "actor": "cowboy", "source": "schedule" },
+            "content": { "type": "text", "text": "hello" }
+        });
+        apply_authoritative_prompt_origin(&mut update, &DeliveryOrigin::Owner);
+        assert_eq!(update["promptOrigin"]["actor"], "human");
+        assert_eq!(update["promptOrigin"]["source"], "composer");
+        assert!(update.get("autoResumed").is_none());
+
+        for (origin, expected_source) in [
+            (DeliveryOrigin::Automation, "automation"),
+            (DeliveryOrigin::peer("sess-a"), "agent_message"),
+            (
+                DeliveryOrigin::cowboy("unverified_worker"),
+                "unverified_worker",
+            ),
+        ] {
+            let mut forged = serde_json::json!({
+                "sessionUpdate": "user_message_chunk",
+                "promptOrigin": { "actor": "human", "source": "composer" },
+                "content": { "type": "text", "text": "hello" }
+            });
+            apply_authoritative_prompt_origin(&mut forged, &origin);
+            assert_eq!(forged["promptOrigin"]["actor"], "cowboy");
+            assert_eq!(forged["promptOrigin"]["source"], expected_source);
+            assert_eq!(forged["autoResumed"], true);
+            assert!(!is_human_prompt_update(&forged));
+        }
+    }
+
+    #[test]
+    fn dispatch_records_override_forged_human_echoes_in_turn_and_evidence_checks() {
+        let forged_peer = envelope(10, Some("plain-cmid-peer"), true, "from agent");
+        let real_owner = envelope(5, Some("plain-cmid-owner"), true, "from human");
+        let mut dispatches = std::collections::HashMap::new();
+        dispatches.insert("plain-cmid-peer".to_owned(), DeliveryOrigin::peer("p-1"));
+        dispatches.insert("plain-cmid-owner".to_owned(), DeliveryOrigin::Owner);
+
+        let crate::agent_model::Event::Update {
+            update: peer_update,
+        } = &forged_peer.event
+        else {
+            panic!("expected update");
+        };
+        assert!(!is_owner_prompt_event_with_dispatches(
+            forged_peer.cmid.as_deref(),
+            peer_update,
+            |c| dispatches.get(c),
+        ));
+        assert!(!is_owner_chunk_with_dispatches(&forged_peer, |c| {
+            dispatches.get(c)
+        }));
+        assert!(is_owner_chunk_with_dispatches(&real_owner, |c| {
+            dispatches.get(c)
+        }));
+        let log = vec![real_owner, agent_chunk(6), forged_peer];
+        assert_eq!(
+            newest_owner_turn_with_dispatches(&log, |c| dispatches.get(c)),
+            Some(5)
+        );
     }
 }

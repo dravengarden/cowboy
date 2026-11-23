@@ -230,6 +230,10 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "0088_managed_call_notices.sql",
         "7e3ba0853af9988a1b2ae6d874f84ba206a06318c7d02b707a3ac0949c4f62e4",
     ),
+    (
+        "0089_prompt_dispatches.sql",
+        "70ce5a6b616064d21cff27edf94ba79f78b5149610e5fd4605b30b5e0a082abc",
+    ),
 ];
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
@@ -451,6 +455,10 @@ const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "0062_managed_call_notices.sql",
         "d4dc23eb023ab29ff0f44105add12a0aa9f42b4730b571a061c23ab6cd5e50a4",
+    ),
+    (
+        "0063_prompt_dispatches.sql",
+        "70ce5a6b616064d21cff27edf94ba79f78b5149610e5fd4605b30b5e0a082abc",
     ),
 ];
 

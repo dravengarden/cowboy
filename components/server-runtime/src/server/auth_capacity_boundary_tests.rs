@@ -11,6 +11,7 @@ fn principal(user_id: &str) -> ProductPrincipal {
 fn cookie_request(user_id: &str) -> AuthenticatedProductRequest {
     AuthenticatedProductRequest {
         permissions: None,
+        caller: crate::prompt_origin::RequestCaller::Person,
         principal: principal(user_id),
         cookie_session: Some(crate::store::ProductUserSession {
             token_hash: "aa".repeat(32),
@@ -43,8 +44,14 @@ fn device_request(
     client_kind: &str,
     scopes: &[&str],
 ) -> AuthenticatedProductRequest {
+    let caller = if principal_class == "automation" {
+        crate::prompt_origin::RequestCaller::Automation
+    } else {
+        crate::prompt_origin::RequestCaller::Person
+    };
     AuthenticatedProductRequest {
         permissions: None,
+        caller,
         principal: principal(user_id),
         cookie_session: None,
         device_identity: Some(crate::client_auth::DeviceAccessIdentity {

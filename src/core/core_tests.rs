@@ -686,6 +686,7 @@ fn queued_prompt_can_be_cancelled_by_exact_cmid() {
         "from ACP".to_owned(),
         Vec::new(),
         Some("acp-1".to_owned()),
+        &crate::prompt_origin::RequestCaller::Person,
     );
     assert_eq!(hub.session_info("s").unwrap().queue_count, 1);
     assert!(!hub.remove_queued_by_cmid("s", "another-client"));
@@ -751,6 +752,8 @@ fn requeue_prompt_restores_and_dedupes() {
         "hello agent".to_owned(),
         vec![],
         Some("c1".to_owned()),
+        None,
+        None,
     );
     assert_eq!(queue_texts(&hub, "r1"), vec!["hello agent".to_owned()]);
     // Same cmid (the delivery raced a re-revive) → not double-queued.
@@ -759,6 +762,8 @@ fn requeue_prompt_restores_and_dedupes() {
         "hello agent".to_owned(),
         vec![],
         Some("c1".to_owned()),
+        None,
+        None,
     );
     assert_eq!(
         queue_texts(&hub, "r1").len(),
@@ -766,7 +771,14 @@ fn requeue_prompt_restores_and_dedupes() {
         "same cmid must not double-queue"
     );
     // A different message DOES stack (front-inserted).
-    hub.requeue_prompt("r1", "second".to_owned(), vec![], Some("c2".to_owned()));
+    hub.requeue_prompt(
+        "r1",
+        "second".to_owned(),
+        vec![],
+        Some("c2".to_owned()),
+        None,
+        None,
+    );
     assert_eq!(
         queue_texts(&hub, "r1"),
         vec!["second".to_owned(), "hello agent".to_owned()]
@@ -786,6 +798,7 @@ async fn pending_context_holds_schedules_drafts_and_manual_queue_until_cleared()
         "wake".into(),
         vec![],
         Some("__wakeup-test".into()),
+        &crate::prompt_origin::RequestCaller::Person,
     );
     assert!(rx.try_recv().is_err());
     hub.load_settings(vec![(
@@ -798,13 +811,15 @@ async fn pending_context_holds_schedules_drafts_and_manual_queue_until_cleared()
         "draft".into(),
         vec![],
         Some("draft-id".into()),
+        &crate::prompt_origin::RequestCaller::Person,
     );
-    hub.activate_all_drafts("context-hold");
+    hub.activate_all_drafts("context-hold", &crate::prompt_origin::RequestCaller::Person);
     hub.add_draft(
         "context-hold",
         "scheduled".into(),
         vec![],
         Some("scheduled-id".into()),
+        &crate::prompt_origin::RequestCaller::Person,
     );
     let id = hub.queue_and_drafts("context-hold", |_| true).unwrap().1[0]
         .id
@@ -815,10 +830,11 @@ async fn pending_context_holds_schedules_drafts_and_manual_queue_until_cleared()
         "front".into(),
         vec![],
         Some("front-id".into()),
-        true
+        true,
+        &crate::prompt_origin::RequestCaller::Person
     ));
     for _ in 0..3 {
-        hub.drain_now("context-hold");
+        hub.drain_now("context-hold", &crate::prompt_origin::RequestCaller::Person);
         hub.try_drain("context-hold");
     }
     assert!(rx.try_recv().is_err());
@@ -853,12 +869,14 @@ async fn context_bootstrap_precedes_racing_queue_without_unpausing_it() {
         "racing message".into(),
         vec![],
         Some("racing".into()),
+        &crate::prompt_origin::RequestCaller::Person,
     );
     hub.submit_context(
         "context-first",
         "bootstrap".into(),
         vec![],
         "context-first-message".into(),
+        &crate::prompt_origin::RequestCaller::Person,
     );
     assert_eq!(
         queue_texts(&hub, "context-first"),
@@ -866,7 +884,10 @@ async fn context_bootstrap_precedes_racing_queue_without_unpausing_it() {
     );
     assert!(rx.try_recv().is_err());
     assert!(hub.session_info("context-first").unwrap().meta.paused);
-    hub.drain_now("context-first");
+    hub.drain_now(
+        "context-first",
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     assert_eq!(rx.try_recv().unwrap().text, "bootstrap");
     assert!(rx.try_recv().is_err());
 }
@@ -890,8 +911,17 @@ fn continuation_bootstrap_waits_for_its_agent_and_can_be_taken_back() {
         "first".into(),
         vec![],
         Some("context-handoff".into()),
+        None,
+        None,
     );
-    hub.requeue_prompt("continued", "later".into(), vec![], Some("typed".into()));
+    hub.requeue_prompt(
+        "continued",
+        "later".into(),
+        vec![],
+        Some("typed".into()),
+        None,
+        None,
+    );
     // Other queued work stays with the destination.
     assert!(
         hub.take_sole_queued("continued", "context-handoff")
@@ -899,10 +929,10 @@ fn continuation_bootstrap_waits_for_its_agent_and_can_be_taken_back() {
     );
     assert!(hub.remove_queued_by_cmid("continued", "typed"));
     assert!(hub.take_sole_queued("continued", "typed").is_none());
-    let (text, _) = hub
+    let taken = hub
         .take_sole_queued("continued", "context-handoff")
         .unwrap();
-    assert_eq!(text, "first");
+    assert_eq!(taken.text, "first");
     assert!(queue_texts(&hub, "continued").is_empty());
     // A cancelled receipt stays readable, lets prompts through, and keeps
     // startup from recording the relationship again from the source's receipt.
@@ -941,7 +971,14 @@ async fn resource_retry_respects_pause_edit_cancel_and_dispatches_once() {
     let (tx, mut rx) = tokio::sync::mpsc::channel(8);
     hub.set_dispatch_tx(tx);
     hub.set_status("wait", Status::Exited, None);
-    hub.requeue_prompt("wait", "keep me".into(), vec![], Some("once".into()));
+    hub.requeue_prompt(
+        "wait",
+        "keep me".into(),
+        vec![],
+        Some("once".into()),
+        None,
+        None,
+    );
     hub.set_paused("wait", true);
     hub.retry_resource_wait("wait");
     assert!(rx.try_recv().is_err());
@@ -956,7 +993,14 @@ async fn resource_retry_respects_pause_edit_cancel_and_dispatches_once() {
     hub.remove_queued_by_cmid("wait", "once");
     hub.retry_resource_wait("wait");
     assert!(rx.try_recv().is_err());
-    hub.requeue_prompt("wait", "send once".into(), vec![], Some("next".into()));
+    hub.requeue_prompt(
+        "wait",
+        "send once".into(),
+        vec![],
+        Some("next".into()),
+        None,
+        None,
+    );
     hub.retry_resource_wait("wait");
     hub.retry_resource_wait("wait");
     assert_eq!(rx.try_recv().unwrap().cmid.as_deref(), Some("next"));
@@ -989,11 +1033,23 @@ async fn paused_empty_queue_holds_submit_but_explicit_send_once_does_not_resume(
     hub.set_dispatch_tx(tx);
     hub.set_status("paused", Status::Running, None);
     hub.set_paused("paused", true);
-    hub.submit("paused", "first".into(), vec![], Some("one".into()));
-    hub.submit("paused", "second".into(), vec![], Some("two".into()));
+    hub.submit(
+        "paused",
+        "first".into(),
+        vec![],
+        Some("one".into()),
+        &crate::prompt_origin::RequestCaller::Person,
+    );
+    hub.submit(
+        "paused",
+        "second".into(),
+        vec![],
+        Some("two".into()),
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     assert!(rx.try_recv().is_err());
     assert_eq!(queue_texts(&hub, "paused"), vec!["first", "second"]);
-    hub.drain_now("paused");
+    hub.drain_now("paused", &crate::prompt_origin::RequestCaller::Person);
     assert_eq!(rx.try_recv().unwrap().cmid.as_deref(), Some("one"));
     assert!(hub.session_info("paused").unwrap().meta.paused);
     assert_eq!(queue_texts(&hub, "paused"), vec!["second"]);
@@ -1007,12 +1063,18 @@ async fn dispatch_marks_explicit_sends_and_consumes_a_waiting_intent() {
     hub.set_dispatch_tx(tx);
     hub.set_status("explicit", Status::Running, None);
     hub.set_paused("explicit", true);
-    hub.submit("explicit", "held".into(), vec![], Some("one".into()));
+    hub.submit(
+        "explicit",
+        "held".into(),
+        vec![],
+        Some("one".into()),
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     // Maintenance's ordinary retry respects Pause and is not explicit.
     hub.retry_resource_wait("explicit");
     assert!(rx.try_recv().is_err());
     hub.set_explicit_wait("explicit", true);
-    hub.drain_now("explicit");
+    hub.drain_now("explicit", &crate::prompt_origin::RequestCaller::Person);
     let request = rx.try_recv().unwrap();
     assert!(request.explicit);
     assert_eq!(request.cmid.as_deref(), Some("one"));
@@ -1031,11 +1093,18 @@ fn copy_undo_requires_the_original_unsent_row() {
         "original".into(),
         content.clone(),
         Some("copy-1".into()),
+        &crate::prompt_origin::RequestCaller::Person,
     );
     let id = hub.inner.sessions.lock()["undo-copy"].drafts[0].id.clone();
     assert!(!hub.remove_draft_if_unchanged("missing", "copy-1", "original", &content));
     assert!(!hub.remove_draft_if_unchanged("undo-copy", "copy-1", "original", &[]));
-    hub.edit_draft("undo-copy", &id, "edited".into(), content.clone());
+    hub.edit_draft(
+        "undo-copy",
+        &id,
+        "edited".into(),
+        content.clone(),
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     assert!(!hub.remove_draft_if_unchanged("undo-copy", "copy-1", "original", &content));
     assert_eq!(hub.inner.sessions.lock()["undo-copy"].drafts.len(), 1);
     assert!(hub.remove_draft_if_unchanged("undo-copy", "copy-1", "edited", &content));
@@ -1045,6 +1114,7 @@ fn copy_undo_requires_the_original_unsent_row() {
         "original".into(),
         content.clone(),
         Some("copy-2".into()),
+        &crate::prompt_origin::RequestCaller::Person,
     );
     hub.inner
         .sessions
@@ -1066,16 +1136,40 @@ async fn interrupt_hold_blocks_drain_and_only_its_owner_can_replace_once() {
     hub.set_dispatch_tx(tx);
     hub.set_status("held", Status::Running, None);
     hub.publish_delivery_hold("held", Some("interrupt-a".into()));
-    hub.submit("held", "queued".into(), vec![], Some("queued-a".into()));
-    hub.drain_now("held");
+    hub.submit(
+        "held",
+        "queued".into(),
+        vec![],
+        Some("queued-a".into()),
+        &crate::prompt_origin::RequestCaller::Person,
+    );
+    hub.drain_now("held", &crate::prompt_origin::RequestCaller::Person);
     assert!(rx.try_recv().is_err());
-    assert!(!hub.dispatch_interrupt_once("held", "wrong-owner", "wrong".into(), vec![]));
+    assert!(!hub.dispatch_interrupt_once(
+        "held",
+        "wrong-owner",
+        "wrong".into(),
+        vec![],
+        &crate::prompt_origin::RequestCaller::Person
+    ));
     hub.set_paused("held", true);
-    assert!(hub.dispatch_interrupt_once("held", "interrupt-a", "replacement".into(), vec![]));
+    assert!(hub.dispatch_interrupt_once(
+        "held",
+        "interrupt-a",
+        "replacement".into(),
+        vec![],
+        &crate::prompt_origin::RequestCaller::Person
+    ));
     let request = rx.try_recv().unwrap();
     assert_eq!(request.text, "replacement");
     assert_eq!(request.cmid.as_deref(), Some("interrupt-a"));
-    assert!(!hub.dispatch_interrupt_once("held", "interrupt-a", "duplicate".into(), vec![]));
+    assert!(!hub.dispatch_interrupt_once(
+        "held",
+        "interrupt-a",
+        "duplicate".into(),
+        vec![],
+        &crate::prompt_origin::RequestCaller::Person
+    ));
     hub.publish_delivery_hold("held", None);
     assert!(hub.session_info("held").unwrap().meta.paused);
     assert_eq!(queue_texts(&hub, "held"), vec!["queued"]);
@@ -1114,13 +1208,24 @@ async fn activated_image_draft_keeps_its_echo_identity_and_replay_is_deduped() {
         "caption".to_owned(),
         content.clone(),
         Some("draft-cmid".to_owned()),
+        &crate::prompt_origin::RequestCaller::Person,
     );
     let id = hub.inner.sessions.lock()["draft-send"].drafts[0].id.clone();
-    hub.activate_draft("draft-send", &id, Some("send-cmid".to_owned()));
+    hub.activate_draft(
+        "draft-send",
+        &id,
+        Some("send-cmid".to_owned()),
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     let dispatched = rx.recv().await.expect("draft dispatch");
     assert_eq!(dispatched.cmid.as_deref(), Some("send-cmid"));
     assert_eq!(dispatched.content, content);
-    hub.activate_draft("draft-send", &id, Some("send-cmid".to_owned()));
+    hub.activate_draft(
+        "draft-send",
+        &id,
+        Some("send-cmid".to_owned()),
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     assert!(
         rx.try_recv().is_err(),
         "replayed activation must not dispatch twice"
@@ -1150,6 +1255,7 @@ async fn activated_image_draft_keeps_its_echo_identity_and_replay_is_deduped() {
         "caption".to_owned(),
         vec![],
         Some("send-cmid".to_owned()),
+        &crate::prompt_origin::RequestCaller::Person,
     );
     assert!(
         rx.try_recv().is_err(),
@@ -1174,9 +1280,10 @@ async fn bulk_draft_activation_preserves_ids_in_dispatch_and_queue() {
             "prompt".to_owned(),
             vec![],
             cmid.map(str::to_owned),
+            &crate::prompt_origin::RequestCaller::Person,
         );
     }
-    hub.activate_all_drafts("bulk-drafts");
+    hub.activate_all_drafts("bulk-drafts", &crate::prompt_origin::RequestCaller::Person);
     assert_eq!(
         rx.recv().await.expect("first dispatch").cmid.as_deref(),
         Some("first")
@@ -1201,6 +1308,7 @@ async fn legacy_draft_activation_keeps_the_source_identity_when_available() {
             "prompt".to_owned(),
             vec![],
             cmid.map(str::to_owned),
+            &crate::prompt_origin::RequestCaller::Person,
         );
         let id = hub.inner.sessions.lock()["legacy-draft-send"].drafts[0]
             .id
@@ -1218,11 +1326,22 @@ async fn legacy_draft_activation_keeps_the_source_identity_when_available() {
             panic!("expected draft activation");
         };
         assert!(send_cmid.is_none());
-        hub.activate_draft(&session_id, &id, send_cmid);
-        assert_eq!(
-            rx.recv().await.expect("draft dispatch").cmid.as_deref(),
-            cmid
+        hub.activate_draft(
+            &session_id,
+            &id,
+            send_cmid,
+            &crate::prompt_origin::RequestCaller::Person,
         );
+        let dispatched_cmid = rx.recv().await.expect("draft dispatch").cmid;
+        match cmid {
+            Some(expected) => assert_eq!(dispatched_cmid.as_deref(), Some(expected)),
+            None => assert!(
+                dispatched_cmid
+                    .as_deref()
+                    .is_some_and(|id| id.starts_with("cowboy-dispatch:")),
+                "dispatches without client cmid receive a synthetic dispatch cmid: {dispatched_cmid:?}"
+            ),
+        }
     }
 }
 
@@ -1234,17 +1353,30 @@ async fn replayed_submit_before_echo_stays_unconfirmed_and_is_not_rerun() {
     let (tx, mut rx) = mpsc::channel(4);
     hub.set_dispatch_tx(tx);
     hub.set_status("replay", Status::Running, None);
-    hub.submit("replay", "hello".to_owned(), vec![], Some("c-1".to_owned()));
+    hub.submit(
+        "replay",
+        "hello".to_owned(),
+        vec![],
+        Some("c-1".to_owned()),
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     assert_eq!(rx.recv().await.expect("first dispatch").text, "hello");
 
     let mut live = hub.subscribe();
-    hub.submit("replay", "hello".to_owned(), vec![], Some("c-1".to_owned()));
+    hub.submit(
+        "replay",
+        "hello".to_owned(),
+        vec![],
+        Some("c-1".to_owned()),
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     assert!(!hub.force_submit(
         "replay",
         "hello".to_owned(),
         vec![],
         Some("c-1".to_owned()),
         true,
+        &crate::prompt_origin::RequestCaller::Person,
     ));
     assert!(
         rx.try_recv().is_err(),
@@ -1269,7 +1401,13 @@ async fn replayed_submit_before_echo_stays_unconfirmed_and_is_not_rerun() {
     // A fresh reconnect can now retire the outbox: transcript replay owns
     // the prompt. The original dispatch remains the only execution.
     let mut live = hub.subscribe();
-    hub.submit("replay", "hello".to_owned(), vec![], Some("c-1".to_owned()));
+    hub.submit(
+        "replay",
+        "hello".to_owned(),
+        vec![],
+        Some("c-1".to_owned()),
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     assert!(rx.try_recv().is_err());
     let frame = live.try_recv().expect("echo-backed confirmation");
     let Outbound::SyncPatch {
@@ -1297,7 +1435,13 @@ async fn replayed_submit_before_echo_stays_unconfirmed_and_is_not_rerun() {
         assert!(!s.log.iter().any(is_user_message_chunk));
     }
     let mut live = hub.subscribe();
-    hub.submit("replay", "hello".to_owned(), vec![], Some("c-1".to_owned()));
+    hub.submit(
+        "replay",
+        "hello".to_owned(),
+        vec![],
+        Some("c-1".to_owned()),
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     assert!(rx.try_recv().is_err(), "evicted echoes must not run again");
     let frame = live.try_recv().expect("retained delivery evidence");
     assert!(
@@ -1327,6 +1471,7 @@ async fn replayed_submit_is_recognised_from_the_persisted_echo() {
         "hello".to_owned(),
         vec![],
         Some("c-2".to_owned()),
+        &crate::prompt_origin::RequestCaller::Person,
     );
     assert!(
         rx.try_recv().is_err(),
@@ -1337,7 +1482,13 @@ async fn replayed_submit_is_recognised_from_the_persisted_echo() {
     // Hub-synthesized ids are reusable on purpose and never deduped by the log.
     let synthesized = "cowboy-retry:restored:1".to_owned();
     hub.push_tagged("restored", echo(), Some(synthesized.clone()));
-    hub.submit("restored", "again".to_owned(), vec![], Some(synthesized));
+    hub.submit(
+        "restored",
+        "again".to_owned(),
+        vec![],
+        Some(synthesized),
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     assert_eq!(
         rx.recv().await.expect("synthesized id dispatches").text,
         "again"
@@ -1358,6 +1509,7 @@ async fn replayed_image_submit_retains_payload_until_requeued() {
         "explain".into(),
         content.clone(),
         Some("image-1".into()),
+        &crate::prompt_origin::RequestCaller::Person,
     );
     let dispatched = rx.recv().await.unwrap();
     assert_eq!(dispatched.content, content);
@@ -1375,6 +1527,7 @@ async fn replayed_image_submit_retains_payload_until_requeued() {
         "explain".into(),
         content.clone(),
         Some("image-1".into()),
+        &crate::prompt_origin::RequestCaller::Person,
     );
     assert!(rx.try_recv().is_err());
     assert!(live.try_recv().is_err());
@@ -1385,6 +1538,8 @@ async fn replayed_image_submit_retains_payload_until_requeued() {
         dispatched.text,
         dispatched.content,
         dispatched.cmid,
+        None,
+        None,
     );
     let mut live = hub.subscribe();
     hub.submit(
@@ -1392,6 +1547,7 @@ async fn replayed_image_submit_retains_payload_until_requeued() {
         "explain".into(),
         content.clone(),
         Some("image-1".into()),
+        &crate::prompt_origin::RequestCaller::Person,
     );
     let frame = live.try_recv().expect("queue-backed acknowledgement");
     let Outbound::SyncPatch {
@@ -1415,6 +1571,7 @@ fn replayed_add_draft_is_confirmed_not_duplicated() {
         "later".to_owned(),
         vec![],
         Some("d-1".to_owned()),
+        &crate::prompt_origin::RequestCaller::Person,
     );
     let mut live = hub.subscribe();
     hub.add_draft(
@@ -1422,6 +1579,7 @@ fn replayed_add_draft_is_confirmed_not_duplicated() {
         "later".to_owned(),
         vec![],
         Some("d-1".to_owned()),
+        &crate::prompt_origin::RequestCaller::Person,
     );
     let frame = live.try_recv().expect("replayed draft confirmation");
     let Outbound::SyncPatch {
@@ -1521,25 +1679,73 @@ fn folder_create_replayed_across_restart_is_confirmed() {
 #[test]
 fn queue_and_draft_edits_report_whether_the_row_still_exists() {
     let hub = hub_with_session("rows");
-    hub.submit("rows", "queued".to_owned(), vec![], Some("q-1".to_owned()));
-    hub.add_draft("rows", "draft".to_owned(), vec![], Some("d-1".to_owned()));
+    hub.submit(
+        "rows",
+        "queued".to_owned(),
+        vec![],
+        Some("q-1".to_owned()),
+        &crate::prompt_origin::RequestCaller::Person,
+    );
+    hub.add_draft(
+        "rows",
+        "draft".to_owned(),
+        vec![],
+        Some("d-1".to_owned()),
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     let Some(Outbound::SyncPatch { value, .. }) = hub.queue_resync("rows") else {
         panic!("expected a queue resync");
     };
     let queued = value["queue"][0]["id"].as_str().unwrap().to_owned();
     let draft = value["drafts"][0]["id"].as_str().unwrap().to_owned();
 
-    assert!(hub.edit_queued("rows", &queued, "edited".to_owned(), vec![]));
-    assert!(!hub.edit_queued("rows", "missing", "edited".to_owned(), vec![]));
+    assert!(hub.edit_queued(
+        "rows",
+        &queued,
+        "edited".to_owned(),
+        vec![],
+        &crate::prompt_origin::RequestCaller::Person
+    ));
+    assert!(!hub.edit_queued(
+        "rows",
+        "missing",
+        "edited".to_owned(),
+        vec![],
+        &crate::prompt_origin::RequestCaller::Person
+    ));
     assert!(hub.remove_queued("rows", &queued));
     assert!(!hub.remove_queued("rows", &queued));
-    assert!(!hub.edit_queued("rows", &queued, String::new(), vec![]));
+    assert!(!hub.edit_queued(
+        "rows",
+        &queued,
+        String::new(),
+        vec![],
+        &crate::prompt_origin::RequestCaller::Person
+    ));
 
-    assert!(hub.edit_draft("rows", &draft, "edited".to_owned(), vec![]));
-    assert!(!hub.edit_draft("rows", "missing", "edited".to_owned(), vec![]));
+    assert!(hub.edit_draft(
+        "rows",
+        &draft,
+        "edited".to_owned(),
+        vec![],
+        &crate::prompt_origin::RequestCaller::Person
+    ));
+    assert!(!hub.edit_draft(
+        "rows",
+        "missing",
+        "edited".to_owned(),
+        vec![],
+        &crate::prompt_origin::RequestCaller::Person
+    ));
     assert!(hub.remove_draft("rows", &draft));
     assert!(!hub.remove_draft("rows", &draft));
-    assert!(!hub.edit_draft("rows", &draft, String::new(), vec![]));
+    assert!(!hub.edit_draft(
+        "rows",
+        &draft,
+        String::new(),
+        vec![],
+        &crate::prompt_origin::RequestCaller::Person
+    ));
 
     assert!(!hub.remove_queued("gone", "x"));
     assert!(!hub.remove_draft("gone", "x"));
@@ -1654,7 +1860,13 @@ fn deleting_a_session_drops_its_sync_states() {
         &serde_json::json!({"path": "README.md"}),
     )
     .unwrap();
-    hub.add_draft("gone", "draft".to_owned(), vec![], Some("d-1".to_owned()));
+    hub.add_draft(
+        "gone",
+        "draft".to_owned(),
+        vec![],
+        Some("d-1".to_owned()),
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     assert!(hub.inner.sync.lock().contains_key("mobile-review:gone"));
     assert!(hub.inner.sync.lock().contains_key("queue:gone"));
     assert!(hub.delete_session("gone"));
@@ -1726,10 +1938,20 @@ async fn retry_after_startup_failure_dispatches_the_original_queued_prompt_once(
         "first prompt".into(),
         content.clone(),
         Some("original-cmid".into()),
+        None,
+        None,
     );
 
-    hub.retry_turn("startup-retry");
-    hub.retry_turn("startup-retry");
+    hub.retry_turn(
+        "startup-retry",
+        &crate::prompt_origin::RequestCaller::Person,
+        None,
+    );
+    hub.retry_turn(
+        "startup-retry",
+        &crate::prompt_origin::RequestCaller::Person,
+        None,
+    );
 
     let dispatched = rx.try_recv().expect("startup retry reaches dispatch");
     assert_eq!(dispatched.text, "first prompt");
@@ -1755,8 +1977,16 @@ async fn repeated_retry_dispatches_original_prompt_once() {
     );
     hub.set_status("retry-once", Status::Crashed, Some("boom".to_owned()));
 
-    hub.retry_turn("retry-once");
-    hub.retry_turn("retry-once");
+    hub.retry_turn(
+        "retry-once",
+        &crate::prompt_origin::RequestCaller::Person,
+        None,
+    );
+    hub.retry_turn(
+        "retry-once",
+        &crate::prompt_origin::RequestCaller::Person,
+        None,
+    );
 
     let first = rx.recv().await.expect("first retry");
     assert_eq!(first.text, "do the thing");
@@ -1792,7 +2022,11 @@ async fn retry_resubmits_every_block_of_the_last_prompt() {
     }
     hub.set_status("retry-blocks", Status::Crashed, Some("boom".to_owned()));
 
-    hub.retry_turn("retry-blocks");
+    hub.retry_turn(
+        "retry-blocks",
+        &crate::prompt_origin::RequestCaller::Person,
+        None,
+    );
 
     let dispatched = rx.try_recv().expect("retry dispatches the last prompt");
     assert_eq!(dispatched.text, "describe this");
@@ -1826,7 +2060,11 @@ async fn retry_of_a_prompt_ending_with_an_image_is_not_a_no_op() {
         Some("boom".to_owned()),
     );
 
-    hub.retry_turn("retry-trailing-image");
+    hub.retry_turn(
+        "retry-trailing-image",
+        &crate::prompt_origin::RequestCaller::Person,
+        None,
+    );
 
     let dispatched = rx
         .try_recv()
@@ -1881,7 +2119,11 @@ async fn retry_restores_image_bytes_externalized_into_artifacts() {
     );
     hub.set_status("retry-artifact", Status::Crashed, Some("boom".to_owned()));
 
-    hub.retry_turn("retry-artifact");
+    hub.retry_turn(
+        "retry-artifact",
+        &crate::prompt_origin::RequestCaller::Person,
+        None,
+    );
 
     let dispatched = rx.try_recv().expect("retry dispatches the prompt");
     assert_eq!(dispatched.text, "what is this");
@@ -1921,7 +2163,11 @@ async fn retry_refuses_visibly_when_the_stored_attachment_is_gone() {
         Some("boom".to_owned()),
     );
 
-    hub.retry_turn("retry-lost-artifact");
+    hub.retry_turn(
+        "retry-lost-artifact",
+        &crate::prompt_origin::RequestCaller::Person,
+        None,
+    );
 
     assert!(
         rx.try_recv().is_err(),
@@ -1971,9 +2217,15 @@ async fn retry_of_an_attachment_only_prompt_keeps_a_different_queued_attachment(
             "name": "notes.txt"
         })],
         Some("other-cmid".to_owned()),
+        None,
+        None,
     );
 
-    hub.retry_turn("retry-attachment-only");
+    hub.retry_turn(
+        "retry-attachment-only",
+        &crate::prompt_origin::RequestCaller::Person,
+        None,
+    );
 
     let dispatched = rx.try_recv().expect("the failed image prompt is retried");
     assert_eq!(dispatched.content, vec![failed]);
@@ -2010,9 +2262,15 @@ async fn retry_drains_rejected_prompt_without_enqueuing_a_copy() {
         "preserve this prompt".to_owned(),
         vec![serde_json::json!({"type": "text", "text": "preserve this prompt"})],
         Some("original-cmid".to_owned()),
+        Some(crate::prompt_origin::DeliveryOrigin::Owner),
+        Some(crate::prompt_origin::DeliveryOrigin::Owner),
     );
 
-    hub.retry_turn("retry-requeued");
+    hub.retry_turn(
+        "retry-requeued",
+        &crate::prompt_origin::RequestCaller::Person,
+        None,
+    );
 
     let dispatched = rx.recv().await.expect("requeued prompt");
     assert_eq!(dispatched.text, "preserve this prompt");
@@ -3358,7 +3616,13 @@ fn native_binding_projection_is_scoped_idempotent_and_preserves_user_state() {
         },
     };
     let behavior = crate::provider::legacy_behavior("claude-code");
-    hub.add_draft(&before.id, "keep draft".into(), vec![], None);
+    hub.add_draft(
+        &before.id,
+        "keep draft".into(),
+        vec![],
+        None,
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     let history = hub.snapshot(&before.id).unwrap().0;
     let mut wrong = expected.clone();
     wrong.machine_id = "different".into();
@@ -3462,13 +3726,25 @@ fn native_readmission_declaration_contract(
 async fn provider_reload_preserves_identity_and_fences_new_prompts() {
     let (hub, before) = provider_reload_fixture();
     let behavior = crate::provider::legacy_behavior("codex");
-    hub.add_draft(&before.id, "saved draft".to_owned(), vec![], None);
+    hub.add_draft(
+        &before.id,
+        "saved draft".to_owned(),
+        vec![],
+        None,
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     let (tx, mut rx) = mpsc::channel(4);
     hub.set_dispatch_tx(tx);
     let (history, _) = hub.snapshot(&before.id).expect("history");
     hub.begin_provider_reload(&before, "new-version", "new-digest", &behavior, false, None)
         .expect("reload");
-    hub.submit(&before.id, "racing prompt".to_owned(), vec![], None);
+    hub.submit(
+        &before.id,
+        "racing prompt".to_owned(),
+        vec![],
+        None,
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     assert!(rx.try_recv().is_err(), "prompt must wait for replacement");
     let after = hub.session_info(&before.id).expect("session");
     assert_eq!(after.meta.provider_version, "new-version");
@@ -3770,7 +4046,13 @@ async fn provider_reload_rejects_a_prompt_that_won_the_race() {
     let (hub, before) = provider_reload_fixture();
     let (tx, mut rx) = mpsc::channel(4);
     hub.set_dispatch_tx(tx);
-    hub.submit(&before.id, "active prompt".to_owned(), vec![], None);
+    hub.submit(
+        &before.id,
+        "active prompt".to_owned(),
+        vec![],
+        None,
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     assert!(rx.recv().await.is_some());
     let behavior = crate::provider::legacy_behavior("codex");
     assert!(
@@ -4040,12 +4322,24 @@ async fn context_reset_releases_stale_in_flight_guard_for_queued_send() {
     hub.set_dispatch_tx(tx);
     hub.set_status("reset-queue", Status::Running, None);
 
-    hub.submit("reset-queue", "old turn".to_owned(), vec![], None);
+    hub.submit(
+        "reset-queue",
+        "old turn".to_owned(),
+        vec![],
+        None,
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     let old_turn = rx.recv().await.expect("old turn dispatch");
     assert_eq!(old_turn.text, "old turn");
     // This test resets an already handed-off runtime turn.
     drop(old_turn);
-    hub.submit("reset-queue", "after reset".to_owned(), vec![], None);
+    hub.submit(
+        "reset-queue",
+        "after reset".to_owned(),
+        vec![],
+        None,
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     assert_eq!(queue_texts(&hub, "reset-queue"), vec!["after reset"]);
 
     hub.prepare_context_reset("reset-queue");
@@ -4070,6 +4364,7 @@ async fn context_reset_preserves_pending_dispatch_order_and_failed_prompt() {
             "first".into(),
             vec![],
             Some("first".into()),
+            &crate::prompt_origin::RequestCaller::Person,
         );
         let first = rx.recv().await.unwrap();
 
@@ -4081,8 +4376,12 @@ async fn context_reset_preserves_pending_dispatch_order_and_failed_prompt() {
             "second".into(),
             vec![],
             Some("second".into()),
+            &crate::prompt_origin::RequestCaller::Person,
         );
-        hub.drain_now("reset-preflight");
+        hub.drain_now(
+            "reset-preflight",
+            &crate::prompt_origin::RequestCaller::Person,
+        );
         assert!(
             rx.try_recv().is_err(),
             "reset cannot supersede preflight ownership"
@@ -4090,7 +4389,14 @@ async fn context_reset_preserves_pending_dispatch_order_and_failed_prompt() {
         assert_eq!(queue_texts(&hub, "reset-preflight"), vec!["second"]);
 
         if failed {
-            hub.requeue_prompt(&first.session_id, first.text, first.content, first.cmid);
+            hub.requeue_prompt(
+                &first.session_id,
+                first.text,
+                first.content,
+                first.cmid,
+                None,
+                None,
+            );
             drop(first.ownership);
             hub.try_drain("reset-preflight");
             let retry = rx.recv().await.unwrap();
@@ -4118,9 +4424,21 @@ async fn clean_turn_end_drains_next_message_without_classifier_hold() {
     hub.set_dispatch_tx(tx);
     hub.set_status("queue-after-turn", Status::Running, None);
 
-    hub.submit("queue-after-turn", "first".to_owned(), vec![], None);
+    hub.submit(
+        "queue-after-turn",
+        "first".to_owned(),
+        vec![],
+        None,
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     assert_eq!(rx.recv().await.expect("first dispatch").text, "first");
-    hub.submit("queue-after-turn", "second".to_owned(), vec![], None);
+    hub.submit(
+        "queue-after-turn",
+        "second".to_owned(),
+        vec![],
+        None,
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     assert_eq!(queue_texts(&hub, "queue-after-turn"), vec!["second"]);
 
     hub.set_status("queue-after-turn", Status::Busy, None);
@@ -4140,7 +4458,8 @@ async fn repeated_interrupt_admission_cannot_cancel_or_drain_again() {
             "correction".into(),
             vec![],
             Some("same-send".into()),
-            true
+            true,
+            &crate::prompt_origin::RequestCaller::Person
         ),
         Some(true)
     );
@@ -4150,7 +4469,8 @@ async fn repeated_interrupt_admission_cannot_cancel_or_drain_again() {
             "correction".into(),
             vec![],
             Some("same-send".into()),
-            true
+            true,
+            &crate::prompt_origin::RequestCaller::Person
         ),
         None
     );
@@ -4169,6 +4489,7 @@ async fn turn_end_then_idle_status_dispatches_only_the_force_pushed_prompt() {
         "active turn".to_owned(),
         vec![],
         None,
+        &crate::prompt_origin::RequestCaller::Person,
     );
     assert_eq!(
         rx.recv().await.expect("active dispatch").text,
@@ -4180,6 +4501,7 @@ async fn turn_end_then_idle_status_dispatches_only_the_force_pushed_prompt() {
         "old queue head".to_owned(),
         vec![],
         None,
+        &crate::prompt_origin::RequestCaller::Person,
     );
     assert!(hub.force_submit(
         "force-turn-end-first",
@@ -4187,6 +4509,7 @@ async fn turn_end_then_idle_status_dispatches_only_the_force_pushed_prompt() {
         vec![],
         None,
         true,
+        &crate::prompt_origin::RequestCaller::Person,
     ));
     assert_eq!(
         queue_texts(&hub, "force-turn-end-first"),
@@ -4224,7 +4547,13 @@ async fn idle_status_then_turn_end_dispatches_only_the_force_pushed_prompt() {
     hub.set_dispatch_tx(tx);
     hub.set_status("force-idle-first", Status::Running, None);
 
-    hub.submit("force-idle-first", "active turn".to_owned(), vec![], None);
+    hub.submit(
+        "force-idle-first",
+        "active turn".to_owned(),
+        vec![],
+        None,
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     assert_eq!(
         rx.recv().await.expect("active dispatch").text,
         "active turn"
@@ -4235,6 +4564,7 @@ async fn idle_status_then_turn_end_dispatches_only_the_force_pushed_prompt() {
         "old queue head".to_owned(),
         vec![],
         None,
+        &crate::prompt_origin::RequestCaller::Person,
     );
     assert!(hub.force_submit(
         "force-idle-first",
@@ -4242,6 +4572,7 @@ async fn idle_status_then_turn_end_dispatches_only_the_force_pushed_prompt() {
         vec![],
         None,
         true,
+        &crate::prompt_origin::RequestCaller::Person,
     ));
 
     hub.set_status("force-idle-first", Status::Running, None);
@@ -4284,13 +4615,20 @@ async fn authoritative_runtime_idle_releases_missed_turn_lifecycle_guard() {
         "lost lifecycle turn".to_owned(),
         vec![],
         None,
+        &crate::prompt_origin::RequestCaller::Person,
     );
     let first = rx.recv().await.expect("first dispatch");
     assert_eq!(first.text, "lost lifecycle turn");
     // The dispatcher has handed this prompt to the runtime. Keeping its
     // request alive would instead model a still-pending async preflight.
     drop(first);
-    hub.submit("runtime-reconnect", "queued turn".to_owned(), vec![], None);
+    hub.submit(
+        "runtime-reconnect",
+        "queued turn".to_owned(),
+        vec![],
+        None,
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     assert_eq!(queue_texts(&hub, "runtime-reconnect"), vec!["queued turn"]);
 
     let guard_epoch = hub
@@ -4562,13 +4900,14 @@ async fn antigravity_drafts_are_scheduled_and_notices_queue_like_any_session() {
         vec![],
         i64::MAX,
         crate::model::Delivery::Back,
+        &crate::prompt_origin::RequestCaller::Person,
     );
     let drafts = hub.queue_and_drafts("agy", |_| true).unwrap().1;
     assert_eq!(drafts.len(), 1);
     assert!(drafts[0].schedule.is_some());
     // Managed-call notices and wakeups are prompts, not parked drafts.
     hub.submit_call_notice("agy", "call-1", "call finished".into());
-    hub.submit_automatic("agy", "wake".into(), "__wakeup-agy".into());
+    hub.submit_automatic("agy", "wake".into(), "__wakeup-agy".into(), "schedule");
     assert_eq!(hub.queue_and_drafts("agy", |_| true).unwrap().1.len(), 1);
 }
 

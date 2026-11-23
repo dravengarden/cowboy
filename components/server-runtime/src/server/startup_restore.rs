@@ -67,6 +67,11 @@ pub async fn restore_hub_from_store(store: &Store, hub: &Hub) -> anyhow::Result<
     // one bounded reconnect window to prove ownership; only then may a
     // missing worker become Interrupted.
     hub.restore_reconciling_runtime(restored);
+    let dispatches = store
+        .recent_prompt_dispatches(crate::store::prompt_dispatches::STARTUP_HYDRATE_PER_SESSION)
+        .await
+        .context("loading recent prompt dispatches")?;
+    hub.hydrate_prompt_dispatches(dispatches);
     crate::session_context::restore_announcements(hub);
     hub.restore_continuations();
     hub.restore_forks();

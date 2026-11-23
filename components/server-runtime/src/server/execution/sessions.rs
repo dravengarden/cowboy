@@ -349,6 +349,7 @@ async fn create_checked(
         &session_id,
         request.initial_prompt,
         format!("execution-initial:{session_id}"),
+        &authenticated.caller,
     );
     super::super::session_context::initialized(state, &session_id).await?;
     schedule(state, &session_id);

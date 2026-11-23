@@ -1160,11 +1160,18 @@ impl RemoteRuntime {
             let CoreCommand::Prompt { content, cmid, .. } = command else {
                 unreachable!("only prompts withdrawn")
             };
-            let origin = crate::prompt_origin::origin_from_cmid(cmid.as_deref());
+            let recorded = cmid
+                .as_deref()
+                .and_then(|c| self.shared.hub.prompt_dispatch_origin(session_id, c));
             for (index, content) in content.into_iter().enumerate() {
                 let mut update =
                     serde_json::json!({"sessionUpdate":"user_message_chunk", "content":content});
-                crate::prompt_origin::apply_prompt_origin(&mut update, &origin);
+                if let Some(origin) = recorded.as_ref() {
+                    crate::prompt_origin::apply_authoritative_prompt_origin(&mut update, origin);
+                } else {
+                    let origin = crate::prompt_origin::origin_from_cmid(cmid.as_deref());
+                    crate::prompt_origin::apply_prompt_origin(&mut update, &origin);
+                }
                 self.shared.hub.push_tagged(
                     session_id,
                     Event::Update { update },
@@ -2740,7 +2747,7 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
                 return; // Worker metadata, never a transcript row.
             }
             let compact_failure = remote_compact_failure(hub, session_id, &update);
-            hub.push_tagged(session_id, Event::Update { update }, cmid);
+            hub.push_tagged_from_worker(session_id, Event::Update { update }, cmid);
             if let Some(message) = compact_failure {
                 hub.record_session_error(session_id, &message);
             }
@@ -2832,7 +2839,7 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
                 .filter_map(|value| value.get("text").and_then(serde_json::Value::as_str))
                 .collect::<Vec<_>>()
                 .join("\n");
-            hub.requeue_prompt(session_id, text, content, cmid);
+            hub.requeue_prompt(session_id, text, content, cmid, None, None);
             hub.broadcast_error(Some(session_id.to_owned()), error);
         }
         RuntimeEvent::CommandRejected { message, .. } | RuntimeEvent::Error { message } => {
@@ -2991,7 +2998,7 @@ fn handle_rejected_command(
             .filter_map(|value| value.get("text").and_then(serde_json::Value::as_str))
             .collect::<Vec<_>>()
             .join("\n");
-        hub.requeue_prompt(session_id, text, content, cmid);
+        hub.requeue_prompt(session_id, text, content, cmid, None, None);
     }
     hub.broadcast_error(Some(session_id.to_owned()), reason);
 }
@@ -3468,10 +3475,22 @@ mod tests {
             let (tx, mut rx) = mpsc::channel(4);
             hub.set_dispatch_tx(tx);
             hub.set_status("s", Status::Running, None);
-            hub.submit("s", "first".to_owned(), vec![], Some("first".to_owned()));
+            hub.submit(
+                "s",
+                "first".to_owned(),
+                vec![],
+                Some("first".to_owned()),
+                &crate::prompt_origin::RequestCaller::Person,
+            );
             assert_eq!(rx.recv().await.unwrap().text, "first");
             hub.set_status("s", Status::Busy, None);
-            hub.submit("s", "next task".to_owned(), vec![], Some("next".to_owned()));
+            hub.submit(
+                "s",
+                "next task".to_owned(),
+                vec![],
+                Some("next".to_owned()),
+                &crate::prompt_origin::RequestCaller::Person,
+            );
             let diagnostic = "The provider declined the request.";
             apply_event(&hub, "s", assistant_chunk(diagnostic));
             // Assistant prose alone must never trigger the hold.
@@ -3514,13 +3533,14 @@ mod tests {
             assert!(rx.try_recv().is_err());
             // An explicit send can beat the old turn's trailing idle edge.
             // Reaffirming the hold must not complete that new dispatch.
-            hub.drain_now("s");
+            hub.drain_now("s", &crate::prompt_origin::RequestCaller::Person);
             assert_eq!(rx.recv().await.unwrap().text, "next task");
             hub.submit(
                 "s",
                 "third task".to_owned(),
                 vec![],
                 Some("third".to_owned()),
+                &crate::prompt_origin::RequestCaller::Person,
             );
             apply_event(
                 &hub,
@@ -3532,7 +3552,7 @@ mod tests {
             );
             assert_eq!(hub.status("s"), Some(Status::Crashed));
             assert!(hub.session_has_in_flight_prompt("s"));
-            hub.drain_now("s");
+            hub.drain_now("s", &crate::prompt_origin::RequestCaller::Person);
             assert!(rx.try_recv().is_err());
 
             apply_event(
@@ -3544,7 +3564,7 @@ mod tests {
             );
             assert_eq!(hub.status("s"), Some(Status::Crashed));
             assert!(hub.session_has_in_flight_prompt("s"));
-            hub.drain_now("s");
+            hub.drain_now("s", &crate::prompt_origin::RequestCaller::Person);
             assert!(rx.try_recv().is_err());
 
             let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
@@ -3566,7 +3586,7 @@ mod tests {
                     Some(crate::core::MODEL_REFUSAL_DETAIL)
                 );
                 assert!(hub.session_has_in_flight_prompt("s"));
-                hub.drain_now("s");
+                hub.drain_now("s", &crate::prompt_origin::RequestCaller::Person);
                 assert!(rx.try_recv().is_err());
             }
             assert_eq!(
@@ -3633,6 +3653,7 @@ mod tests {
             "first".to_owned(),
             Vec::new(),
             Some("cmid-1".to_owned()),
+            &crate::prompt_origin::RequestCaller::Person,
         );
         assert_eq!(rx.recv().await.expect("first dispatch").text, "first");
         hub.submit(
@@ -3640,6 +3661,7 @@ mod tests {
             "second".to_owned(),
             Vec::new(),
             Some("cmid-2".to_owned()),
+            &crate::prompt_origin::RequestCaller::Person,
         );
         assert!(hub.session_has_in_flight_prompt("s"));
 
@@ -6312,8 +6334,20 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
         hub.set_dispatch_tx(tx);
         hub.set_status("s", Status::Starting, None);
-        hub.submit("s", "first".to_owned(), vec![], None);
-        hub.submit("s", "second".to_owned(), vec![], None);
+        hub.submit(
+            "s",
+            "first".to_owned(),
+            vec![],
+            None,
+            &crate::prompt_origin::RequestCaller::Person,
+        );
+        hub.submit(
+            "s",
+            "second".to_owned(),
+            vec![],
+            None,
+            &crate::prompt_origin::RequestCaller::Person,
+        );
         assert!(
             rx.try_recv().is_err(),
             "Starting session must retain its queue"
@@ -6352,8 +6386,20 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
         hub.set_dispatch_tx(tx);
         hub.set_status("s", Status::Running, None);
-        hub.submit("s", "first".into(), vec![], None);
-        hub.submit("s", "second".into(), vec![], None);
+        hub.submit(
+            "s",
+            "first".into(),
+            vec![],
+            None,
+            &crate::prompt_origin::RequestCaller::Person,
+        );
+        hub.submit(
+            "s",
+            "second".into(),
+            vec![],
+            None,
+            &crate::prompt_origin::RequestCaller::Person,
+        );
         let runtime = RemoteRuntime::for_test(hub.clone(), vec![snapshot("s")]);
         let mut idle = snapshot("s");
         idle.state = WorkerState::Running;
@@ -6392,9 +6438,21 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
         hub.set_dispatch_tx(tx);
         hub.set_status("s", Status::Running, None);
-        hub.submit("s", "first".to_owned(), vec![], None);
+        hub.submit(
+            "s",
+            "first".to_owned(),
+            vec![],
+            None,
+            &crate::prompt_origin::RequestCaller::Person,
+        );
         assert_eq!(rx.recv().await.expect("first dispatch").text, "first");
-        hub.submit("s", "second".to_owned(), vec![], None);
+        hub.submit(
+            "s",
+            "second".to_owned(),
+            vec![],
+            None,
+            &crate::prompt_origin::RequestCaller::Person,
+        );
 
         let runtime = RemoteRuntime::for_test(hub, vec![snapshot("s")]);
         runtime.shared.pending.lock().insert(
@@ -6444,9 +6502,21 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
         hub.set_dispatch_tx(tx);
         hub.set_status("s", Status::Running, None);
-        hub.submit("s", "first".to_owned(), vec![], None);
+        hub.submit(
+            "s",
+            "first".to_owned(),
+            vec![],
+            None,
+            &crate::prompt_origin::RequestCaller::Person,
+        );
         assert_eq!(rx.recv().await.expect("first dispatch").text, "first");
-        hub.submit("s", "second".to_owned(), vec![], None);
+        hub.submit(
+            "s",
+            "second".to_owned(),
+            vec![],
+            None,
+            &crate::prompt_origin::RequestCaller::Person,
+        );
 
         let runtime = RemoteRuntime::for_test(hub, vec![snapshot("s")]);
         let mut snapshot_with_pending = snapshot("s");
@@ -6492,9 +6562,21 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
         hub.set_dispatch_tx(tx);
         hub.set_status("s", Status::Running, None);
-        hub.submit("s", "interrupted".to_owned(), vec![], None);
+        hub.submit(
+            "s",
+            "interrupted".to_owned(),
+            vec![],
+            None,
+            &crate::prompt_origin::RequestCaller::Person,
+        );
         assert_eq!(rx.recv().await.expect("first dispatch").text, "interrupted");
-        hub.submit("s", "after restart".to_owned(), vec![], None);
+        hub.submit(
+            "s",
+            "after restart".to_owned(),
+            vec![],
+            None,
+            &crate::prompt_origin::RequestCaller::Person,
+        );
         hub.set_status("s", Status::Starting, None);
 
         let mut starting = snapshot("s");

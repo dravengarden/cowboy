@@ -251,6 +251,8 @@ fn pending(id: &str, text: &str, cmid: &str) -> QueuedMessage {
         content: Vec::new(),
         cmid: Some(cmid.to_owned()),
         schedule: None,
+        origin: None,
+        initiator: None,
     }
 }
 

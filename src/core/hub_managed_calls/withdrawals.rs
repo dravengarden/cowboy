@@ -30,6 +30,8 @@ impl Hub {
                 content: content.clone(),
                 cmid: None,
                 schedule: None,
+                origin: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
+                initiator: None,
             };
             drafts.push(draft.clone());
             added_drafts.push(draft);

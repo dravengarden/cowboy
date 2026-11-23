@@ -276,9 +276,11 @@ pub async fn api_session_cache_protection(
 /// not an interactive client. Works on any session, including `system` ones.
 pub async fn api_session_prompt(
     State(state): State<Arc<AppState>>,
+    Extension(authenticated): Extension<AuthenticatedProductRequest>,
     Path(session_id): Path<String>,
     Json(req): Json<SessionPromptRequest>,
 ) -> Response {
+    let caller = authenticated.caller;
     if crate::session_context::pending(&state.hub, &session_id) {
         return (
             StatusCode::CONFLICT,
@@ -295,10 +297,10 @@ pub async fn api_session_prompt(
         delivery,
         SendDelivery::CurrentTurn | SendDelivery::NextCheckpoint
     ) {
-        return send_delivery::submit(state, session_id, req).await;
+        return send_delivery::submit(state, session_id, caller, req).await;
     }
     if delivery == SendDelivery::Interrupt && req.target.is_some() {
-        return send_delivery::submit(state, session_id, req).await;
+        return send_delivery::submit(state, session_id, caller, req).await;
     }
     // Keep the read guard through dispatch. Provider uninstall acquires the
     // write guard before it snapshots active turns, so a prompt can never slip
@@ -361,7 +363,7 @@ pub async fn api_session_prompt(
         let Some(queued) =
             state
                 .hub
-                .force_submit_once(&session_id, req.text, req.content, cmid, true)
+                .force_submit_once(&session_id, req.text, req.content, cmid, true, &caller)
         else {
             return (StatusCode::ACCEPTED, "already accepted").into_response();
         };
@@ -375,14 +377,16 @@ pub async fn api_session_prompt(
                 return (StatusCode::CONFLICT, error).into_response();
             }
         } else {
-            state.hub.drain_now(&session_id);
+            state.hub.drain_now(&session_id, &caller);
         }
     } else if req.front {
         let _ = state
             .hub
-            .force_submit(&session_id, req.text, req.content, cmid, false);
+            .force_submit(&session_id, req.text, req.content, cmid, false, &caller);
     } else {
-        state.hub.submit(&session_id, req.text, req.content, cmid);
+        state
+            .hub
+            .submit(&session_id, req.text, req.content, cmid, &caller);
     }
     (StatusCode::ACCEPTED, "queued").into_response()
 }
@@ -465,6 +469,7 @@ pub async fn api_new_session(
         return create_machine_session(
             &state,
             &principal,
+            &authenticated.caller,
             req,
             session_id,
             cwd,
@@ -475,6 +480,7 @@ pub async fn api_new_session(
     create_local_session(
         &state,
         &principal,
+        &authenticated.caller,
         req,
         session_id,
         cwd,
@@ -577,6 +583,7 @@ async fn resolve_new_session_defaults(
 async fn create_machine_session(
     state: &Arc<AppState>,
     principal: &ProductPrincipal,
+    caller: &crate::prompt_origin::RequestCaller,
     req: NewSessionRequest,
     session_id: String,
     mut cwd: Option<String>,
@@ -742,6 +749,7 @@ async fn create_machine_session(
         &session_id,
         req.initial_prompt,
         format!("initial:{session_id}"),
+        caller,
     );
     if let Err(error) = session_context::initialized(state, &session_id).await {
         return (StatusCode::CONFLICT, error).into_response();
@@ -764,6 +772,7 @@ async fn create_machine_session(
 async fn create_local_session(
     state: &Arc<AppState>,
     principal: &ProductPrincipal,
+    caller: &crate::prompt_origin::RequestCaller,
     req: NewSessionRequest,
     session_id: String,
     cwd: Option<String>,
@@ -803,25 +812,37 @@ async fn create_local_session(
             if let Some(prompt) = req
                 .initial_prompt
                 .filter(|prompt| !prompt.trim().is_empty())
-                && let Err(message) = state.supervisor.send(
-                    &session_id,
-                    AgentCommand::Prompt(
-                        vec![ContentBlock::from(prompt)],
-                        Some(format!("initial:{session_id}")),
-                        None,
-                    ),
-                )
             {
-                state.hub.set_status(
+                let cmid = format!("initial:{session_id}");
+                if let Err(error) =
+                    send_delivery::record_steer_dispatch(state, &session_id, &cmid, caller).await
+                {
+                    state.hub.set_status(
+                        &session_id,
+                        crate::agent_model::Status::Crashed,
+                        Some(format!("Initial prompt dispatch record failed: {error}")),
+                    );
+                    return (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "Initial prompt failed; dispatch origin could not be persisted",
+                    )
+                        .into_response();
+                }
+                if let Err(message) = state.supervisor.send(
                     &session_id,
-                    crate::agent_model::Status::Crashed,
-                    Some(format!("Initial prompt failed: {message}")),
-                );
-                return (
-                    StatusCode::CONFLICT,
-                    "Initial prompt failed; inspect session context before retrying",
-                )
-                    .into_response();
+                    AgentCommand::Prompt(vec![ContentBlock::from(prompt)], Some(cmid), None),
+                ) {
+                    state.hub.set_status(
+                        &session_id,
+                        crate::agent_model::Status::Crashed,
+                        Some(format!("Initial prompt failed: {message}")),
+                    );
+                    return (
+                        StatusCode::CONFLICT,
+                        "Initial prompt failed; inspect session context before retrying",
+                    )
+                        .into_response();
+                }
             }
             if let Err(error) = session_context::initialized(state, &session_id).await {
                 return (StatusCode::CONFLICT, error).into_response();

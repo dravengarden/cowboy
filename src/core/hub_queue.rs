@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod drafts;
+mod retry;
 mod submit;
 
 /// Why a session's queue head stays queued, or that it may be dispatched.
@@ -51,7 +53,14 @@ impl Hub {
         {
             let req = error.into_inner();
             tracing::error!(session = %req.session_id, "dispatch queue rejected a prompt");
-            self.requeue_prompt(&req.session_id, req.text, req.content, req.cmid);
+            self.requeue_prompt(
+                &req.session_id,
+                req.text,
+                req.content,
+                req.cmid,
+                req.origin,
+                req.initiator,
+            );
             self.broadcast_error(
                 Some(req.session_id),
                 "dispatch queue is full; prompt remains queued".to_owned(),
@@ -112,11 +121,18 @@ impl Hub {
         operation: &str,
         text: String,
         content: Vec<serde_json::Value>,
+        caller: &crate::prompt_origin::RequestCaller,
     ) -> bool {
         if self.reject_reserved_notice_cmid(session_id, Some(operation))
             || self.inner.dispatch_tx.lock().is_none()
         {
             return false;
+        }
+        let origin = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
+        let dispatch_origin =
+            crate::prompt_origin::compute_dispatch_origin(Some(&origin), Some(&origin));
+        if dispatch_origin.is_owner() {
+            self.notify_human_turn(session_id);
         }
         let req = {
             let mut sessions = self.inner.sessions.lock();
@@ -139,6 +155,14 @@ impl Hub {
             s.in_flight = true;
             s.dispatch_pending = Some(s.in_flight_epoch);
             Self::note_dispatched(s, Some(operation));
+            hub_dispatch_origin::note_dispatch_origin(
+                s,
+                session_id,
+                operation,
+                dispatch_origin.clone(),
+                origin.clone(),
+                now_ms(),
+            );
             DispatchReq {
                 ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
                 session_id: session_id.to_owned(),
@@ -146,6 +170,10 @@ impl Hub {
                 content,
                 cmid: Some(operation.to_owned()),
                 explicit: true,
+                origin: Some(origin.clone()),
+                initiator: Some(origin.clone()),
+                dispatch_origin,
+                trigger: origin,
             }
         };
         self.send_dispatch(req);
@@ -226,8 +254,13 @@ impl Hub {
     /// isn't held for editing. Pops the head, marks in-flight, hands the prompt
     /// to the dispatcher task, and re-broadcasts the shrunken queue. No-op
     /// otherwise. `allow_revive` is forwarded to [`Self::ready`].
-    pub(super) fn drain_head(&self, session_id: &str, allow_revive: bool, manual: bool) {
-        // Without a dispatcher wired we must not pop (the prompt would be lost).
+    pub(super) fn drain_head(
+        &self,
+        session_id: &str,
+        allow_revive: bool,
+        manual: bool,
+        trigger: Option<&crate::prompt_origin::RequestCaller>,
+    ) {
         if self.inner.dispatch_tx.lock().is_none() {
             return;
         }
@@ -252,45 +285,68 @@ impl Hub {
                 return;
             }
             let head = s.queue.remove(0);
+            let effective_trigger = trigger
+                .map(crate::prompt_origin::DeliveryOrigin::from_caller)
+                .or_else(|| head.initiator.clone());
+            let dispatch_origin = crate::prompt_origin::compute_dispatch_origin(
+                head.origin.as_ref(),
+                effective_trigger.as_ref(),
+            );
+            let record_trigger = effective_trigger
+                .clone()
+                .unwrap_or_else(|| crate::prompt_origin::DeliveryOrigin::cowboy("legacy_queue"));
+            let dispatch_cmid = hub_dispatch_origin::ensure_dispatch_cmid(head.cmid);
             s.explicit_wait = false;
             s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
             s.in_flight = true;
             s.dispatch_pending = Some(s.in_flight_epoch);
-            Self::note_dispatched(s, head.cmid.as_deref());
+            Self::note_dispatched(s, Some(&dispatch_cmid));
+            hub_dispatch_origin::note_dispatch_origin(
+                s,
+                session_id,
+                &dispatch_cmid,
+                dispatch_origin.clone(),
+                record_trigger.clone(),
+                now_ms(),
+            );
             DispatchReq {
                 ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
                 session_id: session_id.to_owned(),
                 text: head.text,
                 content: head.content,
-                cmid: head.cmid,
+                cmid: Some(dispatch_cmid),
                 explicit: manual,
+                origin: head.origin,
+                initiator: effective_trigger,
+                dispatch_origin,
+                trigger: record_trigger,
             }
         };
+        if req.dispatch_origin.is_owner() {
+            self.notify_human_turn(session_id);
+        }
         self.emit_pending(session_id);
         self.send_dispatch(req);
     }
 
-    /// The AUTO-drain: only fires into an alive idle agent (never revives a dead
-    /// one). Called after every queue mutation and on every status change.
     pub(super) fn try_drain(&self, session_id: &str) {
-        self.drain_head(session_id, false, false);
+        self.drain_head(session_id, false, false, None);
     }
 
-    /// MANUAL drain of the queue head: bypasses the paused hold
-    /// (the user explicitly chose "send now") and revives a dormant session. Used
-    /// by force-push so a ⚡ on a PAUSED queue runs the front message immediately
-    /// WITHOUT resuming the rest of the held queue.
-    pub fn drain_now(&self, session_id: &str) {
-        self.drain_head(session_id, true, true);
+    pub fn drain_now(&self, session_id: &str, caller: &crate::prompt_origin::RequestCaller) {
+        self.drain_head(session_id, true, true, Some(caller));
     }
 
-    /// Retry a never-dispatched resource wait, respecting pause and editing.
     pub fn retry_resource_wait(&self, session_id: &str) {
-        self.drain_head(session_id, true, false);
+        self.drain_head(session_id, true, false, None);
     }
 
-    /// Remember that the requeued head is an explicit send waiting for a
-    /// transient resource, or forget that intent.
+    /// Retry a previously explicit send parked on a resource wait, preserving
+    /// its stored `(origin, initiator)` without fabricating a new caller.
+    pub fn retry_explicit_wait(&self, session_id: &str) {
+        self.drain_head(session_id, true, true, None);
+    }
+
     pub fn set_explicit_wait(&self, session_id: &str, explicit: bool) {
         if let Some(s) = self.inner.sessions.lock().get_mut(session_id) {
             s.explicit_wait = explicit;
@@ -413,6 +469,8 @@ impl Hub {
         text: String,
         content: Vec<serde_json::Value>,
         cmid: Option<String>,
+        origin: Option<crate::prompt_origin::DeliveryOrigin>,
+        initiator: Option<crate::prompt_origin::DeliveryOrigin>,
     ) {
         if let Some(id) = cmid
             .as_deref()
@@ -481,6 +539,8 @@ impl Hub {
                         content,
                         cmid,
                         schedule: None,
+                        origin,
+                        initiator,
                     },
                 );
                 true
@@ -500,32 +560,46 @@ impl Hub {
         text: String,
         content: Vec<serde_json::Value>,
         cmid: Option<String>,
+        caller: &crate::prompt_origin::RequestCaller,
     ) {
         if self.reject_reserved_notice_cmid(session_id, cmid.as_deref()) {
             return;
         }
-        self.submit_inner(session_id, text, content, cmid, false, false);
+        let origin = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
+        self.submit_inner(
+            session_id,
+            text,
+            content,
+            cmid,
+            false,
+            false,
+            Some(origin.clone()),
+            origin,
+        );
     }
 
-    /// The admitted bootstrap precedes messages queued while its intent was
-    /// being persisted. It still respects Pause and never interrupts a turn.
     pub fn submit_context(
         &self,
         session_id: &str,
         text: String,
         content: Vec<serde_json::Value>,
         cmid: String,
+        caller: &crate::prompt_origin::RequestCaller,
     ) {
-        self.submit_inner(session_id, text, content, Some(cmid), false, true);
-        self.drain_head(session_id, true, false);
+        let origin = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
+        self.submit_inner(
+            session_id,
+            text,
+            content,
+            Some(cmid),
+            false,
+            true,
+            Some(origin.clone()),
+            origin,
+        );
+        self.drain_head(session_id, true, false, Some(caller));
     }
 
-    /// Force-push a fresh prompt (the long-press-send affordance). When a turn is
-    /// in flight, the prompt jumps to the FRONT of the queue and this returns
-    /// `true` so the caller interrupts the running turn — the cancelled turn ends,
-    /// the drain then runs this prompt next. On an idle session there's nothing to
-    /// jump ahead of, so it behaves exactly like `submit` (dispatches straight
-    /// through) and returns `false`. Same cmid-idempotency as `submit`.
     #[must_use]
     pub fn force_submit(
         &self,
@@ -533,12 +607,10 @@ impl Hub {
         text: String,
         content: Vec<serde_json::Value>,
         cmid: Option<String>,
-        // `true` = also interrupt the running turn (force push). `false` = just
-        // jump to the front of the queue and let the current turn finish first
-        // ("jump to front" / `submit { front: true }`).
         interrupt_on_busy: bool,
+        caller: &crate::prompt_origin::RequestCaller,
     ) -> bool {
-        self.force_submit_once(session_id, text, content, cmid, interrupt_on_busy)
+        self.force_submit_once(session_id, text, content, cmid, interrupt_on_busy, caller)
             .unwrap_or(false)
     }
 
@@ -550,11 +622,42 @@ impl Hub {
         content: Vec<serde_json::Value>,
         cmid: Option<String>,
         interrupt_on_busy: bool,
+        caller: &crate::prompt_origin::RequestCaller,
+    ) -> Option<bool> {
+        let origin = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
+        self.force_submit_with_provenance(
+            session_id,
+            text,
+            content,
+            cmid,
+            interrupt_on_busy,
+            Some(origin.clone()),
+            origin,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn force_submit_with_provenance(
+        &self,
+        session_id: &str,
+        text: String,
+        content: Vec<serde_json::Value>,
+        cmid: Option<String>,
+        interrupt_on_busy: bool,
+        content_origin: Option<crate::prompt_origin::DeliveryOrigin>,
+        initiator: crate::prompt_origin::DeliveryOrigin,
     ) -> Option<bool> {
         if self.is_managed_child(session_id)
             || self.reject_reserved_notice_cmid(session_id, cmid.as_deref())
         {
             return None;
+        }
+        let dispatch_origin = crate::prompt_origin::compute_dispatch_origin(
+            content_origin.as_ref(),
+            Some(&initiator),
+        );
+        if dispatch_origin.is_owner() {
+            self.notify_human_turn(session_id);
         }
         let wired = self.inner.dispatch_tx.lock().is_some();
         let mut dispatch = None;
@@ -575,23 +678,32 @@ impl Hub {
                 && s.queue.is_empty()
                 && self.context_allows_dispatch(session_id, cmid.as_deref())
             {
-                // Idle + nothing queued → straight dispatch, identical to submit.
+                let dispatch_cmid = hub_dispatch_origin::ensure_dispatch_cmid(cmid);
                 s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
                 s.in_flight = true;
                 s.dispatch_pending = Some(s.in_flight_epoch);
-                Self::note_dispatched(s, cmid.as_deref());
+                Self::note_dispatched(s, Some(&dispatch_cmid));
+                hub_dispatch_origin::note_dispatch_origin(
+                    s,
+                    session_id,
+                    &dispatch_cmid,
+                    dispatch_origin.clone(),
+                    initiator.clone(),
+                    now_ms(),
+                );
                 dispatch = Some(DispatchReq {
                     ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
                     session_id: session_id.to_owned(),
                     text,
                     content,
-                    cmid,
+                    cmid: Some(dispatch_cmid),
                     explicit: true,
+                    origin: content_origin,
+                    initiator: Some(initiator.clone()),
+                    dispatch_origin,
+                    trigger: initiator,
                 });
             } else {
-                // Busy / draining / queued ahead → jump to the FRONT so it runs
-                // next; ask the caller to interrupt the in-flight turn only when
-                // this is a force push (not a no-interrupt "jump to front").
                 let id = self.next_qid();
                 s.queue.insert(
                     0,
@@ -601,6 +713,8 @@ impl Hub {
                         content,
                         cmid,
                         schedule: None,
+                        origin: content_origin,
+                        initiator: Some(initiator),
                     },
                 );
                 interrupt = interrupt_on_busy && context_allows;
@@ -741,7 +855,9 @@ impl Hub {
         id: &str,
         text: String,
         content: Vec<serde_json::Value>,
+        caller: &crate::prompt_origin::RequestCaller,
     ) -> bool {
+        let editor = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
         let (found, settled) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -758,11 +874,15 @@ impl Hub {
                 (before != s.queue.len(), settled)
             } else if let Some(m) = s.queue.iter_mut().find(|m| m.id == id) {
                 let settled = submit::extract_notice_settlements(std::iter::once(&*m));
-                if !settled.is_empty() {
+                let authority_changed =
+                    m.origin.as_ref() != Some(&editor) || m.initiator.as_ref() != Some(&editor);
+                if !settled.is_empty() || authority_changed {
                     m.cmid = None;
                 }
                 m.text = text;
                 m.content = content;
+                m.origin = Some(editor.clone());
+                m.initiator = Some(editor);
                 (true, settled)
             } else {
                 (false, Vec::new())
@@ -792,138 +912,44 @@ impl Hub {
     /// an EXPLICIT user action, so it may revive an exited/crashed session
     /// (`allow_revive` = true) — unlike the auto-drain. If the agent is mid-turn it
     /// just becomes next in line.
-    pub fn request_send_queued(&self, session_id: &str, id: &str) {
+    pub fn request_send_queued(
+        &self,
+        session_id: &str,
+        id: &str,
+        caller: &crate::prompt_origin::RequestCaller,
+    ) {
         if self.is_managed_child(session_id) {
             return;
         }
+        let trigger = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
         {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
             if let Some(pos) = s.queue.iter().position(|m| m.id == id) {
-                let m = s.queue.remove(pos);
+                let mut m = s.queue.remove(pos);
+                if m.initiator.as_ref() != Some(&trigger) {
+                    m.cmid = None;
+                }
+                m.initiator = Some(trigger);
                 s.queue.insert(0, m);
             } else {
                 return;
             }
         }
         self.emit_pending(session_id);
-        // Explicit user "send now" → manual drain, bypassing the awaiting hold.
-        self.drain_head(session_id, true, true);
-    }
-
-    /// Overlay "Retry" for an errored/crashed turn: re-run the last user prompt
-    /// (reviving the session). No-op if there's no prior prompt.
-    pub fn retry_turn(&self, session_id: &str) {
-        if self.is_managed_child(session_id) {
-            return;
-        }
-        let (prompt, mut content, status, retry_cmid, already_queued) = {
-            let sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get(session_id) else {
-                tracing::warn!(session = %session_id, "retry_turn: unknown session — no-op");
-                return;
-            };
-            let Some(last_user_seq) = s.log.iter().rev().find_map(|envelope| {
-                let Event::Update { update } = &envelope.event else {
-                    return None;
-                };
-                (update
-                    .get("sessionUpdate")
-                    .and_then(serde_json::Value::as_str)
-                    == Some("user_message_chunk"))
-                .then_some(envelope.seq)
-            }) else {
-                // Startup can fail before the first prompt reaches the native
-                // agent. That prompt is still queued, with its original cmid
-                // and attachments. Retry its delivery through preflight rather
-                // than requiring a user event that cannot yet exist.
-                drop(sessions);
-                self.drain_head(session_id, true, true);
-                return;
-            };
-            let retry_cmid = format!("cowboy-retry:{session_id}:{last_user_seq}");
-            let LastUserPrompt {
-                text: prompt,
-                content,
-                cmid: echoed_cmid,
-            } = last_user_prompt(&s.log);
-            if s.in_flight
-                || s.queue
-                    .iter()
-                    .any(|message| message.cmid.as_deref() == Some(retry_cmid.as_str()))
-            {
-                tracing::info!(session = %session_id, "retry_turn: identical retry already pending — no-op");
-                return;
-            }
-            // A rejected prompt may already sit in the queue (requeued after a
-            // failed dispatch). Identify it by its cmid when the echo still
-            // carries one; otherwise by text, or — for an attachment-only
-            // prompt whose text is empty — by the attachment shape, so one
-            // image-only prompt never passes for another.
-            let already_queued = s
-                .queue
-                .iter()
-                .find(|message| {
-                    if echoed_cmid.is_some() && message.cmid == echoed_cmid {
-                        return true;
-                    }
-                    if prompt.trim().is_empty() {
-                        attachment_signature(&message.content) == attachment_signature(&content)
-                    } else {
-                        message.text == prompt
-                    }
-                })
-                .map(|message| message.id.clone());
-            (prompt, content, s.meta.status, retry_cmid, already_queued)
-        };
-        if prompt.trim().is_empty() && content.is_empty() {
-            // The "no response" report points here first: a crashed turn whose
-            // user prompt never made it into the log leaves nothing to re-run.
-            tracing::warn!(session = %session_id, ?status, "retry_turn: no prior prompt to retry — no-op");
-            return;
-        }
-        if let Some(id) = already_queued {
-            tracing::info!(session = %session_id, "retry_turn: rejected prompt already queued — sending it without duplication");
-            self.request_send_queued(session_id, &id);
-            return;
-        }
-        if let Err(reference) = self.restore_externalized_images(&mut content) {
-            // History only keeps a URL for a large image; without the stored
-            // bytes the retry would silently drop the attachment (an ACP image
-            // block needs inline data). Refuse, and say so on the failure card.
-            tracing::warn!(session = %session_id, ?status, %reference, "retry_turn: attachment no longer stored — not retrying");
-            if matches!(
-                status,
-                Status::Crashed | Status::Exited | Status::Interrupted
-            ) {
-                self.set_status(
-                    session_id,
-                    status,
-                    Some(
-                        "Retry needs an attachment that is no longer stored; send the prompt again with the file."
-                            .to_owned(),
-                    ),
-                );
-            }
-            return;
-        }
-        tracing::info!(session = %session_id, ?status, prompt_len = prompt.len(), blocks = content.len(), "retry_turn: re-submitting last prompt");
-        let _ = self.force_submit(session_id, prompt, content, Some(retry_cmid), true);
-        // force_submit DISPATCHES only when the queue is empty AND the session is
-        // ready; with messages already queued — or a crashed/exited session — it
-        // just parks the prompt at the queue FRONT and emits pending. That left
-        // Retry looking like "added to the top of the queue, now send it yourself".
-        // Drain the head WITH revive so Retry runs
-        // the prompt immediately, reviving a dead session — no manual send. Safe
-        // after a direct dispatch too: force_submit set `in_flight`, so `ready`
-        // returns false and this drain no-ops (no double send).
-        self.drain_head(session_id, true, true);
+        self.drain_head(session_id, true, true, Some(caller));
     }
 
     /// Move a queued prompt back to drafts.
-    pub fn queued_to_draft(&self, session_id: &str, id: &str) {
+    pub fn queued_to_draft(
+        &self,
+        session_id: &str,
+        id: &str,
+        caller: &crate::prompt_origin::RequestCaller,
+    ) {
+        let actor = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
         let settled = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -935,6 +961,13 @@ impl Hub {
                 if !settled.is_empty() {
                     m.cmid = None;
                 }
+                if !actor.is_owner() {
+                    if m.origin.as_ref() != Some(&actor) {
+                        m.cmid = None;
+                    }
+                    m.origin = Some(actor);
+                }
+                m.initiator = None;
                 if s.editing.as_deref() == Some(id) {
                     s.editing = None;
                 }
@@ -986,453 +1019,6 @@ impl Hub {
             self.try_drain(session_id);
         }
         released
-    }
-
-    /// Park a new draft.
-    pub fn add_draft(
-        &self,
-        session_id: &str,
-        text: String,
-        content: Vec<serde_json::Value>,
-        cmid: Option<String>,
-    ) {
-        if self.reject_reserved_notice_cmid(session_id, cmid.as_deref()) {
-            return;
-        }
-        let duplicate;
-        {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return;
-            };
-            // Idempotent on cmid: when a send looked failed the client resends
-            // with the SAME cmid, but the original may actually have landed — so
-            // a matching cmid means "already staged", don't double-add. Confirm
-            // it again instead: the resending client missed the first patch.
-            duplicate = cmid
-                .as_deref()
-                .filter(|c| s.drafts.iter().any(|m| m.cmid.as_deref() == Some(*c)))
-                .map(str::to_owned);
-            if duplicate.is_none() {
-                let id = self.next_qid();
-                s.drafts.push(QueuedMessage {
-                    id,
-                    text,
-                    content,
-                    cmid,
-                    schedule: None,
-                });
-            }
-        }
-        if let Some(cmid) = duplicate {
-            self.confirm_delivered(session_id, &cmid);
-            return;
-        }
-        self.emit_pending(session_id);
-    }
-
-    /// Attach (or update) a future fire time on a draft — the user-driven analog
-    /// of the agent's `ScheduleWakeup`. Targets an existing draft by `id`, else
-    /// by `cmid`, else creates a fresh draft carrying the schedule. `text`/
-    /// `content` overwrite the target only when non-empty (a reschedule-in-place
-    /// from the chip passes the current text; a bare time-change can pass empty).
-    /// Persists via the drafts jsonb and arms the server-side timer. Broadcasts
-    /// the session list too so the row clock badge updates promptly.
-    #[allow(clippy::too_many_arguments)]
-    pub fn schedule_draft(
-        &self,
-        session_id: &str,
-        id: Option<String>,
-        cmid: Option<String>,
-        text: String,
-        content: Vec<serde_json::Value>,
-        fire_at_ms: i64,
-        delivery: Delivery,
-    ) {
-        if self.reject_reserved_notice_cmid(session_id, cmid.as_deref()) {
-            return;
-        }
-        let draft_id = {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return;
-            };
-            let pos = id
-                .as_deref()
-                .and_then(|i| s.drafts.iter().position(|m| m.id == i))
-                .or_else(|| {
-                    cmid.as_deref()
-                        .and_then(|c| s.drafts.iter().position(|m| m.cmid.as_deref() == Some(c)))
-                });
-            let schedule = Some(DraftSchedule {
-                fire_at_ms,
-                delivery,
-            });
-            match pos {
-                Some(p) => {
-                    let m = &mut s.drafts[p];
-                    if !text.trim().is_empty() || !content.is_empty() {
-                        m.text = text;
-                        m.content = content;
-                    }
-                    m.schedule = schedule;
-                    m.id.clone()
-                }
-                None => {
-                    let did = self.next_qid();
-                    s.drafts.push(QueuedMessage {
-                        id: did.clone(),
-                        text,
-                        content,
-                        cmid,
-                        schedule,
-                    });
-                    did
-                }
-            }
-        };
-        self.emit_pending(session_id);
-        self.broadcast_sessions();
-        self.arm_draft_timer(session_id, &draft_id, fire_at_ms);
-    }
-
-    /// Strip the schedule off a draft, leaving it a plain parked draft, and cancel
-    /// its timer. No-op if the draft is gone or wasn't scheduled.
-    pub fn unschedule_draft(&self, session_id: &str, id: &str) {
-        let cleared = {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return;
-            };
-            match s.drafts.iter_mut().find(|m| m.id == id) {
-                Some(m) if m.schedule.is_some() => {
-                    m.schedule = None;
-                    true
-                }
-                _ => false,
-            }
-        };
-        if cleared {
-            self.emit_pending(session_id);
-            self.broadcast_sessions();
-            self.cancel_draft_timer(session_id, id);
-        }
-    }
-
-    /// Fire a scheduled draft (called by the scheduler at its fire time): remove
-    /// it from drafts and submit it per its `delivery`. Tagged with `SCHED_PREFIX`
-    /// so the echo renders as a "↻ scheduled" note. No-op if the draft is gone
-    /// (the user removed/activated it before it fired — the timer was cancelled,
-    /// but a fire already in-flight is harmless here).
-    pub fn fire_scheduled_draft(&self, session_id: &str, draft_id: &str) {
-        if self.is_managed_child(session_id) {
-            return;
-        }
-        let fired = {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return;
-            };
-            // A trashed session keeps its scheduled Drafts unsent; they stay
-            // visible (overdue) if the session is restored. Checked under the
-            // lock that removes the Draft, so a concurrent Trash cannot slip in.
-            if s.meta.trashed_at_ms.is_some() {
-                return;
-            }
-            s.drafts
-                .iter()
-                .position(|m| m.id == draft_id)
-                .map(|pos| s.drafts.remove(pos))
-        };
-        let Some(m) = fired else {
-            return;
-        };
-        // The draft left the drafts list → refresh the pending panel and the
-        // session list (its next_schedule_ms just changed).
-        self.emit_pending(session_id);
-        self.broadcast_sessions();
-
-        let front = m
-            .schedule
-            .as_ref()
-            .is_some_and(|sc| sc.delivery == Delivery::Front);
-        let cmid = Some(format!("{SCHED_PREFIX}{session_id}-{draft_id}"));
-
-        // Land it in the queue. A scheduled fire ALWAYS respects a paused queue —
-        // it never bypasses the ⏸ hold — and never interrupts a live turn. It
-        // dispatches straight through ONLY when the session is idle, unpaused, and
-        // the queue is empty; otherwise it enqueues (head for Front, tail for Back)
-        // and the normal drain runs it when the queue resumes / the turn ends.
-        let wired = self.inner.dispatch_tx.lock().is_some();
-        let mut dispatch = None;
-        {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return;
-            };
-            if let Some(c) = cmid.as_deref()
-                && s.queue.iter().any(|q| q.cmid.as_deref() == Some(c))
-            {
-                return;
-            }
-            if wired
-                && !s.meta.paused
-                && Self::ready(s, true)
-                && s.queue.is_empty()
-                && self.context_allows_dispatch(session_id, cmid.as_deref())
-            {
-                s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
-                s.in_flight = true;
-                s.dispatch_pending = Some(s.in_flight_epoch);
-                dispatch = Some(DispatchReq {
-                    ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
-                    session_id: session_id.to_owned(),
-                    text: m.text,
-                    content: m.content,
-                    cmid,
-                    // A scheduled fire never bypasses the user's Pause.
-                    explicit: false,
-                });
-            } else {
-                let id = self.next_qid();
-                let msg = QueuedMessage {
-                    id,
-                    text: m.text,
-                    content: m.content,
-                    cmid,
-                    schedule: None,
-                };
-                if front {
-                    s.queue.insert(0, msg);
-                } else {
-                    s.queue.push(msg);
-                }
-            }
-        }
-        match dispatch {
-            Some(req) => self.send_dispatch(req),
-            None => self.emit_pending(session_id),
-        }
-    }
-
-    /// Edit a draft in place. Empty text + content removes it.
-    /// Edit a draft in place. Empty text + content removes it. Returns whether
-    /// the draft still existed.
-    pub fn edit_draft(
-        &self,
-        session_id: &str,
-        id: &str,
-        text: String,
-        content: Vec<serde_json::Value>,
-    ) -> bool {
-        let (found, unscheduled) = {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return false;
-            };
-            if text.trim().is_empty() && content.is_empty() {
-                let had = s.drafts.iter().any(|m| m.id == id && m.schedule.is_some());
-                let before = s.drafts.len();
-                s.drafts.retain(|m| m.id != id);
-                (before != s.drafts.len(), had)
-            } else if let Some(m) = s.drafts.iter_mut().find(|m| m.id == id) {
-                m.text = text;
-                m.content = content;
-                (true, false)
-            } else {
-                (false, false)
-            }
-        };
-        self.emit_pending(session_id);
-        if unscheduled {
-            self.cancel_draft_timer(session_id, id);
-            self.broadcast_sessions();
-        }
-        found
-    }
-
-    /// Compare and remove under one lock. A delayed Undo may never remove a
-    /// row another device has edited, scheduled or already sent.
-    pub fn remove_draft_if_unchanged(
-        &self,
-        session_id: &str,
-        identity: &str,
-        text: &str,
-        content: &[serde_json::Value],
-    ) -> bool {
-        {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(session) = sessions.get_mut(session_id) else {
-                return false;
-            };
-            let Some(index) = session
-                .drafts
-                .iter()
-                .position(|row| row.cmid.as_deref() == Some(identity) || row.id == identity)
-            else {
-                return false;
-            };
-            let row = &session.drafts[index];
-            if row.schedule.is_some() || row.text != text || row.content != content {
-                return false;
-            }
-            session.drafts.remove(index);
-        }
-        self.emit_pending(session_id);
-        true
-    }
-
-    /// Drop one draft. Returns whether the draft still existed.
-    pub fn remove_draft(&self, session_id: &str, id: &str) -> bool {
-        let (removed, unscheduled) = {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return false;
-            };
-            let had = s.drafts.iter().any(|m| m.id == id && m.schedule.is_some());
-            let before = s.drafts.len();
-            s.drafts.retain(|m| m.id != id);
-            (before != s.drafts.len(), had)
-        };
-        self.emit_pending(session_id);
-        if unscheduled {
-            self.cancel_draft_timer(session_id, id);
-            self.broadcast_sessions();
-        }
-        removed
-    }
-
-    /// Move a draft out of `from`'s draft list and onto the END of `to`'s. The
-    /// "parked in the wrong session" fix. No-op if `from == to`, either session
-    /// is unknown, or the id isn't a draft of `from`. Crucially, the draft is
-    /// pulled out ONLY when `to` exists, so a bad destination can never drop the
-    /// message. Both sessions are persisted + broadcast.
-    pub fn move_draft(&self, from: &str, id: &str, to: &str) {
-        if from == to {
-            return;
-        }
-        let scheduled = {
-            let mut sessions = self.inner.sessions.lock();
-            // Take the draft out of `from`, but only if `to` exists to receive it.
-            let Some(msg) = (if sessions.contains_key(to) {
-                sessions.get_mut(from).and_then(|s| {
-                    s.drafts
-                        .iter()
-                        .position(|m| m.id == id)
-                        .map(|pos| s.drafts.remove(pos))
-                })
-            } else {
-                None
-            }) else {
-                return;
-            };
-            let scheduled = msg.schedule.as_ref().map(|sc| sc.fire_at_ms);
-            // `to` existed at the top of this lock and we still hold it, so this
-            // can't miss; the `if let` just avoids an unwrap.
-            if let Some(dst) = sessions.get_mut(to) {
-                dst.drafts.push(msg);
-            }
-            scheduled
-        };
-        self.emit_pending(from);
-        self.emit_pending(to);
-        // A scheduled draft keeps its fire time across the move — retarget the
-        // timer from the source session to the destination (same draft id).
-        if let Some(fire_at_ms) = scheduled {
-            self.cancel_draft_timer(from, id);
-            self.arm_draft_timer(to, id, fire_at_ms);
-            self.broadcast_sessions();
-        }
-    }
-
-    /// Drop a session's whole draft list.
-    pub fn clear_drafts(&self, session_id: &str) {
-        let scheduled_ids: Vec<String> = {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return;
-            };
-            let ids = s
-                .drafts
-                .iter()
-                .filter(|m| m.schedule.is_some())
-                .map(|m| m.id.clone())
-                .collect();
-            s.drafts.clear();
-            ids
-        };
-        self.emit_pending(session_id);
-        for did in &scheduled_ids {
-            self.cancel_draft_timer(session_id, did);
-        }
-        if !scheduled_ids.is_empty() {
-            self.broadcast_sessions();
-        }
-    }
-
-    /// Activate one draft: remove it from drafts and submit it (send-or-queue).
-    pub fn activate_draft(&self, session_id: &str, id: &str, cmid: Option<String>) {
-        if self.is_managed_child(session_id)
-            || self.reject_reserved_notice_cmid(session_id, cmid.as_deref())
-        {
-            return;
-        }
-        let msg = {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return;
-            };
-            s.drafts
-                .iter()
-                .position(|m| m.id == id)
-                .map(|pos| s.drafts.remove(pos))
-        };
-        if let Some(m) = msg {
-            self.emit_pending(session_id);
-            // Manually sending a scheduled draft now → cancel its pending fire.
-            if m.schedule.is_some() {
-                self.cancel_draft_timer(session_id, id);
-                self.broadcast_sessions();
-            }
-            let fallback_cmid = m
-                .cmid
-                .filter(|id| !crate::agent_model::is_reserved_call_notice_cmid(id));
-            self.submit(session_id, m.text, m.content, cmid.or(fallback_cmid));
-        }
-    }
-
-    /// Activate every draft, front-to-back, then clear them.
-    pub fn activate_all_drafts(&self, session_id: &str) {
-        if self.is_managed_child(session_id) {
-            return;
-        }
-        let msgs = {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return;
-            };
-            std::mem::take(&mut s.drafts)
-        };
-        if msgs.is_empty() {
-            return;
-        }
-        self.emit_pending(session_id);
-        let mut had_scheduled = false;
-        for m in msgs {
-            // Manually sending a scheduled draft now → cancel its pending fire.
-            if m.schedule.is_some() {
-                self.cancel_draft_timer(session_id, &m.id);
-                had_scheduled = true;
-            }
-            // Strip legacy reserved notice cmids so parked drafts activate cleanly.
-            let cmid = m
-                .cmid
-                .filter(|id| !crate::agent_model::is_reserved_call_notice_cmid(id));
-            self.submit(session_id, m.text, m.content, cmid);
-        }
-        if had_scheduled {
-            self.broadcast_sessions();
-        }
     }
 
     // --- Reorder --------------------------------------------------------------

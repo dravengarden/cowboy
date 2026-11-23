@@ -29,6 +29,8 @@ pub mod core_security;
 #[cfg(feature = "full")]
 pub mod credentials;
 #[cfg(feature = "full")]
+pub mod delivery_origin;
+#[cfg(feature = "full")]
 pub mod digest;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod execution_target_environment;

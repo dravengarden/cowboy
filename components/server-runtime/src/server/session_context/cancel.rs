@@ -108,7 +108,9 @@ async fn take_back(
             std::slice::from_ref(&source),
         )?;
     }
-    let (text, content) = state.hub.take_sole_queued(&id, &cmid).ok_or(refused)?;
+    let taken = state.hub.take_sole_queued(&id, &cmid).ok_or(refused)?;
+    let (text, content, origin, initiator) =
+        (taken.text, taken.content, taken.origin, taken.initiator);
     // The receipt holds the message before anything else changes; without it
     // the message goes back to the queue rather than exist only in a reply.
     if let Some(delivery) = target.delivery.as_mut() {
@@ -121,11 +123,15 @@ async fn take_back(
     }
     target.injection = None;
     if let Err(error) = advance_applied(&mut target) {
-        state.hub.requeue_prompt(&id, text, content, Some(cmid));
+        state
+            .hub
+            .requeue_prompt(&id, text, content, Some(cmid), origin, initiator);
         return Err(error);
     }
     if let Err(error) = save(&state, &id, &target).await {
-        state.hub.requeue_prompt(&id, text, content, Some(cmid));
+        state
+            .hub
+            .requeue_prompt(&id, text, content, Some(cmid), origin, initiator);
         return Err(error);
     }
     // The work did not move: the destination stops naming the original, so

@@ -77,7 +77,29 @@ pub async fn dispatch(state: Arc<AppState>, req: crate::core::DispatchReq) {
     }
     let result = match admitted(&state, context).await {
         Err(reason) => Err(reason.to_owned()),
-        Ok(()) => deliver(&state, context, &req.text, cmid).await,
+        Ok(()) => {
+            let record = crate::prompt_origin::PromptDispatchRecord {
+                session_id: req.session_id.clone(),
+                cmid: cmid.to_owned(),
+                origin: req.dispatch_origin.clone(),
+                trigger: req.trigger.clone(),
+                dispatched_at_ms: chrono::Utc::now().timestamp_millis(),
+            };
+            match store.record_prompt_dispatch_if_compatible(&record).await {
+                Ok(true) => {
+                    state.hub.record_prompt_dispatch(
+                        &req.session_id,
+                        cmid.to_owned(),
+                        req.dispatch_origin.clone(),
+                        req.trigger.clone(),
+                        record.dispatched_at_ms,
+                    );
+                    deliver(&state, context, &req.text, cmid).await
+                }
+                Ok(false) => Err("dispatch_provenance_conflict".to_owned()),
+                Err(_) => Err("dispatch_provenance_unavailable".to_owned()),
+            }
+        }
     };
     if result.is_err() {
         state.hub.abandon_superagent_prompt(&req.session_id, cmid);

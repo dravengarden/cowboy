@@ -169,10 +169,24 @@ fn client_entry_points_cannot_prompt_a_managed_child() {
         "injected".into(),
         Vec::new(),
         Some("client-1".into()),
+        &crate::prompt_origin::RequestCaller::Person,
     );
-    assert!(!hub.force_submit("child", "forced".into(), Vec::new(), None, true));
-    hub.add_draft("child", "draft".into(), Vec::new(), None);
-    hub.activate_all_drafts("child");
+    assert!(!hub.force_submit(
+        "child",
+        "forced".into(),
+        Vec::new(),
+        None,
+        true,
+        &crate::prompt_origin::RequestCaller::Person
+    ));
+    hub.add_draft(
+        "child",
+        "draft".into(),
+        Vec::new(),
+        None,
+        &crate::prompt_origin::RequestCaller::Person,
+    );
+    hub.activate_all_drafts("child", &crate::prompt_origin::RequestCaller::Person);
     let turn = hub.managed_turn("child", 0).unwrap();
     assert!(!turn.prompted);
     hub.submit_managed_prompt("child", "call-1", "review".into());
@@ -192,8 +206,20 @@ fn a_withdrawn_managed_prompt_never_reaches_a_worker() {
     );
     // A client cannot edit it, and another call's id leaves it alone.
     let queued = hub.inner.sessions.lock()["child"].queue[0].id.clone();
-    assert!(!hub.client_edit("child", &queued, "other".into(), Vec::new()));
-    assert!(!hub.client_edit("child", &queued, String::new(), Vec::new()));
+    assert!(!hub.client_edit(
+        "child",
+        &queued,
+        "other".into(),
+        Vec::new(),
+        &crate::prompt_origin::RequestCaller::Person
+    ));
+    assert!(!hub.client_edit(
+        "child",
+        &queued,
+        String::new(),
+        Vec::new(),
+        &crate::prompt_origin::RequestCaller::Person
+    ));
     assert!(!hub.discard_managed_prompt("child", "call-2"));
     assert!(hub.managed_turn("child", 0).unwrap().prompted);
     assert!(hub.discard_managed_prompt("child", "call-1"));

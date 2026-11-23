@@ -73,15 +73,104 @@ pub async fn set_policy(
     }
 }
 
-pub fn begin(
+/// Persist a Controller dispatch origin record (durable store + Hub cache)
+/// before handing a direct prompt or steer to a worker. Fails closed when a
+/// store is configured and refuses the write.
+pub async fn record_steer_dispatch(
     state: &AppState,
     session: &str,
+    cmid: &str,
+    caller: &crate::prompt_origin::RequestCaller,
+) -> Result<(), String> {
+    record_steer_dispatch_in(&state.hub, state.store.as_ref(), session, cmid, caller).await
+}
+
+pub(crate) async fn record_steer_dispatch_in(
+    hub: &Hub,
+    store: Option<&Store>,
+    session: &str,
+    cmid: &str,
+    caller: &crate::prompt_origin::RequestCaller,
+) -> Result<(), String> {
+    let origin = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
+    let dispatched_at_ms = chrono::Utc::now().timestamp_millis();
+    if hub
+        .prompt_dispatch_record(session, cmid)
+        .is_some_and(|existing| existing.origin != origin || existing.trigger != origin)
+    {
+        return Err("conflicting dispatch provenance for message id".to_owned());
+    }
+    if let Some(store) = store {
+        let record = crate::prompt_origin::PromptDispatchRecord {
+            session_id: session.to_owned(),
+            cmid: cmid.to_owned(),
+            origin: origin.clone(),
+            trigger: origin.clone(),
+            dispatched_at_ms,
+        };
+        let compatible = store
+            .record_prompt_dispatch_if_compatible(&record)
+            .await
+            .map_err(|_| "dispatch provenance store unavailable".to_owned())?;
+        if !compatible {
+            return Err("conflicting dispatch provenance for message id".to_owned());
+        }
+    }
+    hub.record_prompt_dispatch(
+        session,
+        cmid.to_owned(),
+        origin.clone(),
+        origin,
+        dispatched_at_ms,
+    );
+    Ok(())
+}
+
+/// Durably record dispatch origin and begin a current-turn / next-checkpoint
+/// steer. Used by async HTTP and Agent API entry points.
+#[allow(clippy::too_many_arguments)]
+pub async fn begin_recorded(
+    state: &AppState,
+    session: &str,
+    caller: &crate::prompt_origin::RequestCaller,
     text: &str,
     content: &[serde_json::Value],
     cmid: String,
     target: Option<&crate::send_delivery::DeliveryTarget>,
     next_checkpoint: bool,
 ) -> Result<crate::remote_runtime::SteeringDelivery, String> {
+    record_steer_dispatch(state, session, &cmid, caller).await?;
+    begin(
+        state,
+        session,
+        caller,
+        text,
+        content,
+        cmid,
+        target,
+        next_checkpoint,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn begin(
+    state: &AppState,
+    session: &str,
+    caller: &crate::prompt_origin::RequestCaller,
+    text: &str,
+    content: &[serde_json::Value],
+    cmid: String,
+    target: Option<&crate::send_delivery::DeliveryTarget>,
+    next_checkpoint: bool,
+) -> Result<crate::remote_runtime::SteeringDelivery, String> {
+    let origin = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
+    if state
+        .hub
+        .prompt_dispatch_record(session, &cmid)
+        .is_some_and(|existing| existing.origin != origin || existing.trigger != origin)
+    {
+        return Err("conflicting dispatch provenance for message id".into());
+    }
     if crate::session_context::pending(&state.hub, session) {
         return Err("Context changes are pending. Wait for this turn to finish, then send normally, or cancel those changes.".into());
     }
@@ -106,6 +195,13 @@ pub fn begin(
     if info.meta.status != Status::Busy {
         return Err("there is no current turn; choose next_turn".into());
     }
+    state.hub.record_prompt_dispatch(
+        session,
+        cmid.clone(),
+        origin.clone(),
+        origin.clone(),
+        chrono::Utc::now().timestamp_millis(),
+    );
     let delivery = state.supervisor.start_steer(
         session,
         blocks
@@ -116,6 +212,9 @@ pub fn begin(
         target,
         next_checkpoint,
     )?;
+    if origin.is_owner() {
+        state.hub.notify_human_turn(session);
+    }
     // A steered message is sent too: it ends the Back window.
     super::config_revert::clear(&state.hub, session);
     Ok(delivery)
@@ -190,6 +289,7 @@ pub async fn release(
 async fn interrupt_once(
     state: &AppState,
     session: &str,
+    caller: &crate::prompt_origin::RequestCaller,
     request: &SessionPromptRequest,
 ) -> serde_json::Value {
     let refuse = |error: &str| serde_json::json!({"status":"not_delivered","error":error});
@@ -292,6 +392,7 @@ async fn interrupt_once(
         operation,
         request.text.clone(),
         request.content.clone(),
+        caller,
     ) {
         return serde_json::json!({"status":"unknown","error":"Replacement admission is unresolved; queue held."});
     }
@@ -311,6 +412,7 @@ fn operation_key(operation: &str) -> Option<String> {
 pub async fn submit(
     state: Arc<AppState>,
     session: String,
+    caller: crate::prompt_origin::RequestCaller,
     request: SessionPromptRequest,
 ) -> Response {
     let Some(operation) = request.operation.as_deref().and_then(operation_key) else {
@@ -331,8 +433,8 @@ pub async fn submit(
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     };
     let hash = crate::managed_calls::canonical_digest(&serde_json::json!({
-        "delivery":request.delivery, "text":request.text, "content":request.content,
-        "target":request.target,
+        "caller":&caller, "delivery":request.delivery, "text":request.text,
+        "content":request.content, "target":request.target,
     }));
     match store
         .admit_agent_operation(&owner, &session, &operation, &hash)
@@ -352,17 +454,19 @@ pub async fn submit(
         let _permit = permit;
         let mut receipt = if request.delivery == Some(crate::send_delivery::SendDelivery::Interrupt)
         {
-            interrupt_once(&state, &session, &request).await
+            interrupt_once(&state, &session, &caller, &request).await
         } else {
-            let effect = begin(
+            let effect = begin_recorded(
                 &state,
                 &session,
+                &caller,
                 &request.text,
                 &request.content,
                 request.operation.clone().expect("validated operation"),
                 request.target.as_ref(),
                 request.delivery == Some(crate::send_delivery::SendDelivery::NextCheckpoint),
-            );
+            )
+            .await;
             match effect {
                 Ok(effect) => result(&effect.outcome().await),
                 Err(error) => {
@@ -372,6 +476,9 @@ pub async fn submit(
         };
         receipt["operation"] = serde_json::json!(request.operation);
         receipt["delivery"] = serde_json::json!(request.delivery);
+        receipt["caller"] = serde_json::json!(&caller);
+        receipt["origin"] =
+            serde_json::json!(crate::prompt_origin::DeliveryOrigin::from_caller(&caller));
         if store
             .finish_agent_operation(&owner, &session, &operation, &receipt)
             .await

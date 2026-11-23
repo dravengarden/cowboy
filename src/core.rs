@@ -35,6 +35,7 @@ mod session_continuation;
 mod session_fork;
 pub use session_fork::{FORK_ORIGIN_UPDATE, ForkPoint, ForkRecord, ForkState};
 mod hub_config;
+mod hub_dispatch_origin;
 use hub_config::{ConfigPreviews, add_config_choices};
 mod hub_events;
 pub use hub_events::FanoutFrame;
@@ -460,6 +461,14 @@ pub struct DispatchReq {
     /// returned for a transient resource wait, maintenance retries it once the
     /// resource returns even if the queue is paused or the session crashed.
     pub explicit: bool,
+    /// Stored content origin (last content writer), preserved across requeue.
+    pub origin: Option<crate::prompt_origin::DeliveryOrigin>,
+    /// Initiating authority that admitted/triggered the send, preserved across requeue.
+    pub initiator: Option<crate::prompt_origin::DeliveryOrigin>,
+    /// Computed authoritative dispatch origin for this send.
+    pub dispatch_origin: crate::prompt_origin::DeliveryOrigin,
+    /// Authoritative trigger recorded in `prompt_dispatches`.
+    pub trigger: crate::prompt_origin::DeliveryOrigin,
 }
 
 pub struct DispatchOwnership {
@@ -672,6 +681,9 @@ struct Session {
     /// ran. Bounded; the echoed `cmid` in `log` covers the rest and survives a
     /// Controller restart.
     dispatched_cmids: VecDeque<DispatchedPrompt>,
+    dispatched_origins: HashMap<String, crate::prompt_origin::PromptDispatchRecord>,
+    dispatched_origin_order: VecDeque<String>,
+    active_echo_origin: Option<crate::prompt_origin::DeliveryOrigin>,
     /// A worker reports the same completed turn through both `TurnEnded` and a
     /// trailing `Busy` -> `Running` lifecycle edge. The first edge may drain the
     /// next prompt before the second arrives. Latch that completion until the
@@ -1938,7 +1950,7 @@ impl Hub {
 
     /// Tell the scheduler a human turn arrived for a session, resetting its
     /// consecutive-wakeup runaway guard. No-op if the scheduler isn't wired.
-    fn notify_human_turn(&self, session_id: &str) {
+    pub fn notify_human_turn(&self, session_id: &str) {
         if let Some(tx) = self.inner.scheduler_tx.lock().as_ref() {
             let _ = tx.try_send(crate::scheduler::ScheduleCmd::HumanTurn {
                 session_id: session_id.to_owned(),
@@ -2270,6 +2282,9 @@ impl Hub {
                         explicit_wait: self.restored_explicit_wait(&id),
                         dispatch_pending: None,
                         dispatched_cmids: VecDeque::new(),
+                        dispatched_origins: HashMap::new(),
+                        dispatched_origin_order: VecDeque::new(),
+                        active_echo_origin: None,
                         turn_completion_latched: false,
                         provider_generation_missing: false,
                         lifecycle_epoch: 0,
@@ -2541,12 +2556,22 @@ impl Hub {
     /// call-scoped id makes a repeated notice a no-op.
     pub fn submit_call_notice(&self, session_id: &str, call_id: &str, text: String) {
         let cmid = format!("{}{call_id}", crate::agent_model::CALL_NOTICE_PREFIX);
-        self.submit_automatic(session_id, text, cmid);
+        self.submit_automatic(session_id, text, cmid, "managed_call");
     }
 
-    /// Submit a prompt no human sent (call notice, scheduled wakeup).
-    pub fn submit_automatic(&self, session_id: &str, text: String, cmid: String) {
-        self.submit_inner(session_id, text, Vec::new(), Some(cmid), false, false);
+    /// Submit a prompt no human sent (call notice, peer notice, scheduled wakeup).
+    pub fn submit_automatic(&self, session_id: &str, text: String, cmid: String, source: &str) {
+        let origin = crate::prompt_origin::DeliveryOrigin::cowboy(source);
+        self.submit_inner(
+            session_id,
+            text,
+            Vec::new(),
+            Some(cmid),
+            false,
+            false,
+            Some(origin.clone()),
+            origin,
+        );
     }
 
     /// Subscribe to the live event stream.
@@ -3061,6 +3086,9 @@ impl Hub {
                     explicit_wait: false,
                     dispatch_pending: None,
                     dispatched_cmids: VecDeque::new(),
+                    dispatched_origins: HashMap::new(),
+                    dispatched_origin_order: VecDeque::new(),
+                    active_echo_origin: None,
                     turn_completion_latched: false,
                     provider_generation_missing: false,
                     lifecycle_epoch: 0,

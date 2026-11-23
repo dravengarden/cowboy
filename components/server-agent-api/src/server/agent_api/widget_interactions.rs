@@ -9,7 +9,7 @@ use crate::store::session_widgets::StoredWidget;
 use crate::store::session_widgets::interactions::StoredInteraction;
 use crate::widgets::interactions::{self, Decided};
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse as _, Response};
 use sha2::{Digest as _, Sha256};
@@ -157,14 +157,34 @@ pub(in crate::server) async fn recover_decisions(state: &AppState) {
     for (session_id, cmid, message) in pending {
         if admissible(state, &session_id).is_ok() {
             tracing::info!(session = %session_id, %cmid, "re-queued an undelivered widget decision");
-            state
-                .hub
-                .submit(&session_id, message, Vec::new(), Some(cmid));
+            state.hub.submit(
+                &session_id,
+                message,
+                Vec::new(),
+                Some(cmid),
+                &crate::prompt_origin::RequestCaller::Person,
+            );
         }
     }
 }
 
 /// The session may take a person's prompt right now.
+/// Widget decisions and confirmed app messages speak for a person; reject
+/// automation, agent, and internal callers before touching widget state.
+#[expect(
+    clippy::result_large_err,
+    reason = "HTTP rejection is an owned Axum response returned directly by its handler"
+)]
+pub(super) fn require_person_caller(
+    caller: &crate::prompt_origin::RequestCaller,
+) -> Result<(), Response> {
+    if caller.is_person() {
+        Ok(())
+    } else {
+        Err(refusal(StatusCode::FORBIDDEN, "owner_required", json!({})))
+    }
+}
+
 pub(super) fn admissible(
     state: &AppState,
     session_id: &str,
@@ -191,9 +211,13 @@ pub(super) fn admissible(
 /// `POST /api/sessions/{id}/widgets/{widget_id}/interactions`.
 pub(in crate::server) async fn api_widget_interaction(
     State(state): State<Arc<AppState>>,
+    Extension(authenticated): Extension<super::super::AuthenticatedProductRequest>,
     Path((session_id, widget_id)): Path<(String, String)>,
     Json(request): Json<InteractionRequest>,
 ) -> Response {
+    if let Err(response) = require_person_caller(&authenticated.caller) {
+        return response;
+    }
     if let Err((status, code)) = admissible(&state, &session_id) {
         return refusal(status, code, json!({}));
     }
@@ -270,6 +294,7 @@ async fn send(
             decision.message.clone(),
             Vec::new(),
             Some(cmid.clone()),
+            &crate::prompt_origin::RequestCaller::Person,
         );
     };
     match store.widget_interaction(session_id, &cmid).await {
@@ -322,4 +347,28 @@ async fn send(
     let decided = decided(store, session_id, &updated).await;
     super::widgets::push(state, session_id, &updated, "interaction", decided);
     sent()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::prompt_origin::RequestCaller;
+
+    #[tokio::test]
+    async fn widget_endpoints_require_person_caller() {
+        assert!(require_person_caller(&RequestCaller::Person).is_ok());
+        for caller in [
+            RequestCaller::Automation,
+            RequestCaller::agent("parent-1"),
+            RequestCaller::cowboy("schedule"),
+        ] {
+            let response = require_person_caller(&caller).unwrap_err();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            let body = axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap();
+            let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(parsed["code"], "owner_required");
+        }
+    }
 }

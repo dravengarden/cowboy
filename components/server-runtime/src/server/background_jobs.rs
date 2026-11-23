@@ -1404,3 +1404,6 @@ pub fn classify_interruption_detail(detail: Option<&str>) -> &'static str {
         "runtime_interruption"
     }
 }
+
+#[cfg(test)]
+pub(crate) use dispatch::record_dispatch_provenance_in;

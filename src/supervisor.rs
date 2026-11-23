@@ -1866,7 +1866,14 @@ mod tests {
         let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
         let supervisor = remote_supervisor(hub.clone(), Arc::clone(&runtime), root.0.clone());
         hub.set_paused("s", true);
-        hub.requeue_prompt("s", "retained".into(), vec![], Some("original".into()));
+        hub.requeue_prompt(
+            "s",
+            "retained".into(),
+            vec![],
+            Some("original".into()),
+            None,
+            None,
+        );
 
         hub.prepare_context_reset("s");
         hub.clear_transcript("s");
@@ -1922,8 +1929,8 @@ mod tests {
         assert!(!supervisor.prepare_session("s").unwrap());
         assert_eq!(hub.status("s"), Some(Status::Crashed));
         assert!(runtime.pending_for_test().is_empty());
-        hub.retry_turn("s");
-        hub.retry_turn("s");
+        hub.retry_turn("s", &crate::prompt_origin::RequestCaller::Person, None);
+        hub.retry_turn("s", &crate::prompt_origin::RequestCaller::Person, None);
         let request = rx.try_recv().expect("retry reaches dispatch preflight");
         assert_eq!(request.text, "existing durable history");
         assert!(rx.try_recv().is_err(), "retry must not duplicate delivery");
@@ -2086,7 +2093,14 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel(8);
         hub.set_dispatch_tx(tx);
         hub.set_status("s", Status::Starting, None);
-        hub.requeue_prompt("s", "while preparing".into(), vec![], Some("first".into()));
+        hub.requeue_prompt(
+            "s",
+            "while preparing".into(),
+            vec![],
+            Some("first".into()),
+            None,
+            None,
+        );
         supervisor
             .finish_session_preparation("s", |_| Ok(()))
             .unwrap();
@@ -2733,6 +2747,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn reload_preserves_history_pending_state_config_and_native_thread() {
         let root = TestDir::new();
         let cwd = root.path().join("checkout");
@@ -2761,14 +2776,32 @@ mod tests {
         hub.set_status("s", Status::Running, None);
         let (dispatch_tx, mut dispatch_rx) = tokio::sync::mpsc::channel(4);
         hub.set_dispatch_tx(dispatch_tx);
-        hub.submit("s", "active turn".to_owned(), Vec::new(), None);
+        hub.submit(
+            "s",
+            "active turn".to_owned(),
+            Vec::new(),
+            None,
+            &crate::prompt_origin::RequestCaller::Person,
+        );
         assert_eq!(
             dispatch_rx.recv().await.expect("active dispatch").text,
             "active turn"
         );
         hub.set_status("s", Status::Busy, None);
-        hub.submit("s", "keep queued".to_owned(), Vec::new(), None);
-        hub.add_draft("s", "keep draft".to_owned(), Vec::new(), None);
+        hub.submit(
+            "s",
+            "keep queued".to_owned(),
+            Vec::new(),
+            None,
+            &crate::prompt_origin::RequestCaller::Person,
+        );
+        hub.add_draft(
+            "s",
+            "keep draft".to_owned(),
+            Vec::new(),
+            None,
+            &crate::prompt_origin::RequestCaller::Person,
+        );
 
         let info_before = hub.session_info("s").expect("session before reload");
         let (history_before, _) = hub.snapshot("s").expect("history before reload");
@@ -2846,7 +2879,13 @@ mod tests {
         hub.set_status("s", Status::Running, None);
         let (dispatch_tx, mut dispatch_rx) = tokio::sync::mpsc::channel(1);
         hub.set_dispatch_tx(dispatch_tx);
-        hub.submit("s", "active turn".to_owned(), Vec::new(), None);
+        hub.submit(
+            "s",
+            "active turn".to_owned(),
+            Vec::new(),
+            None,
+            &crate::prompt_origin::RequestCaller::Person,
+        );
         assert_eq!(
             dispatch_rx.recv().await.expect("active dispatch").text,
             "active turn"

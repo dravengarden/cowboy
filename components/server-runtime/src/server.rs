@@ -87,6 +87,8 @@ pub mod agent_api_bridge;
 pub mod background_tasks;
 #[cfg(test)]
 mod background_tasks_tests;
+#[cfg(test)]
+mod c_auth_tests;
 pub mod cardea_authorization;
 pub use cowboy_server_code_buffers::server::code_buffers;
 pub mod draft_documents;
@@ -1026,6 +1028,7 @@ pub struct WebSocketQuery {
 #[derive(Clone)]
 pub struct WebSocketAuthentication {
     pub principal: ProductPrincipal,
+    pub caller: crate::prompt_origin::RequestCaller,
     pub via_cookie: bool,
     pub cookie_token: Option<String>,
     pub bearer: Option<String>,

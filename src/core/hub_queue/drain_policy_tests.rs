@@ -16,7 +16,13 @@ fn session_with_queue(id: &str) -> Hub {
     );
     hub.set_status(id, Status::Running, None);
     // Without a dispatcher the drain never pops, so the head stays queued.
-    hub.submit(id, "first".into(), vec![], Some("cmid-1".into()));
+    hub.submit(
+        id,
+        "first".into(),
+        vec![],
+        Some("cmid-1".into()),
+        &crate::prompt_origin::RequestCaller::Person,
+    );
     hub
 }
 

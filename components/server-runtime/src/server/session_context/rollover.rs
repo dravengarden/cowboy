@@ -261,7 +261,13 @@ pub async fn observe(state: Arc<AppState>) {
 /// recorded, atomic renewal leaves the session to resume its old context.
 /// Authored prompts after [`MEASURED_IDLE`] and every renewal log their
 /// decision.
-pub async fn before_dispatch(state: &AppState, id: &str, text: &str, cmid: Option<&str>) {
+pub async fn before_dispatch(
+    state: &AppState,
+    id: &str,
+    text: &str,
+    cmid: Option<&str>,
+    dispatch_origin: &crate::prompt_origin::DeliveryOrigin,
+) {
     if let Some(cmid) = cmid
         && cmid.starts_with(crate::agent_model::CALL_NOTICE_PREFIX)
         && let Some(info) = state.hub.session_info(id)
@@ -277,7 +283,10 @@ pub async fn before_dispatch(state: &AppState, id: &str, text: &str, cmid: Optio
             None,
         );
     }
-    let Some(cmid) = cmid.filter(|cmid| Hub::is_authored_cmid(cmid)) else {
+    if !dispatch_origin.is_owner() {
+        return;
+    }
+    let Some(cmid) = cmid else {
         return;
     };
     if crate::session_context::is_command(text) {

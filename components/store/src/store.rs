@@ -46,6 +46,7 @@ mod copy;
 mod core_security;
 pub mod draft_documents;
 mod managed_calls;
+pub mod prompt_dispatches;
 pub use managed_calls::{
     CallNoticeDelivery, DispatchClaim, LegacyAdoptionOutcome, NoticeClaimRelease,
     NoticeDeliveryState, NoticeEchoEvidence, NoticeReconciliation, completion_id_for_call,

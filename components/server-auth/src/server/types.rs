@@ -388,6 +388,7 @@ impl<'a> From<&'a ProductAuthState> for ProductRequestAuth<'a> {
 #[derive(Clone)]
 pub struct AuthenticatedProductRequest {
     pub principal: ProductPrincipal,
+    pub caller: crate::prompt_origin::RequestCaller,
     pub cookie_session: Option<crate::store::ProductUserSession>,
     pub device_identity: Option<crate::client_auth::DeviceAccessIdentity>,
     pub permissions: Option<crate::core::ProductPermissionObservation>,
