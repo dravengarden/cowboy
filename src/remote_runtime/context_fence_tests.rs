@@ -285,3 +285,30 @@ async fn a_fenced_worker_owns_nothing_but_still_retires_its_turn() {
         "a fenced turn ending left its prompt pending"
     );
 }
+
+#[tokio::test]
+async fn a_worker_identified_as_cleared_loses_its_cache_entry() {
+    let hub = Hub::new();
+    session(&hub);
+    hub.set_agent_session_id("s", "agent-1".to_owned());
+    let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+    clear(&hub);
+    // Reported before it named its native id, then naming the discarded one.
+    merge_worker_snapshots(
+        &runtime.shared,
+        vec![worker("unidentified", WorkerState::Running, None)],
+    )
+    .await;
+    assert!(runtime.shared.workers.lock().contains_key("s"));
+    deliver(
+        &runtime,
+        "unidentified",
+        1,
+        vec![agent("agent-1"), usage(9)],
+    )
+    .await;
+    assert!(!runtime.shared.workers.lock().contains_key("s"));
+    let meta = hub.session_info("s").unwrap().meta;
+    assert_eq!(meta.agent_session_id, None);
+    assert_eq!(meta.context_used, 0);
+}

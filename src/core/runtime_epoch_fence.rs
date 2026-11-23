@@ -34,7 +34,9 @@ const MAX_CLEARED_NATIVE: usize = 8;
 #[derive(Default)]
 pub(super) struct EpochFence {
     generation: u64,
-    epochs: HashMap<String, u64>,
+    /// Epoch -> (generation that admitted it, binding order).
+    epochs: HashMap<String, (u64, u64)>,
+    bound: u64,
 }
 
 impl EpochFence {
@@ -54,7 +56,7 @@ impl EpochFence {
             self.bind(epoch, self.stale());
             return false;
         }
-        if let Some(generation) = self.epochs.get(epoch) {
+        if let Some((generation, _)) = self.epochs.get(epoch) {
             return *generation == self.generation;
         }
         self.bind(epoch, self.generation);
@@ -63,19 +65,30 @@ impl EpochFence {
 
     fn bind(&mut self, epoch: &str, generation: u64) {
         if self.epochs.len() >= MAX_EPOCHS && !self.epochs.contains_key(epoch) {
-            // Forget a current-generation epoch first: a later frame binds it
-            // to the same generation again. Only then the oldest fenced one.
+            // Forget an older current-generation epoch first (reloads leave
+            // them behind; a later frame binds it to the same generation
+            // again), never the newest one, which is the likely live owner.
+            // Only then the oldest fenced one.
             let current = self.generation;
+            let newest = self
+                .epochs
+                .values()
+                .filter(|(bound, _)| *bound == current)
+                .map(|(_, order)| *order)
+                .max();
             let victim = self
                 .epochs
                 .iter()
-                .min_by_key(|(_, bound)| (**bound != current, **bound))
+                .filter(|(_, (_, order))| Some(*order) != newest)
+                .min_by_key(|(_, (bound, order))| (*bound != current, *bound, *order))
                 .map(|(epoch, _)| epoch.clone());
             if let Some(victim) = victim {
                 self.epochs.remove(&victim);
             }
         }
-        self.epochs.insert(epoch.to_owned(), generation);
+        self.bound = self.bound.wrapping_add(1);
+        self.epochs
+            .insert(epoch.to_owned(), (generation, self.bound));
     }
 }
 
@@ -150,6 +163,8 @@ impl Hub {
     /// Re-admit the worker a cancelled reset keeps: it still runs, so its
     /// frames and native id describe the session's only live context again.
     pub fn readmit_runtime_epoch(&self, session_id: &str, epoch: &str, native: Option<&str>) {
+        // Serialized with Clear, which records discarded ids under the same guard.
+        let _fence = self.runtime_projection_exclusive();
         if let Some(native) = native {
             let mut cleared = self.cleared_native(session_id);
             let before = cleared.len();
@@ -196,6 +211,12 @@ mod tests {
         }
         assert!(fence.epochs.len() <= MAX_EPOCHS);
         assert!(!fence.admit("fenced", false));
+        // The newest current epoch survives eviction, so the next Clear fences it.
+        let newest = format!("e{}", MAX_EPOCHS * 2 - 1);
+        fence.bind("fenced-again", 0);
+        assert!(fence.epochs.contains_key(&newest));
+        fence.advance();
+        assert!(!fence.admit(&newest, false));
     }
 
     #[test]

@@ -13,11 +13,28 @@ pub(super) fn admits_worker(shared: &Shared, worker: &WorkerSnapshot) -> bool {
 /// `worker` belongs to the session's current context; one of a cleared context
 /// owns nothing, not even the worker cache entry.
 pub(super) fn current_context(shared: &Shared, worker: &WorkerSnapshot) -> bool {
-    shared.hub.admit_runtime_epoch(
+    admit_epoch(
+        shared,
         &worker.session_id,
         &worker.worker_epoch,
         worker.agent_session_id.as_deref(),
     )
+}
+
+/// A refused epoch also loses the worker cache entry it may have taken while
+/// it was still unidentified; a newer owner's entry stays.
+fn admit_epoch(shared: &Shared, session_id: &str, epoch: &str, native: Option<&str>) -> bool {
+    let admitted = shared.hub.admit_runtime_epoch(session_id, epoch, native);
+    if !admitted {
+        let mut workers = shared.workers.lock();
+        if workers
+            .get(session_id)
+            .is_some_and(|cached| cached.worker_epoch == epoch)
+        {
+            workers.remove(session_id);
+        }
+    }
+    admitted
 }
 
 /// [`admits_worker`] for one streamed event of `epoch`.
@@ -37,7 +54,7 @@ pub(super) fn admits_event(
         _ => None,
     };
     shared.hub.accepts_runtime_projection(session_id)
-        && shared.hub.admit_runtime_epoch(session_id, epoch, native)
+        && admit_epoch(shared, session_id, epoch, native)
 }
 
 pub(super) fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
