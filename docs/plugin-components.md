@@ -88,6 +88,13 @@ adapter's lock moves `url` to 2.5.9 for RUSTSEC-2026-0592 (unbounded
 recursion in `Url::origin()` on nested `blob:` URLs). Native pins and its
 component release are unchanged.
 
+Component release 3.147.0 records provider-runtime 1.3.30, whose
+`cowboy-antigravity-acp` 1.0.25 drops a `usage_update` agy sends during a
+`/compact` turn (it measures the history being summarized), so the Controller
+shows the context as unknown until the next turn's reading. Antigravity 0.2.32
+pins it. The other six Providers pinning provider-runtime advance one patch
+version.
+
 Component release 3.146.0 records provider-runtime 1.3.29, whose
 `cowboy-antigravity-acp` 1.0.24 carries the uncertain-effect L1 facade
 ([design](uncertain-effect-recovery.md)): a process the executor reports as
