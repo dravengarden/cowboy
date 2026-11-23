@@ -24,6 +24,7 @@ import {
   decodeText,
   ENV_POLICY,
   forgotten,
+  notSent,
   imageType,
   INLINE_APPLY,
   inside,
@@ -661,8 +662,7 @@ export class Facade {
     if (observed !== undefined && observed !== base) {
       throw new ToolError(`${path} changed since it was read; read it again first.`);
     }
-    const { verified, observable } = await this.publish(turn, file, current, bytes);
-    if (observable) session.observed.set(file, sha256(bytes));
+    const verified = await this.publish(session, turn, file, current, bytes);
     if (verified) return `${current ? "Replaced" : "Created"} ${file}: ${VERIFIED}`;
     return `${current ? "Replaced" : "Created"} ${file} (${bytes.length} bytes)`;
   }
@@ -698,8 +698,7 @@ export class Facade {
     const next = Buffer.from(
       all === true ? text.replaceAll(before, () => after) : text.replace(before, () => after),
     );
-    const { verified, observable } = await this.publish(turn, file, current, next);
-    if (observable) session.observed.set(file, sha256(next));
+    const verified = await this.publish(session, turn, file, current, next);
     if (verified) return `Edited ${file}: ${VERIFIED}`;
     return `Edited ${file} (${replaced} replacement${replaced === 1 ? "" : "s"})`;
   }
@@ -710,19 +709,22 @@ export class Facade {
    * conditional `apply`: the original stays in place until the replacement
    * is, and a failure leaves the file unchanged or exactly at the result.
    */
-  async publish(turn, file, base, bytes) {
+  async publish(session, turn, file, base, bytes) {
     const generation = this.invalidations.get(file) ?? 0;
     try {
       const verified = await this.publishOnce(turn, file, base, bytes);
-      // Another publish of the file became uncertain meanwhile: this one must
-      // not restore what that invalidated.
-      return { verified, observable: (this.invalidations.get(file) ?? 0) === generation };
+      // Checked and written in one step: a publish of the file that became
+      // uncertain meanwhile is never undone by this one.
+      if ((this.invalidations.get(file) ?? 0) === generation) {
+        session.observed.set(file, sha256(bytes));
+      }
+      return verified;
     } catch (error) {
       // Its outcome is unknown: no session of this facade (the parent or a
       // subagent) may edit the file before reading it again.
       if (error instanceof UncertainEffect) {
-        this.invalidations.set(file, generation + 1);
-        for (const session of this.sessions.values()) session.observed.delete(file);
+        this.invalidations.set(file, (this.invalidations.get(file) ?? 0) + 1);
+        for (const each of this.sessions.values()) each.observed.delete(file);
       }
       throw error;
     }
@@ -861,7 +863,7 @@ export class Facade {
     return read;
   }
 
-  async readOnce(process, waitMs, { lostIsUncertain = true, deadline, bounded } = {}) {
+  async readOnce(process, waitMs, { lostIsUncertain = true, deadline } = {}) {
     // Checked when this read's turn in the chain comes: a reader ahead of
     // it may have confirmed the close or used the caller's remaining time.
     if (process.closed) return [];
@@ -872,15 +874,12 @@ export class Facade {
     }
     let result;
     try {
-      result = await this.connection.call(
-        "process/read",
-        { processId: process.processId, afterSeq: process.afterSeq, maxBytes: 65536, waitMs },
-        // A stop's confirmation read never outlives its confirmation budget:
-        // a held reply leaves the close unconfirmed instead.
-        bounded === undefined
-          ? undefined
-          : { timeoutMs: Math.max(1, bounded - Date.now()) + waitMs },
-      );
+      result = await this.connection.call("process/read", {
+        processId: process.processId,
+        afterSeq: process.afterSeq,
+        maxBytes: 65536,
+        waitMs,
+      });
     } catch (error) {
       if (forgotten(error, process.processId)) {
         // E1: the executor forgot it, so it ended; its exit status and any
@@ -991,14 +990,31 @@ export class Facade {
       try {
         await this.connection.call("process/terminate", { processId: process.processId });
       } catch (error) {
-        // Never sent (the connection could not be opened): a later attempt sends it.
-        if (unreachable(error) && !unknownOutcome(error)) process.stopSent = false;
+        // Refused before it was sent (no connection, or no request slot): a
+        // later attempt sends it. A reply lost after sending keeps the latch.
+        if (notSent(error)) process.stopSent = false;
         throw error;
       }
     }
+    // One monotonic budget covers waiting behind another reader, reconnects
+    // and the reply: when it ends the close is unconfirmed (`false`), and a
+    // read still in flight finishes on its own in the reader chain.
     const deadline = Date.now() + confirmMs;
-    while (!process.closed && Date.now() < deadline) {
-      await this.read(process, 500, { lostIsUncertain: false, bounded: deadline });
+    while (!process.closed) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      let timer;
+      const expired = new Promise((resolve) => {
+        timer = setTimeout(resolve, remaining);
+      });
+      try {
+        await Promise.race([
+          this.read(process, Math.min(500, remaining), { lostIsUncertain: false }),
+          expired,
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
     }
     return process.closed;
   }

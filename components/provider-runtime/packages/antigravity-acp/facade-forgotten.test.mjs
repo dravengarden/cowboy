@@ -193,14 +193,32 @@ test("a search whose process was forgotten answers a retryable error, never a pa
   assert.match(again.text, /hello\.txt:1:hello target/);
 });
 
-test("the readiness probe runs again when it was forgotten", async (t) => {
+test("a forgotten readiness probe reports the Git state unavailable and never runs again", async (t) => {
   const hold = holdReads();
-  const { root, facade } = await fixture(t, { delay: hold.delay });
+  const { root, facade, endpoint } = await fixture(t, { delay: hold.delay });
   execFileSync("git", ["-C", root, "init", "-q", "-b", "main"]);
   await facade.endTurn("s1");
   hold.arm();
   const projection = await buildProjection(facade, root);
-  assert.match(projection, /Git repository root:/);
+  assert.match(projection, /Git: state unavailable/);
+  assert.doesNotMatch(projection, /Git status: clean|not a repository/);
+  const starts = endpoint.calls.filter((entry) => entry.method === "process/start");
+  assert.equal(starts.length, 1);
+});
+
+test("a stop refused before it was sent is sent again later", async (t) => {
+  let refuse = true;
+  const { facade } = await fixture(t);
+  const turn = facade.session("s1").turn;
+  const process = await facade.start(turn, ["/bin/sh", "-c", "sleep 30"]);
+  const call = facade.connection.call.bind(facade.connection);
+  facade.connection.call = (method, ...rest) =>
+    method === "process/terminate" && refuse
+      ? Promise.reject(new Error("Too many execution requests"))
+      : call(method, ...rest);
+  await assert.rejects(facade.terminate(process), /Too many execution requests/);
+  refuse = false;
+  assert.equal(await facade.terminate(process), true);
 });
 
 test("a lost reply to a command's deadline stop is an uncertain effect, and no second stop follows", async (t) => {

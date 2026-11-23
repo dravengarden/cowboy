@@ -232,13 +232,12 @@ export async function buildProjection(
       // session/new), which the worker's ledger admits only for this purpose.
       readiness: true,
     });
-  let probe = await runProbe();
-  // A probe that ended unseen (the executor forgot it) may have lost its
-  // output; the read-only probe runs once more rather than report a clean
-  // tree or no repository from missing output.
-  if (probe.forgotten) probe = await runProbe();
-  if (probe.forgotten) throw new Error("The workspace Git state could not be read");
-  const git = parseGit(probe.stdout);
+  const probe = await runProbe();
+  // Output of a probe that ended unseen (the executor forgot it) or timed out
+  // may be incomplete: never parsed into a clean tree or "not a repository",
+  // and never run again (`git status` can refresh the index).
+  const incomplete = probe.forgotten || probe.timedOut;
+  const git = incomplete ? { top: undefined, status: [] } : parseGit(probe.stdout);
   const fence = `COWBOY_UNTRUSTED_${randomUUID().replaceAll("-", "")}`;
   const environment = [
     `Working directory: ${cwd}`,
@@ -254,6 +253,8 @@ export async function buildProjection(
     );
     environment.push(...shown);
     if (git.status.length > PROJECTION_LIMITS.statusLines) environment.push("[truncated]");
+  } else if (incomplete) {
+    environment.push("Git: state unavailable (the probe's output was incomplete)");
   } else environment.push("Git: not a repository");
   // Candidates are read a few at a time (each is a few round trips to the
   // target), in order: the user's home guidance first, then the
