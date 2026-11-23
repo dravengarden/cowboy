@@ -102,6 +102,30 @@ test("Codex recommends generation 6 models and defaults to Sol 6.2 Medium", asyn
   );
 });
 
+test("Claude Code defaults to Opus Recommended and Antigravity to Gemini 4 Neon High", async () => {
+  for (const [plugin, expected] of [
+    ["claude-code", "opus-default"],
+    ["antigravity", "gemini-neon-high"],
+  ] as const) {
+    const provider = JSON.parse(
+      await readFile(
+        new URL(`../../plugins/${plugin}/provider.json`, import.meta.url), "utf8",
+      ),
+    );
+    const presets = provider.configuration_presets as DeclaredPreset[];
+    assertEquals(
+      presets.filter((preset) => preset.is_default).map((preset) => preset.id),
+      [expected],
+    );
+    const defaults = provider.runtime.behavior.default_preferences;
+    const values = presets.find((preset) => preset.is_default)!.values;
+    assertEquals(
+      Object.fromEntries(Object.keys(values).map((key) => [key, defaults[key]])),
+      values,
+    );
+  }
+});
+
 test("signed Provider presets project without Provider identity branches", () => {
   const presets = supportedRunConfigPresets(declared, options);
   assertEquals(presets.map((preset) => [preset.id, preset.isDefault]), [

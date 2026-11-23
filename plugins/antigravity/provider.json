@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "antigravity",
-  "version": "0.2.27",
+  "version": "0.2.28",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.7.0",
   "display": {
@@ -67,7 +67,7 @@
       "id": "gemini-neon-high",
       "name": "Gemini 4 Neon · High",
       "detail": "Gemini 4 Neon · High thinking · strongest",
-      "is_default": false,
+      "is_default": true,
       "values": {
         "model": "gemini-4-neon",
         "thought_level": "high"
@@ -87,7 +87,7 @@
       "id": "gemini-hydrogen-high",
       "name": "Gemini 4 Hydrogen · High",
       "detail": "Gemini 4 Hydrogen · High thinking · daily",
-      "is_default": true,
+      "is_default": false,
       "values": {
         "model": "gemini-4-hydrogen",
         "thought_level": "high"
@@ -148,7 +148,10 @@
       "session": "portable_v1",
       "turn_end": "portable_v1",
       "configuration": "portable_v1",
-      "default_preferences": {},
+      "default_preferences": {
+        "model": "gemini-4-neon",
+        "thought_level": "high"
+      },
       "error_rules": [
         {
           "when": {
