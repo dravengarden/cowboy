@@ -50,7 +50,8 @@ export function DesktopModal({
   /** A workbench rather than a form: take the whole viewport less a margin
    *  and let the content lay out its own scrolling regions. */
   fill?: boolean;
-}): React.JSX.Element {
+}): React.JSX.Element | null {
+  if (!open) return null;
   return (
     <Dialog
       open={open}

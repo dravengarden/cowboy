@@ -26,6 +26,44 @@ export function jsonValueEqual(a: unknown, b: unknown): boolean {
   return true;
 }
 
+const HIGH_FREQ_SESSION_KEYS = new Set([
+  "updated_at_ms",
+  "context_used",
+  "context_size",
+]);
+
+function sameSessionChromeMeta(a: SessionMeta, b: SessionMeta): boolean {
+  if (a === b) return true;
+  const left = a as unknown as Record<string, unknown>;
+  const right = b as unknown as Record<string, unknown>;
+  for (const key of Object.keys(left)) {
+    if (HIGH_FREQ_SESSION_KEYS.has(key)) continue;
+    if (!Object.hasOwn(right, key) || !jsonValueEqual(left[key], right[key])) {
+      return false;
+    }
+  }
+  for (const key of Object.keys(right)) {
+    if (HIGH_FREQ_SESSION_KEYS.has(key)) continue;
+    if (!Object.hasOwn(left, key)) return false;
+  }
+  return true;
+}
+
+/** Equality comparator for `App` chrome and `SessionList`. Ignores
+ *  high-frequency `updated_at_ms`, `context_used`, and `context_size` ticks
+ *  while reacting to every visual, status, badge, order, or membership change. */
+export function sameAppChromeSessions(
+  previous: readonly SessionMeta[],
+  next: readonly SessionMeta[],
+): boolean {
+  if (previous === next) return true;
+  if (previous.length !== next.length) return false;
+  for (let index = 0; index < previous.length; index += 1) {
+    if (!sameSessionChromeMeta(previous[index]!, next[index]!)) return false;
+  }
+  return true;
+}
+
 /** Keep the previous object for every session whose content is unchanged, and
  * the previous array when nothing changed at all.
  *

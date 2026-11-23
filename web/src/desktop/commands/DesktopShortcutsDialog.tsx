@@ -342,6 +342,15 @@ export function DesktopShortcutsDialog({
 }: {
   open: boolean;
   onClose: () => void;
+}): React.JSX.Element | null {
+  if (!open) return null;
+  return <DesktopShortcutsDialogContent onClose={onClose} />;
+}
+
+function DesktopShortcutsDialogContent({
+  onClose,
+}: {
+  onClose: () => void;
 }): React.JSX.Element {
   const workspace = useDesktopWorkspace();
   const registry = useDesktopCommands();
@@ -362,7 +371,7 @@ export function DesktopShortcutsDialog({
 
   return (
     <DesktopModal
-      open={open}
+      open
       onClose={onClose}
       title="Keyboard shortcuts"
       description={`Vim-first navigation · ${workspace.focusedRegion ?? workspace.focusedPane}`}

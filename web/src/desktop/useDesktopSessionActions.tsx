@@ -57,7 +57,7 @@ const PROMPT_SCOPE: Pick<DesktopCommand, "allowInEditor" | "contexts" | "regions
 
 export function useDesktopSessionActions(sessionId: string, status: Status): DesktopSessionActions {
   const session = useStoreSelector((snapshot) =>
-    snapshot.sessions.find((candidate) => candidate.id === sessionId),
+    snapshot.sessionsById.get(sessionId),
   );
   const timeline = useStoreSelector(
     (snapshot) => desktopTopBarTimelineSlice(snapshot.timelines.get(sessionId)),
@@ -168,7 +168,7 @@ export function useDesktopSessionActions(sessionId: string, status: Status): Des
   const provider = session?.provider ?? "the agent";
   const dialogs = (
     <>
-      <Dialog open={open === "compact"} onClose={close} maxWidth="xs" fullWidth>
+      {open === "compact" && <Dialog open onClose={close} maxWidth="xs" fullWidth>
         <DialogTitle>Compact conversation?</DialogTitle>
         <DialogContent>
           <DialogContentText>{compactAction?.detail}</DialogContentText>
@@ -201,8 +201,8 @@ export function useDesktopSessionActions(sessionId: string, status: Status): Des
             <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
           </Button>
         </DialogActions>
-      </Dialog>
-      <Dialog open={open === "clear"} onClose={close} maxWidth="xs" fullWidth>
+      </Dialog>}
+      {open === "clear" && <Dialog open onClose={close} maxWidth="xs" fullWidth>
         <DialogTitle>Clear conversation?</DialogTitle>
         <DialogContent>
           <DialogContentText>{clearAction?.detail}</DialogContentText>
@@ -226,16 +226,16 @@ export function useDesktopSessionActions(sessionId: string, status: Status): Des
             <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
           </NetworkButton>
         </DialogActions>
-      </Dialog>
-      <StopConfirmDialog
-        open={open === "stop" && busy}
+      </Dialog>}
+      {open === "stop" && busy && <StopConfirmDialog
+        open
         onClose={close}
         onConfirm={(): void => {
           importantHaptic();
           cancelTurn(sessionId);
           setOpen(null);
         }}
-      />
+      />}
     </>
   );
 

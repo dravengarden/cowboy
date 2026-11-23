@@ -99,17 +99,25 @@ function scheduleSuspend(c: AudioContext): void {
 // first resume), then immediately suspend — so we never keep the session active
 // just from being open. Only if the chime is enabled; otherwise we never touch
 // audio at all.
+const UNLOCK_EVENTS = ["pointerdown", "keyup", "touchend"] as const;
+
 function unlockOnce(): void {
-  if (unlocked || !notify.get()) return;
+  if (unlocked) return;
+  if (!notify.get()) return;
   const c = ensureCtx();
   if (!c) return;
   unlocked = true;
+  if (typeof globalThis.removeEventListener === "function") {
+    for (const ev of UNLOCK_EVENTS) {
+      globalThis.removeEventListener(ev, unlockOnce);
+    }
+  }
   void c.resume().then(() => {
     if (c.state === "running") void c.suspend();
   });
 }
 if (typeof globalThis.addEventListener === "function") {
-  for (const ev of ["pointerdown", "keydown", "touchend"]) {
+  for (const ev of UNLOCK_EVENTS) {
     globalThis.addEventListener(ev, unlockOnce, { passive: true });
   }
 }

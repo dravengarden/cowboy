@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import {
   type DesktopCommand,
-  useDesktopCommands,
+  useDesktopCommandActions,
 } from "./DesktopCommandProvider";
 import {
   DESKTOP_SHORTCUTS,
@@ -232,7 +232,7 @@ export function DesktopComposerCommandBindings({
     })),
   ], []);
 
-  const { register } = useDesktopCommands();
+  const { register } = useDesktopCommandActions();
   useEffect(() => {
     const unregister = commands.map(register);
     return () => unregister.forEach((remove) => remove());

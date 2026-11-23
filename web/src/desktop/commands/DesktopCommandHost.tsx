@@ -21,7 +21,7 @@ import {
 import {
   type DesktopCommand,
   useDesktopCommand,
-  useDesktopCommands,
+  useDesktopCommandActions,
 } from "./DesktopCommandProvider";
 import { DesktopShortcut } from "./DesktopKeycap";
 import { useDesktopLeaderOptional } from "./leaderContext";
@@ -109,7 +109,7 @@ export function DesktopCommandHost({
   /** A Draft, not a Session, is the workspace item. */
   draftOpen?: boolean;
 }): React.JSX.Element {
-  const registry = useDesktopCommands();
+  const registry = useDesktopCommandActions();
   const workspace = useDesktopWorkspace();
   useDesktopInsertCommand(draftOpen, workspace.focusRegion);
   const leader = useDesktopLeaderOptional();
@@ -619,7 +619,7 @@ export function DesktopCommandHost({
         onClose={(): void => setRecentOpen(false)}
         onOpen={(key): void => openRecentRef.current(key)}
       />
-      <DesktopModal
+      {paletteOpen && <DesktopModal
         open={paletteOpen}
         onClose={(): void => setPaletteOpen(false)}
         title="Command Palette"
@@ -751,7 +751,7 @@ export function DesktopCommandHost({
           ))}
         <ScrollEdges /></List>
       </Box>
-      </DesktopModal>
+      </DesktopModal>}
     </>
   );
 }

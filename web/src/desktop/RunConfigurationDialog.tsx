@@ -386,9 +386,43 @@ export function RunConfigurationDialog({
   optionPresentations: ReadonlyMap<string, ProviderConfigOptionPresentation>;
   /** Replace or fork opens on its form in the Context pane. */
   initialFocus?: SessionSettingsFocus;
+}): React.JSX.Element | null {
+  if (!open) return null;
+  return (
+    <RunConfigurationDialogContent
+      onClose={onClose}
+      sessionId={sessionId}
+      session={session}
+      status={status}
+      dead={dead}
+      options={options}
+      optionPresentations={optionPresentations}
+      initialFocus={initialFocus}
+    />
+  );
+}
+
+function RunConfigurationDialogContent({
+  onClose,
+  sessionId,
+  session,
+  status,
+  dead,
+  options,
+  optionPresentations,
+  initialFocus,
+}: {
+  onClose: () => void;
+  sessionId: string;
+  session: SessionMeta | undefined;
+  status: Status;
+  dead: boolean;
+  options: readonly ConfigOption[];
+  optionPresentations: ReadonlyMap<string, ProviderConfigOptionPresentation>;
+  initialFocus: SessionSettingsFocus;
 }): React.JSX.Element {
   const panelRef = useRef<HTMLDivElement>(null);
-  useRunConfigKeyboard(open, panelRef, initialFocus === "new_from" ? "new_from" : "first");
+  useRunConfigKeyboard(true, panelRef, initialFocus === "new_from" ? "new_from" : "first");
   const directConfigShortcuts = options.map(optionShortcut).filter(
     (shortcut): shortcut is string => shortcut !== undefined,
   );
@@ -410,10 +444,10 @@ export function RunConfigurationDialog({
     applyConfig,
     closeConfig,
     savedNames,
-  } = useRunConfigDraft(sessionId, options, open, onClose);
+  } = useRunConfigDraft(sessionId, options, true, onClose);
   return (
     <DesktopModal
-      open={open}
+      open
       onClose={closeConfig}
       title="Run configuration"
       description={dead

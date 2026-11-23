@@ -30,6 +30,7 @@ import {
   Upgrade,
 } from "@mui/icons-material";
 import {
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -94,7 +95,8 @@ import {
 import { useSubscriptionAccounts } from "../subscriptionAccounts";
 import { type AboutValues, DEFAULT_ABOUT_VALUES, topBarUsageGroups, topBarUsageItems, useAboutPreferences } from "../aboutPreferences";
 import { useNativeAccountUsage } from "../nativeAccountUsage";
-import { registeredUsageAccounts, type UsageAccountCard, usageCardManageUrl, usageResetTarget } from "../usageAccounts";
+import { sameComposerSheetSession } from "../composerSessionSlice";
+import { registeredUsageAccounts, sameSessionQuotaInputs, type UsageAccountCard, usageCardManageUrl, usageResetTarget } from "../usageAccounts";
 import { AccountBrowserEntry } from "../machineBrowser/AccountBrowserEntry";
 import { DesktopModal } from "./DesktopModal";
 import { RunConfigurationDialog } from "./RunConfigurationDialog";
@@ -642,8 +644,9 @@ function DesktopUsageExtras(
           )}
         </Stack>
       )}
+      {reset.open && (
       <Dialog
-        open={reset.open}
+        open
         onClose={reset.close}
         fullWidth
         maxWidth="xs"
@@ -660,6 +663,7 @@ function DesktopUsageExtras(
           <UsageResetActions flow={reset} />
         </DialogActions>
       </Dialog>
+      )}
     </>
   );
 }
@@ -760,7 +764,7 @@ function DesktopProviderUsage({ account, schedule, onUsageChanged, onRefresh, re
   );
 }
 
-export function DesktopTopBarControls({
+export const DesktopTopBarControls = memo(function DesktopTopBarControls({
   sessionId,
   status,
 }: {
@@ -770,8 +774,9 @@ export function DesktopTopBarControls({
   const rawOptions = useStoreSelector((snapshot) =>
     snapshot.configOptions.get(sessionId) ?? EMPTY_CONFIG_OPTIONS
   );
-  const session = useStoreSelector((snapshot) =>
-    snapshot.sessions.find((candidate) => candidate.id === sessionId)
+  const session = useStoreSelector(
+    (snapshot) => snapshot.sessionsById.get(sessionId),
+    sameComposerSheetSession,
   );
   const [openSurface, setOpenSurface] = useState<
     "config" | "usage" | "update" | "reload" | null
@@ -787,7 +792,7 @@ export function DesktopTopBarControls({
   // The Controller owns usage and its refresh progress; every device reads
   // the same pushed snapshot, so a refresh started anywhere shows here.
   const snapshot = useStoreSelector((state) => state.usage);
-  const sessions = useStoreSelector((state) => state.sessions);
+  const sessions = useStoreSelector((state) => state.sessions, sameSessionQuotaInputs);
   const accounts = useSubscriptionAccounts();
   const native = useNativeAccountUsage(accounts.data?.registry.revision);
   const refreshing = usageRefreshing(snapshot) || native.accounts.some((account) => account.refreshing);
@@ -1277,8 +1282,9 @@ export function DesktopTopBarControls({
         </ButtonBase>
       )}
 
+      {usageOpen && (
       <DesktopModal
-        open={usageOpen}
+        open
         onClose={(): void => setOpenSurface(null)}
         title="Usage and activity"
         description={`Supported account providers · Updated ${updatedAgo}`}
@@ -1379,6 +1385,7 @@ export function DesktopTopBarControls({
           )}
         </Stack>
       </DesktopModal>
+      )}
 
       <Box
         data-product-capacity-alert-control
@@ -1540,14 +1547,18 @@ export function DesktopTopBarControls({
         </Tooltip>
       </Stack>
 
+      {reloadTarget !== null && (
       <SessionReloadDialog
         session={reloadTarget}
         onClose={(): void => setOpenSurface(null)}
       />
+      )}
+      {updateTarget !== null && (
       <ProviderUpdateDialog
         session={updateTarget}
         onClose={closeSurface}
       />
+      )}
     </Stack>
   );
-}
+});

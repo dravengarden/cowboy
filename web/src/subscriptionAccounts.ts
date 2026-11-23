@@ -289,7 +289,8 @@ export function useSubscriptionAccounts(connected = true) {
   const value = useSyncExternalStore(subscribe, current, () => empty);
   const previous = useRef(connected);
   useEffect(() => {
-    if (!current().data || invalidated || (connected && !previous.current)) void refresh();
+    const snap = current();
+    if ((!snap.data && !snap.error) || invalidated || (connected && !previous.current)) void refresh();
     previous.current = connected;
   }, [connected]);
   return { ...value, refresh: reload };

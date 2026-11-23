@@ -1672,16 +1672,16 @@ export function Transcript({
   // Bound a long-running open session without disturbing a detached reader.
   // Trimming is batched and old rows remain recoverable through `loadOlder`.
   useEffect(() => {
-    const el = parentRef.current;
-    // Do not fight the short-history bootstrap above: it deliberately pages
-    // until the viewport fills. Once there is real overflow, the recent tail is
-    // already sufficient to fill the reader and can safely replace deep rows.
+    // Do not read `scrollHeight`/`clientHeight` synchronously here: on session
+    // switch that forces full-document layout of the freshly mounted transcript
+    // before paint. `scheduleHistoryRelease`'s timer checks real overflow after
+    // paint before calling `releaseFollowedHistory`.
     if (
       managesScrollHistory &&
       selectedToolKey === null &&
       stick.current &&
-      el &&
-      el.scrollHeight > el.clientHeight + 1
+      parentRef.current !== null &&
+      timeline.length > 0
     ) {
       scheduleHistoryRelease();
     }

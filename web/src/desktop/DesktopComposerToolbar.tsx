@@ -100,6 +100,18 @@ export function DesktopComposerToolbar(
   return <DesktopComposerToolbarView {...props} session={session} />;
 }
 
+function hasOverlayMutation(records: readonly MutationRecord[]): boolean {
+  const selector = ".MuiModal-root, .MuiPopper-root, [role='dialog'], [role='menu'], [role='listbox']";
+  for (const record of records) {
+    for (const node of [...record.addedNodes, ...record.removedNodes]) {
+      if (node instanceof Element && (node.matches(selector) || node.querySelector(selector) !== null)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 /** The toolbar for already resolved conversation actions (fixtures render it
  *  directly, with a Compact reading the catalog would otherwise supply). */
 export function DesktopComposerToolbarView(
@@ -118,10 +130,9 @@ export function DesktopComposerToolbarView(
   );
   const [overlayOwnsKeys, setOverlayOwnsKeys] = useState(false);
   useEffect(() => {
-    const update = (): void =>
-      setOverlayOwnsKeys(desktopOverlayOwnsShortcuts(document));
-    // MUI portals are body children. Do not observe editor mutations/keystrokes.
-    const observer = new MutationObserver(update);
+    const update = (): void => setOverlayOwnsKeys(desktopOverlayOwnsShortcuts(document));
+    // MUI portals are body children. Ignore tooltips/non-overlay mutations.
+    const observer = new MutationObserver((records) => { if (hasOverlayMutation(records)) update(); });
     observer.observe(document.body, { childList: true });
     document.addEventListener("focusin", update);
     update();
@@ -549,9 +560,9 @@ export function DesktopComposerToolbarView(
         </Tooltip>
       </Box>
       {session.dialogs}
-      <Menu
+      {sessionAnchor !== null && <Menu
         anchorEl={sessionAnchor}
-        open={sessionAnchor !== null}
+        open
         onClose={() => setSessionAnchor(null)}
         anchorOrigin={{ vertical: "top", horizontal: "left" }}
         transformOrigin={{ vertical: "bottom", horizontal: "left" }}
@@ -593,11 +604,11 @@ export function DesktopComposerToolbarView(
             </Box>
           </MenuItem>
         )}
-      </Menu>
-      <Menu
+      </Menu>}
+      {moreAnchor !== null && <Menu
         id="desktop-composer-formatting"
         anchorEl={moreAnchor}
-        open={moreAnchor !== null}
+        open
         onClose={() => setMoreAnchor(null)}
         anchorOrigin={{ vertical: "top", horizontal: "left" }}
         transformOrigin={{ vertical: "bottom", horizontal: "left" }}
@@ -625,7 +636,7 @@ export function DesktopComposerToolbarView(
             )}
           </MenuItem>
         ))}
-      </Menu>
+      </Menu>}
     </Box>
   );
 }

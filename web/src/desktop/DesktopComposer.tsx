@@ -11,9 +11,7 @@ export function DesktopComposer({
 }: ComposerWorkspaceProps): React.JSX.Element {
   // A managed child is controlled by its parent's call, never this Prompt.
   const parent = useStoreSelector((snapshot) =>
-    managedChildParent(
-      snapshot.sessions.find((session) => session.id === sessionId),
-    )
+    managedChildParent(snapshot.sessionsById.get(sessionId))
   );
   if (parent !== null) return <ManagedChildNotice parent={parent} child={sessionId} />;
   return (

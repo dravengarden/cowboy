@@ -50,10 +50,6 @@ function leaderSortKey(key: string): string {
  */
 export function DesktopLeaderMenu(): React.JSX.Element | null {
   const leader = useDesktopLeaderOptional();
-  const registry = useDesktopCommands();
-  const workspace = useDesktopWorkspace();
-  const sessions = useSessionJumpTargets();
-  const hints = useDesktopHints();
   const armed = leader?.armed === true;
   const [visible, setVisible] = useState(false);
   useEffect(() => {
@@ -70,31 +66,28 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
   if (!leader || !armed || !visible) return null;
   // Move pick draws its own legend in the Sessions sidebar.
   if (leader.layer === "move") return null;
+  return <DesktopLeaderMenuContent leader={leader} />;
+}
 
-  const run = (command: DesktopCommand): void => {
-    leader.close();
-    command.run();
-  };
-  const sessionsLayer = leader.layer === "sessions";
-  const modalLayer = leader.layer === "modal";
-  const groupKey = leader.layer.startsWith("group:")
-    ? leader.layer.slice("group:".length)
-    : null;
+function computeLeaderGroups(
+  commands: readonly DesktopCommand[],
+  layer: string,
+  focusedPane: ReturnType<typeof useDesktopWorkspace>["focusedPane"],
+  focusedRegion: ReturnType<typeof useDesktopWorkspace>["focusedRegion"],
+  openGroup: (layer: `group:${string}`) => void,
+): Map<string, LeaderEntry[]> {
+  const sessionsLayer = layer === "sessions";
+  const modalLayer = layer === "modal";
+  const groupKey = layer.startsWith("group:") ? layer.slice("group:".length) : null;
   const entries: LeaderEntry[] = [];
   if (groupKey !== null) {
     for (
-      const command of desktopLeaderGroupCommands(
-        registry.commands,
-        groupKey,
-        workspace.focusedPane,
-        workspace.focusedRegion,
-      )
+      const command of desktopLeaderGroupCommands(commands, groupKey, focusedPane, focusedRegion)
     ) {
       const path = desktopLeaderGroupKey(command)!;
       if (entries.some((entry) => entry.key === path.key)) continue;
       const enabled = command.when?.() !== false;
       if (!enabled && !command.disabledReason) continue;
-      // Listed under the group name, not "Here": the group is the scope.
       const { regions: _regions, contextual: _contextual, ...unscoped } = command;
       entries.push({
         key: path.key,
@@ -103,57 +96,31 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
       });
     }
   } else if (!sessionsLayer && !modalLayer) {
-    // Groups are one entry each; their commands appear one layer down. An
-    // available group takes its key over the root command of the same key.
     for (const [key, name] of Object.entries(DESKTOP_LEADER_GROUPS)) {
-      if (desktopSurfaceCommandOwnsKey(registry.commands, key)) continue;
-      if (
-        !desktopLeaderGroupAvailable(
-          registry.commands,
-          key,
-          workspace.focusedPane,
-          workspace.focusedRegion,
-        )
-      ) continue;
+      if (desktopSurfaceCommandOwnsKey(commands, key)) continue;
+      if (!desktopLeaderGroupAvailable(commands, key, focusedPane, focusedRegion)) continue;
       entries.push({
         key,
-        command: {
-          id: `group.${key}`,
-          title: `${name} …`,
-          group: "Groups",
-          run: () => leader.open(`group:${key}`),
-        },
+        command: { id: `group.${key}`, title: `${name} …`, group: "Groups", run: () => openGroup(`group:${key}`) },
         enabled: true,
       });
     }
     const seen = new Set<string>(entries.map((entry) => entry.key));
     const candidates = new Map<string, DesktopCommand[]>();
-    for (const command of registry.commands) {
+    for (const command of commands) {
       const key = desktopLeaderKey(command);
       if (key === null || seen.has(key)) continue;
-      if (
-        !desktopCommandInScope(
-          command,
-          workspace.focusedPane,
-          workspace.focusedRegion,
-        )
-      ) continue;
+      if (!desktopCommandInScope(command, focusedPane, focusedRegion)) continue;
       candidates.set(key, [...(candidates.get(key) ?? []), command]);
     }
-    for (const [key, commands] of candidates) {
-      // The runnable owner of a key wins, as in dispatch. A key that cannot
-      // run is listed (dimmed) only when it belongs to the focused surface
-      // (an empty Composer's Schedule); a surface that is simply absent
-      // (Plan, Queue and Conversation on a Draft page) stays out.
-      const runnable = commands.find((command) => command.when?.() !== false);
-      const command = runnable ??
-        commands.find((c) => !!c.regions || c.contextual === true);
+    for (const [key, list] of candidates) {
+      const runnable = list.find((command) => command.when?.() !== false);
+      const command = runnable ?? list.find((c) => !!c.regions || c.contextual === true);
       if (!command) continue;
       entries.push({ key, command, enabled: runnable !== undefined });
     }
   }
-  const here = (entry: LeaderEntry): boolean =>
-    !!entry.command.regions || entry.command.contextual === true;
+  const here = (entry: LeaderEntry): boolean => !!entry.command.regions || entry.command.contextual === true;
   const scoped = entries.filter(here);
   const groups = new Map<string, LeaderEntry[]>();
   if (scoped.length > 0) groups.set("Here", scoped);
@@ -164,10 +131,123 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
     groups.set(entry.command.group, group);
   }
   for (const group of groups.values()) {
-    group.sort((left, right) =>
-      leaderSortKey(left.key).localeCompare(leaderSortKey(right.key))
-    );
+    group.sort((left, right) => leaderSortKey(left.key).localeCompare(leaderSortKey(right.key)));
   }
+  return groups;
+}
+
+function LeaderModalHints({
+  hints,
+  onClose,
+}: {
+  hints: ReturnType<typeof useDesktopHints>;
+  onClose: () => void;
+}): React.JSX.Element {
+  return (
+    <Box
+      sx={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fill, minmax(11rem, 1fr))",
+        columnGap: 1,
+      }}
+    >
+      {hints.map((hint) => (
+        <ButtonBase
+          key={`${hint.label}:${hint.name}`}
+          data-modal-leader-entry={hint.label}
+          onClick={() => {
+            onClose();
+            activateHint(hint.element);
+          }}
+          sx={entrySx(false)}
+        >
+          <ShortcutKeycap keyLabel={hint.label} availability="active" accent />
+          <Typography variant="body2" noWrap sx={{ flex: 1, minWidth: 0, textAlign: "left" }}>
+            {hint.name}
+          </Typography>
+        </ButtonBase>
+      ))}
+    </Box>
+  );
+}
+
+function LeaderSessionsList({
+  sessions,
+  onClose,
+}: {
+  sessions: ReturnType<typeof useSessionJumpTargets>;
+  onClose: () => void;
+}): React.JSX.Element {
+  return (
+    <Stack spacing={0.25}>
+      {sessions.length === 0 && (
+        <Typography variant="body2" color="text.secondary" sx={{ px: 1, py: 0.5 }}>
+          No sessions yet.
+        </Typography>
+      )}
+      {sessions.map((target) => (
+        <ButtonBase
+          key={target.id}
+          data-session-jump-entry={target.label}
+          onClick={() => {
+            onClose();
+            document.querySelector<HTMLElement>(
+              "[data-desktop-region='sessions.list'] ul",
+            )?.dispatchEvent(
+              new CustomEvent(DESKTOP_SESSION_JUMP_EVENT, {
+                cancelable: true,
+                detail: { label: target.label },
+              }),
+            );
+          }}
+          sx={entrySx(target.current)}
+        >
+          <ShortcutKeycap keyLabel={target.label} availability="active" accent />
+          <Box sx={{ minWidth: 0, flex: 1, textAlign: "left" }}>
+            <Typography variant="body2" noWrap fontWeight={target.current ? 700 : 500}>
+              {target.title}
+            </Typography>
+            {target.detail && (
+              <Typography variant="caption" color="text.secondary" noWrap component="div">
+                {target.detail}
+              </Typography>
+            )}
+          </Box>
+          {target.current && (
+            <Typography variant="caption" color="primary.main">open</Typography>
+          )}
+        </ButtonBase>
+      ))}
+    </Stack>
+  );
+}
+
+function DesktopLeaderMenuContent({
+  leader,
+}: {
+  leader: NonNullable<ReturnType<typeof useDesktopLeaderOptional>>;
+}): React.JSX.Element {
+  const registry = useDesktopCommands();
+  const workspace = useDesktopWorkspace();
+  const sessions = useSessionJumpTargets();
+  const hints = useDesktopHints();
+
+  const run = (command: DesktopCommand): void => {
+    leader.close();
+    command.run();
+  };
+  const sessionsLayer = leader.layer === "sessions";
+  const modalLayer = leader.layer === "modal";
+  const groupKey = leader.layer.startsWith("group:")
+    ? leader.layer.slice("group:".length)
+    : null;
+  const groups = computeLeaderGroups(
+    registry.commands,
+    leader.layer,
+    workspace.focusedPane,
+    workspace.focusedRegion,
+    (next) => leader.open(next),
+  );
 
   return (
     <Box
@@ -224,75 +304,9 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
         </Typography>
       </Stack>
       {modalLayer
-        ? (
-          <Box
-            sx={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(11rem, 1fr))",
-              columnGap: 1,
-            }}
-          >
-            {hints.map((hint) => (
-              <ButtonBase
-                key={`${hint.label}:${hint.name}`}
-                data-modal-leader-entry={hint.label}
-                onClick={() => {
-                  leader.close();
-                  activateHint(hint.element);
-                }}
-                sx={entrySx(false)}
-              >
-                <ShortcutKeycap keyLabel={hint.label} availability="active" accent />
-                <Typography variant="body2" noWrap sx={{ flex: 1, minWidth: 0, textAlign: "left" }}>
-                  {hint.name}
-                </Typography>
-              </ButtonBase>
-            ))}
-          </Box>
-        )
+        ? <LeaderModalHints hints={hints} onClose={leader.close} />
         : sessionsLayer
-        ? (
-          <Stack spacing={0.25}>
-            {sessions.length === 0 && (
-              <Typography variant="body2" color="text.secondary" sx={{ px: 1, py: 0.5 }}>
-                No sessions yet.
-              </Typography>
-            )}
-            {sessions.map((target) => (
-              <ButtonBase
-                key={target.id}
-                data-session-jump-entry={target.label}
-                onClick={() => {
-                  leader.close();
-                  document.querySelector<HTMLElement>(
-                    "[data-desktop-region='sessions.list'] ul",
-                  )?.dispatchEvent(
-                    new CustomEvent(DESKTOP_SESSION_JUMP_EVENT, {
-                      cancelable: true,
-                      detail: { label: target.label },
-                    }),
-                  );
-                }}
-                sx={entrySx(target.current)}
-              >
-                <ShortcutKeycap keyLabel={target.label} availability="active" accent />
-                <Box sx={{ minWidth: 0, flex: 1, textAlign: "left" }}>
-                  <Typography variant="body2" noWrap fontWeight={target.current ? 700 : 500}>
-                    {target.title}
-                  </Typography>
-                  {target.detail && (
-                    <Typography variant="caption" color="text.secondary" noWrap component="div">
-                      {target.detail}
-                    </Typography>
-                  )}
-                </Box>
-                {target.current && (
-                  <Typography variant="caption" color="primary.main">open</Typography>
-                )}
-              </ButtonBase>
-            ))}
-          </Stack>
-        )
+        ? <LeaderSessionsList sessions={sessions} onClose={leader.close} />
         : (
           <Box
             sx={{

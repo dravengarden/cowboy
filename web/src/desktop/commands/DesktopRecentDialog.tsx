@@ -46,19 +46,59 @@ export function DesktopRecentDialog({
   items: readonly DesktopRecentItem[];
   onClose: () => void;
   onOpen: (key: string) => void;
+}): React.JSX.Element | null {
+  if (!open) return null;
+  return <DesktopRecentDialogContent items={items} onClose={onClose} onOpen={onOpen} />;
+}
+
+function handleRecentDialogKeyDown(
+  event: React.KeyboardEvent<HTMLDivElement>,
+  count: number,
+  selected: number,
+  setSelected: React.Dispatch<React.SetStateAction<number>>,
+  choose: (index: number) => void,
+  onClose: () => void,
+): void {
+  const native = event.nativeEvent;
+  if (desktopImeOwnsKey(native) || event.metaKey || event.ctrlKey || event.altKey) return;
+  const digit = desktopRecentDigit(event.code);
+  const key = workspaceCommandKey(native);
+  const last = count - 1;
+  let handled = true;
+  if (digit !== null) choose(digit - 1);
+  else if (key === "j" || key === "ArrowDown" || (key === "Tab" && !event.shiftKey)) {
+    setSelected((index) => index >= last ? 0 : index + 1);
+  } else if (key === "k" || key === "ArrowUp" || key === "Tab") {
+    setSelected((index) => index <= 0 ? last : index - 1);
+  } else if (key === "g") setSelected(0);
+  else if (key === "G") setSelected(last);
+  else if (key === "l" || key === "Enter") choose(selected);
+  else if (key === "h") onClose();
+  else handled = false;
+  if (handled) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+}
+
+function DesktopRecentDialogContent({
+  items,
+  onClose,
+  onOpen,
+}: {
+  items: readonly DesktopRecentItem[];
+  onClose: () => void;
+  onOpen: (key: string) => void;
 }): React.JSX.Element {
   const [selected, setSelected] = useState(0);
-  const [now, setNow] = useState(() => Date.now());
+  const [now] = useState(() => Date.now());
   const listRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!open) return undefined;
-    setSelected(0);
-    setNow(Date.now());
     const frame = requestAnimationFrame(() =>
       listRef.current?.focus({ preventScroll: true })
     );
     return () => cancelAnimationFrame(frame);
-  }, [open]);
+  }, []);
   useEffect(() => {
     listRef.current?.querySelector<HTMLElement>(
       `[data-desktop-recent-index="${String(selected)}"]`,
@@ -70,34 +110,11 @@ export function DesktopRecentDialog({
     onClose();
     onOpen(item.key);
   };
-  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
-    const native = event.nativeEvent;
-    if (
-      desktopImeOwnsKey(native) || event.metaKey || event.ctrlKey ||
-      event.altKey
-    ) return;
-    const digit = desktopRecentDigit(event.code);
-    const key = workspaceCommandKey(native);
-    const last = items.length - 1;
-    let handled = true;
-    if (digit !== null) choose(digit - 1);
-    else if (key === "j" || key === "ArrowDown" || (key === "Tab" && !event.shiftKey)) {
-      setSelected((index) => index >= last ? 0 : index + 1);
-    } else if (key === "k" || key === "ArrowUp" || key === "Tab") {
-      setSelected((index) => index <= 0 ? last : index - 1);
-    } else if (key === "g") setSelected(0);
-    else if (key === "G") setSelected(last);
-    else if (key === "l" || key === "Enter") choose(selected);
-    else if (key === "h") onClose();
-    else handled = false;
-    if (handled) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
-  };
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void =>
+    handleRecentDialogKeyDown(event, items.length, selected, setSelected, choose, onClose);
   return (
     <DesktopModal
-      open={open}
+      open
       onClose={onClose}
       title="Recent"
       description="Sessions and Drafts you opened on this device, newest first."

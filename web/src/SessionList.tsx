@@ -2306,10 +2306,9 @@ export function SessionList({
                     onOpenSettings={onOpenSettings}
                 />
             )}
-            <Menu
-                sx={{ display: desktop ? "none" : undefined }}
-                anchorEl={menuAnchor?.el ?? null}
-                open={!desktop && !!menuAnchor}
+            {!desktop && menuAnchor !== null && <Menu
+                anchorEl={menuAnchor.el}
+                open
                 onClose={(): void => setMenuAnchor(null)}
                 slotProps={{ paper: { sx: { minWidth: 180 } } }}
             >
@@ -2424,10 +2423,10 @@ export function SessionList({
                     </ListItemIcon>
                     <ListItemText primary="Move to Trash" />
                 </MenuItem>
-            </Menu>
-            {desktop && (
+            </Menu>}
+            {desktop && menuAnchor !== null && (
                 <DesktopModalShell
-                        open={!!menuAnchor}
+                        open
                         onClose={(): void => setMenuAnchor(null)}
                         title="Session"
                         description={`${menuAnchor?.row.title ?? ""} · ${menuAnchor?.row.cwd ?? ""}`}
@@ -2536,10 +2535,9 @@ export function SessionList({
                 </DesktopModalShell>
             )}
             {/* --- Folder layers (docs/sessions-folders.md) --- */}
-            <Menu
-                sx={{ display: desktop ? "none" : undefined }}
-                anchorEl={folderMenu?.el ?? null}
-                open={!desktop && !!folderMenu}
+            {!desktop && folderMenu !== null && <Menu
+                anchorEl={folderMenu.el}
+                open
                 onClose={(): void => setFolderMenu(null)}
                 slotProps={{ paper: { sx: { minWidth: 220 } } }}
             >
@@ -2623,10 +2621,10 @@ export function SessionList({
                     <ListItemIcon><DeleteOutline fontSize="medium" color="error" /></ListItemIcon>
                     <ListItemText primary="Delete folder" />
                 </MenuItem>
-            </Menu>
-            {desktop && (
+            </Menu>}
+            {desktop && folderMenu !== null && (
                 <DesktopModalShell
-                    open={!!folderMenu}
+                    open
                     onClose={(): void => setFolderMenu(null)}
                     title="Folder"
                     description={`${folderMenuFolder?.name ?? ""}${folderMenuFolder?.project && folderMenuFolder.project !== folderMenuFolder.name ? ` · project ${folderMenuFolder.project}` : ""} · ${String(folderMenuCount?.kind === "folder" ? folderMenuCount.sessionCount : 0)} items`}
