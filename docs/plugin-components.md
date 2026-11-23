@@ -88,6 +88,21 @@ adapter's lock moves `url` to 2.5.9 for RUSTSEC-2026-0592 (unbounded
 recursion in `Url::origin()` on nested `blob:` URLs). Native pins and its
 component release are unchanged.
 
+Component release 3.146.0 records provider-runtime 1.3.29, whose
+`cowboy-antigravity-acp` 1.0.24 carries the uncertain-effect L1 facade
+([design](uncertain-effect-recovery.md)): a process the executor reports as
+`unknown process id` after its start was answered has ended, so a forgotten
+write helper is settled by the requested bytes on the target (otherwise it
+stays `outcome unknown` and the file must be read again), a forgotten command
+reports an unknown exit code and a forgotten search asks to run it again
+instead of fencing the turn; a stopped helper is observed for up to 60 s
+before its outcome counts as unknown, and an ended turn
+confirms its commands' stops for up to 60 s through one shared stop (L1b). `HomeReads` takes an injectable clock
+(the wall clock by default), and the subagent request deadline, home-read
+budget and publish-helper turn-end tests no longer depend on wall-clock
+timing. Antigravity 0.2.31 pins it; the other six Providers pinning
+provider-runtime advance one patch version.
+
 Component release 3.145.0 records provider-runtime 1.3.28, whose test-only
 `antigravity-acp/test-endpoint.mjs` drops lost-reply requests before running
 their handler so `facade.test.mjs` does not race against `cowboy-execution-host`
