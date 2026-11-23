@@ -45,7 +45,14 @@ pub(super) struct Sample {
 impl Sample {
     /// Whether any counter could be read (a removed cgroup reads nothing).
     pub(super) fn readable(&self) -> bool {
-        self.cpu.is_some() || self.memory.is_some() || self.io.is_some() || self.current.is_some()
+        self.cpu.is_some()
+            || self.memory.is_some()
+            || self.io.is_some()
+            || self.events.is_some()
+            || self.events_local.is_some()
+            || self.current.is_some()
+            || self.high.is_some()
+            || self.limit.is_some()
     }
 }
 

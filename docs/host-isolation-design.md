@@ -280,6 +280,37 @@ loads.
 
 Off Linux, gap records stay and scopes are unavailable.
 
+**Episodes.** One silence can produce several records: a threshold
+crossing, a backlog extension, then an isolation, a recovery heartbeat, or a
+disconnect. Count episodes, not records, for L0-7's five-gap gate. An episode
+is identified by `cowboy.heartbeat_gap.instance`, `gap_connection_id` and
+`gap_episode_unix_ms` (when the silence began). `gap_observed_unix_ms`
+places each record at the time it was observed, not when it was emitted.
+
+**Review status and known limits.** Code review ran three rounds:
+`call-95301b4244bbfd9292580ac2`, `call-a901ccc4ad83ddc579ecbd2b` and
+`call-a1bcd9b7ee452dac33a130cd`. The last round found no high-severity
+issues. Its fixes are not reviewed, because the three-round budget is used
+up:
+
+- evidence is retained until queued records are written;
+- bind results are delivered while the lane is held;
+- cgroup identity is compared with the last known one;
+- an unreported silence is recorded on disconnect;
+- observation and episode times are exported;
+- all fields count toward readability.
+
+Known limits:
+
+- The cgroup v2 root is not sampled. Host PSI from `/proc/pressure` stands
+  in for it.
+- Threshold, recovery and disconnect records carry no socket-backlog
+  measurement. Only the sweep's own decisions do.
+- A snapshot taken while the reader crosses a frame boundary can mix the
+  old frame's phase with the new frame's byte counts.
+- Between ticks the registry also retains connections that closed; each tick
+  drains them.
+
 **Kill switch.** The Device setting `diagnostics.heartbeat_gap_sampler`
 (default `true`, applies live) stops unit queries and sampling. Gap records
 stay. Agents discover it through Cowboy MCP `configuration.schema("device")`

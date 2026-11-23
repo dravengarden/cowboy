@@ -170,6 +170,25 @@ fn threshold_crossings_are_reported_once_per_silence() {
 }
 
 #[test]
+fn closing_during_a_qualifying_silence_records_it_once() {
+    let hub = aged_hub(Duration::from_secs(60));
+    let mut rx = take_rx(&hub);
+    let connection = hub.connect("sess-1", 1, "e1", None, None);
+    connection.last_heartbeat.store(30_001, Ordering::Relaxed);
+    connection.close();
+    let gap = next_gap(&mut rx);
+    assert_eq!(gap.kind, GapKind::Disconnected);
+    assert!(gap.gap_ms >= 30_000);
+    assert!(gap.observed_unix_ms > 0);
+    // An already reported silence is not reported again on close.
+    let other = hub.connect("sess-2", 2, "e2", None, None);
+    other.last_heartbeat.store(30_001, Ordering::Relaxed);
+    assert!(other.check_threshold().is_some());
+    other.close();
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
 fn full_queue_counts_drops_without_blocking() {
     let hub = Hub::default();
     let connection = hub.connect("sess-1", 7, "e1", None, None);

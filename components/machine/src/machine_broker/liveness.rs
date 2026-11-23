@@ -179,7 +179,15 @@ impl Drop for Connection {
 
 impl Connection {
     /// The broker stopped reading this connection.
-    pub(super) fn close(&self) {
+    /// A silence that already qualifies and was never reported is recorded
+    /// as it ends with the connection.
+    pub(super) fn close(self: &Arc<Self>) {
+        if let Some(mut gap) = self.check_threshold() {
+            gap.kind = GapKind::Disconnected;
+            if self.notices.try_send(Box::new(gap)).is_err() {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+        }
         self.closed.store(true, Ordering::Relaxed);
     }
 
@@ -386,8 +394,16 @@ impl Connection {
     }
 
     fn notice(self: &Arc<Self>, notice: Notice) -> GapNotice {
+        let elapsed = u64::try_from(self.origin.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let observed_unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |time| {
+                u64::try_from(time.as_millis()).unwrap_or(u64::MAX)
+            })
+            .saturating_sub(elapsed.saturating_sub(notice.at_ms));
         GapNotice {
             connection: Arc::clone(self),
+            observed_unix_ms,
             kind: notice.kind,
             gap_ms: notice.gap_ms,
             since: self.at(notice.since_ms),
@@ -422,6 +438,8 @@ enum GapKind {
     Deferred,
     /// The sweep isolated the worker.
     Isolated,
+    /// The connection closed during a qualifying, unreported silence.
+    Disconnected,
 }
 
 impl GapKind {
@@ -431,6 +449,7 @@ impl GapKind {
             Self::Threshold => "threshold",
             Self::Deferred => "backlog_extension",
             Self::Isolated => "isolated",
+            Self::Disconnected => "disconnected",
         }
     }
 }
@@ -448,6 +467,8 @@ struct Notice {
 
 struct GapNotice {
     connection: Arc<Connection>,
+    /// Wall-clock time of the observation, not of the record's emission.
+    observed_unix_ms: u64,
     kind: GapKind,
     gap_ms: u64,
     since: Instant,
@@ -756,11 +777,15 @@ async fn bind_lane(
         let results = results.clone();
         tokio::spawn(async move {
             let state = resolve_binding(&job.connection).await;
-            let _ = results.try_send(BindResult {
-                connection: job.connection.connection,
-                generation: job.generation,
-                state,
-            });
+            // Delivered while holding the lane, so a busy sampler slows the
+            // lane instead of losing results.
+            let _ = results
+                .send(BindResult {
+                    connection: job.connection.connection,
+                    generation: job.generation,
+                    state,
+                })
+                .await;
             drop(permit);
         });
     }
@@ -944,15 +969,23 @@ impl Sampler {
                 },
             );
         }
+        // A closed connection gets no new work, but its binding and history
+        // stay until its queued gap records are written.
+        let referenced: HashSet<u64> = self
+            .pending
+            .iter()
+            .map(|gap| gap.connection.connection)
+            .collect();
         self.bound.retain(|id, bound| {
-            let live = bound
-                .connection
-                .upgrade()
-                .is_some_and(|connection| connection.is_open());
-            if !live {
+            let keep = referenced.contains(id)
+                || bound
+                    .connection
+                    .upgrade()
+                    .is_some_and(|connection| connection.is_open());
+            if !keep {
                 self.history.remove(&Key::Worker(*id));
             }
-            live
+            keep
         });
     }
 
@@ -1072,9 +1105,12 @@ impl Sampler {
             for (key, at, sample) in samples {
                 let ring = self.history.entry(key).or_default();
                 // A recreated cgroup at the same path starts a new history.
+                // Compare with the last known identity, so an unreadable
+                // tick between two cgroups cannot hide the replacement.
                 let replaced = ring
-                    .back()
-                    .and_then(|(_, last)| last.identity)
+                    .iter()
+                    .rev()
+                    .find_map(|(_, last)| last.identity)
                     .zip(sample.identity)
                     .is_some_and(|(last, current)| last != current);
                 if replaced {
@@ -1178,6 +1214,8 @@ impl Sampler {
             gap_id,
             gap_kind = gap.kind.name(),
             gap_ms = gap.gap_ms,
+            gap_observed_unix_ms = gap.observed_unix_ms,
+            gap_episode_unix_ms = gap.observed_unix_ms.saturating_sub(gap.gap_ms),
             gap_unread_bytes = opt(gap.unread_bytes),
             gap_heartbeat_age_ms = opt(evidence.heartbeat_age_ms),
             gap_frame_age_ms = opt(evidence.frame_age_ms),
