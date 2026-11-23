@@ -26,6 +26,7 @@ primary phone/desktop product path.
 - [`legacy-card-retirement.md`](legacy-card-retirement.md) — Retiring the legacy default usage cards (Lynx, Pika, Fox, Mole): removed vs kept code, historical `default` sessions, credential wipes, browser share migration and the Controller startup gate
 - [`execution-environments.md`](execution-environments.md) — Native remote execution, ownership, staged acceptance and OVH egress/context audit
 - [`uncertain-effect-recovery.md`](uncertain-effect-recovery.md) — Uncertain target effects across Controller restarts: incident root cause (executor's 30 s closed-process retention), facade settlement by observation, Controller drain, worker receipts and recovery UX
+- [`host-isolation-design.md`](host-isolation-design.md) — Proposed control identity (`cowboy` UID), root spawner, peer-credential checks, R-CD workspace bridge and control/task cgroup split for Hawk and OVH; design, not implemented
 - [`execution-connection-recovery.md`](execution-connection-recovery.md) — Machine heartbeat, native handshake and execution lifetime recovery, including Retry preflight
 - [`remote-session-disaster-recovery.md`](remote-session-disaster-recovery.md) — Proposed recovery contract, October 24 incident audit, durable ACK gaps, per-session reconciliation and fault acceptance matrix; not implemented or activated
 - [`session-start-latency-2026-10-09.md`](session-start-latency-2026-10-09.md) — Remote Claude start stalls: single-flow Machine transport saturated by bulk writes, credit pacing, one-command startup survey and measurements
