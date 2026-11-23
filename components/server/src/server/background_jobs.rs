@@ -752,6 +752,15 @@ pub(super) async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyh
                 .update_agent_session_id(session_id, agent_session_id.as_deref())
                 .await
         }
+        StoreWrite::ClearAgentSession {
+            session_id,
+            fence_key,
+            fence,
+        } => {
+            store
+                .clear_agent_session_id(session_id, fence_key, fence)
+                .await
+        }
         StoreWrite::UpdateConfigOptions {
             session_id,
             options,

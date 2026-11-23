@@ -102,7 +102,65 @@ impl Store {
     }
 }
 
+impl Store {
+    /// Clear conversation: forget the session's native id and record the
+    /// fence of native ids it discarded (`fence_key` setting) in one
+    /// transaction, so neither persists without the other.
+    pub async fn clear_agent_session_id(
+        &self,
+        session_id: &str,
+        fence_key: &str,
+        fence: &serde_json::Value,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            crate::model::settings_keys::is_persisted_setting_key(fence_key),
+            "unsupported Hub setting"
+        );
+        let mut fence = fence.clone();
+        strip_nul(&mut fence);
+        match &self.backend {
+            StorageBackend::Postgres(backend) => {
+                backend
+                    .clear_agent_session_id(session_id, fence_key, &fence)
+                    .await
+            }
+            StorageBackend::Sqlite(backend) => {
+                backend
+                    .clear_agent_session_id(session_id, fence_key, &fence)
+                    .await
+            }
+        }
+    }
+}
+
 impl PostgresStorage {
+    pub(super) async fn clear_agent_session_id(
+        &self,
+        session_id: &str,
+        fence_key: &str,
+        fence: &serde_json::Value,
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "UPDATE sessions SET agent_session_id = NULL, updated_at = now() WHERE id = $1",
+        )
+        .bind(session_id)
+        .execute(&mut *tx)
+        .await
+        .with_context(|| format!("UPDATE session agent_session_id {session_id}"))?;
+        sqlx::query(
+            "INSERT INTO settings(key, value, updated_at) VALUES ($1, $2, now()) \
+             ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = now()",
+        )
+        .bind(fence_key)
+        .bind(fence)
+        .execute(&mut *tx)
+        .await
+        .with_context(|| format!("UPSERT Hub setting {fence_key}"))?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn update_session_usage(
         &self,
         session_id: &str,

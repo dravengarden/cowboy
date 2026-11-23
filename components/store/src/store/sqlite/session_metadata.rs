@@ -91,3 +91,36 @@ impl SqliteStorage {
         Ok(())
     }
 }
+
+impl SqliteStorage {
+    pub(in crate::store) async fn clear_agent_session_id(
+        &self,
+        session_id: &str,
+        fence_key: &str,
+        fence: &serde_json::Value,
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        let now = now_ms();
+        sqlx::query(
+            "UPDATE sessions SET agent_session_id = NULL, updated_at_ms = ?1 WHERE id = ?2",
+        )
+        .bind(now)
+        .bind(session_id)
+        .execute(&mut *tx)
+        .await
+        .with_context(|| format!("UPDATE SQLite session agent_session_id {session_id}"))?;
+        sqlx::query(
+            "INSERT INTO settings(key, value, updated_at_ms) VALUES (?1, ?2, ?3) \
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value, \
+             updated_at_ms = excluded.updated_at_ms",
+        )
+        .bind(fence_key)
+        .bind(fence)
+        .bind(now)
+        .execute(&mut *tx)
+        .await
+        .with_context(|| format!("UPSERT SQLite Hub setting {fence_key}"))?;
+        tx.commit().await?;
+        Ok(())
+    }
+}

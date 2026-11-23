@@ -1,6 +1,7 @@
 use super::*;
 
 mod account_controls;
+mod clear_agent_session;
 mod rollover_observation;
 mod test_support;
 

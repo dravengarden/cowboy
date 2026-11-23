@@ -159,6 +159,19 @@ async fn a_live_clear_ignores_the_replaced_worker_and_admits_its_replacement() {
     )
     .await;
     clear(&hub);
+    // Before the reset is sent, a late old frame is refused but the reset
+    // still observes the worker it is replacing.
+    deliver(&runtime, "old", 8, vec![usage(70_000)]).await;
+    assert_eq!(
+        runtime
+            .shared
+            .workers
+            .lock()
+            .get("s")
+            .map(|worker| worker.worker_epoch.clone())
+            .as_deref(),
+        Some("old")
+    );
     // The replacement reports after the reset acknowledgement.
     merge_worker_snapshots(
         &runtime.shared,

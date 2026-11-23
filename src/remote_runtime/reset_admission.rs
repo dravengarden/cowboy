@@ -19,7 +19,9 @@
 //! that admission still denies now cancels its reset: the stop never leaves
 //! and the running worker is kept.
 
-use super::{CoreCommand, Duration, Frame, HashMap, HashSet, Mutex, Result, Shared, Status};
+use super::{
+    CoreCommand, Duration, Frame, HashMap, HashSet, Mutex, Result, Shared, Status, WorkerState,
+};
 
 /// Longer than the MCP launch recovery pass needs (5-second ticks); after it
 /// the declaration meets ordinary admission, as before.
@@ -28,6 +30,20 @@ const RECHECK: Duration = Duration::from_secs(2);
 
 static WAITING: std::sync::LazyLock<Mutex<HashMap<String, std::time::Instant>>> =
     std::sync::LazyLock::new(Default::default);
+
+/// Each session's newest reset command and the context generation it started
+/// in. Cancelling that exact reset may readmit the kept worker only into that
+/// same context (`Hub::readmit_runtime_epoch`).
+static RESET_CONTEXTS: std::sync::LazyLock<Mutex<HashMap<String, (String, u64)>>> =
+    std::sync::LazyLock::new(Default::default);
+
+pub(super) fn record_context(shared: &Shared, session_id: &str, command_id: &str) {
+    if let Some(generation) = shared.hub.runtime_context_generation(session_id) {
+        RESET_CONTEXTS
+            .lock()
+            .insert(session_id.to_owned(), (command_id.to_owned(), generation));
+    }
+}
 
 /// The command to admit now, or `None` while it waits. `deferred` holds the
 /// sessions whose reset declaration waits in this pass (it is ordered first).
@@ -196,13 +212,19 @@ fn cancel(shared: &Shared, session_id: &str) -> bool {
         );
     }
     let kept = shared.workers.lock().get(session_id).cloned();
-    if let Some(worker) = &kept {
-        // A cancelled Clear keeps this worker's context running; see
-        // `Hub::readmit_runtime_epoch`.
+    let context = RESET_CONTEXTS
+        .lock()
+        .remove(session_id)
+        .filter(|(command, _)| withdrawn_stops.contains(command));
+    if let (Some(worker), Some((_, generation))) = (&kept, context)
+        && !matches!(worker.state, WorkerState::Exited | WorkerState::Crashed)
+    {
+        // A cancelled Clear keeps this live worker's context running.
         shared.hub.readmit_runtime_epoch(
             session_id,
             &worker.worker_epoch,
             worker.agent_session_id.as_deref(),
+            generation,
         );
     }
     let status = kept.map_or(Status::Crashed, |worker| super::worker_status(worker.state));

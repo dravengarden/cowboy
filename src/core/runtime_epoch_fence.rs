@@ -31,6 +31,17 @@ const MAX_EPOCHS: usize = 32;
 /// Discarded native ids kept per session.
 const MAX_CLEARED_NATIVE: usize = 8;
 
+/// How the fence classifies one runtime frame's worker epoch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuntimeEpoch {
+    Current,
+    /// Bound to a context Clear discarded.
+    Fenced,
+    /// Admitted as current until this frame named a discarded native id: any
+    /// ownership it took while unidentified is void.
+    Reclassified,
+}
+
 #[derive(Default)]
 pub(super) struct EpochFence {
     generation: u64,
@@ -50,17 +61,31 @@ impl EpochFence {
     }
 
     /// `discarded`: the frame reports a native id Clear discarded.
-    fn admit(&mut self, epoch: &str, discarded: bool) -> bool {
+    fn classify(&mut self, epoch: &str, discarded: bool) -> RuntimeEpoch {
+        let known = self.epochs.get(epoch).map(|(generation, _)| *generation);
         if discarded {
             // Also an epoch first admitted without its id: it runs the old context.
             self.bind(epoch, self.stale());
-            return false;
+            return if known == Some(self.generation) {
+                RuntimeEpoch::Reclassified
+            } else {
+                RuntimeEpoch::Fenced
+            };
         }
-        if let Some((generation, _)) = self.epochs.get(epoch) {
-            return *generation == self.generation;
+        if let Some(generation) = known {
+            return if generation == self.generation {
+                RuntimeEpoch::Current
+            } else {
+                RuntimeEpoch::Fenced
+            };
         }
         self.bind(epoch, self.generation);
-        true
+        RuntimeEpoch::Current
+    }
+
+    #[cfg(test)]
+    fn admit(&mut self, epoch: &str, discarded: bool) -> bool {
+        self.classify(epoch, discarded) == RuntimeEpoch::Current
     }
 
     fn bind(&mut self, epoch: &str, generation: u64) {
@@ -122,29 +147,57 @@ impl Hub {
             .unwrap_or_default()
     }
 
-    /// Persist a native id Clear discarded (bounded, newest last).
-    pub(super) fn record_cleared_native(&self, session_id: &str, native: Option<String>) {
-        let Some(native) = native else {
-            return;
-        };
+    /// Record a native id Clear discarded (bounded, newest last) in memory and
+    /// return the fence setting, which Clear persists in the same transaction
+    /// that forgets the session's native id.
+    pub(super) fn record_cleared_native(
+        &self,
+        session_id: &str,
+        native: Option<String>,
+    ) -> (String, serde_json::Value) {
+        let key = cleared_key(session_id);
         let mut cleared = self.cleared_native(session_id);
-        if cleared.contains(&native) {
-            return;
+        if let Some(native) = native
+            && !cleared.contains(&native)
+        {
+            cleared.push(native);
+            let excess = cleared.len().saturating_sub(MAX_CLEARED_NATIVE);
+            cleared.drain(..excess);
         }
-        cleared.push(native);
-        let excess = cleared.len().saturating_sub(MAX_CLEARED_NATIVE);
-        cleared.drain(..excess);
-        self.set_setting(cleared_key(session_id), serde_json::json!(cleared));
+        let fence = serde_json::json!(cleared);
+        self.with_settings_mut(|settings| {
+            Self::commit_setting_locked(settings, key.clone(), fence.clone())
+        });
+        (key, fence)
+    }
+
+    /// The session's current context generation (see [`EpochFence`]).
+    pub fn runtime_context_generation(&self, session_id: &str) -> Option<u64> {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .map(|session| session.runtime_epochs.generation)
     }
 
     /// Whether a runtime frame or snapshot from `epoch` may project into the
     /// session's current context. `native` is the native session id the frame
     /// reports, if any. Unknown sessions are left to the other fences.
     pub fn admit_runtime_epoch(&self, session_id: &str, epoch: &str, native: Option<&str>) -> bool {
+        self.classify_runtime_epoch(session_id, epoch, native) == RuntimeEpoch::Current
+    }
+
+    /// [`Self::admit_runtime_epoch`] with the reason for a refusal.
+    pub fn classify_runtime_epoch(
+        &self,
+        session_id: &str,
+        epoch: &str,
+        native: Option<&str>,
+    ) -> RuntimeEpoch {
         let cleared = native.map(|_| self.cleared_native(session_id));
         let mut sessions = self.inner.sessions.lock();
         let Some(session) = sessions.get_mut(session_id) else {
-            return true;
+            return RuntimeEpoch::Current;
         };
         // The id the session runs now is never discarded (a cancelled Clear
         // re-adopts the worker it keeps).
@@ -155,16 +208,45 @@ impl Hub {
                     .is_some_and(|ids| ids.iter().any(|id| id == native))
         });
         if placeholder(epoch) {
-            return !discarded;
+            return if discarded {
+                RuntimeEpoch::Fenced
+            } else {
+                RuntimeEpoch::Current
+            };
         }
-        session.runtime_epochs.admit(epoch, discarded)
+        session.runtime_epochs.classify(epoch, discarded)
     }
 
-    /// Re-admit the worker a cancelled reset keeps: it still runs, so its
-    /// frames and native id describe the session's only live context again.
-    pub fn readmit_runtime_epoch(&self, session_id: &str, epoch: &str, native: Option<&str>) {
+    /// Re-admit the live worker a cancelled reset keeps: it still runs, so its
+    /// frames and native id describe the session's only context again. Only
+    /// while the session is still in `generation`, the context the cancelled
+    /// reset's Clear started; a newer Clear keeps its fence. The kept native id
+    /// becomes the session's own again, so a later Clear discards it anew.
+    pub fn readmit_runtime_epoch(
+        &self,
+        session_id: &str,
+        epoch: &str,
+        native: Option<&str>,
+        generation: u64,
+    ) -> bool {
+        if placeholder(epoch) {
+            return false;
+        }
         // Serialized with Clear, which records discarded ids under the same guard.
-        let _fence = self.runtime_projection_exclusive();
+        let _guard = self.runtime_projection_exclusive();
+        {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(session) = sessions.get_mut(session_id) else {
+                return false;
+            };
+            if session.runtime_epochs.generation != generation {
+                return false;
+            }
+            session.runtime_epochs.bind(epoch, generation);
+            if let Some(native) = native {
+                session.meta.agent_session_id = Some(native.to_owned());
+            }
+        }
         if let Some(native) = native {
             let mut cleared = self.cleared_native(session_id);
             let before = cleared.len();
@@ -173,13 +255,7 @@ impl Hub {
                 self.set_setting(cleared_key(session_id), serde_json::json!(cleared));
             }
         }
-        if placeholder(epoch) {
-            return;
-        }
-        if let Some(session) = self.inner.sessions.lock().get_mut(session_id) {
-            let generation = session.runtime_epochs.generation;
-            session.runtime_epochs.bind(epoch, generation);
-        }
+        true
     }
 }
 
@@ -243,8 +319,24 @@ mod tests {
         assert!(!hub.admit_runtime_epoch("s", "broker-s", Some("agent-1")));
         assert!(hub.admit_runtime_epoch("s", "new", Some("agent-2")));
         assert!(hub.admit_runtime_epoch("s", "broker-s", None));
-        // Re-adopting the id (a cancelled Clear) lifts its fence.
-        hub.readmit_runtime_epoch("s", "old", Some("agent-1"));
+        // A cancelled reset of an older context cannot reopen this one.
+        let current = hub.runtime_context_generation("s").unwrap();
+        assert!(!hub.readmit_runtime_epoch("s", "old", Some("agent-1"), current.wrapping_add(1)));
+        assert!(!hub.readmit_runtime_epoch("s", "broker-s", Some("agent-1"), current));
+        assert!(!hub.admit_runtime_epoch("s", "old", Some("agent-1")));
+        // Re-adopting the id (a cancelled Clear) lifts its fence, and the
+        // session runs it again, so the next Clear discards it anew.
+        assert!(hub.readmit_runtime_epoch("s", "old", Some("agent-1"), current));
         assert!(hub.admit_runtime_epoch("s", "old", Some("agent-1")));
+        assert_eq!(
+            hub.session_info("s")
+                .unwrap()
+                .meta
+                .agent_session_id
+                .as_deref(),
+            Some("agent-1")
+        );
+        hub.prepare_context_reset("s");
+        assert!(!hub.admit_runtime_epoch("s", "old", Some("agent-1")));
     }
 }

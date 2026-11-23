@@ -21,11 +21,12 @@ pub(super) fn current_context(shared: &Shared, worker: &WorkerSnapshot) -> bool 
     )
 }
 
-/// A refused epoch also loses the worker cache entry it may have taken while
-/// it was still unidentified; a newer owner's entry stays.
+/// An epoch reclassified as cleared also loses the worker cache entry it took
+/// while unidentified; a newer owner's entry stays. A merely fenced epoch keeps
+/// its entry: a live Clear still observes the worker it is replacing.
 fn admit_epoch(shared: &Shared, session_id: &str, epoch: &str, native: Option<&str>) -> bool {
-    let admitted = shared.hub.admit_runtime_epoch(session_id, epoch, native);
-    if !admitted {
+    let class = shared.hub.classify_runtime_epoch(session_id, epoch, native);
+    if class == crate::core::RuntimeEpoch::Reclassified {
         let mut workers = shared.workers.lock();
         if workers
             .get(session_id)
@@ -34,7 +35,7 @@ fn admit_epoch(shared: &Shared, session_id: &str, epoch: &str, native: Option<&s
             workers.remove(session_id);
         }
     }
-    admitted
+    class == crate::core::RuntimeEpoch::Current
 }
 
 /// [`admits_worker`] for one streamed event of `epoch`.

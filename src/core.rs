@@ -56,6 +56,7 @@ mod session_attention;
 pub use session_attention::SessionAttention;
 mod lost_execution;
 mod runtime_epoch_fence;
+pub use runtime_epoch_fence::RuntimeEpoch;
 mod runtime_reconciliation;
 mod session_trash;
 pub use code_scope::{CodeReadScope, SessionCodeScope};
@@ -1176,6 +1177,12 @@ pub enum StoreWrite {
     SetAgentSessionId {
         session_id: String,
         agent_session_id: Option<String>,
+    },
+    /// Clear: no native id, and the fence of discarded ids, in one transaction.
+    ClearAgentSession {
+        session_id: String,
+        fence_key: String,
+        fence: serde_json::Value,
     },
     /// Persist the latest agent-advertised config option snapshot so a fresh
     /// device can render session controls before the worker is warm.
@@ -3545,7 +3552,7 @@ impl Hub {
     pub fn prepare_context_reset(&self, session_id: &str) {
         // Clearing a fork, even before its first launch, discards the copy.
         self.discard_native_fork(session_id);
-        let fence = self.runtime_projection_exclusive();
+        let guard = self.runtime_projection_exclusive();
         let mut discarded = None;
         let usage_changed = {
             let mut sessions = self.inner.sessions.lock();
@@ -3573,16 +3580,17 @@ impl Hub {
                 changed
             })
         };
-        self.record_cleared_native(session_id, discarded);
-        drop(fence);
+        let (fence_key, fence) = self.record_cleared_native(session_id, discarded);
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::ClearAgentSession {
+                session_id: session_id.to_owned(),
+                fence_key,
+                fence,
+            });
+        }
+        drop(guard);
         if usage_changed {
             self.broadcast_sessions();
-        }
-        if let Some(tx) = self.inner.store_tx.as_ref() {
-            let _ = tx.send(StoreWrite::SetAgentSessionId {
-                session_id: session_id.to_owned(),
-                agent_session_id: None,
-            });
         }
     }
 
