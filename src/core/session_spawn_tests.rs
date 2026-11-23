@@ -167,6 +167,41 @@ fn a_later_spawn_lands_after_the_earlier_ones_even_after_a_restart() {
 }
 
 #[test]
+fn a_purged_earlier_spawn_does_not_reverse_the_visible_order() {
+    let hub = Hub::new();
+    filed_creator(&hub, "work");
+    for id in ["first", "second", "third"] {
+        session(&hub, id, "me", "cowboy");
+    }
+    for id in ["first", "second"] {
+        hub.place_spawned("creator", id, &me()).unwrap();
+    }
+    assert!(hub.delete_session("first"));
+    hub.place_spawned("creator", "third", &me()).unwrap();
+    let live = |rows: Vec<String>| -> Vec<String> {
+        rows.into_iter()
+            .filter(|row| {
+                let id = row.strip_prefix("session:").unwrap_or(row);
+                hub.session_info(id).is_some()
+            })
+            .collect()
+    };
+    assert_eq!(
+        displayed(&hub),
+        ["above", "creator", "second", "third", "foreign", "below"]
+    );
+    let rows = live(workspace(&hub));
+    let at = rows
+        .iter()
+        .position(|row| row == "session:creator")
+        .unwrap();
+    assert_eq!(
+        rows[at..at + 3],
+        ["session:creator", "session:second", "session:third"]
+    );
+}
+
+#[test]
 fn a_creator_at_the_top_level_keeps_its_spawns_there() {
     let hub = Hub::new();
     session(&hub, "creator", "me", "cowboy");

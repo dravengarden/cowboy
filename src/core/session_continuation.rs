@@ -183,8 +183,14 @@ impl Hub {
         // throughout so filling in unranked rows never reverses the user's list.
         let mut display_order: Vec<_> = self.inner.order.lock().iter().rev().cloned().collect();
         // `display_order` is a copy: no order lock is held while settings are read.
-        let spawned =
-            |id: &str| mode == Beside::Spawn && self.spawned_from(id).as_deref() == Some(source);
+        // The run also steps over rows of sessions deleted since: the workspace
+        // order keeps their keys, and stopping at one would put this spawn
+        // ahead of the live ones.
+        let spawned = |id: &str| {
+            mode == Beside::Spawn
+                && (self.spawned_from(id).as_deref() == Some(source)
+                    || !self.inner.sessions.lock().contains_key(id))
+        };
         insert_after(&mut display_order, source, destination, &spawned);
         let order: Vec<_> = display_order.iter().rev().cloned().collect();
         self.sync_apply_as_locked(

@@ -1,9 +1,9 @@
 use super::*;
 use crate::core::{Hub, SessionOrigin, SessionRegistration};
 
-fn prepared(body: Value) -> Result<(Spawn, Value), String> {
+fn prepared(body: Value) -> Result<(Spawn, Value), &'static str> {
     let mut input = json!({"body": body});
-    Spawn::prepare(&mut input).map(|spawn| (spawn, input))
+    Spawn::parse(&mut input).map(|spawn| (spawn, input))
 }
 
 fn actor() -> FolderActor {
@@ -71,7 +71,7 @@ fn the_title_is_validated_like_a_rename_and_stays_out_of_the_product_body() {
     // `sessions.rename` refuses these; so does creation, before anything exists.
     for title in [json!(""), json!(" \t\n"), json!(7), json!(["x"]), json!({})] {
         assert_eq!(
-            prepared(json!({"title":title})).err().as_deref(),
+            prepared(json!({"title":title})).err(),
             Some("invalid_argument"),
             "{title}"
         );
@@ -82,12 +82,11 @@ fn the_title_is_validated_like_a_rename_and_stays_out_of_the_product_body() {
 fn an_agent_cannot_name_the_owner_origin_or_system_flag() {
     for key in ["system", "owner_user_id", "origin"] {
         assert_eq!(
-            prepared(json!({ key: "x" })).err().as_deref(),
+            prepared(json!({ key: "x" })).err(),
             Some("invalid_argument")
         );
     }
-    let mut missing = json!({});
-    assert!(Spawn::prepare(&mut missing).is_err());
+    assert!(Spawn::check(&json!({})).is_err());
 }
 
 #[test]
@@ -205,4 +204,44 @@ fn a_refused_creation_or_a_vanished_creator_never_fails_the_session() {
     let (spawn, _) = prepared(json!({})).unwrap();
     spawn.finish(&hub, "creator", &actor(), &receipt(201, "spawn"));
     assert_eq!(placement(&hub, "spawn"), None);
+}
+
+#[test]
+fn a_malformed_body_is_refused_before_admission() {
+    assert_eq!(
+        Spawn::check(&json!({"body":{"title":"  "}})),
+        Err("invalid_argument")
+    );
+    assert_eq!(
+        Spawn::check(&json!({"body":{"origin":"api"}})),
+        Err("invalid_argument")
+    );
+    assert_eq!(Spawn::check(&json!({"body":{"title":"Fine"}})), Ok(()));
+    // The check never changes the caller's input.
+    let input = json!({"body":{"title":" Fine "}});
+    Spawn::check(&input).unwrap();
+    assert_eq!(input["body"]["title"], " Fine ");
+}
+
+#[tokio::test]
+async fn one_creators_creations_wait_for_each_other_but_not_for_other_creators() {
+    use std::time::Duration;
+    let input = |body: Value| json!({"body": body});
+    let (mut a, mut b, mut c) = (input(json!({})), input(json!({})), input(json!({})));
+    let first = Spawn::admit(&mut a, "turn-creator").await.unwrap();
+    let mut second = Box::pin(Spawn::admit(&mut b, "turn-creator"));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut second)
+            .await
+            .is_err(),
+        "a second creation must wait for the first to be filed"
+    );
+    // Another creator is never held up.
+    Spawn::admit(&mut c, "turn-other").await.unwrap();
+    drop(first);
+    let second = tokio::time::timeout(Duration::from_secs(5), second)
+        .await
+        .expect("the turn passes on once the first is filed")
+        .unwrap();
+    assert!(second._turn.is_some());
 }

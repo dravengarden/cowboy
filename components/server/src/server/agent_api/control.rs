@@ -1202,7 +1202,7 @@ async fn dispatch(
         ));
     }
     let spawn = if name == "sessions.create" {
-        Some(spawn::Spawn::prepare(&mut input)?)
+        Some(spawn::Spawn::admit(&mut input, &parent.id).await?)
     } else {
         None
     };
@@ -1383,6 +1383,9 @@ pub(super) async fn apply(
     let auth = identity(state, parent, true).await?;
     scoped_targets(&state.hub, parent, &input.name, &input.input)?;
     write_gate(state, parent, &input.name, &input.input)?;
+    if input.name == "sessions.create" {
+        spawn::Spawn::check(&input.input)?;
+    }
     let store = state.store.as_ref().ok_or("unavailable")?.clone();
     let slot = Arc::clone(&EFFECTS)
         .try_acquire_owned()

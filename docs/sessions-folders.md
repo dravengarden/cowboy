@@ -379,7 +379,11 @@ the session whose agent made the call.
   several spawns read in creation order. `session_spawned_from:<id>` records
   the creator of each placed spawn so that order survives a Controller restart;
   it is internal and never reaches the Web. A spawn the user moved away from the
-  creator breaks that run: the next spawn goes right after the creator.
+  creator breaks that run: the next spawn goes right after the creator. Rows of
+  sessions deleted since do not break it. One creator's creations are admitted
+  one at a time, so overlapping calls are filed in the order they were admitted,
+  not in the order their handlers finish; a creation that outlasts 30 seconds
+  stops holding up the creator's later ones.
 - **Explicit `folder_id`** wins and nothing is moved. `""` names the top level.
   This is the only case in which the folder's defaults (project, Machine,
   runtime Machine, agent, preset, MCP bindings) apply.
@@ -393,7 +397,9 @@ the session whose agent made the call.
   session stays where creation put it, since a created session must never turn
   into a failure that invites a duplicate retry. The same holds for any other
   refusal of the move, which is logged.
-- `title` is optional, trimmed, and cannot be empty, as for `sessions.rename`.
+- `title` is optional, trimmed, and cannot be empty, as for `sessions.rename`;
+  an invalid one is refused before the call is admitted, so nothing is created.
+  It is applied through the synchronized title writer the Web's own rename uses.
   Without it the title is derived from the initial prompt as before.
 
 The move uses the ordinary `folders`, `order` and `workspace-order` writers, so
