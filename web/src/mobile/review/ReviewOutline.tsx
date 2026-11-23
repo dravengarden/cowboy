@@ -146,6 +146,55 @@ function HighlightedSymbolName({
   );
 }
 
+function OutlineFilterField({
+  query,
+  onChange,
+}: {
+  query: string;
+  onChange: (value: string) => void;
+}): React.JSX.Element {
+  return (
+    <TextField
+      value={query}
+      onChange={(event) => onChange(event.target.value)}
+      placeholder="Filter symbols"
+      size="small"
+      fullWidth
+      slotProps={{
+        input: {
+          sx: { fontSize: "max(16px, 1rem)" },
+          startAdornment: (
+            <InputAdornment position="start">
+              <Search fontSize="small" />
+            </InputAdornment>
+          ),
+          endAdornment: query
+            ? (
+              <InputAdornment position="end">
+                <IconButton
+                  aria-label="Clear outline filter"
+                  onPointerDown={(event) => event.preventDefault()}
+                  onClick={() => onChange("")}
+                  sx={{ width: 44, height: 44, mr: -1 }}
+                >
+                  <Clear fontSize="small" />
+                </IconButton>
+              </InputAdornment>
+            )
+            : undefined,
+        },
+      }}
+      sx={{
+        position: "sticky",
+        top: 0,
+        zIndex: 2,
+        bgcolor: "background.paper",
+        borderRadius: 1,
+      }}
+    />
+  );
+}
+
 export function ReviewOutline({
   open,
   onClose,
@@ -248,43 +297,8 @@ export function ReviewOutline({
       cover
       portal
     >
-      <Stack spacing={1.25} sx={{ minHeight: "55vh", pb: 2 }}>
-        <TextField
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Filter symbols"
-          size="small"
-          fullWidth
-          slotProps={{
-            input: {
-              startAdornment: (
-                <InputAdornment position="start">
-                  <Search fontSize="small" />
-                </InputAdornment>
-              ),
-              endAdornment: query
-                ? (
-                  <InputAdornment position="end">
-                    <IconButton
-                      size="small"
-                      aria-label="Clear outline filter"
-                      onClick={() => setQuery("")}
-                    >
-                      <Clear fontSize="small" />
-                    </IconButton>
-                  </InputAdornment>
-                )
-                : undefined,
-            },
-          }}
-          sx={{
-            position: "sticky",
-            top: 0,
-            zIndex: 2,
-            bgcolor: "background.paper",
-            borderRadius: 1,
-          }}
-        />
+      <Stack spacing={1.25} sx={{ minHeight: "55dvh", pb: 2 }}>
+        <OutlineFilterField query={query} onChange={setQuery} />
         {loading
           ? (
             <Stack alignItems="center" justifyContent="center" sx={{ py: 8 }}>

@@ -73,7 +73,7 @@ export function GitTreeRows({
               <ListItemButton
                 onClick={() => onToggle(node.path)}
                 sx={{
-                  minHeight: 34,
+                  minHeight: 44,
                   py: 0,
                   pl: 0.75 + depth * 1.5,
                   pr: 1,
@@ -132,7 +132,7 @@ export function GitTreeRows({
               key={`${entry.scope}:${entry.change.path}`}
               onClick={() => onOpenDiff(entry, queue)}
               sx={{
-                minHeight: 38,
+                minHeight: 44,
                 py: 0,
                 pl: 0.75 + depth * 1.5,
                 pr: 1.25,

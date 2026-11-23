@@ -119,7 +119,7 @@ export function MobileConnectionBanner(
           right: 0,
           height: 3,
           pointerEvents: "none",
-          zIndex: theme.zIndex.tooltip + 1,
+          zIndex: theme.zIndex.appBar + 2,
           ...updateHairlineSx(
             (opacity: number) => alpha(theme.palette.info.main, opacity),
             share,
@@ -155,11 +155,11 @@ export function MobileConnectionBanner(
         gap: 1,
         px: 2,
         py: 0.75,
-        pt: "calc(var(--cowboy-system-top-clearance) + 6px)",
+        pt: "calc(var(--cowboy-system-top-clearance, 0px) + 6px)",
         color: update.phase === "rejected" ? "warning.contrastText" : "info.contrastText",
         fontSize: "0.8125rem",
         fontWeight: 600,
-        zIndex: theme.zIndex.tooltip + 1,
+        zIndex: theme.zIndex.appBar + 2,
         // The bar is its own progress bar: full width, so the press needs no
         // aim, and paint-only, so it never becomes a second moving layer over
         // the pager (docs/mobile-spatial-presentation.md §2.1).

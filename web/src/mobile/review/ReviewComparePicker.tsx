@@ -1,11 +1,14 @@
-import { Check } from "@mui/icons-material";
+import { Check, Clear } from "@mui/icons-material";
 import {
+  IconButton,
+  InputAdornment,
   List,
   ListItemButton,
   ListItemIcon,
   ListItemText,
   ListSubheader,
   TextField,
+  Typography,
 } from "@mui/material";
 import { useEffect, useMemo, useState } from "react";
 import { Sheet } from "../../Sheet";
@@ -26,6 +29,7 @@ function Row({ primary, secondary, selected, onClick }: {
       selected={selected}
       aria-current={selected ? "true" : undefined}
       onClick={onClick}
+      sx={{ minHeight: 44 }}
     >
       <ListItemIcon sx={{ minWidth: 32 }}>
         {selected && <Check fontSize="small" color="primary" />}
@@ -101,8 +105,36 @@ export function ReviewComparePicker({
             aria-label="Search branches"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
+            slotProps={{
+              input: {
+                sx: { fontSize: "max(16px, 1rem)" },
+                endAdornment: query
+                  ? (
+                    <InputAdornment position="end">
+                      <IconButton
+                        aria-label="Clear branch search"
+                        onPointerDown={(event) => event.preventDefault()}
+                        onClick={() => setQuery("")}
+                        sx={{ width: 44, height: 44, mr: -1 }}
+                      >
+                        <Clear fontSize="small" />
+                      </IconButton>
+                    </InputAdornment>
+                  )
+                  : undefined,
+              },
+            }}
             sx={{ px: 2, pb: 1 }}
           />
+          {branches.length === 0 && query.trim().length > 0 && (
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{ px: 2, py: 2, textAlign: "center" }}
+            >
+              No matching branches
+            </Typography>
+          )}
           {branches.map((branch) => (
             <Row
               key={branch.reference}

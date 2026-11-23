@@ -8,10 +8,53 @@ import {
   Stack,
   Typography,
 } from "@mui/material";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { navigationHaptic } from "../../haptic";
 import { isPairedTouchClick } from "../../touchGestures";
 import { type ReviewTab, reviewTabKey } from "./reviewTabs";
+
+function ReviewTabOverflowEdges({
+  overflow,
+}: {
+  overflow: { readonly left: boolean; readonly right: boolean };
+}): React.JSX.Element {
+  return (
+    <>
+      {overflow.left && (
+        <Box
+          aria-hidden
+          data-review-tabs-overflow="left"
+          sx={{
+            position: "absolute",
+            top: 0,
+            bottom: 1,
+            left: 0,
+            width: 20,
+            pointerEvents: "none",
+            background: (theme) =>
+              `linear-gradient(to right, ${theme.palette.background.default}, transparent)`,
+          }}
+        />
+      )}
+      {overflow.right && (
+        <Box
+          aria-hidden
+          data-review-tabs-overflow="right"
+          sx={{
+            position: "absolute",
+            top: 0,
+            bottom: 1,
+            right: 0,
+            width: 24,
+            pointerEvents: "none",
+            background: (theme) =>
+              `linear-gradient(to left, ${theme.palette.background.default}, transparent)`,
+          }}
+        />
+      )}
+    </>
+  );
+}
 
 function basename(path: string): string {
   return path.split("/").at(-1) || path;
@@ -19,6 +62,77 @@ function basename(path: string): string {
 
 function tabLabel(tab: ReviewTab): string {
   return basename(tab.path);
+}
+
+function ReviewTabMenu({
+  menu,
+  tabs,
+  allowPin,
+  allowCloseActions,
+  onCloseMenu,
+  onTogglePin,
+  onClose,
+  onCloseOthers,
+  onCloseAll,
+}: {
+  menu: { anchor: HTMLElement; tab: ReviewTab } | undefined;
+  tabs: readonly ReviewTab[];
+  allowPin: boolean;
+  allowCloseActions: boolean;
+  onCloseMenu: () => void;
+  onTogglePin: (key: string) => void;
+  onClose: (key: string, anchor: HTMLElement) => void;
+  onCloseOthers: (key: string, anchor: HTMLElement) => void;
+  onCloseAll: (anchor: HTMLElement) => void;
+}): React.JSX.Element {
+  return (
+    <Menu anchorEl={menu?.anchor} open={menu !== undefined} onClose={onCloseMenu}>
+      {allowPin && (
+        <MenuItem
+          onClick={() => {
+            if (menu) onTogglePin(reviewTabKey(menu.tab));
+            onCloseMenu();
+          }}
+        >
+          {menu?.tab.pinned ? "Unpin" : "Pin"}
+        </MenuItem>
+      )}
+      {allowCloseActions && (
+        <MenuItem
+          onClick={() => {
+            if (menu) onClose(reviewTabKey(menu.tab), menu.anchor);
+            onCloseMenu();
+          }}
+        >
+          Close
+        </MenuItem>
+      )}
+      {allowCloseActions && (
+        <MenuItem
+          disabled={menu !== undefined &&
+            tabs.every((tab) =>
+              reviewTabKey(tab) === reviewTabKey(menu.tab) || tab.pinned
+            )}
+          onClick={() => {
+            if (menu) onCloseOthers(reviewTabKey(menu.tab), menu.anchor);
+            onCloseMenu();
+          }}
+        >
+          Close others
+        </MenuItem>
+      )}
+      {allowCloseActions && (
+        <MenuItem
+          onClick={() => {
+            if (menu) onCloseAll(menu.anchor);
+            onCloseMenu();
+          }}
+        >
+          Close all
+        </MenuItem>
+      )}
+    </Menu>
+  );
 }
 
 const stripSx = {
@@ -80,11 +194,33 @@ export function ReviewTabStrip({
     | undefined
   >(undefined);
   const [draggingKey, setDraggingKey] = useState<string>();
+  const [overflow, setOverflow] = useState({ left: false, right: false });
   const [menu, setMenu] = useState<{
     anchor: HTMLElement;
     tab: ReviewTab;
   }>();
+  const updateOverflow = useCallback((): void => {
+    const el = strip.current;
+    if (!el) return;
+    const left = el.scrollLeft > 2;
+    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 2;
+    setOverflow((prev) =>
+      prev.left === left && prev.right === right ? prev : { left, right }
+    );
+  }, []);
   const tabOrder = tabs.map(reviewTabKey).join("\0");
+  useEffect(() => () => {
+    if (timer.current !== undefined) globalThis.clearTimeout(timer.current);
+  }, []);
+  useEffect(() => {
+    const el = strip.current;
+    if (!el) return undefined;
+    updateOverflow();
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(updateOverflow);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [tabOrder, updateOverflow]);
   useEffect(() => {
     const viewport = strip.current;
     if (!viewport || !activeKey) return;
@@ -130,11 +266,13 @@ export function ReviewTabStrip({
 
   return (
     <>
+      <Box sx={{ position: "relative", flexShrink: 0, minWidth: 0 }}>
       <Stack
         ref={strip}
         direction="row"
         data-review-tab-strip
         data-mobile-pager-ignore
+        onScroll={updateOverflow}
         sx={stripSx}
       >
         {tabs.map((tab) => {
@@ -233,6 +371,7 @@ export function ReviewTabStrip({
                 finishPress(true);
               }}
               onPointerCancel={() => finishPress(false)}
+              onLostPointerCapture={() => finishPress(false)}
               sx={{
                 appearance: "none",
                 flex: "0 0 auto",
@@ -298,56 +437,19 @@ export function ReviewTabStrip({
           sx={{ flex: "1 0 72px", minHeight: 44 }}
         />
       </Stack>
-      <Menu
-        anchorEl={menu?.anchor}
-        open={menu !== undefined}
-        onClose={() => setMenu(undefined)}
-      >
-        {allowPin && (
-          <MenuItem
-            onClick={() => {
-              if (menu) onTogglePin(reviewTabKey(menu.tab));
-              setMenu(undefined);
-            }}
-          >
-            {menu?.tab.pinned ? "Unpin" : "Pin"}
-          </MenuItem>
-        )}
-        {allowCloseActions && (
-          <MenuItem
-            onClick={() => {
-              if (menu) onClose(reviewTabKey(menu.tab), menu.anchor);
-              setMenu(undefined);
-            }}
-          >
-            Close
-          </MenuItem>
-        )}
-        {allowCloseActions && (
-          <MenuItem
-            disabled={menu !== undefined &&
-              tabs.every((tab) =>
-                reviewTabKey(tab) === reviewTabKey(menu.tab) || tab.pinned
-              )}
-            onClick={() => {
-              if (menu) onCloseOthers(reviewTabKey(menu.tab), menu.anchor);
-              setMenu(undefined);
-            }}
-          >
-            Close others
-          </MenuItem>
-        )}
-        {allowCloseActions && (
-          <MenuItem
-            onClick={() => {
-              if (menu) onCloseAll(menu.anchor);
-              setMenu(undefined);
-            }}
-          >
-            Close all
-          </MenuItem>
-        )}
-      </Menu>
+      <ReviewTabOverflowEdges overflow={overflow} />
+      </Box>
+      <ReviewTabMenu
+        menu={menu}
+        tabs={tabs}
+        allowPin={allowPin}
+        allowCloseActions={allowCloseActions}
+        onCloseMenu={() => setMenu(undefined)}
+        onTogglePin={onTogglePin}
+        onClose={onClose}
+        onCloseOthers={onCloseOthers}
+        onCloseAll={onCloseAll}
+      />
     </>
   );
 }

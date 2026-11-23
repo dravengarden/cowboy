@@ -1,6 +1,6 @@
 import { Close } from "@mui/icons-material";
 import { Button, IconButton, Stack, Typography } from "@mui/material";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReviewLineSelection, ReviewQuestion } from "../../review/reviewLineSelection";
 
 /** What can be done with the selected lines, where a thumb can reach it. */
@@ -14,6 +14,9 @@ export function ReviewSelectionBar({ selection, onClear, onSend, onExplain }: {
   const count = selection.to - selection.from + 1;
   const [asking, setAsking] = useState<ReviewQuestion>();
   const [error, setError] = useState<string>();
+  useEffect(() => {
+    setError(undefined);
+  }, [selection.from, selection.to]);
   const ask = async (kind: ReviewQuestion): Promise<void> => {
     setAsking(kind);
     setError(undefined);
@@ -43,52 +46,52 @@ export function ReviewSelectionBar({ selection, onClear, onSend, onExplain }: {
       aria-label="Selected lines"
       direction="row"
       alignItems="center"
-      spacing={1}
+      spacing={0.5}
       sx={{
         flexShrink: 0,
-        px: 1,
-        minHeight: 44,
+        px: 0.75,
+        minHeight: 48,
         borderTop: 1,
         borderColor: "divider",
         bgcolor: "background.paper",
       }}
     >
       <IconButton
-        size="small"
         aria-label="Clear selection"
         onClick={onClear}
+        sx={{ width: 44, height: 44 }}
       >
         <Close fontSize="small" />
       </IconButton>
-      <Typography variant="body2" sx={{ flex: 1 }}>
+      <Typography variant="body2" noWrap sx={{ flex: 1, minWidth: 0 }}>
         {count === 1 ? "1 line" : `${count} lines`}
       </Typography>
       {onExplain && (
         <>
           <Button
             data-review-explain
-            size="small"
             disabled={asking !== undefined}
             onClick={() => void ask("explain")}
+            sx={{ minHeight: 44, px: 1.25, textTransform: "none" }}
           >
             {asking === "explain" ? "Starting…" : "Explain"}
           </Button>
           <Button
             data-review-ask-review
-            size="small"
             disabled={asking !== undefined}
             onClick={() => void ask("review")}
+            sx={{ minHeight: 44, px: 1.25, textTransform: "none" }}
           >
             {asking === "review" ? "Starting…" : "Review"}
           </Button>
         </>
       )}
       <Button
-        size="small"
         variant="contained"
         disableElevation
         aria-label="Send to Agent"
         onClick={onSend}
+        sx={{ minHeight: 44, px: 1.75, textTransform: "none" }}
       >
         Send
       </Button>

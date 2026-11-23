@@ -1,6 +1,5 @@
 import CheckIcon from "@mui/icons-material/Check";
 import CloudOffOutlinedIcon from "@mui/icons-material/CloudOffOutlined";
-import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 import { alpha, Box, Button, ButtonBase, CircularProgress, Stack, Typography } from "@mui/material";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -21,36 +20,10 @@ import {
 } from "../syncStatus";
 import { useSessionsDrawerOpen } from "./sessionsDrawerPresence";
 
-// Held rows the user has already looked at. Stored by mutation id, so a
-// resolved row never re-raises the reminder for the rest and a new failure
-// still does. Bounded by whatever is held right now.
-const ATTENTION_ACK_KEY = "cowboy:attention-ack";
-
-function readAcknowledged(): ReadonlySet<string> {
-  try {
-    const raw = globalThis.localStorage?.getItem(ATTENTION_ACK_KEY);
-    const parsed: unknown = raw === null || raw === undefined ? [] : JSON.parse(raw);
-    return new Set(
-      Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [],
-    );
-  } catch {
-    return new Set();
-  }
-}
-
-function writeAcknowledged(ids: ReadonlySet<string>): void {
-  try {
-    if (ids.size === 0) globalThis.localStorage?.removeItem(ATTENTION_ACK_KEY);
-    else globalThis.localStorage?.setItem(ATTENTION_ACK_KEY, JSON.stringify([...ids]));
-  } catch {
-    // Private mode or quota: the reminder simply returns after a reload.
-  }
-}
-
 const pillButtonSx = {
   pointerEvents: "auto",
-  minHeight: 32,
-  px: 1.75,
+  minHeight: 44,
+  px: 2,
   gap: 0.75,
   borderRadius: 999,
   fontSize: "0.8125rem",
@@ -69,10 +42,6 @@ const sheetButtonSx = { borderRadius: 999, textTransform: "none", fontWeight: 60
  * debounce, flashes "Synced" on recovery, hides while the sessions drawer
  * shows its own status line, and opens one sheet with the detail, the
  * sessions that hold unsent rows, and the actions that fit the state.
- *
- * "Needs attention" counts only held rows outside the opened session (its own
- * rows show their failure in place) and only until the user hides the
- * reminder; a new failure raises it again.
  */
 export function MobileSyncPill(): ReactNode {
   const raw = useSyncStatus();
@@ -83,14 +52,12 @@ export function MobileSyncPill(): ReactNode {
   const banner = controlPlaneConnection.useConnectionBanner();
   const [now, setNow] = useState(() => Date.now());
   const [open, setOpen] = useState(false);
-  const [, setAcknowledged] = useState<ReadonlySet<string>>(readAcknowledged);
   const shownRef = useRef<SyncPhase | null>(null);
   const recoveredAtRef = useRef<number | undefined>(undefined);
   const wasLiveRef = useRef(raw.phase === "live");
 
   // Earlier sends are resolved at the next send, rather than raising a floating reminder.
-  const attention = 0;
-  const status = withHeld(raw, attention);
+  const status = withHeld(raw, 0);
 
   if (status.phase === "live" && !wasLiveRef.current && shownRef.current !== null) {
     recoveredAtRef.current = Date.now();
@@ -122,11 +89,8 @@ export function MobileSyncPill(): ReactNode {
     return () => globalThis.removeEventListener(SYNC_SHEET_EVENT, onRequest);
   }, []);
 
-  const attentionShown = status.phase === "live" && attention > 0;
   const tone = presented === "recovered"
     ? "success"
-    : attentionShown
-    ? "warning"
     : syncStatusTone(status.phase);
   const label = presented === "recovered" ? "Synced" : syncStatusLabel(status, now);
   const busy = status.phase === "connecting" || status.phase === "waiting";
@@ -138,15 +102,6 @@ export function MobileSyncPill(): ReactNode {
     active: entry.id === activeId,
   }));
 
-  const hideReminder = (): void => {
-    const next = new Set<string>();
-    for (const entry of held.sessions) {
-      for (const id of entry.ids) next.add(id);
-    }
-    writeAcknowledged(next);
-    setAcknowledged(next);
-    setOpen(false);
-  };
   const openHeldSession = (id: string): void => {
     setOpen(false);
     requestPickSession(id);
@@ -189,8 +144,6 @@ export function MobileSyncPill(): ReactNode {
               ? <CheckIcon sx={{ fontSize: "1rem" }} />
               : busy
               ? <CircularProgress size={12} color="inherit" thickness={5} />
-              : attentionShown
-              ? <ErrorOutlineIcon sx={{ fontSize: "1rem" }} />
               : <CloudOffOutlinedIcon sx={{ fontSize: "1rem" }} />}
             <span>{label}</span>
           </ButtonBase>
@@ -199,7 +152,7 @@ export function MobileSyncPill(): ReactNode {
       <ObsidianSheet
         open={open}
         onClose={() => setOpen(false)}
-        title={attentionShown ? "Needs attention" : "Connection"}
+        title="Connection"
         ariaLabel="Connection status"
         actions={
           <Stack direction="row" spacing={1} sx={{ width: "100%" }}>
@@ -232,17 +185,6 @@ export function MobileSyncPill(): ReactNode {
                   Retry now
                 </Button>
               )
-              : attentionShown
-              ? (
-                <Button
-                  fullWidth
-                  variant="contained"
-                  onClick={hideReminder}
-                  sx={{ ...sheetButtonSx, fontWeight: 700 }}
-                >
-                  Hide reminder
-                </Button>
-              )
               : null}
           </Stack>
         }
@@ -252,9 +194,7 @@ export function MobileSyncPill(): ReactNode {
             {syncStatusLabel(status, now) ?? "Connected"}
           </Typography>
           <Typography sx={{ color: "text.secondary", fontSize: "0.9rem", lineHeight: 1.45 }}>
-            {attentionShown
-              ? "These messages could not be confirmed. Open the session to retry, edit, or discard them; hiding the reminder keeps them held."
-              : syncStatusDetail(status, now)}
+            {syncStatusDetail(status, now)}
           </Typography>
           <Stack spacing={0.25} sx={{ color: "text.secondary", fontSize: "0.8125rem" }}>
             {synced !== null && status.phase !== "live" && <span>Last synced {synced}</span>}

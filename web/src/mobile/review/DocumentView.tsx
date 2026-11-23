@@ -1170,7 +1170,7 @@ export function DocumentView({
               gridTemplateColumns: "repeat(auto-fit, minmax(7rem, 1fr))",
               gap: 0.75,
               mt: 1,
-              maxHeight: "min(32vh, 224px)",
+              maxHeight: "min(32dvh, 224px)",
               overflowY: "auto",
               overscrollBehaviorY: "contain",
               touchAction: "pan-y",

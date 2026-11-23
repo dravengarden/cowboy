@@ -67,6 +67,32 @@ function setStatusBarColor(color: string): void {
   head.append(meta);
 }
 
+// Reference-count open ObsidianSheets so closed instances never clobber an
+// active sheet's dimmed status bar and stacked sheets restore only when the
+// last one closes.
+let openStatusBarSheets = 0;
+
+function acquireDimmedStatusBar(surfaceColor: string): () => void {
+  openStatusBarSheets += 1;
+  setStatusBarColor(dimHex(surfaceColor, OBSIDIAN_SHEET_SCRIM_MAX));
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    openStatusBarSheets = Math.max(0, openStatusBarSheets - 1);
+    if (openStatusBarSheets === 0) setStatusBarColor(surfaceColor);
+  };
+}
+
+function clearTimer(
+  ref: { current: ReturnType<typeof globalThis.setTimeout> | null },
+): void {
+  if (ref.current !== null) {
+    globalThis.clearTimeout(ref.current);
+    ref.current = null;
+  }
+}
+
 function prefersReducedMotion(): boolean {
   return globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ===
     true;
@@ -106,23 +132,13 @@ export function ObsidianSheet({
   >(null);
   const rafRef = useRef(0);
   const pendingYRef = useRef<number | null>(null);
-  const movingTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(
-    null,
-  );
+  const movingTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
+  const dismissTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
   const onCloseRef = useRef(onClose);
   const dismissingRef = useRef(false);
   onCloseRef.current = onClose;
 
-  useEffect(() => {
-    setStatusBarColor(
-      open
-        ? dimHex(surfaceColor, OBSIDIAN_SHEET_SCRIM_MAX)
-        : surfaceColor,
-    );
-    return () => {
-      if (open) setStatusBarColor(surfaceColor);
-    };
-  }, [open, surfaceColor]);
+  useEffect(() => (open ? acquireDimmedStatusBar(surfaceColor) : undefined), [open, surfaceColor]);
 
   const paint = useCallback((y: number, animate: boolean): void => {
     yRef.current = y;
@@ -166,12 +182,12 @@ export function ObsidianSheet({
   }, []);
 
   useEffect(() => () => {
-    if (movingTimerRef.current !== null) {
-      globalThis.clearTimeout(movingTimerRef.current);
-    }
+    clearTimer(movingTimerRef);
+    clearTimer(dismissTimerRef);
   }, []);
 
   useEffect(() => {
+    clearTimer(dismissTimerRef);
     if (!open) {
       animatedRef.current = false;
       dismissingRef.current = false;
@@ -211,10 +227,11 @@ export function ObsidianSheet({
     dismissingRef.current = true;
     fireHaptic("light");
     paint(closedPxRef.current, true);
-    globalThis.setTimeout(
-      () => onCloseRef.current(),
-      obsidianSheetSettleMs(prefersReducedMotion()),
-    );
+    clearTimer(dismissTimerRef);
+    dismissTimerRef.current = globalThis.setTimeout(() => {
+      dismissTimerRef.current = null;
+      onCloseRef.current();
+    }, obsidianSheetSettleMs(prefersReducedMotion()));
   }, [paint]);
   const dismissBackdrop = useBackdropDismiss<HTMLDivElement>(dismiss);
 

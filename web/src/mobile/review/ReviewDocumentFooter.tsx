@@ -1,7 +1,7 @@
 import type { ComponentProps } from "react";
 import { createPortal } from "react-dom";
 import { KeyboardArrowDown, KeyboardArrowUp } from "@mui/icons-material";
-import { IconButton, Typography } from "@mui/material";
+import { ButtonBase, IconButton, Typography } from "@mui/material";
 import { ReviewCheckStatus } from "./ReviewCheckStatus";
 import { ReviewDocumentControls } from "./ReviewDocumentControls";
 import { type ReviewDocumentSlots, useReviewDocumentSlots } from "./reviewDocumentSlots";
@@ -68,7 +68,8 @@ function DiffSlotControls({
       )}
       {hunkCount > 1 && slots.hunks && createPortal(
         <>
-          {/* A phone row only fits one hunk control; Next wraps around. */}
+          {/* A phone row only fits one hunk control; Next wraps around and
+              surfaces the current hunk count directly because touch has no hover title. */}
           <IconButton
             aria-label="Previous hunk"
             disabled={hunkIndex <= 0}
@@ -77,14 +78,29 @@ function DiffSlotControls({
           >
             <KeyboardArrowUp />
           </IconButton>
-          <IconButton
-            aria-label="Next hunk"
-            title={`Hunk ${hunkIndex + 1} of ${hunkCount}`}
+          <ButtonBase
+            aria-label={`Next hunk (${hunkIndex + 1} of ${hunkCount})`}
             data-review-hunk-position={`${hunkIndex + 1}/${hunkCount}`}
             onClick={onNext}
+            sx={{
+              minWidth: 44,
+              minHeight: 44,
+              px: 1,
+              gap: 0.25,
+              borderRadius: 999,
+              color: "text.secondary",
+              "&:hover": { bgcolor: "action.hover" },
+            }}
           >
-            <KeyboardArrowDown />
-          </IconButton>
+            <Typography
+              component="span"
+              variant="caption"
+              sx={{ fontVariantNumeric: "tabular-nums", lineHeight: 1 }}
+            >
+              {hunkIndex + 1}/{hunkCount}
+            </Typography>
+            <KeyboardArrowDown fontSize="small" />
+          </ButtonBase>
         </>,
         slots.hunks,
       )}

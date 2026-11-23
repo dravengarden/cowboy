@@ -2,6 +2,7 @@ import { lazy, type ReactNode, Suspense } from "react";
 import { Box, Button, CircularProgress, Stack, Typography } from "@mui/material";
 import { ChatBubbleOutline } from "@mui/icons-material";
 import { openMobileProduct } from "../appPagerMotion";
+import { BOTTOM_NAV_PADDING } from "../bottomNavigation";
 
 // Keep Review's repository, diff and file tooling out of the Mobile shell's
 // initial module graph. The pager mounts both pages, so this import warms in
@@ -47,7 +48,7 @@ function ReviewLoading(): React.JSX.Element {
         sx={{
           px: 1.5,
           pt: 0.5,
-          pb: "max(env(safe-area-inset-bottom), 12px)",
+          pb: BOTTOM_NAV_PADDING,
           borderTop: 1,
           borderColor: "divider",
         }}

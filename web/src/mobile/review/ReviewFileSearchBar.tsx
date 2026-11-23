@@ -86,6 +86,7 @@ export function ReviewFileSearchBar({
               <InputAdornment position="end" sx={{ ml: 0 }}>
                 <IconButton
                   aria-label="Clear file search"
+                  onPointerDown={(event) => event.preventDefault()}
                   onClick={() => onQuery("")}
                   sx={{
                     minWidth: 48,
@@ -107,7 +108,7 @@ export function ReviewFileSearchBar({
             "& input": {
               minWidth: 0,
               py: 1,
-              fontSize: "0.875rem",
+              fontSize: mobile ? "max(16px, 1rem)" : "0.875rem",
               "&::placeholder": { color: "text.secondary", opacity: 0.65 },
             },
           }}
