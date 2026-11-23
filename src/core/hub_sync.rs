@@ -3,6 +3,18 @@
 use super::*;
 
 impl Hub {
+    /// A session title as every rename accepts it: trimmed and not empty.
+    ///
+    /// # Errors
+    /// A title with nothing but whitespace.
+    pub fn clean_title(title: &str) -> Result<String, String> {
+        let title = title.trim();
+        if title.is_empty() {
+            return Err("title cannot be empty".to_owned());
+        }
+        Ok(title.to_owned())
+    }
+
     /// Apply a rename to the typed truth (NO `Sessions` re-broadcast — the sync
     /// channel carries the title now). Persists so fresh-connect + restart show
     /// it. Mirror of [`Self::rename_session`] minus the broadcast.
@@ -463,15 +475,11 @@ impl Hub {
                     .and_then(serde_json::Value::as_str)
                     .ok_or("rename: missing session_id")?
                     .to_owned();
-                let title = args
-                    .get("title")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("")
-                    .trim()
-                    .to_owned();
-                if title.is_empty() {
-                    return Err("title cannot be empty".to_owned());
-                }
+                let title = Self::clean_title(
+                    args.get("title")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or(""),
+                )?;
                 Op::Rename { session_id, title }
             }
             ("order", "reorder") => {
