@@ -343,7 +343,9 @@ pub(super) fn apply_overrides(
     Ok(())
 }
 
-pub(super) fn valid_overrides(config: &serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
+pub(super) fn valid_overrides(
+    config: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
     if config.len() > 32 {
         return Err("Too many configuration choices".into());
     }
@@ -1067,12 +1069,20 @@ mod tests {
         let base = serde_json::json!({"provider":"codex","provider_account_id":"default","machine_id":"ovh","cwd":"project"});
         let target: NextAgent = serde_json::from_value(base.clone()).unwrap();
         // Without options a stored target keeps its previous shape.
-        assert!(serde_json::to_value(&target).unwrap().get("config").is_none());
+        assert!(
+            serde_json::to_value(&target)
+                .unwrap()
+                .get("config")
+                .is_none()
+        );
         let mut chosen = base.clone();
         chosen["config"] = serde_json::json!({"model": "gpt-5.5", "fast": true});
         let target: NextAgent = serde_json::from_value(chosen).unwrap();
         assert!(validate_target(&target).is_ok());
-        assert_eq!(serde_json::to_value(&target).unwrap()["config"]["fast"], true);
+        assert_eq!(
+            serde_json::to_value(&target).unwrap()["config"]["fast"],
+            true
+        );
         let mut nested = base;
         nested["config"] = serde_json::json!({"model": {"id": "x"}});
         let target: NextAgent = serde_json::from_value(nested).unwrap();

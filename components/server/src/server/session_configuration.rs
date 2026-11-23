@@ -82,7 +82,11 @@ pub(super) fn prepare(state: &AppState, session_id: &str) {
 /// a form choosing a copy's configuration. Same signed preview as
 /// [`prepare`]; a same-scope snapshot supplies labels and choices, preferring
 /// one whose model matches, else any (it never supplies selected values).
-pub(super) fn target_preview(state: &AppState, target: &SessionMeta, preferences: &Value) -> Option<Value> {
+pub(super) fn target_preview(
+    state: &AppState,
+    target: &SessionMeta,
+    preferences: &Value,
+) -> Option<Value> {
     if is_managed(target) {
         return None;
     }
