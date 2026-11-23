@@ -362,3 +362,15 @@ test("summary includes compact effective routing section when routing table is p
   assertEquals(text.includes("## Effective routing (models/routing.json 2026-11-23)"), true);
   assertEquals(text.includes("- antigravity: analysis gemini-4-hydrogen:high (~60k tok)"), true);
 });
+
+test("auditRouting flags stale historical snapshots when models/field keeps more than one", () => {
+  const routing: RoutingTable = {
+    schema: 1,
+    evidence: "2026-11-23",
+    providers: {},
+    costs: {},
+  };
+  assertEquals(auditRouting(routing, {}, "2026-11-23", ["2026-11-21.json", "2026-11-23.json"]), [
+    "models/field: keep only the latest cost snapshot (2026-11-23.json); remove older snapshots: 2026-11-21.json",
+  ]);
+});

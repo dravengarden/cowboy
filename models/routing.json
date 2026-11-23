@@ -243,14 +243,14 @@
         "source": "models/field/2026-11-23.json (14-day ledger, mixed inputs, reuse excluded)"
       }
     },
-    "claude-fable-5-1:max": {
+    "claude-fable-5-2[1m]:max": {
       "median_tokens": null,
       "field": {
         "purpose": "review",
-        "median_tokens": 1294230,
-        "median_minutes": 10,
-        "n": 3,
-        "source": "models/field/2026-11-21.json (14-day ledger, mixed inputs, reuse excluded)"
+        "median_tokens": 8561486,
+        "median_minutes": 26,
+        "n": 1,
+        "source": "models/field/2026-11-23.json (14-day ledger, mixed inputs, reuse excluded)"
       }
     },
     "gemini-4-hydrogen:high": {

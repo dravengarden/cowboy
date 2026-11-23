@@ -14,9 +14,11 @@ import { Database } from "bun:sqlite";
 import {
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -487,6 +489,24 @@ export function writeFileGuarded(targetPath: string, text: string, protectedData
   renameSync(staged, target);
 }
 
+const DATED_SNAPSHOT_RE = /^\d{4}-\d{2}-\d{2}\.json$/;
+
+// Keep only the latest dated snapshot in `models/field/`; Git history retains older ones.
+export function pruneOlderSnapshots(keepPath: string): string[] {
+  const target = resolve(keepPath);
+  const keepName = basename(target);
+  if (!DATED_SNAPSHOT_RE.test(keepName)) return [];
+  const dir = dirname(target);
+  if (!existsSync(dir)) return [];
+  const removed: string[] = [];
+  for (const name of readdirSync(dir).sort()) {
+    if (name === keepName || !DATED_SNAPSHOT_RE.test(name)) continue;
+    unlinkSync(join(dir, name));
+    removed.push(name);
+  }
+  return removed;
+}
+
 if (import.meta.main) {
   const args = process.argv.slice(2);
   const option = (name: string) => {
@@ -513,6 +533,7 @@ if (import.meta.main) {
   const text = `${JSON.stringify(report, null, 2)}\n`;
   if (out) {
     writeFileGuarded(out, text, database);
+    pruneOlderSnapshots(out);
   } else {
     process.stdout.write(text);
   }

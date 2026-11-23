@@ -795,6 +795,12 @@ export function auditRouting(
     .filter((d): d is string => !!d)
     .sort();
   const latestField = dates.at(-1);
+  if (dates.length > 1) {
+    const stale = dates.slice(0, -1).map((d) => `${d}.json`);
+    findings.push(
+      `models/field: keep only the latest cost snapshot (${latestField}.json); remove older snapshots: ${stale.join(", ")}`,
+    );
+  }
   if (latestField) {
     const fieldAge = Math.round(days(latestField, asOf));
     if (fieldAge > maxFieldAge) {

@@ -143,14 +143,24 @@ function saveQuotaHistory(
   nowMs: number,
   protectedDb?: string,
 ) {
-  const cutoff = nowMs - 90 * 86_400_000;
-  const dedup = new Map<string, QuotaWindow>();
+  // Keep only the latest pair (previous + current) per window within 14 days so
+  // burn-rate deltas work without accumulating unbounded history.
+  const cutoff = nowMs - 14 * 86_400_000;
+  const byWindow = new Map<string, Map<number, QuotaWindow>>();
   for (const row of [...previous, ...current]) {
     if (row.observed_at_ms < cutoff) continue;
-    dedup.set(`${row.provider}|${row.limit_id}|${row.observed_at_ms}`, row);
+    const key = `${row.provider}|${row.limit_id}`;
+    const bucket = byWindow.get(key) ?? new Map<number, QuotaWindow>();
+    bucket.set(row.observed_at_ms, row);
+    byWindow.set(key, bucket);
   }
-  const ordered = [...dedup.values()].sort((a, b) => a.observed_at_ms - b.observed_at_ms);
-  const text = ordered.map((row) => JSON.stringify(row)).join("\n") + (ordered.length ? "\n" : "");
+  const kept: QuotaWindow[] = [];
+  for (const bucket of byWindow.values()) {
+    const sorted = [...bucket.values()].sort((a, b) => a.observed_at_ms - b.observed_at_ms);
+    kept.push(...sorted.slice(-2));
+  }
+  kept.sort((a, b) => a.observed_at_ms - b.observed_at_ms);
+  const text = kept.map((row) => JSON.stringify(row)).join("\n") + (kept.length ? "\n" : "");
   writeFileGuarded(path, text, protectedDb);
 }
 

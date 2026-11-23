@@ -91,7 +91,12 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { computeQuotaBurn, readDeepSeekGatewayStats, readQuotaSnapshots } from "./field.ts";
+import {
+  computeQuotaBurn,
+  pruneOlderSnapshots,
+  readDeepSeekGatewayStats,
+  readQuotaSnapshots,
+} from "./field.ts";
 
 test("readQuotaSnapshots anonymizes windows and computeQuotaBurn correlates calls", () => {
   const dir = mkdtempSync(join(tmpdir(), "cowboy-quota-test-"));
@@ -176,6 +181,19 @@ test("readDeepSeekGatewayStats aggregates DeepSeek requests and cache hit ratio"
         cache_hit_ratio: 0.8,
       },
     ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("pruneOlderSnapshots removes older dated snapshots and keeps latest and non-dated files", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cowboy-prune-test-"));
+  try {
+    writeFileSync(join(dir, "2026-11-21.json"), "{}");
+    writeFileSync(join(dir, "2026-11-23.json"), "{}");
+    writeFileSync(join(dir, "notes.txt"), "keep");
+    const removed = pruneOlderSnapshots(join(dir, "2026-11-23.json"));
+    assertEquals(removed, ["2026-11-21.json"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

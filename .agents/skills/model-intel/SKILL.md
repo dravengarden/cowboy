@@ -55,8 +55,9 @@ both input sets so a later audit can tell whether its inputs are complete. Read
    **Field data.** Refresh Cowboy's own cost feedback with
    `nix develop -c bun .agents/skills/model-intel/scripts/field.ts --days 14
    --out models/field/<date>.json` on the Controller host (read-only ledger
-   read, aggregates only), then update the `field` costs in
-   `models/routing.json`. Field rows compare cost on mixed inputs, never
+   read, aggregates only; older dated snapshots in `models/field/` are pruned
+   automatically so only the latest snapshot is retained), then update the
+   `field` costs in `models/routing.json`. Field rows compare cost on mixed inputs, never
    quality, and are not scored.
 5. **Score.** `nix develop -c bun .agents/skills/model-intel/scripts/score.ts
    --as-of YYYY-MM-DD`. It refuses to run without the local reference-only
