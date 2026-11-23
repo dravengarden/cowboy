@@ -55,6 +55,7 @@ use mobile_review::*;
 mod session_attention;
 pub use session_attention::SessionAttention;
 mod lost_execution;
+mod runtime_epoch_fence;
 mod runtime_reconciliation;
 mod session_trash;
 pub use code_scope::{CodeReadScope, SessionCodeScope};
@@ -562,6 +563,7 @@ struct Session {
     /// local runtime), in which case only the process-local observation lifetime
     /// above fences this Session. Learned from snapshots, never constructed here.
     machine_lineage: Option<String>,
+    runtime_epochs: runtime_epoch_fence::EpochFence,
     /// Hot event tail when persistence is enabled; the full log in memory-only
     /// development mode.
     log: Vec<Envelope>,
@@ -2191,6 +2193,7 @@ impl Hub {
                         compaction_usage: context_rollover::CompactionUsage::Idle,
                         history_boundary,
                         machine_lineage: None,
+                        runtime_epochs: Default::default(),
                         log,
                         log_bytes,
                         event_count,
@@ -2995,6 +2998,7 @@ impl Hub {
                     compaction_usage: context_rollover::CompactionUsage::Idle,
                     history_boundary: context_rollover::HistoryBoundary::Known(None),
                     machine_lineage: None,
+                    runtime_epochs: Default::default(),
                     log: Vec::new(),
                     log_bytes: 0,
                     event_count: 0,
@@ -3542,7 +3546,7 @@ impl Hub {
         let usage_changed = {
             let mut sessions = self.inner.sessions.lock();
             sessions.get_mut(session_id).is_some_and(|s| {
-                s.meta.agent_session_id = None;
+                s.runtime_epochs.advance(s.meta.agent_session_id.take());
                 s.in_flight = s.dispatch_pending.is_some();
                 let changed = s.meta.context_used != 0
                     || s.meta.context_size != 0

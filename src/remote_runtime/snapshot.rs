@@ -1,9 +1,44 @@
 use super::{
-    Shared, Status, WorkerSnapshot, WorkerState, fail_config_startup, idle_snapshot_guard,
-    reconcile_idle_guard, recoverable_live_worker_error, sync_config_for_worker, worker_status,
+    RuntimeEvent, Shared, Status, WorkerSnapshot, WorkerState, fail_config_startup,
+    idle_snapshot_guard, reconcile_idle_guard, recoverable_live_worker_error,
+    sync_config_for_worker, worker_status,
 };
 
+/// The session accepts runtime projection and `worker` belongs to its current
+/// context (`Hub::admit_runtime_epoch`): Clear fences the epochs it discarded.
+pub(super) fn admits_worker(shared: &Shared, worker: &WorkerSnapshot) -> bool {
+    shared.hub.accepts_runtime_projection(&worker.session_id)
+        && shared.hub.admit_runtime_epoch(
+            &worker.session_id,
+            &worker.worker_epoch,
+            worker.agent_session_id.as_deref(),
+        )
+}
+
+/// [`admits_worker`] for one streamed event of `epoch`.
+pub(super) fn admits_event(
+    shared: &Shared,
+    session_id: &str,
+    epoch: &str,
+    event: &RuntimeEvent,
+) -> bool {
+    let native = match event {
+        RuntimeEvent::AgentSessionId {
+            agent_session_id, ..
+        }
+        | RuntimeEvent::Ready {
+            agent_session_id: Some(agent_session_id),
+        } => Some(agent_session_id.as_str()),
+        _ => None,
+    };
+    shared.hub.accepts_runtime_projection(session_id)
+        && shared.hub.admit_runtime_epoch(session_id, epoch, native)
+}
+
 pub(super) fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
+    if !admits_worker(shared, worker) {
+        return false;
+    }
     // Settle the release first: the acceptance fence below refuses a bound
     // session's owner whose release differs from the recorded one, which is
     // exactly the divergence this reconciliation repairs.
