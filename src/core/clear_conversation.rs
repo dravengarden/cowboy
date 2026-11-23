@@ -12,9 +12,11 @@ use super::hub_managed_calls::StoreAckRx;
 use super::{Hub, StoreWrite};
 
 impl Hub {
-    /// Enqueue the combined durable Clear and change nothing else. `Ok(None)`:
-    /// no durable store is attached (memory-only mode), so there is nothing to
-    /// wait for.
+    /// Enqueue the combined durable Clear and change nothing else except the
+    /// pending latch: until [`Self::end_clear_conversation`], queued prompts
+    /// wait (they would otherwise reach the worker being replaced) and Steer is
+    /// refused. `Ok(None)`: no durable store is attached (memory-only mode),
+    /// so there is nothing to wait for.
     ///
     /// # Errors
     /// When the store queue refuses the write; nothing changed.
@@ -22,18 +24,17 @@ impl Hub {
         &self,
         session_id: &str,
     ) -> Result<Option<(StoreAckRx, ClearCommit)>, String> {
+        let native = {
+            let mut sessions = self.inner.sessions.lock();
+            let session = sessions
+                .get_mut(session_id)
+                .ok_or("session no longer exists")?;
+            session.clear_pending = true;
+            session.meta.agent_session_id.clone()
+        };
         let Some(tx) = self.inner.store_tx.as_ref() else {
             return Ok(None);
         };
-        let native = self
-            .inner
-            .sessions
-            .lock()
-            .get(session_id)
-            .ok_or("session no longer exists")?
-            .meta
-            .agent_session_id
-            .clone();
         let fence = self.fence_discarding(session_id, native);
         let (ack_id, rx) = self.inner.store_acks.allocate();
         let sent = tx.send(StoreWrite::ClearEvents {
@@ -44,6 +45,7 @@ impl Hub {
         });
         if !sent {
             self.inner.store_acks.cancel(ack_id);
+            self.end_clear_conversation(session_id);
             return Err("Clear was not saved: the durable store queue is unavailable".into());
         }
         Ok(Some((rx, ClearCommit { fence })))
@@ -70,6 +72,27 @@ impl Hub {
     }
 }
 
+impl Hub {
+    /// Lift the pending latch once the Clear failed, or committed and its
+    /// worker replacement was requested, and drain what waited.
+    pub fn end_clear_conversation(&self, session_id: &str) {
+        if let Some(session) = self.inner.sessions.lock().get_mut(session_id) {
+            session.clear_pending = false;
+        }
+        self.try_drain(session_id);
+    }
+
+    /// A user Clear is committing for this session.
+    #[must_use]
+    pub fn clear_pending(&self, session_id: &str) -> bool {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .is_some_and(|session| session.clear_pending)
+    }
+}
+
 /// The fence a durable Clear committed.
 pub struct ClearCommit {
     fence: (String, serde_json::Value),
@@ -77,7 +100,7 @@ pub struct ClearCommit {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{Event, PersistenceHealth, SessionOrigin, StoreReceiver, StoreSink};
+    use super::super::{Event, PersistenceHealth, SessionOrigin, Status, StoreReceiver, StoreSink};
     use super::*;
     use std::sync::Arc;
 
@@ -142,5 +165,58 @@ mod tests {
                 "the committed Clear was written again"
             );
         }
+    }
+
+    fn submit_during_clear(hub: &Hub) -> tokio::sync::mpsc::Receiver<super::super::DispatchReq> {
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("s", Status::Running, None);
+        rx
+    }
+
+    #[tokio::test]
+    async fn a_prompt_sent_during_a_clear_waits_for_the_new_context() {
+        let (hub, mut writes) = hub_with_writes();
+        let mut dispatched = submit_during_clear(&hub);
+        let (_ack, commit) = hub.begin_clear_conversation("s").unwrap().unwrap();
+        assert!(hub.clear_pending("s"));
+        hub.submit("s", "next".into(), vec![], Some("cmid-next".into()));
+        assert!(
+            dispatched.try_recv().is_err(),
+            "dispatched into the old context"
+        );
+        let _ = writes.try_recv();
+        hub.finish_clear_conversation("s", Some(commit));
+        // Still held between the commit and the worker replacement.
+        assert!(dispatched.try_recv().is_err());
+        hub.end_clear_conversation("s");
+        let request = dispatched.try_recv().expect("dispatched after the Clear");
+        assert_eq!(request.cmid.as_deref(), Some("cmid-next"));
+        assert_eq!(hub.session_info("s").unwrap().meta.agent_session_id, None);
+        assert!(!hub.clear_pending("s"));
+    }
+
+    #[tokio::test]
+    async fn a_prompt_sent_during_a_failed_clear_reaches_the_unchanged_session() {
+        let (hub, _writes) = hub_with_writes();
+        let mut dispatched = submit_during_clear(&hub);
+        let (ack, _commit) = hub.begin_clear_conversation("s").unwrap().unwrap();
+        hub.submit("s", "next".into(), vec![], Some("cmid-next".into()));
+        assert!(dispatched.try_recv().is_err());
+        hub.store_ack_sink().fail_all("disk full");
+        assert!(matches!(ack.await, Ok(Err(_))));
+        hub.end_clear_conversation("s");
+        let request = dispatched
+            .try_recv()
+            .expect("dispatched after the failed Clear");
+        assert_eq!(request.cmid.as_deref(), Some("cmid-next"));
+        assert_eq!(
+            hub.session_info("s")
+                .unwrap()
+                .meta
+                .agent_session_id
+                .as_deref(),
+            Some("native-1")
+        );
     }
 }

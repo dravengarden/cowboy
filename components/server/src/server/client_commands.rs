@@ -343,6 +343,7 @@ pub(super) fn reset_session_command(
                                 Some(intent) => state.supervisor.recover_execution_session(&session_id, intent),
                                 None => state.supervisor.reset_session(&session_id),
                             };
+                            state.hub.end_clear_conversation(&session_id);
                             if let Err(error) = result {
                                 state.hub.broadcast_error(Some(session_id), error);
                             }
@@ -372,6 +373,7 @@ pub(super) fn reset_session_command(
             if let Err(e) = state.supervisor.reset_session(&session_id) {
                 tracing::warn!(session_id = %session_id, error = %e, "reset: respawn failed");
             }
+            state.hub.end_clear_conversation(&session_id);
         });
         ControlFlow::Break(true)
     }
@@ -384,8 +386,13 @@ async fn clear_conversation(state: &AppState, session_id: &str) -> Result<(), St
         None => None,
         Some((ack, commit)) => match ack.await {
             Ok(Ok(_)) => Some(commit),
-            Ok(Err(error)) => return Err(format!("Clear was not saved: {error}")),
-            Err(_) => return Err("Clear was not saved: the store writer stopped".to_owned()),
+            failed => {
+                state.hub.end_clear_conversation(session_id);
+                return Err(match failed {
+                    Ok(Err(error)) => format!("Clear was not saved: {error}"),
+                    _ => "Clear was not saved: the store writer stopped".to_owned(),
+                });
+            }
         },
     };
     crate::subagent_transcripts::fence(session_id);

@@ -124,6 +124,7 @@ impl Hub {
                 return false;
             };
             if s.delivery_hold.as_deref() != Some(operation)
+                || s.clear_pending
                 || !self.context_allows_dispatch(session_id, Some(operation))
                 || s.meta.status != Status::Running
                 || s.in_flight
@@ -215,7 +216,10 @@ impl Hub {
         } else {
             s.meta.status == Status::Running
         };
-        can && !s.in_flight && s.dispatch_pending.is_none() && s.delivery_hold.is_none()
+        can && !s.in_flight
+            && s.dispatch_pending.is_none()
+            && s.delivery_hold.is_none()
+            && !s.clear_pending
     }
 
     /// Dispatch the head of a session's queue if it can take a turn and the head

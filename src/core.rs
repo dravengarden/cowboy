@@ -567,6 +567,8 @@ struct Session {
     /// above fences this Session. Learned from snapshots, never constructed here.
     machine_lineage: Option<String>,
     runtime_epochs: runtime_epoch_fence::EpochFence,
+    /// A user Clear is committing: queued prompts wait and Steer is refused.
+    clear_pending: bool,
     /// Hot event tail when persistence is enabled; the full log in memory-only
     /// development mode.
     log: Vec<Envelope>,
@@ -2209,6 +2211,7 @@ impl Hub {
                         history_boundary,
                         machine_lineage: None,
                         runtime_epochs: Default::default(),
+                        clear_pending: false,
                         log,
                         log_bytes,
                         event_count,
@@ -3014,6 +3017,7 @@ impl Hub {
                     history_boundary: context_rollover::HistoryBoundary::Known(None),
                     machine_lineage: None,
                     runtime_epochs: Default::default(),
+                    clear_pending: false,
                     log: Vec::new(),
                     log_bytes: 0,
                     event_count: 0,
