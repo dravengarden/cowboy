@@ -1253,7 +1253,7 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
         crate::machine_lanes::LANES.parse()?,
     );
     let lane_endpoint = endpoint.clone();
-    let (mut socket, response) = reconnect::dial(request).await?;
+    let (mut socket, response) = reconnect::dial(request, retry.dial_bound()).await?;
     let chunked = response
         .headers()
         .get(crate::machine_transport::HEADER)

@@ -17,7 +17,9 @@ use crate::machine_protocol::CONTROLLER_RECONNECT_MAX_BACKOFF_SECONDS;
 /// How long after a sustained connection ended failed dials retry quickly.
 const RAPID_WINDOW: Duration = Duration::from_secs(60);
 const RAPID_DELAY: Duration = Duration::from_secs(1);
-/// Bound on one dial and WebSocket handshake.
+/// Bound on one dial and WebSocket handshake inside the rapid window. Outside
+/// it a dial is unbounded as before, so a slow fallback address (a stalled
+/// first DNS answer) still connects once the window ends.
 const DIAL_BOUND: Duration = Duration::from_secs(10);
 
 /// The Controller could not be reached: no WebSocket was established.
@@ -33,19 +35,24 @@ impl std::fmt::Display for Unreachable {
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-/// Open the Controller WebSocket within [`DIAL_BOUND`]; a failure is
-/// [`Unreachable`].
+/// Open the Controller WebSocket, within `bound` when one is given; a failure
+/// is [`Unreachable`].
 pub(super) async fn dial(
     request: tokio_tungstenite::tungstenite::handshake::client::Request,
+    bound: Option<Duration>,
 ) -> anyhow::Result<(
     Socket,
     tokio_tungstenite::tungstenite::handshake::client::Response,
 )> {
-    match tokio::time::timeout(DIAL_BOUND, tokio_tungstenite::connect_async(request)).await {
-        Ok(Ok(connected)) => Ok(connected),
-        Ok(Err(error)) => Err(anyhow::Error::new(error).context(Unreachable)),
-        Err(elapsed) => Err(anyhow::Error::new(elapsed).context(Unreachable)),
-    }
+    let connect = tokio_tungstenite::connect_async(request);
+    let connected = match bound {
+        Some(bound) => match tokio::time::timeout(bound, connect).await {
+            Ok(connected) => connected,
+            Err(elapsed) => return Err(anyhow::Error::new(elapsed).context(Unreachable)),
+        },
+        None => connect.await,
+    };
+    connected.map_err(|error| anyhow::Error::new(error).context(Unreachable))
 }
 
 pub(super) async fn run(config: super::ControllerConfig) -> anyhow::Result<()> {
@@ -109,9 +116,20 @@ impl Backoff {
         delay
     }
 
+    /// The bound for the next dial: [`DIAL_BOUND`] inside the rapid window.
+    pub(super) fn dial_bound(&self) -> Option<Duration> {
+        self.rapid_until
+            .is_some_and(|until| Instant::now() < until)
+            .then_some(DIAL_BOUND)
+    }
+
     /// A dial failed before any WebSocket opened.
     pub(super) fn unreachable(&mut self, now: Instant) -> Duration {
-        if self.rapid_until.is_some_and(|until| now < until) {
+        // A rapid retry never starts past the window's end.
+        if self
+            .rapid_until
+            .is_some_and(|until| now + RAPID_DELAY < until)
+        {
             return RAPID_DELAY;
         }
         self.rapid_until = None;
@@ -169,8 +187,9 @@ mod tests {
             now += RAPID_DELAY;
             assert_eq!(retry.unreachable(now), RAPID_DELAY);
         }
-        // The window does not extend: afterwards the backoff resumes.
-        now = lost + RAPID_WINDOW;
+        // A failure in the window's last second does not retry past its end,
+        // and the window does not extend: the backoff resumes.
+        now = lost + RAPID_WINDOW - Duration::from_millis(500);
         assert_eq!(retry.unreachable(now), Duration::from_secs(2));
         assert_eq!(retry.unreachable(now), Duration::from_secs(4));
     }
@@ -196,5 +215,61 @@ mod tests {
         assert!(error.downcast_ref::<Unreachable>().is_some());
         assert_eq!(crate::logs::failure_reason(&error), "connection_refused");
         assert_eq!(format!("{error}"), "connecting Machine WebSocket");
+    }
+
+    fn request(port: u16) -> tokio_tungstenite::tungstenite::handshake::client::Request {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+        format!("ws://127.0.0.1:{port}/api/machine/connect")
+            .into_client_request()
+            .expect("request")
+    }
+
+    #[tokio::test]
+    async fn a_proxy_error_while_the_controller_is_down_is_a_failed_dial() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0; 1024];
+            let _ = socket.read(&mut buffer).await;
+            let _ = socket
+                .write_all(b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\n\r\n")
+                .await;
+        });
+        let error = dial(request(port), Some(DIAL_BOUND))
+            .await
+            .err()
+            .expect("refused");
+        assert!(error.downcast_ref::<Unreachable>().is_some());
+        assert_eq!(crate::logs::failure_reason(&error), "websocket_handshake");
+    }
+
+    #[tokio::test]
+    async fn a_stalled_upgrade_is_cut_by_the_bound_as_a_failed_dial() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // Accepts and never answers the upgrade.
+        let held = tokio::spawn(async move { listener.accept().await });
+        let error = dial(request(port), Some(Duration::from_millis(200)))
+            .await
+            .err()
+            .expect("cut");
+        assert!(error.downcast_ref::<Unreachable>().is_some());
+        assert_eq!(crate::logs::failure_reason(&error), "timeout");
+        held.abort();
+    }
+
+    #[test]
+    fn dials_are_bounded_only_inside_the_rapid_window() {
+        let mut retry = Backoff::default();
+        assert_eq!(retry.dial_bound(), None);
+        retry.connected(Instant::now() - Duration::from_secs(600));
+        retry.disconnected(Instant::now());
+        assert_eq!(retry.dial_bound(), Some(DIAL_BOUND));
     }
 }
