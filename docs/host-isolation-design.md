@@ -1,6 +1,6 @@
 # Host isolation: heartbeat attribution now, liveness split and identity boundary next
 
-Status: **design, revision 3, not implemented.** Nothing here is activated on
+Status: **design, revision 3.1, not implemented.** Nothing here is activated on
 any host. Every step that touches networking, firewall rules, sudo policy or a
 deployment activation needs explicit owner confirmation before switching (see
 [Flags](#flags-needing-explicit-owner-confirmation)).
@@ -20,7 +20,7 @@ Review history (Codex Astra Max, risk high):
     round-1 findings were not in its input.
   - It reported 1 critical and about 14 high findings, all in that split and
     its heartbeat lane.
-- **Revision 3 (this one)** narrows again:
+- **Revision 3** narrows again:
   - **[L0](#l0-requirements), heartbeat stall attribution, is the only
     implementable scope.** It is broker-side observation with no behavior
     change, and it ships as a resident Machine release.
@@ -29,6 +29,12 @@ Review history (Codex Astra Max, risk high):
   - **[Part I](#part-i-identity-boundary-target-and-binding-requirements)**
     stays a target with binding requirements, and is not
     implementation-ready.
+  - Round 3, `call-02abbc2e4c84c950790749d3` (Sol Max, routine), completed
+    with verdict `needs-attention`: 5 high and 7 medium findings.
+- **Revision 3.1 (this one)** folds all round-3 findings into L0, L-S1, L-L1,
+  I-6, the sandbox claim and D6. These amendments are unreviewed, because the
+  three-round review budget is used up. The next review starts with L0's
+  implementation, not with this design.
 
 ## Why
 
@@ -104,74 +110,129 @@ remedies.
 
 ### L0 requirements
 
-- **L0-1. Gap record.** On every worker heartbeat gap above 20 s, and on every
-  heartbeat-timeout isolation, the broker records one structured event
-  (Machine telemetry and journal). It records no secrets. The fields are:
-  - the session, worker epoch and unit name;
-  - the gap, and the last and current heartbeat receive times;
-  - broker read state for that connection: whether a frame is in progress,
-    its declared length and bytes read so far, the unread backlog, and
-    whether the backlog deferral (`WORKER_BACKLOG_ISOLATION_LIMIT`) was
-    applied;
-  - for the worker unit's cgroup and each ancestor up to `user@<uid>.service`:
-    the `cpu.pressure`, `memory.pressure` and `io.pressure` totals and the
-    delta since the previous heartbeat, `memory.events` (`high`, `max`, `oom`)
-    deltas, and `memory.current`;
-  - the same pressure totals for the broker's own cgroup, plus the host
-    `/proc/pressure/*`, so a broker stall is distinguishable;
-  - the broker's own event-loop lag over the gap, measured by a periodic tick.
-- **L0-2. Baseline sampler.** For PSI deltas to cover the gap, the broker
-  keeps the previous sample of each live worker's cgroup counters at heartbeat
-  receive. It reads only files below the worker's verified unit cgroup
-  (`ControlGroup` from the user manager). It reads with
-  `openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS)` under
-  `/sys/fs/cgroup`, and fails closed per field (`unavailable`), never per
-  session.
-- **L0-3. Bounded cost.** The sampler reads about a dozen small files per
-  worker per heartbeat (10 s). At `--max-sessions 128` that is well under 1%
-  of one CPU. A configured kill switch disables it.
-- **L0-4. No behavior change.** L0 changes none of these:
-  - isolation decisions, timeouts or the backlog limit;
-  - the wire, worker or adapter;
-  - units or slices.
+Revision 3.1 amends this section with the round-3 findings
+(`call-02abbc2e4c84c950790749d3`, verdict `needs-attention`). The review rounds
+are used up, so these amendments are **unreviewed**.
 
-  It also changes no `Cargo.toml`, `Cargo.lock`, `components/wire/src` or SDK
-  file. Those are the retained-worker interface inputs that host releases
-  require to be byte-identical (`flake.nix:956-969`). L0 therefore ships as a
-  resident Machine fix.
-- **L0-5. Reproduction.** In a NixOS test VM with the same slice settings
-  (not on production), run `stress-ng` CPU, VM at `MemoryHigh`, I/O, and a
-  32 MiB-frame flood separately. Record which loads reproduce gaps above 45 s
-  and what L0-1 shows for each. The Hawk record from production then
-  classifies real incidents against this matrix.
-- **L0-6. Decision gate.** After two weeks, or after five recorded gaps, the
+- **L0-1. Gap record.** The broker records one bounded, typed event in two
+  cases:
+  - when a worker heartbeat gap exceeds 20 s;
+  - on every isolation, including one with no closing heartbeat.
+
+  The event goes to the journal and to Machine telemetry. It holds no secrets
+  and contains:
+  - the session, the worker epoch, the connection id, and the unit name with
+    its bound `InvocationID` (L0-2);
+  - **separate clocks**:
+    - the last heartbeat receive time;
+    - the last decoded-frame time (`last_seen` is refreshed by every frame,
+      `machine_broker.rs:4848-4853`);
+    - the last read-progress time;
+    - the sweep decision actually taken: evict, backlog extension, or none
+      (`machine_broker.rs:996-1032`);
+  - **frame progress during the gap**, kept as bounded per-connection
+    observations updated by the existing reader, not reconstructed at
+    heartbeat receipt:
+    - the header-read, payload-read, decode and admission phase;
+    - the declared length, bytes read so far, and the last progress time;
+    - the queued bytes (`FIONREAD`).
+
+    The reader's framing semantics are unchanged. In particular L0 does not
+    switch to `FrameReader`, whose partial-header EOF handling differs
+    (`runtime_wire.rs:1094-1112,1148-1161`);
+  - **pressure samples** (L0-2) covering the gap, with their coverage window.
+    They are labelled correlation, not cause;
+  - the broker's own event-loop lag, which is necessary but not sufficient:
+    a healthy tick can coexist with one stalled connection.
+- **L0-2. Sampler.**
+  - **Binding.** The cgroup identity is resolved only on a new or adopted
+    connection. It comes from a bounded, read-only user-manager query for the
+    derived `.service` (`ControlGroup`, `InvocationID`, `MainPID`). The
+    result is verified against the kernel peer of the broker connection
+    (`SO_PEERCRED` pid membership in that cgroup) and bound to the
+    connection. Unit names are reused across launches, so samples from a
+    stale binding are discarded. Direct mode, and an identity that cannot be
+    resolved, record `unavailable`.
+  - **Scopes.** Fixed counter files are read from validated directories on
+    the cgroup v2 mount:
+    - the worker unit;
+    - every ancestor up to the root, including OVH's capped
+      `user-1000.slice` (L-S11);
+    - the broker's own unit;
+    - the host `/proc/pressure/*`, from a separate proc scope.
+  - **Files.** `cpu.pressure`, `memory.pressure`, `io.pressure`,
+    `memory.events`, `memory.events.local`, `memory.current`, and the outer
+    `memory.high` and `memory.max` limits. Reads use
+    `openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS)` under each validated
+    root. A failure marks that field `unavailable`, never the session.
+- **L0-3. Bounded cost, off the critical paths.**
+  - Sampling and logging never run on the connection reader, the heartbeat
+    monitor or the sweep.
+  - One sampler task runs on a fixed period. It deduplicates shared ancestor
+    scopes (the slice, `user@`, root and host are read once per period, not
+    once per worker), has a fixed concurrency and a bounded queue, and
+    coalesces or drops when behind. Drops are counted.
+  - Overhead is measured under the L0-5 loads before activation.
+  - The kill switch is a Device setting in the schema of the release that
+    introduces it ([rollback](#l0-rollout)).
+- **L0-4. No behavior change.**
+  - L0 does not change isolation decisions, timeouts, the backlog limit, the
+    wire, the worker, the adapter, units or slices.
+  - It does not change `Cargo.toml`, `Cargo.lock`, `components/wire/src` or
+    any SDK file. These are the retained-worker interface inputs that host
+    releases require to be byte-identical (`flake.nix:956-969`).
+- **L0-5. Reproduction.** Run in a NixOS test VM with the same slice settings,
+  never on production. Apply each load separately:
+  - `stress-ng` CPU;
+  - `stress-ng` VM at `MemoryHigh`;
+  - I/O;
+  - a 32 MiB-frame flood.
+
+  Record which loads reproduce gaps above 45 s, and what L0-1 shows for each.
+  Production records from Hawk are then classified against this matrix.
+- **L0-6. Telemetry sinks.** The Machine telemetry bridge keeps an explicit
+  field allowlist and has no structured value visitor
+  (`src/logs/capture.rs:699-883`). The gap record is therefore a bounded,
+  typed event with an explicit allowlisted projection. Its retrieval is
+  verified from both sinks, the journal and VictoriaLogs. A dropped or
+  truncated record is counted. An observation window with drops does not
+  count as clean.
+- **L0-7. Decision gate.** After two weeks, or after five recorded gaps, the
   owner selects the remedy from the data:
-  - shared memory throttling → first apply the policy the execution units
-    already use: drop the slice `MemoryHigh` in favor of `MemoryMax` with
-    per-unit limits, and measure again; take the split only if that is
-    insufficient;
-  - frame blocking → L-lane;
-  - CPU or I/O → weights, then the split;
-  - broker stall → a broker-side design.
+
+  | Data shows | Remedy |
+  |---|---|
+  | Shared memory throttling | First the execution-unit policy: drop the slice `MemoryHigh` in favor of `MemoryMax` plus per-unit limits. Measure again; split only if that is insufficient |
+  | Frame blocking | L-lane |
+  | CPU or I/O pressure | Weights, then the split |
+  | A broker stall | A broker-side design |
 
 ### L0 rollout
 
 | Step | What | Deploys via | Rollback | Flags |
 |---|---|---|---|---|
-| L0-a | Broker gap record and sampler | `.#cowboy-machine-writer-host-release` on Hawk (active deletion writer; resident-only, because `machine_broker.rs` is not among the host-release byte-identity inputs). OVH and Falcon use the resident-fix output that their maintenance runbooks select. **Never `.#cowboy-machine-release` on Hawk while the writer is active** | Previous resident release | Machine component activation (restarts only the resident Machine; workers are retained) |
+| L0-0 | **Pin compatibility preflight.** On the exact integrated commit, `retained-worker-interface-compatible` must hold. As of `789e64c24`, `Cargo.toml` and `Cargo.lock` already differ from the pinned worker source `1da02869a`, so no host release builds from `main` | Build check only | n/a | If incompatible, L0 waits for, or rides on, a **separately approved worker pin advance** (`docs/machine-worker-pin-advance-runbook.md`). That replaces every live Hawk worker generation |
+| L0-a | The broker gap record and the sampler | `.#cowboy-machine-writer-host-release` on Hawk (active deletion writer). OVH and Falcon use the resident-fix output their runbooks select. **Never `.#cowboy-machine-release` on Hawk while the writer is active** | See the next row | Machine component activation: restarts only the resident Machine and retains workers |
+| L0-a′ | Rollback | The previous admitted resident release that keeps both writers and the accepted worker generation | 1. Remove the kill-switch key from the Device configuration, or restore a configuration the rollback binary accepts (older Machines reject unknown keys: `docs/configuration.md:45-69`, `machine_cli.rs:513-521`). 2. Validate with that binary's `cowboy config check`. 3. Activate, then verify worker and keeper identities are retained | Machine component activation |
 | L0-b | VM reproduction | No host | n/a | None |
 
-L0 needs no worker pin advance, no Columbus change and no network change.
+L0 needs no Columbus change and no network change. It needs a worker pin
+advance only if L0-0 fails.
 
 ### L-split requirements (deferred)
 
 These requirements bind any future unit split. They come from revision 2 plus
 round 2.
 
-- **L-S1. Exit proof covers both trees.** Persist the worker's and the
-  agent's boot, launch, `InvocationID` and cgroup identities. Require
-  broker-confirmed exit of both trees before revocation, cleanup or
-  replacement. A killed worker cannot report its agent's exit.
+- **L-S1. Exit proof covers both trees.** Persist the boot, launch,
+  `InvocationID` and cgroup identities of both the worker and the agent.
+  - Write the durable revocation fence first, as today
+    (`docs/requirements.md:434-449`, `machine_broker.rs:2325-2359`).
+  - Then require broker-confirmed exit of both trees before cleanup,
+    replacement or declaring revocation complete. A killed worker cannot
+    report its agent's exit.
+  - Keep the separate account-sandbox confirmation
+    (`machine_broker.rs:2815`).
   - Today named-account tree exit checks only the worker cgroup
     (`machine_broker/systemd_exit.rs:308-319`, `machine_broker.rs:1684-1692,1751-1759`).
 - **L-S2. Scope.** The new launcher applies only to the local-child branch in
@@ -231,7 +292,8 @@ round 2.
   - Liveness needs an independently serviced transport bound to the worker
     epoch and connection, including during replay.
   - Stalled data progress is tracked separately, so heartbeats cannot mask
-    the 300 s limit (`runtime_wire.rs:47,1082-1109`,
+    stalls. Define an explicit data-progress deadline; today's 300 s branch
+    is a backlog allowance tied to frame inactivity (`runtime_wire.rs:47,1082-1109`,
     `machine_broker.rs:996-1023,4848-4850`).
 - **L-L2. ACK ordering.** `CommandAck` is released only after its required
   runtime sequence (for example `TurnStarted`) has been sent
@@ -401,6 +463,12 @@ identity, including a prompt-injected one.
 
 This covers S3 and O3 from revision 1.
 
+- **Fresh inodes for control state.** The I-8 rule applies to Machine control
+  state and credential files too. Publishing by rename and chown leaves a
+  writable descriptor held by the old UID usable. Test with old-UID
+  descriptors held open through both cutover and rollback. Task worktrees
+  keep their inodes, because cleanup records require them.
+
 - **Writer-capable releases only.**
   - Never deploy a `writer=false` release on a host with an active deletion
     writer (`flake.nix:1053`, `machine_broker.rs:1403`).
@@ -494,7 +562,7 @@ mutually dependent units atomically.
   - Landlock through `exec-confined`.
 - **Network.** Per-unit `IPAddressDeny=any` plus an allowlist, and nftables
   `meta skuid` / `socket cgroupv2` rules, as `matrix-agent` uses on Hawk.
-- **Authentication.** A gateway peer check yields `sandbox(S, server)`.
+- **Authentication.** A gateway peer check yields `sandbox(S, server)`. That claim is authority only when sandbox UIDs are not shared across sessions or servers, by the same rule as I-5.
 
 Nothing beyond placement is designed here.
 
@@ -541,5 +609,7 @@ Nothing beyond placement is designed here.
   require owner approval for it.
 - **D5. Budgets for a later split.** The `cowboy-control.slice` `MemoryLow`,
   the task `TasksMax`, and the OVH numbers.
-- **D6. Origin ordering.** Whether per-session agent identities (I-5) must
-  exist before Antigravity round 3 uses `agent(S)` as an origin.
+- **D6 (now binding, not a choice).** Per-session execution identities and
+  writable homes (I-5) are a prerequisite for using `agent(S)` as authority.
+  Antigravity round 3 may carry `agent(S)` only as observed-unit provenance
+  until then.
