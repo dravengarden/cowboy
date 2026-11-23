@@ -15,6 +15,7 @@
 
 mod delivery;
 pub mod launch_gate;
+mod session_lifecycle;
 use launch_gate::refuse_trashed;
 
 use parking_lot::Mutex;
@@ -586,7 +587,7 @@ impl Supervisor {
         command: AgentCommand,
         trace: Option<crate::runtime_trace::TraceCarrier>,
     ) -> Result<(), String> {
-        self.send_traced_after_execution_recovery(session_id, command, trace, None)
+        self.send_traced_after_execution_recovery(session_id, command, trace, None, None)
     }
 
     fn delivery_admission(
@@ -607,12 +608,14 @@ impl Supervisor {
         admission.map(|admit| admit(session_id)).transpose()
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn send_traced_after_execution_recovery(
         &self,
         session_id: &str,
         command: AgentCommand,
         trace: Option<crate::runtime_trace::TraceCarrier>,
         recovery: Option<crate::execution_environment::RecoveryV1>,
+        explicit_command_id: Option<String>,
     ) -> Result<(), String> {
         let _lifecycle = self.lifecycle.lock();
         if recovery.is_some() && !matches!(command, AgentCommand::Prompt(..)) {
@@ -688,19 +691,36 @@ impl Supervisor {
                     cmid.as_deref(),
                     blocks,
                 )?;
+                if runtime.recovery_failed(session_id) {
+                    return Err(
+                        "Execution recovery failed; prompt held until recovery succeeds".into(),
+                    );
+                }
                 let session = self.start_session(session_id)?;
                 if self.is_dormant(&runtime, session_id) {
-                    // Project Starting at once, as an open used to, so the
-                    // client shows the wake for the whole launch.
-                    runtime.revive(session);
-                    let listener = self.wake_listener.lock().clone();
-                    if let Some(listener) = listener {
+                    // Project Starting and enqueue the prompt atomically with
+                    // `disconnect()` so a disconnect between revive and prompt
+                    // enqueue can never strand the parent in `Starting` (Round 3 #10).
+                    runtime.revive_and_try_prompt_traced_with_command_id(
+                        session,
+                        content,
+                        cmid,
+                        trace,
+                        explicit_command_id,
+                    )?;
+                    if let Some(listener) = self.wake_listener.lock().clone() {
                         listener(session_id);
                     }
                 } else {
                     runtime.ensure_current_mcp_plan(session);
+                    runtime.try_prompt_traced_with_command_id(
+                        session_id,
+                        content,
+                        cmid,
+                        trace,
+                        explicit_command_id,
+                    )?;
                 }
-                runtime.prompt_traced(session_id, content, cmid, trace);
             }
             AgentCommand::Steer { .. } | AgentCommand::CancelTurn { .. } => {
                 unreachable!("steering has separate admission")
@@ -1177,9 +1197,9 @@ impl Supervisor {
             .and_then(|b| b.decode().ok())
             .ok_or("missing execution binding")?;
         if runtime.worker_matches_execution(session_id, &binding) {
-            runtime.retry_execution_recovery(session);
+            runtime.retry_execution_recovery(session)?;
         } else {
-            runtime.recover_execution(session, intent);
+            runtime.recover_execution(session, intent)?;
         }
         Ok(())
     }
@@ -1352,148 +1372,6 @@ impl Supervisor {
             self.recycle_session_inner(session_id)?;
         }
         Ok(session_ids)
-    }
-
-    /// Validate a session's persisted cwd before any operation that may reuse a
-    /// worker. A migrated cwd or crashed worker fences and replaces exactly that
-    /// session's worker; the Cowboy id and native agent session id remain
-    /// unchanged. Recycling crashed workers is important when a checkout was
-    /// replaced at the same pathname: the metadata still looks valid while the
-    /// old app-server process holds the deleted directory inode.
-    /// Split-runtime retries defer worker preparation to dispatch preflight,
-    /// which must verify the target lifetime before launching any replacement.
-    pub fn prepare_session(&self, session_id: &str) -> Result<bool, String> {
-        let _lifecycle = self.lifecycle.lock();
-        if self.should_hold_native_restore_failure(session_id) {
-            return Err(crate::provider_behavior::NATIVE_RESTORE_TIMEOUT_HOLD.to_owned());
-        }
-        refuse_trashed(&self.hub, session_id)?;
-        if self
-            .hub
-            .session_info(session_id)
-            .is_some_and(|info| info.meta.execution_binding.is_some())
-        {
-            // Retry must enqueue before launching a split-runtime worker. The
-            // dispatch preflight first asks the target whether its lifetime
-            // survived; only target-proven loss permits a new incarnation.
-            // Eagerly recycling here launches against the stale binding and
-            // can crash before dispatch gets a chance to recover it.
-            return Ok(false);
-        }
-        self.prepare_session_inner(session_id)
-    }
-
-    fn prepare_session_inner(&self, session_id: &str) -> Result<bool, String> {
-        refuse_trashed(&self.hub, session_id)?;
-        let migrated = self.resolve_and_persist_cwd(session_id)?;
-        let session = self
-            .hub
-            .session_list()
-            .into_iter()
-            .find(|meta| meta.id == session_id);
-        // A session whose workspace preparation failed or was interrupted
-        // still points at the stable source checkout. Recycling would launch
-        // a worker there, which the Machine refuses, and leave the session
-        // permanently crashed. Workspace preparation owns its first launch.
-        if session
-            .as_ref()
-            .is_some_and(crate::model::SessionMeta::awaits_workspace_preparation)
-            && !self.has_worker(session_id)
-        {
-            return Ok(false);
-        }
-        let crashed = session
-            .as_ref()
-            .is_some_and(|meta| meta.status == Status::Crashed);
-        if !migrated && !crashed {
-            return Ok(false);
-        }
-        if crashed && !migrated && self.live_recoverable_turn_failure(session_id) {
-            tracing::info!(
-                session = session_id,
-                "reusing live ACP worker after recoverable provider turn failure"
-            );
-            return Ok(false);
-        }
-        if crashed && !migrated {
-            tracing::warn!(
-                session = session_id,
-                "recycling crashed worker before session resume"
-            );
-        }
-        self.recycle_session_inner(session_id)?;
-        Ok(true)
-    }
-
-    fn resolve_and_persist_cwd(&self, session_id: &str) -> Result<bool, String> {
-        let meta = self
-            .hub
-            .session_list()
-            .into_iter()
-            .find(|meta| meta.id == session_id)
-            .ok_or_else(|| format!("unknown session {session_id:?}"))?;
-        meta.require_runtime_launch()?;
-        // Remote paths belong to the selected Machine and are validated by
-        // its trusted-workspace boundary. Never reinterpret them against the
-        // controller's local workspace layout during resume.
-        if meta.machine_id != "local" {
-            return Ok(false);
-        }
-        let stored_cwd = PathBuf::from(&meta.cwd);
-        let resolved = resolve_session_workspace(&self.workspace_root, &stored_cwd)?;
-        if !resolved.changed {
-            return Ok(false);
-        }
-        self.hub
-            .update_session_cwd(session_id, resolved.path.display().to_string())?;
-        tracing::warn!(
-            session = session_id,
-            old_cwd = %meta.cwd,
-            new_cwd = %resolved.path.display(),
-            project = ?resolved.project,
-            resume = ?meta.agent_session_id,
-            "retargeting session after workspace migration"
-        );
-        Ok(true)
-    }
-
-    fn should_hold_native_restore_failure(&self, session_id: &str) -> bool {
-        let Some(meta) = self
-            .hub
-            .session_list()
-            .into_iter()
-            .find(|meta| meta.id == session_id)
-        else {
-            return false;
-        };
-        if meta.status != Status::Crashed {
-            return false;
-        }
-        self.hub
-            .latest_crash_detail(session_id)
-            .as_deref()
-            .is_some_and(crate::provider_behavior::is_native_session_restore_timeout)
-    }
-
-    fn recycle_session_inner(&self, session_id: &str) -> Result<(), String> {
-        let runtime = self.runtime_for_session(session_id)?;
-        let session = self.start_session(session_id)?;
-        self.hub.set_status(session_id, Status::Starting, None);
-        runtime.reset(session);
-        Ok(())
-    }
-
-    fn runtime_for_session(&self, session_id: &str) -> Result<Arc<RemoteRuntime>, String> {
-        let machine_id = self
-            .hub
-            .session_list()
-            .into_iter()
-            .find(|meta| meta.id == session_id)
-            .map(|meta| meta.machine_id)
-            .ok_or_else(|| format!("unknown session {session_id:?}"))?;
-        self.router
-            .runtime(&machine_id)
-            .ok_or_else(|| format!("machine {machine_id:?} is not connected"))
     }
 }
 
@@ -2070,7 +1948,13 @@ mod tests {
         let prompt = || AgentCommand::Prompt(Vec::new(), Some("new-prompt".into()), None);
         assert!(
             supervisor
-                .send_traced_after_execution_recovery("s", prompt(), None, Some(intent.clone()))
+                .send_traced_after_execution_recovery(
+                    "s",
+                    prompt(),
+                    None,
+                    Some(intent.clone()),
+                    None
+                )
                 .unwrap_err()
                 .contains("Waiting for resources")
         );
@@ -2090,7 +1974,7 @@ mod tests {
             Ok(Box::new(()))
         }));
         supervisor
-            .send_traced_after_execution_recovery("s", prompt(), None, Some(intent))
+            .send_traced_after_execution_recovery("s", prompt(), None, Some(intent), None)
             .unwrap();
         assert_eq!(admissions.load(std::sync::atomic::Ordering::SeqCst), 1);
         let pending = runtime.pending_for_test();

@@ -68,6 +68,29 @@ impl RuntimeRouter {
         }
     }
 
+    /// Atomically install `runtime` for `machine_id` only while `predicate`
+    /// still holds (for example, while the owning control connection is still
+    /// current). Prevents a superseded Machine socket from overwriting a newer
+    /// connection's runtime.
+    pub fn install_if<F>(
+        &self,
+        machine_id: String,
+        runtime: Arc<RemoteRuntime>,
+        predicate: F,
+    ) -> bool
+    where
+        F: FnOnce() -> bool,
+    {
+        let mut runtimes = self.runtimes.write();
+        if !predicate() {
+            return false;
+        }
+        if let Some(previous) = runtimes.insert(machine_id, runtime) {
+            previous.disconnect();
+        }
+        true
+    }
+
     /// Stop consuming every runtime's events before persistence closes. An
     /// event this Controller does not consume is not acknowledged, so its
     /// worker replays it to the next Controller instead of losing it.
@@ -151,5 +174,18 @@ mod tests {
 
         assert!(router.runtime("macbook-air").is_none());
         assert!(!runtime.connected());
+    }
+
+    #[tokio::test]
+    async fn install_if_rejects_superseded_connection_without_disturbing_current() {
+        let router = RuntimeRouter::new();
+        let current = RemoteRuntime::for_test(Hub::new(), Vec::new());
+        let stale = RemoteRuntime::for_test(Hub::new(), Vec::new());
+        assert!(router.install_if("hawk".to_owned(), Arc::clone(&current), || true));
+        assert!(!router.install_if("hawk".to_owned(), Arc::clone(&stale), || false));
+        assert!(Arc::ptr_eq(
+            &router.runtime("hawk").expect("current runtime preserved"),
+            &current
+        ));
     }
 }

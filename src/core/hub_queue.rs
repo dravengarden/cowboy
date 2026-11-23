@@ -42,26 +42,7 @@ impl Hub {
     /// Re-broadcast (and persist) a session's queue + drafts after any change.
     /// Re-locks `sessions`, so callers MUST NOT hold the lock when calling.
     pub(super) fn emit_pending(&self, session_id: &str) {
-        let (queue, drafts) = {
-            let sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get(session_id) else {
-                return;
-            };
-            (s.queue.clone(), s.drafts.clone())
-        };
-        if let Some(tx) = self.inner.store_tx.as_ref() {
-            let _ = tx.send(StoreWrite::UpdatePending {
-                session_id: session_id.to_owned(),
-                queue: queue.clone(),
-                drafts: drafts.clone(),
-            });
-        }
-        // Broadcast on the generic optimistic-sync channel as state "queue:<sid>".
-        // Confirmed = the cmids in the value, so a client drops its optimistic add
-        // the moment its cmid lands here (the cross-terminal reconcile).
-        let confirmed = Self::cmids_of(&queue, &drafts);
-        let value = serde_json::json!({ "queue": queue, "drafts": drafts });
-        self.sync_emit(&format!("queue:{session_id}"), value, confirmed);
+        self.emit_pending_with_notice_ops(session_id, Vec::new(), Vec::new());
     }
 
     pub(super) fn send_dispatch(&self, req: DispatchReq) {
@@ -132,7 +113,9 @@ impl Hub {
         text: String,
         content: Vec<serde_json::Value>,
     ) -> bool {
-        if self.inner.dispatch_tx.lock().is_none() {
+        if self.reject_reserved_notice_cmid(session_id, Some(operation))
+            || self.inner.dispatch_tx.lock().is_none()
+        {
             return false;
         }
         let req = {
@@ -253,6 +236,15 @@ impl Hub {
                 self.context_allows_dispatch(session_id, cmid)
             });
             if decision != DrainDecision::Dispatch {
+                return;
+            }
+            if s.queue.first().is_some_and(|head| {
+                self.is_row_withdrawing(session_id, &head.id)
+                    || head
+                        .cmid
+                        .as_deref()
+                        .is_some_and(|cid| self.is_notice_withdrawing(session_id, cid))
+            }) {
                 return;
             }
             let head = s.queue.remove(0);
@@ -429,6 +421,21 @@ impl Hub {
             self.abandon_superagent_prompt(session_id, id);
             return;
         }
+        let released_claims: Vec<crate::store::NoticeClaimRelease> = cmid
+            .as_deref()
+            .filter(|id| id.starts_with(crate::agent_model::CALL_NOTICE_PREFIX))
+            .and_then(|id| self.take_requeue_claim_release(session_id, id))
+            .map(|(cid, stamp, cmd_id)| crate::store::NoticeClaimRelease {
+                completion_id: cid,
+                expected_stamp: Some(stamp),
+                expected_command_id: Some(cmd_id.clone()),
+                expected_worker_epoch: None,
+                require_worker_epoch_match: false,
+                receipt_key: format!("requeue:{cmd_id}"),
+                reconcile_only: false,
+            })
+            .into_iter()
+            .collect();
         let original = content.len();
         let content =
             crate::session_context::without_preamble(self, session_id, cmid.as_deref(), content);
@@ -442,7 +449,7 @@ impl Hub {
         } else {
             text
         };
-        {
+        let inserted = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
@@ -459,21 +466,25 @@ impl Hub {
             if let Some(c) = cmid.as_deref()
                 && s.queue.iter().any(|m| m.cmid.as_deref() == Some(c))
             {
-                return;
+                false
+            } else {
+                let id = self.next_qid();
+                s.queue.insert(
+                    0,
+                    QueuedMessage {
+                        id,
+                        text,
+                        content,
+                        cmid,
+                        schedule: None,
+                    },
+                );
+                true
             }
-            let id = self.next_qid();
-            s.queue.insert(
-                0,
-                QueuedMessage {
-                    id,
-                    text,
-                    content,
-                    cmid,
-                    schedule: None,
-                },
-            );
+        };
+        if inserted || !released_claims.is_empty() {
+            self.emit_pending_with_notice_ops(session_id, Vec::new(), released_claims);
         }
-        self.emit_pending(session_id);
     }
 
     /// Queue-aware send: dispatch immediately when the session is idle and
@@ -486,6 +497,9 @@ impl Hub {
         content: Vec<serde_json::Value>,
         cmid: Option<String>,
     ) {
+        if self.reject_reserved_notice_cmid(session_id, cmid.as_deref()) {
+            return;
+        }
         self.submit_inner(session_id, text, content, cmid, false, false);
     }
 
@@ -533,7 +547,9 @@ impl Hub {
         cmid: Option<String>,
         interrupt_on_busy: bool,
     ) -> Option<bool> {
-        if self.is_managed_child(session_id) {
+        if self.is_managed_child(session_id)
+            || self.reject_reserved_notice_cmid(session_id, cmid.as_deref())
+        {
             return None;
         }
         let wired = self.inner.dispatch_tx.lock().is_some();
@@ -671,19 +687,20 @@ impl Hub {
 
     /// Drop one queued prompt. Returns whether the row was still queued.
     pub fn remove_queued(&self, session_id: &str, id: &str) -> bool {
-        let removed = {
+        let (removed, settled) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
             };
+            let settled = submit::extract_notice_settlements(s.queue.iter().filter(|m| m.id == id));
             let before = s.queue.len();
             s.queue.retain(|m| m.id != id);
             if s.editing.as_deref() == Some(id) {
                 s.editing = None;
             }
-            before != s.queue.len()
+            (before != s.queue.len(), settled)
         };
-        self.emit_pending(session_id);
+        self.emit_pending_with_notice_ops(session_id, settled, Vec::new());
         self.try_drain(session_id);
         removed
     }
@@ -721,42 +738,50 @@ impl Hub {
         text: String,
         content: Vec<serde_json::Value>,
     ) -> bool {
-        let found = {
+        let (found, settled) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
             };
             if text.trim().is_empty() && content.is_empty() {
+                let settled =
+                    submit::extract_notice_settlements(s.queue.iter().filter(|m| m.id == id));
                 let before = s.queue.len();
                 s.queue.retain(|m| m.id != id);
                 if s.editing.as_deref() == Some(id) {
                     s.editing = None;
                 }
-                before != s.queue.len()
+                (before != s.queue.len(), settled)
             } else if let Some(m) = s.queue.iter_mut().find(|m| m.id == id) {
+                let settled = submit::extract_notice_settlements(std::iter::once(&*m));
+                if !settled.is_empty() {
+                    m.cmid = None;
+                }
                 m.text = text;
                 m.content = content;
-                true
+                (true, settled)
             } else {
-                false
+                (false, Vec::new())
             }
         };
-        self.emit_pending(session_id);
+        self.emit_pending_with_notice_ops(session_id, settled, Vec::new());
         self.try_drain(session_id);
         found
     }
 
     /// Drop a session's whole queue.
     pub fn clear_queue(&self, session_id: &str) {
-        {
+        let settled = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            let settled = submit::extract_notice_settlements(s.queue.iter());
             s.queue.clear();
             s.editing = None;
-        }
-        self.emit_pending(session_id);
+            settled
+        };
+        self.emit_pending_with_notice_ops(session_id, settled, Vec::new());
     }
 
     /// "Send now": move a queued prompt to the front, then dispatch it. This is
@@ -895,22 +920,27 @@ impl Hub {
 
     /// Move a queued prompt back to drafts.
     pub fn queued_to_draft(&self, session_id: &str, id: &str) {
-        {
+        let settled = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
             if let Some(pos) = s.queue.iter().position(|m| m.id == id) {
-                let m = s.queue.remove(pos);
+                let mut m = s.queue.remove(pos);
+                let settled = submit::extract_notice_settlements(std::iter::once(&m));
+                if !settled.is_empty() {
+                    m.cmid = None;
+                }
                 if s.editing.as_deref() == Some(id) {
                     s.editing = None;
                 }
                 s.drafts.push(m);
+                settled
             } else {
                 return;
             }
-        }
-        self.emit_pending(session_id);
+        };
+        self.emit_pending_with_notice_ops(session_id, settled, Vec::new());
         self.try_drain(session_id);
     }
 
@@ -962,6 +992,9 @@ impl Hub {
         content: Vec<serde_json::Value>,
         cmid: Option<String>,
     ) {
+        if self.reject_reserved_notice_cmid(session_id, cmid.as_deref()) {
+            return;
+        }
         let duplicate;
         {
             let mut sessions = self.inner.sessions.lock();
@@ -1012,6 +1045,9 @@ impl Hub {
         fire_at_ms: i64,
         delivery: Delivery,
     ) {
+        if self.reject_reserved_notice_cmid(session_id, cmid.as_deref()) {
+            return;
+        }
         let draft_id = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -1332,7 +1368,9 @@ impl Hub {
 
     /// Activate one draft: remove it from drafts and submit it (send-or-queue).
     pub fn activate_draft(&self, session_id: &str, id: &str, cmid: Option<String>) {
-        if self.is_managed_child(session_id) {
+        if self.is_managed_child(session_id)
+            || self.reject_reserved_notice_cmid(session_id, cmid.as_deref())
+        {
             return;
         }
         let msg = {
@@ -1352,9 +1390,10 @@ impl Hub {
                 self.cancel_draft_timer(session_id, id);
                 self.broadcast_sessions();
             }
-            // Echo the explicit send identity so the sender can retire its
-            // optimistic bubble. Older clients retain the draft's identity.
-            self.submit(session_id, m.text, m.content, cmid.or(m.cmid));
+            let fallback_cmid = m
+                .cmid
+                .filter(|id| !crate::agent_model::is_reserved_call_notice_cmid(id));
+            self.submit(session_id, m.text, m.content, cmid.or(fallback_cmid));
         }
     }
 
@@ -1381,8 +1420,11 @@ impl Hub {
                 self.cancel_draft_timer(session_id, &m.id);
                 had_scheduled = true;
             }
-            // Bulk activation preserves the same identity as a single send.
-            self.submit(session_id, m.text, m.content, m.cmid);
+            // Strip legacy reserved notice cmids so parked drafts activate cleanly.
+            let cmid = m
+                .cmid
+                .filter(|id| !crate::agent_model::is_reserved_call_notice_cmid(id));
+            self.submit(session_id, m.text, m.content, cmid);
         }
         if had_scheduled {
             self.broadcast_sessions();

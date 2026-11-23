@@ -138,6 +138,10 @@ pub(super) async fn event(
             .and_then(|worker| worker.launch.as_ref())
             .is_some_and(|launch| !launch.provider_account_id.is_default());
     if !named {
+        let fenced = shared.projection_fence.lock();
+        if *fenced || shared.shutdown.load(Ordering::Acquire) {
+            return false;
+        }
         project();
         return true;
     }
@@ -186,6 +190,10 @@ pub(super) async fn snapshot(
             .as_ref()
             .is_some_and(|launch| !launch.provider_account_id.is_default());
     if !named {
+        let fenced = shared.projection_fence.lock();
+        if *fenced || shared.shutdown.load(Ordering::Acquire) {
+            return false;
+        }
         project();
         return true;
     }
@@ -210,8 +218,10 @@ pub(super) async fn snapshot(
     };
     let Binding::Native(operation, completion) = selection else {
         return with_portable(shared, &store, owner, &meta, || async {
+            let fenced = shared.projection_fence.lock();
             anyhow::ensure!(
-                !shared.shutdown.load(Ordering::Acquire)
+                !*fenced
+                    && !shared.shutdown.load(Ordering::Acquire)
                     && shared.hub.session_info(&meta.id).is_some_and(|info| {
                         !info.meta.closing
                             && info.meta.owner_user_id == meta.owner_user_id
@@ -238,8 +248,9 @@ pub(super) async fn snapshot(
     }
     store
         .with_native_session_release_binding(owner, &operation, &completion, &meta, || async {
+            let fenced = shared.projection_fence.lock();
             anyhow::ensure!(
-                !shared.shutdown.load(Ordering::Acquire),
+                !*fenced && !shared.shutdown.load(Ordering::Acquire),
                 "runtime_disconnected"
             );
             let current = shared
@@ -361,13 +372,58 @@ pub(super) fn declaration_denied(shared: &Shared, session: &StartSession) {
     );
 }
 
-/// False is a pre-write denial. Any failure after starting a write closes the
-/// transport: partially written frames must never be treated as safe rejection.
+/// Outcome of attempting to admit and write one queued `CoreCommand`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SendOutcome {
+    /// Command passed admission, was marked in `attempted_sends`, and was written.
+    Sent,
+    /// Pre-write admission denied the command (caller should invoke `reset_admission::denied`).
+    Denied,
+    /// Command was removed, fenced, or disconnected before `write_broker_frame`
+    /// began (`attempted_sends` was NOT marked; skip without denying).
+    Skipped,
+}
+
+/// Atomically recheck shutdown, membership in `pending`, `fenced_commands`,
+/// and prompt send fences right before `write_broker_frame`, then mark
+/// `attempted_sends` with zero awaits between marking and writing (Round 2 #5).
+/// Lock order: `config_startups` -> `recovery_fences` -> `pending` ->
+/// `attempted_sends` -> `fenced_commands`.
+fn reserve_for_write(
+    shared: &Shared,
+    expected: Option<(&str, u64)>,
+    command: &CoreCommand,
+) -> bool {
+    let startups = shared.config_startups.lock();
+    let recovery_fences = shared.recovery_fences.lock();
+    let pending = shared.pending.lock();
+    if shared.shutdown.load(Ordering::Acquire) {
+        return false;
+    }
+    if let Some((key, version)) = expected {
+        if pending.version(key) != Some(version)
+            || shared.fenced_commands.lock().contains(key)
+            || matches!(command, CoreCommand::Prompt { session_id, .. }
+                if startups.contains(session_id) || recovery_fences.contains_key(session_id))
+        {
+            return false;
+        }
+        shared.attempted_sends.lock().insert(key.to_owned());
+    }
+    true
+}
+
+/// `Denied` is a pre-write denial; `Skipped` means the command became unfitted
+/// (disconnected/fenced/removed/superseded) before `write_broker_frame` began.
+/// Any failure after starting a write closes the transport: partially written
+/// frames must never be treated as safe rejection.
+#[allow(clippy::too_many_lines)]
 pub(super) async fn send<W: tokio::io::AsyncWrite + Unpin>(
     shared: &Shared,
     writer: &mut W,
+    expected: Option<(&str, u64)>,
     command: CoreCommand,
-) -> Result<bool> {
+) -> Result<SendOutcome> {
     if matches!(
         command,
         CoreCommand::StopSession { .. }
@@ -375,63 +431,69 @@ pub(super) async fn send<W: tokio::io::AsyncWrite + Unpin>(
             | CoreCommand::CancelSubagent { .. }
             | CoreCommand::QuiesceAccountSession { .. }
     ) {
+        if !reserve_for_write(shared, expected, &command) {
+            return Ok(SendOutcome::Skipped);
+        }
         write_broker_frame(writer, &Frame::CoreCommand { command }).await?;
-        return Ok(true);
+        return Ok(SendOutcome::Sent);
     }
     let meta = command
         .session_id()
         .and_then(|id| shared.hub.session_info(id))
         .map(|info| info.meta);
     if command.session_id().is_some() && meta.is_none() {
-        return Ok(false);
+        return Ok(SendOutcome::Denied);
     }
     if !mcp_launch_current(&shared.hub, &command) {
-        return Ok(false);
+        return Ok(SendOutcome::Denied);
     }
     let named = launch(&command).is_some_and(|session| !session.provider_account_id.is_default())
         || meta
             .as_ref()
             .is_some_and(|meta| !meta.provider_account_id.is_default());
     if !named {
+        if !reserve_for_write(shared, expected, &command) {
+            return Ok(SendOutcome::Skipped);
+        }
         write_broker_frame(writer, &Frame::CoreCommand { command }).await?;
-        return Ok(true);
+        return Ok(SendOutcome::Sent);
     }
     let Some(meta) = meta else {
-        return Ok(false);
+        return Ok(SendOutcome::Denied);
     };
     if launch(&command).is_some_and(|session| !matches(&meta, session)) {
-        return Ok(false);
+        return Ok(SendOutcome::Denied);
     }
     let Some(owner) = meta.owner_user_id.as_deref() else {
-        return Ok(false);
+        return Ok(SendOutcome::Denied);
     };
     let Some((machine, store)) = shared.native_store.lock().clone() else {
-        return Ok(false);
+        return Ok(SendOutcome::Denied);
     };
     if meta.machine_id != machine || meta.provider_account_id.is_default() {
-        return Ok(false);
+        return Ok(SendOutcome::Denied);
     }
     let Some(selection) = binding(&store, owner, &meta).await else {
-        return Ok(false);
+        return Ok(SendOutcome::Denied);
     };
     let Binding::Native(operation, completion) = selection else {
-        return send_portable(shared, writer, &store, owner, &meta, command).await;
+        return send_portable(shared, writer, &store, owner, &meta, expected, command).await;
     };
     if !shared.auth_recipient_key.as_ref().is_some_and(|key| {
         crate::digest::hex_sha256(key.as_bytes()) == completion.recipient_fingerprint
     }) {
-        return Ok(false);
+        return Ok(SendOutcome::Denied);
     }
     let profile = &completion.profile;
     if let CoreCommand::ReadmitAccountSession { binding, .. } = &command
         && binding.target != *profile
     {
-        return Ok(false);
+        return Ok(SendOutcome::Denied);
     }
     if meta.provider != profile.provider_id
         || meta.provider_auth_generation != Some(profile.generation)
     {
-        return Ok(false);
+        return Ok(SendOutcome::Denied);
     }
     // A Provider reload persists the session's new release through the
     // asynchronous store writer, and its launch can reach admission first:
@@ -440,16 +502,22 @@ pub(super) async fn send<W: tokio::io::AsyncWrite + Unpin>(
     // session in Starting.
     for attempt in 1..=BINDING_ATTEMPTS {
         let started = AtomicBool::new(false);
+        let skipped = AtomicBool::new(false);
         let command = command.clone();
         let result = store
             .with_native_session_release_binding(owner, &operation, &completion, &meta, || async {
                 validate_delivery(shared, &meta, &command)?;
+                if !reserve_for_write(shared, expected, &command) {
+                    skipped.store(true, Ordering::Release);
+                    anyhow::bail!("send_skipped");
+                }
                 started.store(true, Ordering::Release);
                 write_broker_frame(writer, &Frame::CoreCommand { command }).await
             })
             .await;
         match result {
-            Ok(()) => return Ok(true),
+            Ok(()) => return Ok(SendOutcome::Sent),
+            Err(_) if skipped.load(Ordering::Acquire) => return Ok(SendOutcome::Skipped),
             Err(error) if started.load(Ordering::Acquire) => return Err(error),
             Err(error)
                 if attempt < BINDING_ATTEMPTS
@@ -459,10 +527,10 @@ pub(super) async fn send<W: tokio::io::AsyncWrite + Unpin>(
             {
                 tokio::time::sleep(BINDING_RETRY).await;
             }
-            Err(_) => return Ok(false),
+            Err(_) => return Ok(SendOutcome::Denied),
         }
     }
-    Ok(false)
+    Ok(SendOutcome::Denied)
 }
 
 async fn send_portable<W: tokio::io::AsyncWrite + Unpin>(
@@ -471,24 +539,31 @@ async fn send_portable<W: tokio::io::AsyncWrite + Unpin>(
     store: &crate::store::Store,
     owner: &str,
     meta: &crate::core::SessionMeta,
+    expected: Option<(&str, u64)>,
     command: CoreCommand,
-) -> Result<bool> {
+) -> Result<SendOutcome> {
     // Native readmission has no meaning for a Service-held key.
     if matches!(command, CoreCommand::ReadmitAccountSession { .. }) {
-        return Ok(false);
+        return Ok(SendOutcome::Denied);
     }
     let started = AtomicBool::new(false);
+    let skipped = AtomicBool::new(false);
     let result = with_portable(shared, store, owner, meta, || async {
         validate_delivery(shared, meta, &command)?;
+        if !reserve_for_write(shared, expected, &command) {
+            skipped.store(true, Ordering::Release);
+            anyhow::bail!("send_skipped");
+        }
         started.store(true, Ordering::Release);
         write_broker_frame(writer, &Frame::CoreCommand { command }).await
     })
     .await;
     match result {
-        Ok(()) => Ok(true),
+        Ok(()) => Ok(SendOutcome::Sent),
+        Err(_) if skipped.load(Ordering::Acquire) => Ok(SendOutcome::Skipped),
         // Any failure after starting a write closes the transport.
         Err(error) if started.load(Ordering::Acquire) => Err(error),
-        Err(_) => Ok(false),
+        Err(_) => Ok(SendOutcome::Denied),
     }
 }
 

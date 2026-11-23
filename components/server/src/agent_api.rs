@@ -521,7 +521,7 @@ export interface Cowboy {
     capabilities(q:{capability:"image.generate"|"image.edit";if_revision?:string}):Promise<{revision:string;unchanged?:boolean;providers?:{id:string;available:boolean;reason:string|null}[];[key:string]:unknown}>;
     inspect(call_id: string):Promise<CallView>;
     wait(call_id: string, timeout_ms?: number):Promise<CallView>;
-    result(call_id: string, q?: TextWindow):Promise<CallView>;
+    result(call_id: string, q?: TextWindow):Promise<CallView>; // error notice_dispatching: retry after notice arrives
     observe(request_id: string):Promise<CallView>;
   };
 }

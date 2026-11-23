@@ -3,6 +3,7 @@
 mod approval;
 mod coordinator;
 mod history;
+mod notice_delivery;
 mod runner;
 mod selection;
 mod wait_observation;
@@ -13,6 +14,11 @@ pub(super) use coordinator::{
     touch_code_observation,
 };
 pub(super) use history::pin_bounds;
+pub(super) use notice_delivery::{
+    DispatchGate, after_notice_dispatch_error, before_notice_dispatch, prepare_windowed_result,
+    prune_settled_restored_notices, read_windowed_result, spawn_commit_windowed_result,
+    wake_notices_for_machine,
+};
 
 use super::{AppState, AuthenticatedProductRequest, session_is_visible};
 use axum::{
@@ -74,7 +80,21 @@ pub(super) async fn list(
     match store.managed_calls(&parent, page.before.as_deref()).await {
         Ok(calls) => {
             let next = (calls.len() == 100).then(|| calls.last().unwrap().call_id.clone());
-            let summaries: Vec<_> = calls.iter().map(|call| call.summary()).collect();
+            let ids: Vec<String> = calls.iter().map(|call| call.call_id.clone()).collect();
+            let deliveries = store
+                .call_notice_deliveries_for_parent(&parent, &ids)
+                .await
+                .unwrap_or_default();
+            let summaries: Vec<_> = calls
+                .iter()
+                .map(|call| {
+                    let mut summary = json!(call.summary());
+                    if let Some(delivery) = deliveries.get(&call.call_id) {
+                        summary["notice_delivery"] = json!(delivery);
+                    }
+                    summary
+                })
+                .collect();
             Json(json!({"schema":1,"calls":summaries,"next_before":next,
                 "current_placement":placement,"parent_runtime_ready":parent_runtime_ready}))
             .into_response()
@@ -97,7 +117,13 @@ pub(super) async fn inspect(
     match store.managed_call(&parent, &call).await {
         Ok(Some(record)) => match store.managed_call_dismissed(&parent, &call).await {
             Ok(dismissed) => {
-                Json(json!({"schema":1,"call":record,"dismissed":dismissed})).into_response()
+                let notice_delivery = store
+                    .call_notice_delivery(&parent, &call)
+                    .await
+                    .ok()
+                    .flatten();
+                Json(json!({"schema":1,"call":record,"dismissed":dismissed,"notice_delivery":notice_delivery}))
+                    .into_response()
             }
             Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
         },

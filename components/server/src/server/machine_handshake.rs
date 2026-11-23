@@ -116,6 +116,26 @@ pub(super) async fn verified_machine_hello(
     Some((hello, challenge_id))
 }
 
+/// Per-Machine async mutex ordering durable `machine_connected` epoch writes
+/// with live `machine_control` / `runtime_router` registration so a delayed
+/// handshake cannot overwrite a newer connection.
+pub(super) async fn machine_registration_lock(
+    machine_id: &str,
+) -> tokio::sync::OwnedMutexGuard<()> {
+    static LOCKS: std::sync::LazyLock<
+        parking_lot::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    > = std::sync::LazyLock::new(|| parking_lot::Mutex::new(std::collections::HashMap::new()));
+    let lock = {
+        let mut guard = LOCKS.lock();
+        Arc::clone(
+            guard
+                .entry(machine_id.to_owned())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+        )
+    };
+    lock.lock_owned().await
+}
+
 /// Challenge, verify and welcome a connecting Machine: issue a nonce, check
 /// the signed hello against the enrolled key, bind its encryption key,
 /// negotiate the protocol, record the connection and send Welcome. Returns
@@ -181,19 +201,22 @@ pub(super) async fn machine_handshake(
         "workspace_owner": &hello.workspace_owner,
         "capacity": &hello.capacity,
     });
-    if let Err(error) = store
-        .machine_connected(
-            &hello.machine_id,
-            &challenge_id,
-            platform,
-            &hello.arch,
-            connection_mode,
-            &inventory,
-        )
-        .await
     {
-        tracing::error!(%error, machine = %hello.machine_id, "recording Machine connection");
-        return None;
+        let _reg_guard = machine_registration_lock(&hello.machine_id).await;
+        if let Err(error) = store
+            .machine_connected(
+                &hello.machine_id,
+                &challenge_id,
+                platform,
+                &hello.arch,
+                connection_mode,
+                &inventory,
+            )
+            .await
+        {
+            tracing::error!(%error, machine = %hello.machine_id, "recording Machine connection");
+            return None;
+        }
     }
     if send_json(
         socket,

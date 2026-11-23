@@ -46,7 +46,11 @@ mod copy;
 mod core_security;
 pub mod draft_documents;
 mod managed_calls;
-pub use managed_calls::NoticeReconciliation;
+pub use managed_calls::{
+    CallNoticeDelivery, DispatchClaim, LegacyAdoptionOutcome, NoticeClaimRelease,
+    NoticeDeliveryState, NoticeEchoEvidence, NoticeReconciliation, completion_id_for_call,
+    is_completed_turn_stop_reason,
+};
 pub mod preferences;
 pub mod provider_accounts;
 mod session_metadata;
@@ -6018,6 +6022,7 @@ impl PostgresStorage {
                 .await
                 .context("INSERT notification intent")?;
         }
+        managed_calls::project_events_pg(&mut tx, events, created_at_ms).await?;
         tx.commit().await.context("commit event batch")?;
         Ok(())
     }
@@ -6032,12 +6037,8 @@ impl PostgresStorage {
             .await
             .with_context(|| format!("DELETE events for {session_id}"))?;
         session_widgets::clear_transcript_projections_pg(&mut tx, session_id).await?;
-        // Archive the old conversation's Calls without changing child execution,
-        // results, admission receipts or budgets. Future calls start visible.
-        sqlx::query("UPDATE managed_agent_calls SET dismissed = TRUE WHERE parent_session_id = $1 AND (document::jsonb->>'created_at_ms')::bigint < $2")
-            .bind(session_id)
-            .bind(calls_before_ms)
-            .execute(&mut *tx)
+        // Archive old Calls while keeping unconfirmed opted-in notices visible.
+        managed_calls::clear_calls_on_transcript_clear_pg(&mut tx, session_id, calls_before_ms)
             .await?;
         tx.commit().await?;
         Ok(())

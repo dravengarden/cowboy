@@ -19,6 +19,7 @@ use tokio::sync::Semaphore;
 use super::AppState;
 use crate::agent_api::{API_VERSION, MAX_LOG_BYTES, MAX_RESULT_BYTES};
 use crate::core::{Envelope, Event, QueuedMessage, SessionInfo, SessionMeta};
+use crate::machine_control::ConnectionToken;
 use crate::managed_calls::protocol::{Action, Grant};
 use crate::managed_calls::service::Ledger;
 
@@ -103,6 +104,8 @@ fn status_view(info: &SessionInfo, calls_enabled: bool, grant: &Grant) -> Value 
 
 pub(super) async fn read(
     state: &Arc<AppState>,
+    connection: &ConnectionToken,
+    grant: &Grant,
     meta: &SessionMeta,
     ledger: &Ledger,
     mut program: Program,
@@ -125,10 +128,24 @@ pub(super) async fn read(
     };
     let host = SessionHost {
         state,
+        connection,
+        grant,
         meta,
         ledger,
+        reserved_relays: parking_lot::Mutex::new(Vec::new()),
+        unresolved_notice_settlements: parking_lot::Mutex::new(Vec::new()),
     };
-    sandbox.execute(&program, &host).await
+    let mut value = sandbox.execute(&program, &host).await;
+    let unresolved = std::mem::take(&mut *host.unresolved_notice_settlements.lock());
+    if !unresolved.is_empty()
+        && let Some(object) = value.as_object_mut()
+    {
+        object.insert(
+            "unresolved_notice_settlements".to_owned(),
+            json!(unresolved),
+        );
+    }
+    value
 }
 
 // ---------------------------------------------------------------------------
@@ -141,12 +158,55 @@ trait Host: Sync {
         args: Value,
         remaining: Duration,
     ) -> impl std::future::Future<Output = Result<Value, String>> + Send;
+
+    fn call_with_budget(
+        &self,
+        op: &str,
+        args: Value,
+        remaining: Duration,
+        _budget: &cowboy_codeact_runtime::CallBudget<'_>,
+    ) -> impl std::future::Future<Output = Result<Value, String>> + Send {
+        self.call(op, args, remaining)
+    }
+
+    fn authorize_before_relay(
+        &self,
+        _op: &str,
+        _args: &Value,
+        _reply: &Value,
+    ) -> impl std::future::Future<Output = Result<(), String>> + Send {
+        std::future::ready(Ok(()))
+    }
+
+    fn commit_after_relay(
+        &self,
+        _op: &str,
+        _args: &Value,
+        _reply: &Value,
+    ) -> impl std::future::Future<Output = ()> + Send {
+        std::future::ready(())
+    }
 }
 
 struct SessionHost<'a> {
     state: &'a Arc<AppState>,
+    connection: &'a ConnectionToken,
+    grant: &'a Grant,
     meta: &'a SessionMeta,
     ledger: &'a Ledger,
+    reserved_relays: parking_lot::Mutex<Vec<String>>,
+    unresolved_notice_settlements: parking_lot::Mutex<Vec<String>>,
+}
+
+impl Drop for SessionHost<'_> {
+    fn drop(&mut self) {
+        let remaining = std::mem::take(&mut *self.reserved_relays.lock());
+        for completion_id in remaining {
+            self.state
+                .hub
+                .release_result_relay(&self.meta.id, &completion_id);
+        }
+    }
 }
 
 fn arg_str<'v>(args: &'v Value, key: &str) -> Result<&'v str, String> {
@@ -264,32 +324,7 @@ impl Host for SessionHost<'_> {
                 actions::read_parent(&self.state.hub, self.state.store.as_ref(), self.meta).await?;
                 Ok(value)
             }
-            "calls.list" => {
-                only_keys(&args, &["before", "limit"])?;
-                let before = args
-                    .get("before")
-                    .map(|_| arg_str(&args, "before"))
-                    .transpose()?;
-                let limit = page_limit(&args, 20, 100)?;
-                let rows = self.ledger.list(before).await.map_err(|_| "unavailable")?;
-                actions::read_parent(&self.state.hub, self.state.store.as_ref(), self.meta).await?;
-                let next = (rows.len() >= limit).then(|| rows[limit - 1].call_id.clone());
-                let calls = rows
-                    .iter()
-                    .take(limit)
-                    .map(|row| {
-                        let summary = row.summary();
-                        json!({"call_id":row.call_id,"request_id":row.request_id,"provider":row.provider,
-                            "state":row.state,"purpose":row.purpose,"updated_at_ms":row.updated_at_ms,
-                            "created_at_ms":row.created_at_ms,"started_at_ms":row.started_at_ms,"finished_at_ms":row.finished_at_ms,
-                            "configuration":row.configuration,"preset":row.preset,"provider_account_id":row.provider_account_id,
-                            "labels":row.labels,"input_revision":row.input_revision,
-                            "usage":summary.usage,"reused_from":summary.reused_from,
-                            "has_result":summary.has_result,"verdict":summary.verdict,"findings":summary.finding_count})
-                    })
-                    .collect::<Vec<_>>();
-                Ok(json!({"calls":calls,"next_before":next}))
-            }
+            "calls.list" => self.list_calls(&args).await,
             "session.info" | "session.usage" | "session.queue" | "session.drafts"
             | "session.message" | "session.events" | "sessions.info" | "sessions.usage"
             | "sessions.queue" | "sessions.drafts" | "sessions.message" | "sessions.events" => {
@@ -450,13 +485,7 @@ impl Host for SessionHost<'_> {
                 let call_id = arg_str(&args, "call_id")?.to_owned();
                 self.calls(Action::Inspect { call_id }).await
             }
-            "calls.result" => {
-                only_keys(&args, &["call_id", "offset", "chars"])?;
-                let call_id = arg_str(&args, "call_id")?.to_owned();
-                let mut value = self.calls(Action::Result { call_id }).await?;
-                result_window(&mut value["result"], &args)?;
-                Ok(value)
-            }
+            "calls.result" => self.read_call_result(&args, None).await,
             "calls.wait" => {
                 only_keys(&args, &["call_id", "timeout_ms"])?;
                 let call_id = arg_str(&args, "call_id")?.to_owned();
@@ -506,9 +535,185 @@ impl Host for SessionHost<'_> {
             _ => Err("unknown_operation".into()),
         }
     }
+
+    async fn call_with_budget(
+        &self,
+        op: &str,
+        args: Value,
+        remaining: Duration,
+        budget: &cowboy_codeact_runtime::CallBudget<'_>,
+    ) -> Result<Value, String> {
+        if op == "calls.result" {
+            actions::read_parent(&self.state.hub, self.state.store.as_ref(), self.meta).await?;
+            return self.stage_call_result(&args, budget).await;
+        }
+        self.call(op, args, remaining).await
+    }
+
+    async fn authorize_before_relay(
+        &self,
+        op: &str,
+        args: &Value,
+        reply: &Value,
+    ) -> Result<(), String> {
+        if op != "calls.result" {
+            return Ok(());
+        }
+        let Some(ok_payload) = reply.get("ok") else {
+            return Ok(());
+        };
+        if ok_payload.get("state").and_then(Value::as_str) == Some("error") {
+            return Ok(());
+        }
+        // Round 3 #4: run awaited policy/store reads FIRST, then run the
+        // synchronous live worker grant check LAST at the exact relay boundary.
+        actions::read_parent(&self.state.hub, self.state.store.as_ref(), self.meta).await?;
+        if super::superagent::restricted(self.state, self.meta).await? {
+            return Err("superagent_scope_denied".to_owned());
+        }
+        super::managed_calls::authorize(self.state, self.connection, self.grant)
+            .map_err(str::to_owned)?;
+        // Round 3 #5: reserve the notice synchronously across the sandbox write
+        // + flush so the dispatcher cannot claim it before `commit_after_relay`.
+        if let Ok(call_id) = arg_str(args, "call_id") {
+            let completion_id = format!("{}{call_id}", crate::agent_model::CALL_NOTICE_PREFIX);
+            if !self
+                .state
+                .hub
+                .try_reserve_result_relay(&self.meta.id, &completion_id)
+            {
+                return Err("notice_dispatching".to_owned());
+            }
+            self.reserved_relays.lock().push(completion_id);
+        }
+        Ok(())
+    }
+
+    async fn commit_after_relay(&self, op: &str, args: &Value, reply: &Value) {
+        if op != "calls.result" {
+            return;
+        }
+        let Some(ok_payload) = reply.get("ok") else {
+            return;
+        };
+        if ok_payload.get("state").and_then(Value::as_str) == Some("error") {
+            return;
+        }
+        let Ok(call_id) = arg_str(args, "call_id") else {
+            return;
+        };
+        let completion_id = format!("{}{call_id}", crate::agent_model::CALL_NOTICE_PREFIX);
+        // Round 3 #5: synchronously promote the pre-relay reservation into a
+        // durable `pending_result_consumptions` fence BEFORE any await, then
+        // run bounded settlement retries in a tracked background task that
+        // survives beyond the CodeAct broker deadline and drains on shutdown.
+        {
+            let mut reserved = self.reserved_relays.lock();
+            if let Some(pos) = reserved.iter().position(|id| id == &completion_id) {
+                reserved.swap_remove(pos);
+            }
+        }
+        self.state.hub.promote_result_relay_to_pending_consumption(
+            &self.meta.id,
+            call_id,
+            &completion_id,
+        );
+        let rx = super::managed_calls::spawn_commit_windowed_result(
+            self.state,
+            &self.meta.id,
+            call_id,
+            &completion_id,
+        );
+        if matches!(rx.await, Ok(Err(()))) {
+            self.unresolved_notice_settlements
+                .lock()
+                .push(call_id.to_owned());
+        }
+    }
 }
 
 impl SessionHost<'_> {
+    async fn list_calls(&self, args: &Value) -> Result<Value, String> {
+        only_keys(args, &["before", "limit"])?;
+        let before = args
+            .get("before")
+            .map(|_| arg_str(args, "before"))
+            .transpose()?;
+        let limit = page_limit(args, 20, 100)?;
+        let rows = self.ledger.list(before).await.map_err(|_| "unavailable")?;
+        let next = (rows.len() >= limit).then(|| rows[limit - 1].call_id.clone());
+        let page: Vec<_> = rows.iter().take(limit).collect();
+        let opted_in_ids: Vec<String> = page
+            .iter()
+            .filter(|row| row.labels.get("notify").map(String::as_str) == Some("parent"))
+            .map(|row| row.call_id.clone())
+            .collect();
+        let deliveries = if opted_in_ids.is_empty() {
+            std::collections::HashMap::new()
+        } else if let Some(store) = self.state.store.as_ref() {
+            store
+                .call_notice_deliveries_for_parent(&self.meta.id, &opted_in_ids)
+                .await
+                .unwrap_or_default()
+        } else {
+            std::collections::HashMap::new()
+        };
+        actions::read_parent(&self.state.hub, self.state.store.as_ref(), self.meta).await?;
+        let calls = page
+            .into_iter()
+            .map(|row| {
+                let summary = row.summary();
+                let mut item = json!({"call_id":row.call_id,"request_id":row.request_id,"provider":row.provider,
+                    "state":row.state,"purpose":row.purpose,"updated_at_ms":row.updated_at_ms,
+                    "created_at_ms":row.created_at_ms,"started_at_ms":row.started_at_ms,"finished_at_ms":row.finished_at_ms,
+                    "configuration":row.configuration,"preset":row.preset,"provider_account_id":row.provider_account_id,
+                    "labels":row.labels,"input_revision":row.input_revision,
+                    "usage":summary.usage,"reused_from":summary.reused_from,
+                    "has_result":summary.has_result,"verdict":summary.verdict,"findings":summary.finding_count});
+                if let Some(delivery) = deliveries.get(&row.call_id) {
+                    item["notice_delivery"] = json!(delivery);
+                }
+                item
+            })
+            .collect::<Vec<_>>();
+        Ok(json!({"calls":calls,"next_before":next}))
+    }
+
+    async fn stage_call_result(
+        &self,
+        args: &Value,
+        budget: &cowboy_codeact_runtime::CallBudget<'_>,
+    ) -> Result<Value, String> {
+        only_keys(args, &["call_id", "offset", "chars"])?;
+        let call_id = arg_str(args, "call_id")?.to_owned();
+        super::managed_calls::prepare_windowed_result(
+            self.state,
+            self.meta,
+            self.ledger,
+            &call_id,
+            budget,
+            |result| result_window(result, args),
+        )
+        .await
+    }
+
+    async fn read_call_result(
+        &self,
+        args: &Value,
+        budget: Option<&cowboy_codeact_runtime::CallBudget<'_>>,
+    ) -> Result<Value, String> {
+        only_keys(args, &["call_id", "offset", "chars"])?;
+        let call_id = arg_str(args, "call_id")?.to_owned();
+        super::managed_calls::read_windowed_result(
+            self.state,
+            self.meta,
+            self.ledger,
+            &call_id,
+            budget,
+            |result| result_window(result, args),
+        )
+        .await
+    }
     async fn discovery(&self, op: &str, args: &Value) -> Result<Option<Value>, String> {
         if super::superagent::restricted(self.state, self.meta).await?
             && !matches!(
@@ -1121,6 +1326,26 @@ struct RuntimeHost<'a, H>(&'a H);
 impl<H: Host> cowboy_codeact_runtime::Host for RuntimeHost<'_, H> {
     async fn call(&self, op: &str, args: Value, remaining: Duration) -> Result<Value, String> {
         self.0.call(op, args, remaining).await
+    }
+    async fn call_with_budget(
+        &self,
+        op: &str,
+        args: Value,
+        remaining: Duration,
+        budget: &cowboy_codeact_runtime::CallBudget<'_>,
+    ) -> Result<Value, String> {
+        self.0.call_with_budget(op, args, remaining, budget).await
+    }
+    async fn authorize_before_relay(
+        &self,
+        op: &str,
+        args: &Value,
+        reply: &Value,
+    ) -> Result<(), String> {
+        self.0.authorize_before_relay(op, args, reply).await
+    }
+    async fn commit_after_relay(&self, op: &str, args: &Value, reply: &Value) {
+        self.0.commit_after_relay(op, args, reply).await;
     }
     fn finish(&self, done: bool, frame: Value) -> Value {
         finish(done, frame)

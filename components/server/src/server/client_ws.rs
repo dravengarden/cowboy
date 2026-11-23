@@ -584,17 +584,7 @@ pub(super) async fn handle_ws(
                             }
                             continue;
                         }
-                        let command_trace = Observability::begin_command_trace(&text);
-                        let accepted = handle_command(
-                            &state,
-                            &principal,
-                            &text,
-                            &mut held,
-                            command_trace.as_ref(),
-                        );
-                        if let Some(trace) = command_trace {
-                            state.observability.finish_command_trace(&principal.user_id, trace, accepted);
-                        }
+                        dispatch_ws_command(&state, &principal, &text, &mut held).await;
                     }
                     // Other frame types (ping/pong/binary) are ignored.
                     Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Binary(_))) => {}
@@ -766,7 +756,22 @@ async fn admit_active_client(
     }
 }
 
-pub(super) fn handle_command(
+async fn dispatch_ws_command(
+    state: &Arc<AppState>,
+    principal: &ProductPrincipal,
+    text: &str,
+    held: &mut HashMap<String, (String, u64)>,
+) {
+    let command_trace = Observability::begin_command_trace(text);
+    let accepted = handle_command(state, principal, text, held, command_trace.as_ref()).await;
+    if let Some(trace) = command_trace {
+        state
+            .observability
+            .finish_command_trace(&principal.user_id, trace, accepted);
+    }
+}
+
+pub(super) async fn handle_command(
     state: &Arc<AppState>,
     principal: &ProductPrincipal,
     text: &str,
@@ -787,13 +792,8 @@ pub(super) fn handle_command(
     // commands carry one; NewSession doesn't (the session id is assigned
     // by the daemon after success).
     let session_id_for_err: Option<String> = command_session_id(&cmd);
-    // A client-authored prompt or draft carries its `cmid` from a durable
-    // outbox that is replayed after every reconnect. A refusal that can never
-    // change must name that id, otherwise the device retries it forever and the
-    // user only ever sees an unaddressed toast.
-    let authored_cmid: Option<String> = command_authored_cmid(&cmd);
-    if refuse_command(state, principal, &cmd, &session_id_for_err, &authored_cmid) {
-        return false;
+    if let Some(done) = prehandle_command(state, principal, &cmd, &session_id_for_err).await {
+        return done;
     }
     // Serialize runtime admission against Provider lifecycle changes. Holding
     // this read guard through the command match closes the check-then-dispatch
@@ -848,7 +848,7 @@ pub(super) fn handle_command(
             }
         }
         Inbound::CancelSubmitted { session_id, cmid } => {
-            if state.hub.remove_queued_by_cmid(&session_id, &cmid) {
+            if state.hub.withdraw_queued_by_cmid(&session_id, &cmid) {
                 // Explicit acknowledgement for the ACP bridge. Absence of this
                 // event means the prompt crossed the queue→dispatch boundary;
                 // the bridge then waits for its cmid echo and cancels the now-

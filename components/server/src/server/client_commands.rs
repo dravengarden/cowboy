@@ -13,6 +13,20 @@ pub(super) fn refuse_command(
     session_id_for_err: &Option<String>,
     authored_cmid: &Option<String>,
 ) -> bool {
+    if let Some(cmid) = authored_cmid
+        .as_deref()
+        .filter(|id| crate::agent_model::is_reserved_call_notice_cmid(id))
+    {
+        let message = "reserved completion notice message id is not allowed";
+        if let Some(sid) = session_id_for_err {
+            state
+                .hub
+                .command_result(sid, cmid, CommandOutcome::Rejected, message);
+        } else {
+            state.hub.broadcast_error(None, message.to_owned());
+        }
+        return true;
+    }
     if let (Some(sid), Some(cmid)) = (&session_id_for_err, &authored_cmid)
         && state.hub.session_info(sid).is_none()
     {
@@ -461,15 +475,21 @@ pub(super) fn prompt_command(
         if !(text.is_empty() && content.is_empty()) {
             config_revert::clear(&state.hub, &session_id);
         }
+        if content.is_empty() && text.is_empty() {
+            tracing::warn!("Prompt with neither text nor content; dropping");
+            state.hub.broadcast_error(
+                Some(session_id),
+                "empty prompt: no text or content blocks".to_owned(),
+            );
+            return ControlFlow::Break(false);
+        }
+        if state.hub.has_dispatch_tx() {
+            // Route through Hub's single-in-flight queue guard so a legacy
+            // WebSocket `Prompt` can never race with a draining completion notice.
+            state.hub.submit(&session_id, text, content, None);
+            return ControlFlow::Break(true);
+        }
         let blocks: Vec<ContentBlock> = if content.is_empty() {
-            if text.is_empty() {
-                tracing::warn!("Prompt with neither text nor content; dropping");
-                state.hub.broadcast_error(
-                    Some(session_id),
-                    "empty prompt: no text or content blocks".to_owned(),
-                );
-                return ControlFlow::Break(false);
-            }
             vec![ContentBlock::from(text)]
         } else {
             content
@@ -699,5 +719,161 @@ pub(super) fn build_prompt_blocks(
         None
     } else {
         Some(blocks)
+    }
+}
+
+/// Combined admission refusal and durable notice-withdrawal pre-step for `handle_command`.
+pub(super) async fn prehandle_command(
+    state: &Arc<AppState>,
+    principal: &ProductPrincipal,
+    cmd: &Inbound,
+    session_id_for_err: &Option<String>,
+) -> Option<bool> {
+    // A client-authored prompt or draft carries its `cmid` from a durable
+    // outbox that is replayed after every reconnect. A refusal that can never
+    // change must name that id, otherwise the device retries it forever and the
+    // user only ever sees an unaddressed toast.
+    let authored_cmid: Option<String> = command_authored_cmid(cmd);
+    if refuse_command(state, principal, cmd, session_id_for_err, &authored_cmid) {
+        return Some(false);
+    }
+    try_commit_owner_notice_withdrawal(state, cmd, &authored_cmid).await
+}
+
+/// Durably commit owner queue mutations that remove, clear, park, edit, or
+/// cancel a still-queued `call-notice:` row before mutating `Hub` or
+/// acknowledging the command. Returns `None` when the command does not affect
+/// any queued completion notice (so the caller falls through to the fast sync
+/// path), or `Some(accepted)` once handled.
+pub(super) async fn try_commit_owner_notice_withdrawal(
+    state: &Arc<AppState>,
+    cmd: &Inbound,
+    authored_cmid: &Option<String>,
+) -> Option<bool> {
+    let (session_id, op) = match cmd {
+        Inbound::RemoveQueued { session_id, id, .. } => (
+            session_id.as_str(),
+            crate::core::OwnerNoticeWithdrawalOp::RemoveQueued { id },
+        ),
+        Inbound::EditQueued {
+            session_id,
+            id,
+            text,
+            content,
+            ..
+        } => (
+            session_id.as_str(),
+            crate::core::OwnerNoticeWithdrawalOp::EditQueued { id, text, content },
+        ),
+        Inbound::ClearQueue { session_id } => (
+            session_id.as_str(),
+            crate::core::OwnerNoticeWithdrawalOp::ClearQueue,
+        ),
+        Inbound::QueuedToDraft { session_id, id } => (
+            session_id.as_str(),
+            crate::core::OwnerNoticeWithdrawalOp::QueuedToDraft { id },
+        ),
+        Inbound::CancelSubmitted { session_id, cmid } => (
+            session_id.as_str(),
+            crate::core::OwnerNoticeWithdrawalOp::CancelSubmitted { cmid },
+        ),
+        _ => return None,
+    };
+    let _guard = state.hub.pending_commit_lock(session_id).await;
+    let (mut preview, ack_rx) = match state
+        .hub
+        .apply_or_preview_owner_notice_withdrawal(session_id, &op)
+    {
+        crate::core::OwnerQueueMutation::AppliedSync(changed) => {
+            report_owner_queue_mutation_outcome(state, cmd, changed);
+            return Some(true);
+        }
+        crate::core::OwnerQueueMutation::CommitPending(preview, rx) => (preview, rx),
+        crate::core::OwnerQueueMutation::Rejected(message) => {
+            report_withdrawal_failure(state, session_id, authored_cmid.as_deref(), message);
+            return Some(false);
+        }
+    };
+    if state.store.is_none() {
+        state.hub.abort_owner_notice_withdrawal(&mut preview);
+        report_withdrawal_failure(
+            state,
+            session_id,
+            authored_cmid.as_deref(),
+            "durable store unavailable; completion notice withdrawal was not committed",
+        );
+        return Some(false);
+    }
+    match ack_rx.await {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => {
+            state.hub.abort_owner_notice_withdrawal(&mut preview);
+            tracing::warn!(
+                session_id,
+                %error,
+                "failed to durably commit completion notice owner withdrawal"
+            );
+            report_withdrawal_failure(
+                state,
+                session_id,
+                authored_cmid.as_deref(),
+                "failed to durably commit completion notice withdrawal",
+            );
+            return Some(false);
+        }
+        Err(_) => {
+            state.hub.abort_owner_notice_withdrawal(&mut preview);
+            report_withdrawal_failure(
+                state,
+                session_id,
+                authored_cmid.as_deref(),
+                "durable store writer closed before committing completion notice withdrawal",
+            );
+            return Some(false);
+        }
+    }
+    let changed = state.hub.commit_owner_notice_withdrawal(&mut preview, &op);
+    report_owner_queue_mutation_outcome(state, cmd, changed);
+    Some(true)
+}
+
+fn report_owner_queue_mutation_outcome(state: &AppState, cmd: &Inbound, changed: bool) {
+    match cmd {
+        Inbound::CancelSubmitted { session_id, cmid } if changed => {
+            state.hub.push(
+                session_id,
+                Event::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": "cowboy_prompt_cancelled",
+                        "cmid": cmid,
+                    }),
+                },
+            );
+        }
+        Inbound::RemoveQueued {
+            session_id, cmid, ..
+        }
+        | Inbound::EditQueued {
+            session_id, cmid, ..
+        } if !changed => {
+            report_stale_row(state, session_id, cmid.as_deref());
+        }
+        _ => {}
+    }
+}
+
+fn report_withdrawal_failure(
+    state: &AppState,
+    session_id: &str,
+    authored_cmid: Option<&str>,
+    message: &str,
+) {
+    state
+        .hub
+        .broadcast_error(Some(session_id.to_owned()), message.to_owned());
+    if let Some(cmid) = authored_cmid {
+        state
+            .hub
+            .command_result(session_id, cmid, CommandOutcome::Rejected, message);
     }
 }

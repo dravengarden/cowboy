@@ -74,28 +74,93 @@ pub(in crate::server::managed_calls) fn record(record: &Record) {
 }
 
 /// Queue the parent's opted-in completion notice. A parent that is gone or
-/// closing gets none; the Hub's call-scoped id absorbs a repeated notice.
-pub(super) fn notify_parent(state: &super::AppState, record: &Record) {
+/// closing gets none; the durable completion ledger and call-scoped id absorb
+/// repeated submissions across restarts and native session rollover.
+pub(in crate::server::managed_calls) async fn notify_parent(
+    state: &super::AppState,
+    record: &Record,
+) {
+    notify_parent_in(&state.hub, state.store.as_ref(), record).await;
+}
+
+pub(in crate::server::managed_calls) async fn notify_parent_in(
+    hub: &crate::core::Hub,
+    store: Option<&crate::store::Store>,
+    record: &Record,
+) {
     if !super::super::wait_observation::wants_notice(record) {
         return;
     }
     let parent = &record.placement.parent_session_id;
-    if state
-        .hub
+    let cmid = crate::store::completion_id_for_call(&record.call_id);
+    // Finding 12: serialize delivery-state check and Hub enqueue with result
+    // consumption and non-delivery requeues under `pending_commit_lock`.
+    let _commit_guard = hub.pending_commit_lock(parent).await;
+    if let Some(store) = store
+        && let Ok(Some(delivery)) = store.call_notice_delivery(parent, &record.call_id).await
+        && (delivery.state != crate::store::NoticeDeliveryState::Enqueued
+            || delivery.dispatch_started_at_ms.is_some())
+    {
+        return;
+    }
+    if hub
         .session_info(parent)
         .is_none_or(|info| info.meta.closing)
     {
-        let cmid = format!(
-            "{}{}",
-            crate::agent_model::CALL_NOTICE_PREFIX,
-            record.call_id
-        );
         crate::logs::wait_cache::record_notice_admission(parent, Some(&cmid), "parent_unavailable");
+        if let Some(store) = store {
+            let now = chrono::Utc::now().timestamp_millis();
+            let _ = store
+                .mark_call_notice_unknown(parent, &cmid, "parent_unavailable", None, now)
+                .await;
+        }
         return;
     }
-    state
-        .hub
-        .submit_call_notice(parent, &record.call_id, super::call_notice(record));
+    hub.submit_call_notice(parent, &record.call_id, super::call_notice(record));
+}
+
+/// Reading a terminal Call result confirms consumption durably before
+/// withdrawing any still-queued untouched completion notice.
+pub(in crate::server::managed_calls) async fn on_result_read_in(
+    hub: &crate::core::Hub,
+    store: Option<&crate::store::Store>,
+    record: &Record,
+) -> anyhow::Result<()> {
+    if !record.state.terminal() || !super::super::wait_observation::wants_notice(record) {
+        return Ok(());
+    }
+    let parent = &record.placement.parent_session_id;
+    let completion_id = crate::store::completion_id_for_call(&record.call_id);
+    // Finding 12: serialize durable consumption and exact queue removal with
+    // non-delivery requeues and runner admission under `pending_commit_lock`.
+    let _commit_guard = hub.pending_commit_lock(parent).await;
+    if let Some(store) = store {
+        let now = chrono::Utc::now().timestamp_millis();
+        store
+            .mark_call_notice_consumed_for_result_read(parent, &record.call_id, &completion_id, now)
+            .await?;
+    }
+    hub.clear_all_notice_claims(parent, &completion_id);
+    let _ = hub.remove_queued_by_cmid(parent, &completion_id);
+    Ok(())
+}
+
+/// Build the Call envelope and attach durable completion-delivery state when
+/// the Call opted into `notify: "parent"`.
+pub(in crate::server::managed_calls) async fn envelope_with_notice(
+    state: &super::AppState,
+    record: &Record,
+) -> serde_json::Value {
+    let mut value = super::super::coordinator::envelope(record);
+    if super::super::wait_observation::wants_notice(record)
+        && let Some(store) = &state.store
+        && let Ok(Some(delivery)) = store
+            .call_notice_delivery(&record.placement.parent_session_id, &record.call_id)
+            .await
+    {
+        value["notice_delivery"] = serde_json::json!(delivery);
+    }
+    value
 }
 
 /// The call outcome code of a child turn's stop reason.

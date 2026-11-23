@@ -16,6 +16,7 @@ pub mod snapshot;
 pub mod authority;
 pub use cowboy_wire::managed_calls::lifecycle;
 pub mod media;
+pub mod notice;
 pub use cowboy_wire::managed_calls::protocol;
 pub use cowboy_wire::managed_calls::review;
 #[cfg(feature = "full")]

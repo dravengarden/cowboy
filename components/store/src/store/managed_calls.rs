@@ -1,10 +1,19 @@
 //! Parent-scoped immutable admission and compare-and-set lifecycle persistence.
 
+mod notice_delivery;
 mod wait_observation;
 use super::{PostgresStorage, SqliteStorage, StorageBackend, Store};
 use crate::managed_calls::Request;
 use crate::managed_calls::lifecycle::{Record, State};
 use anyhow::{Result, ensure};
+pub use notice_delivery::{
+    CallNoticeDelivery, DispatchClaim, LegacyAdoptionOutcome, NoticeClaimRelease,
+    NoticeDeliveryState, NoticeEchoEvidence, completion_id_for_call, is_completed_turn_stop_reason,
+};
+pub(in crate::store) use notice_delivery::{
+    clear_calls_on_transcript_clear_pg, clear_calls_on_transcript_clear_sqlite, project_events_pg,
+    project_events_sqlite,
+};
 use sha2::{Digest as _, Sha256};
 pub use wait_observation::NoticeReconciliation;
 
@@ -331,11 +340,16 @@ macro_rules! implementation {
                 // A duplicate continuation also hits the active-child index.
                 // Observe by the original parent/request after any uniqueness
                 // conflict; another request owning that child yields no match.
-                sqlx::query("INSERT INTO managed_agent_calls (call_id, parent_session_id, request_id, revision, document, document_sha256, request_document, child_session_id, state, owner_turn) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT DO NOTHING")
+                let request_notify_parent = request
+                    .labels
+                    .get(crate::managed_calls::review::NOTIFY)
+                    .is_some_and(|value| value == "parent");
+                sqlx::query("INSERT INTO managed_agent_calls (call_id, parent_session_id, request_id, revision, document, document_sha256, request_document, child_session_id, state, owner_turn, request_notify_parent) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT DO NOTHING")
                     .bind(&record.call_id).bind(&record.placement.parent_session_id).bind(&record.request_id)
                     .bind(i64::try_from(record.revision)?).bind(&document).bind(checksum(&document))
                     .bind(&request_document).bind(&record.child_session_id).bind(record.state.code())
                     .bind(owner_turn)
+                    .bind(request_notify_parent)
                     .execute(&self.pool).await?;
                 let existing = self.managed_call_request(&record.placement.parent_session_id, &record.request_id)
                     .await?.ok_or_else(|| anyhow::anyhow!("managed call admission missing"))?;
@@ -351,7 +365,7 @@ macro_rules! implementation {
                     let old_document = serde_json::to_string(current)?;
                     let document = serde_json::to_string(next)?;
                     let notice_finished = wait_observation::notice_finished_at(next);
-                    let result = sqlx::query("UPDATE managed_agent_calls SET revision = $1, document = $2, document_sha256 = $3, state = $8, notice_finished_at_ms = $9, notice_parent = $10 WHERE call_id = $4 AND parent_session_id = $5 AND revision = $6 AND document_sha256 = $7")
+                    let result = sqlx::query("UPDATE managed_agent_calls SET revision = $1, document = $2, document_sha256 = $3, state = $8, notice_finished_at_ms = $9, notice_parent = $10, dismissed = CASE WHEN $10 THEN FALSE ELSE dismissed END WHERE call_id = $4 AND parent_session_id = $5 AND revision = $6 AND document_sha256 = $7")
                         .bind(i64::try_from(next.revision)?).bind(&document).bind(checksum(&document))
                         .bind(&current.call_id).bind(&current.placement.parent_session_id)
                         .bind(i64::try_from(current.revision)?).bind(checksum(&old_document))
@@ -360,6 +374,16 @@ macro_rules! implementation {
                     if result.rows_affected() != 1 {
                         // Dropping the transaction rolls back every earlier step.
                         return Ok(false);
+                    }
+                    if let Some(finished_at) = notice_finished {
+                        let completion_id = notice_delivery::completion_id_for_call(&next.call_id);
+                        sqlx::query(notice_delivery::INSERT_ENQUEUED)
+                            .bind(&completion_id)
+                            .bind(&next.call_id)
+                            .bind(&next.placement.parent_session_id)
+                            .bind(finished_at)
+                            .execute(&mut *tx)
+                            .await?;
                     }
                     if let Some(occurrence) = call_occurrence(next) {
                         let now = chrono::Utc::now().timestamp_millis();

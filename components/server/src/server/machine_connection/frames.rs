@@ -405,13 +405,29 @@ impl MachineLink<'_> {
         let call_connection = self.connection.clone();
         let outgoing = self.machine_write_tx.clone();
         let permit = Arc::clone(self.execution_calls).try_acquire_owned();
+        let result_grant = matches!(
+            action,
+            crate::managed_calls::protocol::Action::Result { .. }
+        )
+        .then(|| grant.clone());
         tokio::spawn(async move {
-            let response = if let Ok(_permit) = permit {
+            let mut response = if let Ok(_permit) = permit {
                 managed_calls::handle(&call_state, &call_connection, grant, action).await
             } else {
                 serde_json::json!({"schema":1,"state":"error",
                     "error":{"code":"capacity","admission":"not_submitted"}})
             };
+            // Round 3 #3: re-verify the worker grant right before queueing a
+            // successful direct Result reply so a revoked/replaced worker never
+            // receives a terminal result (while keeping direct gateway reads
+            // strictly non-consuming).
+            if let Some(grant) = result_grant
+                && response.get("state").and_then(serde_json::Value::as_str) != Some("error")
+                && managed_calls::authorize(&call_state, &call_connection, &grant).is_err()
+            {
+                response = serde_json::json!({"schema":1,"state":"error",
+                    "error":{"code":"permission_denied","admission":"not_submitted"}});
+            }
             if call_state.machine_control.is_current(&call_connection) {
                 let _ = queue_machine_json(
                     &outgoing,

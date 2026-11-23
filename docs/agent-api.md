@@ -197,9 +197,17 @@ holds it. The prompt's call-scoped id (`call-notice:<call_id>`) deduplicates
 repeats, records a Cowboy origin rather than a human one, and never resets the
 scheduler's unattended-turn guard. A parent that is closing or gone gets none.
 The agent should end its turn instead of polling `calls.wait`, then read
-`calls.result`. The notice is sent by the Controller runner that observes the
-terminal transition; a Controller crash in that instant can lose it, so
-`calls.inspect` remains the authority. The option is opt-in: an agent that
+`calls.result`. Opted-in notices are persisted in `managed_call_notices` so
+Controller restarts, native session rollovers, and late Machine reconnects
+converge delivery without double-sending, and `calls.inspect`/`calls.list`
+project their `notice_delivery` state (`pending`, `enqueued`, `accepted`,
+`consumed`, `dispatch_unconfirmed`, `unknown`). Reading a terminal
+`calls.result` atomically settles any pending/queued notice as
+`consumed` (`result_read`); if a `calls.result` read races a notice that is
+already being claimed or handed off to the worker before its echo lands,
+`calls.result` returns the transient retryable error code
+`notice_dispatching` — wait for the incoming notice turn or retry
+`calls.result` once the notice echoes. `calls.inspect` remains the authority. The option is opt-in: an agent that
 already polls would otherwise spend an extra turn. The CLI takes the same choice
 as `--notify` on `cowboy review` (which then returns right after admission) and
 on `cowboy codex`/`cowboy claude`; Review 1.0.6 guidance starts reviews this way

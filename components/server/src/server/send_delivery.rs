@@ -297,6 +297,7 @@ async fn interrupt_once(
 fn operation_key(operation: &str) -> Option<String> {
     (!operation.is_empty()
         && operation.len() <= 128
+        && !crate::agent_model::is_reserved_call_notice_cmid(operation)
         && operation
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte)))

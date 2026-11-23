@@ -226,6 +226,10 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "0087_managed_call_owner_turn.sql",
         "bafc2413dfcc68927f37cc0a32d306377c447ccee7c9e1bc9be49318e0256927",
     ),
+    (
+        "0088_managed_call_notices.sql",
+        "7e3ba0853af9988a1b2ae6d874f84ba206a06318c7d02b707a3ac0949c4f62e4",
+    ),
 ];
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
@@ -443,6 +447,10 @@ const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "0061_managed_call_owner_turn.sql",
         "14af0d5850ecd5cfafbe9c3d9c7ec548f72dc184c8fe3b10e10475f574437e30",
+    ),
+    (
+        "0062_managed_call_notices.sql",
+        "d4dc23eb023ab29ff0f44105add12a0aa9f42b4730b571a061c23ab6cd5e50a4",
     ),
 ];
 

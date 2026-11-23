@@ -279,6 +279,10 @@ fn pending_attachments_and_private_settings_are_not_counted_as_tiny_metadata() {
             schedule: None,
             content: vec![serde_json::json!({"type":"resource", "data":content})],
         }],
+        settled_notices: Vec::new(),
+        released_claims: Vec::new(),
+        require_claim_release: false,
+        ack_id: None,
     };
     assert!(estimated_store_write_bytes(&write) >= content.len());
     let setting = StoreWrite::PutSetting {

@@ -223,6 +223,31 @@ impl Hub {
                 native_wait_started,
             )
         };
+        self.finish_pushed_event(
+            session_id,
+            envelope,
+            durable_agent_session_id,
+            attention_changed,
+            native_wait_started,
+        );
+    }
+
+    fn finish_pushed_event(
+        &self,
+        session_id: &str,
+        envelope: Envelope,
+        durable_agent_session_id: Option<String>,
+        attention_changed: bool,
+        native_wait_started: bool,
+    ) {
+        if is_user_message_chunk(&envelope)
+            && let Some(cmid) = envelope
+                .cmid
+                .as_deref()
+                .filter(|id| id.starts_with(crate::agent_model::CALL_NOTICE_PREFIX))
+        {
+            self.clear_notice_claim(session_id, cmid);
+        }
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::AppendEvent(envelope.clone()));
             if let Some(agent_session_id) = durable_agent_session_id {

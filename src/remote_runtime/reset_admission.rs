@@ -34,6 +34,7 @@ static WAITING: std::sync::LazyLock<Mutex<HashMap<String, std::time::Instant>>> 
 pub(super) fn current(
     shared: &Shared,
     key: &str,
+    version: u64,
     command: CoreCommand,
     deferred: &mut HashSet<String>,
 ) -> Option<CoreCommand> {
@@ -58,6 +59,10 @@ pub(super) fn current(
         }
         command => return Some(command),
     };
+    if shared.pending.lock().version(key) != Some(version) {
+        deferred.insert(session.session_id);
+        return None;
+    }
     let id = session.session_id.clone();
     let Some(meta) = shared.hub.session_info(&id).map(|info| info.meta) else {
         return Some(CoreCommand::EnsureSession { session });
@@ -83,7 +88,8 @@ pub(super) fn current(
         return None;
     };
     WAITING.lock().remove(&id);
-    // Only the plan of the very release this declaration names.
+    // Only the plan of the very release this declaration names, and only if
+    // this exact pending version has not been superseded since the snapshot.
     if plan != session.mcp_plan
         && meta.provider_version == session.provider_version
         && meta.provider_generation_digest == session.provider_generation_digest
@@ -91,15 +97,25 @@ pub(super) fn current(
         && meta.provider_account_id == session.provider_account_id
     {
         session.mcp_plan = plan;
-        if let Some(declared) = shared.declarations.lock().get_mut(&id) {
-            declared.mcp_plan.clone_from(&session.mcp_plan);
-        }
-        shared.pending.lock().insert(
-            key.to_owned(),
+        if !shared.pending.lock().update_if_version(
+            key,
+            version,
             CoreCommand::EnsureSession {
                 session: session.clone(),
             },
-        );
+        ) {
+            deferred.insert(id);
+            return None;
+        }
+        if let Some(declared) = shared.declarations.lock().get_mut(&id).filter(|declared| {
+            declared.provider_version == session.provider_version
+                && declared.provider_generation_digest == session.provider_generation_digest
+                && declared.provider_auth_generation == session.provider_auth_generation
+                && declared.provider_account_id == session.provider_account_id
+                && declared.cwd == session.cwd
+        }) {
+            declared.mcp_plan.clone_from(&session.mcp_plan);
+        }
     }
     Some(CoreCommand::EnsureSession { session })
 }
@@ -142,21 +158,43 @@ fn cancel(shared: &Shared, session_id: &str) -> bool {
         return false;
     }
     let sent = shared.sent.lock().clone();
-    let mut withdrawn = false;
+    let mut withdrawn_stops = Vec::new();
     shared.pending.lock().retain(|key, command| {
-        let stop = matches!(command, CoreCommand::StopSession { session_id: id, command_id }
-            if id == session_id && command_id.starts_with("reset-"))
-            && !sent.contains(key);
-        withdrawn |= stop;
-        !stop
+        if let CoreCommand::StopSession {
+            session_id: id,
+            command_id,
+        } = command
+            && id == session_id
+            && command_id.starts_with("reset-")
+            && !sent.contains(key)
+        {
+            withdrawn_stops.push(command_id.clone());
+            false
+        } else {
+            true
+        }
     });
-    if !withdrawn {
+    if withdrawn_stops.is_empty() {
         // Its stop is already with the Machine, which owns the outcome.
         return false;
     }
     WAITING.lock().remove(session_id);
     shared.resetting.lock().remove(session_id);
+    shared.active_reset_commands.lock().remove(session_id);
     shared.reset_replacements.lock().remove(session_id);
+    // Round 3 #7: if this cancelled reload had refreshed a recovery fence to
+    // `AwaitingReplacement`, no CommandAck for the withdrawn stop will ever
+    // arrive; transition that exact fence to `Failed` and return held prompts
+    // through conditional requeue instead of stranding them forever.
+    let cancel_reason = "Worker launch admission denied; the reload was cancelled and the current worker keeps running";
+    for stop_id in &withdrawn_stops {
+        let _ = super::notice_recovery::fail_rejected_recovery_command(
+            shared,
+            session_id,
+            stop_id,
+            cancel_reason,
+        );
+    }
     let status = shared
         .workers
         .lock()
@@ -302,5 +340,128 @@ mod tests {
         assert!(runtime.shared.workers.lock().contains_key("denied"));
         assert_eq!(hub.status("denied"), Some(super::super::Status::Busy));
         assert!(WAITING.lock().get("denied").is_none());
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn stale_reset_declaration_cannot_overwrite_newer_pending_version() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "superseded".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::model::SessionOrigin::Web,
+            false,
+        );
+        let worker = super::super::tests::snapshot("superseded");
+        let runtime = RemoteRuntime::for_test(hub.clone(), vec![worker.clone()]);
+        runtime.connect_for_test();
+
+        let mut stale = worker.launch.clone().unwrap();
+        stale.adopt_only = true;
+        stale.cwd = "/tmp/old-cwd".to_owned();
+        stale.mcp_plan = Some(Box::new(crate::mcp_binding::NativeLaunchPlan {
+            schema: 1,
+            command: "/bin/stale-plan".to_owned(),
+            bindings: Vec::new(),
+        }));
+        runtime.reset(stale.clone());
+
+        let key = "ensure:superseded";
+        let v1 = runtime
+            .shared
+            .pending
+            .lock()
+            .version(key)
+            .expect("initial ensure version");
+
+        // Interleave a newer reset declaration (version v2) with a different cwd.
+        let mut newer = worker.launch.clone().unwrap();
+        newer.adopt_only = true;
+        newer.cwd = "/tmp/new-cwd".to_owned();
+        newer.mcp_plan = Some(Box::new(crate::mcp_binding::NativeLaunchPlan {
+            schema: 1,
+            command: "/bin/newer-plan".to_owned(),
+            bindings: Vec::new(),
+        }));
+        runtime
+            .shared
+            .declarations
+            .lock()
+            .insert("superseded".to_owned(), newer.clone());
+        let v2 = runtime.shared.pending.lock().insert(
+            key.to_owned(),
+            CoreCommand::EnsureSession {
+                session: newer.clone(),
+            },
+        );
+        assert!(v2 > v1);
+
+        // Passing the stale v1 snapshot into `current()` must be skipped and
+        // must NOT overwrite either `pending` (at v2) or `declarations`.
+        let mut deferred = HashSet::new();
+        assert!(
+            !runtime.shared.pending.lock().update_if_version(
+                key,
+                v1,
+                CoreCommand::EnsureSession {
+                    session: stale.clone(),
+                },
+            ),
+            "update_if_version must refuse stale version v1 once v2 is installed"
+        );
+        assert!(
+            current(
+                &runtime.shared,
+                key,
+                v1,
+                CoreCommand::EnsureSession { session: stale },
+                &mut deferred,
+            )
+            .is_none(),
+            "stale snapshot must be skipped once a newer version exists"
+        );
+        assert!(
+            deferred.contains("superseded"),
+            "skipping a stale reset declaration must defer the session for this pass"
+        );
+        // Any reset stop ordered behind the skipped declaration in the same pass
+        // must also wait rather than going out ahead of v2's EnsureSession.
+        assert!(
+            current(
+                &runtime.shared,
+                "reset-1",
+                1,
+                CoreCommand::StopSession {
+                    session_id: "superseded".to_owned(),
+                    command_id: "reset-1".to_owned(),
+                },
+                &mut deferred,
+            )
+            .is_none(),
+            "reset stop must wait in the same pass when its stale declaration was skipped"
+        );
+        assert_eq!(runtime.shared.pending.lock().version(key), Some(v2));
+        match runtime.shared.pending.lock().get(key) {
+            Some(CoreCommand::EnsureSession { session }) => {
+                assert_eq!(session.cwd, "/tmp/new-cwd");
+                assert_eq!(
+                    session.mcp_plan.as_ref().map(|p| p.command.as_str()),
+                    Some("/bin/newer-plan")
+                );
+            }
+            other => panic!("expected newer EnsureSession in pending, got {other:?}"),
+        }
+        assert_eq!(
+            runtime
+                .shared
+                .declarations
+                .lock()
+                .get("superseded")
+                .and_then(|d| d.mcp_plan.as_ref())
+                .map(|p| p.command.as_str()),
+            Some("/bin/newer-plan")
+        );
     }
 }

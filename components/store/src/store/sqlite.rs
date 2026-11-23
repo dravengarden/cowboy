@@ -5057,6 +5057,7 @@ impl SqliteStorage {
                 .await
                 .context("INSERT SQLite notification intent")?;
         }
+        super::managed_calls::project_events_sqlite(&mut transaction, events, now_ms()).await?;
         transaction
             .commit()
             .await
@@ -5072,11 +5073,12 @@ impl SqliteStorage {
             .await
             .with_context(|| format!("DELETE SQLite events for {session_id}"))?;
         super::session_widgets::clear_transcript_projections_sqlite(&mut tx, session_id).await?;
-        sqlx::query("UPDATE managed_agent_calls SET dismissed = TRUE WHERE parent_session_id = ?1 AND json_extract(document, '$.created_at_ms') < ?2")
-            .bind(session_id)
-            .bind(calls_before_ms)
-            .execute(&mut *tx)
-            .await?;
+        super::managed_calls::clear_calls_on_transcript_clear_sqlite(
+            &mut tx,
+            session_id,
+            calls_before_ms,
+        )
+        .await?;
         tx.commit().await?;
         Ok(())
     }

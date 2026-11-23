@@ -85,8 +85,7 @@ pub(super) fn recover(state: &Arc<AppState>) {
         // Before Machines reconnect, when no restored row can drain yet; and
         // again once the Hub has surely restored every session.
         withdraw_ended(&state, &store).await;
-        // Machines reconnect and the Hub restores sessions shortly after
-        // start; observations before that would misread a live child.
+        // Wait for Machines and restored Hub sessions before reading live children.
         tokio::time::sleep(Duration::from_secs(10)).await;
         withdraw_ended(&state, &store).await;
         match store.active_managed_calls().await {
@@ -97,6 +96,7 @@ pub(super) fn recover(state: &Arc<AppState>) {
             }
             Err(error) => tracing::warn!(%error, "managed call recovery unavailable"),
         }
+        super::notice_delivery::recover(&state, &store).await;
     });
 }
 
@@ -239,7 +239,7 @@ async fn drive(state: &Arc<AppState>, parent: &str, call: &str) {
         };
         if record.state.terminal() {
             settle(state, &record);
-            outcome::notify_parent(state, &record);
+            outcome::notify_parent(state, &record).await;
             return;
         }
         // A deleted or closing parent stops its owned active calls.
@@ -1453,31 +1453,7 @@ async fn reconfirm(
 }
 
 fn call_notice(record: &Record) -> String {
-    let title = record
-        .labels
-        .get("title")
-        .map(|title| format!(" ({title})"))
-        .unwrap_or_default();
-    let error = record
-        .error
-        .as_ref()
-        .map(|error| format!(", error {}", error.code))
-        .unwrap_or_default();
-    let hint = record
-        .error
-        .as_ref()
-        .and_then(|error| error.detail.as_deref())
-        .and_then(super::coordinator::input_hint)
-        .map(|hint| format!(" No agent ran: {hint}, then start a new call."))
-        .unwrap_or_default();
-    format!(
-        "[Cowboy] Managed call {}{title} finished: {}{error}. Read it with cowboy_read: \
-         cowboy.calls.result(\"{}\",{{offset:0,chars:4000}}). A running, failed or partial \
-         review is never evidence of a clean review.{hint}",
-        record.call_id,
-        record.state.code(),
-        record.call_id
-    )
+    crate::managed_calls::notice::call_notice(record)
 }
 
 fn settle(state: &AppState, record: &Record) {

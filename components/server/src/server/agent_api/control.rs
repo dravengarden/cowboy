@@ -744,7 +744,7 @@ fn command(name: &str) -> Option<(&'static str, &'static str)> {
 /// accepted/rejected. A managed child's configuration belongs to its call:
 /// that definite refusal is a rejected receipt with its reason, never an
 /// unknown outcome.
-fn run_command(
+async fn run_command(
     state: &Arc<AppState>,
     auth: &web::AuthenticatedProductRequest,
     name: &str,
@@ -767,7 +767,8 @@ fn run_command(
         &value.to_string(),
         &mut HashMap::new(),
         None,
-    );
+    )
+    .await;
     Ok(
         json!({"status":if accepted {"accepted"} else {"rejected"},"completion":"observe domain state"}),
     )
@@ -1195,7 +1196,7 @@ async fn dispatch(
     }
     if command(name).is_some() {
         let op = operation.ok_or("read_only")?;
-        let receipt = run_command(state, auth, name, &input, op)?;
+        let receipt = run_command(state, auth, name, &input, op).await?;
         let call = (parent.id.as_str(), name, &input);
         return Ok(web::peer_notices::after_command(
             state, notify, call, op, receipt,

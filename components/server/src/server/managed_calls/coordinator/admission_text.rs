@@ -64,29 +64,7 @@ pub(crate) fn envelope(record: &Record) -> Value {
 /// text keyed by refusal detail: it never echoes the caller's paths, but an
 /// agent can fix its input in one retry instead of guessing.
 pub(in crate::server) fn input_hint(detail: &str) -> Option<&'static str> {
-    Some(match detail {
-        "context_unsupported" => {
-            "every files entry must be a regular file inside root, not a directory or a symlink; list a directory's files one by one"
-        }
-        "context_unreadable" => {
-            "a files entry does not exist under root on the target machine; pass existing paths relative to root"
-        }
-        "source_unavailable" => {
-            "root must be an existing Git worktree inside a workspace this session may read"
-        }
-        "subdirectory_unsupported" => {
-            "root must be the top of a Git worktree (git rev-parse --show-toplevel), not a subdirectory"
-        }
-        "not_a_repository" => "root must be a Git worktree",
-        "unborn_head" => "root needs at least one commit",
-        "submodule_unsupported" => {
-            "a submodule has local changes or an unsupported path; clean submodules are retained only as commit pointers, so review submodule contents from that submodule's own Git root"
-        }
-        "symlink_unsupported" => {
-            "the worktree contains a symlink pointing outside root, which a snapshot cannot carry"
-        }
-        _ => return None,
-    })
+    crate::managed_calls::notice::input_hint(detail)
 }
 
 #[cfg(test)]

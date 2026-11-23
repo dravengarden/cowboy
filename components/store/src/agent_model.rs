@@ -72,6 +72,14 @@ pub const WAKEUP_PREFIX: &str = "__wake__";
 /// It is a client-style id so the Hub deduplicates a repeated notice against
 /// the queue, recent dispatches and the transcript.
 pub const CALL_NOTICE_PREFIX: &str = "call-notice:";
+
+/// Returns true when a client-authored message or operation ID uses the
+/// reserved completion-notice namespace or embeds a NUL byte that persistence
+/// would strip (which could otherwise forge `call-notice:` after storage).
+#[must_use]
+pub fn is_reserved_call_notice_cmid(raw: &str) -> bool {
+    raw.contains('\0') || raw.starts_with(CALL_NOTICE_PREFIX)
+}
 /// A Controller notice telling a session that the turn of a prompt it sent
 /// to another session ended. Deduplicated like [`CALL_NOTICE_PREFIX`].
 pub const PEER_NOTICE_PREFIX: &str = "session-notice:";

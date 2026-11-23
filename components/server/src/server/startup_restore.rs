@@ -27,7 +27,7 @@ pub(super) async fn restore_hub_from_store(store: &Store, hub: &Hub) -> anyhow::
     // left them, so on a fresh process every WS client's first snapshot
     // is correct.
     let loaded = store.load_all().await.context("loading persisted state")?;
-    let restored: Vec<_> = loaded
+    let mut restored: Vec<_> = loaded
         .into_iter()
         .map(|ls| RestoredSession {
             meta: ls.meta,
@@ -44,6 +44,7 @@ pub(super) async fn restore_hub_from_store(store: &Store, hub: &Hub) -> anyhow::
             last_event_at_ms: ls.last_event_at_ms,
         })
         .collect();
+    managed_calls::prune_settled_restored_notices(store, &mut restored).await;
     let restored_count = restored.len();
     // Adopt durable anchors before any reducer sees a new event, so a
     // restarted Controller never starts a second subagent/Call row.
@@ -157,8 +158,16 @@ pub(super) async fn open_persistence(
         let writer_store = store.clone();
         let writer_persistence_health = Arc::clone(&health);
         let writer_shutdown = store_shutdown_rx.clone();
+        let writer_acks = hub.store_ack_sink();
         let writer_task = tokio::spawn(async move {
-            run_store_writer(writer_store, rx, writer_persistence_health, writer_shutdown).await;
+            run_store_writer_with_acks(
+                writer_store,
+                rx,
+                writer_persistence_health,
+                writer_shutdown,
+                Some(writer_acks),
+            )
+            .await;
             writer_health.set_store_writer(false);
         });
         // Observed subagent transcripts have their own bounded writer, so

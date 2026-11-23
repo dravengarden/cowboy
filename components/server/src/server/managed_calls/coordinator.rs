@@ -148,7 +148,7 @@ pub(super) fn error(code: &str, admission: &str) -> Value {
 
 /// A ledger read failure keeps the schema-1 `capacity` code existing callers
 /// retry on; `reason` tells it apart from a read-slot admission refusal.
-fn ledger_unavailable() -> Value {
+pub(super) fn ledger_unavailable() -> Value {
     let mut value = error("capacity", "not_submitted");
     value["error"]["reason"] = json!("ledger_unavailable");
     value["error"]["retryable"] = json!(true);
@@ -469,12 +469,13 @@ pub(in crate::server) async fn handle(
         return super::super::mcp_bindings::relay::handle(state, connection, &grant, *request)
             .await;
     }
-    dispatch(state, &meta, &ledger, &grant, action).await
+    dispatch(state, connection, &meta, &ledger, &grant, action).await
 }
 
 /// Act for an already authorized parent: Agent API actions, then calls.
 async fn dispatch(
     state: &Arc<AppState>,
+    connection: &ConnectionToken,
     meta: &crate::core::SessionMeta,
     ledger: &Ledger,
     grant: &Grant,
@@ -506,6 +507,8 @@ async fn dispatch(
         } => {
             super::super::agent_api::read(
                 state,
+                connection,
+                grant,
                 meta,
                 ledger,
                 super::super::agent_api::Program {
@@ -567,12 +570,12 @@ pub(in crate::server) async fn dispatch_calls_from(
             .await
         }
         Action::Inspect { call_id } => match ledger.inspect(&call_id).await {
-            Ok(Some(record)) => envelope(&record),
+            Ok(Some(record)) => super::runner::outcome::envelope_with_notice(state, &record).await,
             Ok(None) => error("not_found", "not_submitted"),
             Err(_) => ledger_unavailable(),
         },
         Action::Observe { request_id } => match ledger.observe(&request_id).await {
-            Ok(Some(record)) => envelope(&record),
+            Ok(Some(record)) => super::runner::outcome::envelope_with_notice(state, &record).await,
             Ok(None) => error("not_found", "not_submitted"),
             Err(_) => ledger_unavailable(),
         },
@@ -580,25 +583,12 @@ pub(in crate::server) async fn dispatch_calls_from(
             call_id,
             timeout_ms,
         } => match wait(state, ledger, &call_id, timeout_ms).await {
-            Some(record) => envelope(&record),
+            Some(record) => super::runner::outcome::envelope_with_notice(state, &record).await,
             None => error("not_found", "not_submitted"),
         },
-        Action::Result { call_id } => match ledger.inspect(&call_id).await {
-            Ok(Some(record)) if record.state.terminal() => {
-                let mut value = envelope(&record);
-                value["result"] = record.result.clone().unwrap_or(Value::Null);
-                value
-            }
-            Ok(Some(record)) => {
-                let mut value = envelope(&record);
-                value["state"] = json!("error");
-                value["error"] = json!({"code":"not_ready","admission":"accepted",
-                    "call_state": record.state.code()});
-                value
-            }
-            Ok(None) => error("not_found", "not_submitted"),
-            Err(_) => ledger_unavailable(),
-        },
+        Action::Result { call_id } => {
+            super::notice_delivery::dispatch_result_action(state, ledger, &call_id).await
+        }
         Action::Cancel { call_id } => cancel(state, ledger, &call_id).await,
         Action::Mcp { .. }
         | Action::AgentStatus {}
@@ -1252,11 +1242,9 @@ pub(super) async fn cancel_call(state: &Arc<AppState>, parent: &str, call: &str)
             super::runner::outcome::record(&next);
             if next.state.terminal() {
                 super::wait_observation::settled(state, &next);
+                super::runner::outcome::notify_parent(state, &next).await;
             }
-            // The runner alone withdraws a running call's queued prompt and
-            // decides between the immediate and the native stop: a second
-            // actor here could lose the Stopping race after removing the
-            // prompt, leaving the native stop to delete a retained child.
+            // Runner alone withdraws running calls' queued prompts to avoid Stopping races.
             super::runner::ensure_runner(state, &next);
             state.managed_calls.notify();
             return Some(next);

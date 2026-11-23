@@ -43,12 +43,12 @@ impl Supervisor {
         {
             return Err("superagent_worker_unavailable".into());
         }
-        runtime.prompt_traced(
+        runtime.try_prompt_traced(
             context.target(),
             vec![serde_json::json!({"type":"text","text":text})],
             Some(cmid),
             None,
-        );
+        )?;
         Ok(())
     }
 }

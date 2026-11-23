@@ -860,13 +860,43 @@ pub(super) async fn handle_machine_ws(
              its reads will execute on the Machine"
         );
     }
-    let connection = state.machine_control.install(
-        hello.machine_id.clone(),
-        challenge_id.clone(),
+    let (runtime_core, runtime_tunnel) = match UnixStream::pair() {
+        Ok(pair) => pair,
+        Err(error) => {
+            tracing::error!(%error, machine = %hello.machine_id, "creating Machine runtime tunnel");
+            socket_writer.abort();
+            return;
+        }
+    };
+    let (runtime_reader, runtime_writer) = runtime_tunnel.into_split();
+    let runtime_reader = crate::runtime_wire::FrameReader::new(runtime_reader);
+    let (runtime_frame_tx, mut runtime_frame_rx) = mpsc::channel(MACHINE_RUNTIME_OUTBOUND_CAPACITY);
+    let mut runtime_forwarder = tokio::spawn(forward_machine_runtime_frames(
+        runtime_reader,
+        runtime_frame_tx,
+    ));
+    let (runtime_write_tx, runtime_write_rx) = mpsc::unbounded_channel();
+    let mut runtime_writer = tokio::spawn(write_machine_runtime_frames(
+        runtime_writer,
+        runtime_write_rx,
+    ));
+    let Some((connection, connected_runtime)) = register_current_machine_connection(
+        &state,
+        &store,
+        &hello,
+        &challenge_id,
         colocated,
         protocol,
         machine_command_tx,
-    );
+        runtime_core,
+    )
+    .await
+    else {
+        socket_writer.abort();
+        runtime_forwarder.abort();
+        runtime_writer.abort();
+        return;
+    };
     observe_hello_capabilities(&state, &hello, &connection);
     let lanes = Arc::new(crate::machine_lanes::LaneSet::default());
     // Dropped when this connection ends, which refuses further lanes.
@@ -903,43 +933,6 @@ pub(super) async fn handle_machine_ws(
         },
     );
     spawn_machine_reconnect_sync(&state, &hello, &connection);
-    let (runtime_core, runtime_tunnel) = match UnixStream::pair() {
-        Ok(pair) => pair,
-        Err(error) => {
-            tracing::error!(%error, machine = %hello.machine_id, "creating Machine runtime tunnel");
-            socket_writer.abort();
-            release_connection(&state, &connection);
-            return;
-        }
-    };
-    let (runtime_reader, runtime_writer) = runtime_tunnel.into_split();
-    let runtime_reader = crate::runtime_wire::FrameReader::new(runtime_reader);
-    // Drain Controller -> Machine runtime frames independently from the main
-    // Machine WebSocket loop. Without this pump, a large frame arriving from
-    // Machine can fill runtime_writer while RemoteRuntime simultaneously fills
-    // the opposite half of the same socketpair; both tasks then await write
-    // capacity and neither returns to its read branch.
-    let (runtime_frame_tx, mut runtime_frame_rx) = mpsc::channel(MACHINE_RUNTIME_OUTBOUND_CAPACITY);
-    let mut runtime_forwarder = tokio::spawn(forward_machine_runtime_frames(
-        runtime_reader,
-        runtime_frame_tx,
-    ));
-    // Keep Machine -> Controller writes out of the WebSocket loop as well. A
-    // blocked internal consumer must not stop that loop from forwarding the
-    // opposing direction, which is what lets the consumer make progress.
-    // Startup can replay every unacknowledged worker event before
-    // RemoteRuntime finishes its handshake. Do not reject that finite replay
-    // based on frame count: the writer's per-frame timeout bounds a genuinely
-    // stalled consumer, and disconnect cleanup drops the remaining queue.
-    let (runtime_write_tx, runtime_write_rx) = mpsc::unbounded_channel();
-    let mut runtime_writer = tokio::spawn(write_machine_runtime_frames(
-        runtime_writer,
-        runtime_write_rx,
-    ));
-    let (runtime_tx, mut runtime_rx) = tokio::sync::oneshot::channel();
-    install_machine_runtime(&state, &hello, protocol, runtime_core, runtime_tx);
-    let mut connected_runtime: Option<Arc<RemoteRuntime>> = None;
-    let mut runtime_registration_pending = true;
     let mut inventory = MachineInventory::from_hello(&hello);
     let link = MachineLink {
         state: &state,
@@ -976,13 +969,6 @@ pub(super) async fn handle_machine_ws(
     loop {
         let message = tokio::select! {
             message = socket_stream.next() => Some(message),
-            runtime = &mut runtime_rx, if runtime_registration_pending => {
-                runtime_registration_pending = false;
-                if let Ok(runtime) = runtime {
-                    connected_runtime = Some(runtime);
-                }
-                None
-            }
             frame = runtime_frame_rx.recv() => {
                 let Some(frame) = frame else { break };
                 if queue_machine_json(
@@ -1142,11 +1128,9 @@ pub(super) async fn handle_machine_ws(
     socket_writer.abort();
     runtime_forwarder.abort();
     runtime_writer.abort();
-    if let Some(runtime) = connected_runtime.as_ref() {
-        state
-            .runtime_router
-            .remove_if_current(&hello.machine_id, runtime);
-    }
+    state
+        .runtime_router
+        .remove_if_current(&hello.machine_id, &connected_runtime);
     release_connection(&state, &connection);
     if let Err(error) = store
         .machine_disconnected(
@@ -1215,15 +1199,58 @@ fn spawn_machine_reconnect_sync(
     provider_auth_flow::reconciler::nudge(Some(&hello.machine_id));
 }
 
-/// Installs the Machine's RemoteRuntime in the router and finishes its
-/// broker handshake over the runtime tunnel in the background.
+/// Verify that `challenge_id` is still the durable current connection epoch for
+/// this Machine and atomically install both `machine_control` and
+/// `runtime_router` under the per-Machine registration lock so a delayed
+/// handshake can never supersede a newer connection.
+#[allow(clippy::too_many_arguments)]
+async fn register_current_machine_connection(
+    state: &Arc<AppState>,
+    store: &crate::store::Store,
+    hello: &crate::machine_protocol::MachineHello,
+    challenge_id: &str,
+    colocated: bool,
+    protocol: u16,
+    machine_command_tx: mpsc::UnboundedSender<crate::machine_protocol::MachineCommand>,
+    runtime_core: UnixStream,
+) -> Option<(crate::machine_control::ConnectionToken, Arc<RemoteRuntime>)> {
+    let _reg_guard = super::machine_handshake::machine_registration_lock(&hello.machine_id).await;
+    if !store
+        .machine_connection_is_current(&hello.machine_id, challenge_id)
+        .await
+        .unwrap_or(false)
+    {
+        tracing::info!(
+            machine = %hello.machine_id,
+            "skipping superseded Machine handshake before registering control/runtime"
+        );
+        return None;
+    }
+    let connection = state.machine_control.install(
+        hello.machine_id.clone(),
+        challenge_id.to_owned(),
+        colocated,
+        protocol,
+        machine_command_tx,
+    );
+    let Some(runtime) = install_machine_runtime(state, hello, &connection, protocol, runtime_core)
+    else {
+        release_connection(state, &connection);
+        return None;
+    };
+    Some((connection, runtime))
+}
+
+/// Installs the Machine's RemoteRuntime in the router if `connection` is still
+/// current, and finishes its broker handshake over the runtime tunnel in the
+/// background. Returns `None` if a newer connection already superseded this one.
 fn install_machine_runtime(
     state: &Arc<AppState>,
     hello: &crate::machine_protocol::MachineHello,
+    connection: &crate::machine_control::ConnectionToken,
     protocol: u16,
     runtime_core: UnixStream,
-    runtime_tx: tokio::sync::oneshot::Sender<Arc<RemoteRuntime>>,
-) {
+) -> Option<Arc<RemoteRuntime>> {
     let router = Arc::clone(&state.runtime_router);
     let hub = state.hub.clone();
     let provider_auth = Arc::clone(&state.provider_auth);
@@ -1259,13 +1286,53 @@ fn install_machine_runtime(
         runtime.attach_native_admission(machine_id.clone(), store.clone());
     }
     runtime.set_turn_end_listener(super::provider_accounts::controls::turn_end_listener(state));
-    router.install(machine_id.clone(), Arc::clone(&runtime));
+    // Finding 11: if this runtime's teardown requeue finishes after a replacement
+    // runtime already connected and ran `wake_notices_for_machine`, wake the
+    // dormant (`Exited`) parent now.
+    let teardown_router = Arc::clone(&state.runtime_router);
+    let teardown_hub = state.hub.clone();
+    let teardown_machine = machine_id.clone();
+    let teardown_rt = Arc::downgrade(&runtime);
+    runtime.set_teardown_notice_wake(Arc::new(move |session_id: &str, completion_id: &str| {
+        if let Some(current) = teardown_router.runtime(&teardown_machine)
+            && !teardown_rt
+                .upgrade()
+                .is_some_and(|old| Arc::ptr_eq(&old, &current))
+        {
+            let _ = teardown_hub.wake_queued_call_notice(session_id, completion_id);
+        }
+    }));
+    if !router.install_if(machine_id.clone(), Arc::clone(&runtime), || {
+        state.machine_control.is_current(connection)
+    }) {
+        runtime.disconnect();
+        return None;
+    }
+    let handle = Arc::clone(&runtime);
+    let wake_hub = state.hub.clone();
+    let wake_store = state.store.clone();
     tokio::spawn(async move {
         match RemoteBootstrap::from_stream(label, runtime_core).await {
             Ok(bootstrap) => {
+                if !router
+                    .runtime(&machine_id)
+                    .is_some_and(|current| Arc::ptr_eq(&current, &runtime))
+                {
+                    return;
+                }
                 runtime.start(bootstrap);
                 machine_snapshots.publish().await;
-                let _ = runtime_tx.send(runtime);
+                if router
+                    .runtime(&machine_id)
+                    .is_some_and(|current| Arc::ptr_eq(&current, &runtime))
+                {
+                    super::managed_calls::wake_notices_for_machine(
+                        &wake_hub,
+                        wake_store.as_ref(),
+                        &machine_id,
+                    )
+                    .await;
+                }
             }
             Err(error) => {
                 tracing::warn!(%error, machine = %machine_id, "Machine runtime handshake failed");
@@ -1273,4 +1340,5 @@ fn install_machine_runtime(
             }
         }
     });
+    Some(handle)
 }

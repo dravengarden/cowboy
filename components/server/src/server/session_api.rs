@@ -330,6 +330,17 @@ pub(super) async fn api_session_prompt(
         )
             .into_response();
     }
+    if req
+        .operation
+        .as_deref()
+        .is_some_and(crate::agent_model::is_reserved_call_notice_cmid)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            "reserved completion notice message id is not allowed",
+        )
+            .into_response();
+    }
     if build_prompt_blocks(&req.text, &req.content).is_none() {
         return (StatusCode::BAD_REQUEST, "empty prompt: no text or content").into_response();
     }

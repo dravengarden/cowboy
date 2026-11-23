@@ -299,6 +299,7 @@ pub(super) fn spawn_dispatcher(
 /// undelivered prompts first, telemetry drains, then the write-behind store
 /// flushes.
 pub(super) struct ControllerTasks {
+    pub(super) hub: Hub,
     pub(super) scheduler_task: tokio::task::JoinHandle<()>,
     pub(super) reset_task: tokio::task::JoinHandle<()>,
     pub(super) runtime_reconciliation_task: tokio::task::JoinHandle<()>,
@@ -314,6 +315,7 @@ pub(super) struct ControllerTasks {
 impl ControllerTasks {
     pub(super) async fn shutdown(self) {
         let Self {
+            hub,
             scheduler_task,
             reset_task,
             runtime_reconciliation_task,
@@ -341,6 +343,11 @@ impl ControllerTasks {
                 }
             }
         }
+        // Finding 6 / Round 2 #12: drain runtime-teardown notice requeues
+        // before closing persistence; warn after 5s and keep persistence alive
+        // until bounded retries finish (matching `dispatcher_task` above).
+        hub.drain_teardown_requeues(std::time::Duration::from_secs(5))
+            .await;
         if let Some(task) = purge_task {
             task.abort();
         }

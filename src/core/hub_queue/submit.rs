@@ -104,4 +104,108 @@ impl Hub {
             None => self.emit_pending(session_id),
         }
     }
+
+    /// Wake a cleanly dormant (`Exited`) parent whose queue head is a
+    /// recovered completion notice. Checks `Exited` status and the exact
+    /// completion ID while popping the queue head under the same lock so an
+    /// interleaved removal or reorder can never wake the worker for another
+    /// prompt.
+    pub fn wake_queued_call_notice(&self, session_id: &str, completion_id: &str) -> bool {
+        if self.inner.dispatch_tx.lock().is_none() {
+            return false;
+        }
+        let req = {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return false;
+            };
+            if s.meta.status != Status::Exited
+                || s.meta.paused
+                || s.meta.closing
+                || s.meta.trashed_at_ms.is_some()
+                || s.in_flight
+                || s.dispatch_pending.is_some()
+                || s.delivery_hold.is_some()
+                || s.editing.is_some()
+                || s.queue.first().and_then(|m| m.cmid.as_deref()) != Some(completion_id)
+                || s.queue
+                    .first()
+                    .is_some_and(|m| self.is_row_withdrawing(session_id, &m.id))
+                || self.is_notice_withdrawing(session_id, completion_id)
+                || !self.context_allows_dispatch(session_id, Some(completion_id))
+            {
+                return false;
+            }
+            let head = s.queue.remove(0);
+            s.explicit_wait = false;
+            s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
+            s.in_flight = true;
+            s.dispatch_pending = Some(s.in_flight_epoch);
+            Self::note_dispatched(s, head.cmid.as_deref());
+            DispatchReq {
+                ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
+                session_id: session_id.to_owned(),
+                text: head.text,
+                content: head.content,
+                cmid: head.cmid,
+                explicit: false,
+            }
+        };
+        self.emit_pending(session_id);
+        self.send_dispatch(req);
+        true
+    }
+
+    /// Owner cancellation of a still-queued prompt by `cmid`. If the removed
+    /// row was a completion notice, records `owner_withdrawn` atomically with
+    /// the queue update so startup recovery does not replay it.
+    pub fn withdraw_queued_by_cmid(&self, session_id: &str, cmid: &str) -> bool {
+        let (removed, settled) = {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return false;
+            };
+            let before = s.queue.len();
+            let mut settled = Vec::new();
+            s.queue.retain(|m| {
+                if m.cmid.as_deref() == Some(cmid) {
+                    if cmid.starts_with(crate::agent_model::CALL_NOTICE_PREFIX) {
+                        settled.push((cmid.to_owned(), "owner_withdrawn".to_owned()));
+                    }
+                    false
+                } else {
+                    true
+                }
+            });
+            (before != s.queue.len(), settled)
+        };
+        if removed {
+            self.emit_pending_with_notice_ops(session_id, settled, Vec::new());
+            self.try_drain(session_id);
+        }
+        removed
+    }
+
+    pub(super) fn reject_reserved_notice_cmid(&self, session_id: &str, cmid: Option<&str>) -> bool {
+        if cmid.is_some_and(crate::agent_model::is_reserved_call_notice_cmid) {
+            self.broadcast_error(
+                Some(session_id.to_owned()),
+                "reserved completion notice message id is not allowed for client submissions"
+                    .to_owned(),
+            );
+            return true;
+        }
+        false
+    }
+}
+
+pub(super) fn extract_notice_settlements<'a>(
+    items: impl IntoIterator<Item = &'a QueuedMessage>,
+) -> Vec<(String, String)> {
+    items
+        .into_iter()
+        .filter_map(|m| m.cmid.as_deref())
+        .filter(|c| c.starts_with(crate::agent_model::CALL_NOTICE_PREFIX))
+        .map(|c| (c.to_owned(), "owner_withdrawn".to_owned()))
+        .collect()
 }

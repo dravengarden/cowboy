@@ -26,7 +26,10 @@ use crate::core::{Event, Hub, Status, config_option_accepts};
 
 pub mod account_stop;
 mod broker_protocol;
+mod config_sync;
 mod native_admission;
+mod notice_recovery;
+mod pending_commands;
 mod reset_admission;
 mod startup_watch;
 pub mod turn_end;
@@ -36,6 +39,13 @@ use crate::runtime_wire::{
     WorkerSnapshot, WorkerState, read_frame, write_frame,
 };
 use broker_protocol::{BROKER_PROTOCOL_FLOOR, validate_protocol};
+#[cfg(test)]
+use config_sync::queue_persisted_config;
+use config_sync::{
+    discard_pending_config, fail_config_startup, queue_config_value,
+    queue_persisted_config_for_session, sync_config_for_worker, take_pending_prompts,
+};
+use pending_commands::PendingCommands;
 
 const BROKER_RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(100);
 const BROKER_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
@@ -97,7 +107,7 @@ pub struct Shared {
     /// for another Machine's session. `None` only in test harnesses.
     machine_id: Option<String>,
     hub: Hub,
-    pending: Mutex<HashMap<String, CoreCommand>>,
+    pending: Mutex<PendingCommands>,
     steering: Mutex<HashMap<(String, String), oneshot::Sender<String>>>,
     /// The Machine starts a `native_fork` launch with `session/fork`; an
     /// older one would ignore the field and open an empty thread.
@@ -108,6 +118,13 @@ pub struct Shared {
     machine_protocol: u16,
     account_stops: Mutex<HashMap<String, account_stop::Waiter>>,
     sent: Mutex<HashSet<String>>,
+    /// Commands whose transport handoff has been attempted (`native_admission::send`).
+    /// Never cleared on reconnect — only on `CommandAck` or command removal — so
+    /// runtime teardown can prove which queued notices never left the Controller.
+    attempted_sends: Mutex<HashSet<String>>,
+    /// Uncertain pre-recovery commands fenced from replay after a failed
+    /// execution recovery (skipped by `send_pending` even across reconnects).
+    fenced_commands: Mutex<HashSet<String>>,
     /// Launch metadata re-declared after every broker reconnect. These are
     /// registry claims, not pending commands: absence never authorizes Machine broker
     /// to spawn while surviving workers are still converging.
@@ -125,6 +142,10 @@ pub struct Shared {
     /// a late `Running` edge cannot drain a force-pushed prompt into the worker
     /// that is being fenced.
     resetting: Mutex<HashSet<String>>,
+    /// Exact `reset-*` `StopSession` or `RecoverExecutionSession` command ID
+    /// (or `parking:*` placeholder) owning the active reset for each session,
+    /// so a stale superseded ACK cannot dismantle a newer reset.
+    active_reset_commands: Mutex<HashMap<String, String>>,
     /// The epoch each reset replaces, and the replacement's own snapshot when
     /// it reached this Controller before the reset acknowledgement. Snapshots
     /// are ignored while resetting and the acknowledgement forgets the old
@@ -150,7 +171,21 @@ pub struct Shared {
     telemetry: Mutex<Option<(String, crate::observability::Observability)>>,
     native_store: Mutex<Option<(String, crate::store::Store)>>,
     turn_ends: Mutex<Option<turn_end::Listener>>,
+    /// Dedicated execution-recovery send fences (Finding 3 & Finding 8).
+    /// Lock order across `Shared`:
+    /// `projection_fence` -> `config_startups` -> `recovery_fences` -> `pending` -> `sent` -> `attempted_sends` -> `fenced_commands`.
+    recovery_fences: Mutex<HashMap<String, notice_recovery::RecoveryFence>>,
+    recovery_fence_counter: AtomicU64,
+    /// Fenced `true` by `disconnect()` so a superseded runtime's bootstrap or
+    /// event task cannot project snapshots into a replacement's `Hub` (Finding 13).
+    projection_fence: Mutex<bool>,
+    /// Optional wakeup hook fired after runtime-teardown notice retention so a
+    /// dormant (`Exited`) parent wakes if a replacement runtime already connected (Finding 11).
+    teardown_notice_wake: Mutex<Option<TeardownNoticeWake>>,
 }
+
+/// Callback invoked after runtime-teardown notice retention to wake a dormant parent.
+pub type TeardownNoticeWake = Arc<dyn Fn(&str, &str) + Send + Sync>;
 
 pub struct RemoteRuntime {
     shared: Arc<Shared>,
@@ -233,18 +268,21 @@ impl RemoteRuntime {
                 socket,
                 machine_id: Some(machine_id),
                 hub,
-                pending: Mutex::new(HashMap::new()),
+                pending: Mutex::new(PendingCommands::default()),
                 steering: Mutex::new(HashMap::new()),
                 native_fork_protocol: machine_protocol
                     >= crate::machine_protocol::NATIVE_FORK_PROTOCOL_VERSION,
                 machine_protocol,
                 account_stops: Mutex::new(HashMap::new()),
                 sent: Mutex::new(HashSet::new()),
+                attempted_sends: Mutex::new(HashSet::new()),
+                fenced_commands: Mutex::new(HashSet::new()),
                 declarations: Mutex::new(HashMap::new()),
                 workers: Mutex::new(HashMap::new()),
                 config_sync_epochs: Mutex::new(HashMap::new()),
                 config_startups: Mutex::new(HashSet::new()),
                 resetting: Mutex::new(HashSet::new()),
+                active_reset_commands: Mutex::new(HashMap::new()),
                 reset_replacements: Mutex::new(HashMap::new()),
                 optimistic_revivals: Mutex::new(HashSet::new()),
                 highwaters: Mutex::new(HashMap::new()),
@@ -262,6 +300,10 @@ impl RemoteRuntime {
                 telemetry: Mutex::new(None),
                 native_store: Mutex::new(None),
                 turn_ends: Mutex::new(None),
+                recovery_fences: Mutex::new(HashMap::new()),
+                recovery_fence_counter: AtomicU64::new(0),
+                projection_fence: Mutex::new(false),
+                teardown_notice_wake: Mutex::new(None),
             }),
             notify_rx: Mutex::new(Some(notify_rx)),
         })
@@ -290,12 +332,14 @@ impl RemoteRuntime {
                 socket: bootstrap.socket.clone(),
                 machine_id: None,
                 hub,
-                pending: Mutex::new(HashMap::new()),
+                pending: Mutex::new(PendingCommands::default()),
                 steering: Mutex::new(HashMap::new()),
                 native_fork_protocol: true,
                 machine_protocol: crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
                 account_stops: Mutex::new(HashMap::new()),
                 sent: Mutex::new(HashSet::new()),
+                attempted_sends: Mutex::new(HashSet::new()),
+                fenced_commands: Mutex::new(HashSet::new()),
                 declarations: Mutex::new(declarations),
                 workers: Mutex::new(
                     bootstrap
@@ -315,6 +359,7 @@ impl RemoteRuntime {
                         .collect(),
                 ),
                 resetting: Mutex::new(HashSet::new()),
+                active_reset_commands: Mutex::new(HashMap::new()),
                 reset_replacements: Mutex::new(HashMap::new()),
                 optimistic_revivals: Mutex::new(HashSet::new()),
                 highwaters: Mutex::new(HashMap::new()),
@@ -332,6 +377,10 @@ impl RemoteRuntime {
                 telemetry: Mutex::new(None),
                 native_store: Mutex::new(None),
                 turn_ends: Mutex::new(None),
+                recovery_fences: Mutex::new(HashMap::new()),
+                recovery_fence_counter: AtomicU64::new(0),
+                projection_fence: Mutex::new(false),
+                teardown_notice_wake: Mutex::new(None),
             }),
             notify_rx: Mutex::new(Some(notify_rx)),
         })
@@ -400,10 +449,16 @@ impl RemoteRuntime {
         };
         let shared = Arc::clone(&self.shared);
         tokio::spawn(async move {
+            if shared.shutdown.load(Ordering::Acquire) {
+                return;
+            }
             // Production installs a connecting runtime with an empty worker
             // map. Seed ownership before marking the broker ready; projecting
             // only Hub metadata temporarily makes every live slot look free.
             merge_worker_snapshots(&shared, bootstrap.workers).await;
+            if shared.shutdown.load(Ordering::Acquire) {
+                return;
+            }
             connection_manager(
                 shared,
                 notify_rx,
@@ -464,8 +519,8 @@ impl RemoteRuntime {
             if let Some(mut session) = declaration {
                 session.adopt_only = true;
                 let mut pending = self.shared.pending.lock();
-                if let std::collections::hash_map::Entry::Vacant(entry) = pending.entry(key) {
-                    entry.insert(CoreCommand::EnsureSession { session });
+                if !pending.contains_key(&key) {
+                    pending.insert(key, CoreCommand::EnsureSession { session });
                     let _ = self.shared.notify.send(());
                 }
             }
@@ -767,13 +822,31 @@ impl RemoteRuntime {
         *self.shared.native_store.lock() = Some((machine, store));
     }
 
+    pub fn set_teardown_notice_wake(&self, wake: TeardownNoticeWake) {
+        *self.shared.teardown_notice_wake.lock() = Some(wake);
+    }
+
+    /// Whether execution recovery's durable parking failed for `session_id`
+    /// and a subsequent recovery retry has not yet superseded it.
+    #[must_use]
+    pub fn recovery_failed(&self, session_id: &str) -> bool {
+        self.shared
+            .recovery_fences
+            .lock()
+            .get(session_id)
+            .is_some_and(|fence| fence.state == notice_recovery::RecoveryFenceState::Failed)
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub async fn send_native_test<W: tokio::io::AsyncWrite + Unpin>(
         &self,
         writer: &mut W,
         command: CoreCommand,
     ) -> Result<bool> {
-        native_admission::send(&self.shared, writer, command).await
+        Ok(
+            native_admission::send(&self.shared, writer, None, command).await?
+                == native_admission::SendOutcome::Sent,
+        )
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -822,12 +895,62 @@ impl RemoteRuntime {
         cmid: Option<String>,
         trace: Option<crate::runtime_trace::TraceCarrier>,
     ) -> String {
-        let command_id = self.next_id("cmd");
+        self.try_prompt_traced(session_id, content, cmid, trace)
+            .unwrap_or_default()
+    }
+
+    /// Queue a prompt command atomically against `disconnect()`'s shutdown fence
+    /// and execution recovery's failed-parking fence. Returns `Err` synchronously
+    /// if this runtime was already disconnected or recovery failed so callers can
+    /// release any dispatch claim and requeue immediately.
+    pub fn try_prompt_traced(
+        &self,
+        session_id: &str,
+        content: Vec<serde_json::Value>,
+        cmid: Option<String>,
+        trace: Option<crate::runtime_trace::TraceCarrier>,
+    ) -> std::result::Result<String, String> {
+        self.try_prompt_traced_with_command_id(session_id, content, cmid, trace, None)
+    }
+
+    /// Same as [`Self::try_prompt_traced`], binding a caller-supplied durable
+    /// `command_id` (used for `call-notice:` dispatches so worker non-delivery
+    /// receipts authenticate against the persisted dispatch attempt).
+    pub fn revive_and_try_prompt_traced_with_command_id(
+        &self,
+        session: StartSession,
+        content: Vec<serde_json::Value>,
+        cmid: Option<String>,
+        trace: Option<crate::runtime_trace::TraceCarrier>,
+        explicit_command_id: Option<String>,
+    ) -> std::result::Result<String, String> {
+        let command_id = explicit_command_id.unwrap_or_else(|| self.next_id("cmd"));
+        let turn_id = self.next_turn_id();
+        notice_recovery::revive_and_try_prompt(
+            &self.shared,
+            session,
+            command_id,
+            turn_id,
+            content,
+            cmid,
+            trace,
+        )
+    }
+
+    pub fn try_prompt_traced_with_command_id(
+        &self,
+        session_id: &str,
+        content: Vec<serde_json::Value>,
+        cmid: Option<String>,
+        trace: Option<crate::runtime_trace::TraceCarrier>,
+        explicit_command_id: Option<String>,
+    ) -> std::result::Result<String, String> {
+        let command_id = explicit_command_id.unwrap_or_else(|| self.next_id("cmd"));
         let turn_id = self.next_turn_id();
         // The echo would otherwise carry every image back across the Machine
         // link, holding the prompt on "Sending…" while the turn already runs.
         let echo_artifacts = self.shared.hub.store_prompt_images(&content);
-        self.queue(
+        self.try_queue(
             command_id.clone(),
             CoreCommand::Prompt {
                 session_id: session_id.to_owned(),
@@ -839,8 +962,8 @@ impl RemoteRuntime {
                 echo_artifacts,
                 observe_subagents: true,
             },
-        );
-        command_id
+        )?;
+        Ok(command_id)
     }
 
     pub fn delivery_controls(&self, session_id: &str) -> crate::runtime_wire::DeliveryControls {
@@ -1217,6 +1340,11 @@ impl RemoteRuntime {
             queue_persisted_config_for_session(&self.shared, &session_id, true);
         }
         let command_id = self.next_id("reset");
+        self.shared
+            .active_reset_commands
+            .lock()
+            .insert(session_id.clone(), command_id.clone());
+        notice_recovery::refresh_recovery_fence_for_reset(&self.shared, &session_id, &command_id);
         self.queue(
             command_id.clone(),
             CoreCommand::StopSession {
@@ -1249,53 +1377,17 @@ impl RemoteRuntime {
 
     pub fn recover_execution(
         &self,
-        mut session: StartSession,
+        session: StartSession,
         intent: crate::execution_environment::RecoveryV1,
-    ) {
-        session
-            .generation
-            .clone_from(&self.shared.desired_generation);
-        let id = session.session_id.clone();
-        self.park_recovery_prompts(&id);
-        begin_reset(&self.shared, &id);
-        self.shared.config_startups.lock().insert(id.clone());
-        self.shared.config_sync_epochs.lock().remove(&id);
-        discard_pending_config(&self.shared, &id);
-        self.shared
-            .pending
-            .lock()
-            .retain(|_, command| command.session_id() != Some(id.as_str()));
-        self.shared.declarations.lock().insert(id, session.clone());
-        let command_id = self.next_id("execution-recover");
-        self.queue(
-            command_id.clone(),
-            CoreCommand::RecoverExecutionSession {
-                session: Box::new(session),
-                intent: Box::new(intent),
-                command_id,
-            },
-        );
+    ) -> std::result::Result<(), String> {
+        notice_recovery::recover_execution_durable(&self.shared, session, Some(intent))
     }
 
-    pub fn retry_execution_recovery(&self, session: StartSession) {
-        self.park_recovery_prompts(&session.session_id);
-        self.reset(session);
-    }
-
-    fn park_recovery_prompts(&self, id: &str) {
-        for command in take_pending_prompts(&self.shared, id) {
-            // Preserve an unacknowledged prompt for explicit user inspection;
-            // it must not run automatically against the new execution lifetime.
-            if let CoreCommand::Prompt { content, cmid, .. } = command {
-                let text = content
-                    .iter()
-                    .filter_map(|part| part.get("text").and_then(serde_json::Value::as_str))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                self.shared.hub.add_draft(id, text, content, cmid);
-                self.shared.hub.broadcast_error(Some(id.to_owned()), "Execution recovery retained an unacknowledged prompt as a draft; inspect effects before resending".into());
-            }
-        }
+    pub fn retry_execution_recovery(
+        &self,
+        session: StartSession,
+    ) -> std::result::Result<(), String> {
+        notice_recovery::recover_execution_durable(&self.shared, session, None)
     }
 
     /// Stop accepting a deployment boundary only after every command already
@@ -1314,7 +1406,7 @@ impl RemoteRuntime {
         self.shared.shutdown.store(true, Ordering::Release);
         let _ = self.shared.notify.send(());
 
-        let pending = std::mem::take(&mut *self.shared.pending.lock());
+        let pending = self.shared.pending.lock().drain_commands();
         for (key, command) in pending {
             let Some(session_id) = command.session_id().map(str::to_owned) else {
                 continue;
@@ -1322,8 +1414,8 @@ impl RemoteRuntime {
             if matches!(command, CoreCommand::Prompt { .. })
                 && !(broker_owns_sent && sent.contains(&key))
             {
-                handle_rejected_command(
-                    &self.shared.hub,
+                notice_recovery::requeue_rejected_command(
+                    &self.shared,
                     &session_id,
                     Some(command),
                     Some(
@@ -1335,16 +1427,46 @@ impl RemoteRuntime {
     }
 
     /// Fence a disconnected Machine runtime without entering the local socket
-    /// reconnect loop. Durable prompts remain owned by the Hub.
+    /// reconnect loop. Acquires `projection_fence` before returning so no
+    /// concurrent bootstrap/event task can project into a replacement's `Hub`.
+    /// Provably unsent completion notices are durably requeued; attempted sends
+    /// remain fenced.
     pub fn disconnect(&self) {
-        self.shared.shutdown.store(true, Ordering::Release);
-        self.shared.connected.store(false, Ordering::Release);
+        {
+            let mut fenced = self.shared.projection_fence.lock();
+            *fenced = true;
+            self.shared.shutdown.store(true, Ordering::Release);
+            self.shared.connected.store(false, Ordering::Release);
+        }
         let _ = self.shared.notify.send(());
+        notice_recovery::requeue_unsent_notices_on_disconnect(&self.shared);
+    }
+
+    fn try_queue(&self, key: String, command: CoreCommand) -> std::result::Result<(), String> {
+        let recovery_fences = self.shared.recovery_fences.lock();
+        let mut pending = self.shared.pending.lock();
+        if self.shared.shutdown.load(Ordering::Acquire) {
+            return Err("Machine runtime disconnected before prompt handoff".to_owned());
+        }
+        if let CoreCommand::Prompt { session_id, .. } = &command
+            && recovery_fences
+                .get(session_id)
+                .is_some_and(|f| f.state == notice_recovery::RecoveryFenceState::Failed)
+        {
+            return Err(
+                "Execution recovery failed; prompt retained until recovery succeeds".to_owned(),
+            );
+        }
+        self.shared.sent.lock().remove(&key);
+        pending.insert(key, command);
+        drop(pending);
+        drop(recovery_fences);
+        let _ = self.shared.notify.send(());
+        Ok(())
     }
 
     fn queue(&self, key: String, command: CoreCommand) {
-        self.shared.sent.lock().remove(&key);
-        self.shared.pending.lock().insert(key, command);
+        insert_pending(&self.shared, key, command);
         let _ = self.shared.notify.send(());
     }
 
@@ -1357,6 +1479,12 @@ impl RemoteRuntime {
         let value = self.shared.turn_counter.fetch_add(1, Ordering::Relaxed);
         format!("turn-{}-{value}", std::process::id())
     }
+}
+
+fn insert_pending(shared: &Shared, key: String, command: CoreCommand) -> u64 {
+    let mut pending = shared.pending.lock();
+    shared.sent.lock().remove(&key);
+    pending.insert(key, command)
 }
 
 fn seed_counter() -> u64 {
@@ -1652,17 +1780,18 @@ async fn send_pending<W: tokio::io::AsyncWrite + Unpin>(
     shared: &Shared,
     writer: &mut W,
 ) -> Result<()> {
-    let mut commands: Vec<_> = shared
-        .pending
-        .lock()
-        .iter()
-        .map(|(key, command)| (key.clone(), command.clone()))
-        .collect();
-    commands.sort_by_key(|(_, command)| command_priority(command));
+    let mut commands: Vec<_> = {
+        let pending = shared.pending.lock();
+        pending
+            .iter_with_versions()
+            .map(|(key, version, command)| (key.clone(), version, command.clone()))
+            .collect()
+    };
+    commands.sort_by_key(|(_, _, command)| command_priority(command));
     let mut deferred = HashSet::new();
-    for (key, command) in commands {
-        // Already carried by this connection; `queue`, a rejected ack and a reconnect clear it.
-        if shared.sent.lock().contains(&key) {
+    for (key, version, command) in commands {
+        // Already carried by this connection or fenced after failed recovery.
+        if shared.sent.lock().contains(&key) || shared.fenced_commands.lock().contains(&key) {
             continue;
         }
         if !command_supported(shared, &command) {
@@ -1697,7 +1826,11 @@ async fn send_pending<W: tokio::io::AsyncWrite + Unpin>(
         }
         if let CoreCommand::Prompt { session_id, .. } = &command {
             let startups = shared.config_startups.lock();
-            if startups.contains(session_id) || !shared.pending.lock().contains_key(&key) {
+            let recovery_fences = shared.recovery_fences.lock();
+            if startups.contains(session_id)
+                || recovery_fences.contains_key(session_id)
+                || !shared.pending.lock().contains_key(&key)
+            {
                 continue;
             }
         }
@@ -1705,14 +1838,24 @@ async fn send_pending<W: tokio::io::AsyncWrite + Unpin>(
         if !shared.pending.lock().contains_key(&key) {
             continue;
         }
-        let Some(command) = reset_admission::current(shared, &key, command, &mut deferred) else {
+        let Some(command) = reset_admission::current(shared, &key, version, command, &mut deferred)
+        else {
             continue;
         };
-        if !native_admission::send(shared, writer, command.clone()).await? {
-            reset_admission::denied(shared, writer, key, &command).await?;
-            continue;
+        notice_recovery::record_dispatch_worker_epoch_if_notice(shared, &command).await;
+        match native_admission::send(shared, writer, Some((&key, version)), command.clone()).await?
+        {
+            native_admission::SendOutcome::Sent => {
+                shared.sent.lock().insert(key);
+            }
+            native_admission::SendOutcome::Skipped => {}
+            native_admission::SendOutcome::Denied => {
+                let still_current = shared.pending.lock().version(&key) == Some(version);
+                if still_current {
+                    reset_admission::denied(shared, writer, key, &command).await?;
+                }
+            }
         }
-        shared.sent.lock().insert(key);
     }
     Ok(())
 }
@@ -1825,7 +1968,10 @@ async fn send_declarations<W: tokio::io::AsyncWrite + Unpin>(
             continue;
         }
         let declared = session.clone();
-        if !native_admission::send(shared, writer, CoreCommand::EnsureSession { session }).await? {
+        if native_admission::send(shared, writer, None, CoreCommand::EnsureSession { session })
+            .await?
+            != native_admission::SendOutcome::Sent
+        {
             native_admission::declaration_denied(shared, &declared);
         }
     }
@@ -1936,7 +2082,10 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                 );
             }
             if previous.is_none_or(|previous| runtime_seq > previous) {
-                native_admission::event(shared, &session_id, &worker_epoch, || {
+                let mut undelivered_ack = None;
+                let admitted = native_admission::event(shared, &session_id, &worker_epoch, || {
+                    undelivered_ack =
+                        notice_recovery::suppressed_undelivered(&key, runtime_seq, &event, true);
                     // Account signals and uncertain effects of an admitted
                     // epoch are observed even while its transcript is not
                     // projected (a reset).
@@ -1968,22 +2117,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                             codex_full_access_permission(shared, &session_id, &event);
                         let is_config_options =
                             matches!(&event, RuntimeEvent::ConfigOptions { .. });
-                        if let RuntimeEvent::Update { update, .. } = &event
-                            && update
-                                .get("sessionUpdate")
-                                .and_then(serde_json::Value::as_str)
-                                == Some(crate::runtime_wire::STEERING_RESULT_UPDATE)
-                            && let (Some(cmid), Some(outcome)) = (
-                                update.get("cmid").and_then(serde_json::Value::as_str),
-                                update.get("outcome").and_then(serde_json::Value::as_str),
-                            )
-                            && let Some(waiter) = shared
-                                .steering
-                                .lock()
-                                .remove(&(session_id.clone(), cmid.to_owned()))
-                        {
-                            let _ = waiter.send(outcome.to_owned());
-                        }
+                        resolve_steering_update(shared, &session_id, &event);
                         turn_end::ended(shared, &session_id, &event);
                         update_snapshot_from_event(shared, &session_id, runtime_seq, &event);
                         if let RuntimeEvent::Status {
@@ -2006,26 +2140,27 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                         if is_config_options && let Some(worker) = worker.as_ref() {
                             sync_config_for_worker(shared, worker);
                         }
-                        if let Some((request_id, option_id)) = auto_permission {
-                            tracing::info!(
-                                session = %session_id,
-                                %request_id,
-                                %option_id,
-                                "auto-approving Codex full-access permission at runtime boundary"
-                            );
-                            queue_permission(shared, &session_id, request_id, option_id);
-                        } else {
-                            mark_projected_provider_auth_expired(shared, &session_id, &event);
-                            if let Some(event) = divert(&shared.hub, &key, runtime_seq, event) {
-                                apply_event(&shared.hub, &session_id, event);
-                            }
-                            reconcile_idle_guard(shared, &session_id, idle_guard);
-                        }
+                        undelivered_ack = notice_recovery::project_worker_outcome(
+                            shared,
+                            &key,
+                            &session_id,
+                            runtime_seq,
+                            event.clone(),
+                            idle_guard,
+                            auto_permission,
+                        );
                     }
                 })
                 .await;
-                // ACK means consumed, not authorized or projected. Rejected
-                // events must not loop forever or establish process-exit proof.
+                notice_recovery::settle_event_undelivered(
+                    shared,
+                    &key,
+                    runtime_seq,
+                    &event,
+                    admitted,
+                    undelivered_ack,
+                )
+                .await?;
                 shared.highwaters.lock().insert(key, runtime_seq);
             }
             write_broker_frame(
@@ -2072,7 +2207,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                 // the native result proves non-delivery, never a transport ACK.
                 let _ = waiter.send("unknown".into());
             }
-            shared.sent.lock().remove(&command_id);
+            notice_recovery::clear_acked_command(shared, &command_id);
             if !accepted && matches!(&command, Some(CoreCommand::CancelSubagent { .. })) {
                 shared.hub.broadcast_error(
                     Some(session_id.clone()),
@@ -2103,14 +2238,23 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                     Some(CoreCommand::StopSession { command_id, .. })
                         if command_id.starts_with("reset-")
                 );
+            let is_current_reset = reset_stop
+                && shared
+                    .active_reset_commands
+                    .lock()
+                    .get(&session_id)
+                    .is_some_and(|active| active == &command_id);
             if let Some(CoreCommand::StopSession { command_id, .. }) = &command {
                 if !command_id.starts_with("reset-") {
                     shared.declarations.lock().remove(&session_id);
+                    shared.workers.lock().remove(&session_id);
+                } else if is_current_reset {
+                    shared.workers.lock().remove(&session_id);
                 }
-                shared.workers.lock().remove(&session_id);
             }
-            if reset_stop {
+            if is_current_reset {
                 shared.resetting.lock().remove(&session_id);
+                shared.active_reset_commands.lock().remove(&session_id);
                 let replacement = shared
                     .reset_replacements
                     .lock()
@@ -2137,27 +2281,14 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                 shared.hub.set_status(&session_id, Status::Exited, None);
             }
             if !accepted {
-                if matches!(&command, Some(CoreCommand::EnsureSession { .. })) || reset_stop {
-                    fail_config_startup(
-                        shared,
-                        &session_id,
-                        reason.as_deref().unwrap_or("worker startup rejected"),
-                    );
-                }
-                if reason.as_deref().is_some_and(|message| {
-                    message.starts_with("session workspace was replaced or removed:")
-                }) {
-                    reset_after_workspace_replacement(shared, &session_id);
-                }
-                // The Machine lacks this session's pinned generation: every
-                // later open fails the same way until the update pass re-pins it.
-                if reason
-                    .as_deref()
-                    .is_some_and(crate::generation_retention::is_not_installed_detail)
-                {
-                    shared.hub.note_provider_generation_missing(&session_id);
-                }
-                handle_rejected_command(&shared.hub, &session_id, command, reason);
+                notice_recovery::handle_rejected_ack(
+                    shared,
+                    &session_id,
+                    &command_id,
+                    command,
+                    is_current_reset,
+                    reason,
+                );
             }
         }
         Frame::Snapshot { worker } => {
@@ -2265,7 +2396,15 @@ fn begin_reset(shared: &Shared, session_id: &str) {
         .get(session_id)
         .map(|worker| worker.worker_epoch.clone())
         .unwrap_or_default();
+    let placeholder = format!(
+        "pending-reset:{}",
+        shared.command_counter.fetch_add(1, Ordering::Relaxed) + 1
+    );
     shared.resetting.lock().insert(session_id.to_owned());
+    shared
+        .active_reset_commands
+        .lock()
+        .insert(session_id.to_owned(), placeholder);
     shared
         .reset_replacements
         .lock()
@@ -2284,6 +2423,7 @@ fn project_snapshot(shared: &Shared, worker: &WorkerSnapshot) {
         .insert(worker.session_id.clone(), worker.clone());
     acknowledge_pending_ensure_from_snapshot(shared, worker);
     apply_snapshot(shared, worker);
+    notice_recovery::spawn_record_snapshot_worker_epoch_if_notice(shared, worker);
 }
 
 async fn update_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
@@ -2297,6 +2437,9 @@ async fn update_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) 
 
 async fn merge_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
     for worker in workers {
+        if shared.shutdown.load(Ordering::Acquire) {
+            return;
+        }
         if foreign_session(shared, &worker.session_id) {
             reject_foreign_frame(shared, &worker.session_id, "worker inventory");
             continue;
@@ -2312,6 +2455,7 @@ async fn merge_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
                 .workers
                 .lock()
                 .insert(worker.session_id.clone(), worker.clone());
+            notice_recovery::spawn_record_snapshot_worker_epoch_if_notice(shared, &worker);
         })
         .await;
     }
@@ -2344,226 +2488,23 @@ fn worker_status(state: WorkerState) -> Status {
     }
 }
 
-fn queue_persisted_config_for_session(shared: &Shared, session_id: &str, force_replay: bool) {
-    let persisted_options = shared.hub.persisted_config_options(session_id);
-    let worker_options = {
-        let workers = shared.workers.lock();
-        workers
-            .get(session_id)
-            .and_then(|worker| worker.config_options.clone())
-    };
-    // The Hub snapshot is the last controller-authoritative state and may be
-    // newer than a detached worker's launch-time snapshot. Prefer it when
-    // deciding whether a durable value is still safe to replay.
-    let options = persisted_options.or(worker_options);
-    queue_persisted_config(shared, session_id, options.as_ref(), force_replay);
-}
-
-fn queue_persisted_config(
-    shared: &Shared,
-    session_id: &str,
-    options: Option<&serde_json::Value>,
-    force_replay: bool,
-) {
-    // Managed workers advertise only the signed preset options. Wait for that
-    // allowlist before replaying: older workers hide every option, and legacy
-    // interactive permission preferences must never reach a managed child.
-    if shared.hub.is_managed_child(session_id) && options.is_none() {
-        return;
-    }
-    let Some(preferences) = shared.hub.config_preferences(session_id) else {
-        return;
-    };
-    let Some(preferences) = preferences.as_object() else {
-        return;
-    };
-    let Some(meta) = shared
-        .hub
-        .session_list()
-        .into_iter()
-        .find(|meta| meta.id == session_id)
-    else {
-        return;
-    };
-    let configuration = meta.provider_behavior.as_ref().map_or_else(
-        || crate::provider::legacy_behavior(&meta.provider).configuration,
-        |behavior| behavior.configuration.clone(),
-    );
-    let Some(options) = options else {
-        for (config_id, value) in preferences {
-            if crate::managed_config::is_managed(&configuration, config_id) {
-                continue;
-            }
-            queue_config_value(shared, session_id, config_id, value.clone());
-        }
-        return;
-    };
-    let Some(options) = options.as_array() else {
-        return;
-    };
-    for (config_id, value) in preferences {
-        if crate::managed_config::is_managed(&configuration, config_id) {
-            continue;
-        }
-        let Some(option) = options
-            .iter()
-            .find(|option| option.get("id").and_then(serde_json::Value::as_str) == Some(config_id))
-        else {
-            continue;
-        };
-        if (!force_replay && config_current_value(option) == Some(value))
-            || !config_option_accepts(option, value)
-        {
-            continue;
-        }
-        queue_config_value(shared, session_id, config_id, value.clone());
-    }
-}
-
-fn sync_config_for_worker(shared: &Shared, worker: &WorkerSnapshot) {
-    if !worker.has_connected_owner() || worker.config_options.is_none() {
-        return;
-    }
-    let already_synced = {
-        let mut epochs = shared.config_sync_epochs.lock();
-        if epochs
-            .get(&worker.session_id)
-            .is_some_and(|epoch| epoch == &worker.worker_epoch)
-        {
-            true
-        } else {
-            epochs.insert(worker.session_id.clone(), worker.worker_epoch.clone());
-            false
-        }
-    };
-    if !already_synced {
-        queue_persisted_config(
-            shared,
-            &worker.session_id,
-            worker.config_options.as_ref(),
-            false,
-        );
-    }
-    if shared.config_startups.lock().remove(&worker.session_id) {
-        let _ = shared.notify.send(());
-    }
-}
-
-// Completion proves admission when the separate CommandAck was lost. Start
-// events and active snapshots precede the fallible ACP send and cannot prove it.
-fn fail_config_startup(shared: &Shared, session_id: &str, reason: &str) {
-    let rejected = {
-        let mut startups = shared.config_startups.lock();
-        if !startups.remove(session_id) {
-            return;
-        }
-        take_pending_prompts(shared, session_id)
-    };
-    for command in rejected {
-        handle_rejected_command(
-            &shared.hub,
-            session_id,
-            Some(command),
-            Some(reason.to_owned()),
-        );
-    }
-}
-
-fn take_pending_prompts(shared: &Shared, session_id: &str) -> Vec<CoreCommand> {
-    let mut rejected = Vec::new();
-    shared.pending.lock().retain(|key, command| {
-        if matches!(command, CoreCommand::Prompt { session_id: owner, .. } if owner == session_id) {
-            rejected.push((key.clone(), command.clone()));
-            false
-        } else {
-            true
-        }
-    });
-    rejected
-        .into_iter()
-        .map(|(key, command)| {
-            shared.sent.lock().remove(&key);
-            command
-        })
-        .collect()
-}
-
-fn queue_config_value(
-    shared: &Shared,
-    session_id: &str,
-    config_id: &str,
-    value: serde_json::Value,
-) {
-    let same_pending = shared.pending.lock().iter().any(|(_, command)| {
-        matches!(
-            command,
-            CoreCommand::SetConfigOption {
-                session_id: pending_session,
-                config_id: pending_id,
-                value: pending_value,
-                ..
-            } if pending_session == session_id
-                && pending_id == config_id
-                && pending_value == &value
+fn resolve_steering_update(shared: &Shared, session_id: &str, event: &RuntimeEvent) {
+    if let RuntimeEvent::Update { update, .. } = event
+        && update
+            .get("sessionUpdate")
+            .and_then(serde_json::Value::as_str)
+            == Some(crate::runtime_wire::STEERING_RESULT_UPDATE)
+        && let (Some(cmid), Some(outcome)) = (
+            update.get("cmid").and_then(serde_json::Value::as_str),
+            update.get("outcome").and_then(serde_json::Value::as_str),
         )
-    });
-    if same_pending {
-        return;
+        && let Some(waiter) = shared
+            .steering
+            .lock()
+            .remove(&(session_id.to_owned(), cmid.to_owned()))
+    {
+        let _ = waiter.send(outcome.to_owned());
     }
-    let stale_keys: Vec<String> = shared
-        .pending
-        .lock()
-        .iter()
-        .filter_map(|(key, command)| {
-            matches!(
-                command,
-                CoreCommand::SetConfigOption {
-                    session_id: pending_session,
-                    config_id: pending_id,
-                    ..
-                } if pending_session == session_id && pending_id == config_id
-            )
-            .then_some(key.clone())
-        })
-        .collect();
-    for key in stale_keys {
-        shared.pending.lock().remove(&key);
-        shared.sent.lock().remove(&key);
-    }
-    let counter = shared.command_counter.fetch_add(1, Ordering::Relaxed);
-    let command_id = format!("config-{}-{counter}", std::process::id());
-    shared.pending.lock().insert(
-        command_id.clone(),
-        CoreCommand::SetConfigOption {
-            session_id: session_id.to_owned(),
-            command_id,
-            config_id: config_id.to_owned(),
-            value,
-        },
-    );
-    let _ = shared.notify.send(());
-}
-
-fn discard_pending_config(shared: &Shared, session_id: &str) {
-    let mut removed = Vec::new();
-    shared.pending.lock().retain(|key, command| {
-        let obsolete = matches!(command, CoreCommand::SetConfigOption { session_id: owner, .. }
-            if owner == session_id);
-        if obsolete {
-            removed.push(key.clone());
-        }
-        !obsolete
-    });
-    let mut sent = shared.sent.lock();
-    for key in removed {
-        sent.remove(&key);
-    }
-}
-
-fn config_current_value(option: &serde_json::Value) -> Option<&serde_json::Value> {
-    option
-        .get("currentValue")
-        .or_else(|| option.get("current_value"))
 }
 
 fn recoverable_live_worker_error(
@@ -3074,15 +3015,17 @@ fn reset_after_workspace_replacement(shared: &Shared, session_id: &str) {
         .lock()
         .insert(session_id.to_owned(), session.clone());
     let ensure_key = format!("ensure:{session_id}");
-    shared.sent.lock().remove(&ensure_key);
-    shared
-        .pending
-        .lock()
-        .insert(ensure_key, CoreCommand::EnsureSession { session });
+    insert_pending(shared, ensure_key, CoreCommand::EnsureSession { session });
     queue_persisted_config_for_session(shared, session_id, true);
     let value = shared.command_counter.fetch_add(1, Ordering::Relaxed);
     let command_id = format!("reset-{}-{value}", std::process::id());
-    shared.pending.lock().insert(
+    shared
+        .active_reset_commands
+        .lock()
+        .insert(session_id.to_owned(), command_id.clone());
+    notice_recovery::refresh_recovery_fence_for_reset(shared, session_id, &command_id);
+    insert_pending(
+        shared,
         command_id.clone(),
         CoreCommand::StopSession {
             session_id: session_id.to_owned(),
@@ -4142,16 +4085,18 @@ mod tests {
         let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
         let launch = snapshot("s").launch.unwrap();
         let mut output = Vec::new();
-        assert!(
+        assert_eq!(
             native_admission::send(
                 &runtime.shared,
                 &mut output,
+                None,
                 CoreCommand::EnsureSession {
                     session: launch.clone()
                 }
             )
             .await
-            .unwrap()
+            .unwrap(),
+            native_admission::SendOutcome::Sent
         );
         output.clear();
         hub.load_settings(vec![(
@@ -4161,27 +4106,31 @@ mod tests {
             ),
             serde_json::json!({"bindings":[{"name":"suger"}]}),
         )]);
-        assert!(
-            !native_admission::send(
-                &runtime.shared,
-                &mut output,
-                CoreCommand::EnsureSession { session: launch }
-            )
-            .await
-            .unwrap()
-        );
-        assert!(output.is_empty());
-        assert!(
+        assert_eq!(
             native_admission::send(
                 &runtime.shared,
                 &mut output,
+                None,
+                CoreCommand::EnsureSession { session: launch }
+            )
+            .await
+            .unwrap(),
+            native_admission::SendOutcome::Denied
+        );
+        assert!(output.is_empty());
+        assert_eq!(
+            native_admission::send(
+                &runtime.shared,
+                &mut output,
+                None,
                 CoreCommand::StopSession {
                     session_id: "s".into(),
                     command_id: "stop-s".into()
                 }
             )
             .await
-            .unwrap()
+            .unwrap(),
+            native_admission::SendOutcome::Sent
         );
         assert!(!output.is_empty());
     }
@@ -6213,7 +6162,9 @@ mod tests {
         assert!(intent.accepts(&replacement));
         let mut launch = old.launch.unwrap();
         launch.execution_binding = Some(record(&replacement));
-        runtime.recover_execution(launch.clone(), intent.clone());
+        runtime
+            .recover_execution(launch.clone(), intent.clone())
+            .unwrap();
         runtime.ensure(launch);
         let pending = runtime.pending_for_test();
         assert!(pending.iter().any(|command| matches!(command,
@@ -6256,15 +6207,17 @@ mod tests {
             Some("original-prompt".into()),
         );
         let session = snapshot("s").launch.unwrap();
-        runtime.recover_execution(
-            session,
-            crate::execution_environment::RecoveryV1 {
-                schema: 1,
-                phase: "recovering".into(),
-                operation_id: "repair-1".into(),
-                previous: crate::execution_environment::fixture().decode().unwrap(),
-            },
-        );
+        runtime
+            .recover_execution(
+                session,
+                crate::execution_environment::RecoveryV1 {
+                    schema: 1,
+                    phase: "recovering".into(),
+                    operation_id: "repair-1".into(),
+                    previous: crate::execution_environment::fixture().decode().unwrap(),
+                },
+            )
+            .unwrap();
         let info = runtime.shared.hub.session_info("s").unwrap();
         assert_eq!(info.queue_count, 0);
         assert_eq!(info.drafts_count, 1);
@@ -6312,7 +6265,9 @@ mod tests {
             vec![serde_json::json!({"type":"text","text":"uncertain replacement effect"})],
             Some("retry-prompt".into()),
         );
-        runtime.retry_execution_recovery(snapshot("s").launch.unwrap());
+        runtime
+            .retry_execution_recovery(snapshot("s").launch.unwrap())
+            .unwrap();
         let info = runtime.shared.hub.session_info("s").unwrap();
         assert_eq!(info.queue_count, 0);
         assert_eq!(info.drafts_count, 2);

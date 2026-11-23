@@ -653,7 +653,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let dispatcher_task = spawn_dispatcher(&state, dispatch_rx);
     let code_holdings_task = tokio::spawn(agent_api::maintain_holdings(Arc::clone(&state)));
 
-    let runtime_router = Arc::clone(&state.runtime_router);
+    let (runtime_router, hub) = (Arc::clone(&state.runtime_router), state.hub.clone());
     let result = serve_axum(args.bind, args.data_dir.clone(), state, shutdown_tx).await;
     code_holdings_task.abort();
     let _ = code_holdings_task.await;
@@ -664,6 +664,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         tracing::error!(%error, "Catalog observer failed during shutdown");
     }
     ControllerTasks {
+        hub,
         scheduler_task,
         reset_task,
         runtime_reconciliation_task,

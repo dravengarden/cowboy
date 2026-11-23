@@ -39,7 +39,11 @@ use hub_config::{ConfigPreviews, add_config_choices};
 mod hub_events;
 pub use hub_events::FanoutFrame;
 mod hub_managed_calls;
-pub use hub_managed_calls::RetainedLogScan;
+pub use hub_managed_calls::{
+    NoticeClaimGuard, NoticeRequeueRequest, OwnerNoticeWithdrawalOp, OwnerQueueMutation,
+    PendingNoticeWithdrawal, PendingRecoveryPark, PendingUndeliveredRequeue, RetainedLogScan,
+    StoreAckSink, UndeliveredRequeue,
+};
 mod hub_peer_notice;
 pub use hub_peer_notice::PromptProgress;
 mod hub_provider_pins;
@@ -1195,11 +1199,19 @@ pub enum StoreWrite {
     DeleteSession(String),
     /// Persist a session's queue + drafts (whole lists, as JSONB) so staged
     /// messages survive a daemon restart — matching the durability the old
-    /// client-side localStorage gave them.
+    /// client-side localStorage gave them. Any completion notices settled
+    /// (withdrawn/parked) or non-delivery dispatch claims released commit
+    /// atomically with the queue mutation in one SQL transaction.
     UpdatePending {
         session_id: String,
         queue: Vec<QueuedMessage>,
         drafts: Vec<QueuedMessage>,
+        settled_notices: Vec<(String, String)>,
+        released_claims: Vec<crate::store::NoticeClaimRelease>,
+        #[serde(default)]
+        require_claim_release: bool,
+        #[serde(skip)]
+        ack_id: Option<u64>,
     },
     /// Persist the manual session ordering (a `position` per id) so a drag-
     /// arranged list survives a daemon restart.
@@ -1263,8 +1275,34 @@ pub fn estimated_store_write_bytes(write: &StoreWrite) -> usize {
             session_id,
             queue,
             drafts,
+            settled_notices,
+            released_claims,
+            ..
         } => queue.iter().chain(drafts.iter()).fold(
-            session_id.len().saturating_add(64),
+            session_id
+                .len()
+                .saturating_add(64)
+                .saturating_add(
+                    settled_notices
+                        .iter()
+                        .map(|(cid, reason)| cid.len().saturating_add(reason.len()))
+                        .sum::<usize>(),
+                )
+                .saturating_add(
+                    released_claims
+                        .iter()
+                        .map(|release| {
+                            release
+                                .completion_id
+                                .len()
+                                .saturating_add(8)
+                                .saturating_add(release.receipt_key.len())
+                                .saturating_add(
+                                    release.expected_command_id.as_deref().map_or(0, str::len),
+                                )
+                        })
+                        .sum::<usize>(),
+                ),
             |size, message| {
                 size.saturating_add(message.id.len())
                     .saturating_add(message.text.len())
@@ -1443,6 +1481,9 @@ struct HubInner {
     /// Per-state arbiters for the generic optimistic-sync channel, keyed by
     /// state name (`"title"`, `"order"`, …). See [`SyncArbiter`].
     sync: Mutex<HashMap<String, SyncArbiter>>,
+    /// Active and pending-release completion-notice dispatch stamps. Never held with `sessions`.
+    notice_claims: Mutex<hub_managed_calls::NoticeClaims>,
+    store_acks: hub_managed_calls::StoreAckSink,
     /// Serialize read/compare/apply and ordered write-behind snapshots.
     sync_apply_gate: Mutex<()>,
     review_default_receipts: Mutex<review_defaults::Receipts>,
@@ -1671,6 +1712,8 @@ impl Hub {
                 sync: Mutex::new(HashMap::new()),
                 sync_apply_gate: Mutex::new(()),
                 review_default_receipts: Mutex::new(review_defaults::Receipts::default()),
+                notice_claims: Mutex::new(hub_managed_calls::NoticeClaims::default()),
+                store_acks: hub_managed_calls::StoreAckSink::default(),
                 next_qid: AtomicU64::new(1),
                 next_error_id: AtomicU64::new(1),
             }),

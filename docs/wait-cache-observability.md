@@ -130,8 +130,41 @@ series. Inspect `cowboy_observability_failed_metric_batches_total`,
 query-back. A configured exporter receipt and a queryable sample are
 different evidence.
 
-Phase 2 still requires a durable notice delivery contract and proof that a
-receiver consumed the notice across restart.
+## Phase 2A durable completion notices
+
+Opted-in Managed Calls (`labels.notify = "parent"`) own one durable row in
+`managed_call_notices`, inserted atomically in the same transaction as the
+terminal `managed_agent_calls` CAS transition. Each Call carries one immutable
+`completion_id` (`call-notice:<call_id>`) and moves through explicit states:
+
+- `enqueued`: committed with the terminal Call. Before handing the notice to a
+  worker, the dispatcher atomically stamps `dispatch_started_at_ms` (releasing
+  the stamp if synchronous handoff fails before leaving the Controller). Queue
+  admission and dispatch fencing absorb repeated submissions for the same
+  `completion_id`.
+- `accepted`: the receiver's durable transcript persisted a `user_message_chunk`
+  echo carrying that `completion_id`.
+- `consumed`: confirmed either by a completed `TurnEnd` following the echo (with
+  no intervening user turn, including a replayed `TurnEnd` after worker
+  reconnect) or by an authorized `cowboy.calls.result(...)` read (`cowboy_read`)
+  after the sandbox write+flush succeeds, which marks `consumed` (`result_read`)
+  and withdraws any still-queued notice. Direct Machine gateway `Action::Result`
+  (`cowboy call result`) stays non-consuming without a wire-level post-delivery
+  receipt so a transport drop cannot lose an unread notice.
+- `unknown`: delivery or consumption could not be confirmed (`parent_unavailable`,
+  `dispatch_unconfirmed` after a post-send Controller restart, `worker_stopped`,
+  `turn_unconfirmed`, `turn_not_completed`, `superseded_by_user_turn`, or
+  `transcript_cleared`).
+
+On Controller startup, `managed_calls::notice_delivery::recover` reconciles
+unsettled (`enqueued` / `accepted`) rows against durable transcript events:
+pre-send notices (`dispatch_started_at_ms IS NULL`) re-submit or wake a cleanly
+dormant (`Exited`) parent (including across native session rollover), while
+post-send unconfirmed notices fail closed to `unknown` without blindly
+duplicating the prompt. Call inspection, listing, and observation envelopes
+expose `notice_delivery`, and transcript clear keeps any Call whose notice is
+not `consumed` visible rather than auto-dismissing it. All Providers follow the
+same owner-paced delivery path.
 
 ## Rollout checklist
 
