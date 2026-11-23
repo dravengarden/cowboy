@@ -3,6 +3,7 @@ import { Box, List, ListItemButton, ListItemText, Typography } from "@mui/materi
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { desktopSize } from "../../surface/desktopSize";
 import { DESKTOP_SURFACE_RADIUS } from "../DesktopEmbeddedControl";
+import { ReviewPathText, REVIEW_TRUNCATED_PATH_SX } from "./ReviewPathText";
 import {
   type CodeTreeEntry,
   fetchCodeSearch,
@@ -55,8 +56,8 @@ function ReviewFileMatches({
           sx={{ py: 0.25, minHeight: desktopSize(28), borderRadius: `${String(DESKTOP_SURFACE_RADIUS)}px` }}
         >
           <ListItemText
-            primary={path}
-            slotProps={{ primary: { noWrap: true, sx: { fontSize: "0.8rem", direction: "rtl", textAlign: "left" } } }}
+            primary={<ReviewPathText path={path} />}
+            slotProps={{ primary: { noWrap: true, sx: { fontSize: "0.8rem", ...REVIEW_TRUNCATED_PATH_SX } } }}
           />
         </ListItemButton>
       ))}

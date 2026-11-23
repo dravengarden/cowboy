@@ -1,5 +1,6 @@
 import { List, ListItemButton, ListItemText, ListSubheader, Typography } from "@mui/material";
 import { useEffect, useMemo, useState } from "react";
+import { HintTooltip } from "../../HintTooltip";
 import { desktopSize } from "../../surface/desktopSize";
 import { useStoreSelector } from "../../store";
 import { worktreeContextId } from "../../reviewDirectoryDefault";
@@ -59,28 +60,36 @@ export function ReviewWorktreesList({
   const row = (item: RepositoryWorktreeRow, current: boolean): React.JSX.Element => {
     const choice = worktreeReviewValue(item, target, local);
     const owner = item.sessions[0];
+    const disabled = !current && "reason" in choice;
     return (
-      <ListItemButton
+      <HintTooltip
         key={item.worktree.path}
-        data-desktop-item={item.worktree.path}
-        data-review-worktree={item.worktree.path}
-        selected={current}
-        disabled={!current && "reason" in choice}
         title={"reason" in choice && !current ? choice.reason : item.worktree.path}
-        onClick={() => {
-          if (!current && "value" in choice) onReview(choice.value);
-        }}
-        sx={{ py: 0.25, px: 1, minHeight: desktopSize(30), borderRadius: `${String(DESKTOP_SURFACE_RADIUS)}px` }}
+        placement="right"
+        enterDelay={450}
       >
-        <ListItemText
-          primary={worktreeTitle(item.worktree)}
-          secondary={owner ? `${item.location} · ${owner.title}` : item.location}
-          slotProps={{
-            primary: { noWrap: true, sx: { fontSize: "0.8rem", fontWeight: current ? 650 : 500 } },
-            secondary: { noWrap: true, sx: { fontSize: "0.68rem" } },
-          }}
-        />
-      </ListItemButton>
+        <span style={{ display: "block" }}>
+          <ListItemButton
+            data-desktop-item={item.worktree.path}
+            data-review-worktree={item.worktree.path}
+            selected={current}
+            disabled={disabled}
+            onClick={() => {
+              if (!current && "value" in choice) onReview(choice.value);
+            }}
+            sx={{ py: 0.25, px: 1, minHeight: desktopSize(30), borderRadius: `${String(DESKTOP_SURFACE_RADIUS)}px` }}
+          >
+            <ListItemText
+              primary={worktreeTitle(item.worktree)}
+              secondary={owner ? `${item.location} · ${owner.title}` : item.location}
+              slotProps={{
+                primary: { noWrap: true, sx: { fontSize: "0.8rem", fontWeight: current ? 650 : 500 } },
+                secondary: { noWrap: true, sx: { fontSize: "0.68rem" } },
+              }}
+            />
+          </ListItemButton>
+        </span>
+      </HintTooltip>
     );
   };
   return (

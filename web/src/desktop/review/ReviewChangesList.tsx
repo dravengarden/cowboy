@@ -19,9 +19,11 @@ import {
   Typography,
 } from "@mui/material";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { HintTooltip } from "../../HintTooltip";
 import { desktopSize } from "../../surface/desktopSize";
 import { LeaderKeycap } from "../commands/DesktopKeycap";
 import { DESKTOP_SURFACE_RADIUS } from "../DesktopEmbeddedControl";
+import { ReviewPathText, REVIEW_TRUNCATED_PATH_SX } from "./ReviewPathText";
 import type { CodeChange } from "../../review/codeApi";
 import { reviewEntryKey } from "../../review/diffNavigationModel";
 import type { GitReviewEntry } from "../../review/gitReviewModel";
@@ -72,57 +74,62 @@ function ChangeRow({
   const directory = slash > 0 ? change.path.slice(0, slash) : "";
   const status = STATUS[change.status];
   return (
-    <ListItemButton
-      data-desktop-item={entryKey(entry)}
-      data-review-change={change.path}
-      data-review-reviewed={reviewed ? "true" : undefined}
-      selected={open}
-      onClick={() => onOpen(entry)}
+    <HintTooltip
       title={change.oldPath ? `${change.oldPath} → ${change.path}` : change.path}
-      sx={{
-        py: 0.25,
-        px: 1,
-        gap: 1,
-        minHeight: desktopSize(30),
-        borderRadius: `${String(DESKTOP_SURFACE_RADIUS)}px`,
-        opacity: reviewed ? 0.62 : 1,
-      }}
+      placement="right"
+      enterDelay={450}
     >
-      <Typography
-        component="span"
-        sx={{ width: "1.1em", flexShrink: 0, fontFamily: "monospace", fontWeight: 700, color: status.color, fontSize: "0.78rem" }}
-        aria-label={change.status}
-      >
-        {status.letter}
-      </Typography>
-      <ListItemText
-        primary={name}
-        secondary={directory || undefined}
-        slotProps={{
-          primary: { noWrap: true, sx: { fontSize: "0.8rem", fontWeight: open ? 650 : 500 } },
-          secondary: { noWrap: true, sx: { fontSize: "0.7rem", direction: "rtl", textAlign: "left" } },
+      <ListItemButton
+        data-desktop-item={entryKey(entry)}
+        data-review-change={change.path}
+        data-review-reviewed={reviewed ? "true" : undefined}
+        selected={open}
+        onClick={() => onOpen(entry)}
+        sx={{
+          py: 0.25,
+          px: 1,
+          gap: 1,
+          minHeight: desktopSize(30),
+          borderRadius: `${String(DESKTOP_SURFACE_RADIUS)}px`,
+          opacity: reviewed ? 0.62 : 1,
         }}
-        sx={{ my: 0, minWidth: 0 }}
-      />
-      {(change.additions !== undefined || change.deletions !== undefined) && (
-        <Typography component="span" sx={{ flexShrink: 0, fontFamily: "monospace", fontSize: "0.7rem" }}>
-          <Box component="span" sx={{ color: "success.main" }}>+{change.additions ?? 0}</Box>
-          {" "}
-          <Box component="span" sx={{ color: "error.main" }}>−{change.deletions ?? 0}</Box>
-        </Typography>
-      )}
-      {badge && (
-        <Box
+      >
+        <Typography
           component="span"
-          data-review-finding-badge={badge.count}
-          aria-label={`${String(badge.count)} finding${badge.count === 1 ? "" : "s"}, highest ${badge.severity}`}
-          sx={{ flexShrink: 0, minWidth: "1.3em", px: 0.5, borderRadius: 1, fontSize: "0.66rem", fontWeight: 700, textAlign: "center", color: "background.paper", bgcolor: BADGE_COLOR[badge.severity] }}
+          sx={{ width: "1.1em", flexShrink: 0, fontFamily: "monospace", fontWeight: 700, color: status.color, fontSize: "0.78rem" }}
+          aria-label={change.status}
         >
-          {badge.count}
-        </Box>
-      )}
-      {reviewed && <CheckCircle aria-label="Reviewed" sx={{ fontSize: "1rem", color: "success.main", flexShrink: 0 }} />}
-    </ListItemButton>
+          {status.letter}
+        </Typography>
+        <ListItemText
+          primary={name}
+          secondary={directory ? <ReviewPathText path={directory} /> : undefined}
+          slotProps={{
+            primary: { noWrap: true, sx: { fontSize: "0.8rem", fontWeight: open ? 650 : 500 } },
+            secondary: { noWrap: true, sx: { fontSize: "0.7rem", ...REVIEW_TRUNCATED_PATH_SX } },
+          }}
+          sx={{ my: 0, minWidth: 0 }}
+        />
+        {(change.additions !== undefined || change.deletions !== undefined) && (
+          <Typography component="span" sx={{ flexShrink: 0, fontFamily: "monospace", fontSize: "0.7rem" }}>
+            <Box component="span" sx={{ color: "success.main" }}>+{change.additions ?? 0}</Box>
+            {" "}
+            <Box component="span" sx={{ color: "error.main" }}>−{change.deletions ?? 0}</Box>
+          </Typography>
+        )}
+        {badge && (
+          <Box
+            component="span"
+            data-review-finding-badge={badge.count}
+            aria-label={`${String(badge.count)} finding${badge.count === 1 ? "" : "s"}, highest ${badge.severity}`}
+            sx={{ flexShrink: 0, minWidth: "1.3em", px: 0.5, borderRadius: 1, fontSize: "0.66rem", fontWeight: 700, textAlign: "center", color: "background.paper", bgcolor: BADGE_COLOR[badge.severity] }}
+          >
+            {badge.count}
+          </Box>
+        )}
+        {reviewed && <CheckCircle aria-label="Reviewed" sx={{ fontSize: "1rem", color: "success.main", flexShrink: 0 }} />}
+      </ListItemButton>
+    </HintTooltip>
   );
 }
 
@@ -154,22 +161,24 @@ function ComparisonMenu({
     setOpen(false);
     if (comparison !== changes.comparison) changes.setComparison(comparison);
   };
+  const compareLabel = reviewCompareLabel(changes.comparison, scenarios, comparisons);
   return (
     <>
-      <Button
-        ref={anchor}
-        size="small"
-        color="inherit"
-        data-review-compare
-        title={reviewCompareLabel(changes.comparison, scenarios, comparisons)}
-        endIcon={<ExpandMore />}
-        onClick={() => setOpen(true)}
-        sx={{ minWidth: 0, textTransform: "none", fontSize: "0.75rem", justifyContent: "flex-start", overflow: "hidden" }}
-      >
-        <Box component="span" sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {reviewCompareLabel(changes.comparison, scenarios, comparisons)}
-        </Box>
-      </Button>
+      <HintTooltip title={compareLabel} enterDelay={400}>
+        <Button
+          ref={anchor}
+          size="small"
+          color="inherit"
+          data-review-compare
+          endIcon={<ExpandMore />}
+          onClick={() => setOpen(true)}
+          sx={{ minWidth: 0, textTransform: "none", fontSize: "0.75rem", justifyContent: "flex-start", overflow: "hidden" }}
+        >
+          <Box component="span" sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {compareLabel}
+          </Box>
+        </Button>
+      </HintTooltip>
       <LeaderKeycap leaderKey="VA" />
       <Menu anchorEl={anchor.current} open={open} onClose={() => setOpen(false)}>
         {scenarios.map((scenario) => (

@@ -3,14 +3,18 @@ import {
   alpha,
   Box,
   Divider,
+  InputBase,
   Stack,
   Typography,
 } from "@mui/material";
-import { Keyboard } from "@mui/icons-material";
-import { useMemo } from "react";
+import { Keyboard, Search } from "@mui/icons-material";
+import { useMemo, useRef, useState } from "react";
+import { DESKTOP_INSET_RADIUS } from "../DesktopEmbeddedControl";
 import { useDesktopWorkspace } from "../DesktopWorkspaceController";
 import { DesktopKeycap, DesktopShortcut } from "./DesktopKeycap";
 import { useDesktopCommands } from "./DesktopCommandProvider";
+import { desktopImeOwnsKey } from "./imeShortcut";
+import { workspaceCommandKey } from "./workspaceCommandKey";
 import {
   DESKTOP_APPROVAL_SHORTCUT,
   DESKTOP_FOCUS_CALLS_SHORTCUT,
@@ -254,6 +258,89 @@ const CONVERSATION: ShortcutRow[] = [
   },
 ];
 
+const CODE_REVIEW: ShortcutRow[] = [
+  {
+    keys: [desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.review)],
+    title: "Open Code Review (or open the Review group once shown)",
+    description: "While Review is shown, ␣VV focuses it",
+  },
+  {
+    keys: [
+      desktopLeaderGroupSequence("V", "C"),
+      desktopLeaderGroupSequence("V", "F"),
+      desktopLeaderGroupSequence("V", "H"),
+      desktopLeaderGroupSequence("V", "W"),
+      desktopLeaderGroupSequence("V", "G"),
+    ],
+    title: "Navigator: Changes / Files / History / Worktrees / Pull request",
+    description: "Inside Navigator: [ / ] switch tabs, / filters, L or Enter opens, H collapses",
+  },
+  {
+    keys: [
+      desktopLeaderGroupSequence("V", "X"),
+      desktopLeaderGroupSequence("V", "A"),
+      desktopLeaderGroupSequence("V", "U"),
+    ],
+    title: "Choose context / Compare against / Only unreviewed files",
+  },
+  {
+    keys: [
+      desktopLeaderGroupSequence("V", "M"),
+      desktopLeaderGroupSequence("V", "D"),
+      desktopLeaderGroupSequence("V", "Z"),
+    ],
+    title: "Mark reviewed / Unified or split diff / Whole file or patch context",
+  },
+  {
+    keys: [
+      desktopLeaderGroupSequence("V", "["),
+      desktopLeaderGroupSequence("V", "]"),
+      desktopLeaderGroupSequence("V", "O"),
+      desktopLeaderGroupSequence("V", "K"),
+    ],
+    title: "Fold Navigator / Fold Inspector / Outline / Run project check",
+  },
+  {
+    keys: [
+      desktopLeaderGroupSequence("V", "Q"),
+      desktopLeaderGroupSequence("V", "P"),
+      "gt / gT",
+    ],
+    title: "Close file tab / Keep preview tab / Next or previous file tab",
+  },
+  {
+    keys: [
+      desktopLeaderGroupSequence("V", "S"),
+      desktopLeaderGroupSequence("V", "E"),
+      desktopLeaderGroupSequence("V", "R"),
+      "Enter",
+    ],
+    title: "Send to Prompt / Explain in a fork / Review in a fork",
+  },
+  {
+    keys: ["]c / [c", "]f / [f", "]u / [u", "]d / [d"],
+    title: "Document: next / previous hunk, file, unreviewed file, or problem",
+  },
+  {
+    keys: ["gd / gD / gy / gI / gr", "K", "gO"],
+    title: "Document: language navigation, symbol hover, and outline",
+  },
+];
+
+function filterShortcutRows(
+  sectionTitle: string,
+  rows: readonly ShortcutRow[],
+  tokens: readonly string[],
+): ShortcutRow[] {
+  if (tokens.length === 0) return [...rows];
+  const section = sectionTitle.toLowerCase();
+  if (tokens.every((token) => section.includes(token))) return [...rows];
+  return rows.filter((row) => {
+    const haystack = `${section} ${row.keys.join(" ")} ${row.title} ${row.description ?? ""}`.toLowerCase();
+    return tokens.every((token) => haystack.includes(token));
+  });
+}
+
 function KeySequence({ keys }: { keys: string[] }): React.JSX.Element {
   return (
     <Stack
@@ -347,6 +434,61 @@ export function DesktopShortcutsDialog({
   return <DesktopShortcutsDialogContent onClose={onClose} />;
 }
 
+function ShortcutsFilterBar({
+  inputRef,
+  query,
+  onChange,
+}: {
+  inputRef: React.RefObject<HTMLInputElement | null>;
+  query: string;
+  onChange: (value: string) => void;
+}): React.JSX.Element {
+  return (
+    <Box sx={{ px: 1.5, pt: 1.25 }}>
+      <Box
+        sx={{
+          minHeight: desktopSize(38),
+          px: 1.25,
+          display: "flex",
+          alignItems: "center",
+          gap: 1,
+          border: 1,
+          borderColor: (theme) => alpha(theme.palette.divider, 0.9),
+          borderRadius: `${DESKTOP_INSET_RADIUS}px`,
+          bgcolor: (theme) => alpha(theme.palette.background.paper, 0.52),
+          "&:focus-within": {
+            borderColor: "primary.main",
+            bgcolor: "background.paper",
+          },
+        }}
+      >
+        <Search aria-hidden sx={{ fontSize: "1.05rem", color: "text.secondary" }} />
+        <InputBase
+          inputRef={inputRef}
+          fullWidth
+          value={query}
+          onChange={(event): void => onChange(event.target.value)}
+          onKeyDown={(event): void => {
+            if (desktopImeOwnsKey(event.nativeEvent)) return;
+            if (event.key === "Escape" && query.length > 0) {
+              event.preventDefault();
+              event.stopPropagation();
+              onChange("");
+            }
+          }}
+          placeholder="Filter shortcuts… (press / to focus)"
+          inputProps={{
+            "aria-label": "Filter keyboard shortcuts",
+            "data-desktop-escape": "close",
+            "data-desktop-vim": "off",
+          }}
+          sx={{ fontSize: "0.85rem" }}
+        />
+      </Box>
+    </Box>
+  );
+}
+
 function DesktopShortcutsDialogContent({
   onClose,
 }: {
@@ -354,6 +496,8 @@ function DesktopShortcutsDialogContent({
 }): React.JSX.Element {
   const workspace = useDesktopWorkspace();
   const registry = useDesktopCommands();
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
   const paneCommands = useMemo<ShortcutRow[]>(() =>
     registry.commands
       .filter((command) =>
@@ -361,13 +505,50 @@ function DesktopShortcutsDialogContent({
         (!command.contexts || command.contexts.includes(workspace.focusedPane)) &&
         (!command.regions ||
           (!!workspace.focusedRegion && command.regions.includes(workspace.focusedRegion))) &&
-        command.shortcut
+        Boolean(command.shortcut || command.sequence?.length)
       )
       .map((command) => ({
-        keys: [command.shortcut as string],
+        keys: [command.shortcut ?? command.sequence!.join(" → ")],
         title: command.title,
         ...(command.description ? { description: command.description } : {}),
       })), [registry.commands, workspace.focusedPane, workspace.focusedRegion]);
+
+  const tokens = useMemo(
+    () => query.trim().toLowerCase().split(/\s+/).filter(Boolean),
+    [query],
+  );
+  const sections = useMemo(() => {
+    const all: { title: string; rows: ShortcutRow[]; active?: boolean }[] = [
+      { title: "Workspace navigation", rows: NAVIGATION, active: true },
+      { title: "Discovery and commands", rows: DISCOVERY },
+      { title: "Direct actions", rows: DIRECT_ACTIONS },
+      // Reference material stays readable from every focus; it lights
+      // up while the reader owns the keys.
+      {
+        title: "Conversation reading",
+        rows: CONVERSATION,
+        active: workspace.focusedRegion === "conversation.transcript",
+      },
+      {
+        title: "Code Review",
+        rows: CODE_REVIEW,
+        active: workspace.focusedRegion?.startsWith("review.") === true,
+      },
+      ...(paneCommands.length > 0
+        ? [{
+          title: `${workspace.focusedRegion ?? workspace.focusedPane} commands`,
+          rows: paneCommands,
+          active: true,
+        }]
+        : []),
+    ];
+    return all
+      .map((section) => ({
+        ...section,
+        rows: filterShortcutRows(section.title, section.rows, tokens),
+      }))
+      .filter((section) => section.rows.length > 0);
+  }, [paneCommands, tokens, workspace.focusedPane, workspace.focusedRegion]);
 
   return (
     <DesktopModal
@@ -377,6 +558,16 @@ function DesktopShortcutsDialogContent({
       description={`Vim-first navigation · ${workspace.focusedRegion ?? workspace.focusedPane}`}
       icon={<Keyboard color="primary" />}
       width={920}
+      onShortcutKeyDown={(event): void => {
+        if (document.activeElement === searchRef.current) return;
+        const native = event.nativeEvent;
+        if (desktopImeOwnsKey(native) || event.metaKey || event.ctrlKey || event.altKey) return;
+        if (workspaceCommandKey(native) === "/") {
+          event.preventDefault();
+          event.stopPropagation();
+          searchRef.current?.focus();
+        }
+      }}
       shortcutGroups={[
         {
           slots: [{
@@ -385,9 +576,11 @@ function DesktopShortcutsDialogContent({
             availability: "active",
           }],
         },
+        { slots: [{ shortcut: "/", label: "Search" }] },
         { slots: [{ shortcut: "Esc", label: "Close" }] },
       ]}
     >
+      <ShortcutsFilterBar inputRef={searchRef} query={query} onChange={setQuery} />
       <Box
         sx={{
           p: 1.5,
@@ -397,23 +590,22 @@ function DesktopShortcutsDialogContent({
           "@media (max-width: 760px)": { gridTemplateColumns: "1fr" },
         }}
       >
-        <ShortcutSection title="Workspace navigation" rows={NAVIGATION} active />
-        <ShortcutSection title="Discovery and commands" rows={DISCOVERY} />
-        <ShortcutSection title="Direct actions" rows={DIRECT_ACTIONS} />
-        {/* Reference material stays readable from every focus; it lights
-            up while the reader owns the keys. */}
-        <ShortcutSection
-          title="Conversation reading"
-          rows={CONVERSATION}
-          active={workspace.focusedRegion === "conversation.transcript"}
-        />
-        {paneCommands.length > 0 && (
-          <ShortcutSection
-            title={`${workspace.focusedRegion ?? workspace.focusedPane} commands`}
-            rows={paneCommands}
-            active
-          />
+        {sections.length === 0 && (
+          <Typography
+            color="text.secondary"
+            sx={{ gridColumn: "1 / -1", px: 1.5, py: 3, textAlign: "center" }}
+          >
+            No shortcuts match “{query.trim()}”.
+          </Typography>
         )}
+        {sections.map((section) => (
+          <ShortcutSection
+            key={section.title}
+            title={section.title}
+            rows={section.rows}
+            active={section.active === true}
+          />
+        ))}
       </Box>
     </DesktopModal>
   );

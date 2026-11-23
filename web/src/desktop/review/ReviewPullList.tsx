@@ -2,8 +2,10 @@ import { CheckCircle, OpenInNew } from "@mui/icons-material";
 import { Alert, Box, Button, IconButton, List, ListItemButton, ListItemText, Tooltip, Typography } from "@mui/material";
 import { useEffect, useMemo, useState } from "react";
 import { desktopSize } from "../../surface/desktopSize";
+import { HintTooltip } from "../../HintTooltip";
 import { mutateMobileReview } from "../../store";
 import { DESKTOP_SURFACE_RADIUS } from "../DesktopEmbeddedControl";
+import { ReviewPathText, REVIEW_TRUNCATED_PATH_SX } from "./ReviewPathText";
 import { extensionRequest, type ExtensionResponse } from "../../extensions/api";
 import { readRemoteReview } from "../../review/remoteReviewSources";
 import {
@@ -74,9 +76,11 @@ function PullFiles({
     <Box sx={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }} data-review-pull-files>
       <Box sx={{ px: 1.5, py: 0.5, display: "flex", alignItems: "center", gap: 0.5 }}>
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography noWrap sx={{ fontSize: "0.8rem", fontWeight: 650 }} title={review?.title}>
-            {review?.title ?? `#${binding.number}`}
-          </Typography>
+          <HintTooltip title={review?.title ?? ""} enterDelay={400}>
+            <Typography noWrap sx={{ fontSize: "0.8rem", fontWeight: 650 }}>
+              {review?.title ?? `#${binding.number}`}
+            </Typography>
+          </HintTooltip>
           <Typography noWrap sx={{ fontSize: "0.68rem", color: "text.secondary" }} data-review-pull-facts>
             {`${binding.owner}/${binding.repository}#${binding.number}`}
             {review && ` · ${review.state} · ${review.head.slice(0, 8)} · ${String(review.totalFiles)} files · ${String(review.files.filter(viewed).length)}/${String(review.files.length)} viewed`}
@@ -105,9 +109,9 @@ function PullFiles({
             sx={{ py: 0.25, px: 1, gap: 1, minHeight: desktopSize(30), borderRadius: `${String(DESKTOP_SURFACE_RADIUS)}px`, opacity: viewed(file) ? 0.62 : 1 }}
           >
             <ListItemText
-              primary={file.path}
+              primary={<ReviewPathText path={file.path} />}
               secondary={file.oldPath ? `from ${file.oldPath}` : file.status}
-              slotProps={{ primary: { noWrap: true, sx: { fontSize: "0.78rem", direction: "rtl", textAlign: "left" } }, secondary: { sx: { fontSize: "0.68rem" } } }}
+              slotProps={{ primary: { noWrap: true, sx: { fontSize: "0.78rem", ...REVIEW_TRUNCATED_PATH_SX } }, secondary: { sx: { fontSize: "0.68rem" } } }}
               sx={{ my: 0, minWidth: 0 }}
             />
             <Typography component="span" sx={{ flexShrink: 0, fontFamily: "monospace", fontSize: "0.7rem" }}>

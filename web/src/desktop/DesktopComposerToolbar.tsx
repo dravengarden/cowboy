@@ -481,6 +481,7 @@ export function DesktopComposerToolbarView(
                   aria-label="Conversation actions"
                   aria-haspopup="menu"
                   aria-expanded={sessionAnchor ? "true" : undefined}
+                  aria-keyshortcuts={conversationActionKeyshortcuts(session)}
                   data-composer-action="conversation"
                   size="small"
                   color="inherit"
@@ -667,6 +668,15 @@ function ContextReading(
       )}
     </>
   );
+}
+
+function conversationActionKeyshortcuts(
+  session: DesktopSessionActions,
+): string {
+  return [
+    session.compact ? DESKTOP_SHORTCUTS.compact : "",
+    session.clear ? DESKTOP_SHORTCUTS.clear : "",
+  ].filter(Boolean).join(" ");
 }
 
 /** The folded menu keeps the context reading it took over from Compact. */

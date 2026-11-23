@@ -140,7 +140,11 @@ function useReviewReveal(review: ReviewWorkbench): void {
     setPending(false);
     const { context, target, placeSource, document, editor } = latest.current;
     const file = revealedFile(context.agentSynced);
-    if (!file || !target?.own) return;
+    if (!file) return;
+    if (!target?.own) {
+      notify("Switch Review back to this session's worktree to open this file.", "info");
+      return;
+    }
     placeSource(file.path, file.line);
     // A file already shown keeps its state; move its cursor directly.
     if (file.line !== undefined && document?.kind === "source" && document.path === file.path && editor.current) {

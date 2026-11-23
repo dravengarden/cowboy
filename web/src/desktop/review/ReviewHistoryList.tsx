@@ -1,8 +1,10 @@
 import { ArrowBack } from "@mui/icons-material";
 import { Box, Button, List, ListItemButton, ListItemText, Typography } from "@mui/material";
 import { useEffect, useRef, useState } from "react";
+import { HintTooltip } from "../../HintTooltip";
 import { desktopSize } from "../../surface/desktopSize";
 import { DESKTOP_SURFACE_RADIUS } from "../DesktopEmbeddedControl";
+import { ReviewPathText, REVIEW_TRUNCATED_PATH_SX } from "./ReviewPathText";
 import {
   fetchGitCommit,
   fetchGitRepository,
@@ -71,9 +73,9 @@ function CommitFiles({
           sx={{ ...rowSx, pl: 3 }}
         >
           <ListItemText
-            primary={file.path}
+            primary={<ReviewPathText path={file.path} />}
             secondary={file.oldPath ? `from ${file.oldPath}` : file.status}
-            slotProps={{ primary: { noWrap: true, sx: { fontSize: "0.78rem", direction: "rtl", textAlign: "left" } }, secondary: { sx: { fontSize: "0.68rem" } } }}
+            slotProps={{ primary: { noWrap: true, sx: { fontSize: "0.78rem", ...REVIEW_TRUNCATED_PATH_SX } }, secondary: { sx: { fontSize: "0.68rem" } } }}
           />
         </ListItemButton>
       ))}
@@ -158,32 +160,38 @@ export function ReviewHistoryList({
               <Typography sx={{ p: 2, fontSize: "0.8rem", color: "text.secondary" }}>History could not be read.</Typography>
             )}
             {commits.map((commit) => (
-              <ListItemButton
+              <HintTooltip
                 key={commit.oid}
-                data-desktop-item={commit.oid}
-                data-review-commit={commit.oid}
-                onClick={() => {
-                  focusAfter.current = "[data-review-history-back]";
-                  setSelected(commit);
-                }}
-                title={`${commit.oid}\n${new Date(commit.authoredAt).toLocaleString()}`}
-                sx={rowSx}
+                title={commit.oid}
+                detail={new Date(commit.authoredAt).toLocaleString()}
+                placement="right"
+                enterDelay={450}
               >
-                <ListItemText
-                  primary={commit.subject}
-                  secondary={
-                    <Box component="span" sx={{ display: "flex", gap: 0.75 }}>
-                      <Box component="span" sx={{ fontFamily: "monospace" }}>{commit.oid.slice(0, 7)}</Box>
-                      <Box component="span" sx={{ overflow: "hidden", textOverflow: "ellipsis" }}>{commit.author}</Box>
-                      <Box component="span" sx={{ flexShrink: 0 }}>{commitAge(commit.authoredAt)}</Box>
-                      {commit.decorations.slice(0, 2).map((decoration) => (
-                        <Box component="span" key={decoration} sx={{ color: "primary.main", flexShrink: 0 }}>{decoration}</Box>
-                      ))}
-                    </Box>
-                  }
-                  slotProps={{ primary: { noWrap: true, sx: { fontSize: "0.8rem" } }, secondary: { component: "span", sx: { fontSize: "0.68rem" } } }}
-                />
-              </ListItemButton>
+                <ListItemButton
+                  data-desktop-item={commit.oid}
+                  data-review-commit={commit.oid}
+                  onClick={() => {
+                    focusAfter.current = "[data-review-history-back]";
+                    setSelected(commit);
+                  }}
+                  sx={rowSx}
+                >
+                  <ListItemText
+                    primary={commit.subject}
+                    secondary={
+                      <Box component="span" sx={{ display: "flex", gap: 0.75 }}>
+                        <Box component="span" sx={{ fontFamily: "monospace" }}>{commit.oid.slice(0, 7)}</Box>
+                        <Box component="span" sx={{ overflow: "hidden", textOverflow: "ellipsis" }}>{commit.author}</Box>
+                        <Box component="span" sx={{ flexShrink: 0 }}>{commitAge(commit.authoredAt)}</Box>
+                        {commit.decorations.slice(0, 2).map((decoration) => (
+                          <Box component="span" key={decoration} sx={{ color: "primary.main", flexShrink: 0 }}>{decoration}</Box>
+                        ))}
+                      </Box>
+                    }
+                    slotProps={{ primary: { noWrap: true, sx: { fontSize: "0.8rem" } }, secondary: { component: "span", sx: { fontSize: "0.68rem" } } }}
+                  />
+                </ListItemButton>
+              </HintTooltip>
             ))}
             {more && (
               <Button data-desktop-item="history-more" size="small" onClick={() => load(commits.at(-1)?.oid)} sx={{ m: 1 }}>

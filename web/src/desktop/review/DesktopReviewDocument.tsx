@@ -3,13 +3,16 @@ import {
   Alert,
   Box,
   Button,
-  IconButton,
+  ListItemText,
+  Menu,
+  MenuItem,
   Tab,
   Tabs,
   Toolbar,
   Typography,
 } from "@mui/material";
 import type { EditorView } from "@codemirror/view";
+import { HintTooltip } from "../../HintTooltip";
 import { desktopSize } from "../../surface/desktopSize";
 import { DesktopKeycap, LeaderKeycap } from "../commands/DesktopKeycap";
 import {
@@ -18,6 +21,7 @@ import {
   reviewDocumentKey,
 } from "./desktopReviewTabs";
 import { ReviewCodeEditor } from "./ReviewCodeEditor";
+import { ReviewPathText, REVIEW_TRUNCATED_PATH_SX } from "./ReviewPathText";
 import { ReviewSplitMirror } from "./ReviewSplitMirror";
 import type { SplitDiff } from "./splitDiffModel";
 import type { CodeDiagnostic } from "../../review/codeApi";
@@ -27,6 +31,68 @@ import type { ReviewDocumentLoad } from "./useReviewDocumentText";
 
 function tabLabel(document: ReviewDocumentRef): string {
   return document.path.split("/").at(-1) ?? document.path;
+}
+
+function ReviewFileTabMenu({
+  menu,
+  tabs,
+  onCloseMenu,
+  onCloseTab,
+  onKeepTab,
+}: {
+  menu: { key: string; left: number; top: number } | null;
+  tabs: DesktopReviewTabs;
+  onCloseMenu: () => void;
+  onCloseTab: (key: string) => void;
+  onKeepTab: (key: string) => void;
+}): React.JSX.Element | null {
+  const menuTab = menu
+    ? tabs.tabs.find((tab) => reviewDocumentKey(tab.document) === menu.key)
+    : undefined;
+  if (!menu || !menuTab) return null;
+  return (
+    <Menu
+      open
+      onClose={onCloseMenu}
+      anchorReference="anchorPosition"
+      anchorPosition={{ left: menu.left, top: menu.top }}
+      slotProps={{ list: { dense: true } }}
+    >
+      <MenuItem
+        onClick={() => {
+          const target = menu.key;
+          onCloseMenu();
+          onCloseTab(target);
+        }}
+      >
+        <ListItemText>Close</ListItemText>
+      </MenuItem>
+      <MenuItem
+        disabled={tabs.tabs.length < 2}
+        onClick={() => {
+          const keep = menu.key;
+          onCloseMenu();
+          for (const item of tabs.tabs) {
+            const candidate = reviewDocumentKey(item.document);
+            if (candidate !== keep) onCloseTab(candidate);
+          }
+        }}
+      >
+        <ListItemText>Close Others</ListItemText>
+      </MenuItem>
+      {menuTab.preview && (
+        <MenuItem
+          onClick={() => {
+            const target = menu.key;
+            onCloseMenu();
+            onKeepTab(target);
+          }}
+        >
+          <ListItemText>Keep Open</ListItemText>
+        </MenuItem>
+      )}
+    </Menu>
+  );
 }
 
 /** The open files: Vim's `gt`/`gT` step them, `␣VQ` closes, `␣VP` keeps. */
@@ -41,9 +107,18 @@ function ReviewFileTabs({
   onClose: (key: string) => void;
   onKeep: (key: string) => void;
 }): React.JSX.Element | null {
+  const [menu, setMenu] = useState<{ key: string; left: number; top: number } | null>(null);
   if (tabs.tabs.length === 0) return null;
   return (
-    <Box sx={{ display: "flex", alignItems: "center", borderBottom: 1, borderColor: "divider", minHeight: desktopSize(32) }}>
+    <Box
+      onWheel={(event): void => {
+        if (event.deltaY !== 0 && event.deltaX === 0) {
+          const scroller = event.currentTarget.querySelector<HTMLElement>(".MuiTabs-scroller");
+          if (scroller) scroller.scrollLeft += event.deltaY;
+        }
+      }}
+      sx={{ display: "flex", alignItems: "center", borderBottom: 1, borderColor: "divider", minHeight: desktopSize(32) }}
+    >
       <Tabs
         value={tabs.active ?? false}
         variant="scrollable"
@@ -54,6 +129,7 @@ function ReviewFileTabs({
       >
         {tabs.tabs.map((tab) => {
           const key = reviewDocumentKey(tab.document);
+          const tooltipTitle = `${tab.document.path}${tab.document.kind === "diff" ? " (changes)" : tab.document.kind === "commit" ? ` (commit ${tab.document.oid.slice(0, 8)})` : ""}`;
           return (
             <Tab
               key={key}
@@ -62,39 +138,63 @@ function ReviewFileTabs({
               data-review-file-tab={tab.document.path}
               data-review-file-tab-kind={tab.document.kind}
               data-review-file-tab-preview={tab.preview ? "true" : undefined}
-              title={`${tab.document.path}${tab.document.kind === "diff" ? " (changes)" : tab.document.kind === "commit" ? ` (commit ${tab.document.oid.slice(0, 8)})` : ""}`}
               onDoubleClick={() => onKeep(key)}
+              onMouseDown={(event) => {
+                // Middle click closes; it must not start browser autoscroll.
+                if (event.button === 1) event.preventDefault();
+              }}
               onAuxClick={(event) => {
-                if (event.button === 1) onClose(key);
+                if (event.button !== 1) return;
+                event.preventDefault();
+                onClose(key);
+              }}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                setMenu({ key, left: event.clientX, top: event.clientY });
               }}
               disableRipple
               label={
-                <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}>
-                  <Box component="span" sx={{ fontStyle: tab.preview ? "italic" : "normal" }}>
-                    {tabLabel(tab.document)}
-                  </Box>
-                  {tab.document.kind !== "source" && (
-                    <Box component="span" sx={{ fontSize: "0.65rem", color: "text.secondary" }}>
-                      {tab.document.kind === "commit"
-                        ? `@${tab.document.oid.slice(0, 7)}`
-                        : tab.document.kind === "pr"
-                        ? `#${tab.document.number}`
-                        : "Δ"}
+                <HintTooltip
+                  title={tooltipTitle}
+                  detail={tab.preview ? "Preview tab · double-click to keep open" : undefined}
+                  enterDelay={450}
+                >
+                  <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}>
+                    <Box component="span" sx={{ fontStyle: tab.preview ? "italic" : "normal" }}>
+                      {tabLabel(tab.document)}
                     </Box>
-                  )}
-                  <IconButton
-                    component="span"
-                    size="small"
-                    aria-label={`Close ${tab.document.path}`}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onClose(key);
-                    }}
-                    sx={{ p: 0.25, ml: 0.25 }}
-                  >
-                    <Close sx={{ fontSize: "0.85rem" }} />
-                  </IconButton>
-                </Box>
+                    {tab.document.kind !== "source" && (
+                      <Box component="span" sx={{ fontSize: "0.65rem", color: "text.secondary" }}>
+                        {tab.document.kind === "commit"
+                          ? `@${tab.document.oid.slice(0, 7)}`
+                          : tab.document.kind === "pr"
+                          ? `#${tab.document.number}`
+                          : "Δ"}
+                      </Box>
+                    )}
+                    <Box
+                      component="span"
+                      role="button"
+                      tabIndex={-1}
+                      aria-label={`Close ${tab.document.path}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onClose(key);
+                      }}
+                      sx={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        p: 0.25,
+                        ml: 0.25,
+                        borderRadius: "50%",
+                        "&:hover": { bgcolor: "action.selected" },
+                      }}
+                    >
+                      <Close sx={{ fontSize: "0.85rem" }} />
+                    </Box>
+                  </Box>
+                </HintTooltip>
               }
               sx={{
                 minHeight: desktopSize(32),
@@ -115,6 +215,13 @@ function ReviewFileTabs({
         <LeaderKeycap leaderKey="VQ" />
         <LeaderKeycap leaderKey="VP" />
       </Box>
+      <ReviewFileTabMenu
+        menu={menu}
+        tabs={tabs}
+        onCloseMenu={() => setMenu(null)}
+        onCloseTab={onClose}
+        onKeepTab={onKeep}
+      />
     </Box>
   );
 }
@@ -236,9 +343,11 @@ export function DesktopReviewDocument({
           data-review-document-footer
           sx={{ minHeight: desktopSize(34), px: 1, gap: 1, borderTop: 1, borderColor: "divider", flexShrink: 0 }}
         >
-          <Typography noWrap sx={{ fontSize: "0.75rem", minWidth: "6em", flex: 1, direction: "rtl", textAlign: "left" }} title={document.path}>
-            {document.path}
-          </Typography>
+          <HintTooltip title={document.path} enterDelay={400}>
+            <Typography noWrap sx={{ fontSize: "0.75rem", minWidth: "6em", flex: 1, ...REVIEW_TRUNCATED_PATH_SX }}>
+              <ReviewPathText path={document.path} />
+            </Typography>
+          </HintTooltip>
           {ready?.added !== undefined && (
             <Typography sx={{ fontFamily: "monospace", fontSize: "0.72rem", flexShrink: 0 }}>
               <Box component="span" sx={{ color: "success.main" }}>+{ready.added}</Box>{" "}

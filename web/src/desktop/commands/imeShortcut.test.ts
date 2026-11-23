@@ -5,8 +5,8 @@ import { desktopImeOwnsKey, shortcutKey } from "./imeShortcut.ts";
 import { readAppSource, readTranscriptSource } from "../../appSource.test.ts";
 
 const appSource = await readAppSource();
-const hostSource = await readFile(
-  new URL("./DesktopCommandHost.tsx", import.meta.url), "utf8",
+const paletteSource = await readFile(
+  new URL("./DesktopCommandPalette.tsx", import.meta.url), "utf8",
 );
 const providerSource = await readFile(
   new URL("./DesktopCommandProvider.tsx", import.meta.url), "utf8",
@@ -97,7 +97,7 @@ test("every Desktop shortcut owner checks the shared IME boundary", () => {
   for (
     const [name, source, minimum] of [
       ["session surfaces", appSource, 3],
-      ["command palette", hostSource, 1],
+      ["command palette", paletteSource, 1],
       ["workspace provider", providerSource, 1],
       ["top bar overlays", topBarSource, 2],
       ["transcript inspector", transcriptSource, 1],

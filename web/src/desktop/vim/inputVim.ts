@@ -323,7 +323,7 @@ export function handleInputVimKey(event: KeyboardEvent): boolean {
   }
   if (pending === "r") {
     const char = argument(event);
-    if (char === null || value.length === 0) return consume();
+    if (char === null || value.length === 0 || pos >= value.length || value[pos] === "\n") return consume();
     edit(field, value.slice(0, pos) + char + value.slice(pos + 1), pos);
     return consume();
   }

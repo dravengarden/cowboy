@@ -1,6 +1,7 @@
 import { ExpandMore } from "@mui/icons-material";
 import { Box, Button, ListItemText, ListSubheader, Menu, MenuItem, Typography } from "@mui/material";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { HintTooltip } from "../../HintTooltip";
 import { useActiveSessionId } from "../../controlPlane";
 import { useAnnouncedSessionContext } from "../../SessionContextCue";
 import { useStoreSelector } from "../../store";
@@ -56,25 +57,26 @@ export function ReviewContextMenu({
   let group: string | undefined;
   return (
     <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, px: 1, pt: 0.5, minWidth: 0 }}>
-      <Button
-        ref={anchor}
-        size="small"
-        color="inherit"
-        data-review-context
-        onClick={() => setOpen(true)}
-        endIcon={<ExpandMore />}
-        title={target?.cwd}
-        sx={{ minWidth: 0, flex: 1, justifyContent: "flex-start", textTransform: "none", overflow: "hidden" }}
-      >
-        <Box component="span" sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", minWidth: 0 }}>
-          <Typography component="span" noWrap sx={{ fontSize: "0.78rem", fontWeight: 650, maxWidth: "100%" }}>
-            {target?.label ?? "No code"}
-          </Typography>
-          <Typography component="span" noWrap sx={{ fontSize: "0.66rem", color: "text.secondary", maxWidth: "100%" }}>
-            {context.choice ? `${target?.kind ?? "Context"} · chosen here` : target?.kind ?? context.error ?? ""}
-          </Typography>
-        </Box>
-      </Button>
+      <HintTooltip title={target?.cwd ?? ""} enterDelay={400}>
+        <Button
+          ref={anchor}
+          size="small"
+          color="inherit"
+          data-review-context
+          onClick={() => setOpen(true)}
+          endIcon={<ExpandMore />}
+          sx={{ minWidth: 0, flex: 1, justifyContent: "flex-start", textTransform: "none", overflow: "hidden" }}
+        >
+          <Box component="span" sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", minWidth: 0 }}>
+            <Typography component="span" noWrap sx={{ fontSize: "0.78rem", fontWeight: 650, maxWidth: "100%" }}>
+              {target?.label ?? "No code"}
+            </Typography>
+            <Typography component="span" noWrap sx={{ fontSize: "0.66rem", color: "text.secondary", maxWidth: "100%" }}>
+              {context.choice ? `${target?.kind ?? "Context"} · chosen here` : target?.kind ?? context.error ?? ""}
+            </Typography>
+          </Box>
+        </Button>
+      </HintTooltip>
       <LeaderKeycap leaderKey="VX" />
       <Menu anchorEl={anchor.current} open={open} onClose={() => setOpen(false)}>
         {options.flatMap((option) => {

@@ -85,10 +85,66 @@ function Segment({
   return tooltip ? <Tooltip title={tooltip}>{body}</Tooltip> : body;
 }
 
+function StatusLineHints({
+  hints,
+  allHighPriority,
+}: {
+  hints: readonly RegionHint[];
+  allHighPriority: boolean;
+}): React.JSX.Element | null {
+  if (hints.length === 0) return null;
+  return (
+    <Stack
+      direction="row"
+      spacing={1.25}
+      alignItems="center"
+      aria-label="Focused region shortcuts"
+      sx={{
+        ml: 0.75,
+        mr: 1,
+        minWidth: 0,
+        // Hints yield space; the connection segment on the right must not.
+        overflow: "hidden",
+        color: "text.disabled",
+        "@media (max-width: 640px)": { display: "none" },
+      }}
+    >
+      {hints.map((hint) => {
+        const highPriority = allHighPriority || hint.priority === "high";
+        return (
+          <Stack
+            key={`${hint.keys}-${hint.label}`}
+            direction="row"
+            spacing={0.5}
+            alignItems="center"
+            data-status-hint-priority={highPriority ? "high" : "normal"}
+            sx={highPriority
+              ? { flexShrink: 0 }
+              : {
+                flexShrink: 0,
+                "@media (max-width: 1180px)": { display: "none" },
+              }}
+          >
+            <DesktopShortcut
+              shortcut={hint.keys}
+              quiet
+              availability={hint.availability ?? "available"}
+            />
+            <Box component="span" sx={{ fontSize: "0.625rem", whiteSpace: "nowrap" }}>
+              {hint.label}
+            </Box>
+          </Stack>
+        );
+      })}
+    </Stack>
+  );
+}
+
 interface RegionHint {
   keys: string;
   label: string;
   availability?: ShortcutAvailability;
+  priority?: "high";
 }
 
 // Desktop keeps the segment informational; only Mobile offers "Hide reminder".
@@ -385,10 +441,10 @@ export const DesktopStatusLine = memo(function DesktopStatusLine({
       : []),
     // A pending approval answers from every focus (FOCUS.md "Approvals").
     ...(hasApprovalChoice
-      ? [{ keys: DESKTOP_APPROVAL_SHORTCUT, label: "Answer" }]
+      ? [{ keys: DESKTOP_APPROVAL_SHORTCUT, label: "Answer", priority: "high" as const }]
       : []),
     ...(status === "busy"
-      ? [{ keys: DESKTOP_SHORTCUTS.stop, label: "Stop" }]
+      ? [{ keys: DESKTOP_SHORTCUTS.stop, label: "Stop", priority: "high" as const }]
       : []),
     { keys: DESKTOP_RESIZE_HINT, label: "Resize" },
   ];
@@ -486,41 +542,10 @@ export const DesktopStatusLine = memo(function DesktopStatusLine({
           />
         )}
       </Stack>
-      {hints.length > 0 && (
-        <Stack
-          direction="row"
-          spacing={1.25}
-          alignItems="center"
-          aria-label="Focused region shortcuts"
-          sx={{
-            ml: 0.75,
-            mr: 1,
-            minWidth: 0,
-            // Hints yield space; the connection segment on the right must not.
-            overflow: "hidden",
-            color: "text.disabled",
-            "@media (max-width: 1180px)": { display: "none" },
-          }}
-        >
-          {hints.map((hint) => (
-            <Stack
-              key={`${hint.keys}-${hint.label}`}
-              direction="row"
-              spacing={0.5}
-              alignItems="center"
-            >
-              <DesktopShortcut
-                shortcut={hint.keys}
-                quiet
-                availability={hint.availability ?? "available"}
-              />
-              <Box component="span" sx={{ fontSize: "0.625rem", whiteSpace: "nowrap" }}>
-                {hint.label}
-              </Box>
-            </Stack>
-          ))}
-        </Stack>
-      )}
+      <StatusLineHints
+        hints={hints}
+        allHighPriority={resizingLayout || workspaceCommandMode}
+      />
       <Box sx={{ flex: 1 }} />
       <Stack
         direction="row"
@@ -565,7 +590,6 @@ export const DesktopStatusLine = memo(function DesktopStatusLine({
             </Stack>
           }
           tooltip="Open the Desktop command palette"
-          mono
           onClick={(): void => {
             commands.execute("commandPalette.open");
           }}

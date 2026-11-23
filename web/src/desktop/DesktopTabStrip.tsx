@@ -1,15 +1,17 @@
-import { Box, Divider, ListItemText, Menu, MenuItem } from "@mui/material";
+import { Box, ButtonBase, Divider, ListItemText, Menu, MenuItem } from "@mui/material";
 import { Close, PushPin } from "@mui/icons-material";
 import { alpha, type Theme } from "@mui/material/styles";
 import {
   memo,
   type ReactNode,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
+import { HintTooltip } from "../HintTooltip";
 import { ShortcutKeycap } from "../ShortcutKeycap";
 import {
   type DesktopCommand,
@@ -51,6 +53,215 @@ export interface DesktopTabItem {
   readonly leading: ReactNode;
 }
 
+function TabStripOverflowEdges({
+  overflow,
+}: {
+  overflow: { readonly left: boolean; readonly right: boolean };
+}): React.JSX.Element {
+  return (
+    <>
+      {overflow.left && (
+        <Box
+          aria-hidden
+          data-desktop-tabs-overflow="left"
+          sx={{
+            position: "absolute",
+            top: 0,
+            bottom: 1,
+            left: 0,
+            width: 22,
+            pointerEvents: "none",
+            background: (t: Theme) =>
+              `linear-gradient(to right, ${t.palette.background.default}, transparent)`,
+          }}
+        />
+      )}
+      {overflow.right && (
+        <Box
+          aria-hidden
+          data-desktop-tabs-overflow="right"
+          sx={{
+            position: "absolute",
+            top: 0,
+            bottom: 1,
+            right: "2.75rem",
+            width: 24,
+            pointerEvents: "none",
+            background: (t: Theme) =>
+              `linear-gradient(to left, ${t.palette.background.default}, transparent)`,
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+function TabStripActionsButton({
+  overflowRight,
+  onOpenMenu,
+}: {
+  overflowRight: boolean;
+  onOpenMenu: (rect: DOMRect) => void;
+}): React.JSX.Element {
+  return (
+    <HintTooltip
+      title="Tab actions"
+      detail="D close, O others, P pin, U reopen · ␣[ and ␣] step"
+      enterDelay={350}
+    >
+      <ButtonBase
+        type="button"
+        tabIndex={-1}
+        aria-label="Tab actions"
+        data-desktop-tab-actions
+        onMouseDown={(event): void => event.preventDefault()}
+        onClick={(event): void => {
+          onOpenMenu(event.currentTarget.getBoundingClientRect());
+        }}
+        sx={{
+          position: "sticky",
+          right: 0,
+          zIndex: 2,
+          display: "inline-flex",
+          alignItems: "center",
+          flexShrink: 0,
+          ml: "auto",
+          px: "0.625rem",
+          bgcolor: (t: Theme) =>
+            t.palette.mode === "dark"
+              ? alpha(t.palette.background.default, 0.92)
+              : alpha(t.palette.background.paper, 0.92),
+          borderLeft: overflowRight ? 1 : 0,
+          borderColor: "divider",
+          "&:hover": { bgcolor: "action.hover" },
+        }}
+      >
+        <LeaderKeycap leaderKey={DESKTOP_TAB_GROUP} />
+      </ButtonBase>
+    </HintTooltip>
+  );
+}
+
+interface TabStripMenuActions {
+  close: (key: string | null, scope: DesktopTabCloseScope) => void;
+  pin: (key: string | null) => void;
+  keep: (key: string | null) => void;
+  reopen: () => void;
+  canReopen: () => boolean;
+}
+
+function TabStripContextMenu({
+  menu,
+  items,
+  currentKey,
+  actions,
+  onClose,
+  onRename,
+}: {
+  menu: TabMenu | null;
+  items: readonly DesktopTabItem[];
+  currentKey: string | null;
+  actions: TabStripMenuActions;
+  onClose: () => void;
+  onRename: (key: string) => void;
+}): React.JSX.Element | null {
+  const shown = useRef<TabMenu | null>(null);
+  if (menu) shown.current = menu;
+  const menuKey = shown.current?.key ?? "";
+  const menuItem = items.find((item) => item.key === menuKey);
+  const menuIndex = items.findIndex((item) => item.key === menuKey);
+  if (menu === null || menuItem === undefined) return null;
+  const unpinnedBeside = (from: number, to: number): boolean =>
+    items.slice(from, to).some((item) => !item.pinned);
+  const run = (action: () => void) => (): void => {
+    onClose();
+    action();
+  };
+  const slot = (key: string): React.JSX.Element | null =>
+    menuKey === currentKey
+      ? (
+        <ShortcutKeycap
+          keyLabel={desktopLeaderLabel(`${DESKTOP_TAB_GROUP}${key}`)}
+          variant="global"
+          sx={{ ml: "1.5rem" }}
+        />
+      )
+      : null;
+  return (
+    <Menu
+      open
+      onClose={onClose}
+      anchorReference="anchorPosition"
+      anchorPosition={{ left: menu.left, top: menu.top }}
+      slotProps={{ list: { dense: true } }}
+    >
+      <MenuItem
+        disabled={items.length < 2}
+        onClick={run(() => actions.close(menuKey, "one"))}
+      >
+        <ListItemText>Close</ListItemText>
+        {slot(DESKTOP_TAB_KEYS.close)}
+      </MenuItem>
+      <MenuItem
+        disabled={!unpinnedBeside(0, menuIndex) &&
+          !unpinnedBeside(menuIndex + 1, items.length)}
+        onClick={run(() => actions.close(menuKey, "others"))}
+      >
+        <ListItemText>Close Others</ListItemText>
+        {slot(DESKTOP_TAB_KEYS.closeOthers)}
+      </MenuItem>
+      <MenuItem
+        disabled={!unpinnedBeside(menuIndex + 1, items.length)}
+        onClick={run(() => actions.close(menuKey, "right"))}
+      >
+        <ListItemText>Close to the Right</ListItemText>
+        {slot(DESKTOP_TAB_KEYS.closeRight)}
+      </MenuItem>
+      <MenuItem
+        disabled={!unpinnedBeside(0, menuIndex)}
+        onClick={run(() => actions.close(menuKey, "left"))}
+      >
+        <ListItemText>Close to the Left</ListItemText>
+        {slot(DESKTOP_TAB_KEYS.closeLeft)}
+      </MenuItem>
+      <MenuItem
+        disabled={!unpinnedBeside(0, items.length) || items.length < 2}
+        onClick={run(() => actions.close(menuKey, "all"))}
+      >
+        <ListItemText>Close All</ListItemText>
+        {slot(DESKTOP_TAB_KEYS.closeAll)}
+      </MenuItem>
+      <Divider />
+      <MenuItem onClick={run(() => actions.pin(menuKey))}>
+        <ListItemText>{menuItem.pinned ? "Unpin" : "Pin"}</ListItemText>
+        {slot(DESKTOP_TAB_KEYS.pin)}
+      </MenuItem>
+      {menuItem.preview && (
+        <MenuItem onClick={run(() => actions.keep(menuKey))}>
+          <ListItemText>Keep Open</ListItemText>
+          {slot(DESKTOP_TAB_KEYS.keep)}
+        </MenuItem>
+      )}
+      <MenuItem disabled={!actions.canReopen()} onClick={run(actions.reopen)}>
+        <ListItemText>Reopen Closed Tab</ListItemText>
+        <ShortcutKeycap
+          keyLabel={desktopLeaderLabel(
+            `${DESKTOP_TAB_GROUP}${DESKTOP_TAB_KEYS.reopen}`,
+          )}
+          variant="global"
+          sx={{ ml: "1.5rem" }}
+        />
+      </MenuItem>
+      {menuItem.kind === "session" && <Divider />}
+      {menuItem.kind === "session" && (
+        <MenuItem onClick={run(() => onRename(menuKey))}>
+          <ListItemText>Rename…</ListItemText>
+        </MenuItem>
+      )}
+    </Menu>
+  );
+}
+
 interface TabMenu {
   readonly key: string;
   readonly left: number;
@@ -87,7 +298,17 @@ export const DesktopTabStrip = memo(function DesktopTabStrip({
   const [drop, setDrop] = useState<{ key: string; after: boolean } | null>(
     null,
   );
+  const [overflow, setOverflow] = useState({ left: false, right: false });
   const strip = useRef<HTMLDivElement | null>(null);
+  const updateOverflow = useCallback((): void => {
+    const el = strip.current;
+    if (!el) return;
+    const left = el.scrollLeft > 2;
+    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 2;
+    setOverflow((prev) =>
+      prev.left === left && prev.right === right ? prev : { left, right }
+    );
+  }, []);
   const live = useRef({ items, currentKey, visits, exists, onOpen, onRename });
   live.current = { items, currentKey, visits, exists, onOpen, onRename };
 
@@ -305,78 +526,78 @@ export const DesktopTabStrip = memo(function DesktopTabStrip({
   useLayoutEffect(() => {
     strip.current?.querySelector<HTMLElement>("[aria-selected='true']")
       ?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [currentKey, items.length]);
+    updateOverflow();
+  }, [currentKey, items.length, updateOverflow]);
 
-  // The menu keeps its subject while it animates closed.
-  const shown = useRef<TabMenu | null>(null);
-  if (menu) shown.current = menu;
-  const menuKey = shown.current?.key ?? "";
-  const menuItem = items.find((item) => item.key === menuKey);
-  const menuIndex = items.findIndex((item) => item.key === menuKey);
-  const unpinnedBeside = (from: number, to: number): boolean =>
-    items.slice(from, to).some((item) => !item.pinned);
-  const run = (action: () => void) => (): void => {
-    setMenu(null);
-    action();
-  };
-  const slot = (key: string): React.JSX.Element | null =>
-    menuKey === currentKey
-      ? (
-        <ShortcutKeycap
-          keyLabel={desktopLeaderLabel(`${DESKTOP_TAB_GROUP}${key}`)}
-          variant="global"
-          sx={{ ml: "1.5rem" }}
-        />
-      )
-      : null;
+  useEffect(() => {
+    const el = strip.current;
+    if (!el) return undefined;
+    updateOverflow();
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(updateOverflow);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [updateOverflow]);
 
   return (
     <Box
-      ref={strip}
-      role="tablist"
-      aria-label="Open Sessions and Drafts"
-      data-desktop-tabs
-      // Every tab is reached by its digit slot or the group slot at the end.
-      data-desktop-shortcut-owner
-      onWheel={(event): void => {
-        if (event.deltaY !== 0 && event.deltaX === 0) {
-          event.currentTarget.scrollLeft += event.deltaY;
-        }
-      }}
+      data-desktop-tabs-shell
       sx={{
-        display: "flex",
-        alignItems: "stretch",
+        position: "relative",
         flexShrink: 0,
-        height: "2.375rem",
         minWidth: 0,
-        overflowX: "auto",
-        overflowY: "hidden",
-        scrollbarWidth: "none",
-        "&::-webkit-scrollbar": { display: "none" },
-        // A recessed rail: the selected tab rises out of it into the page.
-        borderBottom: 1,
-        borderColor: "divider",
-        bgcolor: (t: Theme) =>
-          alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.28 : 0.045),
-        ...sx,
       }}
     >
-      {items.map((item, index) => {
-        const selected = item.key === currentKey;
-        return (
-          <Box
-            key={item.key}
-            role="tab"
-            aria-selected={selected}
-            tabIndex={-1}
-            data-desktop-tab={item.key}
-            data-desktop-tab-state={item.pinned
-              ? "pinned"
-              : item.preview
-              ? "preview"
-              : "kept"}
-            title={item.title}
-            draggable
+      <Box
+        ref={strip}
+        role="tablist"
+        aria-label="Open Sessions and Drafts"
+        data-desktop-tabs
+        // Every tab is reached by its digit slot or the group slot at the end.
+        data-desktop-shortcut-owner
+        onScroll={updateOverflow}
+        onWheel={(event): void => {
+          if (event.deltaY !== 0 && event.deltaX === 0) {
+            event.currentTarget.scrollLeft += event.deltaY;
+          }
+        }}
+        sx={{
+          display: "flex",
+          alignItems: "stretch",
+          height: "2.375rem",
+          minWidth: 0,
+          overflowX: "auto",
+          overflowY: "hidden",
+          scrollbarWidth: "none",
+          "&::-webkit-scrollbar": { display: "none" },
+          // A recessed rail: the selected tab rises out of it into the page.
+          borderBottom: 1,
+          borderColor: "divider",
+          bgcolor: (t: Theme) =>
+            alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.28 : 0.045),
+          ...sx,
+        }}
+      >
+        {items.map((item, index) => {
+          const selected = item.key === currentKey;
+          return (
+            <HintTooltip
+              key={item.key}
+              title={item.title}
+              detail={item.preview ? "Preview tab · double-click to keep open" : undefined}
+              enterDelay={450}
+            >
+              <Box
+                role="tab"
+                aria-selected={selected}
+                tabIndex={-1}
+                data-desktop-tab={item.key}
+                data-desktop-tab-state={item.pinned
+                  ? "pinned"
+                  : item.preview
+                  ? "preview"
+                  : "kept"}
+                draggable
             onClick={(): void => {
               if (!selected) onOpen(item.key);
             }}
@@ -536,91 +757,27 @@ export const DesktopTabStrip = memo(function DesktopTabStrip({
               {item.pinned ? <PushPin /> : <Close />}
             </Box>
           </Box>
+          </HintTooltip>
         );
       })}
-      <Box
-        component="span"
-        title="Tab actions: D close, O others, P pin, U reopen. ␣[ and ␣] step"
-        sx={{
-          display: "inline-flex",
-          alignItems: "center",
-          flexShrink: 0,
-          px: "0.625rem",
+      <TabStripActionsButton
+        overflowRight={overflow.right}
+        onOpenMenu={(rect): void => {
+          const targetKey = currentKey ?? items[0]?.key;
+          if (!targetKey) return;
+          setMenu({ key: targetKey, left: rect.left, top: rect.bottom });
         }}
-      >
-        <LeaderKeycap leaderKey={DESKTOP_TAB_GROUP} />
+      />
       </Box>
-      {menu !== null && menuItem !== undefined && <Menu
-        open
+      <TabStripOverflowEdges overflow={overflow} />
+      <TabStripContextMenu
+        menu={menu}
+        items={items}
+        currentKey={currentKey}
+        actions={actions}
         onClose={(): void => setMenu(null)}
-        anchorReference="anchorPosition"
-        {...(menu ? { anchorPosition: { left: menu.left, top: menu.top } } : {})}
-        slotProps={{ list: { dense: true } }}
-      >
-        <MenuItem
-          disabled={items.length < 2}
-          onClick={run(() => actions.close(menuKey, "one"))}
-        >
-          <ListItemText>Close</ListItemText>
-          {slot(DESKTOP_TAB_KEYS.close)}
-        </MenuItem>
-        <MenuItem
-          disabled={!unpinnedBeside(0, menuIndex) &&
-            !unpinnedBeside(menuIndex + 1, items.length)}
-          onClick={run(() => actions.close(menuKey, "others"))}
-        >
-          <ListItemText>Close Others</ListItemText>
-          {slot(DESKTOP_TAB_KEYS.closeOthers)}
-        </MenuItem>
-        <MenuItem
-          disabled={!unpinnedBeside(menuIndex + 1, items.length)}
-          onClick={run(() => actions.close(menuKey, "right"))}
-        >
-          <ListItemText>Close to the Right</ListItemText>
-          {slot(DESKTOP_TAB_KEYS.closeRight)}
-        </MenuItem>
-        <MenuItem
-          disabled={!unpinnedBeside(0, menuIndex)}
-          onClick={run(() => actions.close(menuKey, "left"))}
-        >
-          <ListItemText>Close to the Left</ListItemText>
-          {slot(DESKTOP_TAB_KEYS.closeLeft)}
-        </MenuItem>
-        <MenuItem
-          disabled={!unpinnedBeside(0, items.length) || items.length < 2}
-          onClick={run(() => actions.close(menuKey, "all"))}
-        >
-          <ListItemText>Close All</ListItemText>
-          {slot(DESKTOP_TAB_KEYS.closeAll)}
-        </MenuItem>
-        <Divider />
-        <MenuItem onClick={run(() => actions.pin(menuKey))}>
-          <ListItemText>{menuItem?.pinned ? "Unpin" : "Pin"}</ListItemText>
-          {slot(DESKTOP_TAB_KEYS.pin)}
-        </MenuItem>
-        {menuItem?.preview && (
-          <MenuItem onClick={run(() => actions.keep(menuKey))}>
-            <ListItemText>Keep Open</ListItemText>
-            {slot(DESKTOP_TAB_KEYS.keep)}
-          </MenuItem>
-        )}
-        <MenuItem disabled={!actions.canReopen()} onClick={run(actions.reopen)}>
-          <ListItemText>Reopen Closed Tab</ListItemText>
-          <ShortcutKeycap
-            keyLabel={desktopLeaderLabel(
-              `${DESKTOP_TAB_GROUP}${DESKTOP_TAB_KEYS.reopen}`,
-            )}
-            variant="global"
-            sx={{ ml: "1.5rem" }}
-          />
-        </MenuItem>
-        {menuItem?.kind === "session" && <Divider />}
-        {menuItem?.kind === "session" && (
-          <MenuItem onClick={run(() => onRename(menuKey))}>
-            <ListItemText>Rename…</ListItemText>
-          </MenuItem>
-        )}
-      </Menu>}
+        onRename={onRename}
+      />
     </Box>
   );
 });

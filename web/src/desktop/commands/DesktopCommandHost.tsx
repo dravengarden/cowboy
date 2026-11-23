@@ -1,17 +1,6 @@
-import { ScrollEdges } from "@cowboy/app-shell";
 import { useDesktopInsertCommand } from "../editorInsert";
 import { OPEN_BACKGROUND_TASKS_EVENT } from "../../backgroundTaskInspectorState";
-import { desktopSize } from "../../surface/desktopSize";
-import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  alpha,
-  Box,
-  InputBase,
-  List,
-  ListItemButton,
-  ListItemText,
-} from "@mui/material";
-import { Search } from "@mui/icons-material";
+import { useMemo, useRef, useState } from "react";
 import { useDesktopWorkspace } from "../DesktopWorkspaceController";
 import {
   focusConversationCommand,
@@ -22,9 +11,8 @@ import {
   type DesktopCommand,
   useDesktopCommand,
   useDesktopCommandActions,
-  useDesktopCommands,
 } from "./DesktopCommandProvider";
-import { DesktopShortcut } from "./DesktopKeycap";
+import { DesktopCommandPalette } from "./DesktopCommandPalette";
 import { useDesktopLeaderOptional } from "./leaderContext";
 import { DesktopRecentDialog } from "./DesktopRecentDialog";
 import { openUndoHistory } from "../../UndoHistorySheet";
@@ -42,10 +30,7 @@ import {
   preferredDesktopSplitter,
   visibleDesktopSplitterIds,
 } from "../desktopSplitterKeyboard";
-import { DESKTOP_INSET_RADIUS } from "../DesktopEmbeddedControl";
 import { retrySyncNow } from "../../store";
-import { DesktopModal } from "../DesktopModal";
-import { desktopImeOwnsKey } from "./imeShortcut";
 import {
   DESKTOP_PANES_EXPANDED,
   desktopCollapsedPanesStore,
@@ -584,192 +569,5 @@ export function DesktopCommandHost({
         <DesktopCommandPalette onClose={(): void => setPaletteOpen(false)} />
       )}
     </>
-  );
-}
-
-function paletteShortcutGroups(hasResults: boolean, selectedAvailable: boolean) {
-  return [
-    { slots: [{ shortcut: DESKTOP_SHORTCUTS.commands, label: "Palette", availability: "active" as const }] },
-    {
-      label: "Navigate",
-      slots: [
-        { shortcut: "↑/↓", label: "Move", availability: hasResults ? "available" as const : "inactive" as const },
-        { shortcut: "Enter", label: "Run", availability: selectedAvailable ? "available" as const : "inactive" as const },
-      ],
-    },
-    { slots: [{ shortcut: "Esc", label: "Close" }] },
-  ];
-}
-
-function DesktopCommandPalette({
-  onClose,
-}: {
-  onClose: () => void;
-}): React.JSX.Element {
-  // Mounted only while open, so subscribing to live command updates keeps
-  // dynamic rows (such as approvals) current without waking DesktopCommandHost.
-  const registry = useDesktopCommands();
-  const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState(0);
-  const paletteInputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    const frame = requestAnimationFrame(() => paletteInputRef.current?.focus());
-    return () => cancelAnimationFrame(frame);
-  }, []);
-  const normalized = query.trim().toLowerCase();
-  const available = registry.commands.filter((command) =>
-    command.id !== "commandPalette.open" &&
-    (!normalized ||
-      `${command.title} ${command.id} ${command.group} ${command.description ?? ""}`
-        .toLowerCase().includes(normalized))
-  );
-  // An explicit pick runs only the exact registered command instance this row
-  // presented: if an approval prompt changed before activation, reject it.
-  const runCommand = (command: DesktopCommand): void => {
-    const live = registry.list().find((entry) => entry.id === command.id);
-    if (live !== command) return;
-    if (registry.execute(command.id, { anyScope: true })) onClose();
-  };
-  useEffect(() => setSelected(0), [query]);
-  useEffect(() => {
-    if (selected >= available.length) setSelected(Math.max(0, available.length - 1));
-  }, [available.length, selected]);
-
-  const runSelected = (): void => {
-    const command = available[selected];
-    if (command) runCommand(command);
-  };
-  const selectedCommand = available[selected];
-  const selectedAvailable = selectedCommand !== undefined && selectedCommand.when?.() !== false;
-
-  return (
-    <DesktopModal
-      open
-      onClose={onClose}
-      title="Command Palette"
-      description="Search and run every registered Desktop command."
-      width={680}
-      shortcutGroups={paletteShortcutGroups(available.length > 0, selectedAvailable)}
-    >
-      <Box sx={{ px: 1.5, pb: 1.5, pt: 1.25 }}>
-        <Box
-          sx={{
-            minHeight: desktopSize(44),
-            px: 1.5,
-            display: "flex",
-            alignItems: "center",
-            gap: 1.25,
-            border: 1,
-            borderColor: (theme) => alpha(theme.palette.primary.main, 0.3),
-            borderRadius: `${DESKTOP_INSET_RADIUS}px`,
-            bgcolor: (theme) => alpha(theme.palette.background.paper, 0.52),
-            transition: "border-color 120ms ease, box-shadow 120ms ease, background-color 120ms ease",
-            "&:focus-within": {
-              borderColor: "primary.main",
-              bgcolor: "background.paper",
-              boxShadow: (theme) =>
-                `0 0 0 2px ${alpha(theme.palette.primary.main, 0.16)}`,
-            },
-          }}
-        >
-          <Search
-            aria-hidden
-            sx={{ flexShrink: 0, color: "text.secondary", fontSize: "1.2rem" }}
-          />
-          <InputBase
-            inputRef={paletteInputRef}
-            autoFocus
-            fullWidth
-            value={query}
-            onChange={(event): void => setQuery(event.target.value)}
-            onKeyDown={(event): void => {
-              if (desktopImeOwnsKey(event.nativeEvent)) return;
-              if (event.key === "ArrowDown") {
-                event.preventDefault();
-                setSelected((value) =>
-                  Math.min(value + 1, Math.max(0, available.length - 1))
-                );
-              } else if (event.key === "ArrowUp") {
-                event.preventDefault();
-                setSelected((value) => Math.max(0, value - 1));
-              } else if (event.key === "Enter") {
-                event.preventDefault();
-                runSelected();
-              }
-            }}
-            placeholder="Search commands…"
-            // A launcher: typing is all it is for, so one Esc closes it
-            // (FOCUS.md "Modals"), as in every command palette.
-            inputProps={{
-              "aria-label": "Search commands",
-              "data-desktop-escape": "close",
-              "data-desktop-vim": "off",
-            }}
-            sx={{
-              minWidth: 0,
-              fontSize: "0.9rem",
-              "& .MuiInputBase-input": {
-                p: 0,
-                height: "1.5em",
-                lineHeight: 1.5,
-                caretColor: "primary.main",
-                "&::placeholder": { color: "text.secondary", opacity: 0.72 },
-              },
-            }}
-          />
-        </Box>
-        <DesktopCommandPaletteList
-          available={available}
-          selected={selected}
-          onHover={setSelected}
-          onRun={runCommand}
-        />
-      </Box>
-    </DesktopModal>
-  );
-}
-
-function DesktopCommandPaletteList({
-  available,
-  selected,
-  onHover,
-  onRun,
-}: {
-  available: readonly DesktopCommand[];
-  selected: number;
-  onHover: (index: number) => void;
-  onRun: (command: DesktopCommand) => void;
-}): React.JSX.Element {
-  return (
-    <List
-      dense
-      sx={{ maxHeight: "min(52vh, 460px)", overflowY: "auto", pt: 1 }}
-    >
-      {available.map((command, index) => (
-        <ListItemButton
-          key={command.id}
-          selected={index === selected}
-          disabled={command.when?.() === false}
-          onMouseMove={(): void => onHover(index)}
-          onClick={(): void => onRun(command)}
-          sx={{ borderRadius: 1.5 }}
-        >
-          <ListItemText
-            primary={command.title}
-            secondary={command.when?.() === false
-              ? (typeof command.disabledReason === "function"
-                ? command.disabledReason()
-                : command.disabledReason ?? "Unavailable")
-              : command.description ?? command.id}
-          />
-          {(command.shortcut || command.sequence) && (
-            <DesktopShortcut
-              shortcut={command.shortcut ?? command.sequence?.join(" → ") ?? ""}
-              availability={command.when?.() === false ? "inactive" : "available"}
-            />
-          )}
-        </ListItemButton>
-      ))}
-    <ScrollEdges /></List>
   );
 }
