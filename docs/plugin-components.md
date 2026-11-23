@@ -88,6 +88,17 @@ adapter's lock moves `url` to 2.5.9 for RUSTSEC-2026-0592 (unbounded
 recursion in `Url::origin()` on nested `blob:` URLs). Native pins and its
 component release are unchanged.
 
+Component release 3.143.0 records provider-runtime 1.3.27, whose
+`cowboy-antigravity-acp` 1.0.23 labels a subagent only with the model agy
+confirmed for it (the new session's configuration, then the full configuration
+the last replayed parent setting answered with; agy's own configuration updates for
+a session the proxy opened are withheld unless the child started with nothing
+replayed onto it), names the skills Cowboy cannot run in every session's routing
+(a managed call's included) and offers the `Subagent` substitute only to the
+owner's session, and tells a subagent it does the work itself. Antigravity
+0.2.29 pins it. The other six Providers pinning provider-runtime advance one
+patch version.
+
 Component release 3.142.0 records provider-runtime 1.3.26, whose
 `cowboy-antigravity-acp` 1.0.22 lets `SearchFiles` find files by name with only
 a glob and a directory path (Claude's Glob), and measures the home discovery
