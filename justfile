@@ -11,7 +11,7 @@
 # Directories are Cargo flags, never CARGO_* variables: sccache hashes those
 # into every crate's key, so a checkout path there makes every key unique to
 # the checkout and no other worktree ever hits.
-rust_test_args := "-p cowboy -p cowboy-store -p cowboy-server -p cowboy-machine --all-targets --all-features --locked --target-dir " + justfile_directory() + "/target/test-graph"
+rust_test_args := "-p cowboy -p cowboy-store -p cowboy-server -p cowboy-machine -p cowboy-provider-sdk -p cowboy-plugin-sdk --all-targets --all-features --locked --target-dir " + justfile_directory() + "/target/test-graph"
 # How every recipe runs that graph. The invoking Codex Plugin exports its own
 # signed package path; Cowboy's unit tests exercise embedded fixtures and must
 # not inherit that runtime. The graph always keeps rustc incremental state,
@@ -216,7 +216,7 @@ workspace-extensions-browser-conformance BROWSER:
 
 idb-conformance-check:
     bun x --no-install biome format tools/idb-browser-conformance.ts tools/idb-browser-bundle.mjs tools/cdp-fixture.ts tools/cdp-browser-conformance.ts tools/cdp-keyboard-acceptance.ts tools/ios-simulator-conformance.ts tools/dom-apps-conformance.ts tools/mcp-apps-conformance.ts
-    bun run typecheck
+    if [ "${COWBOY_CHECK_DEDUPE:-0}" != "1" ]; then bun run typecheck; fi
 
 # Retain an actual product-store bundle before and after a latency change.
 send-latency-bundle OUTPUT:
@@ -237,7 +237,7 @@ build-site:
 # Keep the published ecosystem synchronized with the real Plugin Catalog inputs.
 site-check:
     bun x --no-install biome format site/build.ts site/build_test.ts site/site.js
-    bun run typecheck
+    if [ "${COWBOY_CHECK_DEDUPE:-0}" != "1" ]; then bun run typecheck; fi
     bun test ./site/build_test.ts
     just build-site
 
@@ -273,7 +273,7 @@ native-plugin-conformance RUNTIME="auto":
 # Source/dependency and keyboard checks also run on Linux in the pinned shell.
 native-shell-check:
     bun x --no-install biome format tools/check-native-shell.ts tools/check-native-shell_test.ts tools/native-shell-probe.js tools/native-shell-probe_test.ts
-    bun run typecheck
+    if [ "${COWBOY_CHECK_DEDUPE:-0}" != "1" ]; then bun run typecheck; fi
     bun test ./tools/check-native-shell_test.ts ./tools/native-shell-probe_test.ts ./tools/native-shell-loader_test.ts
     python3 -m unittest discover -s tools -p 'native_shell_smoke_test.py'
     python3 -m unittest discover -s tools -p 'native_swift_rs_compat_test.py'
@@ -310,7 +310,7 @@ component-package-check:
 plugin-check: component-package-check
     bun x --no-install biome format plugins/claude-code/collector/credits.js plugins/claude-code/collector/resets.js plugins/claude-code/resets.test.js
     bun x --no-install biome format plugins/codex/collector/index.js plugins/grok/collector/index.js plugins/claude-deepseek/collector/index.js plugins/claude-deepseek/collector/pricing.js plugins/collector-sidecars.test.js plugins/claude-deepseek/pricing.test.js plugins/claude-code/collector/index.js plugins/claude-code/collector/usage.js plugins/claude-code/collector/process.js plugins/codex/collector/process.js plugins/grok/collector/process.js plugins/claude-code/usage.test.js
-    bun run typecheck
+    if [ "${COWBOY_CHECK_DEDUPE:-0}" != "1" ]; then bun run typecheck; fi
     bun test ./components/plugin-api/*.test.ts ./components/state-store/*.test.ts ./components/app-shell/*.test.ts
     bun test ./tools/check-plugin-components_test.ts ./tools/plugin-component-closure_test.ts
     bun test ./tools/plugin-source-digest_test.ts
@@ -324,12 +324,20 @@ plugin-build PLUGIN:
     #!/usr/bin/env bash
     set -euo pipefail
     case "{{PLUGIN}}" in (*[!a-z0-9-]*|"") echo "invalid plugin id" >&2; exit 2;; esac
-    bun tools/check-plugin-components.ts
+    if [ "${COWBOY_CHECK_DEDUPE:-0}" != "1" ]; then
+      bun tools/check-plugin-components.ts
+    fi
     test -f "plugins/{{PLUGIN}}/plugin.json"
     mkdir -p "dist/plugins/{{PLUGIN}}"
-    cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- build \
-      "plugins/{{PLUGIN}}" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" \
-      "cowboy-plugin://{{PLUGIN}}"
+    if [ -n "${COWBOY_PLUGIN_PACK_BIN:-}" ] && [ -x "$COWBOY_PLUGIN_PACK_BIN" ]; then
+      "$COWBOY_PLUGIN_PACK_BIN" build \
+        "plugins/{{PLUGIN}}" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" \
+        "cowboy-plugin://{{PLUGIN}}"
+    else
+      cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- build \
+        "plugins/{{PLUGIN}}" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" \
+        "cowboy-plugin://{{PLUGIN}}"
+    fi
 
 example-auth-bundle PLUGIN:
     #!/usr/bin/env bash
@@ -337,9 +345,15 @@ example-auth-bundle PLUGIN:
     case "{{PLUGIN}}" in (*[!a-z0-9-]*|"") echo "invalid plugin id" >&2; exit 2;; esac
     test -f "examples/authentication/{{PLUGIN}}/plugin.json"
     mkdir -p "dist/plugins/{{PLUGIN}}"
-    cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- build \
-      "examples/authentication/{{PLUGIN}}" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" \
-      "cowboy-plugin://{{PLUGIN}}"
+    if [ -n "${COWBOY_PLUGIN_PACK_BIN:-}" ] && [ -x "$COWBOY_PLUGIN_PACK_BIN" ]; then
+      "$COWBOY_PLUGIN_PACK_BIN" build \
+        "examples/authentication/{{PLUGIN}}" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" \
+        "cowboy-plugin://{{PLUGIN}}"
+    else
+      cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- build \
+        "examples/authentication/{{PLUGIN}}" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" \
+        "cowboy-plugin://{{PLUGIN}}"
+    fi
 
 # Every bootstrap login host must have an independently buildable signed
 # Plugin source. Discovery deliberately has no list of authentication IDs.
@@ -351,11 +365,21 @@ editor-plugin-pack DIR OUT:
 example-auth-build-all:
     #!/usr/bin/env bash
     set -euo pipefail
+    pack="${COWBOY_PLUGIN_PACK_BIN:-}"
+    if [ -z "$pack" ]; then
+      cargo build --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack
+      pack="$PWD/target/debug/cowboy-plugin-pack"
+    fi
+    pids=()
     for host in examples/authentication/*/host.json; do
       source_dir="${host%/host.json}"
       test -f "$source_dir/plugin.json"
-      just example-auth-bundle "${source_dir##*/}"
+      COWBOY_PLUGIN_PACK_BIN="$pack" just example-auth-bundle "${source_dir##*/}" &
+      pids+=("$!")
     done
+    status=0
+    for pid in "${pids[@]}"; do wait "$pid" || status=$?; done
+    exit "$status"
 
 # Data-only backend packages use the exact same pack/sign/publish lifecycle.
 example-telemetry-bundle PLUGIN:
@@ -364,12 +388,36 @@ example-telemetry-bundle PLUGIN:
     case "{{PLUGIN}}" in (*[!a-z0-9-]*|"") echo "invalid plugin id" >&2; exit 2;; esac
     test -f "examples/telemetry/{{PLUGIN}}/plugin.json"
     mkdir -p "dist/plugins/{{PLUGIN}}"
-    cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- build \
-      "examples/telemetry/{{PLUGIN}}" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" \
-      "cowboy-plugin://{{PLUGIN}}"
+    if [ -n "${COWBOY_PLUGIN_PACK_BIN:-}" ] && [ -x "$COWBOY_PLUGIN_PACK_BIN" ]; then
+      "$COWBOY_PLUGIN_PACK_BIN" build \
+        "examples/telemetry/{{PLUGIN}}" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" \
+        "cowboy-plugin://{{PLUGIN}}"
+    else
+      cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- build \
+        "examples/telemetry/{{PLUGIN}}" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" \
+        "cowboy-plugin://{{PLUGIN}}"
+    fi
 
 plugin-build-all:
-    for manifest in plugins/*/plugin.json; do plugin="${manifest%/plugin.json}"; just plugin-build "${plugin##*/}"; done
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "${COWBOY_CHECK_DEDUPE:-0}" != "1" ]; then
+      bun tools/check-plugin-components.ts
+    fi
+    pack="${COWBOY_PLUGIN_PACK_BIN:-}"
+    if [ -z "$pack" ]; then
+      cargo build --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack
+      pack="$PWD/target/debug/cowboy-plugin-pack"
+    fi
+    pids=()
+    for manifest in plugins/*/plugin.json; do
+      plugin="${manifest%/plugin.json}"
+      COWBOY_CHECK_DEDUPE=1 COWBOY_PLUGIN_PACK_BIN="$pack" just plugin-build "${plugin##*/}" &
+      pids+=("$!")
+    done
+    status=0
+    for pid in "${pids[@]}"; do wait "$pid" || status=$?; done
+    exit "$status"
 
 # Prove that one Plugin can build outside the Cowboy checkout using only its
 # own source directory, its component release pin, and the packaged SDK CLI.
@@ -381,11 +429,15 @@ plugin-isolation-check PLUGIN="codex":
     isolation_root="$(mktemp -d /tmp/cowboy-plugin-isolation-XXXXXX)"
     cleanup() { rm -r -- "$isolation_root"; }
     trap cleanup EXIT
-    cargo build --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack
+    pack="${COWBOY_PLUGIN_PACK_BIN:-}"
+    if [ -z "$pack" ]; then
+      cargo build --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack
+      pack="$repo_root/target/debug/cowboy-plugin-pack"
+    fi
     git ls-files --cached --others --exclude-standard -z -- "plugins/{{PLUGIN}}" | tar --null -T - -cf - | tar -xf - -C "$isolation_root"
     mv "$isolation_root/plugins/{{PLUGIN}}" "$isolation_root/source"
     cd "$isolation_root"
-    "$repo_root/target/debug/cowboy-plugin-pack" build "$isolation_root/source" "{{PLUGIN}}.cowboy-plugin"
+    "$pack" build "$isolation_root/source" "{{PLUGIN}}.cowboy-plugin"
     test -s "{{PLUGIN}}.cowboy-plugin"
     test -s "{{PLUGIN}}.release.json"
     if test -s "$repo_root/dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin"; then
@@ -687,7 +739,7 @@ claude-remote-scripts: claude-remote-prepare
     node --import ./tools/register-memory-client.mjs --test tools/claude-remote-privacy.test.mjs
     bun x --no-install biome format tools/claude-remote-privacy.test.mjs
     bun x --no-install biome format tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-shell-jobs.test.mjs tools/claude-remote-shell-fixture.mjs tools/claude-remote-context.test.mjs tools/claude-remote-skills.test.mjs tools/claude-remote-mcp.test.mjs tools/claude-remote-native-baseline.test.mjs tools/claude-remote-hooks-baseline.test.mjs tools/claude-remote-mods-baseline.test.mjs tools/claude-remote-permissions-baseline.test.mjs tools/claude-remote-context-baseline.test.mjs tools/claude-remote-tools-baseline.test.mjs
-    bun run typecheck
+    if [ "${COWBOY_CHECK_DEDUPE:-0}" != "1" ]; then bun run typecheck; fi
     python3 -m unittest discover -s tools -p remote_impact_test.py
 
 # Cross-language package/linker conformance. This is also the Agent Plugin
@@ -716,7 +768,7 @@ provider-runtime-scripts: claude-source-deps
     node --import ./tools/register-memory-client.mjs --test plugins/codex/runtime/launch.test.mjs
     node --import ./tools/register-memory-client.mjs --test plugins/codex/runtime/execution-mcp.test.mjs
     bun x --no-install biome format plugins/codex/runtime/build.ts plugins/codex/runtime/launch.mjs plugins/codex/runtime/launch.test.mjs plugins/codex/runtime/memory.mjs plugins/codex/runtime/execution-mcp.mjs plugins/codex/runtime/execution-mcp.test.mjs plugins/codex/runtime/package.json plugins/codex/runtime/package-lock.json
-    bun run typecheck
+    if [ "${COWBOY_CHECK_DEDUPE:-0}" != "1" ]; then bun run typecheck; fi
     bun test ./tools/check-provider-release-coverage_test.ts
     bun test ./tools/provider-runtime-platforms_test.ts
     bun test ./.agents/skills/release-cowboy-plugin/scripts/audit-dependencies_test.ts
@@ -735,17 +787,49 @@ provider-runtime-scripts: claude-source-deps
 
 # The Rust tests, Plugin builds and package checks of `provider-check`.
 provider-build-check:
-    cargo test --locked -p cowboy-provider-sdk --all-targets
-    cargo test --locked -p cowboy-plugin-sdk --all-targets
-    just plugin-build-all
-    just example-auth-build-all
-    just example-telemetry-bundle victoria
-    for manifest in plugins/*/plugin.json; do plugin="${manifest#plugins/}"; just plugin-isolation-check "${plugin%/plugin.json}"; done
-    cd web && bun run typecheck
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "${COWBOY_CHECK_DEDUPE:-0}" != "1" ]; then
+      cargo test --locked -p cowboy-provider-sdk --all-targets
+      cargo test --locked -p cowboy-plugin-sdk --all-targets
+    fi
+    pack="${COWBOY_PLUGIN_PACK_BIN:-}"
+    if [ -z "$pack" ] && [ -n "${COWBOY_TEST_GRAPH_ARTIFACTS:-}" ] && [ -r "$COWBOY_TEST_GRAPH_ARTIFACTS" ]; then
+      pack="$(just test-graph-bin cowboy-plugin-pack)"
+    fi
+    if [ -z "$pack" ]; then
+      cargo build --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack
+      pack="$PWD/target/debug/cowboy-plugin-pack"
+    fi
+    export COWBOY_PLUGIN_PACK_BIN="$pack"
+    just plugin-build-all &
+    p_plugins=$!
+    just example-auth-build-all &
+    p_auth=$!
+    just example-telemetry-bundle victoria &
+    p_tel=$!
+    status=0
+    wait "$p_plugins" || status=$?
+    wait "$p_auth" || status=$?
+    wait "$p_tel" || status=$?
+    if ((status != 0)); then exit "$status"; fi
+    pids=()
+    for manifest in plugins/*/plugin.json; do
+      plugin="${manifest#plugins/}"
+      just plugin-isolation-check "${plugin%/plugin.json}" &
+      pids+=("$!")
+    done
+    for pid in "${pids[@]}"; do wait "$pid" || status=$?; done
+    if ((status != 0)); then exit "$status"; fi
+    if [ "${COWBOY_CHECK_DEDUPE:-0}" != "1" ]; then
+      (cd web && bun run typecheck)
+    fi
     bun components/provider-ui/validate-packages.ts dist/plugins/*/*.cowboy-plugin
     bun x --no-install biome format tools/check-provider-ui-execution.ts
     bun tools/check-provider-ui-execution.ts dist/plugins/*/*.cowboy-plugin
-    cd web && bun test ./src/providerSdk.test.ts
+    if [ "${COWBOY_CHECK_DEDUPE:-0}" != "1" ]; then
+      (cd web && bun test ./src/providerSdk.test.ts)
+    fi
 
 # Quality gates.
 composition-generate:
@@ -753,7 +837,7 @@ composition-generate:
 
 composition-check:
     bun x --no-install biome format tools/generate-composition-contract.ts tools/generate-composition-contract_test.ts tools/composition-link-conformance.ts contracts
-    bun run typecheck
+    if [ "${COWBOY_CHECK_DEDUPE:-0}" != "1" ]; then bun run typecheck; fi
     bun test ./tools/generate-composition-contract_test.ts
     bun tools/generate-composition-contract.ts
     bun test ./contracts/composition.test.ts ./contracts/composition-check.test.ts ./contracts/widget-v1.test.ts
@@ -795,8 +879,14 @@ zed-check: zed-lint zed-test
 
 # Everything `lint` checks besides workspace Clippy and the Zed adapter.
 lint-plugins:
-    cd web && bun run lint
-    cd plugins/claude-code/relay && cargo clippy --all-targets --locked -- -D warnings
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "${COWBOY_CHECK_DEDUPE:-0}" = "1" ]; then
+      (cd web && bun x --no-install oxlint --ignore-pattern public/wasm_exec.js)
+    else
+      (cd web && bun run lint)
+      (cd plugins/claude-code/relay && cargo clippy --all-targets --locked -- -D warnings)
+    fi
 
 dependencies:
     #!/usr/bin/env bash
@@ -907,9 +997,17 @@ test-rust:
     python3 -m unittest discover -s tools -p ovh_machine_idle_sessions_test.py
 
 # Compiles the shared test graph, so `check` can start it before the static
-# checks rather than after them.
+# checks rather than after them, and records the JSON artifact map so later
+# steps (`test-graph-bin`, `test-postgres`, `logs-conformance`) do not rerun
+# Cargo's fingerprint/link pass just to discover executable paths.
 test-graph-build:
-    {{rust_test_env}} cargo test {{rust_test_args}} --no-run
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p target/test-graph
+    tmp="target/test-graph/artifacts.$$.json"
+    trap 'rm -f "$tmp"' EXIT
+    {{rust_test_env}} cargo test {{rust_test_args}} --no-run --message-format=json-render-diagnostics > "$tmp"
+    mv -f "$tmp" target/test-graph/artifacts.json
 
 # Compiles the test slices `test-rust` runs, so `check` can build them beside
 # the main graph; `test-rust` then only runs them. The execution host shares
@@ -961,6 +1059,17 @@ check: toolchain-check
     #!/usr/bin/env bash
     set -euo pipefail
     logs="$(mktemp -d "${TMPDIR:-/tmp}/cowboy-check.XXXXXX")"
+    js_fifo="$logs/jobserver.fifo"
+    mkfifo "$js_fifo"
+    exec 9<>"$js_fifo"
+    # Coordinate the 6 concurrent Cargo lanes through one POSIX FIFO jobserver
+    # so they share the host's cores instead of spawning 6 * nproc rustc jobs.
+    cores="$(nproc 2>/dev/null || echo 8)"
+    tokens=$((cores > 4 ? cores - 4 : 2))
+    printf "%${tokens}s" "" | tr ' ' '+' >&9
+    cargo_js="MAKEFLAGS=--jobserver-auth=fifo:$js_fifo"
+    export COWBOY_CHECK_DEDUPE=1
+    rm -f target/test-graph/artifacts.json
     pending=()
     cleanup() {
       local job
@@ -968,6 +1077,7 @@ check: toolchain-check
       for job in "${pending[@]}"; do
         kill -- "-${job%%:*}" 2>/dev/null || kill "${job%%:*}" 2>/dev/null || true
       done
+      exec 9>&- 2>/dev/null || true
       rm -rf "$logs"
     }
     trap cleanup EXIT
@@ -987,6 +1097,18 @@ check: toolchain-check
       cat "$logs/${job#*:}.log"
       if ((status != 0)); then exit "$status"; fi
     }
+    collect_named() {
+      local target="$1" next=() job found=""
+      for job in "${pending[@]}"; do
+        if [[ "${job#*:}" == "$target" ]]; then
+          found="$job"
+        else
+          next+=("$job")
+        fi
+      done
+      pending=("${next[@]}")
+      if [[ -n "$found" ]]; then collect "$found"; fi
+    }
     # Between foreground steps: stop at a background job that already failed.
     reap() {
       local job status
@@ -996,29 +1118,32 @@ check: toolchain-check
       done
     }
     # The shared test graph is the longest chain on a fresh worktree, so it
-    # starts first; composition-check later finds it built.
-    background test-graph-build
+    # starts first; composition-check and provider-build-check consume its
+    # recorded artifact map once collected.
+    background test-graph-build "$cargo_js"
     # The Node suites resolve `ws` from the prepared Claude ACP packages.
     just claude-source-deps
     # These three each start with `claude-remote-prepare`: whichever builds the
     # execution host first, the others find it built. The suites are collected
-    # before `test-rust`, so they never overlap the main test run.
-    background provider-antigravity-check
-    background claude-remote-scripts
-    background test-rust-slices-build
-    background clippy
-    background release-sources-check
-    background zed-check
+    # before the main Rust tests, so they never overlap them.
+    background provider-antigravity-check "$cargo_js"
+    background claude-remote-scripts "$cargo_js"
+    background test-rust-slices-build "$cargo_js"
+    background clippy "$cargo_js"
+    background release-sources-check "$cargo_js"
+    background zed-check "$cargo_js"
     background provider-runtime-scripts
     background test-web
     background build-web
     background dependencies
     # The MCP relay is a Cargo workspace of its own (plugins/claude-code/relay).
-    background claude-remote-relay
+    background claude-remote-relay "$cargo_js"
     just fmt structure-check docs-index-check protocol-contract-check typecheck
     reap
     just idb-conformance-check site-check native-shell-check lint-plugins plugin-check
     reap
+    collect_named test-graph-build
+    export COWBOY_TEST_GRAPH_ARTIFACTS="$PWD/target/test-graph/artifacts.json"
     just composition-check
     reap
     just provider-build-check
@@ -1027,7 +1152,39 @@ check: toolchain-check
       pending=("${pending[@]:1}")
       collect "$job"
     done
-    just test-rust test-postgres logs-conformance
+    # Stop sharing the compile jobserver before timing-sensitive test suites run.
+    unset MAKEFLAGS
+    exec 9>&- 2>/dev/null || true
+    # Run the two full-core nextest suites alone first, then overlap the small
+    # post-suites (wire, code-adapter, python, postgres, logs-conformance).
+    {{rust_test_env}} cargo nextest run {{rust_test_args}}
+    {{rust_slice_env}} cargo nextest run --cargo-profile {{rust_slice_profile}} {{rust_machine_args}}
+    post_jobs=()
+    run_post() {
+      local name="$1"; shift
+      (
+        SECONDS=0
+        "$@"
+        status=$?
+        echo "($name took ${SECONDS}s)"
+        exit "$status"
+      ) >"$logs/post-$name.log" 2>&1 &
+      post_jobs+=("$!:$name")
+    }
+    run_post wire {{rust_slice_env}} cargo test --profile {{rust_slice_profile}} {{rust_wire_args}}
+    run_post code-adapter {{rust_slice_env}} cargo test --profile {{rust_slice_profile}} {{rust_code_adapter_args}}
+    run_post idle-sessions python3 -m unittest discover -s tools -p ovh_machine_idle_sessions_test.py
+    run_post test-postgres just test-postgres
+    run_post logs-conformance just logs-conformance
+    post_status=0
+    for job in "${post_jobs[@]}"; do
+      st=0
+      wait "${job%%:*}" || st=$?
+      echo "==> ${job#*:} (post, exit $st)"
+      cat "$logs/post-${job#*:}.log"
+      if ((st != 0 && post_status == 0)); then post_status=$st; fi
+    done
+    exit "$post_status"
 
 # Real diagnostic CLI, typed OTel fixture, query/metrics/tail/watch/RPC contracts.
 # An optional explicit --ssh in the standalone tool adds same-host SSH acceptance.
@@ -1037,7 +1194,11 @@ logs-conformance:
     # Reuse the shared test graph's library test and CLI executables; the
     # tool's own root-only `cargo test --lib` selection, like a separate
     # `cargo build --bin cowboy`, would compile the workspace again.
-    artifacts="$({{rust_test_env}} cargo test {{rust_test_args}} --no-run --message-format=json-render-diagnostics)"
+    if [[ -n "${COWBOY_TEST_GRAPH_ARTIFACTS:-}" && -r "$COWBOY_TEST_GRAPH_ARTIFACTS" ]]; then
+      artifacts="$(cat "$COWBOY_TEST_GRAPH_ARTIFACTS")"
+    else
+      artifacts="$({{rust_test_env}} cargo test {{rust_test_args}} --no-run --message-format=json-render-diagnostics)"
+    fi
     fixture="$(jq -r 'select(.reason == "compiler-artifact" and .target.name == "cowboy" and .profile.test and (.target.kind | index("lib"))) | .executable // empty' <<<"$artifacts")"
     cowboy="$(jq -r 'select(.reason == "compiler-artifact" and .target.name == "cowboy" and (.profile.test | not) and (.target.kind | index("bin"))) | .executable // empty' <<<"$artifacts")"
     test -x "$fixture"
@@ -1050,8 +1211,12 @@ logs-conformance:
 test-graph-bin NAME:
     #!/usr/bin/env bash
     set -euo pipefail
-    executable="$({{rust_test_env}} cargo test {{rust_test_args}} --no-run --message-format=json-render-diagnostics |
-      jq -r --arg name '{{NAME}}' 'select(.reason == "compiler-artifact" and .target.name == $name and (.profile.test | not) and (.target.kind | index("bin"))) | .executable // empty')"
+    if [[ -n "${COWBOY_TEST_GRAPH_ARTIFACTS:-}" && -r "$COWBOY_TEST_GRAPH_ARTIFACTS" ]]; then
+      executable="$(jq -r --arg name '{{NAME}}' 'select(.reason == "compiler-artifact" and .target.name == $name and (.profile.test | not) and (.target.kind | index("bin"))) | .executable // empty' "$COWBOY_TEST_GRAPH_ARTIFACTS")"
+    else
+      executable="$({{rust_test_env}} cargo test {{rust_test_args}} --no-run --message-format=json-render-diagnostics |
+        jq -r --arg name '{{NAME}}' 'select(.reason == "compiler-artifact" and .target.name == $name and (.profile.test | not) and (.target.kind | index("bin"))) | .executable // empty')"
+    fi
     test -x "$executable"
     printf '%s\n' "$executable"
 
@@ -1083,6 +1248,15 @@ warm: install (compact "warm-lanes")
 warm-lanes:
     #!/usr/bin/env bash
     set -uo pipefail
+    js_dir="$(mktemp -d "${TMPDIR:-/tmp}/cowboy-warm-js.XXXXXX")"
+    js_fifo="$js_dir/jobserver.fifo"
+    mkfifo "$js_fifo"
+    exec 9<>"$js_fifo"
+    cores="$(nproc 2>/dev/null || echo 8)"
+    tokens=$((cores > 4 ? cores - 4 : 2))
+    printf "%${tokens}s" "" | tr ' ' '+' >&9
+    export MAKEFLAGS="--jobserver-auth=fifo:$js_fifo"
+    trap 'exec 9>&- 2>/dev/null || true; rm -rf "$js_dir"' EXIT
     lane() {
       local log status
       log="$(mktemp "${TMPDIR:-/tmp}/cowboy-warm.XXXXXX")"
