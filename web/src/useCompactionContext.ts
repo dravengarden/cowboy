@@ -185,21 +185,23 @@ export function useCompactionContext({
     status,
   ]);
 
-  if (serverStale) {
+  // An accepted read-through stands until the broadcast moves past the reading
+  // it was installed against, including a stale one it supersedes.
+  if (override) {
     return {
-      used: serverUsed,
-      size: serverSize,
-      stale: true,
-      refreshing: false,
+      used: override.used,
+      size: override.size,
+      stale: override.stale,
+      refreshing: request !== null,
       beginRefresh,
       cancelRefresh,
     };
   }
   return {
-    used: override?.used ?? serverUsed,
-    size: override?.size ?? serverSize,
-    stale: override?.stale ?? false,
-    refreshing: request !== null,
+    used: serverUsed,
+    size: serverSize,
+    stale: serverStale,
+    refreshing: !serverStale && request !== null,
     beginRefresh,
     cancelRefresh,
   };

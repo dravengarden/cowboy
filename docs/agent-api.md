@@ -343,10 +343,11 @@ the account key (for example `openai`). Session context consumption is not
 account quota or a total billed-token counter.
 
 After a completed compaction that no usage report followed, `context` carries
-`stale_after_compaction: true` (and `usage.compacted_at_ms` its time) in
-`sessions.info`, `sessions.list` and both usage reads: `used`/`size` are the
-pre-compaction history, and the compacted context's size is unknown until the
-agent's next usage report replaces the reading.
+`stale_after_compaction: true` in `sessions.info`, `sessions.list` and both
+usage reads: `used`/`size` are the pre-compaction history, and the compacted
+context's size is unknown until the agent's next usage report replaces the
+reading. Only the usage reads, which also return the `usage` object, carry
+the compaction's time as `usage.compacted_at_ms`.
 
 ### Account usage and quota
 

@@ -245,10 +245,7 @@ fn usage_an_older_antigravity_proxy_relays_during_compact_stays_history() {
     turn_end(&hub, "agy-old");
     let stale = meta(&hub, "agy-old");
     assert!(stale.context_usage_stale());
-    assert_eq!(
-        stale.context_used, 480_000,
-        "the summarized history is no reading"
-    );
+    assert_eq!(stale.context_used, 488_059);
     persisted(&mut rx);
     hub.set_session_usage("agy-old", live(61_000));
     assert!(!meta(&hub, "agy-old").context_usage_stale());
@@ -265,20 +262,33 @@ fn clear_and_compaction_writes_reach_storage_in_their_hub_order() {
 }
 
 #[test]
-fn an_older_antigravity_proxy_cannot_clear_a_stale_mark_in_a_failed_compaction() {
+fn an_older_antigravity_proxy_measures_the_context_a_failed_compaction_keeps() {
+    // Its `/compact` prompt's usage measures the context the session holds
+    // until the compaction completes: current when it fails or is cancelled,
+    // history once it completes.
     let (hub, _rx) = hub_with("agy-again");
     hub.set_session_usage("agy-again", live(480_000));
     compaction_with(&hub, "agy-again", "agy-compact-1", "completed");
     assert!(meta(&hub, "agy-again").context_usage_stale());
 
-    for (id, end) in [("agy-compact-2", "failed"), ("agy-compact-3", "cancelled")] {
+    for (id, end, used) in [
+        ("agy-compact-2", "failed", 61_000),
+        ("agy-compact-3", "cancelled", 62_000),
+    ] {
         compaction_with(&hub, "agy-again", id, "in_progress");
-        hub.set_session_usage("agy-again", live(490_000));
+        hub.set_session_usage("agy-again", live(used));
         compaction_with(&hub, "agy-again", id, end);
         let after = meta(&hub, "agy-again");
-        assert!(after.context_usage_stale(), "{end} keeps the mark");
-        assert_eq!(after.context_used, 480_000);
+        assert!(
+            !after.context_usage_stale(),
+            "{end} keeps the context it measured"
+        );
+        assert_eq!(after.context_used, used);
     }
+    compaction_with(&hub, "agy-again", "agy-compact-4", "in_progress");
+    hub.set_session_usage("agy-again", live(63_000));
+    compaction_with(&hub, "agy-again", "agy-compact-4", "completed");
+    assert!(meta(&hub, "agy-again").context_usage_stale());
 }
 
 #[test]

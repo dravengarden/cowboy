@@ -28,6 +28,9 @@ pub(super) enum CompactionUsage {
     /// summarized: Antigravity's proxy synthesizes these (`agy-compact-`
     /// IDs) around an ordinary prompt, and a proxy before
     /// `cowboy-antigravity-acp` 1.0.25 still relays that prompt's usage.
+    /// Such a report is still the current reading (until the compaction
+    /// completes it measures the uncompacted context the session holds), so
+    /// it applies; it only never counts as a report of the compacted context.
     Unmeasured,
 }
 
@@ -201,13 +204,6 @@ impl Hub {
             let mut sessions = self.inner.sessions.lock();
             match sessions.get_mut(session_id) {
                 Some(s) => {
-                    // Reports during a compaction that measures the history
-                    // being summarized (an Antigravity proxy before
-                    // `cowboy-antigravity-acp` 1.0.25 relays them) say nothing
-                    // about the context: keep the stored reading and its mark.
-                    if s.compaction_usage == CompactionUsage::Unmeasured {
-                        return;
-                    }
                     let stored = s.meta.usage.as_ref();
                     // Per-model accounting republished onto the last reading
                     // keeps that reading's observation time: it measures
