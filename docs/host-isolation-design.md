@@ -679,12 +679,17 @@ Decided by the owner on 2026-11-23 (relayed by coordinator
 
   The `cowboy-agent` UID alternative is not pursued.
 
+- **D2: a `hawk-admin` login.** Its key lives only on owner devices,
+  mirroring OVH's `ovh-operator`; `pam_u2f` is not used. The I-1 slice
+  creates it before narrowing `draven`'s sudo.
+- **D3: agent-initiated activation stays recorded authority (R1).** This
+  matches the owner's default-deploy preference. Part I therefore never
+  claims protection against a deliberate malicious activation. The audit
+  trail is the machine transaction and component receipts, and the sudo
+  wrappers in I-1 must keep them mandatory.
+
 Still open:
 
-- **D2. Admin path.** Either a `hawk-admin` login whose key is held only on
-  owner devices (mirroring OVH's `ovh-operator`), or `pam_u2f`.
-- **D3. R1.** Accept agent-initiated activation as recorded authority, or
-  require owner approval for it.
 - **D5. Budgets for a later split.** The `cowboy-control.slice` `MemoryLow`,
   the task `TasksMax`, and the OVH numbers.
 - **D6 (now binding, not a choice).** Per-session execution identities and
