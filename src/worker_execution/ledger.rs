@@ -150,12 +150,6 @@ struct State {
     servers: HashSet<String>,
     /// Extension calls admitted and not yet settled.
     calls: usize,
-    /// The one stop of each tracked process lifetime, by the unit or by the
-    /// worker: never a second signal. Created only for a recorded process;
-    /// retired with a terminal outcome once its end is observed, or when a
-    /// new start of the id is admitted. A pending or unknown stop keeps the
-    /// id unavailable for a new start.
-    stops: HashMap<String, watch::Sender<Stop>>,
     /// The durable record could not be written: an uncertain effect may be
     /// published but not durable, so no further effect is admitted.
     unwritable: bool,
@@ -189,64 +183,6 @@ pub struct Ledger {
 impl std::fmt::Debug for Ledger {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Ledger").field("path", &self.path).finish()
-    }
-}
-
-/// The state, then outcome, of one tracked process lifetime's stop.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Stop {
-    /// Its owner is sending it.
-    Pending,
-    /// The executor answered it: never sent again.
-    Confirmed,
-    /// Certainly never reached the executor: the next caller sends it.
-    NotSent,
-    /// Its reply was lost: never sent again, and its process id stays
-    /// unavailable for a new start.
-    Unknown,
-}
-
-/// A caller's part in a process's one stop.
-pub(super) enum StopClaim {
-    /// Send it, then `finish_stop`.
-    Owner,
-    /// Another path sends it: wait for its outcome.
-    Joined(watch::Receiver<Stop>),
-    /// Not a process this ledger tracks: relayed as before, unclaimed.
-    Untracked,
-}
-
-/// The outcome of a joined stop once its owner finished.
-async fn joined(mut stop: watch::Receiver<Stop>) -> Stop {
-    loop {
-        let state = *stop.borrow_and_update();
-        if state != Stop::Pending {
-            return state;
-        }
-        if stop.changed().await.is_err() {
-            // The owner went away without an outcome.
-            return Stop::Unknown;
-        }
-    }
-}
-
-/// A stop's outcome from its invocation's classified result.
-fn stop_outcome(result: &Result<Value, bool>) -> Stop {
-    match result {
-        Err(false) => Stop::NotSent,
-        Err(true) => Stop::Unknown,
-        // The executor refused it: it stopped nothing.
-        Ok(reply) if reply.get("error").is_some() => Stop::NotSent,
-        Ok(_) => Stop::Confirmed,
-    }
-}
-
-/// What a joined caller is told: the owner's typed outcome.
-fn stop_reply(outcome: Stop) -> Value {
-    match outcome {
-        Stop::Confirmed => json!({"result": {}}),
-        Stop::NotSent => not_sent("the stop was not sent; send it again"),
-        Stop::Pending | Stop::Unknown => unavailable(),
     }
 }
 
@@ -474,17 +410,6 @@ impl Ledger {
         if state.processes.len() >= MAX_PROCESSES {
             return Err("session process limit reached; process start refused");
         }
-        // A stop of an earlier lifetime with this id that is not terminal
-        // could still reach the new process.
-        if state
-            .stops
-            .get(&process)
-            .is_some_and(|stop| matches!(*stop.borrow(), Stop::Pending | Stop::Unknown))
-        {
-            return Err("a stop of this process id has not finished; process start refused");
-        }
-        // Admitted: the old lifetime's terminal stop is retired.
-        state.stops.remove(&process);
         if turn == READINESS_TURN {
             state.probes.insert(process.clone());
         }
@@ -512,18 +437,7 @@ impl Ledger {
 
     /// The target's evidence that `process` is gone.
     pub fn exited(&self, process: &str) {
-        let mut state = self.state.lock();
-        // Its terminal stop ends with it; a pending or unknown one keeps
-        // the id unavailable.
-        if state
-            .stops
-            .get(process)
-            .is_some_and(|stop| matches!(*stop.borrow(), Stop::Confirmed | Stop::NotSent))
-        {
-            state.stops.remove(process);
-        }
-        if state.processes.remove(process).is_some() {
-            drop(state);
+        if self.state.lock().processes.remove(process).is_some() {
             self.changed.send_modify(|value| *value += 1);
         }
     }
@@ -533,48 +447,6 @@ impl Ledger {
     /// was observed. Unknown processes count too (fail closed).
     fn result_process(&self, process: &str) -> bool {
         !self.state.lock().probes.contains(process)
-    }
-
-    /// Take the one stop of `process`: its owner sends it, any other caller
-    /// joins it and learns its outcome. A stop certainly never sent is taken
-    /// anew by the next caller. Only a recorded process lifetime is claimed.
-    pub(super) fn begin_stop(&self, process: &str) -> StopClaim {
-        let mut state = self.state.lock();
-        if let Some(stop) = state.stops.get(process)
-            && *stop.borrow() != Stop::NotSent
-        {
-            return StopClaim::Joined(stop.subscribe());
-        }
-        if !state.processes.contains_key(process) {
-            state.stops.remove(process);
-            return StopClaim::Untracked;
-        }
-        state
-            .stops
-            .insert(process.to_owned(), watch::channel(Stop::Pending).0);
-        StopClaim::Owner
-    }
-
-    /// The outcome of the owner's stop of `process`.
-    pub(super) fn finish_stop(&self, process: &str, outcome: Stop) {
-        let mut state = self.state.lock();
-        if let Some(stop) = state.stops.get(process) {
-            stop.send_replace(outcome);
-            if outcome == Stop::NotSent {
-                state.stops.remove(process);
-            }
-        }
-        drop(state);
-        self.changed.send_modify(|value| *value += 1);
-    }
-
-    /// The state of `process`'s stop, if one was taken.
-    pub(super) fn stop_state(&self, process: &str) -> Option<watch::Receiver<Stop>> {
-        self.state
-            .lock()
-            .stops
-            .get(process)
-            .map(watch::Sender::subscribe)
     }
 
     pub(super) fn mark_uncertain(&self, method: &str) {
@@ -626,14 +498,7 @@ impl Ledger {
         let state = self.state.lock();
         match turn {
             Some(turn) => !state.admitted.contains_key(turn),
-            // Teardown also waits for every stop still being sent.
-            None => {
-                state.admitted.is_empty()
-                    && !state
-                        .stops
-                        .values()
-                        .any(|stop| *stop.borrow() == Stop::Pending)
-            }
+            None => state.admitted.is_empty(),
         }
     }
 
@@ -745,12 +610,6 @@ const KNOWN_EFFECTS: &[&str] = &[
     "process/terminate",
     "process/read",
 ];
-
-/// A request that certainly never reached the target, typed so the agent
-/// side may send it again.
-fn not_sent(message: &str) -> Value {
-    json!({"error": {"code": -32000, "message": message, "data": {"outcome": "not_sent"}}})
-}
 
 fn refused(message: &str) -> Value {
     json!({"error": {"code": -32000, "message": message}})
@@ -871,21 +730,6 @@ impl Client {
             Err(reason) => return refused(reason),
         };
         let process = process_id(&params);
-        // One stop per process, shared with the worker's own stop paths: a
-        // repeated stop is not forwarded (the process got its signal).
-        let stop = (method == "process/terminate")
-            .then(|| process.clone())
-            .flatten();
-        // The stop this relay owns, if any: a joined one answers with the
-        // owner's typed outcome, an untracked one relays unclaimed.
-        let stop = match stop {
-            Some(process) => match ledger.begin_stop(&process) {
-                StopClaim::Joined(stop) => return stop_reply(joined(stop).await),
-                StopClaim::Owner => Some(process),
-                StopClaim::Untracked => None,
-            },
-            None => None,
-        };
         let start = (method == "process/start")
             .then(|| process.clone())
             .flatten();
@@ -893,15 +737,6 @@ impl Client {
         let result = self.invoke_classified(method.clone(), params).await;
         if let Some(admitted) = &admitted {
             ledger.settled(admitted, start.as_deref());
-        }
-        let outcome = stop.as_ref().map(|process| {
-            let outcome = stop_outcome(&result);
-            ledger.finish_stop(process, outcome);
-            outcome
-        });
-        // A stop certainly never sent is typed so the unit sends it again.
-        if outcome == Some(Stop::NotSent) && matches!(result, Err(false)) {
-            return not_sent("the stop was not sent; send it again");
         }
         match result {
             Ok(reply) => {
@@ -1062,40 +897,12 @@ impl Client {
         };
         let attempt = async {
             ledger.wait_until(|ledger| !ledger.starting(&process)).await;
-            // One stop per process lifetime: after the unit's or another
-            // worker path's stop, this only observes; one certainly never
-            // sent is sent by this path. The stop runs on its own task (the
-            // teardown waits for it), so the bounded exit wait below never
-            // drops one that may be queued.
-            loop {
-                match ledger.begin_stop(&process) {
-                    StopClaim::Owner => {
-                        let (client, owner, id) =
-                            (Arc::clone(self), Arc::clone(&ledger), process.clone());
-                        ledger.runtime.spawn(async move {
-                            let sent = client
-                                .invoke_classified(
-                                    "process/terminate".to_owned(),
-                                    json!({"processId": id}),
-                                )
-                                .await;
-                            owner.finish_stop(&id, stop_outcome(&sent));
-                        });
-                        break;
-                    }
-                    // Never sent by its owner: this path sends it.
-                    StopClaim::Joined(stop) => {
-                        if joined(stop).await != Stop::NotSent {
-                            break;
-                        }
-                    }
-                    StopClaim::Untracked => break,
-                }
-            }
-            // Observed once the stop has an outcome (within this bound).
-            if let Some(stop) = ledger.stop_state(&process) {
-                joined(stop).await;
-            }
+            let _ = self
+                .invoke(
+                    "process/terminate".to_owned(),
+                    json!({"processId": process}),
+                )
+                .await;
             loop {
                 let read = self
                     .invoke(
@@ -1117,15 +924,6 @@ impl Client {
             .await
             .is_err()
         {
-            // A stop whose reply was lost, of a process whose end is not
-            // proven: its effect is unknown.
-            if ledger.live().contains(&process)
-                && ledger
-                    .stop_state(&process)
-                    .is_some_and(|stop| *stop.borrow() == Stop::Unknown)
-            {
-                ledger.mark_uncertain("process/terminate");
-            }
             tracing::warn!(event_name = "cowboy.execution.terminate_unconfirmed", session = %self.session, %process, "target process end unconfirmed; the keeper's reap is the backstop");
         }
     }

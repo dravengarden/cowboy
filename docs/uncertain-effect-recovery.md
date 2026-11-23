@@ -382,78 +382,79 @@ serializing concurrent activations is the coordinator's existing policy.
 
 ## L2a: worker ledger hardening (worker release)
 
-Three pre-existing worker bugs the reviews found. They are independent of L2's
-receipts and ship first. All are in `src/worker_execution{,/ledger}.rs`.
+Pre-existing worker bugs found by the reviews. All are in
+`src/worker_execution{,/ledger}.rs`, and L2a ships these four, narrowed after
+three review rounds (`call-8a6c5e81`, `call-b856f2db`, `call-878a5459`):
 
-- F7, a refusal after a resend. The worker counts how often a pending request
-  was sent (`Pending::sends`). A response to a request sent more than once
-  answers a resend, and the keeper may have admitted an earlier send whose
-  reply was lost. So `invoke_classified` treats a later refusal as possible
-  admission (`Err(true)`), and a mutation becomes uncertain instead of "not
-  sent". A refusal of the only send keeps meaning "not admitted". Retries
-  after `Unavailable`/`Capacity` count as sends too, because the Controller
-  can report `Unavailable` after the Machine has received the request.
-- Sequence durability. `mark_uncertain` used to publish its sequence even
-  when the ledger write failed, so a successor reloading the older record
-  could reuse a sequence the Controller had already acknowledged. Sequences
-  are now `max(previous + 1, now in Unix ms)`. The Controller only compares
-  them (`observed`, `acknowledged`, `merge_uncertain_effect`), so no reader
-  changes, and a lost write can never cause reuse. A failed write still
-  publishes (fail closed) and marks the ledger unwritable, after which no
-  further mutation is admitted for the worker's lifetime.
-- One stop per process. The ledger records each process a stop was sent to,
-  or may have been, whether by the unit's relayed `process/terminate` or by
-  the worker's own `cancel_turn`, `finish_turn` or `settle_all`. Later stop
-  paths only observe, and a repeated stop from the unit is answered without
-  being forwarded. A stop that certainly never ran (refused before sending,
-  or answered with an error) releases the claim. If a stop may have been
-  sent but never reached the executor, the process is left to the keeper's
-  unattended reap, the existing backstop.
+- Send counting (F7). The worker counts each request's sends at the frame's
+  own write boundary (`Client::sending`). A response to a request sent more
+  than once answers a resend, and the keeper may have admitted an earlier
+  send whose reply was lost, so `invoke_classified` treats a later refusal as
+  possible admission. A refusal of the only send keeps meaning "not
+  admitted". A batch entry never written is not a send. Retries after
+  `Unavailable`/`Capacity` count, because the Controller can report
+  `Unavailable` after the Machine received the request.
+- Time-based sequence. Uncertain-effect sequences are
+  `max(previous + 1, now in Unix ms)`. The Controller only compares them
+  (`observed`, `acknowledged`, `merge_uncertain_effect`), so no reader changes.
+  An older worker reading a newer record continues with `+1`, which stays
+  monotonic.
+- A failed write refuses later effects. `mark_uncertain` still publishes when
+  its ledger write fails (fail closed), and it latches the ledger unwritable.
+- The unwritable latch refuses every effectful admission for the worker's
+  lifetime: `MUTATIONS`, `process/write`, `process/signal`, extension calls
+  (`admit_call`) and the worker's own server starts (`record_server`).
+  `process/read` and `process/terminate` remain for cleanup.
 
-Code review round 1 (`call-8a6c5e81`, high) and its fixes:
-
-- Sends are counted at each frame's own write boundary (`Client::sending`),
-  no longer for the whole batch in `frames()`. A frame after a failed write
-  in the same batch was never sent, and a refusal of its first real send is
-  not an admission.
-- The unwritable latch covers every effectful admission: mutations,
-  `process/write`, `process/signal`, and extension calls (`admit_call`).
-  Observation (`process/read`) and stopping (`process/terminate`) remain for
-  cleanup.
-- Stop claims, redesigned after round 2 (`call-b856f2db`):
-  - Each claim belongs to a tracked process lifetime, and a claim exists only
-    for a process this ledger recorded. A stop for any other id is relayed
-    unclaimed, as before L2a.
-  - The owner sends the stop. Any other caller, unit or worker path, joins it
-    and receives the same typed outcome: `Confirmed` (`{result}`), `NotSent`
-    (`data.outcome: "not_sent"`, which the facade's `notSent` treats as never
-    sent, and the next caller sends it), or `Unknown` (`data.outcome:
-    "unknown"`).
-  - A claim retires with a terminal outcome once the process's end is
-    observed, or when a new start of the id is admitted, only after every
-    admission check passed. A refused duplicate start changes nothing.
-  - While a stop of an id is `Pending` or `Unknown`, that id is unavailable
-    for a new start.
-  - The worker's own stop runs on its own task. Teardown (`settle_all`) waits
-    for every pending stop. If the bounded exit wait ends with the stop
-    `Unknown` and the process's end unproven, the stop is recorded as
-    uncertain.
-- The worker's server starts (`record_server`) also respect the unwritable
-  latch.
-- Moved to L2, not in L2a: a Controller-provided sequence floor (high 1 of
-  round 1). Round 2 showed that a Machine-owned relaunch (generation cutover,
-  fallback) reuses a cached `StartSession`. So every launch path must obtain
-  a fresh authoritative floor, or hold effect admission until it can. A floor
-  in `StartSession` alone is not enough.
+Stop handling is unchanged from before L2a: no stop claims and no ownership
+table. Stop ownership moved to L2 as a redesign item (below).
 
 Tests: a resend followed by `WorkspaceChanged` is uncertain, while a refusal
-of the only send is not. The unit's stop and the worker's cancellation send
-one `process/terminate`. An unwritable ledger publishes and then refuses
-further effects. The sequence assertions are now time-based.
+of the only send is not. A batch entry never written is not a send. An
+unwritable ledger publishes, then refuses mutations, extension calls,
+`process/write` and `process/signal`, but not reads and stops. The sequence
+assertions are time-based.
 
-Release: worker code, so `.#cowboy-machine-release` with a worker pin
-advance. Sequences grow from small counters to Unix-ms values. An older
-worker reading a newer record continues with `+1`, which stays monotonic.
+Release: worker code, so `.#cowboy-machine-release` with a worker pin advance.
+
+## L2 redesign item: stop ownership
+
+L2a's stop-claim mechanism was dropped after three review rounds left high
+findings. The redesign has to satisfy all of these:
+
+- One stop per process lifetime across the unit's relayed stop and the
+  worker's `cancel_turn`, `finish_turn` and `settle_all`, so a process
+  handling a first signal never gets a second.
+- Every caller learns one typed outcome, `Confirmed` (with the executor's
+  result), `NotSent` (retryable, understood by the facade and the worker) or
+  `Unknown`. The owner gets the same typed outcome rather than a raw
+  executor error.
+- The stop owner and the exit observer finalize the outcome together. A
+  worker stop that becomes `Unknown` after the bounded exit wait must still
+  be recorded.
+- A stop must never reach a later process that reuses its id. That includes
+  an untracked stop (an id this ledger never recorded) whose delivery stalls
+  while a start of the id is admitted. Two options: reserve such ids in a
+  bounded in-flight table that start admission checks, or answer
+  "already gone" without forwarding when absence is authoritative.
+- Claims are bounded and retire with their lifetime, including a claim
+  whose process exit was observed while its stop was still pending.
+- Teardown includes stops queued by its own final `terminate_all` pass.
+- Executor-side lifetime binding, the robust option: the keeper (or the
+  executor) binds a stop to a process incarnation, so a stop for an older
+  incarnation is a no-op whatever its delivery order. This removes the
+  worker-side id-reuse tables.
+
+## L2 redesign item: a Controller-provided sequence floor
+
+From round 1 of L2a: if a ledger write fails, the Controller can acknowledge
+a sequence the disk never recorded. A successor whose wall clock was set
+back, or that follows a burst of increments, can then reuse that sequence.
+A floor in `StartSession` alone is not enough, because Machine-owned
+relaunches (generation cutover, fallback) reuse a cached `StartSession`.
+Every launch path must obtain a fresh authoritative floor,
+`max(observed, acknowledged)` from the Controller's durable record, or hold
+effect admission until it can.
 
 ## L2: trusted receipts in the worker (design only; Machine release)
 
