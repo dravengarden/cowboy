@@ -174,8 +174,10 @@ pub(super) fn named_credential_refusal(auth: &Path, provider_id: &str) -> Result
     }
     for entry in fs::read_dir(accounts)? {
         let entry = entry?;
+        // The descriptor walks above classify accounts by name; an
+        // undecodable one is a malformed tree, never skipped.
         ensure!(
-            entry.file_type()?.is_dir(),
+            entry.file_type()?.is_dir() && entry.file_name().to_str().is_some(),
             "invalid Provider account directory"
         );
         native_profile::ensure_revoked(

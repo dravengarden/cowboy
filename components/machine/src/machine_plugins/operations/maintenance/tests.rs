@@ -1,11 +1,6 @@
 use super::*;
 
 fn fixture(root: &Path) -> UninstallStep {
-    fixture_with(root, true)
-}
-
-/// `intent`: whether the failed forward step began its slot intent.
-fn fixture_with(root: &Path, intent: bool) -> UninstallStep {
     fs::set_permissions(root, fs::Permissions::from_mode(0o700)).unwrap();
     for path in [
         "plugins",
@@ -47,15 +42,13 @@ fn fixture_with(root: &Path, intent: bool) -> UninstallStep {
         &lease,
         || true,
         || {
-            if intent {
-                journal.installations.begin(
-                    &step.plugin_id,
-                    Some(&step.generation_digest),
-                    None,
-                    installations::Effect::Uninstall,
-                    Some(step.request_digest()?),
-                )?;
-            }
+            journal.installations.begin(
+                &step.plugin_id,
+                Some(&step.generation_digest),
+                None,
+                installations::Effect::Uninstall,
+                Some(step.request_digest()?),
+            )?;
             bail!("fixture cleanup failure")
         },
     );
@@ -295,40 +288,6 @@ fn offline_completion_refuses_a_linked_accounts_root() {
     assert_eq!(call(root.path(), &step, true).unwrap()["applied"], true);
 }
 
-/// The forward step records its uncertain receipt before it begins the slot
-/// intent; a crash between the two leaves the original stable installation.
-/// Roll-forward accepts exactly that and writes the matching tombstone.
-#[test]
-fn offline_completion_rolls_forward_a_step_interrupted_before_its_intent() {
-    let root = tempfile::tempdir().unwrap();
-    let step = fixture_with(root.path(), false);
-    {
-        let journal = Journal::open(root.path()).unwrap();
-        assert!(journal.ensure_unfenced(&step.plugin_id).is_err());
-        assert!(
-            journal
-                .installations
-                .revision(&step.plugin_id, &step.generation_digest)
-                .is_ok(),
-            "the original installation is still stable"
-        );
-    }
-    assert_eq!(call(root.path(), &step, true).unwrap()["applied"], true);
-    let reopened = Journal::open(root.path()).unwrap();
-    reopened.ensure_unfenced(&step.plugin_id).unwrap();
-    assert!(
-        reopened
-            .installations
-            .revision(&step.plugin_id, &step.generation_digest)
-            .is_err(),
-        "the slot now holds the removal tombstone"
-    );
-    reopened
-        .installations
-        .maintenance_removal(&step, false)
-        .unwrap();
-}
-
 /// An outstanding login candidate home, default scope or named, refuses
 /// offline completion as it refuses the live uninstall.
 #[test]
@@ -344,5 +303,21 @@ fn offline_completion_refuses_outstanding_login_candidates() {
         assert!(call(root.path(), &step, true).is_err(), "{candidates}");
         fs::remove_dir_all(root.path().join(candidates).join("request-1")).unwrap();
     }
+    assert_eq!(call(root.path(), &step, true).unwrap()["applied"], true);
+}
+
+/// An account directory whose name is not UTF-8 cannot be classified, so the
+/// refusal check treats it as a malformed credential tree.
+#[test]
+fn offline_completion_refuses_an_undecodable_account_directory() {
+    use std::os::unix::ffi::OsStrExt as _;
+    let root = tempfile::tempdir().unwrap();
+    let step = fixture(root.path());
+    let accounts = root.path().join("provider-auth/accounts");
+    let odd = accounts.join(std::ffi::OsStr::from_bytes(b"account-\xff"));
+    fs::create_dir_all(odd.join("providers/victoria/runtime")).unwrap();
+    assert!(call(root.path(), &step, true).is_err());
+    assert!(odd.join("providers/victoria/runtime").is_dir());
+    fs::remove_dir_all(&odd).unwrap();
     assert_eq!(call(root.path(), &step, true).unwrap()["applied"], true);
 }

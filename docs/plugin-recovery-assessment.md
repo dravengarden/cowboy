@@ -35,8 +35,7 @@ cowboy-machine --state-dir /path/to/machine-state \
 Repeat with `--confirm-uninstall-digest` set to the exact reported request
 digest to apply. The command acquires the resident Machine's exclusive journal
 owner lock. It verifies the uncertain receipt, the slot's pending removal for the exact
-predecessor and request digest (or the exact original installation, when the
-forward step stopped between its uncertain receipt and its slot intent), an active link that is absent or still the
+predecessor and request digest, an active link that is absent or still the
 original generation, private state/auth directories, and absence of an
 unresolved installation attempt. It runs the live uninstall's named-account
 refusal check first and again before completion: any named `materialized`,
@@ -110,18 +109,23 @@ its own redesign:
 - Command login release mixing: a login reads its method before reserving its
   candidate home, so an install in between can mix two signed releases
   (`components/machine/src/machine_cli.rs:3272`).
-- Connection teardown vs terminal transaction: socket teardown removes the
-  live token before the asynchronous epoch clear, so a terminal transaction
-  can still match a retired connection's epoch
+- Connection teardown vs receipt reconciliation: socket teardown removes the
+  live token before the asynchronous epoch clear, so reconciliation's terminal
+  transaction can still match a retired connection's epoch
   (`components/server-runtime/src/server/machine_connection.rs:1066`).
+- Uncertain receipt without slot intent: the forward step records its
+  uncertain receipt before beginning its installation intent
+  (`components/machine/src/machine_plugins/operations.rs:233`).
+  An interruption between the two leaves an uncertain receipt over the
+  unchanged installation, which offline roll-forward does not accept; it
+  needs signed-target verification and a browser drain before any recovery.
 
 ## Read-only observation protocol
 
 Status: seventh spatiotemporal slice, 2026-09-10. Protocol 12 adds a **read-only**
 recovery observation to the existing core uninstall lifecycle. It does not add
 a restore command, grant, automatic retry, new journal format or SQL migration.
-Installation CAS remains enabled; durable compensation remains disabled except
-for the verified no-effect compensation of a zero-session definite rejection.
+Installation CAS remains enabled; durable compensation remains disabled.
 
 ## Historical outcome and current installation are different facts
 

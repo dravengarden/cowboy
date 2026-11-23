@@ -164,38 +164,7 @@ impl Store {
             from.permits(to) && to != Phase::Completed,
             "invalid uninstall transition"
         );
-        dispatch!(self, advance_plugin_uninstall(id, from, to, problem, None))
-    }
-
-    /// [`Self::advance_plugin_uninstall`] decided on Machine evidence observed
-    /// over one connection: the same transaction requires that connection's
-    /// epoch to still be the Machine's recorded current one, serializing with
-    /// a replacement handshake (which records its epoch first) and revocation.
-    /// `within_budget` (the original approval's budget) is rechecked after
-    /// every lock is held, immediately before the commit.
-    pub async fn advance_plugin_uninstall_on_connection(
-        &self,
-        id: &str,
-        (from, to): (Phase, Phase),
-        problem: Option<Problem>,
-        (machine, epoch): (&str, &str),
-        within_budget: &(dyn Fn() -> bool + Sync),
-    ) -> Result<()> {
-        ensure!(
-            from.permits(to) && to != Phase::Completed,
-            "invalid uninstall transition"
-        );
-        ensure!(within_budget(), "uninstall approval expired");
-        dispatch!(
-            self,
-            advance_plugin_uninstall(
-                id,
-                from,
-                to,
-                problem,
-                Some(((machine, epoch), within_budget))
-            )
-        )
+        dispatch!(self, advance_plugin_uninstall(id, from, to, problem))
     }
 
     /// Completion and the exact Service-side deletion are one local commit.
@@ -224,7 +193,9 @@ impl Store {
 
     /// [`Self::resolve_plugin_uninstall`] for a resolution decided on Machine
     /// evidence observed over one connection, bound to its epoch in the same
-    /// transaction (see [`Self::advance_plugin_uninstall_on_connection`]).
+    /// transaction: the observed epoch must still be the Machine's recorded
+    /// current one (its row update serializes with a replacement handshake,
+    /// which records its epoch first, and with revocation).
     pub async fn resolve_plugin_uninstall_on_connection(
         &self,
         permit: &ResolutionPermit,
@@ -359,19 +330,10 @@ macro_rules! implement_journal {
                 Ok(operations)
             }
 
-            async fn advance_plugin_uninstall(&self, id: &str, from: Phase, to: Phase, problem: Option<Problem>,
-                connection: Option<((&str, &str), &(dyn Fn() -> bool + Sync))>) -> Result<()> {
+            async fn advance_plugin_uninstall(&self, id: &str, from: Phase, to: Phase, problem: Option<Problem>) -> Result<()> {
                 let mut tx = self.pool.begin().await?;
                 sqlx::query($durability).execute(&mut *tx).await?;
                 sqlx::query($lock).execute(&mut *tx).await?;
-                if let Some(((machine, epoch), _)) = connection {
-                    // The observed connection's epoch is still the Machine's
-                    // recorded current one. The row update takes the Machine
-                    // row's write lock, so a replacement handshake or a
-                    // revocation commits first (and this refuses) or waits.
-                    let current = sqlx::query($current).bind(machine).bind(epoch).execute(&mut *tx).await?;
-                    ensure!(current.rows_affected() == 1, "Machine connection changed; observe it again");
-                }
                 let changed = sqlx::query(
                     "UPDATE plugin_uninstall_operations SET attention_from = CASE WHEN $3 = 'needs_attention' AND phase <> 'needs_attention' THEN phase ELSE attention_from END, \
                      cause = CASE WHEN $3 = 'restoring_machine' THEN $4 ELSE cause END, phase = $3, problem = $4, updated_at_ms = $5 \
@@ -380,9 +342,6 @@ macro_rules! implement_journal {
                     .bind(problem.map(|p| serde_json::to_string(&p)).transpose()?)
                     .bind(chrono::Utc::now().timestamp_millis()).execute(&mut *tx).await?;
                 ensure!(changed.rows_affected() == 1, "uninstall phase changed; reconcile the same operation");
-                if let Some((_, within_budget)) = connection {
-                    ensure!(within_budget(), "uninstall approval expired before commit");
-                }
                 tx.commit().await.context("committing uninstall progress")
             }
 

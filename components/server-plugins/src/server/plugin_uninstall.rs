@@ -260,12 +260,6 @@ trait Effects: Sync {
         &self,
         intent: &UninstallIntent,
     ) -> impl std::future::Future<Output = Result<(), CommandRequestError>> + Send;
-    /// The Machine connection whose evidence a no-effect compensation used,
-    /// as `(machine, epoch)`; its terminal phase is bound to it.
-    fn evidence_connection(&self) -> Option<(String, String)>;
-    /// Whether the original confirmation's budget still holds; rechecked
-    /// inside the terminal transaction.
-    fn within_budget(&self) -> bool;
 }
 
 struct LiveEffects {
@@ -314,15 +308,6 @@ impl Effects for LiveEffects {
         valid
     }
 
-    fn within_budget(&self) -> bool {
-        self.authority.within_budget()
-    }
-    fn evidence_connection(&self) -> Option<(String, String)> {
-        Some((
-            self.connection.machine_id().to_owned(),
-            self.connection.epoch().to_owned(),
-        ))
-    }
     fn stop(&self, id: &str) -> bool {
         self.state.supervisor.delete_session(id)
     }
@@ -341,39 +326,13 @@ impl Effects for LiveEffects {
             .await?;
         require_applied_step(observation.result)
     }
-    async fn reactivate(&self, intent: &UninstallIntent) -> Result<(), CommandRequestError> {
-        let refused = || CommandRequestError {
+    async fn reactivate(&self, _intent: &UninstallIntent) -> Result<(), CommandRequestError> {
+        // A durable forward receipt does not grant installation-CAS or
+        // authorize an unjournaled inverse. Keep the recovery fence.
+        Err(CommandRequestError {
             certainty: CommandFailure::NotSent,
             detail: "durable compensation requires a separately verified recovery step".to_owned(),
-        };
-        // A durable forward receipt does not grant installation-CAS or
-        // authorize an unjournaled inverse. Only a definite rejection whose
-        // exact installation is still current owes none: verify that on this
-        // connection and send nothing else. Otherwise keep the recovery fence.
-        // The stop phase may have terminally deleted the approved sessions on
-        // the Machine before it rejected the step; a verified Plugin cannot
-        // claim their restoration, so affected sessions keep the fence.
-        if !intent.session_ids.is_empty() {
-            return Err(refused());
-        }
-        let step = intent.machine_step().map_err(|_| refused())?;
-        let observation = self
-            .state
-            .machine_control
-            .plugin_uninstall_recovery(&self.connection, &step)
-            .await
-            .map_err(|_| refused())?;
-        // Decide only on evidence from the still-current connection.
-        if self.state.machine_control.is_current(&self.connection)
-            && crate::plugin_operation::resolution::rejection_left_installation_unchanged(
-                &observation,
-                &step,
-            )
-        {
-            Ok(())
-        } else {
-            Err(refused())
-        }
+        })
     }
 }
 
@@ -464,52 +423,14 @@ async fn compensate(
         )
         .await;
     }
-    // Recheck authority, including the observed connection, right before the
-    // terminal phase releases the fence. A connection replaced after this
-    // check cannot invalidate the decision: its decisive evidence is a
-    // definite `rejected` receipt, which a Machine never rewrites (offline
-    // maintenance only rolls an uncertain receipt forward), and the slot's
-    // other lifecycle operations stay behind this operation's fence until
-    // `finish`, so startup may treat the saved Compensated phase as final.
-    if !effects.authorized(intent).await {
-        return attention(
-            store,
-            intent,
+    store
+        .advance_plugin_uninstall(
+            &intent.operation_id,
             Phase::RestoringSessions,
-            Problem::CompensationFailed,
+            Phase::Compensated,
+            Some(cause),
         )
-        .await;
-    }
-    let terminal = (Phase::RestoringSessions, Phase::Compensated);
-    let committed = match effects.evidence_connection() {
-        // Bound in the same transaction to the connection the evidence came
-        // over: a replacement recorded meanwhile refuses the terminal phase.
-        Some((machine, epoch)) => {
-            store
-                .advance_plugin_uninstall_on_connection(
-                    &intent.operation_id,
-                    terminal,
-                    Some(cause),
-                    (&machine, &epoch),
-                    &|| effects.within_budget(),
-                )
-                .await
-        }
-        None => {
-            store
-                .advance_plugin_uninstall(&intent.operation_id, terminal.0, terminal.1, Some(cause))
-                .await
-        }
-    };
-    if committed.is_err() {
-        return attention(
-            store,
-            intent,
-            Phase::RestoringSessions,
-            Problem::CompensationFailed,
-        )
-        .await;
-    }
+        .await?;
     Ok(Phase::Compensated)
 }
 

@@ -65,57 +65,31 @@ pub(in crate::machine_plugins) struct Installations {
 }
 
 impl Installations {
-    /// Only the offline maintenance owner calls this, after preserving the
-    /// original receipt, to roll an uncertain uninstall forward. The slot
-    /// holds this request's removal (pending, or stable after an interrupted
-    /// pass), or still the exact original installation: the forward step
-    /// records its uncertain receipt before it begins the slot intent, and a
-    /// crash between the two leaves that. No link is used to reconstruct
-    /// installation authority. `complete` writes the stable tombstone.
+    /// Only the offline maintenance owner calls this after preserving the
+    /// original receipt and verifying the exact absent installation. No link
+    /// is used to reconstruct installation authority.
     pub(super) fn maintenance_removal(&self, step: &UninstallStep, complete: bool) -> Result<()> {
         let mut state = self.state.lock();
         ensure!(
             !state.poisoned && state.present,
             "installation journal unavailable"
         );
-        let original = step
-            .installation_revision
-            .clone()
-            .context("uninstall has no installation incarnation")?;
-        let request = step.request_digest()?;
         let transition = state
             .slots
             .get(&step.plugin_id)
             .context("installation not tracked")?;
-        let removal = transition.effect == Effect::Uninstall
-            && transition.generation_digest.is_none()
-            && transition.previous_revision.as_ref() == Some(&original)
-            && transition.operation_digest.as_ref() == Some(&request);
-        let not_begun = transition.outcome == (Outcome::Stable {})
-            && transition.revision == original
-            && transition.generation_digest.as_ref() == Some(&step.generation_digest);
         ensure!(
-            removal || not_begun,
+            transition.effect == Effect::Uninstall
+                && transition.generation_digest.is_none()
+                && transition.previous_revision == step.installation_revision
+                && transition.previous_revision.is_some()
+                && transition.operation_digest.as_ref() == Some(&step.request_digest()?),
             "pending uninstall installation changed"
         );
         if complete {
-            let tombstone = if removal {
-                let mut transition = transition.clone();
-                transition.outcome = Outcome::Stable {};
-                transition
-            } else {
-                Transition {
-                    schema: 1,
-                    plugin_id: step.plugin_id.clone(),
-                    revision: InstallationRevision::fresh()?,
-                    previous_revision: Some(original),
-                    generation_digest: None,
-                    effect: Effect::Uninstall,
-                    operation_digest: Some(request),
-                    outcome: Outcome::Stable {},
-                }
-            };
-            self.persist(&mut state, &tombstone)?;
+            let mut transition = transition.clone();
+            transition.outcome = Outcome::Stable {};
+            self.persist(&mut state, &transition)?;
         }
         Ok(())
     }

@@ -204,6 +204,8 @@ fn roll_forward(
     checkpoint()?;
     super::super::uninstall::named_credential_refusal(auth, &step.plugin_id)?;
     if active_is_original(plugin, step)? {
+        // After both validations: never start removal past the budget.
+        checkpoint()?;
         fs::remove_file(plugin.join("active"))?;
     }
     // Also when the link was already absent: the failed forward step may have
