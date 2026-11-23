@@ -25,6 +25,7 @@ export type UsageLimitLabel = {
 
 type UsageMaps = {
   plugins: Record<string, string>;
+  accounts: Record<string, string>;
   resets: Record<string, string>;
   products: Record<string, string>;
   parsers: Record<string, string>;
@@ -277,6 +278,7 @@ function readUsage(host: object): {
 function emptyUsageMaps(): UsageMaps {
   return {
     plugins: {},
+    accounts: {},
     resets: {},
     products: {},
     parsers: {},
@@ -314,6 +316,7 @@ function collectUsageMaps(hosts: unknown): UsageMaps {
     const account = usage.account;
     if (!isPluginIdentifier(id) || !isPluginIdentifier(account)) continue;
     maps.plugins[account] = id;
+    maps.accounts[id] = account;
     if (usage.reset) maps.resets[account] = usage.reset;
     if (usage.product) maps.products[account] = usage.product;
     if (usage.parser) maps.parsers[account] = usage.parser;
@@ -367,6 +370,11 @@ export function applyUsageHostPlugins(hosts: unknown): void {
 /** Map account-usage provider ids onto Agent Plugin slot ids. */
 export function usagePluginId(provider: string): string {
   return overlayUsage.plugins[provider] ?? provider;
+}
+
+/** Map an Agent Plugin id onto its declared account-usage provider id. */
+export function usageAccountId(pluginId: string): string | undefined {
+  return overlayUsage.accounts[pluginId];
 }
 
 /** Map account-usage provider ids onto usage-reset API ids. */

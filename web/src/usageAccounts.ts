@@ -3,7 +3,7 @@ import type { SubscriptionSnapshot } from "./subscriptionAccounts";
 import { sessionQuota } from "./sessionQuota";
 import type { NativeAccountUsage } from "./nativeAccountUsage";
 import { accountControl, accountPlanLabel, namedOnlyProvider } from "./accountControls";
-import { accountManageUrl, providerManageUrl, accountProviderLabel, type ProviderUsage, record, type UsageSnapshot, usageCardProviders, usagePluginId, usageResetProvider } from "./usageLimits";
+import { accountManageUrl, providerManageUrl, accountProviderLabel, type ProviderUsage, record, type UsageSnapshot, usageAccountId, usageCardOrder, usagePluginId, usageResetProvider } from "./usageLimits";
 import type { UsageResetTarget } from "./usageApi";
 
 export interface UsageAccountCard {
@@ -75,8 +75,6 @@ export function registeredUsageAccounts(
 ): UsageAccountCard[] {
   // Revocation is a permanent fence; its cleanup status lives in Subscriptions.
   const named = (accounts?.registry.accounts ?? []).filter((account) => !account.revoking);
-  const cards: UsageAccountCard[] = [];
-  const added = new Set<string>();
   const namedCard = (account: typeof named[number]): UsageAccountCard => {
     const enabled = account.enabled;
     const reports = enabled ? sessions.filter((session) =>
@@ -94,9 +92,10 @@ export function registeredUsageAccounts(
       : observed;
     const collected = native?.usage ?? undefined;
     const usage = collected ?? reports.sort((a, b) => b.observed_at_ms - a.observed_at_ms)[0];
-    const provider = usage?.provider ?? snapshot?.providers.find((item) =>
-      usagePluginId(item.provider) === account.provider_id
-    )?.provider ?? account.provider_id;
+    const provider = usage?.provider ?? usageAccountId(account.provider_id) ??
+      snapshot?.providers.find((item) =>
+        usagePluginId(item.provider) === account.provider_id
+      )?.provider ?? account.provider_id;
     const defaultLabel = accounts?.registry.defaults[account.provider_id] === account.id ? " · Default" : "";
     // A named-only (Antigravity) quota report has no plan; its sessions report one.
     const control = collected && !record(collected.account?.account)?.planType ? accountControl(accounts, account.id) : undefined;
@@ -107,26 +106,21 @@ export function registeredUsageAccounts(
       usage: usage ?? { provider, status: "unavailable", source: "", observed_at_ms: 0 },
       ...(native ? { native } : {}),
       ...(plan ? { statusLabel: plan.toUpperCase() } : {}),
-      ...(!collected ? { statusLabel: !account.enabled ? "DISABLED" : usage ? "SESSION" : native?.refreshing ? "REFRESHING" : native?.reason === "native_login_outdated" ? "SIGN IN AGAIN" : native?.reason === "native_login_pending" ? "SIGN-IN PENDING" : native?.reason === "native_login_required" || native?.reason === "portable_credentials_required" ? "NOT SIGNED IN" : "NOT REPORTED" } : {}),
+      ...(!collected ? { statusLabel: !account.enabled ? "DISABLED" : usage ? "SESSION" : native?.refreshing ? "REFRESHING" : native?.reason === "native_login_outdated" || native?.reason === "native_usage_authentication_required" || native?.reason === "portable_usage_authentication_required" ? "SIGN IN AGAIN" : native?.reason === "native_login_pending" ? "SIGN-IN PENDING" : native?.reason === "native_login_required" || native?.reason === "portable_credentials_required" ? "NOT SIGNED IN" : "NOT REPORTED" } : {}),
       emptyMessage: !account.enabled ? "This account is disabled."
         : native?.message ?? (native?.refreshing ? "Refreshing this account’s usage…" : "No quota reported for this account yet."),
     };
   };
   // Provider product order first (the legacy default cards are retired, so
-  // every card is a registered account); an uninstalled or quota-less
-  // Provider must not hide its registered accounts.
-  for (const usage of usageCardProviders(snapshot)) {
-    const provider = usagePluginId(usage.provider);
-    for (const account of named) {
-      if (account.provider_id !== provider || added.has(account.id)) continue;
-      cards.push(namedCard(account));
-      added.add(account.id);
-    }
-  }
-  for (const account of named) {
-    if (!added.has(account.id)) cards.push(namedCard(account));
-  }
-  return cards;
+  // every card is a registered account); accounts without a declared order
+  // keep their registry order behind them.
+  return named
+    .map((account, index) => ({ card: namedCard(account), index }))
+    .sort((left, right) =>
+      usageCardOrder(left.card.group) - usageCardOrder(right.card.group) ||
+      left.index - right.index
+    )
+    .map(({ card }) => card);
 }
 
 /** `observation` without its refusal reason and message. */

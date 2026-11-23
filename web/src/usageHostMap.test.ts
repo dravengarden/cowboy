@@ -9,6 +9,7 @@ import {
   usageActivityModelIds,
   usageActivityModelLabel,
   usageActivityModels,
+  usageAccountId,
   usageAvailableStatus,
   usageCacheIntervalLabel,
   usageCacheIntervalMs,
@@ -78,6 +79,12 @@ test("usage plugin ids map account providers onto agent plugins", () => {
   assertEquals(usagePluginId("deepseek"), "claude-deepseek");
   assertEquals(usagePluginId("future-account"), "future-account");
   assertEquals(usagePluginId("future-b"), "future-b");
+  assertEquals(usageAccountId("codex"), "openai");
+  assertEquals(usageAccountId("grok"), "xai");
+  assertEquals(usageAccountId("claude-code"), "anthropic");
+  assertEquals(usageAccountId("claude-deepseek"), "deepseek");
+  assertEquals(usageAccountId("antigravity"), "antigravity");
+  assertEquals(usageAccountId("future-plugin"), undefined);
 });
 
 test("activated host inventory replaces usage account mapping", () => {

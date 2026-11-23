@@ -283,3 +283,66 @@ test("named resets appear only where the Service can spend them", () => {
   ]);
   assertEquals(usageResetTarget(older.find((card) => card.id === "pika")!), undefined);
 });
+
+test("retired-default providers keep product order, host labels, and renewal status without snapshot entries", () => {
+  applyUsageHostPlugins([
+    { id: "claude-code", usage: { account: "anthropic", product: "Anthropic", order: 0 } },
+    { id: "codex", usage: { account: "openai", product: "OpenAI", order: 1 } },
+    { id: "grok", usage: { account: "xai", product: "xAI", order: 2 } },
+    { id: "antigravity", usage: { account: "antigravity", product: "Antigravity", order: 7 } },
+  ]);
+  // Live Service snapshots omit retired default cards (anthropic/openai/xai)
+  // and only retain non-retired providers such as antigravity.
+  const retiredSnapshot: UsageSnapshot = {
+    refreshed_at_ms: 100,
+    next_refresh_at_ms: 200,
+    refresh_interval_ms: 100,
+    providers: [{ provider: "antigravity", source: "Antigravity", status: "available", observed_at_ms: 100 }],
+  };
+  const accounts: SubscriptionSnapshot = {
+    ...registry,
+    registry: {
+      revision: 1,
+      defaults: { grok: "fox", codex: "pika" },
+      accounts: [
+        { id: "husky", provider_id: "antigravity", label: "Husky", enabled: true },
+        { id: "fox", provider_id: "grok", label: "Grok · Fox", enabled: true },
+        { id: "lark", provider_id: "claude-code", label: "Claude · Lark", enabled: true },
+        { id: "pika", provider_id: "codex", label: "OpenAI · Pika", enabled: true },
+      ],
+    },
+  };
+  const authExpired = {
+    account_id: "fox",
+    provider_id: "grok",
+    refreshing: false,
+    usage: null,
+    reason: "portable_usage_authentication_required",
+    message: "This account's sign-in needs renewal. Sign in again in Settings → Subscriptions to refresh usage.",
+  };
+  const cards = registeredUsageAccounts(retiredSnapshot, accounts, [], [authExpired]);
+  assertEquals(cards.map((c) => c.id), ["lark", "pika", "fox", "husky"]);
+  const grok = cards.find((c) => c.id === "fox")!;
+  assertEquals(grok.group, "xai");
+  assertEquals(grok.subtitle, "xAI · Default");
+  assertEquals(grok.statusLabel, "SIGN IN AGAIN");
+  assertEquals(grok.emptyMessage, authExpired.message);
+  // Explicit user order overrides the product default.
+  assertEquals(
+    orderUsageAccounts(cards, ["husky", "lark", "pika"]).map((c) => c.id),
+    ["husky", "lark", "pika", "fox"],
+  );
+  // Native usage auth expiry also surfaces the sign-in badge.
+  const nativeExpired = {
+    account_id: "lark",
+    provider_id: "claude-code",
+    refreshing: false,
+    usage: null,
+    reason: "native_usage_authentication_required",
+    message: "This Machine's native login needs renewal. Sign in again to refresh usage.",
+  };
+  assertEquals(
+    registeredUsageAccounts(null, accounts, [], [nativeExpired]).find((c) => c.id === "lark")?.statusLabel,
+    "SIGN IN AGAIN",
+  );
+});
