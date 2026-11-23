@@ -241,8 +241,7 @@ mod tests {
         });
         let error = dial(request(port), Some(DIAL_BOUND))
             .await
-            .err()
-            .expect("refused");
+            .expect_err("refused");
         assert!(error.downcast_ref::<Unreachable>().is_some());
         assert_eq!(crate::logs::failure_reason(&error), "websocket_handshake");
     }
@@ -257,8 +256,7 @@ mod tests {
         let held = tokio::spawn(async move { listener.accept().await });
         let error = dial(request(port), Some(Duration::from_millis(200)))
             .await
-            .err()
-            .expect("cut");
+            .expect_err("cut");
         assert!(error.downcast_ref::<Unreachable>().is_some());
         assert_eq!(crate::logs::failure_reason(&error), "timeout");
         held.abort();
