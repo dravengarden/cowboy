@@ -408,14 +408,10 @@ three review rounds (`call-8a6c5e81`, `call-b856f2db`, `call-878a5459`):
 - Relay accounting. A relayed `process/write` or `process/signal` with an
   unknown outcome, or answered but never delivered to the unit, is recorded
   like a mutation (the same `effectful` rule).
-- Worker-owned starts and writes. An extension server's start runs on its
-  own task, so the discovery timeout can abandon the wait but never the
-  start. Within 120 s it ends started, refused, or uncertain: on possible
-  admission, or no answer within the bound, the start is recorded as
-  uncertain, it no longer counts as starting, and the process stays recorded
-  so teardown ends it. Each new
-  `process/write` from the extension broker checks the unwritable latch
-  first, while retries of a write already sent continue.
+- Worker-owned writes. Each new `process/write` from the extension broker
+  checks the unwritable latch first, while retries of a write already sent
+  continue. Extension server starts are unchanged from before L2a (a
+  redesign item in L2, below).
 - Time-based sequence. Uncertain-effect sequences are
   `max(previous + 1, now in Unix ms)`. The Controller only compares them
   (`observed`, `acknowledged`, `merge_uncertain_effect`), so no reader changes.
@@ -468,6 +464,24 @@ findings. The redesign has to satisfy all of these:
   executor) binds a stop to a process incarnation, so a stop for an older
   incarnation is a no-op whatever its delivery order. This removes the
   worker-side id-reuse tables.
+
+## L2 redesign item: an uncertain extension server start
+
+L2a's review rounds tried twice to classify an extension server's start
+(`extension_broker::start`) and dropped it. The redesign must cover all
+three findings:
+
+- The start must be classified (`invoke_classified`). A possibly admitted
+  start is recorded uncertain, stops counting as starting, and keeps its
+  process recorded so teardown ends it (narrowed round 1).
+- The 40 s discovery timeout must not leave a start recorded as starting.
+  The start needs a completion owner that survives the discovery's
+  cancellation (narrowed round 2).
+- Worker teardown waits at most 60 s (`TEARDOWN_SETTLE`) and blocks on
+  starting processes. Before that deadline it must finalize every unresolved
+  start as uncertain, publishing the uncertainty before it clears starting,
+  so runtime shutdown never drops a start without a record (narrowed
+  round 3).
 
 ## L2 redesign item: a Controller-provided sequence floor
 
