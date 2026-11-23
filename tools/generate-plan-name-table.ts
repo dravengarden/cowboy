@@ -11,7 +11,7 @@
 // `--check` fails when the committed table differs from the generated one.
 import { readFileSync, writeFileSync } from "node:fs";
 
-const OUTPUT = "components/server/src/server/provider_accounts/controls/plan/unprintable.rs";
+const OUTPUT = "components/server-accounts/src/server/provider_accounts/controls/plan/unprintable.rs";
 const FORBIDDEN = /[\p{C}\p{Zl}\p{Zp}]/u;
 
 function ranges(): [number, number][] {
