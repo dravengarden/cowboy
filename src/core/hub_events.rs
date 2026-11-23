@@ -151,6 +151,11 @@ impl Hub {
                 event,
                 cmid,
             };
+            if let Event::Update { update } = &envelope.event
+                && crate::prompt_origin::starts_owner_turn(envelope.cmid.as_deref(), update)
+            {
+                s.owner_turn_seq = Some(seq);
+            }
             if is_user_message_chunk(&envelope)
                 && let Some(cmid) = envelope.cmid.as_deref()
                 && let Some(dispatched) =

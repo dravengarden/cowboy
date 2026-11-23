@@ -28,10 +28,10 @@ const SCAN_DEADLINE: Duration = Duration::from_secs(3);
 #[cfg(test)]
 mod tests;
 
-/// Whether a timeline event is a prompt a person sent.
+/// Whether a timeline event begins an owner turn.
 fn is_owner_prompt(event: &Envelope) -> bool {
     matches!(&event.event, Event::Update { update }
-        if crate::prompt_origin::is_owner_prompt_event(event.cmid.as_deref(), update))
+        if crate::prompt_origin::starts_owner_turn(event.cmid.as_deref(), update))
 }
 
 /// The sequence of the newest owner prompt in `log`, in any order.

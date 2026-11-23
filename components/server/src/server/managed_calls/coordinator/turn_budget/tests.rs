@@ -236,9 +236,63 @@ async fn an_owner_prompt_starts_a_fresh_budget_and_keeps_the_old_turn_counted() 
             2
         );
     }
-    // A prompt without a client id is the owner's too (an ACP client).
+    // A chunk no send claimed (an ACP client's unmatched text) is no turn.
     fixture.prompt(None);
-    fixture.spend(1).await;
+    assert_eq!(refused(fixture.call().await).0, "call_limit");
+}
+
+#[tokio::test]
+async fn one_send_is_one_turn_however_many_blocks_it_has() {
+    let mut fixture = Fixture::new(1).await;
+    fixture.prompt(Some("cmid-1"));
+    let turn = fixture.spend(1).await;
+    // The send's second block carries no message id; it is stamped like the
+    // first but must not open another budget.
+    fixture.prompt(None);
+    assert_eq!(refused(fixture.call().await).0, "call_limit");
+    // Nor may a peer's steered later block that an older worker left unstamped.
+    let peer = format!("agent-{}", "a".repeat(64));
+    fixture.prompt(Some(peer.as_str()));
+    fixture.hub.push(
+        PARENT,
+        Event::Update {
+            update: json!({
+                "sessionUpdate":"user_message_chunk","content":{"type":"text","text":"second block"},
+                "_meta":{"cowboyDelivery":"current_turn"},
+            }),
+        },
+    );
+    assert_eq!(refused(fixture.call().await).0, "call_limit");
+    assert_eq!(
+        fixture
+            .store
+            .managed_call_turn_count(PARENT, turn)
+            .await
+            .unwrap(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn clearing_the_transcript_keeps_the_turn() {
+    let mut fixture = Fixture::new(2).await;
+    fixture.prompt(Some("cmid-1"));
+    let turn = fixture.spend(2).await;
+    fixture.hub.clear_transcript(PARENT);
+    assert_eq!(
+        newest_owner_prompt(&fixture.hub.snapshot(PARENT).unwrap().0),
+        None,
+        "the prompt left the log"
+    );
+    assert_eq!(refused(fixture.call().await).0, "call_limit");
+    assert_eq!(
+        fixture
+            .store
+            .managed_call_turn_count(PARENT, turn)
+            .await
+            .unwrap(),
+        2
+    );
 }
 
 #[tokio::test]

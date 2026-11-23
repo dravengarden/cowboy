@@ -304,28 +304,39 @@ the budget counts the calls that share the current turn, in every state: a
 failed or cancelled call, a dismissed call and a continuation round all spent
 budget. A replayed `request_id` returns the original call and keeps its turn.
 A call admitted before the column existed carries `NULL` and counts in no turn.
-Admission finds the turn in the Hub's retained log (which also holds events
-the store has not written yet, whatever the client bootstrap window shows),
-else in durable history (200 events per page, three seconds). When it cannot,
-it refuses with the retryable `capacity` code and a `reason`
-(`session_unavailable`, `owner_turn_scan_timeout` or
-`owner_turn_history_unavailable`) rather than guess; nothing is recorded. A
-racing duplicate of the same `request_id` that was admitted meanwhile is
-answered with its receipt, not with the refusal.
+
+The turn begins at the chunk that carries the client message id of the owner's
+send (`prompt_origin::starts_owner_turn`). A send's later blocks carry no id, a
+steered block of an older worker is not stamped, and a chunk no send claimed (an
+ACP client's unmatched text) has none: none of them begins a turn, so a send
+has one anchor however many blocks it has. The Hub remembers the latest such
+sequence per session (`owner_turn_seq`), so the turn survives the transcript
+trimming it out of memory and a cleared transcript. Admission reads that, else
+the Hub's retained log (which also holds events the store has not written yet,
+whatever the client bootstrap window shows), else durable history (200 events
+per page, three seconds). When it cannot, it refuses with the retryable
+`capacity` code and a `reason` (`session_unavailable`,
+`owner_turn_scan_timeout` or `owner_turn_history_unavailable`) rather than
+guess; nothing is recorded. A racing duplicate of the same `request_id` that was
+admitted meanwhile is answered with its receipt, not with the refusal.
 
 **What the budget cannot promise.** The owner's prompt is recognized by its
 client message id and the origin the Hub stamps on its echo, not by
-authenticated provenance at each entry point; every steered block carries the
-stamp of its own message id. It is a guard against runaway automation (the
-notice → call loop), not a security boundary. These still start a turn because
-their message ids look like the owner's: an agent's `sessions.context_send`
-(`context-<operation>`), `sessions.create` with `initial_prompt` (`initial:`),
-a peer's `sessions.retry` (`cowboy-retry:`), activating a draft (its own id),
-and a chunk an ACP client sends with neither id nor stamp. Clearing the
-transcript removes the anchor, and a call's first request can reach the
-Controller before the prompt echo is projected, in which case it counts against
-the previous turn. Closing these needs a trusted sender stamped at each ingress
-and the turn anchored when the Controller dispatches the prompt.
+authenticated provenance at each entry point. It is a guard against runaway
+automation (the notice → call loop), not a security boundary. These still start
+a turn because their message ids look like the owner's: an agent's
+`sessions.context_send` (`context-<operation>`), `sessions.create` with
+`initial_prompt` (`initial:`), a delegated `sessions.retry` (`cowboy-retry:`,
+which can resend a wake or a notice), and activating a draft an agent edited
+(it keeps the draft's own id). An owner prompt whose text is runtime markup or
+whose operation id begins `__wake__` is missed. The remembered turn is lost
+when the Controller restarts after the owner's prompt left the retained log
+before the store wrote it, or after the transcript was cleared (the cleared
+history is gone), and then reads as the previous turn or none. A call's first
+request can reach the Controller before the prompt echo is projected, in which
+case it counts against the previous turn. Undecodable durable rows can make a
+history page look empty. Closing these needs a trusted sender stamped at each
+ingress and the turn anchored when the Controller dispatches the prompt.
 
 **Migration and compatibility window.** Stored Tools defaults that carry
 `max_per_session` keep loading: the lifetime cap becomes `max_per_turn` 16
@@ -346,7 +357,11 @@ the two take turns, so a reader never pairs one save's document with another's
 limit. A rollback keeps every other setting and returns to its own lifetime
 cap; re-upgrading restores the saved per-turn limit only while the predecessor
 has not replaced the document: a reset or an edit made meanwhile orphans the
-limit, which then migrates from the document's own cap. The ledger column is additive
+limit, which then migrates from the document's own cap (a byte-identical
+rewrite cannot be told from the original). Like every Hub setting, a save is
+acknowledged when committed in memory and persisted by the store queue, one key
+at a time: a crash between the two keys reads as the previous document with the
+default limit, the same loss a crash before either write has. The ledger column is additive
 (PostgreSQL 0087, SQLite 0061) and the call `Record` is unchanged, so a
 predecessor reads every row. The window ends when no predecessor remains a
 rollback target; then the legacy field, its fixed write and the input mapping

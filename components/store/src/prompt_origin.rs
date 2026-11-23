@@ -272,6 +272,15 @@ pub fn is_owner_prompt_event(cmid: Option<&str>, update: &Value) -> bool {
         && is_human_prompt_update(update)
 }
 
+/// Whether a recorded event begins an owner turn: the chunk that carries the
+/// message id of a prompt a person sent. Later blocks of one send carry no id,
+/// so a send has one anchor however many blocks it has; a steered block of an
+/// older worker, which stamps no origin, and a chunk no send claimed (an ACP
+/// client's unmatched text) never begin one.
+pub fn starts_owner_turn(cmid: Option<&str>, update: &Value) -> bool {
+    cmid.is_some() && is_owner_prompt_event(cmid, update)
+}
+
 pub fn is_human_prompt_update(update: &Value) -> bool {
     if update.get("autoResumed").and_then(Value::as_bool) == Some(true) {
         return false;
@@ -342,6 +351,42 @@ mod tests {
             Some("cmid-1"),
             &serde_json::json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi"}})
         ));
+    }
+
+    #[test]
+    fn an_owner_turn_begins_at_the_chunk_that_carries_the_prompt_id() {
+        let chunk = |cmid: Option<&str>, stamp: bool, text: &str| {
+            let mut update = serde_json::json!({
+                "sessionUpdate": "user_message_chunk",
+                "content": { "type": "text", "text": text }
+            });
+            if stamp {
+                apply_prompt_origin(&mut update, &origin_from_cmid(cmid));
+            }
+            (cmid.map(str::to_owned), update)
+        };
+        let begins =
+            |(cmid, update): (Option<String>, Value)| starts_owner_turn(cmid.as_deref(), &update);
+        // A two-block owner send: only the first block (the one with the id).
+        assert!(begins(chunk(Some("cmid-1"), true, "first block")));
+        assert!(!begins(chunk(None, true, "second block")));
+        // An older worker's steered later block carries neither id nor stamp.
+        assert!(!begins(chunk(None, false, "unstamped steered block")));
+        // A chunk no send claimed, and every non-owner id, never begins one.
+        assert!(!begins(chunk(None, false, "unmatched acp text")));
+        let peer = format!("agent-{}", "f".repeat(64));
+        for cmid in [
+            "call-notice:call-1",
+            "session-notice:p",
+            "__wake__s",
+            peer.as_str(),
+        ] {
+            assert!(!begins(chunk(Some(cmid), true, "x")), "{cmid}");
+        }
+        // The shared predicate keeps treating an id-less human chunk as owner's
+        // (the superagent causal budget and historical rows depend on it).
+        let (cmid, update) = chunk(None, true, "legacy row");
+        assert!(is_owner_prompt_event(cmid.as_deref(), &update));
     }
 
     #[test]

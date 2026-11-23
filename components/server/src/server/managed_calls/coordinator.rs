@@ -933,6 +933,9 @@ async fn start(
         Ok(None) => {}
         Err(_) => return error("capacity", "not_submitted"),
     }
+    // What the caller submitted: the replay of a repeated request id matches
+    // against it, not against the agent a continuation resolves below.
+    let submitted = requested;
     let policy = agent_tools::effective(state, meta).calls;
     // Before any approval: a person changes this in Tools, and neither Allow
     // once nor Allow for session may override it.
@@ -992,7 +995,7 @@ async fn start(
                             state,
                             ledger,
                             &original,
-                            (requested, preset),
+                            (submitted, preset),
                             &request,
                             deadline,
                         )

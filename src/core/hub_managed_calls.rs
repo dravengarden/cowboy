@@ -22,7 +22,8 @@ impl Hub {
     /// The newest event of a session's retained log that `matches`, with the
     /// log's first sequence and whether it is the whole history. The retained
     /// log holds every event not yet trimmed, written to the store or not,
-    /// whatever a client bootstrap shows of it.
+    /// whatever a client bootstrap shows of it. A turn the Hub saw begin
+    /// (`owner_turn_seq`) counts even after its event left the log.
     pub fn newest_in_retained_log(
         &self,
         session_id: &str,
@@ -30,8 +31,9 @@ impl Hub {
     ) -> Option<RetainedLogScan> {
         let sessions = self.inner.sessions.lock();
         let s = sessions.get(session_id)?;
+        let in_log = s.log.iter().rev().find(|e| matches(e)).map(|e| e.seq);
         Some(RetainedLogScan {
-            newest_match: s.log.iter().rev().find(|e| matches(e)).map(|e| e.seq),
+            newest_match: in_log.max(s.owner_turn_seq),
             first_seq: s.log.first().map(|e| e.seq),
             whole: s.reached_start,
         })

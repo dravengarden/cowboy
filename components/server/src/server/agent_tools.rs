@@ -520,9 +520,29 @@ mod turn_limit_tests {
         current["calls"]["max_per_turn"] = json!(4);
         let update: AgentUpdate = serde_json::from_value(json!({"settings": current})).unwrap();
         assert_eq!(update.tools().unwrap().unwrap().calls.max_per_turn, 4);
-        let update: AgentUpdate =
-            serde_json::from_value(json!({"settings": {"schema": 1}})).unwrap();
-        assert_eq!(update.tools(), Err(()));
+        assert!(serde_json::from_value::<AgentUpdate>(json!({"settings": {"schema": 1}})).is_err());
+    }
+
+    #[test]
+    fn a_save_still_refuses_duplicate_keys_and_nul_presets() {
+        let mut current = legacy_document(json!(1));
+        current["calls"]
+            .as_object_mut()
+            .unwrap()
+            .remove("max_per_session");
+        current["calls"]["max_per_turn"] = json!(4);
+        let text = json!({"settings": current}).to_string();
+        assert!(serde_json::from_str::<AgentUpdate>(&text).is_ok());
+        let duplicated = text.replacen("\"enabled\":true", "\"enabled\":true,\"enabled\":false", 1);
+        assert_ne!(duplicated, text, "the fixture has an enabled field");
+        assert!(serde_json::from_str::<AgentUpdate>(&duplicated).is_err());
+        // A NUL would be dropped by the settings stores and change what the
+        // saved limit was bound to.
+        let mut tools = AgentTools::builtin("codex");
+        tools.calls.targets[0].preset = Some("sol\u{0}-max".into());
+        assert!(!tools.validate());
+        tools.calls.targets[0].preset = Some("sol-max".into());
+        assert!(tools.validate());
     }
 
     #[test]
@@ -557,10 +577,12 @@ fn valid_targets(targets: &[CallTarget]) -> bool {
         && targets.iter().all(|target| {
             CALL_TARGETS.contains(&target.agent.as_str())
                 && agents.insert(target.agent.clone())
-                && target
-                    .preset
-                    .as_ref()
-                    .is_none_or(|preset| !preset.is_empty() && preset.len() <= 128)
+                && target.preset.as_ref().is_none_or(|preset| {
+                    !preset.is_empty()
+                            && preset.len() <= 128
+                            // The settings stores drop NULs, which would change what a save hashed to.
+                            && !preset.contains('\0')
+                })
                 && target.options.as_ref().is_none_or(|options| {
                     target.preset.is_none()
                         && !options.is_empty()
@@ -1173,7 +1195,18 @@ pub(super) async fn list(
 #[serde(deny_unknown_fields)]
 pub(super) struct AgentUpdate {
     /// `null` restores the built-in defaults.
-    settings: Option<serde_json::Value>,
+    settings: Option<AgentToolsWire>,
+}
+
+/// The defaults as submitted: [`AgentTools`] with the wire form of `calls`, so
+/// a duplicate key is still refused and the retired field stays visible.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentToolsWire {
+    schema: u16,
+    #[serde(rename = "matrix", alias = "memory")]
+    memory: MemoryTools,
+    calls: CallsPolicyWire,
 }
 
 impl AgentUpdate {
@@ -1186,12 +1219,14 @@ impl AgentUpdate {
         let Some(settings) = self.settings else {
             return Ok(None);
         };
-        if settings.pointer("/calls/max_per_session").is_some()
-            && settings.pointer("/calls/max_per_turn").is_some()
-        {
+        if settings.calls.max_per_session.is_some() && settings.calls.max_per_turn.is_some() {
             return Err(());
         }
-        serde_json::from_value(settings).map(Some).map_err(|_| ())
+        Ok(Some(AgentTools {
+            schema: settings.schema,
+            memory: settings.memory,
+            calls: settings.calls.into(),
+        }))
     }
 }
 
