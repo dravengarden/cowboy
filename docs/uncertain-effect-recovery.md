@@ -252,8 +252,11 @@ Of the observed 37 s outage, about 18 s was the Machine's own backoff
 (1, 2, 4, 8, 16 s). A Machine whose connection had been sustained (the
 existing reset condition, at least the 30 s cap) now retries failed dials at
 1 s intervals inside a non-extending 60 s rapid-retry window from the
-disconnect. Each dial and WebSocket handshake is bounded to 10 s (it had no
-bound). After the window, or after any failure once a WebSocket opened (an
+disconnect. Inside that window each dial and WebSocket handshake is bounded
+to 10 s. Outside it a dial stays unbounded, as before. Bounding every dial
+safely needs staggered attempts across resolved addresses (a blackholed first
+address must not starve a reachable fallback). That is a follow-up, and the
+pre-existing unbounded dial is unchanged. After the window, or after any failure once a WebSocket opened (an
 authentication refusal included), it falls back to the existing exponential
 backoff. The
 rule is local to `machine_cli/reconnect.rs`. It needs no Controller change, no
