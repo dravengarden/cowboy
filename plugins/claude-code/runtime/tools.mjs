@@ -57,6 +57,9 @@ const HOOK_CLEANUP_DEFER_MS = 2000;
 const REMOVAL_RETRY_BASE_MS = 2000;
 const REMOVAL_RETRY_MAX_MS = 60000;
 const MAX_PIGGYBACK_REMOVALS = 32;
+// Bound persisted hook cleanup paths well below MAX_STATE (2 MiB) so a
+// sustained removal failure can never block state.json from loading.
+const MAX_PERSISTED_HOOK_REMOVALS = 256;
 // Output that keeps arriving is read once per settle interval, not at every
 // round trip: the collector hands output over only when the command ends, so
 // a trickle costs one call per interval while a full page is drained at once.
@@ -426,7 +429,7 @@ export function hookSnapshotScript(
     `rm -f -- ${shellLiteral(delta)} ${shellLiteral(copy + ".cache")} || s=$((s + 100))`,
     ...(stale.length && staleAck
       ? [
-          `unset -f rm 2>/dev/null; if command rm -f -- ${stale.map(shellLiteral).join(" ")} 2>/dev/null; then printf 'COWBOY_STALE_OK:%s\\n' ${shellLiteral(staleAck)}; fi`,
+          `unset -f rm 2>/dev/null; command rm -f -- ${stale.map(shellLiteral).join(" ")} 2>/dev/null; _ok=1; for _p in ${stale.map(shellLiteral).join(" ")}; do [ ! -e "$_p" ] && [ ! -L "$_p" ] || _ok=0; done; [ "$_ok" = 1 ] && printf 'COWBOY_STALE_OK:%s\\n' ${shellLiteral(staleAck)}`,
         ]
       : []),
     'exit "$s"',
@@ -1110,10 +1113,25 @@ export class WorkspaceTools {
     await this.fileBufferSweep(await this.fileBufferPolicy()).catch(() => {});
     // Local copies belong to the process that made them.
     await rm(this.localDirectory(), { recursive: true, force: true });
-    await this.reconcileCancellations();
     if (Array.isArray(this.state.pendingHookRemovals) && this.state.pendingHookRemovals.length) {
       await this.queueRemovals(this.state.pendingHookRemovals, 0, { persist: false });
     }
+    const orphanedHooks = Object.entries(this.state.jobs)
+      .filter(([, job]) => job?.privateHook && !job.cancelRequested)
+      .map(([id]) => id);
+    if (orphanedHooks.length) {
+      await this.save(() => {
+        const previous = {};
+        for (const id of orphanedHooks) {
+          previous[id] = this.state.jobs[id];
+          this.state.jobs[id] = { ...this.state.jobs[id], cancelRequested: true };
+        }
+        return () => {
+          for (const [id, job] of Object.entries(previous)) this.state.jobs[id] = job;
+        };
+      }).catch(() => {});
+    }
+    await this.reconcileCancellations();
   }
 
   async cleanupTemporaryStates() {
@@ -1282,6 +1300,7 @@ export class WorkspaceTools {
       if (!inline) await this.hookInputFile(file, bytes, call);
       // Shell form runs through the shell; exec form runs its argv directly
       // (resolved on PATH), with the project placeholder as a plain string.
+      const ownedHookFiles = [inline ? undefined : file, copy, agentCopy].filter(Boolean);
       started = true;
       await this.startForeground(
         hookCommand(this.shell, {
@@ -1295,7 +1314,7 @@ export class WorkspaceTools {
         call,
         { CLAUDE_PROJECT_DIR: this.cwd, CLAUDE_ENV_FILE: this.envFile() },
         id,
-        { privateHook: true },
+        { privateHook: true, ...(ownedHookFiles.length ? { hookFiles: ownedHookFiles } : {}) },
       );
       const streams = { stdout: [], stderr: [] };
       const limits = { stdout: 0, stderr: 0 };
@@ -1345,9 +1364,26 @@ export class WorkspaceTools {
         return { timedOut: true };
       }
       settled = true;
+      const retiredFiles = [inline ? undefined : file, copy, agentCopy].filter(Boolean);
       if (this.state.jobs[id]) {
-        delete this.state.jobs[id];
-        await this.save();
+        await this.save(() => {
+          const previous = this.state.jobs[id];
+          const previousRemovals = this.state.pendingHookRemovals;
+          delete this.state.jobs[id];
+          if (retiredFiles.length) {
+            this.state.pendingHookRemovals = [
+              ...new Set([...(previousRemovals ?? []), ...retiredFiles]),
+            ].slice(-MAX_PERSISTED_HOOK_REMOVALS);
+          }
+          return () => {
+            if (previous !== undefined) this.state.jobs[id] = previous;
+            if (previousRemovals === undefined) delete this.state.pendingHookRemovals;
+            else this.state.pendingHookRemovals = previousRemovals;
+          };
+        });
+      }
+      if (retiredFiles.length) {
+        await this.queueRemovals(retiredFiles, undefined, { persist: false }).catch(() => {});
       }
       return {
         exitCode: result.exitCode,
@@ -1364,8 +1400,9 @@ export class WorkspaceTools {
       }
       this.foreground.delete(id);
       if (call?.id) this.calls.delete(call.id);
-      // Queue immediately only when no unclosed hook job still owns these files.
-      if (!this.state.jobs[id]) {
+      // Queue immediately only when no unclosed hook job still owns these files
+      // (e.g., failed before process/start persisted a job record).
+      if (!settled && !this.state.jobs[id]) {
         await this.queueRemovals(hookFiles).catch(() => {});
       }
     }
@@ -1528,7 +1565,7 @@ export class WorkspaceTools {
               ) {
                 staleRemoved = true;
                 for (const path of stale) this.pendingRemovals?.delete(path);
-                await this.persistPendingRemovals().catch(() => {});
+                await this.mutatePendingRemovals({ remove: stale }).catch(() => {});
                 this.scheduleRemovals();
               }
               if (removalFailed) {
@@ -4295,6 +4332,9 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     }
     if (name === "Read" && args.file_path?.startsWith(TASK_OUTPUT_PREFIX)) {
       const id = args.file_path.slice(TASK_OUTPUT_PREFIX.length);
+      if (this.state.jobs[id]?.privateHook) {
+        return { deny: `Unknown task: ${id}` };
+      }
       const result = await this.call("taskoutput", {
         task_id: id,
         timeout: 10000,
@@ -4522,12 +4562,19 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     });
   }
 
-  async persistPendingRemovals() {
-    const next = [...(this.pendingRemovals?.keys() ?? [])];
+  async mutatePendingRemovals({ add = [], remove = [] } = {}) {
+    if (!add.length && !remove.length) return;
+    const removedSet = new Set(remove);
     await this.save(() => {
       const previous = this.state.pendingHookRemovals;
-      if (next.length) {
-        this.state.pendingHookRemovals = next;
+      const merged = [
+        ...new Set([
+          ...(previous ?? []).filter((p) => !removedSet.has(p)),
+          ...add.filter((p) => !removedSet.has(p)),
+        ]),
+      ].slice(-MAX_PERSISTED_HOOK_REMOVALS);
+      if (merged.length) {
+        this.state.pendingHookRemovals = merged;
       } else {
         delete this.state.pendingHookRemovals;
       }
@@ -4544,19 +4591,19 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     { persist = true } = {},
   ) {
     const nextAt = Date.now() + Math.max(0, deferMs);
-    let added = false;
+    const addedPaths = [];
     for (const path of paths) {
       if (!path) continue;
       this.pendingRemovals ??= new Map();
       if (!this.pendingRemovals.has(path)) {
         this.pendingRemovals.set(path, { attempts: 0, nextAt, inFlight: false });
-        added = true;
+        addedPaths.push(path);
       }
     }
-    if (added && persist) {
-      await this.persistPendingRemovals().catch(() => {});
+    if (addedPaths.length && persist) {
+      await this.mutatePendingRemovals({ add: addedPaths }).catch(() => {});
     }
-    if (added) this.scheduleRemovals();
+    if (addedPaths.length) this.scheduleRemovals();
   }
 
   scheduleRemovals() {
@@ -4594,7 +4641,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     this.cleanup = (this.cleanup ?? Promise.resolve()).then(async () => {
       const retryBase = this.removalRetryBaseMs ?? REMOVAL_RETRY_BASE_MS;
       const now = Date.now();
-      let changed = false;
+      const removedPaths = [];
       for (const [path, entry] of [...(this.pendingRemovals?.entries() ?? [])]) {
         if (!this.pendingRemovals.has(path) || entry.inFlight) continue;
         if (!immediate && entry.nextAt > now) continue;
@@ -4606,11 +4653,11 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
             force: true,
           });
           this.pendingRemovals.delete(path);
-          changed = true;
+          removedPaths.push(path);
         } catch (error) {
           if (missing(error)) {
             this.pendingRemovals.delete(path);
-            changed = true;
+            removedPaths.push(path);
           } else {
             entry.attempts += 1;
             const backoff = Math.max(
@@ -4623,8 +4670,8 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
           entry.inFlight = false;
         }
       }
-      if (changed) {
-        await this.persistPendingRemovals().catch(() => {});
+      if (removedPaths.length) {
+        await this.mutatePendingRemovals({ remove: removedPaths }).catch(() => {});
       }
       this.scheduleRemovals();
     });
@@ -4736,7 +4783,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         if (hookFiles.length) {
           this.state.pendingHookRemovals = [
             ...new Set([...(previousRemovals ?? []), ...hookFiles]),
-          ];
+          ].slice(-MAX_PERSISTED_HOOK_REMOVALS);
         }
         if (previous.privateHook) {
           delete this.state.jobs[id];

@@ -359,7 +359,7 @@ test("only small valid text deltas travel inside the hook snapshot command", () 
   assert.match(script, /\nrm -f -- 'd e' 'f\.cache' \|\| s=\$\(\(s \+ 100\)\)\nexit "\$s"$/);
   assert.match(
     hookSnapshotScript(["helper"], "d", "f", undefined, ["old 1"], "ack123"),
-    /\nrm -f -- 'd' 'f\.cache' \|\| s=\$\(\(s \+ 100\)\)\nunset -f rm 2>\/dev\/null; if command rm -f -- 'old 1' 2>\/dev\/null; then printf 'COWBOY_STALE_OK:%s\\n' 'ack123'; fi\nexit "\$s"$/,
+    /\nrm -f -- 'd' 'f\.cache' \|\| s=\$\(\(s \+ 100\)\)\nunset -f rm 2>\/dev\/null; command rm -f -- 'old 1' 2>\/dev\/null; _ok=1; for _p in 'old 1'; do \[ ! -e "\$_p" \] && \[ ! -L "\$_p" \] \|\| _ok=0; done; \[ "\$_ok" = 1 \] && printf 'COWBOY_STALE_OK:%s\\n' 'ack123'\nexit "\$s"$/,
   );
   assert.doesNotMatch(hookSnapshotScript(["helper"], "d", "f", undefined), /printf/);
 });

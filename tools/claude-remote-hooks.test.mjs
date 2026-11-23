@@ -1209,6 +1209,28 @@ test("hook cleanup respects unclosed cancellations, persists across restarts, an
   await tools2.drainHookRemovals(1000);
   assert.deepEqual(removed, ["/home/target/.cache/cowboy/hook-input/shutdown.jsonl"]);
   assert.equal(tools2.state.pendingHookRemovals, undefined);
+
+  // 4. Orphaned privateHook job persisted without cancelRequested is reconciled on load(),
+  //    and privateHook jobs are refused as public cowboy-task:// handles.
+  removed.length = 0;
+  hookClosed = false;
+  tools2.state.jobs["orphan-hook"] = {
+    afterSeq: null,
+    exited: false,
+    privateHook: true,
+    hookFiles: ["/home/target/.cache/cowboy/hook-input/orphan.jsonl"],
+  };
+  await tools2.save();
+  const denied = await tools2.dispatch("Read", { file_path: "cowboy-task://orphan-hook" });
+  assert.equal(denied.deny, "Unknown task: orphan-hook");
+  hookId = "orphan-hook";
+  hookClosed = true;
+  const conn3 = makeConnection();
+  const tools3 = new WorkspaceTools(conn3, binding, statePath);
+  await tools3.load();
+  await tools3.cleanup;
+  assert.equal(tools3.state.jobs["orphan-hook"], undefined);
+  assert.deepEqual(removed, ["/home/target/.cache/cowboy/hook-input/orphan.jsonl"]);
 });
 
 let fixtureId = 0;
