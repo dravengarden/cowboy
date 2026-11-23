@@ -711,9 +711,9 @@ export async function mountRunConfigKeyboardAcceptance(): Promise<void> {
         max_sources: 8,
       });
     }
-    if (path === "/api/usage") {
-      return Response.json({ providers: [], observed_at_ms: Date.now() });
-    }
+    // The new agent's preview: it would start on the live values.
+    if (path === "/api/sessions/run/duplicate/options") return Response.json({ options });
+    if (path === "/api/usage") return Response.json({ providers: [], observed_at_ms: Date.now() });
     const placement = placementResponse(path, entry);
     if (placement) return placement;
     return new Response("Unavailable in isolated fixture", { status: 404 });

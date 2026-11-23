@@ -1,4 +1,4 @@
-import type { MachineSummary, SessionMeta } from "./protocol";
+import type { ConfigOption, MachineSummary, SessionMeta } from "./protocol";
 
 /** Providers whose adapter fork Cowboy verified; the server enforces the same. */
 const FORKABLE_PROVIDERS = new Set(["claude-code", "codex"]);
@@ -153,4 +153,47 @@ export async function duplicateSession(
   }
   const error = typeof record.error === "string" ? record.error : text.trim();
   throw new Error(error || `Duplicate failed (HTTP ${String(response.status)})`);
+}
+
+/** The options a copy on `provider`/`provider_account_id` would offer before
+ *  it exists: the target generation's signed choices with what creation
+ *  would save (inherited settings and the preset) as current values. */
+export async function duplicateOptions(
+  sessionId: string,
+  body: {
+    provider: string;
+    provider_account_id: string;
+    preset?: string | null;
+    inherit_settings?: boolean;
+  },
+  signal?: AbortSignal,
+  fetcher: SessionForkFetch = globalThis.fetch,
+): Promise<ConfigOption[]> {
+  const response = await fetcher(
+    `/api/sessions/${encodeURIComponent(sessionId)}/duplicate/options`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        provider: body.provider,
+        provider_account_id: body.provider_account_id,
+        ...(body.preset ? { preset: body.preset } : {}),
+        ...(body.inherit_settings === false ? { inherit_settings: false } : {}),
+      }),
+      ...(signal ? { signal } : {}),
+    },
+  );
+  const text = await response.text();
+  let record: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = text ? JSON.parse(text) : null;
+    if (parsed !== null && typeof parsed === "object") record = parsed as Record<string, unknown>;
+  } catch {
+    record = {};
+  }
+  if (response.ok && Array.isArray(record.options)) {
+    return record.options as ConfigOption[];
+  }
+  const error = typeof record.error === "string" ? record.error : text.trim();
+  throw new Error(error || `Options unavailable (HTTP ${String(response.status)})`);
 }

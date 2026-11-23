@@ -50,13 +50,21 @@ export function Kbd(
 export function useConfirmEnter(
   open: boolean,
   onConfirm: () => void,
-  { suppressBareEnter = true }: { suppressBareEnter?: boolean } = {},
+  {
+    suppressBareEnter = true,
+    ignoreWithin,
+  }: {
+    suppressBareEnter?: boolean;
+    /** A region with its own Mod+Enter: keys from inside it pass through. */
+    ignoreWithin?: string;
+  } = {},
 ): void {
   const ref = useRef(onConfirm);
   ref.current = onConfirm;
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (e: KeyboardEvent): void => {
+      if (ignoreWithin && e.target instanceof Element && e.target.closest(ignoreWithin)) return;
       const intent = confirmEnterIntent(e);
       if (intent === "ignore") return;
       if (intent === "suppress" && !suppressBareEnter) return;
@@ -66,5 +74,5 @@ export function useConfirmEnter(
     };
     globalThis.addEventListener("keydown", onKey, true);
     return (): void => globalThis.removeEventListener("keydown", onKey, true);
-  }, [open, suppressBareEnter]);
+  }, [open, suppressBareEnter, ignoreWithin]);
 }

@@ -35,34 +35,88 @@ fn configuration(
             .map(|value| (key, value))
     });
     // An explicit target preset wins over inherited model/reasoning values.
-    if let Some(preset) = selection
-        .preset
-        .as_deref()
-        .filter(|value| !value.is_empty())
-    {
-        let id = preset
-            .strip_prefix(&format!("{}/", target.provider))
-            .ok_or("Preset belongs to another Provider")?;
-        let preset = package
-            .manifest
-            .configuration
-            .presets
-            .iter()
-            .find(|preset| preset.id == id)
-            .ok_or("Target preset is unavailable")?;
-        values.extend(
-            preset
-                .values
-                .iter()
-                .map(|(key, value)| (key.clone(), serde_json::json!(value))),
-        );
-    }
+    values.extend(preset_values(
+        &package.manifest.configuration,
+        target,
+        selection,
+    )?);
     // Model/reasoning presets can include a default permission mode. Keeping a
     // restrictive source permission takes precedence over that incidental default.
     if let Some((key, value)) = protected_permission {
         values.insert(key.into(), value);
     }
     Ok(values)
+}
+
+/// The signed values of the selection's target preset, if it names one.
+fn preset_values(
+    contract: &ConfigurationUiContract,
+    target: &SessionMeta,
+    selection: &NextAgent,
+) -> Result<BTreeMap<String, serde_json::Value>, String> {
+    let Some(preset) = selection
+        .preset
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(BTreeMap::new());
+    };
+    let id = preset
+        .strip_prefix(&format!("{}/", target.provider))
+        .ok_or("Preset belongs to another Provider")?;
+    let preset = contract
+        .presets
+        .iter()
+        .find(|preset| preset.id == id)
+        .ok_or("Target preset is unavailable")?;
+    Ok(preset
+        .values
+        .iter()
+        .map(|(key, value)| (key.clone(), serde_json::json!(value)))
+        .collect())
+}
+
+/// The options a copy for `selection` would offer before it is created:
+/// the target generation's signed defaults, then what creation saves
+/// (inherited settings and the preset, or the preset alone).
+pub(super) async fn target_options(
+    state: &AppState,
+    auth: &AuthenticatedProductRequest,
+    source: &SessionMeta,
+    selection: &NextAgent,
+) -> Result<serde_json::Value, String> {
+    let generation = target_generation(state, auth, selection).await?;
+    let mut target = source.clone();
+    target.provider.clone_from(&selection.provider);
+    target.provider_account_id = selection.provider_account_id.clone();
+    target.provider_version = generation.version;
+    target.provider_generation_digest = generation.digest;
+    target.provider_auth_generation = generation.auth_generation;
+    let mut preferences = match serde_json::to_value(&generation.behavior.default_preferences) {
+        Ok(serde_json::Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    };
+    target.provider_behavior = Some(generation.behavior);
+    let chosen = if selection.inherit_settings {
+        configuration(state, source, &target, selection)?
+    } else {
+        let package = state
+            .provider_catalog
+            .package(
+                &target.provider,
+                &target.provider_version,
+                &target.provider_generation_digest,
+            )
+            .ok_or("Target Provider configuration is unavailable")?;
+        preset_values(&package.manifest.configuration, &target, selection)?
+    };
+    preferences.extend(chosen);
+    super::super::session_configuration::target_preview(
+        state,
+        &target,
+        &serde_json::Value::Object(preferences),
+    )
+    .ok_or_else(|| "Target Provider configuration is unavailable".into())
 }
 
 /// Read-only admission before reserving a session or preparing its worktree.
@@ -224,7 +278,7 @@ fn compatible_configuration(
         && value.as_str() != Some(unrestricted)
         && (source.provider != target.provider || !same_release || !same_permission_contract)
     {
-        return Err("The current permission mode cannot be inherited by this Provider version. Keep the same Provider version, or turn off Inherit compatible settings in More options to explicitly use the new agent's defaults.".into());
+        return Err("The current permission mode cannot be inherited by this Provider version. Keep the same Provider version, or turn off Inherit compatible settings to explicitly use the new agent's defaults.".into());
     }
     if source.provider != target.provider {
         return Ok(BTreeMap::new());

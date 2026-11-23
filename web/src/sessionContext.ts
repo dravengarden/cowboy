@@ -13,6 +13,8 @@ export interface NextAgent {
   cwd: string;
   preset: string | null;
   inherit_settings?: boolean;
+  /** Explicit options for the new agent, over inherited and preset values. */
+  config?: Record<string, string | boolean>;
 }
 export interface ContextDelivery {
   operation: string;

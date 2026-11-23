@@ -78,6 +78,38 @@ pub(super) fn prepare(state: &AppState, session_id: &str) {
     state.hub.set_initial_config_options(&meta, options);
 }
 
+/// The options a new session of `target` would offer before it exists, for
+/// a form choosing a copy's configuration. Same signed preview as
+/// [`prepare`]; a same-scope snapshot supplies labels and choices, preferring
+/// one whose model matches, else any (it never supplies selected values).
+pub(super) fn target_preview(state: &AppState, target: &SessionMeta, preferences: &Value) -> Option<Value> {
+    if is_managed(target) {
+        return None;
+    }
+    let package = state.provider_catalog.package(
+        &target.provider,
+        &target.provider_version,
+        &target.provider_generation_digest,
+    )?;
+    let peers = state
+        .hub
+        .session_list()
+        .into_iter()
+        .rev()
+        .filter(|candidate| same_scope(target, candidate))
+        .filter_map(|candidate| state.hub.persisted_config_options(&candidate.id))
+        .collect::<Vec<_>>();
+    let observed = peers
+        .iter()
+        .find(|options| model_matches(options, preferences))
+        .or_else(|| peers.first());
+    Some(preview(
+        &package.manifest.configuration.presets,
+        preferences,
+        observed,
+    ))
+}
+
 /// An exited session keeps the options its last worker reported, which may
 /// come from an earlier Provider generation: a dormant re-pin or an operator
 /// update moves the session without starting a worker. Offer, for display

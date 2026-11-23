@@ -180,3 +180,22 @@ export function runConfigDraftChanges(
     .sort((left, right) => Number(right.model) - Number(left.model))
     .map(({ configId, value }) => ({ configId, value }));
 }
+
+/** A preset's detail without the words its name already says
+ *  ("Gemini 4 Neon · High thinking · strongest" under "Gemini 4 Neon · High"
+ *  reads "thinking · strongest"). */
+export function presetDetail(preset: { name: string; detail: string }): string {
+  const named = new Set(preset.name.split(/\s*·\s*/).map((part) => part.toLowerCase()));
+  const parts = preset.detail
+    .split(/\s*·\s*/)
+    .map((part) => {
+      let rest = part;
+      for (const word of [...named].sort((a, b) => b.length - a.length)) {
+        const lower = rest.toLowerCase();
+        if (lower === word || lower.startsWith(`${word} `)) rest = rest.slice(word.length).trim();
+      }
+      return rest;
+    })
+    .filter((part) => part.length > 0);
+  return parts.join(" · ");
+}

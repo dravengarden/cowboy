@@ -9,7 +9,7 @@ mod fork;
 mod inheritance;
 pub(super) mod rollover;
 pub(super) use cancel::cancel;
-pub(super) use fork::{duplicate, fork};
+pub(super) use fork::{duplicate, duplicate_options, fork};
 
 // Serializes short durable mutations and creation admission, including requests
 // coming through MCP. A dropped HTTP request does not cancel the transaction.
@@ -328,7 +328,43 @@ fn editable(info: &SessionInfo, context: &Context, new_agent: bool) -> Result<()
     Ok(())
 }
 
+/// Save explicit option choices on a dormant destination; its first launch
+/// replays them, like any Settings change on a sleeping session.
+pub(super) fn apply_overrides(
+    state: &AppState,
+    destination: &str,
+    config: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    for (config_id, value) in config {
+        state
+            .hub
+            .set_config_preference(destination, config_id.clone(), value.clone())?;
+    }
+    Ok(())
+}
+
+pub(super) fn valid_overrides(config: &serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
+    if config.len() > 32 {
+        return Err("Too many configuration choices".into());
+    }
+    for (config_id, value) in config {
+        if config_id.is_empty()
+            || config_id.len() > 128
+            || !matches!(
+                value,
+                serde_json::Value::String(_) | serde_json::Value::Bool(_)
+            )
+        {
+            return Err(
+                "Configuration choices must be option ids with a string or boolean value".into(),
+            );
+        }
+    }
+    Ok(())
+}
+
 fn validate_target(target: &NextAgent) -> Result<(), String> {
+    valid_overrides(&target.config)?;
     for value in [&target.provider, &target.machine_id, &target.cwd] {
         if value.is_empty() || value.len() > 256 || value.contains('\0') {
             return Err("Choose a Provider and registered project".into());
@@ -589,6 +625,7 @@ async fn prepare_target(
         if target.inherit_settings {
             inheritance::apply(state, &source, &destination, target)?;
         }
+        apply_overrides(state, target_id, &target.config)?;
         state
             .hub
             .place_continuation(id, target_id, target.inherit_settings, &actor)?;
@@ -1024,5 +1061,21 @@ mod tests {
         let mut with_credentials = base;
         with_credentials["credentials"] = serde_json::json!("secret");
         assert!(serde_json::from_value::<NextAgent>(with_credentials).is_err());
+    }
+    #[test]
+    fn new_target_options_are_optional_and_bounded() {
+        let base = serde_json::json!({"provider":"codex","provider_account_id":"default","machine_id":"ovh","cwd":"project"});
+        let target: NextAgent = serde_json::from_value(base.clone()).unwrap();
+        // Without options a stored target keeps its previous shape.
+        assert!(serde_json::to_value(&target).unwrap().get("config").is_none());
+        let mut chosen = base.clone();
+        chosen["config"] = serde_json::json!({"model": "gpt-5.5", "fast": true});
+        let target: NextAgent = serde_json::from_value(chosen).unwrap();
+        assert!(validate_target(&target).is_ok());
+        assert_eq!(serde_json::to_value(&target).unwrap()["config"]["fast"], true);
+        let mut nested = base;
+        nested["config"] = serde_json::json!({"model": {"id": "x"}});
+        let target: NextAgent = serde_json::from_value(nested).unwrap();
+        assert!(validate_target(&target).is_err());
     }
 }

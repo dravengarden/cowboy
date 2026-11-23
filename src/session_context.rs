@@ -17,6 +17,10 @@ pub struct NextAgent {
     /// Copy compatible user configuration at send time, never native identity.
     #[serde(default = "inherit_settings_default")]
     pub inherit_settings: bool,
+    /// Explicit options for the new agent (model, reasoning, …), applied over
+    /// inherited and preset values before its first launch.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub config: serde_json::Map<String, serde_json::Value>,
 }
 
 const fn inherit_settings_default() -> bool {

@@ -528,10 +528,10 @@ Context. Its panel is an exclusive region with its own keymap
 | `H` / `L` | Change the field: step a choice or the Model, a switch off / on, a disclosure closed / open; else move beside |
 | `[` / `]`, `Ctrl-H` / `Ctrl-L` | Previous / next pane (brackets wrap); each pane keeps its cursor. They also leave the session tree, which otherwise keeps its own `J/K/H/L/Enter//` |
 | `gg` / `G` | First / last field of the pane |
-| `1`–`9` | Apply that recommended preset |
+| `1`–`9` | Apply that recommended preset (of the pane holding the cursor) |
 | `A` `M` `E` `C` `F` `P` | The option with that letter (Model opens its list) |
 | `Enter` | Open a Select, toggle a switch, press a button |
-| `Mod+Enter` | Apply the Agent draft |
+| `Mod+Enter` | Apply the Agent draft; in Replace or fork, replace (`Mod+Shift+Enter` forks) |
 | `␣` | Dialog leader: a letter on every control of every pane |
 
 Agent options are a draft: presets, `H/L` and the letters change what the
@@ -541,6 +541,17 @@ and names the agent's value (`was Opus 5.5`); `Mod+Enter` or Apply sends the
 changes together, the model first, and waits for the agent to acknowledge
 them. With unsaved edits the first `Esc` only warns; a second discards them
 and closes. Tools and linked sessions still save as they change.
+
+**Replace or fork** (Context pane) configures the new agent in the same
+grammar: its installation, subscription and project, the target's presets
+(`1`–`9` in that pane) and every option it offers as one field each
+(`J/K`, `H/L`, its letter), all visible at once on any Provider. A changed
+field names what the new agent would otherwise start on. While the form is
+open the Context pane takes the larger share of the window and puts the form
+beside the session tree, held in view as the tree scrolls. From anywhere in
+the form `Mod+Enter` replaces this session and `Mod+Shift+Enter` forks; the
+Agent draft's `Mod+Enter` does not reach into it. Presets and letters act on
+the pane holding the cursor.
 
 The field under the cursor is shaded with a leading bar and its pane is
 outlined. A switch disabled while its change saves keeps the cursor: focus

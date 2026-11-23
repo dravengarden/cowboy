@@ -363,19 +363,20 @@ export function runConfigKey(
 ): boolean {
   if (action.type !== "go") goPending = false;
   const active = cursorIn(panel);
+  // Presets and option letters act on the pane holding the cursor (the Agent
+  // pane, or Replace or fork's new agent), else the first pane that has one.
+  const scoped = (selector: string): HTMLElement | null =>
+    active?.closest<HTMLElement>(PANE)?.querySelector<HTMLElement>(selector) ??
+      panel.querySelector<HTMLElement>(selector);
   if (action.type === "preset") {
-    const preset = panel.querySelector<HTMLElement>(
-      `[data-config-preset="${String(action.index)}"]`,
-    );
+    const preset = scoped(`[data-config-preset="${String(action.index)}"]`);
     if (!preset || !usable(preset)) return false;
     preset.focus();
     preset.click();
     return true;
   }
   if (action.type === "direct") {
-    const row = panel.querySelector<HTMLElement>(
-      `[data-config-shortcut="${action.shortcut}"]`,
-    );
+    const row = scoped(`[data-config-shortcut="${action.shortcut}"]`);
     if (!row) return false;
     const select = row.querySelector<HTMLElement>("[data-config-select]");
     if (select && usable(select)) {

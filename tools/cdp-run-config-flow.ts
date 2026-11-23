@@ -432,35 +432,59 @@ async function replaceOrForkSelects(driver: AcceptanceDriver): Promise<void> {
     `l picks the installation and closes the list: ${JSON.stringify(picked)}`,
   );
   results.push("AI installation opens from the leader; j moves, l picks");
-  // The new agent's own options were native selects, whose OS popup never
-  // sees j/k; on Desktop they are lists like every other Select.
-  const fork = await page.evaluate<{ x: number; y: number; native: boolean } | null>(`(() => {
-    const field = document.querySelector("[data-config-pane='context'] [data-fork-option]");
-    const select = field?.closest('.MuiFormControl-root')?.querySelector("[role='combobox']");
-    if (!select) return null;
-    select.scrollIntoView({ block: "center" });
-    const r = select.getBoundingClientRect();
-    return { x: r.left + r.width / 2, y: r.top + r.height / 2, native: field.tagName === "SELECT" };
+  // The new agent's options use the Agent pane's grammar: one field per
+  // option, stepped with h/l from the cursor, beside the session tree.
+  const layout = await page.evaluate<{ split: boolean; beside: boolean; fields: number } | null>(`(() => {
+    const split = document.querySelector("[data-context-workbench='split']");
+    const form = split?.querySelector("[data-new-session-editor]")?.getBoundingClientRect();
+    const tree = split?.querySelector("[role='tree']")?.getBoundingClientRect();
+    return {
+      split: Boolean(split),
+      beside: Boolean(form && tree && form.right <= tree.left + 1),
+      fields: document.querySelectorAll("[data-config-pane='context'] [data-fork-configuration] [data-config-row]").length,
+    };
   })()`);
-  check(fork && !fork.native, `The new agent's options are Desktop lists: ${JSON.stringify(fork)}`);
-  if (!fork) throw new Error("The new agent's options did not render");
-  for (const type of ["mousePressed", "mouseReleased"]) {
-    await page.send("Input.dispatchMouseEvent", { type, x: fork.x, y: fork.y, button: "left", clickCount: 1 });
-  }
-  await sleep(350);
-  const forkOpened = await state();
-  check(forkOpened.list && forkOpened.option, `A new-agent option opens on its value: ${JSON.stringify(forkOpened)}`);
-  await key("j");
-  await sleep(100);
-  const forkNext = (await state()).option;
-  await key("l");
-  await sleep(300);
-  const forkPicked = await state();
   check(
-    forkNext !== forkOpened.option && !forkPicked.list && forkNext.startsWith(forkPicked.combobox.trim()),
-    `j/l pick a new-agent option: ${JSON.stringify({ forkNext, forkPicked })}`,
+    layout?.split && layout.beside && layout.fields > 1,
+    `The new agent's form sits beside the session tree with every option as a field: ${JSON.stringify(layout)}`,
   );
-  results.push("The new agent's options are lists that j/l drive, not native selects");
+  const choice = await page.evaluate<{ x: number; y: number; id: string } | null>(`(() => {
+    const row = [...document.querySelectorAll("[data-config-pane='context'] [data-fork-configuration] [data-config-row][data-config-option]")]
+      .find((r) => r.querySelectorAll("[data-config-choice]").length > 1 && !r.querySelector("[data-config-select]"));
+    const pressed = row?.querySelector("[data-config-choice][aria-pressed='true']");
+    if (!pressed) return null;
+    pressed.scrollIntoView({ block: "center" });
+    const r = pressed.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2, id: row.getAttribute("data-config-option") };
+  })()`);
+  check(choice, "A new-agent option has choices to step");
+  if (!choice) throw new Error("The new agent's options did not render");
+  for (const type of ["mousePressed", "mouseReleased"]) {
+    await page.send("Input.dispatchMouseEvent", { type, x: choice.x, y: choice.y, button: "left", clickCount: 1 });
+  }
+  await sleep(150);
+  const changedRow = JSON.stringify(
+    `[data-fork-configuration] [data-config-option='${choice.id}'][data-config-changed]`,
+  );
+  const changed = () =>
+    page.evaluate<{ fork: boolean; agent: number }>(`({
+      fork: Boolean(document.querySelector(${changedRow})),
+      agent: document.querySelectorAll("[data-config-pane='agent'] [data-config-changed]").length,
+    })`);
+  const unstepped = await changed();
+  await key("l");
+  await sleep(200);
+  const stepped = await changed();
+  check(
+    !unstepped.fork && stepped.fork && stepped.agent === unstepped.agent,
+    `l steps the new agent's option, not the Agent pane: ${JSON.stringify({ unstepped, stepped })}`,
+  );
+  await key("h");
+  await sleep(200);
+  const restored = await changed();
+  check(!restored.fork, `h returns it to the start value: ${JSON.stringify(restored)}`);
+  await driver.shot("run-config-fork");
+  results.push("The new agent's options are fields beside the tree that h/l step in place");
   await page.evaluate(`(() => {
     const button = [...document.querySelectorAll("[data-config-pane='context'] button")]
       .find((b) => b.textContent.includes("Replace or fork"));

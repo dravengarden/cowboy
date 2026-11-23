@@ -10,6 +10,7 @@ import {
 import type { ConfigOption } from "./protocol";
 import {
   activeRunConfigPreset,
+  presetDetail,
   type RunConfigDraft,
   runConfigCurrentTitle,
   runConfigDraftChanges,
@@ -402,4 +403,20 @@ test("a resumed Fable 5.2 session keeps its preset under the Provider's exact eq
   const changedLive = [{ ...resumed[0]!, currentValue: "opus", _meta: undefined }, resumed[1]!];
   assertEquals(runConfigDraftChanges(changedLive, draft), []);
   assertEquals(runConfigDraftEdit({}, resumed, "model", "opus"), { model: "opus" });
+});
+
+test("A preset's detail drops the words its name already says", () => {
+  assertEquals(
+    presetDetail({ name: "Gemini 4 Neon · High", detail: "Gemini 4 Neon · High thinking · strongest" }),
+    "thinking · strongest",
+  );
+  assertEquals(
+    presetDetail({
+      name: "Claude Opus 5.5 · High",
+      detail: "Claude Opus 5.5 · High thinking · on the Google account's quota",
+    }),
+    "thinking · on the Google account's quota",
+  );
+  // Only whole words: "Highest" is not "High".
+  assertEquals(presetDetail({ name: "Fast · High", detail: "Highest quality" }), "Highest quality");
 });

@@ -1,5 +1,6 @@
-import { MenuItem, TextField } from "@mui/material";
+import { ListItemText, MenuItem, TextField } from "@mui/material";
 import type { SessionPreset } from "./newSessionPreset";
+import { presetDetail } from "./runConfigPresets";
 
 export function SessionPresetPicker({
   provider,
@@ -25,7 +26,14 @@ export function SessionPresetPicker({
       disabled={disabled}
       value={value}
       slotProps={{
-        select: { displayEmpty: true },
+        select: {
+          displayEmpty: true,
+          renderValue: (selected) => {
+            const chosen = presets.find((preset) => `${provider}/${preset.id}` === selected);
+            if (chosen) return `${chosen.name}${chosen.is_default ? " · Recommended" : ""}`;
+            return selected ? `${String(selected)} · Unavailable or incompatible` : defaultLabel;
+          },
+        },
         inputLabel: { shrink: true },
       }}
       onChange={(event) => onChange(event.target.value)}
@@ -37,10 +45,15 @@ export function SessionPresetPicker({
       )}
       {presets.map((preset) => (
         <MenuItem key={preset.id} value={`${provider}/${preset.id}`}>
-          {preset.name}
-          {preset.is_default ? " · Recommended" : ""} · {preset.detail}
+          <ListItemText
+            primary={`${preset.name}${preset.is_default ? " · Recommended" : ""}`}
+            // The detail often restates the name; show what it adds.
+            secondary={presetDetail(preset)}
+            sx={{ my: 0 }}
+          />
         </MenuItem>
       ))}
     </TextField>
   );
 }
+

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Box, Button, Stack, Typography } from "@mui/material";
+import { Alert, Box, Button, Stack, type SxProps, type Theme, Typography } from "@mui/material";
 import { ExpandMore, ForkRightOutlined } from "@mui/icons-material";
 import { isManagedChild } from "./managedCalls";
 import type { SessionMeta } from "./protocol";
@@ -18,7 +18,8 @@ import {
 import { useProjectPlacement } from "./useProjectPlacement";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { AiInstallationPicker } from "./AiInstallationPicker";
-import { ForkConfiguration, type ForkConfig } from "./ForkConfiguration";
+import { ForkConfiguration, type ForkConfig, useForkTargetOptions } from "./ForkConfiguration";
+import { NewSessionActions } from "./NewSessionActions";
 import { SessionSubscription, useSessionSubscription } from "./SessionSubscription";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import { ConfirmSheet } from "./Sheet";
@@ -149,6 +150,10 @@ export function SessionContextSettings({
             <PendingSwitch session={session} context={data} onBack={() => void reload()} />
           )}
         </Box>
+        <Box
+          data-context-workbench={inlineLinks && open ? "split" : undefined}
+          sx={contextWorkbenchSx(inlineLinks, open)}
+        >
         {data && open && (
           <NewSessionForm
             key={`${session.id}:${formGeneration}`}
@@ -177,9 +182,39 @@ export function SessionContextSettings({
             inline
           />
         )}
+        </Box>
       </Stack>
     </Box>
   );
+}
+
+/** Bring the project field into reach: Desktop shows it, touch discloses it. */
+function chooseProject(desktop: boolean, disclose: (open: boolean) => void): void {
+  if (!desktop) return disclose(true);
+  const field = document.querySelector<HTMLElement>("[data-fork-project] [role='combobox'], [data-fork-project] input");
+  field?.scrollIntoView({ block: "nearest" });
+  field?.focus();
+}
+
+/** Desktop: the installation and subscription side by side. */
+const targetGridSx = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 1.25 };
+
+/** Desktop workbench: the new agent's form beside the session tree, held in
+ *  view while the tree scrolls. Elsewhere the wrapper adds no box. */
+function contextWorkbenchSx(inlineLinks: boolean, open: boolean): SxProps<Theme> {
+  if (!inlineLinks) return { display: "contents" };
+  return {
+    display: "grid",
+    gap: 2,
+    gridTemplateColumns: "minmax(0, 1fr)",
+    alignItems: "start",
+    "@container run-config-pane (min-width: 760px)": open
+      ? {
+          gridTemplateColumns: "minmax(0, 1.15fr) minmax(0, 1fr)",
+          "& > [data-new-session-editor]": { position: "sticky", top: 0 },
+        }
+      : {},
+  };
 }
 
 /** What the next prompt will read, whichever agent receives it. Like an
@@ -299,8 +334,7 @@ function NewSessionForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [overrides, setOverrides] = useState<ForkConfig>({});
-  const options = useStoreSelector((state) => state.configOptions.get(session.id));
-  const custom = Object.keys(overrides).length > 0;
+  const liveOptions = useStoreSelector((state) => state.configOptions.get(session.id));
   const machines = useStoreSelector((state) => state.machines);
   const execution = sessionExecution(session);
   const defaults = {
@@ -323,6 +357,8 @@ function NewSessionForm({
   useEffect(() => {
     if (provider === defaults.provider) subscription.select(account);
   }, [provider, account]);
+  const target = useForkTargetOptions(session.id, { provider, account: subscription.value, preset, inherit: inheritSettings },
+    provider === session.provider ? liveOptions : undefined, Boolean(subscription.value));
   const nextAgent = {
     provider,
     provider_account_id: subscription.value,
@@ -331,6 +367,7 @@ function NewSessionForm({
     cwd: placement.project?.projectId || "",
     preset: preset || null,
     inherit_settings: inheritSettings,
+    ...(Object.keys(overrides).length > 0 ? { config: overrides } : {}),
   };
   const sameAccount = provider === session.provider && subscription.value === sourceAccount;
   // Worktrees live on the execution Machine, per project.
@@ -419,6 +456,8 @@ function NewSessionForm({
       closeSessionSettings(session.id);
       requestPickSession(receipt.session_id, receipt.session ?? undefined);
     }, "Fork failed");
+  const canReplace = !forkOnly && !locked && ready && !full && !replaceWaits;
+  const canFork = allowFork && !locked && ready && samePlacement && !forkWaits;
   return (
     <Stack
       spacing={1.5}
@@ -443,6 +482,7 @@ function NewSessionForm({
           been applied.
         </Alert>
       )}
+      <Box data-new-session-target sx={desktop ? targetGridSx : { display: "contents" }}>
       <AiInstallationPicker
         installations={placement.installations}
         value={placement.installation?.value || ""}
@@ -458,6 +498,7 @@ function NewSessionForm({
         }
       />
       <SessionSubscription state={subscription} disabled={busy} desktop={desktop} helperText="" />
+      </Box>
       <ForkOutcome
         forkOnly={forkOnly}
         allowFork={allowFork}
@@ -470,9 +511,9 @@ function NewSessionForm({
       {!placement.loading && !placement.error && !placement.project && (
         <Alert
           severity="warning"
-          action={<Button onClick={() => setAdvanced(true)}>Choose project</Button>}
+          action={<Button onClick={() => chooseProject(desktop, setAdvanced)}>Choose project</Button>}
         >
-          Choose a project in More options first.
+          {desktop ? "Choose a project below first." : "Choose a project in More options first."}
         </Alert>
       )}
       <ForkConfiguration
@@ -494,7 +535,9 @@ function NewSessionForm({
         inherit={inheritSettings}
         onInherit={setInheritSettings}
         sameProvider={provider === session.provider}
-        options={allowFork ? (options ?? []) : []}
+        options={target.options}
+        loading={target.loading}
+        optionsError={target.error}
         overrides={overrides}
         onOverrides={setOverrides}
         advanced={advanced}
@@ -528,28 +571,16 @@ function NewSessionForm({
         </Typography>
       )}
       {error && <Alert severity="error">{error}</Alert>}
-      <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" alignItems="center">
-        {!forkOnly && (
-          <Button
-            variant="contained"
-            data-new-session-continue-run
-            disabled={locked || !ready || full || replaceWaits || custom}
-            onClick={() => void continueWork()}
-          >
-            {busy ? "Saving…" : "Replace this session"}
-          </Button>
-        )}
-        {allowFork && (
-          <Button
-            variant={forkOnly ? "contained" : "outlined"}
-            data-new-session-fork-run
-            disabled={locked || !ready || !samePlacement || forkWaits}
-            onClick={() => void forkWork()}
-          >
-            Fork to new session
-          </Button>
-        )}
-      </Stack>
+      <NewSessionActions
+        desktop={desktop}
+        forkOnly={forkOnly}
+        allowFork={allowFork}
+        canReplace={canReplace}
+        canFork={canFork}
+        busy={busy}
+        onReplace={continueWork}
+        onFork={forkWork}
+      />
     </Stack>
   );
 }

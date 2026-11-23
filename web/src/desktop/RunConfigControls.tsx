@@ -22,6 +22,7 @@ import type { ProviderConfigOptionPresentation } from "../providerConfigOptions"
 import {
   activeRunConfigPreset,
   type RunConfigPreset,
+  presetDetail,
   runConfigPresetChanges,
 } from "../runConfigPresets";
 import { nextRunConfigChoiceIndex } from "./runConfigKeyboard";
@@ -95,13 +96,13 @@ const choiceButtonSx: SxProps<Theme> = {
 };
 
 /** "was Opus 5.5": the agent's value under a field the draft changes. */
-function UnsavedFrom({ name }: { name: string }): React.JSX.Element {
+function UnsavedFrom({ name, title }: { name: string; title?: string | undefined }): React.JSX.Element {
   return (
     <Typography
       variant="caption"
       color="warning.main"
       noWrap
-      title={`Unsaved · the agent runs ${name}`}
+      title={title ?? `Unsaved · the agent runs ${name}`}
       sx={{ display: "block", fontSize: "0.625rem", fontWeight: 650 }}
     >
       was {name}
@@ -113,6 +114,7 @@ export function ConfigOptionControl({
   option,
   disabled,
   savedName,
+  savedTitle,
   onChange,
 }: {
   /** The option as the unsaved draft leaves it. */
@@ -121,6 +123,8 @@ export function ConfigOptionControl({
   disabled: boolean;
   /** The agent's value when the draft changes it. */
   savedName?: string | undefined;
+  /** Explains `savedName` on hover, where it is not the agent's value. */
+  savedTitle?: ((name: string) => string) | undefined;
   onChange: (id: string, value: string | boolean) => void;
 }): React.JSX.Element {
   const label = optionLabel(option);
@@ -164,6 +168,7 @@ export function ConfigOptionControl({
     <Box
       ref={rowRef}
       data-config-row
+      data-config-option={option.id}
       data-config-shortcut={shortcut?.toLowerCase()}
       data-config-changed={savedName !== undefined || undefined}
       sx={{
@@ -196,7 +201,7 @@ export function ConfigOptionControl({
             )}
           </Stack>
         </Tooltip>
-        {savedName !== undefined && <UnsavedFrom name={savedName} />}
+        {savedName !== undefined && <UnsavedFrom name={savedName} title={savedTitle?.(savedName)} />}
       </Box>
       {label === "Model"
         ? (
@@ -349,7 +354,7 @@ export function RecommendedPresetControls({
                     noWrap
                     sx={{ display: "block", fontSize: "0.625rem" }}
                   >
-                    {preset.detail}
+                    {presetDetail(preset) || preset.detail}
                   </Typography>
                 </HintTooltip>
               </Box>

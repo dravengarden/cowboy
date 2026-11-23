@@ -54,6 +54,11 @@ const runConfigPanelSx = {
     gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
     gridTemplateRows: "max-content minmax(0, 1fr)",
     gridTemplateAreas: '"agent context" "tools context"',
+    // Replace or fork open: the new agent's form and the session tree share
+    // the Context pane, so it takes the larger share of the window.
+    "&:has([data-context-workbench='split'])": {
+      gridTemplateColumns: "minmax(0, 0.8fr) minmax(0, 1.6fr)",
+    },
   },
 } as const;
 
@@ -151,6 +156,8 @@ function RunConfigPane({
           overflow: "auto",
           px: 2,
           py: 1.25,
+          containerType: "inline-size",
+          containerName: "run-config-pane",
         }}
       >
         {children}
@@ -332,6 +339,8 @@ function useRunConfigDraft(
   };
   useConfirmEnter(configOpen && unsaved, () => void applyConfig(), {
     suppressBareEnter: false,
+    // Replace or fork submits its own form.
+    ignoreWithin: "[data-new-session-editor]",
   });
   const savedNames = new Map(
     draftChanges.map(({ configId }) => {

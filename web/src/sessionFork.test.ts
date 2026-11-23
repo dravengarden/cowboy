@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   duplicateMode,
+  duplicateOptions,
   duplicateSession,
   forkAvailability,
   forkSession,
@@ -110,4 +111,39 @@ test("Duplicate requests carry config overrides and an idempotency key", async (
     provider_account_id: "pika",
     preset: "codex/max",
   });
+});
+
+test("duplicateOptions previews the target agent's options before it exists", async () => {
+  const calls: { url: string; body: unknown }[] = [];
+  const options = await duplicateOptions(
+    "sess/1",
+    { provider: "antigravity", provider_account_id: "husky", preset: "antigravity/neon", inherit_settings: false },
+    undefined,
+    (url, init) => {
+      calls.push({ url, body: JSON.parse(String(init.body)) });
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ options: [{ id: "model", name: "Model", currentValue: "neon", options: [] }] }),
+          { status: 200 },
+        ),
+      );
+    },
+  );
+  expect(calls).toEqual([
+    {
+      url: "/api/sessions/sess%2F1/duplicate/options",
+      body: {
+        provider: "antigravity",
+        provider_account_id: "husky",
+        preset: "antigravity/neon",
+        inherit_settings: false,
+      },
+    },
+  ]);
+  expect(options.map((option) => option.id)).toEqual(["model"]);
+  await expect(
+    duplicateOptions("s", { provider: "x", provider_account_id: "d" }, undefined, () =>
+      Promise.resolve(new Response(JSON.stringify({ error: "Target Machine is unavailable" }), { status: 400 })),
+    ),
+  ).rejects.toThrow("Target Machine is unavailable");
 });

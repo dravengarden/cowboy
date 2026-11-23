@@ -14,8 +14,14 @@ is a new agent that reads the source through Cowboy MCP.
 ## User flow
 
 **Fork to new session** in **Replace or fork** (Session Settings; the session menu
-item and Desktop `F` open it) leaves the source unchanged. Native fork takes no
-model or reasoning fields: configure the opened session. The API keeps `config`.
+item and Desktop `F` open it) leaves the source unchanged. The form configures
+the new agent completely, on any Provider: every option it offers, valued as it
+would start (`POST /api/sessions/SESSION/duplicate/options` previews the target
+generation's signed choices for a Provider, subscription, preset and
+inheritance, with labels from a same-scope snapshot, before anything exists).
+Changed options travel as `config`, on Fork and on Replace (`next_agent.config`)
+alike, and are saved on the new agent before its first launch, whose replay
+reconciles a value the agent no longer offers.
 
 - Same Provider and subscription on a fork-capable Machine: a native fork
   (below) of the whole conversation, with API `config` saved on the copy before

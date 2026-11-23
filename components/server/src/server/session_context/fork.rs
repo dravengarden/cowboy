@@ -28,41 +28,6 @@ pub(in crate::server) struct ForkRequest {
     pub config: serde_json::Map<String, serde_json::Value>,
 }
 
-/// Save explicit option choices on a dormant destination; its first launch
-/// replays them, like any Settings change on a sleeping session.
-fn apply_overrides(
-    state: &AppState,
-    destination: &str,
-    config: &serde_json::Map<String, serde_json::Value>,
-) -> Result<(), String> {
-    for (config_id, value) in config {
-        state
-            .hub
-            .set_config_preference(destination, config_id.clone(), value.clone())?;
-    }
-    Ok(())
-}
-
-fn valid_overrides(config: &serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
-    if config.len() > 32 {
-        return Err("Too many configuration choices".into());
-    }
-    for (config_id, value) in config {
-        if config_id.is_empty()
-            || config_id.len() > 128
-            || !matches!(
-                value,
-                serde_json::Value::String(_) | serde_json::Value::Bool(_)
-            )
-        {
-            return Err(
-                "Configuration choices must be option ids with a string or boolean value".into(),
-            );
-        }
-    }
-    Ok(())
-}
-
 /// Execution Machine, runtime Machine and project of an admitted session.
 pub(super) fn placement(meta: &SessionMeta) -> Result<(String, Option<String>, String), String> {
     let project = meta
@@ -212,6 +177,7 @@ async fn fork_session(
         runtime_machine_id: runtime_machine_id.clone(),
         preset: None,
         inherit_settings: true,
+        config: serde_json::Map::new(),
     };
     // The adapter reads the source thread from the login's native home on
     // this Machine, and each auth generation has its own home. A Service
@@ -322,7 +288,9 @@ pub(in crate::server) struct DuplicateRequest {
     /// A signed preset of the target installation (`provider/preset`).
     #[serde(default)]
     pub preset: Option<String>,
-    /// Explicit live options for the copy (same Provider only).
+    /// Explicit options for the copy, as the target offers them
+    /// (`duplicate/options`); saved before its first launch, whose replay
+    /// reconciles a value the agent no longer accepts.
     #[serde(default)]
     pub config: serde_json::Map<String, serde_json::Value>,
     /// Copy compatible settings from the source (default on).
@@ -378,11 +346,6 @@ async fn duplicate_session(
     if state.hub.is_managed_child(&id) {
         return Err("A managed call cannot be duplicated".into());
     }
-    if !request.config.is_empty() && request.provider != info.meta.provider {
-        return Err(
-            "Model and reasoning choices apply to the same Provider; choose a preset".into(),
-        );
-    }
     let source = info.meta.clone();
     let (machine_id, runtime_machine_id, project) = placement(&source)?;
     let selection = NextAgent {
@@ -393,6 +356,7 @@ async fn duplicate_session(
         runtime_machine_id: runtime_machine_id.clone(),
         preset: request.preset.clone(),
         inherit_settings: request.inherit_settings,
+        config: serde_json::Map::new(),
     };
     inheritance::preflight(&state, &auth, &source, &selection).await?;
     let actor = folder_actor(&state, &auth.principal);
@@ -438,6 +402,48 @@ async fn duplicate_session(
         format!("The copy {destination} was created but not finished ({error}); delete it and duplicate again")
     })?;
     Ok(destination)
+}
+
+/// The target a duplicate would create, without creating it.
+#[derive(Debug, Deserialize)]
+pub(in crate::server) struct DuplicateOptionsRequest {
+    pub provider: String,
+    pub provider_account_id: crate::provider_account::ProviderAccountId,
+    #[serde(default)]
+    pub preset: Option<String>,
+    #[serde(default = "inherit_by_default")]
+    pub inherit_settings: bool,
+}
+
+/// The options a copy on another Provider or subscription would offer, so
+/// the fork form can configure every option before the copy exists.
+pub(in crate::server) async fn duplicate_options(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthenticatedProductRequest>,
+    Path(id): Path<String>,
+    Json(request): Json<DuplicateOptionsRequest>,
+) -> Response {
+    let result = async {
+        current_authority(&state, &auth)?;
+        let source = owned(&state, &auth.principal, &id)?.meta;
+        let (machine_id, runtime_machine_id, project) = placement(&source)?;
+        let selection = NextAgent {
+            provider: request.provider,
+            provider_account_id: request.provider_account_id,
+            machine_id,
+            cwd: project,
+            runtime_machine_id,
+            preset: request.preset,
+            inherit_settings: request.inherit_settings,
+            config: serde_json::Map::new(),
+        };
+        inheritance::target_options(&state, &auth, &source, &selection).await
+    }
+    .await;
+    match result {
+        Ok(options) => Json(serde_json::json!({ "options": options })).into_response(),
+        Err(error) => failure(error),
+    }
 }
 
 pub(in crate::server) async fn duplicate(

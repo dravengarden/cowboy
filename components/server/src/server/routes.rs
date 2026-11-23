@@ -345,6 +345,10 @@ fn with_session_context_routes(
             post(session_context::continue_here),
         )
         .route(
+            "/api/sessions/{id}/duplicate/options",
+            post(session_context::duplicate_options),
+        )
+        .route(
             "/api/sessions/{id}/duplicate",
             post(session_context::duplicate).layer(middleware::from_fn_with_state(
                 Arc::clone(&state.session_create_replays),

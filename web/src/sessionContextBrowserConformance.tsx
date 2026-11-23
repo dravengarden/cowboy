@@ -37,6 +37,12 @@ export async function runSessionContextBrowserConformance(
   const realSocket = globalThis.WebSocket;
   const checks: string[] = [];
   const duplicateKeys: string[] = [];
+  const optionReads: Record<string, unknown>[] = [];
+  const targetOptions = [
+    { id: "model", name: "Model", category: "model", currentValue: "opus", options: [{ value: "opus", name: "Opus" }, { value: "sonnet", name: "Sonnet" }] },
+    { id: "effort", name: "Reasoning", category: "thought_level", currentValue: "high", options: [{ value: "high", name: "High" }, { value: "max", name: "Max" }] },
+    { id: "fast", name: "Fast mode", currentValue: false, options: [{ value: false, name: "Off" }, { value: true, name: "On" }] },
+  ];
   const entry = managementEntryFixture("claude-code");
   entry.publisher = entry.manifest.publisher;
   const sessions: SessionMeta[] = [
@@ -164,6 +170,12 @@ export async function runSessionContextBrowserConformance(
     if (url.endsWith("/continue-here")) {
       writes.push({ url, body: {} });
       return Response.json({ session: null });
+    }
+    if (url.endsWith("/duplicate/options")) {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      optionReads.push(body);
+      // The target's preview: what the new agent would start on.
+      return Response.json({ options: targetOptions });
     }
     if (url.endsWith("/fork") || url.endsWith("/duplicate")) {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -690,16 +702,27 @@ export async function runSessionContextBrowserConformance(
           ?.includes("uncommitted changes stay here") === true,
         `${mode}: the form says what happens to files`,
       );
-      button("More options").click();
-      await until(() =>
-        Boolean(container.querySelector("[data-context-advanced]"))
-      );
-      check(
-        container.querySelector("[data-fork-configuration]")?.textContent
-          ?.includes("Inherit current model & reasoning") === true,
-        `${mode}: visible preset defaults to current model and reasoning`,
-      );
-      button("Fewer options").click();
+      if (desktop) {
+        // Desktop shows every option at once, valued as the new agent starts.
+        const model = () =>
+          container.querySelector('[data-fork-configuration] [data-config-option="model"]');
+        await until(() => Boolean(model()));
+        check(
+          model()!.textContent!.includes("Opus") && !button("More options"),
+          `${mode}: every option shows what the new agent starts on`,
+        );
+      } else {
+        button("More options").click();
+        await until(() =>
+          Boolean(container.querySelector("[data-context-advanced]"))
+        );
+        check(
+          container.querySelector("[data-fork-configuration]")?.textContent
+            ?.includes("Inherit current model & reasoning") === true,
+          `${mode}: visible preset defaults to current model and reasoning`,
+        );
+        button("Fewer options").click();
+      }
       container.querySelector<HTMLElement>(
         '[data-new-session-editor] [data-session-subscription] [role="combobox"]',
       )!
@@ -1079,7 +1102,9 @@ export async function runSessionContextBrowserConformance(
         !container.querySelector("[data-new-session-stale]"),
         `${mode}: an untouched form follows a change made elsewhere`,
       );
-      button("More options").click();
+      // Any use marks the form as chosen.
+      if (desktop) container.querySelector<HTMLElement>("[data-fork-configuration]")!.click();
+      else button("More options").click();
       stageElsewhere(null);
       await until(() =>
         Boolean(container.querySelector("[data-new-session-stale]"))
@@ -1122,16 +1147,17 @@ export async function runSessionContextBrowserConformance(
       check(
         continueRun().disabled &&
           container.textContent?.includes(
-              "Choose a project in More options",
+              desktop ? "Choose a project below" : "Choose a project in More options",
             ) === true,
         `${mode}: missing inherited project explains why Continue is disabled`,
       );
       button("Choose project").click();
+      const projectField = desktop ? "[data-fork-project]" : "[data-context-advanced]";
       await until(() =>
-        Boolean(container.querySelector("[data-context-advanced]"))
+        Boolean(container.querySelector(projectField))
       );
       check(
-        Boolean(container.querySelector("[data-context-advanced]")),
+        Boolean(container.querySelector(projectField)),
         `${mode}: missing project action exposes the field`,
       );
       flushSync(() => root.render(null));
@@ -1225,25 +1251,34 @@ export async function runSessionContextBrowserConformance(
     });
     flushSync(() => root.render(<Fixture desktop />));
     await openForm();
-    const forkOption = (id: string) => container.querySelector<HTMLElement>(`[data-fork-option="${id}"]`);
-    check(forkOption("model") && forkOption("effort") && !forkOption("fast"), "fork: model and reasoning are visible before expanding");
+    // Desktop: every option of the new agent at once, in the Agent pane's
+    // grammar (one field per option, choices pressed or stepped with H/L).
+    const forkRow = (id: string) =>
+      container.querySelector<HTMLElement>(`[data-fork-configuration] [data-config-option="${id}"]`);
+    await until(() => Boolean(forkRow("model") && forkRow("effort") && forkRow("fast")));
+    check(
+      !container.querySelector("[data-fork-configuration] select") && !button("More options"),
+      "fork: every option is a field at once, with no disclosure or native list",
+    );
+    check(
+      optionReads.at(-1)?.provider === "claude-code" && optionReads.at(-1)?.inherit_settings === undefined,
+      "fork: the new agent's options come from its target preview",
+    );
     await observe?.("fork-core");
     const beforeDraft = writes.length;
-    // Desktop options are lists (Vim menu keys reach them), not native selects.
-    const selectOption = async (id: string, label: string) => {
-      forkOption(id)!.closest(".MuiFormControl-root")!
-        .querySelector<HTMLElement>("[role='combobox']")!
-        .dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
-      await until(() => Boolean(option(label)));
-      option(label)!.click();
-      await until(() => !document.querySelector("[role='listbox']"));
+    const pick = async (id: string, label: string) => {
+      [...forkRow(id)!.querySelectorAll<HTMLElement>("[data-config-choice]")]
+        .find((choice) => choice.textContent === label)!.click();
+      await until(() => Boolean(forkRow(id)!.querySelector("[data-config-choice][aria-pressed='true']")?.textContent === label));
     };
-    await selectOption("effort", "Max");
-    button("More options").click();
-    await until(() => Boolean(forkOption("fast")));
-    await selectOption("fast", "On");
-    await until(() => continueRun().disabled);
-    check(writes.length === beforeDraft, "fork: configuration edits stay local");
+    await pick("effort", "Max");
+    await pick("fast", "On");
+    await until(() => Boolean(forkRow("fast")?.hasAttribute("data-config-changed")));
+    check(
+      writes.length === beforeDraft && forkRow("effort")!.textContent!.includes("was High") &&
+        !continueRun().disabled,
+      "fork: configuration edits stay local, name the start value, and leave Replace available",
+    );
     await observe?.("fork-advanced");
     forkRun().click();
     await until(() => writes.length > beforeDraft);
@@ -1253,9 +1288,25 @@ export async function runSessionContextBrowserConformance(
     flushSync(() => root.render(null));
     flushSync(() => root.render(<Fixture desktop />));
     await openForm();
-    button("More options").click();
-    await until(() => Boolean(container.querySelector("[data-context-advanced]")));
-    container.querySelector<HTMLInputElement>('[data-context-advanced] input[type="checkbox"]')!
+    await until(() => Boolean(forkRow("fast")));
+    await pick("fast", "On");
+    const beforeReplace = writes.length;
+    document.querySelector<HTMLElement>("[data-new-session-editor] [data-config-choice][aria-pressed='true']")!.focus();
+    document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, metaKey: true, bubbles: true }));
+    await until(() => writes.length > beforeReplace);
+    const replaced = writes.at(-1)!;
+    check(
+      replaced.url.endsWith("/context") &&
+        ((replaced.body.next_agent as Record<string, unknown>).config as Record<string, unknown>).fast === true,
+      "replace: Mod+Enter in the form stages the new agent with its options",
+    );
+    await until(() => !container.querySelector("[data-new-session-editor]"));
+    context = { ...context, next_agent: null, revision: context.revision + 1, applied_revision: context.revision + 1 };
+    flushSync(() => root.render(null));
+    flushSync(() => root.render(<Fixture desktop />));
+    await openForm();
+    await until(() => Boolean(container.querySelector("[data-fork-inherit] input")));
+    container.querySelector<HTMLInputElement>('[data-fork-inherit] input[type="checkbox"]')!
       .click();
     await until(() => forkMode() === "linked");
     check(true, "fork: clearing inheritance is honored by a linked fork, not ignored");
