@@ -1499,7 +1499,7 @@ mod tests {
         for op in catalog::OPERATIONS {
             assert!(names.insert(op.name));
             assert!(
-                route(op.name).is_some()
+                substate_routes::route_meta(op.name).is_some()
                     || command(op.name).is_some()
                     || matches!(
                         op.name,
@@ -1514,7 +1514,7 @@ mod tests {
                 "{}",
                 op.name
             );
-            if let Some((method, _, _)) = route(op.name) {
+            if let Some((method, _)) = substate_routes::route_meta(op.name) {
                 assert_eq!(op.write, method != "GET", "{}", op.name);
             }
             if command(op.name).is_some() {

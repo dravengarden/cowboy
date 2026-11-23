@@ -116,14 +116,11 @@ pub use cowboy_server_accounts::server::{
 };
 #[cfg(test)]
 pub use cowboy_server_accounts::server::{
-    authentication_only_adds_methods, provider_inventory_contract_matches,
-    resolve_scheduling_auth_generation,
+    provider_inventory_contract_matches, resolve_scheduling_auth_generation,
 };
 mod superagent;
 use plugin_install::api_machine_plugin_install;
 mod plugin_history;
-#[cfg(test)]
-pub use cowboy_server_auth::server::product_continuation;
 pub use cowboy_server_plugins::server::plugin_uninstall;
 #[cfg(test)]
 pub use cowboy_server_plugins::server::provider_auth_sync_required_before_install;
@@ -133,7 +130,7 @@ pub use cowboy_server_plugins::server::{
 };
 mod projects;
 pub use cowboy_server_auth::server::provider_auth_sync;
-pub use cowboy_server_auth::server::sync_dataset;
+mod sync_dataset;
 pub use cowboy_server_auth::server::web_security;
 pub use cowboy_server_telemetry::server::telemetry_binding;
 use plugin_uninstall::{

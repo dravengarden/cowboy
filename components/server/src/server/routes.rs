@@ -17,15 +17,7 @@ pub(super) fn platform_routes(state: &AppState) -> Router<Arc<AppState>> {
         .route("/healthz", get(healthz))
         .route("/version", get(version))
         .route("/api/metrics", get(api_metrics))
-        .route(
-            "/api/sync/dataset",
-            get(
-                |State(state): State<Arc<AppState>>,
-                 Extension(auth): Extension<AuthenticatedProductRequest>| async move {
-                    sync_dataset::dataset_response(&state.service_id, &auth.principal)
-                },
-            ),
-        )
+        .route("/api/sync/dataset", get(sync_dataset::get_dataset))
         .route("/api/preferences/{scope}", get(preferences::read))
         .route("/api/superagent/activity", get(superagent::activity))
         .route(

@@ -92,3 +92,20 @@ pub(super) fn resolve_router(
         Router::new().route(p, h).with_state(Arc::clone(state)),
     ))
 }
+
+#[cfg(test)]
+pub(super) fn route_meta(name: &str) -> Option<(&'static str, &'static str)> {
+    if let Some((m, p, _)) =
+        browser_routes::browser_route(name).or_else(|| account_routes::account_route(name))
+    {
+        return Some((m, p));
+    }
+    if let Some((m, p, _)) = plugin_route(name) {
+        return Some((m, p));
+    }
+    if let Some((m, p, _)) = code_route(name) {
+        return Some((m, p));
+    }
+    let (m, p, _) = route(name)?;
+    Some((m, p))
+}

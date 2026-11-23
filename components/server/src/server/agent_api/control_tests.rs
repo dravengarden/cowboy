@@ -210,7 +210,7 @@ fn adapter_paths_retain_the_product_route_and_permission_policy() {
         role,
     };
     for op in catalog::OPERATIONS {
-        let Some((method, path, _)) = route(op.name) else {
+        let Some((method, path)) = substate_routes::route_meta(op.name) else {
             continue;
         };
         let normalized = parameters.replace_all(path, "{id}");
