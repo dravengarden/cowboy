@@ -222,10 +222,32 @@ export class Facade {
       await Promise.allSettled([...turn.inflight]);
     }
     const commands = [...session.commands.values()];
+    // An ended turn waits up to `stopConfirmMs` for its commands' process
+    // trees to exit, so nothing of the turn is still being stopped once it
+    // completes (a worker replaced at the turn's end otherwise cuts off that
+    // stop mid-request, which parks the session). A cancellation keeps the
+    // short wait: its native cancel follows this cleanup.
+    // A subagent keeps the short wait too: its parent bounds the child's
+    // settlement on its own.
+    const confirmMs = cancelled || session.parent !== undefined ? 5000 : LIMITS.stopConfirmMs;
     await Promise.all(
       commands.map(async (command) => {
-        if (await this.terminate(command).catch(() => false)) {
-          this.forget(session, command);
+        // The turn's end takes the stop over from the expiry timer (one
+        // owner, also across overlapping cleanups), and hands it back if
+        // the close stays unconfirmed.
+        clearTimeout(command.timer);
+        command.cleaning = (command.cleaning ?? 0) + 1;
+        let closed;
+        try {
+          closed = await this.terminate(command, confirmMs).catch(() => false);
+        } finally {
+          command.cleaning -= 1;
+        }
+        if (closed) this.forget(session, command);
+        else if (command.cleaning === 0 && session.commands.get(command.processId) === command) {
+          clearTimeout(command.timer);
+          command.timer = setTimeout(() => this.expire(session, command), 5000);
+          command.timer.unref?.();
         }
       }),
     );
@@ -985,21 +1007,39 @@ export class Facade {
     // One stop per process: after a stop that may have been delivered (its
     // reply lost included), later attempts only observe, so a process
     // handling the first signal never receives a second.
-    if (!process.stopSent) {
-      process.stopSent = true;
-      try {
-        await this.connection.call("process/terminate", { processId: process.processId });
-      } catch (error) {
-        // Refused before it was sent (no connection, or no request slot): a
-        // later attempt sends it. A reply lost after sending keeps the latch.
-        if (notSent(error)) process.stopSent = false;
-        throw error;
-      }
-    }
-    // One monotonic budget covers waiting behind another reader, reconnects
-    // and the reply: when it ends the close is unconfirmed (`false`), and a
-    // read still in flight finishes on its own in the reader chain.
+    // One monotonic budget covers the stop's own reply, waiting behind
+    // another reader, reconnects and the confirming reads: when it ends the
+    // close is unconfirmed (`false`), and a request still in flight finishes
+    // on its own.
     const deadline = Date.now() + confirmMs;
+    // One stop per process, shared by every caller: a later caller joins the
+    // stop in flight (so nothing that settles this process leaves its reply
+    // outstanding) and never sends a second signal to a process handling the
+    // first. Only a stop refused before it was sent (no connection, or no
+    // request slot) is sent again later; a reply lost after sending keeps it.
+    if (!process.stopping) {
+      process.stopping = this.connection
+        .call("process/terminate", { processId: process.processId })
+        .catch((error) => {
+          // Callers joined on this stop see its failure; a later caller only
+          // observes (the stop may have been delivered) or, if it was never
+          // sent, sends it.
+          process.stopping = notSent(error) ? undefined : Promise.resolve();
+          throw error;
+        });
+      process.stopping.catch(() => {});
+    }
+    let stopTimer;
+    const stopExpired = new Promise((resolve) => {
+      stopTimer = setTimeout(() => resolve(false), Math.max(0, deadline - Date.now()));
+    });
+    try {
+      if ((await Promise.race([process.stopping.then(() => true), stopExpired])) === false) {
+        return process.closed;
+      }
+    } finally {
+      clearTimeout(stopTimer);
+    }
     while (!process.closed) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;
@@ -1009,7 +1049,9 @@ export class Facade {
       });
       try {
         await Promise.race([
-          this.read(process, Math.min(500, remaining), { lostIsUncertain: false }),
+          // Not sent at all once the deadline passed while it waited in
+          // the reader chain.
+          this.read(process, Math.min(500, remaining), { lostIsUncertain: false, deadline }),
           expired,
         ]);
       } finally {
@@ -1114,14 +1156,26 @@ export class Facade {
       if (!Number.isInteger(seconds) || seconds < 1 || seconds > LIMITS.commandMaxSeconds) {
         throw new ToolError(`timeout_seconds must be between 1 and ${LIMITS.commandMaxSeconds}`);
       }
-      running = await this.start(turn, this.commandArgv(command));
-      running.deadline = Date.now() + seconds * 1000;
-      // Every reader's chunks land here (see `read`).
-      running.output = new Retained(LIMITS.commandOutput);
-      session.commands.set(running.processId, running);
-      // The deadline holds even when nobody reads the command again.
-      running.timer = setTimeout(() => this.expire(session, running), seconds * 1000);
-      running.timer.unref?.();
+      // From its start to its registration the command is part of the turn:
+      // the turn's end waits for it, so its cleanup always sees the handle.
+      const registering = (async () => {
+        const started = await this.start(turn, this.commandArgv(command));
+        started.deadline = Date.now() + seconds * 1000;
+        // Every reader's chunks land here (see `read`).
+        started.output = new Retained(LIMITS.commandOutput);
+        session.commands.set(started.processId, started);
+        // The deadline holds even when nobody reads the command again.
+        started.timer = setTimeout(() => this.expire(session, started), seconds * 1000);
+        started.timer.unref?.();
+        return started;
+      })();
+      const tracked = registering.catch(() => {});
+      turn.inflight?.add(tracked);
+      try {
+        running = await registering;
+      } finally {
+        turn.inflight?.delete(tracked);
+      }
     }
     if (running.busy) throw new ToolError("Another call is reading this command");
     running.busy = true;
@@ -1222,7 +1276,13 @@ export class Facade {
    * when that reader returns before it.
    */
   async expire(session, running) {
-    if (running.closed || session.commands.get(running.processId) !== running) {
+    // The turn's cleanup owns the stop while it runs and re-arms the timer
+    // itself when the close stays unconfirmed.
+    if (
+      running.closed ||
+      running.cleaning > 0 ||
+      session.commands.get(running.processId) !== running
+    ) {
       return;
     }
     if (running.busy) {
@@ -1233,7 +1293,7 @@ export class Facade {
     running.busy = true;
     try {
       if (await this.terminate(running).catch(() => false)) this.forget(session, running);
-      else {
+      else if (!(running.cleaning > 0)) {
         // Not confirmed yet: try again; the handle stays until it is.
         running.timer = setTimeout(() => this.expire(session, running), 5000);
         running.timer.unref?.();
