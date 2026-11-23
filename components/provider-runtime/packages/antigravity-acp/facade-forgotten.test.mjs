@@ -212,3 +212,17 @@ test("a lost reply to a command's deadline stop is an uncertain effect", async (
   assert.match(ran.text, /^outcome unknown/);
   assert.deepEqual(uncertain, [["s1", "process/terminate"]]);
 });
+
+test("a helper whose process tree exits slowly after its stop is confirmed, not uncertain", async (t) => {
+  const { facade, uncertain } = await fixture(t);
+  const turn = facade.session("s1").turn;
+  // Exits 7 s after SIGTERM, beyond the former 5 s confirmation.
+  const result = await facade.runBounded(
+    turn,
+    ["/bin/sh", "-c", 'trap "sleep 7; exit 0" TERM; sleep 100 >/dev/null 2>&1 & wait'],
+    { timeoutMs: 300, maxBytes: 1024 },
+  );
+  assert.equal(result.timedOut, true);
+  assert.equal(turn.uncertain, undefined);
+  assert.deepEqual(uncertain, []);
+});

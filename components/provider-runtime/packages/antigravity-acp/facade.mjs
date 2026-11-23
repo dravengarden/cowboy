@@ -942,11 +942,12 @@ export class Facade {
     }
   }
 
-  /** Terminate `process`; `true` only once the target confirmed it closed. */
-  async terminate(process) {
+  /** Terminate `process`; `true` only once the target confirmed it closed
+   * within `confirmMs`. */
+  async terminate(process, confirmMs = 5000) {
     if (process.closed) return true;
     await this.connection.call("process/terminate", { processId: process.processId });
-    const deadline = Date.now() + 5000;
+    const deadline = Date.now() + confirmMs;
     while (!process.closed && Date.now() < deadline) {
       await this.read(process, 500, { lostIsUncertain: false });
     }
@@ -1009,7 +1010,9 @@ export class Facade {
     // Whatever ended the loop, the process is not left running unconfirmed: a
     // helper that may still publish is an effect of unknown outcome.
     if (!process.closed) {
-      const closed = await this.terminate(process).catch(() => false);
+      // A slow-exiting process tree is observed for a bounded while before
+      // its outcome counts as unknown.
+      const closed = await this.terminate(process, LIMITS.stopConfirmMs).catch(() => false);
       if (!closed && !readiness) throw new UncertainEffect("process/terminate");
     }
     if (failure !== undefined) throw failure;

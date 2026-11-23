@@ -22,6 +22,9 @@ export const LIMITS = Object.freeze({
   // invocation admits at most 7 MiB, so 3 MiB (~5.6 MB encoded) fits.
   writeBytes: 3 * 1024 * 1024,
   publishTimeoutMs: 30_000,
+  // How long a helper's stop is observed before its outcome counts as
+  // unknown: a process tree may take a while to exit after its signal.
+  stopConfirmMs: 60_000,
   // A running command's output shown in the transcript: its last 16 KiB,
   // at most every 2 s (each update rewrites the call's one stored row).
   progressMs: 2_000,
