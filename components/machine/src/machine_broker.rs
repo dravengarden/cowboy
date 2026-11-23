@@ -1013,11 +1013,11 @@ impl Broker {
             if silent < timeout {
                 continue;
             }
-            let unread = worker
+            let measured = worker
                 .receive_probe
                 .as_deref()
-                .and_then(|probe| rustix::io::ioctl_fionread(probe).ok())
-                .unwrap_or(0);
+                .and_then(|probe| rustix::io::ioctl_fionread(probe).ok());
+            let unread = measured.unwrap_or(0);
             let detail = if unread == 0 {
                 format!(
                     "worker heartbeat timed out after {}s; Machine broker stopped the worker",
@@ -1036,7 +1036,7 @@ impl Broker {
                 )
             };
             if let Some(observed) = &worker.liveness {
-                observed.isolated(&detail, unread);
+                observed.isolated(&detail, measured);
             }
             stale.push((session_id.clone(), detail));
         }
@@ -4278,6 +4278,7 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
                 &observed,
             )
             .await;
+            observed.close();
             if let Some(peer) = broker.remove_worker(&session_id, connection_id) {
                 broker.worker_disconnected(session_id, peer, None).await;
             }

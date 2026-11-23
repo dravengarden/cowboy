@@ -37,6 +37,16 @@ pub(super) struct Sample {
     /// `u64::MAX` is `max` (no limit).
     pub(super) high: Option<u64>,
     pub(super) limit: Option<u64>,
+    /// Device and inode of the cgroup directory read, so a cgroup recreated
+    /// at the same path is never compared with its predecessor.
+    pub(super) identity: Option<(u64, u64)>,
+}
+
+impl Sample {
+    /// Whether any counter could be read (a removed cgroup reads nothing).
+    pub(super) fn readable(&self) -> bool {
+        self.cpu.is_some() || self.memory.is_some() || self.io.is_some() || self.current.is_some()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -305,6 +315,9 @@ mod sys {
             current: file("memory.current").as_deref().and_then(parse_limit),
             high: file("memory.high").as_deref().and_then(parse_limit),
             limit: file("memory.max").as_deref().and_then(parse_limit),
+            identity: rustix::fs::fstat(directory)
+                .ok()
+                .map(|stat| (stat.st_dev, stat.st_ino)),
         }
     }
 

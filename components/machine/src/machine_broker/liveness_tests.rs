@@ -17,18 +17,12 @@ fn aged_hub(age: Duration) -> Hub {
     }
 }
 
-fn take_rx(hub: &Hub) -> mpsc::Receiver<Notice> {
+fn take_rx(hub: &Hub) -> mpsc::Receiver<Box<GapNotice>> {
     hub.rx.lock().take().unwrap()
 }
 
-fn next_gap(rx: &mut mpsc::Receiver<Notice>) -> GapNotice {
-    loop {
-        match rx.try_recv() {
-            Ok(Notice::Gap(gap)) => return *gap,
-            Ok(Notice::Bind(_)) => {}
-            Err(error) => panic!("gap notice expected: {error:?}"),
-        }
-    }
+fn next_gap(rx: &mut mpsc::Receiver<Box<GapNotice>>) -> GapNotice {
+    *rx.try_recv().expect("gap notice expected")
 }
 
 fn ms(at: Duration) -> u64 {
@@ -145,7 +139,7 @@ fn sweep_decisions_carry_their_own_measurement() {
     assert!(rx.try_recv().is_err());
     // The last heartbeat was 60 s ago.
     connection.last_heartbeat.store(1, Ordering::Relaxed);
-    connection.isolated("worker heartbeat timed out after 46s", 0);
+    connection.isolated("worker heartbeat timed out after 46s", Some(0));
     let gap = next_gap(&mut rx);
     assert_eq!(gap.kind, GapKind::Isolated);
     assert_eq!(gap.unread_bytes, Some(0));
@@ -180,13 +174,9 @@ fn full_queue_counts_drops_without_blocking() {
     let hub = Hub::default();
     let connection = hub.connect("sess-1", 7, "e1", None, None);
     for _ in 0..(NOTICE_CAPACITY * 2) {
-        connection.isolated("flood", 0);
+        connection.isolated("flood", None);
     }
-    // The first slot held the bind notice.
-    assert_eq!(
-        hub.dropped.load(Ordering::Relaxed),
-        (NOTICE_CAPACITY + 1) as u64
-    );
+    assert_eq!(hub.dropped.load(Ordering::Relaxed), NOTICE_CAPACITY as u64);
 }
 
 #[test]
@@ -201,16 +191,21 @@ fn identifiers_are_bounded() {
 }
 
 #[test]
-fn lag_requires_history_covering_the_gap() {
+fn lag_counts_stalls_overlapping_the_gap_and_reports_coverage() {
     let lag = Lag::default();
     let start = Instant::now();
-    for (offset, late) in [(0, 1), (1, 900), (2, 3)] {
-        lag.record(start + Duration::from_secs(offset), late);
-    }
-    let at = |secs| start + Duration::from_secs(secs);
-    assert_eq!(lag.max_between(at(0), at(2)), Some(900));
-    assert_eq!(lag.max_between(at(2), at(2)), Some(3));
-    assert_eq!(lag.max_between(start - Duration::from_secs(1), at(2)), None);
+    let at = |ms| start + Duration::from_millis(ms);
+    // An on-time tick, a tick due at 1 s that woke 900 ms late, an on-time one.
+    lag.record(at(0), at(0));
+    lag.record(at(1_000), at(1_900));
+    lag.record(at(2_000), at(2_001));
+    assert_eq!(lag.max_between(at(0), at(2_000)), (Some(900), true));
+    // A gap that closed while the late tick was still waiting counts it.
+    assert_eq!(lag.max_between(at(1_200), at(1_500)), (Some(900), true));
+    // The probe has not yet woken past the end: partial.
+    assert!(!lag.max_between(at(0), at(5_000)).1);
+    // Nor reached back to the start.
+    assert!(!lag.max_between(start - Duration::from_secs(1), at(2_000)).1);
 }
 
 #[test]
@@ -229,14 +224,16 @@ fn directory() -> Arc<CgroupDir> {
     Arc::new(std::os::fd::OwnedFd::from(file))
 }
 
-fn sampler() -> (Sampler, mpsc::Receiver<BindJob>) {
+fn sampler_for(hub: &Hub) -> (Sampler, mpsc::Receiver<BindJob>) {
     let (jobs, jobs_rx) = mpsc::channel(BIND_QUEUE);
-    let sampler = Sampler::new(
-        1,
-        Arc::new(AtomicU64::new(0)),
-        Arc::new(Lag::default()),
+    let sampler = Sampler::new(SamplerLinks {
+        instance: 1,
+        dropped: Arc::clone(&hub.dropped),
+        lag: Arc::new(Lag::default()),
         jobs,
-    );
+        lane_generation: Arc::new(AtomicU64::new(0)),
+        registry: Arc::clone(&hub.registry),
+    });
     (sampler, jobs_rx)
 }
 
@@ -260,7 +257,7 @@ fn plan_deduplicates_shared_ancestors_and_reserves_broker_and_host() {
     let hub = Hub::default();
     let one = hub.connect("s1", 1, "e", None, None);
     let two = hub.connect("s2", 2, "e", None, None);
-    let (mut sampler, _jobs) = sampler();
+    let (mut sampler, _jobs) = sampler_for(&hub);
     sampler.broker_cgroup = Some("user.slice/app.slice/cowboy-machine.service".into());
     let agents = "/user.slice/cowboy.slice/cowboy-agents.slice";
     verify(&mut sampler, &one, &format!("{agents}/w1.service"));
@@ -273,20 +270,46 @@ fn plan_deduplicates_shared_ancestors_and_reserves_broker_and_host() {
     assert_eq!(count(&Key::Ancestor("user.slice".into())), 1);
     assert_eq!(count(&Key::Broker), 1);
     assert_eq!(keys.last(), Some(&Key::Host));
-    // A closed connection no longer contributes scopes once its bind notice
-    // has been consumed.
-    drop(take_rx(&hub));
-    drop(two);
+    // A closed connection stops contributing scopes.
+    two.close();
+    sampler.adopt();
     let keys: Vec<Key> = sampler.plan().iter().map(target_key).collect();
     assert!(!keys.contains(&Key::Worker(2)));
+}
+
+#[test]
+fn registration_is_adopted_and_binds_fill_the_queue_in_order() {
+    let hub = Hub::default();
+    let (mut sampler, mut jobs) = sampler_for(&hub);
+    let connections: Vec<_> = (0..(BIND_QUEUE as u64 + 3))
+        .map(|id| hub.connect("s", id, "e", Some(format!("w{id}.service")), None))
+        .collect();
+    sampler.adopt();
+    assert_eq!(sampler.bound.len(), connections.len());
+    sampler.fill();
+    let pending = |sampler: &Sampler| {
+        sampler
+            .bound
+            .values()
+            .filter(|bound| bound.state.label() == "pending")
+            .count()
+    };
+    assert_eq!(pending(&sampler), BIND_QUEUE);
+    // Room frees as the lane takes jobs; the rest are submitted later.
+    for _ in 0..3 {
+        jobs.try_recv().unwrap();
+    }
+    sampler.fill();
+    assert_eq!(pending(&sampler), connections.len());
 }
 
 #[test]
 fn stale_bind_results_are_discarded() {
     let hub = Hub::default();
     let connection = hub.connect("s1", 1, "e", None, None);
-    let (mut sampler, mut jobs) = sampler();
-    sampler.bind(&connection);
+    let (mut sampler, mut jobs) = sampler_for(&hub);
+    sampler.adopt();
+    sampler.fill();
     assert!(jobs.try_recv().is_ok());
     assert_eq!(sampler.bound[&1].state.label(), "pending");
     // A kill-switch transition happened while the query ran.
@@ -297,6 +320,31 @@ fn stale_bind_results_are_discarded() {
         state: BindingState::Unavailable("unit_query_failed"),
     });
     assert_eq!(sampler.bound[&1].state.label(), "pending");
+    drop(connection);
+}
+
+#[test]
+fn closed_connections_are_not_live() {
+    let hub = aged_hub(Duration::from_secs(60));
+    let connection = hub.connect("s1", 1, "e", None, None);
+    let (mut sampler, _jobs) = sampler_for(&hub);
+    sampler.adopt();
+    assert_eq!(sampler.live().len(), 1);
+    // A queued job or notice may still hold it; closing is what counts.
+    let held = Arc::clone(&connection);
+    connection.close();
+    assert!(sampler.live().is_empty());
+    sampler.adopt();
+    assert!(sampler.bound.is_empty());
+    drop(held);
+}
+
+#[test]
+fn direct_mode_peers_are_never_pinned() {
+    let hub = Hub::default();
+    let direct = hub.connect("s1", 1, "e", None, Some(std::process::id()));
+    assert!(direct.peer.is_none());
+    assert_eq!(hub.pinned.load(Ordering::Relaxed), 0);
 }
 
 #[test]
@@ -304,7 +352,7 @@ fn records_use_the_periodic_history_around_the_gap() {
     let hub = aged_hub(Duration::from_secs(60));
     let mut rx = take_rx(&hub);
     let connection = hub.connect("s1", 1, "e", Some("w1.service".into()), None);
-    let (mut sampler, _jobs) = sampler();
+    let (mut sampler, _jobs) = sampler_for(&hub);
     verify(&mut sampler, &connection, "/cowboy.slice/w1.service");
     connection.last_heartbeat.store(20_001, Ordering::Relaxed);
     connection.heartbeat();
@@ -328,13 +376,47 @@ fn records_use_the_periodic_history_around_the_gap() {
 fn pending_gaps_are_bounded() {
     let hub = Hub::default();
     let connection = hub.connect("s1", 1, "e", None, None);
-    let (mut sampler, _jobs) = sampler();
-    let notice = || connection.notice(GapKind::Isolated, 0, 1, 1, Evidence::default(), None, None);
+    let (mut sampler, _jobs) = sampler_for(&hub);
+    let notice = || {
+        connection.notice(Notice {
+            kind: GapKind::Isolated,
+            since_ms: 0,
+            at_ms: 1,
+            gap_ms: 1,
+            evidence: Evidence::default(),
+            unread_bytes: None,
+            detail: None,
+        })
+    };
     for _ in 0..(MAX_PENDING_GAPS + 3) {
         sampler.queue(notice());
     }
     assert_eq!(sampler.pending.len(), MAX_PENDING_GAPS);
-    assert_eq!(sampler.dropped.load(Ordering::Relaxed), 3);
+    assert_eq!(sampler.links.dropped.load(Ordering::Relaxed), 3);
+}
+
+#[test]
+fn a_removed_cgroup_keeps_its_last_readable_counters_as_the_end() {
+    let start = Instant::now();
+    let at = |secs| start + Duration::from_secs(secs);
+    let readable = |some_us| Sample {
+        cpu: Some(counters::Psi {
+            some_us,
+            full_us: None,
+        }),
+        ..Sample::default()
+    };
+    let ring: History = [
+        (at(0), readable(10)),
+        (at(10), readable(30)),
+        (at(20), Sample::default()),
+    ]
+    .into_iter()
+    .collect();
+    let ((start_at, _), (end_at, end)) = endpoints(&ring, at(5)).unwrap();
+    assert_eq!((*start_at, *end_at), (at(0), at(10)));
+    assert_eq!(end.cpu.map(|psi| psi.some_us), Some(30));
+    assert!(endpoints(&[(at(0), Sample::default())].into_iter().collect(), at(0)).is_none());
 }
 
 #[test]
@@ -394,6 +476,60 @@ mod linux {
         assert_eq!(sample.memory, None);
         assert!(counters::read_at(&handle, "../etc/passwd").is_err());
     }
+}
+
+/// L0-3 overhead: the sampler's per-tick read cost against this host's live
+/// Cowboy worker and execution cgroups (read-only). Run with
+/// `just test-rust-filter --run-ignored only -E 'test(sampler_cost_on_this_host)' --no-capture`.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "measures against this host's live cgroups"]
+async fn sampler_cost_on_this_host() {
+    let relative = format!(
+        "user.slice/user-{uid}.slice/user@{uid}.service/cowboy.slice/cowboy-agents.slice",
+        uid = rustix::process::getuid().as_raw()
+    );
+    let Ok(entries) = std::fs::read_dir(format!("/sys/fs/cgroup/{relative}")) else {
+        eprintln!("no {relative} on this host");
+        return;
+    };
+    let mut plan = Vec::new();
+    for (id, entry) in entries.flatten().enumerate() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.ends_with(".service") {
+            continue;
+        }
+        if let Ok(directory) = counters::open_cgroup(&format!("/{relative}/{name}")) {
+            plan.push(Target::Worker(id as u64, Arc::new(directory)));
+        }
+    }
+    let workers = plan.len();
+    for ancestor in counters::ancestors(&format!("{relative}/x.service")) {
+        plan.push(Target::Path(Key::Ancestor(ancestor.clone()), ancestor));
+    }
+    plan.push(Target::Host);
+    let mut timings = Vec::new();
+    for _ in 0..10 {
+        let again = plan
+            .iter()
+            .map(|target| match target {
+                Target::Worker(id, directory) => Target::Worker(*id, Arc::clone(directory)),
+                Target::Path(key, path) => Target::Path(key.clone(), path.clone()),
+                Target::Host => Target::Host,
+            })
+            .collect();
+        let started = Instant::now();
+        let samples = read_plan(again).await;
+        timings.push(started.elapsed());
+        assert_eq!(samples.len(), plan.len());
+    }
+    timings.sort();
+    eprintln!(
+        "sampler tick over {workers} workers + {} shared scopes: median {:?}, max {:?}",
+        plan.len() - workers,
+        timings[timings.len() / 2],
+        timings[timings.len() - 1]
+    );
 }
 
 mod parsing {

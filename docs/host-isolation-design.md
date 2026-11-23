@@ -231,16 +231,25 @@ into a 64-slot queue; a full queue counts drops:
   or isolation follows.
 - A probe records the broker runtime's own scheduling lag every 250 ms.
 
+**Registration.** Admission pushes a weak reference onto a registry that only
+the sampler drains, so a busy notice queue never loses a connection. The
+broker marks the connection closed when it stops reading it; references
+held by queued notices or bind jobs never keep it "live".
+
 **Binding.** At admission the broker pins the `SO_PEERCRED` peer's
-`/proc/<pid>` directory before any await. A two-lane bind pool then:
+`/proc/<pid>` directory before any await. Only systemd workers are pinned,
+and at most 256 at once; with the pinned cgroup directories (also capped at
+256), this bounds diagnostic descriptors well below the broker's limit. A
+two-lane bind pool then:
 
 1. runs a bounded `systemctl --user show` (5 s, 4 KiB of output);
 2. pins the unit's `ControlGroup` directory;
 3. verifies that the pinned peer is a member.
 
-A recreated unit cannot be sampled under the old invocation. Results from
-before a kill-switch transition are discarded, and enabling the sampler
-rebinds live connections.
+A recreated unit cannot be sampled under the old invocation. Bindings wait
+in order for room in the bounded bind queue. The lane drops queued jobs from
+before a kill-switch transition, or for closed connections, without
+querying. Enabling the sampler rebinds every live connection.
 
 **Residual.** The window between `accept` and the `/proc` open is not
 covered. Closing it needs `SO_PEERPIDFD`, which rustix 1.1.6 does not expose;
@@ -250,18 +259,34 @@ the crate forbids `unsafe`.
 directories. It reads ancestors once each (capped) and always the broker unit
 and the host. Reads run on a blocking thread with
 `openat2(BENEATH|NO_SYMLINKS|NO_MAGICLINKS|NO_XDEV)` on validated roots.
-Gap records are built from those periodic samples:
+Each scope is timestamped at its own read. A cgroup recreated at the same
+path, detected by device and inode, restarts its history. Gap records are
+built from those periodic samples:
 
 - `gap_baseline_lead_ms` and `gap_end_lag_ms` state the real coverage
   against the gap's own start and end.
+- The end is the newest readable sample, so a stopped worker keeps its last
+  counters.
+- Broker and host scopes are reported even when the worker binding failed.
+- The broker lag field states whether the probe covered the whole gap
+  (`gap_broker_lag_complete`).
 - A gap waits at most one tick.
+
+**Measured cost (L0-3).** One tick over Hawk's live 139 worker and execution
+cgroups plus 6 shared scopes took a median of 6.5 ms (max 8.2 ms), about
+0.07% of one CPU at the 10 s period. Measured 2026-11-23 with the ignored
+test `sampler_cost_on_this_host`, under ordinary load, not the L0-5 stress
+loads.
 
 Off Linux, gap records stay and scopes are unavailable.
 
 **Kill switch.** The Device setting `diagnostics.heartbeat_gap_sampler`
 (default `true`, applies live) stops unit queries and sampling. Gap records
-stay. Agents discover it through Cowboy MCP `configuration.schema("device")`;
-writing Device configuration stays an operator action.
+stay. Agents discover it through Cowboy MCP `configuration.schema("device")`
+once the Controller runs a release carrying the setting. Until then the
+schema comes from the Machine itself (`cowboy config schema --scope device`
+with the Machine's binary). Writing Device configuration stays an operator
+action.
 
 **Query** (VictoriaLogs on Hawk):
 

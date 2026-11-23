@@ -859,6 +859,7 @@ fn field_name(name: &str) -> Option<&'static str> {
         "gap_longest_idle_ms" => "cowboy.heartbeat_gap.longest_idle_ms",
         "gap_frames" => "cowboy.heartbeat_gap.frames",
         "gap_broker_lag_ms" => "cowboy.heartbeat_gap.broker_lag_ms",
+        "gap_broker_lag_complete" => "cowboy.heartbeat_gap.broker_lag_complete",
         "gap_unit" => "cowboy.heartbeat_gap.unit",
         "gap_cgroup_truncated" => "cowboy.heartbeat_gap.scope.cgroup_truncated",
         "gap_baseline_lead_ms" => "cowboy.heartbeat_gap.scope.baseline_lead_ms",
