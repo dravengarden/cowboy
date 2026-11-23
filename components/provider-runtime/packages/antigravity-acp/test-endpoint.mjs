@@ -47,6 +47,10 @@ export async function fakeEndpoint(
     // Metadata of a dangling symlink reports the link (no-follow) instead
     // of a missing path.
     metadataNoFollow = false,
+    // Like the pinned executor, forget a closed process this many ms after
+    // it closed (its later reads answer `unknown process id`); `Infinity`
+    // keeps every process.
+    retainClosedMs = Infinity,
   } = {},
 ) {
   const toReal = (path) => (path.startsWith(virtual) ? root + path.slice(virtual.length) : path);
@@ -167,6 +171,11 @@ export async function fakeEndpoint(
         entry.exited = entry.closed = true;
         entry.exitCode = code ?? (signal ? 128 + 15 : null);
         wake("process/exited");
+        if (Number.isFinite(retainClosedMs)) {
+          setTimeout(() => {
+            if (processes.get(params.processId) === entry) processes.delete(params.processId);
+          }, retainClosedMs).unref?.();
+        }
       });
       entry.child = child;
       processes.set(params.processId, entry);
@@ -193,8 +202,9 @@ export async function fakeEndpoint(
     // The worker's own requests: a session without extensions.
     "cowboy/extensions": () => ({ tools: [], instructions: "" }),
     "process/terminate": (params) => {
-      processes.get(params.processId)?.child.kill("SIGTERM");
-      return {};
+      const entry = processes.get(params.processId);
+      entry?.child.kill("SIGTERM");
+      return { running: Boolean(entry && !entry.exited) };
     },
     // Answered by the worker endpoint itself (its ledger), never the target.
     "cowboy/uncertainEffect": () => ({}),
