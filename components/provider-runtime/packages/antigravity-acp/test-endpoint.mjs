@@ -204,6 +204,7 @@ export async function fakeEndpoint(
       const frame = JSON.parse(bytes.toString());
       if (frame.id === undefined) return;
       calls.push({ method: frame.method, params: frame.params, at: Date.now() });
+      if (lose(frame.method, frame.params)) return socket.terminate();
       let reply;
       inflight += 1;
       maxInflight = Math.max(maxInflight, inflight);
@@ -229,7 +230,6 @@ export async function fakeEndpoint(
         };
       }
       inflight -= 1;
-      if (lose(frame.method, frame.params)) return socket.terminate();
       socket.send(JSON.stringify(reply));
     });
   });

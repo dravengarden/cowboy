@@ -88,6 +88,12 @@ adapter's lock moves `url` to 2.5.9 for RUSTSEC-2026-0592 (unbounded
 recursion in `Url::origin()` on nested `blob:` URLs). Native pins and its
 component release are unchanged.
 
+Component release 3.145.0 records provider-runtime 1.3.28, whose test-only
+`antigravity-acp/test-endpoint.mjs` drops lost-reply requests before running
+their handler so `facade.test.mjs` does not race against `cowboy-execution-host`
+startup. No shipped `cowboy-antigravity-acp` artifact or digest changes; the
+seven Providers pinning provider-runtime advance one patch version.
+
 Component release 3.143.0 records provider-runtime 1.3.27, whose
 `cowboy-antigravity-acp` 1.0.23 labels a subagent only with the model agy
 confirmed for it (the new session's configuration, then the full configuration
