@@ -6,6 +6,12 @@ import { allowedTool } from "./hook.mjs";
 import { MANAGED_FACADE_TOOLS } from "./managed.mjs";
 import { presentToolCall } from "./presentation.mjs";
 import { AcpProxy, TURN_ERROR_TEXT, VIOLATION_PREFIX } from "./proxy.mjs";
+import {
+  childProjection,
+  ROOT_DELEGATION,
+  ROUTING,
+  UNAVAILABLE_SKILLS_NOTE,
+} from "./projection.mjs";
 import { SUBAGENT_GUIDANCE } from "./subagents.mjs";
 
 const tick = () => new Promise((done) => setImmediate(done));
@@ -21,6 +27,7 @@ const request = (id, method, params = {}) => ({ jsonrpc: "2.0", id, method, para
 function unit({
   backend = () => ({ class: "ok", successes: 1, barrier: true, refusals: [] }),
   subagents = { settleMs: 40, requestMs: 60 },
+  projection = async (cwd) => `PROJECTION ${cwd}`,
 } = {}) {
   /** What the fake `agy` does besides answering every request. */
   const control = {
@@ -32,6 +39,10 @@ function unit({
     endTurnDelay: 0,
     afterNew: () => [],
     beforeNew: () => [],
+    /** Fields agy adds to a new session's result. */
+    newResult: () => ({}),
+    /** What agy answers a settings replay with. */
+    replyResult: () => ({}),
   };
   const terminated = [];
   const unbound = [];
@@ -64,7 +75,7 @@ function unit({
     },
     sessionCwd: (cwd) => cwd,
     checkMirror: () => {},
-    projection: async (cwd) => `PROJECTION ${cwd}`,
+    projection,
     newChannel: () => `channel-${channels.size}`,
     bindChannel: (channel, sessionId) => channels.set(channel, sessionId),
     unbindChannel: (channel) => unbound.push(channel),
@@ -109,13 +120,21 @@ function unit({
         const sessionId = `child-${opened}`;
         // Frames read before the reply, naming the session about to be opened.
         for (const frame of control.beforeNew(sessionId)) proxy.fromAgent(frame);
-        proxy.fromAgent({ jsonrpc: "2.0", id: message.id, result: { sessionId } });
+        proxy.fromAgent({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: { sessionId, ...control.newResult(sessionId) },
+        });
         // Frames read in the same chunk as the reply, with no await between.
         for (const frame of control.afterNew(sessionId)) proxy.fromAgent(frame);
       } else if (
         ["session/set_model", "session/set_config_option", "session/close"].includes(message.method)
       ) {
-        proxy.fromAgent({ jsonrpc: "2.0", id: message.id, result: {} });
+        proxy.fromAgent({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: message.method === "session/close" ? {} : control.replyResult(message),
+        });
       }
     });
   };
@@ -227,6 +246,25 @@ test("the facade offers Subagent and StopSubagent to ordinary sessions only", ()
   );
   assert.equal(shown.title, "Subagent: Bug hunt");
   assert.equal(shown.name, "Subagent");
+});
+
+test("only the owner's session is told to delegate; a subagent is told it cannot", async () => {
+  const made = await parent({ projection: async () => `${ROUTING}\n<cowboy_environment>` });
+  const root = made.everything.find(
+    (message) => message.method === "session/new" && message.id === 2,
+  );
+  const rootPrompt = root.params._meta.antigravity.systemPrompt.append;
+  assert.ok(rootPrompt.includes(ROOT_DELEGATION));
+  assert.ok(rootPrompt.includes(UNAVAILABLE_SKILLS_NOTE));
+  await startChild(made);
+  const [created] = sent(made.agent, "session/new");
+  const childPrompt = created.params._meta.antigravity.systemPrompt.append;
+  // The note stays, the delegation paragraph that names an unusable tool goes.
+  assert.ok(childPrompt.includes(UNAVAILABLE_SKILLS_NOTE));
+  assert.equal(childPrompt.includes(ROOT_DELEGATION), false);
+  assert.equal(/use\s+mcp_cowboy_Subagent/.test(childPrompt.replaceAll("\n", " ")), false);
+  assert.equal(childPrompt, `${childProjection(rootPrompt)}\n\n${SUBAGENT_GUIDANCE}`);
+  assert.match(SUBAGENT_GUIDANCE, /swarm and run-workflow are unavailable to you/);
 });
 
 test("starting a subagent opens a native session and reports it as an ACP subagent", async () => {
@@ -975,6 +1013,252 @@ test("a startup failure of an earlier turn does not refund the next turn's budge
   await proxy.fromAgent({ jsonrpc: "2.0", id: created.id, error: { code: -32603, message: "no" } });
   await starting;
   assert.equal(proxy.subagents.group("s").started, 0);
+});
+
+/** A full `configOptions` set naming `model` (and an unrelated effort option). */
+const configOptions = (model, { withModel = true } = {}) => ({
+  configOptions: [
+    ...(withModel
+      ? [
+          {
+            id: "model",
+            name: "Model",
+            category: "model",
+            type: "select",
+            currentValue: model,
+            options: [
+              { value: "default-model", name: "Default" },
+              { value: model, name: `Name of ${model}` },
+            ],
+          },
+        ]
+      : []),
+    { id: "thought_level", name: "Effort", type: "select", currentValue: "low", options: [] },
+  ],
+});
+const configUpdates = (client, sessionId) => updates(client, sessionId, "config_option_update");
+const labelled = (message) =>
+  message.params.update.configOptions
+    .filter((option) => option.id === "model")
+    .map((option) => option.currentValue);
+
+test("a child's model label is the new session's confirmed configuration", async () => {
+  const made = await parent();
+  made.control.newResult = () => configOptions("m-new");
+  const id = await startChild(made);
+  await flush();
+  assert.deepEqual(configUpdates(made.client, id).map(labelled), [["m-new"]]);
+  // Only the model option is forwarded, never the rest of the set.
+  assert.deepEqual(configUpdates(made.client, id)[0].params.update.configOptions.length, 1);
+  assert.equal(made.proxy.subagents.configUpdateIgnored(id), false);
+});
+
+test("an update from before agy's answer never overwrites what that answer confirmed", async () => {
+  const made = await parent();
+  const { client, control } = made;
+  // agy names model A, then answers the open confirming B, then names C.
+  control.beforeNew = (sessionId) => [
+    childUpdate(sessionId, { sessionUpdate: "config_option_update", ...configOptions("m-a") }),
+  ];
+  control.newResult = () => configOptions("m-b");
+  control.afterNew = (sessionId) => [
+    childUpdate(sessionId, { sessionUpdate: "config_option_update", ...configOptions("m-c") }),
+  ];
+  const id = await startChild(made);
+  await flush();
+  assert.deepEqual(configUpdates(client, id).map(labelled), [["m-a"], ["m-b"], ["m-c"]]);
+});
+
+test("a child that got no replays still shows agy's own updates", async () => {
+  const made = await parent();
+  made.control.afterNew = (sessionId) => [
+    childUpdate(sessionId, { sessionUpdate: "config_option_update", ...configOptions("m-own") }),
+  ];
+  const id = await startChild(made);
+  await flush();
+  assert.deepEqual(configUpdates(made.client, id).map(labelled), [["m-own"]]);
+  await made.proxy.fromAgent(
+    childUpdate(id, { sessionUpdate: "config_option_update", ...configOptions("m-later") }),
+  );
+  await flush();
+  assert.deepEqual(configUpdates(made.client, id).map(labelled), [["m-own"], ["m-later"]]);
+});
+
+test("a replayed child is labelled by the last replay's full configuration only", async () => {
+  const made = await parent();
+  const { proxy, client, control } = made;
+  await proxy.fromClient(request(20, "session/set_model", { sessionId: "s", modelId: "m-set" }));
+  await proxy.fromClient(
+    request(21, "session/set_config_option", {
+      sessionId: "s",
+      configId: "thought_level",
+      value: "high",
+    }),
+  );
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 20, result: {} });
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 21, result: {} });
+  client.length = 0;
+  // The session opens on the account default, and agy says so while opening.
+  control.newResult = () => configOptions("default-model");
+  control.afterNew = (sessionId) => [
+    childUpdate(sessionId, {
+      sessionUpdate: "config_option_update",
+      ...configOptions("default-model"),
+    }),
+  ];
+  // The model replay's answer names the new model; the effort replay's, the
+  // full set at the end.
+  control.replyResult = (message) =>
+    message.method === "session/set_config_option" ? configOptions("m-set") : {};
+  const id = await startChild(made);
+  await flush();
+  // agy's own opening update (the default) is withheld, the confirmed one sent.
+  assert.deepEqual(configUpdates(client, id).map(labelled), [["m-set"]]);
+  assert.equal(proxy.subagents.configUpdateIgnored(id), true);
+  // A later update cannot be ordered against the replays: withheld too.
+  await proxy.fromAgent(
+    childUpdate(id, { sessionUpdate: "config_option_update", ...configOptions("default-model") }),
+  );
+  await flush();
+  assert.deepEqual(configUpdates(client, id).map(labelled), [["m-set"]]);
+});
+
+test("a replayed child whose model is not confirmed gets no label", async () => {
+  for (const [name, replyResult] of [
+    ["an answer that lists no configuration", () => ({})],
+    ["an answer with no model option", () => configOptions("m-set", { withModel: false })],
+    [
+      "an answer whose model has no value",
+      () => ({ configOptions: [{ id: "model", currentValue: "" }] }),
+    ],
+  ]) {
+    const made = await parent();
+    const { proxy, client, control } = made;
+    await proxy.fromClient(request(20, "session/set_model", { sessionId: "s", modelId: "m-set" }));
+    await proxy.fromAgent({ jsonrpc: "2.0", id: 20, result: {} });
+    client.length = 0;
+    // The new session did name a model, but the replay changed it afterwards.
+    control.newResult = () => configOptions("default-model");
+    control.afterNew = (sessionId) => [
+      childUpdate(sessionId, {
+        sessionUpdate: "config_option_update",
+        ...configOptions("default-model"),
+      }),
+    ];
+    control.replyResult = replyResult;
+    const id = await startChild(made);
+    await flush();
+    assert.deepEqual(configUpdates(client, id), [], name);
+    // The child still runs and is announced; only its label is missing.
+    assert.equal(updates(client, "s", "subagent_update").length >= 1, true, name);
+  }
+});
+
+test("a model choice list too large to forward is sent empty, as a complete select option", async () => {
+  const made = await parent();
+  const big = configOptions("m-new");
+  // Multi-byte text: the cap is on bytes, not characters.
+  big.configOptions[0].options = [{ value: "x", name: "é".repeat(20 * 1024) }];
+  made.control.newResult = () => big;
+  const id = await startChild(made);
+  await flush();
+  const [update] = configUpdates(made.client, id);
+  assert.deepEqual(labelled(update), ["m-new"]);
+  // What the worker's typed decoder needs: id, name, type, currentValue and options.
+  assert.deepEqual(update.params.update.configOptions[0], {
+    id: "model",
+    name: "Model",
+    category: "model",
+    type: "select",
+    currentValue: "m-new",
+    options: [],
+  });
+});
+
+test("an abandoned child's late configuration update never reaches the worker", async () => {
+  const made = await parent();
+  const { proxy, client, control } = made;
+  // The child opens, then cannot start: agy's log is unavailable. Its close is
+  // still unanswered when the late update arrives.
+  control.mark = undefined;
+  control.ignore.add("session/close");
+  control.newResult = () => configOptions("m-new");
+  await assert.rejects(startChild(made), /log is unavailable/);
+  await flush();
+  client.length = 0;
+  // A late update for that session would be read as the parent's configuration.
+  await proxy.fromAgent(
+    childUpdate("child-1", { sessionUpdate: "config_option_update", ...configOptions("m-late") }),
+  );
+  await flush();
+  assert.deepEqual(
+    client.filter((message) => message.params?.update?.sessionUpdate === "config_option_update"),
+    [],
+  );
+  assert.equal(proxy.subagents.configUpdateIgnored("child-1"), true);
+});
+
+test("a fenced session stays fenced however many others open, until agy closes it", async () => {
+  const made = await parent();
+  const { subagents } = made.proxy;
+  subagents.adopt("abandoned-early");
+  for (let index = 0; index < 5000; index++) subagents.adopt(`later-${index}`);
+  assert.equal(subagents.configUpdateIgnored("abandoned-early"), true);
+  // The live root is never fenced.
+  assert.equal(subagents.configUpdateIgnored("s"), false);
+  // Closed natively: nothing more can arrive for it.
+  subagents.closeById("abandoned-early");
+  await flush();
+  assert.equal(subagents.configUpdateIgnored("abandoned-early"), false);
+  assert.equal(subagents.configUpdateIgnored("later-1"), true);
+});
+
+test("a refused child open does not flush a quarantined configuration update to the parent", async () => {
+  const made = await parent();
+  const { proxy, agent, client, control } = made;
+  control.ignore.add("session/new");
+  const starting = proxy.subagents.start("s", { prompt: "x" }).then(
+    () => undefined,
+    (error) => error,
+  );
+  await flush(1);
+  const [created] = sent(agent, "session/new");
+  client.length = 0;
+  // A frame of a session nobody has claimed yet waits for the open's answer.
+  await proxy.fromAgent(
+    childUpdate("ghost", { sessionUpdate: "config_option_update", ...configOptions("m-ghost") }),
+  );
+  assert.equal(client.length, 0);
+  // agy refuses the open: the quarantine is released, minus that update.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: created.id,
+    error: { code: -32603, message: "refused" },
+  });
+  assert.match((await starting).message, /could not start/i);
+  await flush();
+  assert.deepEqual(
+    client.filter((message) => message.params?.update?.sessionUpdate === "config_option_update"),
+    [],
+  );
+});
+
+test("a replayed child stays fenced after the proxy prunes it", async () => {
+  const made = await parent();
+  const { proxy, client, control } = made;
+  await proxy.fromClient(request(20, "session/set_model", { sessionId: "s", modelId: "m-set" }));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 20, result: {} });
+  control.replyResult = () => configOptions("m-set");
+  const id = await startChild(made);
+  await flush();
+  // The worker keeps the child's row while the proxy's own cache is bounded.
+  proxy.subagents.children.delete(id);
+  client.length = 0;
+  await proxy.fromAgent(
+    childUpdate(id, { sessionUpdate: "config_option_update", ...configOptions("default-model") }),
+  );
+  await flush();
+  assert.deepEqual(configUpdates(client, id), []);
 });
 
 test("a refused model setting fails the start and leaves nothing behind", async () => {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { SessionMeta } from "./protocol";
+import { providerDisplayName, useProviderLabels } from "./providerDisplayName";
 import { useStoreSelector } from "./store";
 
 /** A parent-scoped managed call summary. Execution state, a structured review
@@ -270,12 +271,14 @@ export function machineName(id: string | null | undefined): string {
     : id.charAt(0).toUpperCase() + id.slice(1);
 }
 
+/** Claude and Codex keep their short names; any other Provider is named by its
+ * signed Plugin (for example Antigravity), else by its id. */
 export function providerLabel(provider: string): string {
   return provider === "claude-code"
     ? "Claude"
     : provider === "codex"
     ? "Codex"
-    : provider;
+    : providerDisplayName(provider) ?? provider;
 }
 
 export function elapsedLabel(fromMs: number, toMs: number): string {
@@ -586,6 +589,8 @@ export function useManagedCalls(parent: string | null): {
   error: string | null;
   refresh: () => void;
 } {
+  // The labels this list shows read the Provider Catalog cache.
+  useProviderLabels();
   const clearedAt = useStoreSelector((snapshot) => {
     const timeline = parent ? snapshot.timelines.get(parent) : undefined;
     for (let index = (timeline?.length ?? 0) - 1; index >= 0; index -= 1) {
@@ -635,6 +640,7 @@ export function useManagedCall(
   detail: ManagedCallDetail | null;
   error: string | null;
 } {
+  useProviderLabels();
   const [detail, setDetail] = useState<ManagedCallDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {

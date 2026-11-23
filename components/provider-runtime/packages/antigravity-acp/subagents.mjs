@@ -19,6 +19,7 @@
 import { randomUUID } from "node:crypto";
 import { LIMITS, ToolError } from "./facade-tools.mjs";
 import { agyNotice } from "./presentation.mjs";
+import { childProjection } from "./projection.mjs";
 
 /** What a child is told beside the projection its parent got. */
 export const SUBAGENT_GUIDANCE = [
@@ -26,8 +27,9 @@ export const SUBAGENT_GUIDANCE = [
   "self-contained task, in the same workspace and with the same Cowboy tools.",
   "Do the task, then finish with a message that is your complete report: what you did or found,",
   "with file paths, and anything left undone. That message is all the session that started you",
-  "sees. You cannot start subagents or ask the owner anything; if something blocks you, say so in",
-  "the report.",
+  "sees. You cannot start subagents (mcp_cowboy_Subagent will refuse) or ask the owner anything;",
+  "swarm and run-workflow are unavailable to you as well, so do the work yourself with the cowboy",
+  "tools. If something blocks you, say so in the report.",
 ].join("\n");
 
 /** How long a native request waits for `agy` before the start fails. */
@@ -42,6 +44,10 @@ const MAX_KEPT = 64;
 const MAX_CONFIG = 16;
 /** Frames of a child held until the worker knows it (bounded). */
 const MAX_HELD = 256;
+/** The most configuration options a reply may list before it is not trusted. */
+const MAX_OPTIONS = 64;
+/** The largest choice list of the model option that is forwarded. */
+const MODEL_CHOICES_BYTES = 32 * 1024;
 
 const TURN_ENDED = "The turn ended before the subagent started.";
 const MODE_CHANGED = "The session's mode changed before the subagent started.";
@@ -50,6 +56,35 @@ const LATE_REPLY_MS = 120_000;
 
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const RUNNING = new Set(["starting", "running"]);
+
+/**
+ * The `model` option of a reply's full `configOptions` set (a `session/new`
+ * result, or the answer to a `session/set_config_option`), as a complete ACP
+ * select option the worker can decode; `undefined` when the reply carries no
+ * model option with a current value. A reply that lists no model proves nothing
+ * about it. A choice list too large to forward is sent empty: the worker then
+ * labels the child by its current value instead of its display name.
+ */
+export function modelOption(result) {
+  const options = result?.configOptions;
+  if (!Array.isArray(options) || options.length > MAX_OPTIONS) return undefined;
+  const option = options.find(
+    (candidate) =>
+      isObject(candidate) && (candidate.id === "model" || candidate.category === "model"),
+  );
+  if (!option || typeof option.currentValue !== "string" || option.currentValue === "") {
+    return undefined;
+  }
+  const choices = Array.isArray(option.options) ? option.options : [];
+  return {
+    id: typeof option.id === "string" ? option.id : "model",
+    name: typeof option.name === "string" ? option.name : "Model",
+    category: "model",
+    type: "select",
+    currentValue: option.currentValue,
+    options: Buffer.byteLength(JSON.stringify(choices)) <= MODEL_CHOICES_BYTES ? choices : [],
+  };
+}
 
 /** `text` cut to `limit` characters, marked when it was. */
 function bounded(text, limit) {
@@ -120,6 +155,14 @@ export class Subagents {
     this.pendingOpens = 0;
     /** Frames of sessions nobody knows while a start is opening one (bounded). */
     this.quarantine = [];
+    /**
+     * Native sessions this host opened whose own `config_option_update` frames
+     * the worker must not hear (see `configUpdateIgnored`). Never evicted while
+     * the session may still speak: an id leaves only when agy confirms
+     * `session/close`, after which it emits nothing for it. Independent of
+     * `children`, which prunes settled children while the worker keeps their row.
+     */
+    this.configFence = new Set();
   }
 
   /** The worker's `initialize` request. */
@@ -149,6 +192,19 @@ export class Subagents {
   /** Whether `sessionId` is a child whose turn is open. */
   active(sessionId) {
     return this.isOpen(this.children.get(sessionId));
+  }
+
+  /**
+   * Whether agy's own `config_option_update` for `sessionId` is withheld. Only a
+   * child that started and had no settings replayed onto it hears agy's updates,
+   * which then describe its unchanged default. Once settings were replayed no
+   * such update can be ordered against them (a delayed one may still describe
+   * the model from before), and an abandoned or late session has no worker row to
+   * take it: a frame for a session the worker does not know would be read as the
+   * parent's. Its label is the confirmed one `start` sent, or none.
+   */
+  configUpdateIgnored(sessionId) {
+    return this.configFence.has(sessionId);
   }
 
   /** The child of `sessionId`, if it is one. */
@@ -277,18 +333,30 @@ export class Subagents {
 
   /** A new native session: its frames wait, those already quarantined with them. */
   adopt(sessionId) {
+    // Fenced from the start: only a child that started, with nothing replayed
+    // onto it, is let through (`start`). One that is abandoned, or whose answer
+    // came after its request timed out, never reaches the worker's configuration.
+    this.configFence.add(sessionId);
     const held = [];
     this.quarantine = this.quarantine.filter((frame) => {
       if (frame.params?.sessionId !== sessionId) return true;
       held.push(frame);
       return false;
     });
+    // What arrived before agy's answer is older than that answer's own
+    // configuration; the rest is newer (`release` keeps that order).
+    held.beforeReply = held.length;
     this.opening.set(sessionId, held);
   }
 
   /** No start is opening a session any more: unclaimed frames take the ordinary path. */
   releaseQuarantine() {
-    const frames = this.quarantine;
+    // A configuration update of a session nobody claimed (its open was refused,
+    // or never answered) would be read as the parent's: it is dropped. The root
+    // session's own configuration also arrives in its `session/new` answer.
+    const frames = this.quarantine.filter(
+      (frame) => frame.params?.update?.sessionUpdate !== "config_option_update",
+    );
     this.quarantine = [];
     frames
       .reduce((done, frame) => done.then(() => this.proxy.fromAgent(frame)), Promise.resolve())
@@ -315,12 +383,18 @@ export class Subagents {
   }
 
   /** The child is announced: its held frames now take the ordinary path. */
-  release(sessionId) {
+  release(sessionId, publish = () => {}) {
     const frames = this.opening.get(sessionId) ?? [];
     this.opening.delete(sessionId);
-    frames
-      .reduce((done, frame) => done.then(() => this.proxy.fromAgent(frame)), Promise.resolve())
-      .catch(() => {});
+    const before = frames.beforeReply ?? 0;
+    const drain = (done, list) =>
+      list.reduce((chain, frame) => chain.then(() => this.proxy.fromAgent(frame)), done);
+    // In the order agy spoke: what it sent before its answer, then what that
+    // answer confirmed (`publish`), then what it sent after.
+    drain(
+      drain(Promise.resolve(), frames.slice(0, before)).then(publish),
+      frames.slice(before),
+    ).catch(() => {});
   }
 
   /**
@@ -368,6 +442,9 @@ export class Subagents {
       cancelled: false,
       replied: false,
       closed: false,
+      // The parent's settings were replayed onto it: its model is then known
+      // only from the last replay's answer (see `configUpdateIgnored`).
+      replayed: false,
       channel: undefined,
       cursor: undefined,
       killTimer: undefined,
@@ -409,7 +486,9 @@ export class Subagents {
         mcpServers: [runtime.mcpServer(child.channel)],
         _meta: {
           antigravity: {
-            systemPrompt: { append: [setup.projection, SUBAGENT_GUIDANCE].join("\n\n") },
+            systemPrompt: {
+              append: [childProjection(setup.projection), SUBAGENT_GUIDANCE].join("\n\n"),
+            },
           },
         },
       });
@@ -428,13 +507,20 @@ export class Subagents {
       this.children.set(nativeId, child);
       runtime.bindChannel(child.channel, nativeId);
       runtime.facade.link?.(nativeId, parentId);
+      // The child's model as agy itself confirmed it: the new session's
+      // configuration, then the full configuration the last replay answered
+      // with. A replay whose answer lists no model leaves it unknown.
+      let confirmed = modelOption(created.result);
       for (const replay of setup.config.values()) {
+        child.replayed = true;
+        confirmed = undefined;
         const reply = await this.request(replay.method, { sessionId: nativeId, ...replay.params });
         if (reply.error !== undefined) {
           throw new ToolError(
             "Antigravity refused the session's model settings for the subagent; nothing was started.",
           );
         }
+        confirmed = modelOption(reply.result);
         check();
       }
       child.cursor = await runtime.evidence.mark();
@@ -468,8 +554,24 @@ export class Subagents {
       });
       proxy.turns.set(nativeId, this.childTurn(nativeId, prompt));
       runtime.facade.beginTurn(nativeId);
+      // The one model label the worker gets for a replayed child, and only
+      // when it is confirmed. A child nothing was replayed onto also gets
+      // agy's own updates, which describe the unchanged default.
+      const publish = () => {
+        if (confirmed === undefined) return;
+        proxy.client({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: nativeId,
+            update: { sessionUpdate: "config_option_update", configOptions: [confirmed] },
+          },
+        });
+      };
+      // A child nothing was replayed onto hears agy's own updates from here.
+      if (!child.replayed) this.configFence.delete(nativeId);
       // The worker knows the child now: what `agy` sent while it opened.
-      this.release(nativeId);
+      this.release(nativeId, publish);
       // A prompt has no timeout of its own: it ends when the turn does.
       this.request(
         "session/prompt",
@@ -677,6 +779,8 @@ export class Subagents {
     this.request("session/close", { sessionId: id }, 5000)
       .then((reply) => {
         if (strict && reply.error !== undefined) throw new Error("close refused");
+        // Closed: agy emits nothing more for it, so its fence entry can go.
+        if (reply.error === undefined) this.configFence.delete(id);
       })
       .catch(() => {
         // A session that never ran a prompt does nothing, but one `agy` will

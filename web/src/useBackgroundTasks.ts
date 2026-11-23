@@ -28,6 +28,7 @@ import {
   useManagedCalls,
 } from "./managedCalls";
 import type { Envelope } from "./protocol";
+import { useProviderLabels } from "./providerDisplayName";
 import type { Subagent } from "./subagents";
 import { cancelSubagent, useStoreSelector } from "./store";
 
@@ -238,6 +239,8 @@ export function useBackgroundTasks(
   }, [derived, sessionId, authority]);
   const pending = useMemo(() => pendingPermissions(timeline), [timeline]);
   const { calls: listedCalls, observedAt, error, refresh } = useManagedCalls(sessionId);
+  // Task subtitles name a Provider from the Catalog; re-derive them when it loads.
+  const catalog = useProviderLabels();
   const anchored = useAnchoredCalls(sessionId, items, listedCalls, observedAt);
   const calls = useMemo(
     () => anchored.calls.length === 0 ? listedCalls : [...listedCalls, ...anchored.calls],
@@ -290,7 +293,7 @@ export function useBackgroundTasks(
       callsStale: error !== null && observedAt !== null,
       acknowledged,
     });
-  }, [items, authority, calls, approval, pending, stopStates, unreachableMachines, error, observedAt, acknowledged]);
+  }, [items, authority, calls, approval, pending, stopStates, unreachableMachines, error, observedAt, acknowledged, catalog]);
   // A rejected subagent Stop surfaces as a session error while it waits.
   useEffect(() => {
     if (!lastError || lastError.sessionId !== sessionId) return;

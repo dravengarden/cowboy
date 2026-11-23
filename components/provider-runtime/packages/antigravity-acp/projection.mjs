@@ -9,6 +9,7 @@ import { posix } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { inside } from "./facade.mjs";
 import { HomeReads, mapBounded } from "./facade-tools.mjs";
+import { UNAVAILABLE_SKILLS_NOTE } from "./presentation.mjs";
 import { discoverSkills, skillsSection } from "./skills.mjs";
 
 export const PROJECTION_LIMITS = Object.freeze({
@@ -51,7 +52,7 @@ printf 'branch\\t%s\\n' "$(git symbolic-ref --short -q HEAD || git rev-parse --s
 git -c core.quotePath=true status --short 2>/dev/null | head -n 201 | sed 's/^/status\\t/'
 `;
 
-export const ROUTING = [
+const ROUTING_HEAD = [
   "This session's workspace is on another machine. Every file and command operation must use",
   "the tools of the `cowboy` MCP server: mcp_cowboy_ReadFile, mcp_cowboy_ListDirectory,",
   "mcp_cowboy_SearchFiles, mcp_cowboy_WriteFile, mcp_cowboy_EditFile, mcp_cowboy_RunCommand and",
@@ -61,13 +62,50 @@ export const ROUTING = [
   "inside the working directory. The local directory of this process is not the workspace.",
   "Web search (search_web) and reading public http(s) URLs (read_url_content) remain available.",
   "For a multi-step task, keep the owner's checklist current with mcp_cowboy_UpdatePlan.",
-  "To delegate a self-contained task, use mcp_cowboy_Subagent (mcp_cowboy_StopSubagent stops one):",
-  "it runs in this turn with the same tools and returns its report, so wait for it before you end",
-  "the turn.",
+];
+
+/**
+ * What only a session that can start subagents is told. A subagent has the
+ * `Subagent` tool in its list but cannot start one, so its projection never
+ * carries this (`childProjection`).
+ */
+export const ROOT_DELEGATION = [
+  "To delegate a self-contained task, or where you would have used swarm or run-workflow, use",
+  "mcp_cowboy_Subagent (mcp_cowboy_StopSubagent stops one): it runs in this turn with the same",
+  "tools and returns its report, so wait for it before you end the turn.",
+].join("\n");
+
+const ROUTING_TAIL = [
   "For long work in a Cowboy call (calls.start, review.start) or another session (queue.submit),",
   "pass notify:true and end your turn: Cowboy starts your next turn with a notice when it",
   "finishes. Wait inside the turn only when you need the result right away.",
+];
+
+export { UNAVAILABLE_SKILLS_NOTE };
+
+export const ROUTING = [
+  ...ROUTING_HEAD,
+  UNAVAILABLE_SKILLS_NOTE,
+  ROOT_DELEGATION,
+  ...ROUTING_TAIL,
 ].join("\n");
+
+/**
+ * A managed call's own routing plus the note every session gets (its routing
+ * replaces `ROUTING`; `managed.mjs` stays free of imports so the packaged hook,
+ * which loads it alone, keeps working).
+ */
+export function withUnavailableSkills(routing) {
+  return `${routing}\n${UNAVAILABLE_SKILLS_NOTE}`;
+}
+
+/**
+ * The projection a subagent gets: its parent's without the delegation
+ * paragraph, which names a tool the subagent cannot use.
+ */
+export function childProjection(projection) {
+  return projection.replace(`${ROOT_DELEGATION}\n`, "");
+}
 
 /** Parse the Git probe's tab-separated lines. */
 export function parseGit(output) {

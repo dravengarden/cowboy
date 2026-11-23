@@ -5,6 +5,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { providerDisplayName } from "./providerDisplayName";
 
 /** Agent tools the Controller enforces: per agent kind, per-session overrides. */
 export interface CallTarget {
@@ -163,6 +164,8 @@ export function agentLabel(agent: string): string {
   if (agent === "codex") return "Codex";
   if (agent === "claude-code") return "Claude";
   if (agent === AUTO) return "Auto";
+  const named = providerDisplayName(agent);
+  if (named) return named;
   return agent.split("-").map((part) =>
     part.charAt(0).toUpperCase() + part.slice(1)
   ).join(" ");

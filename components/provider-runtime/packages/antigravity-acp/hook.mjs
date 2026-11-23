@@ -68,7 +68,8 @@ const DELEGATION_REASON =
   "background after your turn, where the workspace tools are closed and the owner cannot " +
   "see them. To delegate a self-contained task, use mcp_cowboy_Subagent: it works in the " +
   "same workspace, shows to the owner as a subagent and returns its report; wait for it, " +
-  "because it is stopped when your turn ends (mcp_cowboy_StopSubagent stops one). To delegate " +
+  "because it is stopped when your turn ends (mcp_cowboy_StopSubagent stops one). A subagent " +
+  "cannot start one: it does the work itself. To delegate " +
   "read-only work (review, analysis) to another session, use Cowboy managed calls " +
   "(mcp_cowboy_cowboy_execute with action calls.start or review.start); to delegate work " +
   "that edits files, queue it into another Cowboy session (control.apply queue.submit). " +

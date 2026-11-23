@@ -6,7 +6,9 @@ import { join } from "node:path";
 import test from "node:test";
 import { Connection } from "../../execution-connection.mjs";
 import { Facade } from "./facade.mjs";
-import { buildProjection } from "./projection.mjs";
+import { MANAGED_ROUTING } from "./managed.mjs";
+import { UNAVAILABLE_SKILLS_NOTE } from "./presentation.mjs";
+import { buildProjection, withUnavailableSkills } from "./projection.mjs";
 import {
   discoverSkills,
   expandSkillCommand,
@@ -344,6 +346,20 @@ test("a skill slash command becomes the instruction to read and follow it", () =
   assert.equal(expandSkillCommand(unknown, skills), unknown);
   const offered = [{ type: "text", text: "/deploy now" }];
   assert.equal(expandSkillCommand(offered, skills, ["deploy"]), offered, "agy's command wins");
+});
+
+test("a managed projection keeps its own routing and names the unavailable skills once", async (t) => {
+  const { root, facade } = await fixture(t);
+  const projection = await buildProjection(facade, root, {
+    routing: withUnavailableSkills(MANAGED_ROUTING),
+    skills: false,
+    home: false,
+  });
+  assert.equal(projection.split(UNAVAILABLE_SKILLS_NOTE).length, 2);
+  assert.ok(projection.includes(MANAGED_ROUTING));
+  // Still a read-only call: no delegation paragraph, no extra tools.
+  assert.equal(projection.includes("mcp_cowboy_Subagent"), false);
+  assert.match(projection, /read-only Cowboy managed call/);
 });
 
 test("a managed projection lists no repository skills", async (t) => {
