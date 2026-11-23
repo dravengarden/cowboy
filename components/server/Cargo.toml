@@ -19,14 +19,14 @@ test = false
 [features]
 default = ["full"]
 full = []
-machine-host = ["cowboy/machine-host", "cowboy-server-runtime/machine-host"]
-test-support = ["cowboy/test-support", "cowboy-server-runtime/test-support", "dep:tempfile"]
+machine-host = ["cowboy/machine-host", "cowboy-server-runtime/machine-host", "cowboy-server-routes/machine-host", "cowboy-server-agent-api/machine-host"]
+test-support = ["cowboy/test-support", "cowboy-server-runtime/test-support", "cowboy-server-routes/test-support", "cowboy-server-agent-api/test-support", "dep:tempfile"]
 
 [dependencies]
-cowboy-codeact-runtime = { path = "../codeact-runtime" }
+cowboy-server-agent-api = { version = "0.1.0", path = "../server-agent-api" }
+cowboy-server-routes = { version = "0.1.0", path = "../server-routes" }
 cowboy-server-runtime = { version = "0.1.0", path = "../server-runtime" }
 cowboy = { version = "0.1.0", path = "../.." }
-cardea-authorization = { git = "ssh://git@github.com/dravengarden/cardea.git", rev = "71f12d90bd1b3212f11530cbd0c20086317a5976", version = "=0.1.0" }
 clap = { version = "4", features = ["derive", "env"] }
 futures = "0.3"
 tokio = { version = "1", features = ["full"] }
@@ -48,13 +48,11 @@ sqlx = { version = "0.8", default-features = false, features = [
 ] }
 chrono = { version = "0.4", features = ["serde"] }
 axum = { version = "0.8", features = ["ws"] }
-tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["compression-br", "compression-gzip", "trace"] }
 tracing = "0.1"
 anyhow = "1"
 base64 = "0.22"
 sha2 = "0.10"
-url = "2"
 uuid = { version = "1", default-features = false, features = ["std"] }
 # parking_lot Mutex: non-poisoning. A panic inside a critical section drops the
 # guard and frees the lock instead of poisoning it, which would otherwise make
@@ -70,7 +68,6 @@ p256 = { version = "0.13", features = ["ecdsa", "pem", "pkcs8"] }
 rand = "0.8"
 cowboy-provider-sdk = { version = "=3.7.0", path = "../provider-sdk" }
 cowboy-plugin-sdk = { version = "=1.20.0", path = "../plugin-sdk" }
-regex = "1"
 tempfile = { version = "3", optional = true }
 # `@`-picker file search: gitignore-aware walk + fuzzy ranking (the matcher
 # Helix / Zed use). See src/files.rs.

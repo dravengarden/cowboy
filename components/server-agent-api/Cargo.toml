@@ -1,0 +1,57 @@
+[package]
+name = "cowboy-server-agent-api"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Controller Agent API (cowboy_read, cowboy_execute, control dispatch, code reads, and widgets)"
+license = "MIT"
+rust-version = "1.98.1"
+
+[lib]
+name = "cowboy_server_agent_api"
+path = "src/lib.rs"
+
+[features]
+default = ["full"]
+full = []
+machine-host = ["cowboy/machine-host", "cowboy-server-runtime/machine-host"]
+test-support = ["cowboy/test-support", "cowboy-server-runtime/test-support"]
+
+[dependencies]
+cowboy = { version = "0.1.0", path = "../.." }
+cowboy-codeact-runtime = { path = "../codeact-runtime" }
+cowboy-provider-sdk = { version = "=3.7.0", path = "../provider-sdk" }
+cowboy-server-runtime = { version = "0.1.0", path = "../server-runtime" }
+anyhow = "1"
+axum = { version = "0.8", features = ["ws"] }
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+parking_lot = "0.12"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["full"] }
+tower = { version = "0.5", features = ["util"] }
+tracing = "0.1"
+url = "2"
+uuid = { version = "1", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+cowboy = { version = "0.1.0", path = "../..", features = ["test-support"] }
+cowboy-server-runtime = { version = "0.1.0", path = "../server-runtime", features = ["test-support"] }
+cowboy-wire = { version = "0.1.0", path = "../wire", features = ["test-fixtures"] }
+tempfile = "3"
+tokio = { version = "1", features = ["test-util"] }
+
+[lints.rust]
+warnings = "deny"
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "allow", priority = -1 }
+
+[package.metadata.cargo-machete]
+# cowboy-wire enables test fixtures.
+ignored = ["cowboy-wire"]

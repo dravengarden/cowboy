@@ -27,7 +27,7 @@ mod hover;
 mod post_edit;
 mod summary;
 
-pub(in crate::server) async fn maintain_holdings(state: std::sync::Arc<AppState>) {
+pub async fn maintain_holdings(state: std::sync::Arc<AppState>) {
     // Codex post-edit delivery shares this Controller-lifetime task.
     let push = tokio::spawn(codex_push::run(std::sync::Arc::clone(&state)));
     let mut shutdown = state.shutdown.clone();

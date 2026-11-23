@@ -28,6 +28,7 @@ pub use std::sync::Arc;
 pub mod lifecycle;
 pub mod plugin_install;
 pub mod plugin_uninstall;
+pub mod routes;
 
 pub use lifecycle::*;
 pub use plugin_install::{api_machine_plugin_install, api_machine_plugin_install_operations};

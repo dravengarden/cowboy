@@ -162,7 +162,7 @@ test("website explains telemetry activation, routing, and privacy", async () => 
 
 test("linked Victoria guide uses the real generic installation route", async () => {
   const guide = await readFile(`${ROOT}/examples/telemetry/victoria/README.md`, "utf8");
-  const server = await readFile(`${ROOT}/components/server/src/server/routes.rs`, "utf8");
+  const server = await readFile(`${ROOT}/components/server-plugins/src/server/routes.rs`, "utf8");
   assert(
     guide.includes("POST /api/machines/{machine_id}/plugins/victoria`"),
     "document the implemented installation route",

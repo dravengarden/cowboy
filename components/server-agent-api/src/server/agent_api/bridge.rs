@@ -2,7 +2,7 @@
 
 use super::*;
 
-pub(in crate::server) struct Bridge;
+pub struct Bridge;
 
 impl super::super::agent_api_bridge::AgentApiBridge for Bridge {
     fn status(&self, state: &Arc<AppState>, meta: &SessionMeta, grant: &Grant) -> Value {

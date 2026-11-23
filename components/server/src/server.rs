@@ -9,8 +9,7 @@ pub use cowboy_server_runtime::server::*;
 use tower_http::compression::CompressionLayer;
 use tower_http::trace::TraceLayer;
 
-mod agent_api;
-mod routes;
+use cowboy_server_agent_api::server::agent_api;
 
 /// Start the HTTP/WebSocket server and the agent supervisor.
 pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
@@ -366,11 +365,12 @@ async fn serve_axum(
     };
 
     let app = Router::new()
-        .merge(routes::platform_routes(&state))
-        .merge(routes::provider_routes(&state))
-        .merge(routes::machine_routes(&state))
-        .merge(routes::session_routes(&state))
-        .merge(routes::code_routes(&state))
+        .merge(cowboy_server_routes::platform_routes(&state))
+        .merge(cowboy_server_routes::provider_routes(&state))
+        .merge(cowboy_server_routes::machine_routes(&state))
+        .merge(cowboy_server_routes::session_routes(&state))
+        .merge(cowboy_server_routes::code_routes(&state))
+        .merge(cowboy_server_agent_api::server::routes::widget_routes())
         // Everything else: the separately deployed SPA, with index.html
         // fallback for client-side routes.
         .fallback(static_handler)

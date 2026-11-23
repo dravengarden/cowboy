@@ -11,7 +11,7 @@
 # Directories are Cargo flags, never CARGO_* variables: sccache hashes those
 # into every crate's key, so a checkout path there makes every key unique to
 # the checkout and no other worktree ever hits.
-rust_test_args := "-p cowboy -p cowboy-store -p cowboy-server-auth -p cowboy-server-accounts -p cowboy-server-code -p cowboy-server-code-buffers -p cowboy-server-plugins -p cowboy-server-runtime -p cowboy-server-telemetry -p cowboy-server -p cowboy-machine -p cowboy-integration-tests -p cowboy-provider-sdk -p cowboy-plugin-sdk --all-targets --all-features --locked --target-dir " + justfile_directory() + "/target/test-graph"
+rust_test_args := "-p cowboy -p cowboy-store -p cowboy-server-auth -p cowboy-server-accounts -p cowboy-server-code -p cowboy-server-code-buffers -p cowboy-server-plugins -p cowboy-server-runtime -p cowboy-server-agent-api -p cowboy-server-telemetry -p cowboy-server -p cowboy-machine -p cowboy-integration-tests -p cowboy-provider-sdk -p cowboy-plugin-sdk --all-targets --all-features --locked --target-dir " + justfile_directory() + "/target/test-graph"
 # How every recipe runs that graph. The invoking Codex Plugin exports its own
 # signed package path; Cowboy's unit tests exercise embedded fixtures and must
 # not inherit that runtime. The graph always keeps rustc incremental state,

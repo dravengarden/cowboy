@@ -29,6 +29,8 @@ export const CRATES: Record<string, string> = {
   cowboy_server_auth: "components/server-auth/src",
   cowboy_server_code: "components/server-code/src",
   cowboy_server_plugins: "components/server-plugins/src",
+  cowboy_server_agent_api: "components/server-agent-api/src",
+  cowboy_server_routes: "components/server-routes/src",
   cowboy_server_runtime: "components/server-runtime/src",
   cowboy_server_code_buffers: "components/server-code-buffers/src",
   cowboy_server_telemetry: "components/server-telemetry/src",

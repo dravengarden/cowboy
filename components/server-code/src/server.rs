@@ -38,6 +38,7 @@ pub use tokio::sync::mpsc;
 pub mod code_api;
 pub mod code_context;
 pub mod code_reads;
+pub mod routes;
 pub mod types;
 pub mod workspace_extensions;
 pub mod zed_session;

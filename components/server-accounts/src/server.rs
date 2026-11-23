@@ -39,6 +39,7 @@ pub use tokio::sync::watch;
 
 pub mod helpers;
 pub mod provider_accounts;
+pub mod routes;
 
 pub use helpers::*;
 

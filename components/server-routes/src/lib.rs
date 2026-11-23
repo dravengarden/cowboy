@@ -1,10 +1,15 @@
-//! The Controller HTTP route table, grouped by domain. `serve_axum` merges
-//! these builders and adds the SPA fallback and middleware layers.
+//! The Controller HTTP route table, grouped by domain.
+//!
+//! Sub-state route tables live in `cowboy-server-accounts`, `cowboy-server-code`,
+//! and `cowboy-server-plugins` so their Axum handler monomorphization runs off
+//! the critical path; `cowboy-server-routes` compiles the remaining `AppState`
+//! routes once (`test = false`) in parallel with `cowboy-server-agent-api`.
 
-use super::*;
+use cowboy::{machine_lanes as root_machine_lanes, otlp, plugin_process};
+use cowboy_server_runtime::server::*;
 
 /// Health, metrics, telemetry, diagnostics, preferences and notification routes.
-pub(super) fn platform_routes(state: &AppState) -> Router<Arc<AppState>> {
+pub fn platform_routes(state: &AppState) -> Router<Arc<AppState>> {
     let telemetry = Router::new()
         .merge(telemetry_binding::resolution::surface::routes())
         .merge(telemetry_binding::recovery::surface::routes())
@@ -34,7 +39,7 @@ pub(super) fn platform_routes(state: &AppState) -> Router<Arc<AppState>> {
         )
         .route(
             "/api/telemetry/v1/{signal}",
-            post(api_otlp).layer(DefaultBodyLimit::max(crate::otlp::MAX_BYTES)),
+            post(api_otlp).layer(DefaultBodyLimit::max(otlp::MAX_BYTES)),
         )
         .route("/api/logs", get(api_diagnostic_logs))
         .route("/api/logs/{id}", get(api_diagnostic_log_detail))
@@ -51,69 +56,12 @@ pub(super) fn platform_routes(state: &AppState) -> Router<Arc<AppState>> {
 }
 
 /// Provider account, usage, Plugin and Provider authentication routes.
-pub(super) fn provider_routes(state: &AppState) -> Router<Arc<AppState>> {
-    let accounts = Router::new()
-        .route(
-            "/api/provider-accounts",
-            get(provider_accounts::read)
-                .put(provider_accounts::update)
-                .layer(DefaultBodyLimit::max(16 * 1024)),
-        )
-        .route(
-            "/api/provider-accounts/usage",
-            get(provider_accounts::usage::list),
-        )
-        .route(
-            "/api/provider-accounts/{account_id}/usage",
-            get(provider_accounts::usage::read).post(provider_accounts::usage::refresh),
-        )
-        .route(
-            "/api/provider-accounts/{account_id}/usage/reset",
-            post(provider_accounts::usage::reset::http_reset),
-        )
-        .route(
-            "/api/provider-accounts/{account_id}/revocation",
-            get(provider_accounts::lifecycle::http_status)
-                .post(provider_accounts::lifecycle::http_start)
-                .layer(DefaultBodyLimit::max(16 * 1024)),
-        )
-        .route(
-            "/api/provider-accounts/{account_id}/revocation/reconcile",
-            post(provider_accounts::lifecycle::http_resume).layer(DefaultBodyLimit::max(16 * 1024)),
-        )
-        .route(
-            "/api/provider-accounts/login-operations/{operation}",
-            get(provider_accounts::login::http_receipt)
-                .delete(provider_accounts::login::http_cancel),
-        )
-        .route(
-            "/api/provider-accounts/{account_id}/logins",
-            get(provider_accounts::login::http_logins),
-        )
-        .route(
-            "/api/provider-accounts/{account_id}/logins/{request}",
-            get(provider_accounts::login::http_continue)
-                .delete(provider_accounts::login::http_continue_cancel),
-        )
-        .route(
-            "/api/provider-accounts/{account_id}/credentials",
-            post(provider_accounts::portable::http_commit).layer(DefaultBodyLimit::max(32 * 1024)),
-        )
-        .route(
-            "/api/provider-accounts/{account_id}/login",
-            get(provider_accounts::login::options)
-                .post(provider_accounts::login::start)
-                .layer(DefaultBodyLimit::max(16 * 1024)),
-        )
-        .route(
-            "/api/provider-accounts/{account_id}/controls",
-            post(provider_accounts::controls::http::http_control)
-                .layer(DefaultBodyLimit::max(16 * 1024)),
-        )
-        .merge(provider_browser_routes())
-        .with_state(Arc::clone(&state.accounts));
+pub fn provider_routes(state: &AppState) -> Router<Arc<AppState>> {
     Router::new()
-        .merge(accounts)
+        .merge(
+            cowboy_server_accounts::server::routes::accounts_routes()
+                .with_state(Arc::clone(&state.accounts)),
+        )
         .route("/api/usage", get(api_usage).post(api_usage_refresh))
         .route("/api/usage/executors", get(api_usage_executors))
         .route(
@@ -137,7 +85,7 @@ pub(super) fn provider_routes(state: &AppState) -> Router<Arc<AppState>> {
         .route(
             "/api/plugins/{id}/call",
             post(api_plugin_call).layer(DefaultBodyLimit::max(
-                crate::plugin_process::MAX_PLUGIN_COMMAND_INPUT_BYTES,
+                plugin_process::MAX_PLUGIN_COMMAND_INPUT_BYTES,
             )),
         )
         .route(
@@ -184,96 +132,12 @@ pub(super) fn provider_routes(state: &AppState) -> Router<Arc<AppState>> {
         )
 }
 
-/// Owner-operated Machine browsers for named accounts: state, lifecycle
-/// commands and the viewer's display stream. No route couples a browser to
-/// a Provider login.
-fn provider_browser_routes() -> Router<Arc<AccountsState>> {
-    Router::new()
-        .route(
-            "/api/provider-accounts/{account_id}/browser",
-            get(provider_accounts::browser::http_state),
-        )
-        .route(
-            "/api/provider-accounts/{account_id}/browser/open",
-            post(provider_accounts::browser::http_open).layer(DefaultBodyLimit::max(16 * 1024)),
-        )
-        .route(
-            "/api/provider-accounts/{account_id}/browser/navigate",
-            post(provider_accounts::browser::http_navigate).layer(DefaultBodyLimit::max(16 * 1024)),
-        )
-        .route(
-            "/api/provider-accounts/{account_id}/browser/resize",
-            post(provider_accounts::browser::http_resize).layer(DefaultBodyLimit::max(16 * 1024)),
-        )
-        .route(
-            "/api/provider-accounts/{account_id}/browser/snapshot",
-            post(provider_accounts::browser::http_snapshot).layer(DefaultBodyLimit::max(16 * 1024)),
-        )
-        .route(
-            "/api/provider-accounts/{account_id}/browser/hibernate",
-            post(provider_accounts::browser::http_hibernate)
-                .layer(DefaultBodyLimit::max(16 * 1024)),
-        )
-        .route(
-            "/api/provider-accounts/{account_id}/browser/reset",
-            post(provider_accounts::browser::http_reset).layer(DefaultBodyLimit::max(16 * 1024)),
-        )
-        .route(
-            "/api/provider-accounts/{account_id}/browser/stream",
-            get(provider_accounts::browser::viewer::upgrade),
-        )
-}
-
 /// Machine registry, enrollment, connection, Plugin installation and project routes.
-pub(super) fn machine_routes(state: &AppState) -> Router<Arc<AppState>> {
-    let plugin_ops = Router::new()
-        .route(
-            "/api/machines/{id}/providers/{provider_id}",
-            post(api_machine_plugin_install),
-        )
-        .route(
-            "/api/machines/{id}/plugins/{provider_id}",
-            post(api_machine_plugin_install),
-        )
-        .route(
-            "/api/machines/{id}/providers/{provider_id}/uninstall",
-            post(api_machine_plugin_uninstall),
-        )
-        .route(
-            "/api/machines/{id}/plugins/{provider_id}/uninstall",
-            post(api_machine_plugin_uninstall),
-        )
-        .route(
-            "/api/machines/{id}/plugins/{provider_id}/operations",
-            get(api_machine_plugin_operations),
-        )
-        .route(
-            "/api/machines/{id}/plugins/{provider_id}/installation-operations",
-            get(plugin_install::api_machine_plugin_install_operations),
-        )
-        .route(
-            "/api/machines/{id}/plugins/{provider_id}/operations/{operation_id}/machine-receipt",
-            get(api_machine_plugin_operation_receipt),
-        )
-        .route(
-            "/api/machines/{id}/plugins/{provider_id}/operations/{operation_id}/recovery-assessment",
-            get(api_machine_plugin_recovery_assessment),
-        )
-        .route(
-            "/api/machines/{id}/plugins/{provider_id}/operations/{operation_id}/resolution-plan",
-            post(plugin_uninstall::resolution::api_resolution_plan),
-        )
-        .route(
-            "/api/machines/{id}/plugins/{provider_id}/operations/{operation_id}/resolve",
-            post(plugin_uninstall::resolution::api_resolve),
-        )
-        .route(
-            "/api/machines/{id}/plugins/{provider_id}/operations/{operation_id}/resolution",
-            get(plugin_uninstall::resolution::api_resolution_receipt),
-        )
-        .with_state(Arc::clone(&state.plugins));
+pub fn machine_routes(state: &AppState) -> Router<Arc<AppState>> {
     Router::new()
-        .merge(plugin_ops)
+        .merge(
+            cowboy_server_plugins::server::routes::routes().with_state(Arc::clone(&state.plugins)),
+        )
         .route("/api/project-policies", get(projects::policies))
         .route("/api/project-placements", get(projects::placements))
         .route(
@@ -328,13 +192,9 @@ pub(super) fn machine_routes(state: &AppState) -> Router<Arc<AppState>> {
         .route("/api/machine/service", get(api_machine_service))
         .route("/api/machine/enroll", post(api_machine_enroll))
         .route("/api/machine/connect", any(machine_ws_upgrade))
-        .route(crate::machine_lanes::LANE_PATH, any(machine_lanes::upgrade))
+        .route(root_machine_lanes::LANE_PATH, any(machine_lanes::upgrade))
         .merge(
-            Router::new()
-                .route(
-                    crate::machine_protocol::machine_browser::STREAM_PATH,
-                    any(provider_accounts::browser::machine_stream::upgrade),
-                )
+            cowboy_server_accounts::server::routes::machine_stream_routes()
                 .with_state(Arc::clone(&state.accounts)),
         )
         .route(
@@ -380,7 +240,7 @@ fn with_session_context_routes(
 }
 
 /// Session, execution, draft, managed-call, history and WebSocket routes.
-pub(super) fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
+pub fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
     with_session_context_routes(Router::new(), state)
         .route("/api/drafts", get(draft_documents::list))
         .route(
@@ -489,14 +349,6 @@ pub(super) fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
             post(notifications::acknowledge),
         )
         .route("/api/sessions/{id}/prompt", post(api_session_prompt))
-        .route(
-            "/api/sessions/{id}/widgets/{widget_id}/interactions",
-            post(agent_api::api_widget_interaction),
-        )
-        .route(
-            "/api/sessions/{id}/widgets/{widget_id}/apps/{node_id}/messages",
-            post(agent_api::api_widget_app_message),
-        )
         .route("/api/sessions/{id}/config-revert", get(config_revert::get))
         .route(
             "/api/sessions/{id}/config-revert/restore",
@@ -524,7 +376,7 @@ pub(super) fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
 }
 
 /// Code browsing, intelligence, buffer and workspace routes.
-pub(super) fn code_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
+pub fn code_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
     Router::<Arc<AppState>>::new()
         .merge(code_buffers::routes(code_buffers::Context {
             service_id: state.service_id.clone(),
@@ -538,61 +390,7 @@ pub(super) fn code_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
             device_access: Arc::clone(&state.device_access),
             product_authentication: Arc::clone(&state.product_authentication),
         }))
-        .merge(
-            Router::new()
-                .route(
-                    "/api/code/sessions/{id}/extensions",
-                    get(workspace_extensions::inventory),
-                )
-                .route(
-                    "/api/code/sessions/{id}/extensions/resources",
-                    get(workspace_extensions::resources),
-                )
-                .route(
-                    "/api/sessions/reconcile-project",
-                    post(api_reconcile_project_sessions),
-                )
-                .route("/api/sessions/{id}/review-fetch", post(api_review_fetch))
-                .route("/api/workspaces", get(api_workspaces))
-                .route("/api/sessions/{id}/files", get(api_search_files))
-                .route("/api/code/sessions/{id}/tree", get(api_file_tree))
-                .merge(code_api::search_routes())
-                .merge(code_api::check_routes())
-                .route("/api/code/sessions/{id}/manifest", get(api_code_manifest))
-                .route("/api/code/sessions/{id}/changes", get(api_code_changes))
-                .route(
-                    "/api/code/sessions/{id}/repository",
-                    get(api_code_repository),
-                )
-                .route("/api/code/sessions/{id}/commit", get(api_code_commit))
-                .route(
-                    "/api/code/sessions/{id}/commit-diff",
-                    get(api_code_commit_diff),
-                )
-                .route("/api/code/sessions/{id}/diff", get(api_code_diff))
-                .route("/api/code/sessions/{id}/file", get(api_code_file))
-                .route("/api/code/sessions/{id}/file-raw", get(api_code_file_raw))
-                .route("/api/code/sessions/{id}/blob", get(api_code_blob))
-                .route("/api/code/sessions/{id}/file-blob", get(api_code_file_blob))
-                .route("/api/code/sessions/{id}/language", get(api_code_language))
-                .route(
-                    "/api/code/sessions/{id}/intelligence/hover",
-                    get(api_code_hover),
-                )
-                .route(
-                    "/api/code/sessions/{id}/intelligence/navigation",
-                    get(api_code_navigation),
-                )
-                .route(
-                    "/api/code/sessions/{id}/intelligence/outline",
-                    get(api_code_outline),
-                )
-                .route(
-                    "/api/code/sessions/{id}/buffer",
-                    put(api_code_buffer_open).delete(api_code_buffer_close),
-                )
-                .with_state(Arc::clone(&state.code)),
-        )
+        .merge(cowboy_server_code::server::routes::routes().with_state(Arc::clone(&state.code)))
 }
 
 fn session_tool_routes(state: &AppState) -> Router<Arc<AppState>> {
@@ -602,11 +400,7 @@ fn session_tool_routes(state: &AppState) -> Router<Arc<AppState>> {
             get(agent_tools::session).put(agent_tools::configure_session),
         )
         .merge(
-            Router::new()
-                .route(
-                    "/api/sessions/{id}/uncertain-effect/acknowledge",
-                    post(provider_accounts::controls::http::http_acknowledge),
-                )
+            cowboy_server_accounts::server::routes::session_acknowledge_routes()
                 .with_state(Arc::clone(&state.accounts)),
         )
         .merge(mcp_bindings::routes())

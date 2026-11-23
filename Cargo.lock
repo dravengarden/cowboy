@@ -931,20 +931,19 @@ dependencies = [
  "anyhow",
  "axum",
  "base64 0.22.1",
- "cardea-authorization",
  "chrono",
  "clap",
  "cowboy",
- "cowboy-codeact-runtime",
  "cowboy-plugin-sdk",
  "cowboy-provider-sdk",
+ "cowboy-server-agent-api",
+ "cowboy-server-routes",
  "cowboy-server-runtime",
  "cowboy-wire",
  "futures",
  "p256",
  "parking_lot",
  "rand 0.8.8",
- "regex",
  "reqwest",
  "rustls",
  "semver",
@@ -956,10 +955,8 @@ dependencies = [
  "tikv-jemallocator",
  "tokio",
  "tokio-tungstenite",
- "tower",
  "tower-http",
  "tracing",
- "url",
  "uuid",
 ]
 
@@ -987,6 +984,32 @@ dependencies = [
  "tracing",
  "uuid",
  "x25519-dalek",
+]
+
+[[package]]
+name = "cowboy-server-agent-api"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "cowboy",
+ "cowboy-codeact-runtime",
+ "cowboy-provider-sdk",
+ "cowboy-server-runtime",
+ "cowboy-wire",
+ "parking_lot",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+ "url",
+ "uuid",
 ]
 
 [[package]]
@@ -1086,6 +1109,18 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "cowboy-server-routes"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "cowboy",
+ "cowboy-server-accounts",
+ "cowboy-server-code",
+ "cowboy-server-plugins",
+ "cowboy-server-runtime",
 ]
 
 [[package]]
