@@ -223,7 +223,8 @@ impl Hub {
                     // what the worker last saw, not a measurement of the
                     // compacted context; only a live report replaces a stale one.
                     let fresh = !usage.raw.is_null() && !republished;
-                    if fresh && let CompactionUsage::Running { reported } = &mut s.compaction_usage {
+                    if fresh && let CompactionUsage::Running { reported } = &mut s.compaction_usage
+                    {
                         *reported = true;
                     }
                     if !fresh && stale_mark.is_some() {

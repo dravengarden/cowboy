@@ -245,7 +245,10 @@ fn usage_an_older_antigravity_proxy_relays_during_compact_stays_history() {
     turn_end(&hub, "agy-old");
     let stale = meta(&hub, "agy-old");
     assert!(stale.context_usage_stale());
-    assert_eq!(stale.context_used, 480_000, "the summarized history is no reading");
+    assert_eq!(
+        stale.context_used, 480_000,
+        "the summarized history is no reading"
+    );
     persisted(&mut rx);
     hub.set_session_usage("agy-old", live(61_000));
     assert!(!meta(&hub, "agy-old").context_usage_stale());
@@ -291,9 +294,19 @@ fn republished_accounting_is_no_fresh_reading() {
     persisted(&mut rx);
     hub.set_session_usage("acct", republished.clone());
     let kept = meta(&hub, "acct");
-    assert!(kept.context_usage_stale(), "accounting keeps the stale mark");
-    assert_eq!(kept.usage.expect("reading").raw["_meta"], republished.raw["_meta"]);
-    assert!(persisted(&mut rx).iter().all(|w| w.as_ref().is_some_and(SessionUsage::stale_after_compaction)));
+    assert!(
+        kept.context_usage_stale(),
+        "accounting keeps the stale mark"
+    );
+    assert_eq!(
+        kept.usage.expect("reading").raw["_meta"],
+        republished.raw["_meta"]
+    );
+    assert!(
+        persisted(&mut rx)
+            .iter()
+            .all(|w| w.as_ref().is_some_and(SessionUsage::stale_after_compaction))
+    );
 
     let (hub, _rx) = hub_with("acct-running");
     hub.set_session_usage("acct-running", live(400_000));
