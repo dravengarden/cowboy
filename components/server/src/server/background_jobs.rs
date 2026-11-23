@@ -752,14 +752,8 @@ pub(super) async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyh
                 .update_agent_session_id(session_id, agent_session_id.as_deref())
                 .await
         }
-        StoreWrite::ClearAgentSession {
-            session_id,
-            fence_key,
-            fence,
-        } => {
-            store
-                .clear_agent_session_id(session_id, fence_key, fence)
-                .await
+        StoreWrite::ClearAgentSession { .. } | StoreWrite::ClearEvents { .. } => {
+            clear_context(store, write).await
         }
         StoreWrite::UpdateConfigOptions {
             session_id,
@@ -774,16 +768,6 @@ pub(super) async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyh
         } => {
             store
                 .update_config_preferences(session_id, preferences)
-                .await
-        }
-        StoreWrite::ClearEvents {
-            session_id,
-            calls_before_ms,
-            fence,
-        } => {
-            let fence = fence.as_ref().map(|(key, value)| (key.as_str(), value));
-            store
-                .clear_conversation(session_id, *calls_before_ms, fence)
                 .await
         }
         StoreWrite::DeleteSession(id) => store.delete_session(id).await,
@@ -838,6 +822,33 @@ pub(super) async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyh
         } => store.upsert_wakeup(session_id, *fire_at_ms, prompt).await,
         StoreWrite::DeleteWakeup { session_id } => store.delete_wakeup(session_id).await,
         StoreWrite::PutSetting { key, value } => store.put_setting(key, value).await,
+    }
+}
+
+/// Clear conversation and context resets: each is one store transaction with
+/// the restart fence of the native ids it discards.
+async fn clear_context(store: &Store, write: &StoreWrite) -> anyhow::Result<()> {
+    match write {
+        StoreWrite::ClearAgentSession {
+            session_id,
+            fence_key,
+            fence,
+        } => {
+            store
+                .clear_agent_session_id(session_id, fence_key, fence)
+                .await
+        }
+        StoreWrite::ClearEvents {
+            session_id,
+            calls_before_ms,
+            fence,
+        } => {
+            let fence = fence.as_ref().map(|(key, value)| (key.as_str(), value));
+            store
+                .clear_conversation(session_id, *calls_before_ms, fence)
+                .await
+        }
+        _ => anyhow::bail!("not a Clear store write"),
     }
 }
 
