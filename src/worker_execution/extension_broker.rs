@@ -454,7 +454,14 @@ fn launch(process: &str, argv: &[String], cwd: &str, stdin: bool) -> Value {
     })
 }
 
-/// Start a target process the worker owns, recorded before it is sent.
+/// How long a recorded server start may stay unanswered before its outcome
+/// counts as unknown (beyond the discovery timeout that may abandon it).
+const SERVER_START_SETTLE: Duration = Duration::from_secs(120);
+
+/// Start a target process the worker owns, recorded before it is sent. The
+/// start settles on its own task, so a caller that gives up (the discovery
+/// timeout) never leaves it recorded as starting: within its bound it ends
+/// started, refused, or uncertain with its process kept for teardown.
 async fn start(
     client: &Arc<Client>,
     ledger: &Ledger,
@@ -462,25 +469,38 @@ async fn start(
     params: Value,
 ) -> Result<(), String> {
     ledger.record_server(process)?;
-    let started = client
-        .invoke_classified("process/start".into(), params)
-        .await;
-    if matches!(started, Err(true)) {
-        // Possibly admitted: the process may run. It stays recorded, so the
-        // teardown ends it, and its unknown start is recorded.
-        ledger.server_started(process, true);
-        ledger.mark_uncertain("process/start");
-        return Err("the server's start has an unknown outcome".into());
-    }
-    let ok = started.as_ref().is_ok_and(|reply| {
-        reply.pointer("/result/processId").and_then(Value::as_str) == Some(process)
+    let (owner, id) = (Arc::clone(client), process.to_owned());
+    let settled = tokio::spawn(async move {
+        let started = tokio::time::timeout(
+            SERVER_START_SETTLE,
+            owner.invoke_classified("process/start".into(), params),
+        )
+        .await
+        // Not answered within the bound: it may have been dispatched.
+        .unwrap_or(Err(true));
+        let Some(ledger) = owner.ledger() else {
+            return Err("the session has no execution ledger".to_owned());
+        };
+        if matches!(started, Err(true)) {
+            // Possibly admitted: the process may run. It stays recorded, so
+            // the teardown ends it, and its unknown start is recorded.
+            ledger.server_started(&id, true);
+            ledger.mark_uncertain("process/start");
+            return Err("the server's start has an unknown outcome".to_owned());
+        }
+        let ok = started.as_ref().is_ok_and(|reply| {
+            reply.pointer("/result/processId").and_then(Value::as_str) == Some(id.as_str())
+        });
+        ledger.server_started(&id, ok);
+        if ok {
+            Ok(())
+        } else {
+            Err("the target refused the process".to_owned())
+        }
     });
-    ledger.server_started(process, ok);
-    if ok {
-        Ok(())
-    } else {
-        Err("the target refused the process".into())
-    }
+    settled
+        .await
+        .unwrap_or_else(|_| Err("the server's start was interrupted".to_owned()))
 }
 
 impl Server {

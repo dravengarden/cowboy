@@ -377,11 +377,11 @@ impl Client {
                 // The Machine resends a request itself when a bulk lane
                 // fails, below this count: a refusal of an effectful request
                 // may answer such a resend while an earlier send was admitted.
-                // Only the keeper's capacity refusal follows its operation
-                // table check, so it alone proves the operation is absent.
-                Response::Refused { reason } => {
-                    return Err(admitted
-                        || (ledger::effectful(&method) && reason != wire::Refusal::Capacity));
+                // Fail closed: any refusal of an effectful request may answer
+                // a copy the worker cannot see (a Machine resend) while
+                // another copy was admitted.
+                Response::Refused { .. } => {
+                    return Err(admitted || ledger::effectful(&method));
                 }
                 _ => return Err(true),
             }

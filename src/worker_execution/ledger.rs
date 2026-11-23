@@ -603,7 +603,7 @@ pub(super) fn unread_effects(
     let answered = reply.get("result").is_some()
         || reply.pointer("/error/data/outcome") == Some(&json!("unknown"));
     let mut effects = Vec::new();
-    if (MUTATIONS.contains(&method) || carries_result)
+    if (effectful(method) || carries_result)
         && answered
         && let Some(known) = KNOWN_EFFECTS.iter().find(|known| **known == method)
     {
@@ -624,6 +624,8 @@ const KNOWN_EFFECTS: &[&str] = &[
     "process/start",
     "process/terminate",
     "process/read",
+    "process/write",
+    "process/signal",
 ];
 
 fn refused(message: &str) -> Value {
@@ -772,7 +774,7 @@ impl Client {
                     }
                     return refused("Execution unavailable; the request was not sent");
                 }
-                if MUTATIONS.contains(&method.as_str()) || result_carrying {
+                if effectful(&method) || result_carrying {
                     ledger.mark_uncertain(&method);
                 }
                 unavailable()

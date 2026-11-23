@@ -396,19 +396,24 @@ three review rounds (`call-8a6c5e81`, `call-b856f2db`, `call-878a5459`):
   `Unavailable` after the Machine received the request.
 - Resends below the worker. When a bulk lane fails, the Machine resends
   unanswered requests itself (`machine_cli`), and the worker never sees those
-  resends. So a keeper refusal of an effectful request (a mutation,
+  resends. So any keeper refusal of an effectful request (a mutation,
   `process/write`, `process/signal` or `process/terminate`) counts as possible
-  admission whatever the send count. The exception is `Capacity`: the keeper
-  raises it only after its operation table showed the operation absent. A
-  refused read stays a plain refusal. This was chosen over a "resent by the
-  Machine" flag on `RuntimeReply`. That type denies unknown fields, so the
-  flag would need protocol gating in both the broker and `machine_cli`, where
-  this needs a worker change only. Cost: a mutation refused on its only send
-  (for example after the workspace changed) now parks. That is rare, and
-  such a session needs attention anyway.
-- Worker-owned starts and writes. An extension server's start uses
-  `invoke_classified`. On possible admission, the start is recorded as
-  uncertain, and the process stays recorded so teardown ends it. Each new
+  admission, whatever the send count. That includes `Capacity`, which one
+  copy can receive while another copy was admitted (round 2). A refused read
+  stays a plain refusal. This was chosen over a "resent by the Machine" flag
+  on `RuntimeReply`: that type denies unknown fields, so the flag would need
+  protocol gating in both the broker and `machine_cli`, where this needs a
+  worker change only. Cost, accepted: an effectful request refused on its
+  only send now parks.
+- Relay accounting. A relayed `process/write` or `process/signal` with an
+  unknown outcome, or answered but never delivered to the unit, is recorded
+  like a mutation (the same `effectful` rule).
+- Worker-owned starts and writes. An extension server's start runs on its
+  own task, so the discovery timeout can abandon the wait but never the
+  start. Within 120 s it ends started, refused, or uncertain: on possible
+  admission, or no answer within the bound, the start is recorded as
+  uncertain, it no longer counts as starting, and the process stays recorded
+  so teardown ends it. Each new
   `process/write` from the extension broker checks the unwritable latch
   first, while retries of a write already sent continue.
 - Time-based sequence. Uncertain-effect sequences are

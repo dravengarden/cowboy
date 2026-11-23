@@ -390,7 +390,7 @@ async fn lost_mutation_replies_mark_the_effect_uncertain_durably() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("session.json");
     let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
-        "fs/remove" => Reply::Answer(Response::Refused {
+        "fs/getMetadata" => Reply::Answer(Response::Refused {
             reason: wire::Refusal::Capacity,
         }),
         "fs/writeFile" | "process/terminate" => Reply::Answer(Response::Operation {
@@ -405,10 +405,10 @@ async fn lost_mutation_replies_mark_the_effect_uncertain_durably() {
     ledger.set_observer(Box::new(move |method, sequence| {
         seen.lock().push((method.to_owned(), sequence));
     }));
-    // A refusal before admission had no effect.
+    // A refused read had no effect (a refused effect may have had one).
     let refused = target
         .client
-        .relay("fs/remove".into(), json!({"path": "file:///target/a"}))
+        .relay("fs/getMetadata".into(), json!({"path": "file:///target/a"}))
         .await;
     assert!(refused.get("error").is_some());
     assert!(ledger.uncertain_effect().is_none());
@@ -1368,4 +1368,37 @@ async fn a_refused_effect_is_possibly_admitted_but_a_refused_read_is_not() {
         Some(&json!("unknown"))
     );
     assert_eq!(ledger.uncertain_effect().as_deref(), Some("fs/writeFile"));
+}
+
+#[tokio::test]
+async fn an_unknown_process_write_or_signal_parks_the_session() {
+    for method in ["process/write", "process/signal"] {
+        let target = Target::new(Arc::new(|_| {
+            Reply::Answer(Response::Operation {
+                outcome: Outcome::Unknown,
+            })
+        }));
+        let ledger = ledger(&target.client, None);
+        ledger.begin_turn("turn-1");
+        let reply = target
+            .client
+            .relay(method.into(), json!({"processId": "p1"}))
+            .await;
+        assert_eq!(
+            reply.pointer("/error/data/outcome"),
+            Some(&json!("unknown"))
+        );
+        assert_eq!(ledger.uncertain_effect().as_deref(), Some(method));
+    }
+}
+
+#[test]
+fn an_answered_write_or_signal_the_unit_never_read_is_unknown() {
+    use super::ledger::unread_effects;
+    for method in ["process/write", "process/signal"] {
+        assert_eq!(
+            unread_effects(method, false, &json!({"result": {}})),
+            [method]
+        );
+    }
 }
