@@ -1,6 +1,6 @@
 //! A continuation remains beside its source in both sidebar orderings.
 use super::{Hub, settings_keys};
-use crate::session_folders::FolderActor;
+use crate::session_folders::{FolderActor, defaults::DefaultKey};
 use serde_json::json;
 
 impl Hub {
@@ -28,7 +28,8 @@ impl Hub {
         inherit_settings: bool,
         actor: &FolderActor,
     ) -> Result<(), String> {
-        let title = self.place_beside(source, destination, inherit_settings, actor)?;
+        let title =
+            self.place_beside(source, destination, inherit_settings, actor, Beside::Source)?;
         self.set_setting(
             format!(
                 "{}{destination}",
@@ -72,7 +73,7 @@ impl Hub {
         destination: &str,
         actor: &FolderActor,
     ) -> Result<(), String> {
-        let title = self.place_beside(source, destination, true, actor)?;
+        let title = self.place_beside(source, destination, true, actor, Beside::Source)?;
         self.rename_session(destination, format!("{title} (fork)"));
         Ok(())
     }
@@ -86,7 +87,7 @@ impl Hub {
         destination: &str,
         actor: &FolderActor,
     ) -> Result<(), String> {
-        let title = self.place_beside(source, destination, true, actor)?;
+        let title = self.place_beside(source, destination, true, actor, Beside::Source)?;
         let title = if title.ends_with(" (copy)") {
             title
         } else {
@@ -94,6 +95,37 @@ impl Hub {
         };
         self.rename_session(destination, title);
         Ok(())
+    }
+
+    /// An agent-spawned session, filed beside its creator the way a fork is:
+    /// the creator's folder and both sidebar orders, never its settings. A
+    /// creator's spawns keep their creation order, each after the previous one.
+    /// Returns whether the session moved; `false` leaves it where it was
+    /// created, as when the creator is in Trash or gone.
+    ///
+    /// # Errors
+    /// Another owner's creator, or a folder the actor cannot change. Nothing is
+    /// recorded in that case; the session stays where it was created.
+    pub fn place_spawned(
+        &self,
+        creator: &str,
+        spawned: &str,
+        actor: &FolderActor,
+    ) -> Result<bool, String> {
+        // Trash takes the same gate, so a creator cannot be trashed after this
+        // check and before the move.
+        let _guard = self.inner.sync_apply_gate.lock();
+        let Some(info) = self.session_info(creator) else {
+            return Ok(false);
+        };
+        if info.meta.trashed_at_ms.is_some() || info.meta.closing {
+            return Ok(false);
+        }
+        if self.lifts_language_server_ban(&info.meta, spawned) {
+            return Ok(false);
+        }
+        self.place_beside_locked(creator, spawned, false, actor, Beside::Spawn)?;
+        Ok(true)
     }
 
     /// Folder, both sidebar orders and the review directory; returns the
@@ -104,8 +136,21 @@ impl Hub {
         destination: &str,
         inherit_settings: bool,
         actor: &FolderActor,
+        mode: Beside,
     ) -> Result<String, String> {
         let _guard = self.inner.sync_apply_gate.lock();
+        self.place_beside_locked(source, destination, inherit_settings, actor, mode)
+    }
+
+    /// [`Self::place_beside`] for a caller already holding the sync gate.
+    fn place_beside_locked(
+        &self,
+        source: &str,
+        destination: &str,
+        inherit_settings: bool,
+        actor: &FolderActor,
+        mode: Beside,
+    ) -> Result<String, String> {
         let source_meta = self.session_info(source).ok_or("Source unavailable")?.meta;
         let target = self
             .session_info(destination)
@@ -120,7 +165,12 @@ impl Hub {
         {
             return Err("Invalid continuation ownership".into());
         }
-        let folder = self.continuation_folder(source, actor)?;
+        let mut folder = self.continuation_folder(source, actor)?;
+        if folder.is_none() && mode == Beside::Spawn && self.files_by_project(destination, actor) {
+            // A creator at the top level keeps its spawn there, even when the
+            // spawn's own project is bound to a folder that would claim it.
+            folder = Some(None);
+        }
         if let Some(folder) = folder {
             self.sync_apply_as_locked(
                 actor,
@@ -135,7 +185,17 @@ impl Hub {
         // Mixed workspace order already uses display order. Work in display order
         // throughout so filling in unranked rows never reverses the user's list.
         let mut display_order: Vec<_> = self.inner.order.lock().iter().rev().cloned().collect();
-        insert_after(&mut display_order, source, destination);
+        // `display_order` is a copy: no order lock is held while settings are read.
+        // Rows hidden from the sidebar (deleted or in Trash) never break the
+        // creator's run: the workspace order keeps their keys. Spawns are
+        // ordered by creation, not by the order they happen to be filed in.
+        let spawned = |id: &str| {
+            mode == Beside::Spawn
+                && (self.hidden(id)
+                    || (self.spawned_from(id).as_deref() == Some(source)
+                        && created_before(id, destination)))
+        };
+        insert_after(&mut display_order, source, destination, &spawned);
         let order: Vec<_> = display_order.iter().rev().cloned().collect();
         self.sync_apply_as_locked(
             actor,
@@ -176,6 +236,7 @@ impl Hub {
             &mut mixed,
             &format!("session:{source}"),
             &format!("session:{destination}"),
+            &|key| key.strip_prefix("session:").is_some_and(spawned),
         );
         self.sync_apply_as_locked(
             actor,
@@ -205,8 +266,90 @@ impl Hub {
                 )?;
             }
         }
+        if mode == Beside::Spawn {
+            // Inside the gate, so a concurrent spawn sees this one in its run.
+            self.set_setting(
+                format!(
+                    "{}{destination}",
+                    settings_keys::SESSION_SPAWNED_FROM_PREFIX
+                ),
+                json!(source),
+            );
+        }
         Ok(source_meta.title)
     }
+
+    /// Whether filing `spawned` in the creator's folder would lift a
+    /// `language_servers: off` policy that the folder it is filed in now applies
+    /// (Review reads the session's folder live). An agent's implicit placement
+    /// never widens that trust; only an explicit move by its owner does.
+    fn lifts_language_server_ban(&self, creator: &super::SessionMeta, spawned: &str) -> bool {
+        let Some(spawned) = self.session_info(spawned).map(|info| info.meta) else {
+            return false;
+        };
+        let actor = FolderActor {
+            user_id: spawned.owner_user_id.clone(),
+            sees_all: false,
+        };
+        let folders = self.inner.folders.lock();
+        let off = |meta: &super::SessionMeta| {
+            folders
+                .display_folder(&actor, &meta.id, sidebar_project(meta))
+                .is_some_and(|folder| {
+                    folders
+                        .resolve_defaults(&actor, &folder)
+                        .is_ok_and(|resolved| {
+                            matches!(
+                                resolved.values.get(&DefaultKey::LanguageServers),
+                                Some(Some(value)) if value == "off"
+                            )
+                        })
+                })
+        };
+        off(&spawned) && !off(creator)
+    }
+
+    /// Whether the sidebar shows no row for the session: it is deleted or in
+    /// Trash.
+    fn hidden(&self, session: &str) -> bool {
+        self.inner
+            .sessions
+            .lock()
+            .get(session)
+            .is_none_or(|session| session.meta.trashed_at_ms.is_some())
+    }
+
+    /// The creator a session was filed beside as a spawn, if any.
+    fn spawned_from(&self, session: &str) -> Option<String> {
+        self.setting(&format!(
+            "{}{session}",
+            settings_keys::SESSION_SPAWNED_FROM_PREFIX
+        ))?
+        .as_str()
+        .map(str::to_owned)
+    }
+
+    /// Whether the sidebar would file the session into a folder bound to its
+    /// project while it has no explicit placement.
+    fn files_by_project(&self, session: &str, actor: &FolderActor) -> bool {
+        let Some(info) = self.session_info(session) else {
+            return false;
+        };
+        self.inner
+            .folders
+            .lock()
+            .display_folder(actor, session, sidebar_project(&info.meta))
+            .is_some()
+    }
+}
+
+/// Where a session is filed relative to the one it belongs beside.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Beside {
+    /// Immediately after its source: a continuation, fork or copy.
+    Source,
+    /// After the creator's earlier spawns, so those keep their creation order.
+    Spawn,
 }
 
 /// Match sessionProjectLabel in the Web sidebar, including legacy checkouts.
@@ -309,12 +452,34 @@ fn resumed_key(session_id: &str) -> String {
     )
 }
 
-fn insert_after(order: &mut Vec<String>, source: &str, destination: &str) {
+/// Whether `earlier` was created before `later`. Session ids come from one
+/// increasing counter, so their numbers are the order in which creations began
+/// even when overlapping creations are filed in another order. An id outside
+/// that form is taken as older.
+fn created_before(earlier: &str, later: &str) -> bool {
+    let number = |id: &str| id.strip_prefix("sess-")?.parse::<u64>().ok();
+    match (number(earlier), number(later)) {
+        (Some(earlier), Some(later)) => earlier < later,
+        _ => true,
+    }
+}
+
+/// Move `destination` right after `source` and the run of `follows` rows
+/// that already trails it.
+fn insert_after(
+    order: &mut Vec<String>,
+    source: &str,
+    destination: &str,
+    follows: &dyn Fn(&str) -> bool,
+) {
     order.retain(|id| id != destination);
-    let at = order
+    let mut at = order
         .iter()
         .position(|id| id == source)
         .map_or(order.len(), |index| index + 1);
+    while order.get(at).is_some_and(|id| follows(id)) {
+        at += 1;
+    }
     order.insert(at, destination.to_owned());
 }
 
@@ -676,3 +841,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "session_spawn_tests.rs"]
+mod spawn_tests;

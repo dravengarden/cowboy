@@ -586,6 +586,12 @@ HTTP handler, WebSocket command and merged protocol router to its MCP operation
 or concrete owner exception. Tests reject unclassified additions and stale
 entries.
 
+`sessions.create` files the new session beside its creator in the Sessions list
+unless the body names a `folder_id`, and accepts an optional `title` validated
+like `sessions.rename`; see [Sessions an agent
+creates](sessions-folders.md#sessions-an-agent-creates) for placement, folder
+defaults and the Trash and deleted-creator cases.
+
 Read through `control.read(name,input,selection)`. Its default is a shape
 description, not a full payload. Select a JSON pointer, a short string window or
 an array page; the same bounds apply to document history, log detail and Plugin

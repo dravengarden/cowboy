@@ -17,6 +17,7 @@ use tower::ServiceExt as _;
 mod account_routes;
 mod browser_routes;
 mod context_routes;
+mod spawn;
 
 static EFFECTS: LazyLock<Arc<Semaphore>> = LazyLock::new(|| Arc::new(Semaphore::new(16)));
 
@@ -1200,20 +1201,11 @@ async fn dispatch(
             state, notify, call, op, receipt,
         ));
     }
-    if name == "sessions.create" {
-        let body = input
-            .get_mut("body")
-            .and_then(Value::as_object_mut)
-            .ok_or("invalid_argument")?;
-        if body.contains_key("system")
-            || body.contains_key("owner_user_id")
-            || body.contains_key("origin")
-        {
-            return Err("invalid_argument".into());
-        }
-        // Agent creation follows the same managed-worktree path as the GUI.
-        body.insert("origin".into(), json!("web"));
-    }
+    let spawn = if name == "sessions.create" {
+        Some(spawn::Spawn::prepare(&mut input)?)
+    } else {
+        None
+    };
     if name == "projects.placements" {
         only_keys(&input, &["machine"])?;
         input = json!({"query":{"machine_id":arg_str(&input,"machine")?}});
@@ -1249,7 +1241,12 @@ async fn dispatch(
         .oneshot(request)
         .await
         .map_err(|_| "unavailable")?;
-    response_value(response, spec.write).await
+    let result = response_value(response, spec.write).await?;
+    if let Some(spawn) = spawn {
+        let actor = web::folder_actor(state, &auth.principal);
+        spawn.finish(&state.hub, &parent.id, &actor, &result);
+    }
+    Ok(result)
 }
 
 async fn response_value(response: axum::response::Response, write: bool) -> Result<Value, String> {
@@ -1386,6 +1383,9 @@ pub(super) async fn apply(
     let auth = identity(state, parent, true).await?;
     scoped_targets(&state.hub, parent, &input.name, &input.input)?;
     write_gate(state, parent, &input.name, &input.input)?;
+    if input.name == "sessions.create" {
+        spawn::Spawn::check(&input.input)?;
+    }
     let store = state.store.as_ref().ok_or("unavailable")?.clone();
     let slot = Arc::clone(&EFFECTS)
         .try_acquire_owned()

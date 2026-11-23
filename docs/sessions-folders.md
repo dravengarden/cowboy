@@ -363,6 +363,55 @@ placement, including Global, so project bindings cannot override this choice.
 The picker reveals the selected directory on reopening and keeps its hierarchy
 preference separate from the Project and legacy working-directory pickers.
 
+### Sessions an agent creates
+
+`sessions.create` in the [Agent API](agent-api.md) files the new session beside
+its creator, the way a fork or copy is filed beside its source. The creator is
+the session whose agent made the call.
+
+- **Folder.** With no `folder_id`, the session goes into the creator's effective
+  folder: its explicit placement, else the folder bound to its project, else the
+  top level. A creator in a nested folder keeps its spawns in that nested folder.
+  A creator at the top level keeps them there: the spawn is pinned to the top
+  level when a folder bound to the spawn's own project would otherwise claim it.
+- **Position.** Both the flat order and the mixed workspace order place the
+  session right after its creator and after the creator's earlier spawns, so
+  several spawns read in creation order. Creation order is the session id
+  counter, so overlapping calls whose creations finish in another order are
+  still filed in the order they began. `session_spawned_from:<id>` records the
+  creator of each placed spawn so the run survives a Controller restart; it is
+  internal and never reaches the Web. A spawn the user moved away from the
+  creator breaks that run: the next spawn goes right after the creator. Rows
+  hidden from the sidebar (deleted or in Trash) do not break it.
+- **Explicit `folder_id`** wins and nothing is moved. `""` names the top level.
+  This is the only case in which the folder's defaults (project, Machine,
+  runtime Machine, agent, preset, MCP bindings) apply.
+- **Defaults are unchanged.** Folder defaults are creation inputs resolved from
+  the request's `folder_id`. The implicit placement is applied after creation as
+  a list move, like fork, copy and fresh-agent handoff, so it never changes the
+  workspace, Machine, runtime Machine, account or preset a spawn resolves to
+  compared with omitting the folder before this behaviour existed. A spawn that
+  wants its creator's folder defaults names that folder explicitly.
+- **Language servers.** Review reads a session's folder live to decide whether
+  project-configured language servers may run. The implicit placement never
+  lifts a `language_servers: off` policy: when the folder that files the spawn
+  now (for example through its project binding) bans them and the creator's
+  folder does not, the spawn stays where creation put it. Only its owner moves
+  it out. Filing into a folder that bans them is allowed.
+- **Creator in Trash or deleted.** Nothing moves and no error is returned: the
+  session stays where creation put it, since a created session must never turn
+  into a failure that invites a duplicate retry. The same holds for any other
+  refusal of the move, which is logged.
+- `title` is optional, trimmed, and cannot be empty, as for `sessions.rename`;
+  a body the creation handler would reject, such as an invalid title, is refused
+  before the call is admitted, so nothing is created. The title is set right
+  after creation, the way `sessions.rename`, fork and copy set one. Without it
+  the title is derived from the initial prompt as before.
+
+The move uses the ordinary `folders`, `order` and `workspace-order` writers, so
+open Web clients see the row appear in place through their live sync patches,
+without a reload.
+
 ### Inherited directory defaults
 
 Create → Folder and the tree's New folder inside shortcut share one editor.
