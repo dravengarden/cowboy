@@ -797,7 +797,10 @@ test("deferred post-EOF cleanup preserves inherited-pipe transcript reads and pi
   //    and a failing rm on a file-backed hook never skips the PreToolUse exit-2 guard.
   const fakeBin = join(root, "fake-bin");
   await mkdir(fakeBin, { recursive: true });
-  await writeFile(join(fakeBin, "rm"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  await writeFile(join(fakeBin, "rm"), '#!/bin/sh\necho "NOISY RM STDOUT"\nexit 1\n', {
+    mode: 0o755,
+  });
+  await writeFile(join(fakeBin, "sh"), '#!/bin/sh\necho "HIJACKED SH"\nexit 0\n', { mode: 0o755 });
   const hostileEnv = join(root, "bash-env.sh");
   await writeFile(hostileEnv, 'trap "exit 1" ERR\nset -e\nset -m\n');
   tools.hookCleanupDeferMs = 0;
@@ -823,13 +826,14 @@ test("deferred post-EOF cleanup preserves inherited-pipe transcript reads and pi
     calls.length = 0;
     const large = JSON.stringify({ content: "y".repeat(70000) });
     const guarded = await tools.runHook({
-      command: "exit 2",
+      command: 'in=$(cat); printf \'{"decision":"block","len":%d}\' "${#in}"; exit 2',
       input: large,
       timeoutMs: 5000,
       call: { id: "hook-rm-fail-guard" },
     });
     await tools.cleanup;
     assert.equal(guarded.exitCode, 2);
+    assert.deepEqual(JSON.parse(guarded.stdout), { decision: "block", len: large.length });
     const written = calls.find(({ method }) => method === "fs/writeFile").params;
     assert.deepEqual(
       calls.filter(({ method }) => method === "fs/remove").map(({ params }) => params.path),
@@ -888,7 +892,7 @@ test("fallback removals retry independently without head-of-line starvation and 
 
   // 1. p1 always fails with EACCES, p2 fails once transiently, p3 succeeds immediately.
   //    p3 must NOT be starved by p1, and p2 must automatically recover on the idle timer.
-  tools.queueRemovals(["/tmp/p1-eacces", "/tmp/p2-transient", "/tmp/p3-ok"], 0);
+  await tools.queueRemovals(["/tmp/p1-eacces", "/tmp/p2-transient", "/tmp/p3-ok"], 0);
   await tools.cleanup;
   assert.deepEqual(removed, ["/tmp/p3-ok"]);
   assert.equal(tools.pendingRemovals.has("/tmp/p1-eacces"), true);
@@ -1065,6 +1069,146 @@ test("runHook quiet notifiedRead covers wake, early-notification race, reread ti
   );
   assert.equal(listeners.size, baselineListeners);
   assert.ok(calls.some(({ method }) => method === "process/terminate"));
+});
+
+test("hook cleanup respects unclosed cancellations, persists across restarts, and requires snapshot ack", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "cowboy-hook-durable-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const statePath = join(dir, "state.json");
+  const removed = [];
+  const snapshotScripts = [];
+  let hookClosed = false;
+  let hookId = "";
+  let emitAck = false;
+
+  const makeConnection = () => ({
+    info: { userHomeDir: "file:///home/target" },
+    listeners: new Set(),
+    closed: false,
+    async call(method, params) {
+      if (method === "fs/remove") {
+        removed.push(fileURLToPath(params.path));
+        return {};
+      }
+      if (method === "process/start") {
+        const script = params.argv[2] ?? "";
+        if (params.argv[4]?.includes(".delta'")) {
+          snapshotScripts.push(params.argv[4]);
+        } else if (!script.startsWith("umask 077")) {
+          hookId = params.processId;
+        }
+        return { processId: params.processId };
+      }
+      if (method === "process/read") {
+        if (params.processId === hookId) {
+          return {
+            chunks: [],
+            exited: hookClosed,
+            closed: hookClosed,
+            exitCode: hookClosed ? 143 : null,
+          };
+        }
+        // Snapshot command: optionally omit COWBOY_STALE_OK even when exitCode is 0.
+        if (emitAck) {
+          const match = /COWBOY_STALE_OK:%s\\n' '([a-f0-9]+)'/.exec(snapshotScripts.at(-1) ?? "");
+          if (match && params.afterSeq === null) {
+            return {
+              chunks: [
+                {
+                  seq: 1,
+                  stream: "stdout",
+                  chunk: Buffer.from(`COWBOY_STALE_OK:${match[1]}\n`).toString("base64"),
+                },
+              ],
+              exited: true,
+              closed: true,
+              exitCode: 0,
+            };
+          }
+        }
+        return { chunks: [], exited: true, closed: true, exitCode: 0 };
+      }
+      return {};
+    },
+  });
+
+  // 1. Timeout with closed:false binds hookFiles to the job record; another snapshot
+  //    must NOT unlink them while cancellation is still unconfirmed.
+  const conn1 = makeConnection();
+  const tools1 = new WorkspaceTools(conn1, binding, statePath);
+  await tools1.load();
+  tools1.shell = "/bin/bash";
+  tools1.hookCleanupDeferMs = 5000;
+
+  hookClosed = false;
+  const timed = await tools1.runHook({
+    command: "slow.sh",
+    input: "{}",
+    timeoutMs: 1,
+    call: { id: "hook-unclosed" },
+    transcript: Buffer.from("secret\n"),
+  });
+  assert.deepEqual(timed, { timedOut: true });
+  const unclosedJobId = hookId;
+  assert.ok(tools1.state.jobs[unclosedJobId]?.privateHook);
+  assert.equal(tools1.state.jobs[unclosedJobId]?.hookFiles?.length, 1);
+  const ownedCopy = tools1.state.jobs[unclosedJobId].hookFiles[0];
+  assert.equal(tools1.pendingRemovals?.has(ownedCopy) ?? false, false);
+  assert.equal(removed.length, 0);
+
+  // Another snapshot in flight while unclosedJobId is still live must NOT include ownedCopy.
+  snapshotScripts.length = 0;
+  await tools1.hookTranscript(
+    Buffer.from("secret\nmore\n"),
+    "/home/target/.cache/cowboy/hook-input/other.jsonl",
+  );
+  assert.ok(!snapshotScripts.at(-1).includes(ownedCopy));
+
+  // Once the executor confirms closure, the privateHook job record is deleted and
+  // ownedCopy is promoted and removed via fs/remove.
+  hookClosed = true;
+  await tools1.reconcileCancellation(unclosedJobId);
+  await tools1.cleanup;
+  assert.equal(tools1.state.jobs[unclosedJobId], undefined);
+  assert.deepEqual(removed, [ownedCopy]);
+
+  // 2. Missing COWBOY_STALE_OK ack on exit 0 must NOT retire stale path and must hand off
+  //    to per-path retry (so a second snapshot skips it instead of bypassing backoff).
+  removed.length = 0;
+  snapshotScripts.length = 0;
+  emitAck = false;
+  await tools1.queueRemovals(["/home/target/.cache/cowboy/hook-input/no-ack.jsonl"], 60000);
+  await tools1.hookTranscript(
+    Buffer.from("secret\nmore\n2\n"),
+    "/home/target/.cache/cowboy/hook-input/snap2.jsonl",
+  );
+  assert.ok(snapshotScripts.at(-1).includes("no-ack.jsonl"));
+  // Handed off to fs/remove immediately (and retired once fs/remove succeeded).
+  await tools1.cleanup;
+  assert.deepEqual(removed, ["/home/target/.cache/cowboy/hook-input/no-ack.jsonl"]);
+
+  // 3. Deferred removals persist in state.json across restart and drain on graceful shutdown.
+  removed.length = 0;
+  await tools1.queueRemovals(["/home/target/.cache/cowboy/hook-input/persisted.jsonl"], 60000);
+  assert.deepEqual(tools1.state.pendingHookRemovals, [
+    "/home/target/.cache/cowboy/hook-input/persisted.jsonl",
+  ]);
+  // Simulate ungraceful exit (no drain) and fresh process restart reading state.json.
+  clearTimeout(tools1.removalTimer);
+  const conn2 = makeConnection();
+  const tools2 = new WorkspaceTools(conn2, binding, statePath);
+  await tools2.load();
+  await tools2.cleanup;
+  assert.deepEqual(removed, ["/home/target/.cache/cowboy/hook-input/persisted.jsonl"]);
+  assert.equal(tools2.state.pendingHookRemovals, undefined);
+
+  // Graceful shutdown drainHookRemovals() flushes deferred items immediately before close.
+  removed.length = 0;
+  await tools2.queueRemovals(["/home/target/.cache/cowboy/hook-input/shutdown.jsonl"], 60000);
+  assert.equal(removed.length, 0);
+  await tools2.drainHookRemovals(1000);
+  assert.deepEqual(removed, ["/home/target/.cache/cowboy/hook-input/shutdown.jsonl"]);
+  assert.equal(tools2.state.pendingHookRemovals, undefined);
 });
 
 let fixtureId = 0;

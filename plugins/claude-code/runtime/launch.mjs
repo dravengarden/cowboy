@@ -1357,6 +1357,7 @@ async function native(args) {
     child?.kill("SIGTERM");
     // Target MCP servers end with the session, as natively.
     await tools?.stopMcpServers(true).catch(() => {});
+    await tools?.drainHookRemovals?.(2000).catch(() => {});
     connection?.close();
     await memory?.close();
     await modBridge?.close();

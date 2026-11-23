@@ -406,8 +406,14 @@ export function hookInlineText(bytes, limit = HOOK_INLINE_INPUT) {
 // every exit the snapshot defines, so no separate removal follows it. An
 // inherited errexit must not skip that removal; a failed removal adds 100 to
 // the snapshot's status so the caller removes the files itself.
-export function hookSnapshotScript(snapshot, delta, copy, inline, stale = []) {
-  const removals = [delta, copy + ".cache", ...stale].map(shellLiteral).join(" ");
+export function hookSnapshotScript(
+  snapshot,
+  delta,
+  copy,
+  inline,
+  stale = [],
+  staleAck = undefined,
+) {
   return [
     "set +e",
     ...(inline === undefined
@@ -417,7 +423,12 @@ export function hookSnapshotScript(snapshot, delta, copy, inline, stale = []) {
         ]),
     snapshot.map(shellLiteral).join(" "),
     "s=$?",
-    `unset -f rm 2>/dev/null; command rm -f -- ${removals} || s=$((s + 100))`,
+    `rm -f -- ${shellLiteral(delta)} ${shellLiteral(copy + ".cache")} || s=$((s + 100))`,
+    ...(stale.length && staleAck
+      ? [
+          `unset -f rm 2>/dev/null; if command rm -f -- ${stale.map(shellLiteral).join(" ")} 2>/dev/null; then printf 'COWBOY_STALE_OK:%s\\n' ${shellLiteral(staleAck)}; fi`,
+        ]
+      : []),
     'exit "$s"',
   ].join("\n");
 }
@@ -864,22 +875,22 @@ export function hookCommand(shell, { command, argv, cwd, inline, input, file }) 
   if (argv) {
     const resolved = argv.map((value) => value.replaceAll("${CLAUDE_PROJECT_DIR}", cwd));
     return [
-      "sh",
+      "/bin/sh",
       "-c",
       inline
         ? 'set +e +m; (set +o pipefail) 2>/dev/null && set +o pipefail; i=$1; shift; printf "%s" "$i" | exec "$@"'
-        : 'set +e +m; i=$1; shift; exec 0<"$i" && { command rm -f -- "$i" 2>/dev/null || true; } && exec "$@"',
+        : 'set +e +m; i=$1; shift; exec 0<"$i" && exec "$@"',
       shell,
       inline ? input : file,
       ...resolved,
     ];
   }
   return [
-    "sh",
+    "/bin/sh",
     "-c",
     inline
       ? 'set +e +m; (set +o pipefail) 2>/dev/null && set +o pipefail; printf "%s" "$1" | exec "$0" -c "$2"'
-      : 'set +e +m; exec 0<"$1" && { command rm -f -- "$1" 2>/dev/null || true; } && exec "$0" -c "$2"',
+      : 'set +e +m; exec 0<"$1" && exec "$0" -c "$2"',
     shell,
     inline ? input : file,
     command,
@@ -1063,7 +1074,10 @@ export class WorkspaceTools {
     this.saves = Promise.resolve();
     this.fileBufferStats = { hits: 0, misses: 0, applies: 0, sentBytes: 0 };
     this.connection.listeners?.add((frame) => {
-      if (frame.method === "connected") this.scheduleCancellations();
+      if (frame.method === "connected") {
+        this.scheduleCancellations();
+        this.scheduleRemovals();
+      }
     });
   }
 
@@ -1097,6 +1111,9 @@ export class WorkspaceTools {
     // Local copies belong to the process that made them.
     await rm(this.localDirectory(), { recursive: true, force: true });
     await this.reconcileCancellations();
+    if (Array.isArray(this.state.pendingHookRemovals) && this.state.pendingHookRemovals.length) {
+      await this.queueRemovals(this.state.pendingHookRemovals, 0, { persist: false });
+    }
   }
 
   async cleanupTemporaryStates() {
@@ -1278,6 +1295,7 @@ export class WorkspaceTools {
         call,
         { CLAUDE_PROJECT_DIR: this.cwd, CLAUDE_ENV_FILE: this.envFile() },
         id,
+        { privateHook: true },
       );
       const streams = { stdout: [], stderr: [] };
       const limits = { stdout: 0, stderr: 0 };
@@ -1322,6 +1340,7 @@ export class WorkspaceTools {
       } while (result.closed ? result.chunks.length > 0 : Date.now() < deadline);
       if (!result.closed) {
         settled = true;
+        await this.attachHookFilesForCancellation(id, [inline ? undefined : file, copy, agentCopy]);
         await this.cancelTasks([id]);
         return { timedOut: true };
       }
@@ -1336,16 +1355,19 @@ export class WorkspaceTools {
         stderr: Buffer.concat(streams.stderr).toString("utf8"),
       };
     } finally {
-      // Lost output observation: stop the target command through the
-      // durable reconciler rather than abandon an untracked process.
-      if (started && !settled) await this.cancelTasks([id]).catch(() => {});
+      const hookFiles = [inline ? undefined : file, copy, agentCopy].filter(Boolean);
+      // Lost output observation: bind temporary files to the live job record
+      // before cancelling so cleanup waits until closure is confirmed.
+      if (started && !settled) {
+        await this.attachHookFilesForCancellation(id, hookFiles).catch(() => {});
+        await this.cancelTasks([id]).catch(() => {});
+      }
       this.foreground.delete(id);
       if (call?.id) this.calls.delete(call.id);
-      // Only after executor EOF (or cancellation) do hook files become eligible
-      // for removal, so inherited-pipe children never observe ENOENT. Active
-      // turns piggyback these removals onto the next hook's snapshot command;
-      // idle sessions still flush them via fs/remove with per-path retry.
-      this.queueRemovals([inline ? undefined : file, copy, agentCopy]);
+      // Queue immediately only when no unclosed hook job still owns these files.
+      if (!this.state.jobs[id]) {
+        await this.queueRemovals(hookFiles).catch(() => {});
+      }
     }
   }
 
@@ -1448,24 +1470,39 @@ export class WorkspaceTools {
               inline = undefined;
               script = hookSnapshotScript(snapshot, delta, copy, inline);
             }
-            // Piggyback previously finished hook temp files onto the snapshot's
-            // own rm invocation whenever they fit without forcing inline deltas
-            // into a separate fs/writeFile round trip.
+            // Piggyback fresh, non-in-flight finished hook temp files onto the
+            // snapshot command without disturbing backed-off retries or staging
+            // cleanup. Stale entries are retired only on an explicit body ack.
             const protectedPaths = new Set([cache, delta, copy, copy + ".cache"]);
             const stale = [];
-            for (const candidate of this.pendingRemovals?.keys() ?? []) {
-              if (stale.length >= MAX_PIGGYBACK_REMOVALS || protectedPaths.has(candidate)) continue;
-              const trial = hookSnapshotScript(snapshot, delta, copy, inline, [
-                ...stale,
-                candidate,
-              ]);
+            const staleAck = randomUUID().replaceAll("-", "");
+            for (const [candidate, entry] of this.pendingRemovals?.entries() ?? []) {
+              if (
+                stale.length >= MAX_PIGGYBACK_REMOVALS ||
+                protectedPaths.has(candidate) ||
+                entry.inFlight ||
+                entry.attempts > 0
+              ) {
+                continue;
+              }
+              const trial = hookSnapshotScript(
+                snapshot,
+                delta,
+                copy,
+                inline,
+                [...stale, candidate],
+                staleAck,
+              );
               if (Buffer.byteLength(trial) <= HOOK_SCRIPT_LIMIT) {
                 stale.push(candidate);
                 script = trial;
               }
             }
+            for (const path of stale) {
+              const entry = this.pendingRemovals?.get(path);
+              if (entry) entry.inFlight = true;
+            }
             let staleRemoved = false;
-            if (stale.length) this.deferPendingRemovals(stale, 10000);
             try {
               if (inline === undefined) await this.hookInputFile(delta, bytes, call);
               const end = randomUUID().replaceAll("-", "");
@@ -1483,9 +1520,15 @@ export class WorkspaceTools {
               const removalFailed = [100, 103, 175].includes(result.exitCode);
               const exitCode = removalFailed ? result.exitCode - 100 : result.exitCode;
               uncertain = ![0, 3, 75].includes(exitCode);
-              if (!removalFailed && !uncertain && stale.length) {
+              if (
+                !uncertain &&
+                stale.length &&
+                typeof result.output === "string" &&
+                result.output.includes(`COWBOY_STALE_OK:${staleAck}`)
+              ) {
                 staleRemoved = true;
                 for (const path of stale) this.pendingRemovals?.delete(path);
+                await this.persistPendingRemovals().catch(() => {});
                 this.scheduleRemovals();
               }
               if (removalFailed) {
@@ -1493,7 +1536,20 @@ export class WorkspaceTools {
               }
               return { ...result, exitCode };
             } finally {
-              if (!staleRemoved && stale.length) this.deferPendingRemovals(stale, 0);
+              if (!staleRemoved && stale.length) {
+                const now = Date.now();
+                for (const path of stale) {
+                  const entry = this.pendingRemovals?.get(path);
+                  if (entry) {
+                    entry.inFlight = false;
+                    // Hand off unconfirmed piggybacks to per-path fs/remove
+                    // with backoff so future snapshots do not bypass backoff.
+                    entry.attempts = Math.max(entry.attempts, 1);
+                    entry.nextAt = now;
+                  }
+                }
+                this.scheduleRemovals();
+              }
             }
           };
           let result = await prepare(
@@ -4450,27 +4506,57 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       .catch(() => {});
   }
 
-  queueRemovals(paths, deferMs = this.hookCleanupDeferMs ?? HOOK_CLEANUP_DEFER_MS) {
+  async attachHookFilesForCancellation(id, paths) {
+    const files = paths.filter(Boolean);
+    if (!files.length || !this.state.jobs[id]) return;
+    await this.save(() => {
+      const previous = this.state.jobs[id];
+      if (!previous) return;
+      const existing = Array.isArray(previous.hookFiles) ? previous.hookFiles : [];
+      this.state.jobs[id] = {
+        ...previous,
+        privateHook: true,
+        hookFiles: [...new Set([...existing, ...files])],
+      };
+      return () => (this.state.jobs[id] = previous);
+    });
+  }
+
+  async persistPendingRemovals() {
+    const next = [...(this.pendingRemovals?.keys() ?? [])];
+    await this.save(() => {
+      const previous = this.state.pendingHookRemovals;
+      if (next.length) {
+        this.state.pendingHookRemovals = next;
+      } else {
+        delete this.state.pendingHookRemovals;
+      }
+      return () => {
+        if (previous === undefined) delete this.state.pendingHookRemovals;
+        else this.state.pendingHookRemovals = previous;
+      };
+    });
+  }
+
+  async queueRemovals(
+    paths,
+    deferMs = this.hookCleanupDeferMs ?? HOOK_CLEANUP_DEFER_MS,
+    { persist = true } = {},
+  ) {
     const nextAt = Date.now() + Math.max(0, deferMs);
     let added = false;
     for (const path of paths) {
       if (!path) continue;
       this.pendingRemovals ??= new Map();
       if (!this.pendingRemovals.has(path)) {
-        this.pendingRemovals.set(path, { attempts: 0, nextAt });
+        this.pendingRemovals.set(path, { attempts: 0, nextAt, inFlight: false });
         added = true;
       }
     }
-    if (added) this.scheduleRemovals();
-  }
-
-  deferPendingRemovals(paths, deferMs) {
-    const nextAt = Date.now() + Math.max(0, deferMs);
-    for (const path of paths) {
-      const entry = this.pendingRemovals?.get(path);
-      if (entry) entry.nextAt = nextAt;
+    if (added && persist) {
+      await this.persistPendingRemovals().catch(() => {});
     }
-    this.scheduleRemovals();
+    if (added) this.scheduleRemovals();
   }
 
   scheduleRemovals() {
@@ -4478,11 +4564,12 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       clearTimeout(this.removalTimer);
       this.removalTimer = undefined;
     }
-    if (!this.pendingRemovals?.size) return;
+    if (!this.pendingRemovals?.size || this.connection.closed) return;
     let earliest = Infinity;
     for (const entry of this.pendingRemovals.values()) {
-      if (entry.nextAt < earliest) earliest = entry.nextAt;
+      if (!entry.inFlight && entry.nextAt < earliest) earliest = entry.nextAt;
     }
+    if (!Number.isFinite(earliest)) return;
     const delay = Math.max(0, earliest - Date.now());
     if (delay === 0) {
       this.flushRemovals();
@@ -4507,18 +4594,23 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     this.cleanup = (this.cleanup ?? Promise.resolve()).then(async () => {
       const retryBase = this.removalRetryBaseMs ?? REMOVAL_RETRY_BASE_MS;
       const now = Date.now();
+      let changed = false;
       for (const [path, entry] of [...(this.pendingRemovals?.entries() ?? [])]) {
-        if (!this.pendingRemovals.has(path)) continue;
+        if (!this.pendingRemovals.has(path) || entry.inFlight) continue;
         if (!immediate && entry.nextAt > now) continue;
+        if (this.connection.closed) break;
+        entry.inFlight = true;
         try {
           await this.connection.call("fs/remove", {
             path: pathToFileURL(path).href,
             force: true,
           });
           this.pendingRemovals.delete(path);
+          changed = true;
         } catch (error) {
           if (missing(error)) {
             this.pendingRemovals.delete(path);
+            changed = true;
           } else {
             entry.attempts += 1;
             const backoff = Math.max(
@@ -4527,11 +4619,39 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
             );
             entry.nextAt = Date.now() + backoff;
           }
+        } finally {
+          entry.inFlight = false;
         }
+      }
+      if (changed) {
+        await this.persistPendingRemovals().catch(() => {});
       }
       this.scheduleRemovals();
     });
     return this.cleanup;
+  }
+
+  // Best-effort bounded flush on graceful shutdown before the execution
+  // connection closes; anything still unremoved remains persisted in state.
+  async drainHookRemovals(timeoutMs = 2000) {
+    if (this.removalTimer) {
+      clearTimeout(this.removalTimer);
+      this.removalTimer = undefined;
+    }
+    if (!this.pendingRemovals?.size || this.connection.closed) return;
+    let timer;
+    await Promise.race([
+      this.flushRemovals({ immediate: true }).catch(() => {}),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+    clearTimeout(timer);
+    if (this.removalTimer) {
+      clearTimeout(this.removalTimer);
+      this.removalTimer = undefined;
+    }
   }
 
   // A command that outlived its Bash call leaves its directory file behind.
@@ -4607,13 +4727,32 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         });
       }
       if (!result.closed) return;
+      let hookFiles = [];
       await this.save(() => {
         const previous = this.state.jobs[id];
         if (!previous) return;
-        this.state.jobs[id] = { ...previous, cancelRequested: false };
-        return () => (this.state.jobs[id] = previous);
+        const previousRemovals = this.state.pendingHookRemovals;
+        hookFiles = Array.isArray(previous.hookFiles) ? previous.hookFiles : [];
+        if (hookFiles.length) {
+          this.state.pendingHookRemovals = [
+            ...new Set([...(previousRemovals ?? []), ...hookFiles]),
+          ];
+        }
+        if (previous.privateHook) {
+          delete this.state.jobs[id];
+        } else {
+          this.state.jobs[id] = { ...previous, cancelRequested: false };
+        }
+        return () => {
+          this.state.jobs[id] = previous;
+          if (previousRemovals === undefined) delete this.state.pendingHookRemovals;
+          else this.state.pendingHookRemovals = previousRemovals;
+        };
       });
       this.foreground.delete(id);
+      if (hookFiles.length) {
+        await this.queueRemovals(hookFiles, 0, { persist: false });
+      }
       await this.releaseCwdFile(id);
     } catch (error) {
       // Missing/unknown before admission settles is not cancellation proof.
@@ -4646,13 +4785,26 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     }
     if (now - job.unknownSince < UNKNOWN_PROCESS_SETTLED_MS) return;
     await this.releaseCwdFile(id);
+    let hookFiles = [];
     await this.save(() => {
       const previous = this.state.jobs[id];
+      const previousRemovals = this.state.pendingHookRemovals;
+      hookFiles = Array.isArray(previous?.hookFiles) ? previous.hookFiles : [];
+      if (hookFiles.length) {
+        this.state.pendingHookRemovals = [...new Set([...(previousRemovals ?? []), ...hookFiles])];
+      }
       delete this.state.jobs[id];
-      return () => (this.state.jobs[id] = previous);
+      return () => {
+        if (previous !== undefined) this.state.jobs[id] = previous;
+        if (previousRemovals === undefined) delete this.state.pendingHookRemovals;
+        else this.state.pendingHookRemovals = previousRemovals;
+      };
     });
     this.foreground.delete(id);
     this.treesKilled.delete(id);
+    if (hookFiles.length) {
+      await this.queueRemovals(hookFiles, 0, { persist: false });
+    }
   }
 
   async reconcileCancellations() {
