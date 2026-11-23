@@ -155,6 +155,18 @@ pub fn apply_prompt_origin(update: &mut Value, origin: &PromptOrigin) {
     }
 }
 
+/// The timeline echo of one block steered into a running turn. Every block
+/// carries the origin its message id selects, like any other prompt echo, so
+/// a peer's or a notice's later blocks never read as the owner's.
+pub fn steering_echo(block: &Value, cmid: &str) -> Value {
+    let mut update = serde_json::json!({
+        "sessionUpdate": "user_message_chunk", "content": block,
+        "_meta": {"cowboyDelivery": "current_turn"},
+    });
+    apply_prompt_origin(&mut update, &origin_from_cmid(Some(cmid)));
+    update
+}
+
 pub fn annotate_inbound_user_prompt(update: &mut Value, provider_id: &str) {
     if update.get("sessionUpdate").and_then(Value::as_str) != Some("user_message_chunk") {
         return;
@@ -250,6 +262,48 @@ pub fn take_matching_inbound_prompt_echo(update: &Value, remaining: &mut Vec<Val
     false
 }
 
+/// Whether a recorded timeline event is a prompt a person sent: a user-role
+/// chunk whose client message id and stamped origin are both the owner's.
+/// Cowboy completion notices, peer-session messages, scheduled wakeups and
+/// agent-side injections are user-role chunks too, but never an owner prompt.
+pub fn is_owner_prompt_event(cmid: Option<&str>, update: &Value) -> bool {
+    update.get("sessionUpdate").and_then(Value::as_str) == Some("user_message_chunk")
+        && origin_from_cmid(cmid).is_human()
+        && is_human_prompt_update(update)
+}
+
+/// Whether a recorded user-role chunk is affirmatively an owner's: the Hub
+/// stamped it with a human origin when it echoed the prompt, and its message
+/// id, if it kept one, is not an automation's. A chunk nobody stamped (an ACP
+/// client's unmatched text, a steered block of an older worker) and older rows
+/// from before the stamp are not, whatever their text; a stamped chunk is the
+/// owner's even when it is a Cowboy preamble carried ahead of the owner's text.
+pub fn is_owner_chunk(envelope: &crate::model::Envelope) -> bool {
+    let crate::agent_model::Event::Update { update } = &envelope.event else {
+        return false;
+    };
+    update.get("sessionUpdate").and_then(Value::as_str) == Some("user_message_chunk")
+        && update.get("autoResumed").and_then(Value::as_bool) != Some(true)
+        && update
+            .pointer("/promptOrigin/actor")
+            .and_then(Value::as_str)
+            == Some("human")
+        && origin_from_cmid(envelope.cmid.as_deref()).is_human()
+}
+
+/// The sequence that begins the newest owner turn in `log` (any slice, oldest
+/// first): the first chunk of the newest run of consecutive owner chunks, so a
+/// send has one anchor however many blocks (a context preamble, images) it
+/// has. A run cut by the slice's start is anchored at its first chunk there.
+pub fn newest_owner_turn(log: &[crate::model::Envelope]) -> Option<u64> {
+    let newest = log.iter().rposition(is_owner_chunk)?;
+    let root = log[..newest]
+        .iter()
+        .rposition(|event| !is_owner_chunk(event))
+        .map_or(0, |gap| gap + 1);
+    Some(log[root].seq)
+}
+
 pub fn is_human_prompt_update(update: &Value) -> bool {
     if update.get("autoResumed").and_then(Value::as_bool) == Some(true) {
         return false;
@@ -277,6 +331,153 @@ mod tests {
         assert_eq!(origin.source, "managed_call");
     }
     use super::*;
+
+    #[test]
+    fn only_a_person_sends_an_owner_prompt() {
+        let chunk = |cmid: Option<&str>, text: &str| {
+            let mut update = serde_json::json!({
+                "sessionUpdate": "user_message_chunk",
+                "content": { "type": "text", "text": text }
+            });
+            apply_prompt_origin(&mut update, &origin_from_cmid(cmid));
+            (cmid.map(str::to_owned), update)
+        };
+        let peer = format!("agent-{}", "a".repeat(64));
+        for cmid in [
+            Some("call-notice:call-1"),
+            Some("managed-call:call-1:round-1"),
+            Some("session-notice:peer-1"),
+            Some("__wake__s-1"),
+            Some("__sched__s-draft"),
+            Some("__cont__abc"),
+            Some(peer.as_str()),
+            Some("cowboy-superagent:op"),
+        ] {
+            let (cmid, update) = chunk(cmid, "done");
+            assert!(
+                !is_owner_prompt_event(cmid.as_deref(), &update),
+                "{cmid:?} must not be an owner prompt"
+            );
+        }
+        for cmid in [Some("cmid-1"), Some("acp-1-2"), None] {
+            let (cmid, update) = chunk(cmid, "please review");
+            assert!(is_owner_prompt_event(cmid.as_deref(), &update), "{cmid:?}");
+        }
+        // The second block of a prompt carries no cmid; its stamped origin
+        // keeps a notice's later blocks from reading as the owner's.
+        let (_, notice_block) = chunk(Some("call-notice:call-1"), "second block");
+        assert!(!is_owner_prompt_event(None, &notice_block));
+        // Runtime markup and non-prompt updates are never owner prompts.
+        let (cmid, update) = chunk(Some("cmid-1"), "<system-reminder>x</system-reminder>");
+        assert!(!is_owner_prompt_event(cmid.as_deref(), &update));
+        assert!(!is_owner_prompt_event(
+            Some("cmid-1"),
+            &serde_json::json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi"}})
+        ));
+    }
+
+    fn envelope(seq: u64, cmid: Option<&str>, stamp: bool, text: &str) -> crate::model::Envelope {
+        let mut update = serde_json::json!({
+            "sessionUpdate": "user_message_chunk",
+            "content": { "type": "text", "text": text }
+        });
+        if stamp {
+            apply_prompt_origin(&mut update, &origin_from_cmid(cmid));
+        }
+        crate::model::Envelope {
+            session_id: "s".into(),
+            seq,
+            event: crate::agent_model::Event::Update { update },
+            cmid: cmid.map(str::to_owned),
+        }
+    }
+
+    fn agent_chunk(seq: u64) -> crate::model::Envelope {
+        crate::model::Envelope {
+            session_id: "s".into(),
+            seq,
+            event: crate::agent_model::Event::Update {
+                update: serde_json::json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"x"}}),
+            },
+            cmid: None,
+        }
+    }
+
+    #[test]
+    fn an_owner_turn_is_the_first_chunk_of_the_newest_run_of_owner_chunks() {
+        // A send with a Cowboy preamble ahead of the owner's text: the id sits
+        // on the preamble block, the text has none, both are stamped.
+        let send = [
+            envelope(
+                10,
+                Some("cmid-1"),
+                true,
+                "<system-reminder>linked context</system-reminder>",
+            ),
+            envelope(11, None, true, "Continue"),
+        ];
+        assert_eq!(newest_owner_turn(&send), Some(10));
+        // An id longer than the durable bound is dropped on restore; the stamp
+        // keeps the send recognizable, and a direct API prompt never had one.
+        assert_eq!(
+            newest_owner_turn(&[envelope(4, None, true, "direct")]),
+            Some(4)
+        );
+        // Separate sends are separate turns, and a notice after one is not.
+        let log = [
+            envelope(1, Some("cmid-1"), true, "first"),
+            agent_chunk(2),
+            envelope(3, Some("cmid-2"), true, "second"),
+            envelope(4, Some("call-notice:call-1"), true, "done"),
+            agent_chunk(5),
+        ];
+        assert_eq!(newest_owner_turn(&log), Some(3));
+        assert_eq!(newest_owner_turn(&log[..2]), Some(1));
+        assert_eq!(newest_owner_turn(&log[3..]), None);
+        // Nothing unstamped begins a turn: an ACP client's unmatched text, an
+        // older worker's steered block, or a row from before the stamp.
+        for unstamped in [
+            envelope(7, None, false, "unmatched acp text"),
+            envelope(8, Some("cmid-1"), false, "steered by an older worker"),
+        ] {
+            assert_eq!(newest_owner_turn(&[unstamped]), None);
+        }
+        // An automation's id never does, stamped or not, and neither does a
+        // chunk the Hub flagged as automatic.
+        let peer = format!("agent-{}", "f".repeat(64));
+        for cmid in [
+            "call-notice:call-1",
+            "session-notice:p",
+            "__wake__s",
+            peer.as_str(),
+        ] {
+            assert_eq!(
+                newest_owner_turn(&[envelope(9, Some(cmid), true, "x")]),
+                None,
+                "{cmid}"
+            );
+        }
+        // Only user-role chunks count.
+        assert_eq!(newest_owner_turn(&[agent_chunk(1)]), None);
+    }
+
+    #[test]
+    fn every_steered_block_carries_the_origin_of_its_message_id() {
+        let peer = format!("agent-{}", "d".repeat(64));
+        for (cmid, owner) in [
+            (peer.as_str(), false),
+            ("call-notice:call-1", false),
+            ("cmid-1", true),
+        ] {
+            for text in ["first block", "second block"] {
+                let block = serde_json::json!({"type": "text", "text": text});
+                let update = steering_echo(&block, cmid);
+                assert_eq!(update["_meta"]["cowboyDelivery"], "current_turn");
+                // Only the first block carries the id; the echo must not need it.
+                assert_eq!(is_owner_prompt_event(None, &update), owner, "{cmid} {text}");
+            }
+        }
+    }
 
     #[test]
     fn cmid_prefixes_select_cowboy_sources() {

@@ -46,9 +46,12 @@ struct GrantEntry {
 mod context_only;
 mod observation;
 mod readiness;
+mod replay;
+mod turn_budget;
 pub(in crate::server) use observation::touch as touch_code_observation;
 pub(in crate::server) use observation::{changes as code_changes, head as code_observation_head};
 pub(super) use readiness::{child_runtime, child_runtime_pinned, runtime_readiness};
+use replay::replay;
 
 impl GrantEntry {
     fn accepts_installation(
@@ -831,7 +834,7 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             "max_wait_ms": crate::managed_calls::protocol::MAX_WAIT_MS,
             "max_context_files": 32,
             "max_concurrent": policy.max_concurrent,
-            "max_per_session": policy.max_per_session,
+            "max_per_turn": policy.max_per_turn,
         },
         "placement": {
             "runtime_machine_id": meta.machine_id,
@@ -842,19 +845,6 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             "cwd": placement.cwd,
         },
     })
-}
-
-/// A repeated request id names the same call: an explicit agent must match,
-/// and Auto matches a call Auto chose.
-fn same_request(original: &Record, requested: &str, preset: Option<&str>) -> bool {
-    if preset.is_some_and(|preset| original.preset.as_deref() != Some(preset)) {
-        return false;
-    }
-    if requested == agent_tools::AUTO {
-        original.selection.as_deref() == Some(agent_tools::AUTO)
-    } else {
-        original.provider == requested
-    }
 }
 
 /// The first candidate whose child can run now, in preference order; else
@@ -930,17 +920,22 @@ async fn start(
     // are refused.
     match ledger.observe(&request.request_id).await {
         Ok(Some(original)) => {
-            if original.request_digest != request.digest()
-                || !same_request(&original, requested, preset)
-            {
-                return error("request_conflict", "not_submitted");
-            }
-            super::runner::ensure_runner(state, &original);
-            return envelope(&wait_started(state, ledger, &original, deadline).await);
+            return replay(
+                state,
+                ledger,
+                &original,
+                (requested, preset),
+                &request,
+                deadline,
+            )
+            .await;
         }
         Ok(None) => {}
         Err(_) => return error("capacity", "not_submitted"),
     }
+    // What the caller submitted: the replay of a repeated request id matches
+    // against it, not against the agent a continuation resolves below.
+    let submitted = requested;
     let policy = agent_tools::effective(state, meta).calls;
     // Before any approval: a person changes this in Tools, and neither Allow
     // once nor Allow for session may override it.
@@ -987,24 +982,29 @@ async fn start(
             target.options = None;
         }
     }
-    // A soft per-session budget: concurrent admissions may pass it together.
-    match state
-        .store
-        .as_ref()
-        .map(|store| store.managed_call_counts(&meta.id))
-    {
-        Some(counts) => match counts.await {
-            Ok((active, _)) if active >= u64::from(policy.max_concurrent) => {
-                return error("concurrency_limit", "not_submitted");
+    // Soft budgets: concurrent admissions may pass them together.
+    let owner_turn =
+        match turn_budget::admit(&state.hub, state.store.as_ref(), &meta.id, &policy).await {
+            Ok(turn) => turn,
+            Err(refusal) => {
+                // A racing duplicate of this request may have been admitted
+                // since the first look; its receipt, not a refusal, is the answer.
+                return match ledger.observe(&request.request_id).await {
+                    Ok(Some(original)) => {
+                        replay(
+                            state,
+                            ledger,
+                            &original,
+                            (submitted, preset),
+                            &request,
+                            deadline,
+                        )
+                        .await
+                    }
+                    _ => refusal,
+                };
             }
-            Ok((_, total)) if total >= u64::from(policy.max_per_session) => {
-                return error("call_limit", "not_submitted");
-            }
-            Ok(_) => {}
-            Err(_) => return error("capacity", "not_submitted"),
-        },
-        None => return error("capacity", "not_submitted"),
-    }
+        };
     let (mut target, generation) = match first_ready(state, meta, ledger, targets, &request).await {
         Ok(ready) => ready,
         Err(reason) => return error(reason, "not_submitted"),
@@ -1044,6 +1044,7 @@ async fn start(
         preset: target.recorded_preset(),
         selection,
         generation: generation.filter(|_| request.purpose.is_review()),
+        owner_turn: Some(owner_turn),
     };
     // Continuation admission holds the child lifecycle fence while it
     // rechecks the child and inserts, so retirement cannot interleave.

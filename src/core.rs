@@ -39,6 +39,7 @@ use hub_config::{ConfigPreviews, add_config_choices};
 mod hub_events;
 pub use hub_events::FanoutFrame;
 mod hub_managed_calls;
+pub use hub_managed_calls::RetainedLogScan;
 mod hub_peer_notice;
 pub use hub_peer_notice::PromptProgress;
 mod hub_provider_pins;
@@ -565,6 +566,11 @@ struct Session {
     event_count: u64,
     reached_start: bool,
     next_seq: u64,
+    /// Sequence of the event that began the session's latest owner turn
+    /// ([`crate::prompt_origin::newest_owner_turn`]). Unlike `log` it survives
+    /// trimming and a cleared transcript, so a call budget never loses its
+    /// turn to eviction. `None` until a person prompts it in this lifetime.
+    owner_turn_seq: Option<u64>,
     /// When the session last showed activity (see [`counts_as_activity`]).
     /// Monotonic; a restart restores it from the newest such durable event,
     /// so idle-based policies do not restart their wait on every deploy.
@@ -2125,6 +2131,7 @@ impl Hub {
                     self.inner.store_tx.is_some(),
                     &mut reached_start,
                 );
+                let owner_turn_seq = crate::prompt_origin::newest_owner_turn(&log);
                 for envelope in &log {
                     let _ = history_reducer.reduce(envelope.clone());
                 }
@@ -2144,6 +2151,7 @@ impl Hub {
                         event_count,
                         reached_start,
                         next_seq,
+                        owner_turn_seq,
                         last_activity: restored_last_activity(last_event_at_ms, now_ms()),
                         config_options,
                         config_previews: ConfigPreviews::default(),
@@ -2946,6 +2954,7 @@ impl Hub {
                     event_count: 0,
                     reached_start: true,
                     next_seq: 0,
+                    owner_turn_seq: None,
                     last_activity: std::time::Instant::now(),
                     config_options: None,
                     config_previews: ConfigPreviews::default(),

@@ -4328,10 +4328,9 @@ async fn run_session(
                     };
                     if outcome == "injected" {
                         for (index, block) in blocks.iter().enumerate() {
-                            state.sink.push_tagged(&session_id, Event::Update { update: serde_json::json!({
-                                "sessionUpdate":"user_message_chunk", "content":block,
-                                "_meta":{"cowboyDelivery":"current_turn"},
-                            }) }, (index == 0).then(|| cmid.clone()));
+                            let content = serde_json::to_value(block).unwrap_or_default();
+                            let update = crate::prompt_origin::steering_echo(&content, &cmid);
+                            state.sink.push_tagged(&session_id, Event::Update { update }, (index == 0).then(|| cmid.clone()));
                         }
                     }
                     state.sink.push(&session_id, Event::Update { update: serde_json::json!({
