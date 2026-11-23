@@ -46,10 +46,12 @@ struct GrantEntry {
 mod context_only;
 mod observation;
 mod readiness;
+mod replay;
 mod turn_budget;
 pub(in crate::server) use observation::touch as touch_code_observation;
 pub(in crate::server) use observation::{changes as code_changes, head as code_observation_head};
 pub(super) use readiness::{child_runtime, child_runtime_pinned, runtime_readiness};
+use replay::replay;
 
 impl GrantEntry {
     fn accepts_installation(
@@ -845,19 +847,6 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
     })
 }
 
-/// A repeated request id names the same call: an explicit agent must match,
-/// and Auto matches a call Auto chose.
-fn same_request(original: &Record, requested: &str, preset: Option<&str>) -> bool {
-    if preset.is_some_and(|preset| original.preset.as_deref() != Some(preset)) {
-        return false;
-    }
-    if requested == agent_tools::AUTO {
-        original.selection.as_deref() == Some(agent_tools::AUTO)
-    } else {
-        original.provider == requested
-    }
-}
-
 /// The first candidate whose child can run now, in preference order; else
 /// the first refusal.
 async fn first_ready(
@@ -910,23 +899,6 @@ fn continued_agent(state: &AppState, conversation: &Conversation) -> Result<Opti
         Some(child) if !child.meta.closing => Ok(Some(child.meta.provider)),
         _ => Err(error("conversation_unavailable", "not_submitted")),
     }
-}
-
-/// The original call of a repeated request id, even if the Provider has since
-/// become unavailable or the policy changed; conflicting inputs are refused.
-async fn replay(
-    state: &Arc<AppState>,
-    ledger: &Ledger,
-    original: &Record,
-    (requested, preset): (&str, Option<&str>),
-    request: &Request,
-    deadline: tokio::time::Instant,
-) -> Value {
-    if original.request_digest != request.digest() || !same_request(original, requested, preset) {
-        return error("request_conflict", "not_submitted");
-    }
-    super::runner::ensure_runner(state, original);
-    envelope(&wait_started(state, ledger, original, deadline).await)
 }
 
 #[allow(clippy::too_many_arguments)] // The admission inputs plus the anchor's origin.
