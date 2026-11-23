@@ -246,13 +246,15 @@ export function TranscriptImage(
           }}
         />
       </Box>
-      <ImageLightbox
-        images={[{ src, alt }]}
-        index={open ? 0 : null}
-        onIndex={(): void => undefined}
-        onClose={(): void => setOpen(false)}
-        plate={false}
-      />
+      {open && (
+        <ImageLightbox
+          images={[{ src, alt }]}
+          index={0}
+          onIndex={(): void => undefined}
+          onClose={(): void => setOpen(false)}
+          plate={false}
+        />
+      )}
     </>
   );
 }
@@ -295,6 +297,50 @@ export function ChunkView({
 // content (the inner ref isn't clamped, so the clamp can never hide its own
 // toggle) and re-measured on async growth (a pasted image loading). One height
 // cap + a centered text toggle behaves identically on mobile + desktop.
+const RELATIVE_STYLE: React.CSSProperties = { position: "relative" };
+const FLEX_MIN_ZERO_STYLE: React.CSSProperties = { flex: 1, minWidth: 0 };
+const USER_BODY_CLAMPED_STYLE: React.CSSProperties = { maxHeight: USER_BUBBLE_COLLAPSE_PX, overflow: "hidden" };
+const USER_BODY_OPEN_STYLE: React.CSSProperties = { maxHeight: "none", overflow: "hidden" };
+const TOOL_HEADER_PLAIN_SX = { p: 1, cursor: "default" } as const;
+const TOOL_HEADER_DETAIL_SX = { p: 1, cursor: "pointer", "&:hover": { bgcolor: "action.hover" } } as const;
+const TOOL_HEADER_DESKTOP_SX = {
+  p: 1, cursor: "pointer", "&:hover": { bgcolor: "action.hover" }, outline: "none", "&:focus-visible": { bgcolor: "action.focus" },
+} as const;
+const TOOL_TITLE_BASE_STYLE: React.CSSProperties = {
+  flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "inherit", lineHeight: 1.43,
+};
+const TOOL_TITLE_PROSE_STYLE: React.CSSProperties = { ...TOOL_TITLE_BASE_STYLE, fontFamily: "var(--cowboy-reading-font, inherit)" };
+const TOOL_TITLE_MONO_STYLE: React.CSSProperties = { ...TOOL_TITLE_BASE_STYLE, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" };
+const TOOL_SUBTITLE_SX = { display: "block" } as const;
+const TOOL_CHEVRON_SX = { transform: "rotate(-90deg)", color: "text.secondary", mr: -1 } as const;
+const toolCardSxCache = new Map<string, (theme: Theme) => Record<string, unknown>>();
+function toolCardPaperSx(
+  status: string,
+  running: boolean,
+  desktop: boolean,
+): (theme: Theme) => Record<string, unknown> {
+  const key = `${status}:${running ? 1 : 0}:${desktop ? 1 : 0}`;
+  let cached = toolCardSxCache.get(key);
+  if (!cached) {
+    cached = (theme: Theme) => ({
+      alignSelf: "stretch",
+      overflow: "hidden",
+      ...toolBreathSx(running, theme),
+      backgroundImage: `linear-gradient(105deg, ${alpha(
+        toolStatusTone(status, theme),
+        theme.palette.mode === "dark" ? 0.1 : 0.055,
+      )}, transparent 48%)`,
+      boxShadow: `0 1px 3px ${alpha(
+        theme.palette.common.black,
+        theme.palette.mode === "dark" ? 0.16 : 0.06,
+      )}`,
+      borderRadius: desktop ? `${DESKTOP_INSET_RADIUS}px` : 1,
+    });
+    toolCardSxCache.set(key, cached);
+  }
+  return cached;
+}
+
 export function CollapsibleUserBody({
   children,
   containsImage = false,
@@ -335,15 +381,10 @@ export function CollapsibleUserBody({
     naturalHeight > USER_BUBBLE_COLLAPSE_PX + USER_BUBBLE_COLLAPSE_BUFFER_PX;
   return (
     <>
-      <Box sx={{ position: "relative" }}>
-        <Box
-          sx={{
-            maxHeight: clamp ? USER_BUBBLE_COLLAPSE_PX : "none",
-            overflow: "hidden",
-          }}
-        >
-          <Box ref={ref}>{children}</Box>
-        </Box>
+      <div style={RELATIVE_STYLE}>
+        <div style={clamp ? USER_BODY_CLAMPED_STYLE : USER_BODY_OPEN_STYLE}>
+          <div ref={ref}>{children}</div>
+        </div>
         {overflowing && clamp && (
           <Box
             aria-hidden
@@ -359,7 +400,7 @@ export function CollapsibleUserBody({
             }}
           />
         )}
-      </Box>
+      </div>
       {overflowing && !containsImage && (
         <Box sx={{ display: "flex", justifyContent: "center", mt: 0.25 }}>
           <Button
@@ -602,12 +643,12 @@ export function MessageBubble({
   }
   const lastChunkIdx = displayChunks.length - 1;
   const body = displayChunks.map((c, i) => (
-    <Box key={i} sx={{ position: "relative" }}>
+    <div key={i} style={RELATIVE_STYLE}>
       <ChunkView chunk={c} invert={mine && human} streaming={!!streaming && i === lastChunkIdx} />
       {streaming && i === lastChunkIdx && c.type === "text" && (
         <StreamingCaret />
       )}
-    </Box>
+    </div>
   ));
   // Non-human user-role prompts (historical Cowboy continuation/schedule, agent runtime)
   // stay on the timeline but never use the primary-filled human bubble.
@@ -627,27 +668,13 @@ export function MessageBubble({
   // keeps a quiet fill so long Markdown still reads as a message.
   if (!mine) {
     return (
-      <Paper
-        elevation={0}
-        sx={(theme) => ({
-          p: { xs: 1.15, sm: 1.4 },
-          ...messageBubbleLayoutSx("assistant"),
-          ...messageBubbleSurfaceSx("assistant", theme),
-        })}
-      >
+      <Paper elevation={0} sx={ASSISTANT_BUBBLE_SX}>
         {body}
       </Paper>
     );
   }
   return (
-    <Paper
-      elevation={0}
-      sx={(theme) => ({
-        p: { xs: 1, sm: 1.25 },
-        ...messageBubbleLayoutSx("user"),
-        ...messageBubbleSurfaceSx("user", theme),
-      })}
-    >
+    <Paper elevation={0} sx={USER_BUBBLE_SX}>
       <CollapsibleUserBody
         containsImage={chunks.some((chunk) => chunk.type === "image")}
       >
@@ -656,6 +683,13 @@ export function MessageBubble({
     </Paper>
   );
 }
+
+const ASSISTANT_BUBBLE_SX = (theme: Theme) => ({
+  p: { xs: 1.15, sm: 1.4 }, ...messageBubbleLayoutSx("assistant"), ...messageBubbleSurfaceSx("assistant", theme),
+});
+const USER_BUBBLE_SX = (theme: Theme) => ({
+  p: { xs: 1, sm: 1.25 }, ...messageBubbleLayoutSx("user"), ...messageBubbleSurfaceSx("user", theme),
+});
 
 /** Lifecycle notes (recovered, interrupted, crashed) are caption text with a
  * glyph sized from that text, so both follow the global font size together and
@@ -723,32 +757,7 @@ export function ToolCard({
     };
   }, [fallbackTitle, item.rawInput, item.toolKind]);
   return (
-    <Paper
-      elevation={0}
-      sx={(theme) => ({
-        alignSelf: "stretch",
-        overflow: "hidden",
-        // Borderless: a filled `background.paper` surface (a touch lighter than
-        // the transcript bg) reads as a soft card WITHOUT a 1px outline. The
-        // outlined border (theme `divider`) drew a faint violet line top+bottom
-        // on every collapsed card, and a tool-heavy transcript stacked them into
-        // a "ruled paper" look. The icon + status chip already mark it as a tool.
-        // The fill also breathes while the call is in flight (toolBreath.ts).
-        ...toolBreathSx(running, theme),
-        // Keep the card borderless, but give the execution state a quiet wash
-        // that reads in a long tool run. It preserves the existing fill-based
-        // selection language and avoids a stack of purple leading rails.
-        backgroundImage: `linear-gradient(105deg, ${alpha(
-          toolStatusTone(item.status, theme),
-          theme.palette.mode === "dark" ? 0.1 : 0.055,
-        )}, transparent 48%)`,
-        boxShadow: `0 1px 3px ${alpha(
-          theme.palette.common.black,
-          theme.palette.mode === "dark" ? 0.16 : 0.06,
-        )}`,
-        borderRadius: desktop ? `${DESKTOP_INSET_RADIUS}px` : 1,
-      })}
-    >
+    <Paper elevation={0} sx={toolCardPaperSx(item.status, running, desktop)}>
       <Stack
         {...(hasDetail
           ? {
@@ -776,64 +785,26 @@ export function ToolCard({
         direction="row"
         spacing={1}
         alignItems="center"
-        sx={{
-          p: 1,
-          cursor: hasDetail ? "pointer" : "default",
-          "&:hover": hasDetail ? { bgcolor: "action.hover" } : undefined,
-          ...(desktop && hasDetail && {
-            outline: "none",
-            "&:focus-visible": {
-              bgcolor: "action.focus",
-            },
-          }),
-        }}
+        sx={!hasDetail
+          ? TOOL_HEADER_PLAIN_SX
+          : desktop
+          ? TOOL_HEADER_DESKTOP_SX
+          : TOOL_HEADER_DETAIL_SX}
       >
         {toolIcon(mcp ? "mcp" : item.toolKind)}
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Typography
-          variant="body2"
-          sx={{
-            flex: 1,
-            minWidth: 0,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            // Match the prose typography so a tool card reads as part of the same
-            // document, not as smaller UI chrome:
-            //  - FAMILY: follow the `--cowboy-reading-font` setting like the prose
-            //    does, instead of letting MUI Typography pin the theme font —
-            //    otherwise picking a serif/sans reading face restyles the messages
-            //    but the tool cards stay on the system font, which reads as
-            //    inconsistent. Shell commands (execute) stay monospace: they're
-            //    code, and a path full of slashes in a serif is worse, not better.
-            //  - SIZE: `inherit` (not body2's fixed 0.875rem) so the title tracks
-            //    the transcript's reading-size scale (the scroll container's
-            //    `${fontScale}em`) exactly like the markdown body. A fixed rem made
-            //    the title visibly smaller than the prose and, worse, it didn't
-            //    grow when the reading size was bumped — same family but reading as
-            //    two different fonts.
-            fontSize: "inherit",
-            fontFamily: !mcp && item.toolKind === "execute"
-              ? "ui-monospace, SFMono-Regular, Menlo, monospace"
-              : "var(--cowboy-reading-font, inherit)",
-          }}
-        >
-          {headerTitle}
-        </Typography>
-        {mcp && (
-          <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>
-            {mcp.server} · {toolCopyText({ title: mcp.tool, toolName: item.toolName, rawInput: item.rawInput }).split("\n")[0]}
-          </Typography>
-        )}
-        </Box>
+        <div style={FLEX_MIN_ZERO_STYLE}>
+          <div style={!mcp && item.toolKind === "execute" ? TOOL_TITLE_MONO_STYLE : TOOL_TITLE_PROSE_STYLE}>
+            {headerTitle}
+          </div>
+          {mcp && (
+            <Typography variant="caption" color="text.secondary" noWrap sx={TOOL_SUBTITLE_SX}>
+              {mcp.server} · {toolCopyText({ title: mcp.tool, toolName: item.toolName, rawInput: item.rawInput }).split("\n")[0]}
+            </Typography>
+          )}
+        </div>
         <ToolStatusChip status={item.status} />
         {hasDetail && (
-          <ExpandMore
-            fontSize="medium"
-            // The rotated 24px glyph keeps ~8px of transparent box past its
-            // tip, so without the pull the right inset read twice the left.
-            sx={{ transform: "rotate(-90deg)", color: "text.secondary", mr: -1 }}
-          />
+          <ExpandMore fontSize="medium" sx={TOOL_CHEVRON_SX} />
         )}
       </Stack>
     </Paper>

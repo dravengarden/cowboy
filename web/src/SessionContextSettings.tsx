@@ -77,7 +77,16 @@ export function SessionContextSettings({
   const ready = open && Boolean(data);
   useEffect(() => {
     if (!reveal || !ready) return undefined;
-    const show = () => actions.current?.scrollIntoView({ block: "start" });
+    const show = () => {
+      const target = actions.current;
+      if (!target) return;
+      // On the Desktop workbench (`inlineLinks`), Replace or fork already opens
+      // at the top of the Context pane unless a provenance/delivery block sits
+      // above it — avoid forcing a synchronous scrollIntoView layout pass.
+      if (inlineLinks && target.parentElement?.firstElementChild === target &&
+          target.parentElement.previousElementSibling === null) return;
+      target.scrollIntoView({ block: "start" });
+    };
     const frame = requestAnimationFrame(show);
     const settled = setTimeout(() => {
       show();
@@ -87,7 +96,7 @@ export function SessionContextSettings({
       cancelAnimationFrame(frame);
       clearTimeout(settled);
     };
-  }, [reveal, ready]);
+  }, [inlineLinks, reveal, ready]);
   const onSaved = () => {
     void reload();
     setOpen(false);

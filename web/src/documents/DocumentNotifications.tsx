@@ -36,20 +36,21 @@ const subscribe = (listener: () => void): () => void => {
 const read = (): Notice | null => notice;
 export function DocumentNotifications(
   { mobile = false }: { mobile?: boolean } = {},
-): React.JSX.Element {
+): React.JSX.Element | null {
   const current = useSyncExternalStore(subscribe, read, read);
   const [busy, setBusy] = useState(false);
+  if (current === null) return null;
   const close = (): void => {
-    if (notice?.id === current?.id) {
+    if (notice?.id === current.id) {
       notice = null;
       emit();
     }
   };
-  const undoId = current?.undoId;
+  const undoId = current.undoId;
   return (
     <Snackbar
-      key={current?.id}
-      open={current !== null}
+      key={current.id}
+      open
       // One duration for every notice; hovering pauses it, and an Undo in
       // flight holds it until the outcome is known.
       autoHideDuration={busy ? null : UNDO_NOTICE_MS}

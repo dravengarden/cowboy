@@ -61,7 +61,7 @@ export interface DeliveryPickerProps {
   steerReady?: boolean;
 }
 
-export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
+export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element | null {
   const desktop = useSurfaceProfile().kind === "desktop";
   const [options, setOptions] = useState<DeliveryOptions | null>(null);
   // Whether `options` came from this opening's read (authoritative) rather
@@ -210,10 +210,8 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
     close: props.onClose,
     stop: props.onStop,
   };
-  return (
-    <Menu
-      open={open}
-      action={position}
+  if (!open) return null;
+  return (<Menu open action={position}
       anchorEl={virtualAnchor.current}
       onClose={props.onClose}
       disableRestoreFocus

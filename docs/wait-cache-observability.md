@@ -166,6 +166,31 @@ expose `notice_delivery`, and transcript clear keeps any Call whose notice is
 not `consumed` visible rather than auto-dismissing it. All Providers follow the
 same owner-paced delivery path.
 
+## Phase 2B pre-dispatch triage
+
+Once Phase 2A durable completion notices are verified, Cowboy and Columbus
+guidance decouple long waits from open parent turns before dispatch (without
+modifying signed Plugin manifests outside a signed Plugin release or altering
+in-flight native turns):
+
+- **Long (>3–5 min heuristic) read-only work**: dispatch via `calls.start` or
+  `review.start` with `notify:true` (CLI: `--notify`) and end the parent turn
+  cleanly instead of polling `calls.wait`; read `calls.result` when the durable
+  `[Cowboy]` notice arrives.
+- **Long write work**: route to an independent isolated session in its own
+  worktree (`sessions.create` + `queue.submit` with `notify:true`, or
+  `cowboy session prompt --notify`) and end the parent turn.
+- **Short critical-path work**: reserve native subagents (Codex
+  `spawn_agent`+`wait_agent`, Claude `Task`) for work that fits inside the
+  active turn.
+- **Hard guardrails**: never abort, reset, or force-compact an in-flight native
+  turn. Measure decoupling under ordinary resume first before deciding whether
+  Phase 2C (`rollover_on_notify`) is justified.
+
+Canonical rules live in [`AGENTS.md`](../AGENTS.md) and
+[`docs/agent-api.md`](agent-api.md#pre-dispatch-triage-long-waits-and-prompt-cache),
+paired with the shared Columbus harness contract in `conventions/review.md`.
+
 ## Rollout checklist
 
 1. Record the verified main commit. Build `.#cowboy-controller-release` from

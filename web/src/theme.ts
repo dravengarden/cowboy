@@ -204,9 +204,8 @@ export function useThemeMode(): ThemeControls {
           // freshly opened session menu. Lift popovers just above snackbars;
           // dialogs and sheets keep the default modal layer under the notice.
           MuiPopover: {
-            styleOverrides: {
-              root: ({ theme }) => ({ zIndex: theme.zIndex.snackbar + 1 }),
-            },
+            defaultProps: prefersCoarsePointer() ? {} : { disableScrollLock: true },
+            styleOverrides: { root: ({ theme }) => ({ zIndex: theme.zIndex.snackbar + 1 }) },
           },
           MuiMenuItem: {
             styleOverrides: {

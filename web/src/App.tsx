@@ -443,10 +443,7 @@ export function App({
     const mobileComposerFollowRef = useRef<HTMLDivElement | null>(null);
     const mobileFrostFollowRef = useRef<HTMLDivElement | null>(null);
     const mobileStatusChromeFollowRef = useRef<HTMLDivElement | null>(null);
-    const { appBarRef, composerRef } = useFloatingComposerGeometry({
-        surfaceRef: columnRef,
-        navbarAtBottom,
-    });
+    const { appBarRef, composerRef } = useFloatingComposerGeometry({ surfaceRef: columnRef, navbarAtBottom, enabled: mobile });
     // React detaches and reattaches a changed callback ref even when the DOM
     // node survives. Streamed session updates must not reset the geometry
     // observer, clear its disclosure hold, or publish a temporary zero height.

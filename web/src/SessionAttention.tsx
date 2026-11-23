@@ -51,11 +51,11 @@ export function SessionAttentionMenu({ sessions, onPick, folder, folders }: {
       sx={{ minWidth: 0, minHeight: 44, fontSize: "0.75rem", whiteSpace: "nowrap", "@media (pointer: fine)": { minHeight: 32 } }}>
       {pending.length} need action
     </Button>
-    <Menu anchorEl={anchor} open={anchor !== null} onClose={() => setAnchor(null)}>
+    {anchor !== null && <Menu anchorEl={anchor} open onClose={() => setAnchor(null)}>
       {pending.map(({ session, label }) => <MenuItem key={session.id} onClick={() => {
         setAnchor(null);
         onPick(session.id);
       }}><ListItemText primary={session.title} secondary={label} /></MenuItem>)}
-    </Menu>
+    </Menu>}
   </Box>;
 }

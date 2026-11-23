@@ -187,6 +187,23 @@ Paged list objects from `calls.list`, `machines.list`, `usage.list` and
 `control.list` keep their JSON shape but also expose non-enumerable array
 methods (`map`, `filter`, `find`, iteration, `length`) over their primary list.
 
+### Pre-dispatch triage (long waits and prompt cache)
+
+Because Provider prompt caches expire while an open parent turn waits on
+background work (Phase 2B of
+[`docs/wait-cache-observability.md`](wait-cache-observability.md)), choose the
+dispatch path before launching work:
+
+| Expected work | Dispatch path | Parent turn behavior |
+| --- | --- | --- |
+| Long (>3–5 min heuristic) **read-only** work (reviews, design reviews, broad history/code analyses) | `calls.start` / `review.start` with `notify:true` (CLI: `--notify`) | End the turn cleanly instead of polling `calls.wait`; read `calls.result` when the durable `[Cowboy]` notice arrives. |
+| Long **write** work (edits, builds, multi-step fixes in another scope) | Independent isolated session in its own worktree (`sessions.create` + `queue.submit` with `notify:true`, or `cowboy session prompt --notify`) | End the turn cleanly and act when the peer `[Cowboy]` completion notice arrives. |
+| Short critical-path work (<3–5 min) that belongs inside the active turn | Native subagents (Codex `spawn_agent`+`wait_agent`, Claude `Task`) | Wait inline inside the active turn. |
+
+Never abort, reset, or force-compact an in-flight native turn to avoid cache
+expiry. Measure decoupling under ordinary resume first before considering any
+opt-in rollover on notice (Phase 2C).
+
 ### Completion notices
 
 `calls.start` and `review.start` accept `notify:true`. When that call reaches a
