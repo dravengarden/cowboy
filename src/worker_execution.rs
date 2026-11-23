@@ -49,8 +49,10 @@ const RETRY: Duration = Duration::from_secs(30);
 
 pub struct Pending {
     request: RuntimeRequest,
-    sender: oneshot::Sender<MachineResponse>,
+    /// The response and how often the request was sent before it.
+    sender: oneshot::Sender<(MachineResponse, u32)>,
     sent: Option<Instant>,
+    sends: u32,
     pub bytes: usize,
 }
 
@@ -100,6 +102,7 @@ impl Client {
             .filter_map(|pending| {
                 if reconnect || pending.sent.is_none_or(|sent| sent.elapsed() >= RETRY) {
                     pending.sent = Some(Instant::now());
+                    pending.sends = pending.sends.saturating_add(1);
                     Some(Frame::ExecutionRequest {
                         request: Box::new(pending.request.clone()),
                     })
@@ -136,7 +139,7 @@ impl Client {
             return;
         }
         if let Some(pending) = self.pending.lock().remove(&reply.request_id) {
-            let _ = pending.sender.send(reply.response);
+            let _ = pending.sender.send((reply.response, pending.sends));
         }
     }
 
@@ -146,6 +149,15 @@ impl Client {
 
     /// The outer error means the request was never queued for sending.
     async fn call_queued(&self, command: Command) -> Result<Result<Response>> {
+        Ok(self
+            .call_counted(command)
+            .await?
+            .map(|(response, _)| response))
+    }
+
+    /// `call_queued`, with how often the request was sent before its
+    /// response arrived.
+    async fn call_counted(&self, command: Command) -> Result<Result<(Response, u32)>> {
         let started = Instant::now();
         let operation = match &command {
             Command::Invoke { invocation, .. } => Some(invocation.operation_id.clone()),
@@ -191,6 +203,7 @@ impl Client {
                     request,
                     sender,
                     sent: None,
+                    sends: 0,
                     bytes,
                 },
             );
@@ -199,7 +212,7 @@ impl Client {
         let response = tokio::time::timeout(Duration::from_secs(180), receiver).await;
         self.pending.lock().remove(&id);
         match response {
-            Ok(Ok(MachineResponse::Call { response })) => {
+            Ok(Ok((MachineResponse::Call { response }, sends))) => {
                 if let Some(operation) = operation {
                     // A transport-level failure is a WARN; a tool that ran
                     // and reported its own error is ordinary agent traffic.
@@ -228,7 +241,7 @@ impl Client {
                         tracing::info!(event_name = "cowboy.execution.call_observed", session = %self.session, environment_id = %self.binding.environment.id, %operation, duration_ms = started.elapsed().as_secs_f64() * 1000.0, "slow execution invocation observed");
                     }
                 }
-                Ok(Ok(response))
+                Ok(Ok((response, sends)))
             }
             _ => {
                 tracing::warn!(event_name = "cowboy.execution.response_timeout", session = %self.session, environment_id = %self.binding.environment.id, reason = "response_unavailable", duration_ms = started.elapsed().as_secs_f64() * 1000.0, "execution response unavailable");
@@ -319,9 +332,15 @@ impl Client {
         loop {
             // A request the transport refused to queue was never sent; any
             // later loss may follow admission.
-            let queued = self.call_queued(command).await;
+            let queued = self.call_counted(command).await;
             let response = match queued {
-                Ok(Ok(response)) => response,
+                Ok(Ok((response, sends))) => {
+                    // Sent more than once: an earlier send's reply was lost
+                    // after the keeper may have admitted it, so a refusal of
+                    // a later send proves nothing about the effect (F7).
+                    admitted |= sends > 1;
+                    response
+                }
                 Ok(Err(_)) => return Err(true),
                 Err(_) => return Err(admitted),
             };

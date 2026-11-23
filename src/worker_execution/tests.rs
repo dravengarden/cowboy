@@ -427,7 +427,13 @@ async fn lost_mutation_replies_mark_the_effect_uncertain_durably() {
     assert_eq!(lost.pointer("/error/data/outcome"), Some(&json!("unknown")));
     assert!(refused.pointer("/error/data").is_none());
     assert_eq!(ledger.uncertain_effect().as_deref(), Some("fs/writeFile"));
-    assert_eq!(*observed.lock(), [("fs/writeFile".to_owned(), 1)]);
+    let first = {
+        let seen = observed.lock();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0, "fs/writeFile");
+        seen[0].1
+    };
+    assert!(first > 1, "time-based: never reused after a lost write");
     // A lost termination result is uncertain too.
     target
         .client
@@ -444,7 +450,7 @@ async fn lost_mutation_replies_mark_the_effect_uncertain_durably() {
         Some("process/terminate")
     );
     // Each lost reply advances the sequence the owner acknowledges.
-    assert_eq!(reopened.uncertain_sequence(), 2);
+    assert!(reopened.uncertain_sequence() > first);
     assert!(Ledger::open("other", Some(root.path().join("session.json"))).is_err());
 }
 
@@ -785,7 +791,7 @@ async fn an_uncertain_effect_reported_by_the_agent_side_is_recorded_unforwarded(
         .await;
     assert!(reply.get("result").is_some());
     assert_eq!(ledger.uncertain_effect().as_deref(), Some("file publish"));
-    assert_eq!(ledger.uncertain_sequence(), 1);
+    assert!(ledger.uncertain_sequence() > 0);
     assert!(target.log().is_empty(), "never forwarded to the target");
 }
 
@@ -997,4 +1003,135 @@ async fn the_broker_runs_target_servers_for_the_unit_inside_turns() {
         .relay("cowboy/extensionCall".into(), json!({"name": "nope"}))
         .await;
     assert!(unknown.get("error").is_some());
+}
+
+#[tokio::test]
+async fn a_refusal_after_a_resend_does_not_hide_a_possible_admission() {
+    // F7: the first send's reply is lost; the resend is refused. The keeper
+    // may have admitted the first send, so the effect is uncertain.
+    let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
+        "fs/writeFile" => Reply::Hold,
+        _ => completed(json!({"result": {}})),
+    }));
+    let ledger = ledger(&target.client, None);
+    ledger.begin_turn("turn-1");
+    let client = Arc::clone(&target.client);
+    let relay = tokio::spawn(async move {
+        client
+            .relay(
+                "fs/writeFile".into(),
+                json!({"path": "file:///target/a", "dataBase64": ""}),
+            )
+            .await
+    });
+    eventually(|| !target.held.lock().is_empty()).await;
+    // A reconnect resends the same request under its identity.
+    assert_eq!(target.client.frames(true).len(), 1);
+    let request = target.held.lock().pop().unwrap();
+    answer(
+        &target.client,
+        request,
+        Response::Refused {
+            reason: wire::Refusal::WorkspaceChanged,
+        },
+    );
+    let reply = relay.await.unwrap();
+    assert_eq!(
+        reply.pointer("/error/data/outcome"),
+        Some(&json!("unknown"))
+    );
+    assert_eq!(ledger.uncertain_effect().as_deref(), Some("fs/writeFile"));
+}
+
+#[tokio::test]
+async fn a_refusal_of_the_only_send_is_not_an_admission() {
+    let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
+        "fs/writeFile" => Reply::Answer(Response::Refused {
+            reason: wire::Refusal::WorkspaceChanged,
+        }),
+        _ => completed(json!({"result": {}})),
+    }));
+    let ledger = ledger(&target.client, None);
+    ledger.begin_turn("turn-1");
+    let reply = target
+        .client
+        .relay(
+            "fs/writeFile".into(),
+            json!({"path": "file:///target/a", "dataBase64": ""}),
+        )
+        .await;
+    assert!(reply.get("error").is_some());
+    assert!(reply.pointer("/error/data").is_none());
+    assert!(ledger.uncertain_effect().is_none());
+}
+
+#[tokio::test]
+async fn a_process_gets_one_stop_from_the_unit_and_the_worker_together() {
+    let target = Target::new(processes());
+    let ledger = ledger(&target.client, None);
+    ledger.begin_turn("turn-1");
+    target
+        .client
+        .relay("process/start".into(), start("p1"))
+        .await;
+    target
+        .client
+        .relay("process/terminate".into(), json!({"processId": "p1"}))
+        .await;
+    // A repeated stop from the unit is not forwarded.
+    let again = target
+        .client
+        .relay("process/terminate".into(), json!({"processId": "p1"}))
+        .await;
+    assert!(again.get("result").is_some());
+    // The worker's own cancellation only observes.
+    target.client.cancel_turn();
+    eventually(|| ledger.live().is_empty()).await;
+    let stops = target
+        .log()
+        .iter()
+        .filter(|entry| entry.starts_with("process/terminate"))
+        .count();
+    assert_eq!(stops, 1);
+}
+
+#[tokio::test]
+async fn an_unwritable_ledger_refuses_further_effects() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("ledger");
+    std::fs::create_dir(&directory).unwrap();
+    let path = directory.join("session.json");
+    let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
+        "fs/writeFile" => Reply::Answer(Response::Operation {
+            outcome: Outcome::Unknown,
+        }),
+        _ => completed(json!({"result": {}})),
+    }));
+    let ledger = ledger(&target.client, Some(path));
+    ledger.begin_turn("turn-1");
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o500)).unwrap();
+    target
+        .client
+        .relay(
+            "fs/writeFile".into(),
+            json!({"path": "file:///target/a", "dataBase64": ""}),
+        )
+        .await;
+    // Published although not durable, then no effect is admitted.
+    assert_eq!(ledger.uncertain_effect().as_deref(), Some("fs/writeFile"));
+    let refused = target
+        .client
+        .relay(
+            "fs/createDirectory".into(),
+            json!({"path": "file:///target/b"}),
+        )
+        .await;
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot be written")
+    );
 }

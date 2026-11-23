@@ -150,6 +150,12 @@ struct State {
     servers: HashSet<String>,
     /// Extension calls admitted and not yet settled.
     calls: usize,
+    /// Processes a stop was sent for (or may have been) by the unit or by
+    /// the worker: one stop per process, never a second signal.
+    stopped: HashSet<String>,
+    /// The durable record could not be written: an uncertain effect may be
+    /// published but not durable, so no further effect is admitted.
+    unwritable: bool,
     /// When the last turn was fenced (its evidence may still be delivered).
     turn_ended: Option<std::time::Instant>,
     closed: bool,
@@ -346,6 +352,9 @@ impl Ledger {
         params: &Value,
     ) -> Result<Option<Admitted>, &'static str> {
         let mut state = self.state.lock();
+        if state.unwritable && MUTATIONS.contains(&method) {
+            return Err("the execution ledger cannot be written; the change was refused");
+        }
         // The worker's own MCP servers are not the unit's processes, also
         // those an earlier worker of the session started.
         if process_id(params).is_some_and(|process| {
@@ -433,13 +442,28 @@ impl Ledger {
         !self.state.lock().probes.contains(process)
     }
 
+    /// Claim the one stop of `process`: `false` when a stop was already sent
+    /// (or may have been), by the unit or by the worker.
+    pub(super) fn claim_stop(&self, process: &str) -> bool {
+        self.state.lock().stopped.insert(process.to_owned())
+    }
+
+    /// A claimed stop was certainly never sent: a later stop may be sent.
+    pub(super) fn release_stop(&self, process: &str) {
+        self.state.lock().stopped.remove(process);
+    }
+
     pub(super) fn mark_uncertain(&self, method: &str) {
         let mut state = self.state.lock();
         state.record.uncertain_effect = Some(method.to_owned());
-        state.record.uncertain_sequence = state.record.uncertain_sequence.saturating_add(1);
+        state.record.uncertain_sequence = next_sequence(state.record.uncertain_sequence);
         let sequence = state.record.uncertain_sequence;
         if let Err(error) = self.persist(&state.record) {
-            tracing::warn!(%error, "execution ledger update failed");
+            // Published all the same (fail closed). The time-based sequence
+            // keeps a successor that reloads the older record from reusing
+            // this one, and no further effect is admitted.
+            tracing::warn!(%error, "execution ledger update failed; effects refused");
+            state.unwritable = true;
         }
         drop(state);
         if let Some(observer) = self.observer.get() {
@@ -542,6 +566,20 @@ fn read(path: &Path) -> Result<Option<Record>> {
 }
 
 /// A refused native request; nothing was forwarded.
+/// The next uncertain-effect sequence: above the previous one and at least
+/// the current Unix time in milliseconds. A record whose write was lost
+/// after its sequence was published therefore never makes a successor reuse
+/// that sequence, which the Controller may already have acknowledged; the
+/// Controller only compares sequences.
+fn next_sequence(previous: u64) -> u64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+        });
+    previous.saturating_add(1).max(now)
+}
+
 fn refused(message: &str) -> Value {
     json!({"error": {"code": -32000, "message": message}})
 }
@@ -656,6 +694,16 @@ impl Client {
             Err(reason) => return refused(reason),
         };
         let process = process_id(&params);
+        // One stop per process, shared with the worker's own stop paths: a
+        // repeated stop is not forwarded (the process got its signal).
+        let stop = (method == "process/terminate")
+            .then(|| process.clone())
+            .flatten();
+        if let Some(process) = &stop
+            && !ledger.claim_stop(process)
+        {
+            return json!({"result": {}});
+        }
         let start = (method == "process/start")
             .then(|| process.clone())
             .flatten();
@@ -663,6 +711,15 @@ impl Client {
         let result = self.invoke_classified(method.clone(), params).await;
         if let Some(admitted) = &admitted {
             ledger.settled(admitted, start.as_deref());
+        }
+        // A stop that certainly never ran may be sent again later.
+        if let Some(process) = &stop
+            && match &result {
+                Err(admitted) => !admitted,
+                Ok(reply) => reply.get("error").is_some(),
+            }
+        {
+            ledger.release_stop(process);
         }
         match result {
             Ok(reply) => {
@@ -820,12 +877,19 @@ impl Client {
         };
         let attempt = async {
             ledger.wait_until(|ledger| !ledger.starting(&process)).await;
-            let _ = self
-                .invoke(
-                    "process/terminate".to_owned(),
-                    json!({"processId": process}),
-                )
-                .await;
+            // One stop per process: after the unit's or another worker path's
+            // stop, this only observes.
+            if ledger.claim_stop(&process) {
+                let sent = self
+                    .invoke_classified(
+                        "process/terminate".to_owned(),
+                        json!({"processId": process}),
+                    )
+                    .await;
+                if matches!(sent, Err(false)) {
+                    ledger.release_stop(&process);
+                }
+            }
             loop {
                 let read = self
                     .invoke(
