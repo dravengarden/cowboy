@@ -702,23 +702,17 @@ where
                             tracing::warn!(event_name = "cowboy.execution.request_rejected", session = %client.session, reason = "request_capacity", pending = ids.len(), "execution request not admitted");
                             // No effect was admitted. Limit this request, not
                             // the transport carrying other commands/results.
-                            writer.send(Message::Text(json!({"id":id,"error":{"code":-32000,"message":"Execution request capacity reached; this request was not admitted"}}).to_string().into())).await?;
+                            writer.send(refusal(&id, "Execution request capacity reached; this request was not admitted")).await?;
                             continue;
                         }
                         ids.insert(id.to_string());
                         let method = message["method"].as_str().context("execution method missing")?.to_owned();
-                        // Native sends parameterless requests such as
-                        // environment/info with `"params": null`; the wire
-                        // contract carries an object.
-                        let params = match message.get("params") {
-                            None | Some(Value::Null) => json!({}),
-                            Some(params) => params.clone(),
-                        };
+                        let params = native_params(&message);
                         if !client.relays.admits(&method) {
                             // The unit is being stopped: no new effect, only
                             // the cleanup of what it started (design L1c).
                             ids.remove(&id.to_string());
-                            writer.send(Message::Text(json!({"id":id,"error":{"code":-32000,"message":"The session is ending; this request was not admitted"}}).to_string().into())).await?;
+                            writer.send(refusal(&id, "The session is ending; this request was not admitted")).await?;
                             continue;
                         }
                         relays.spawn(id, method, params);
@@ -767,6 +761,24 @@ where
         }
     }
     Ok(())
+}
+
+/// A refusal of one native request that admitted no effect.
+fn refusal(id: &Value, message: &str) -> Message {
+    Message::Text(
+        json!({"id": id, "error": {"code": -32000, "message": message}})
+            .to_string()
+            .into(),
+    )
+}
+
+/// A native request's params as the wire contract carries them: native sends
+/// parameterless requests such as environment/info with `"params": null`.
+fn native_params(message: &Value) -> Value {
+    match message.get("params") {
+        None | Some(Value::Null) => json!({}),
+        Some(params) => params.clone(),
+    }
 }
 
 /// A fresh keeper operation id; the suffix asks the keeper for the backend's
