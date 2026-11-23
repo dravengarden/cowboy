@@ -260,6 +260,59 @@ async fn contract(store: &Store) {
     );
 }
 
+/// An enrolled Machine whose recorded current connection epoch is `epoch`.
+async fn connected_machine(store: &Store, machine: &str, epoch: &str) {
+    let enrollment = store
+        .create_machine_enrollment(machine, "Machine", 60)
+        .await
+        .unwrap();
+    store
+        .consume_machine_enrollment(
+            &enrollment,
+            "ssh-ed25519 QUJD",
+            "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
+        )
+        .await
+        .unwrap();
+    store
+        .machine_connected(
+            machine,
+            epoch,
+            "linux",
+            "x86_64",
+            "outbound_wss",
+            &serde_json::json!({}),
+        )
+        .await
+        .unwrap();
+}
+
+/// The resolution is bound to the epoch of the connection its evidence came
+/// over: a replacement recorded on the Machine row refuses it.
+async fn resolve_on_current_connection(
+    store: &Store,
+    approval: ResolutionIntent,
+    machine: &str,
+) -> crate::plugin_operation::resolution::ResolutionReceipt {
+    connected_machine(store, machine, "epoch-current").await;
+    assert!(
+        store
+            .resolve_plugin_uninstall_on_connection(
+                &ResolutionPermit::for_test(approval.clone()),
+                (machine, "epoch-replaced"),
+            )
+            .await
+            .is_err()
+    );
+    store
+        .resolve_plugin_uninstall_on_connection(
+            &ResolutionPermit::for_test(approval),
+            (machine, "epoch-current"),
+        )
+        .await
+        .unwrap()
+}
+
 async fn verified_removal_contract(store: &Store) {
     use crate::machine_protocol::plugin_recovery::{
         InstallationEvidence, RecoveryObservation, RecoverySnapshot,
@@ -332,47 +385,7 @@ async fn verified_removal_contract(store: &Store) {
             .await
             .is_err()
     );
-    // The resolution is bound to the epoch of the connection its evidence
-    // came over: a replacement recorded on the Machine row refuses it.
-    let enrollment = store
-        .create_machine_enrollment(&intent.machine_id, "Machine", 60)
-        .await
-        .unwrap();
-    store
-        .consume_machine_enrollment(
-            &enrollment,
-            "ssh-ed25519 QUJD",
-            "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
-        )
-        .await
-        .unwrap();
-    store
-        .machine_connected(
-            &intent.machine_id,
-            "epoch-current",
-            "linux",
-            "x86_64",
-            "outbound_wss",
-            &serde_json::json!({}),
-        )
-        .await
-        .unwrap();
-    assert!(
-        store
-            .resolve_plugin_uninstall_on_connection(
-                &ResolutionPermit::for_test(approval.clone()),
-                (&intent.machine_id, "epoch-replaced"),
-            )
-            .await
-            .is_err()
-    );
-    let receipt = store
-        .resolve_plugin_uninstall_on_connection(
-            &ResolutionPermit::for_test(approval),
-            (&intent.machine_id, "epoch-current"),
-        )
-        .await
-        .unwrap();
+    let receipt = resolve_on_current_connection(store, approval, &intent.machine_id).await;
     let after = store
         .plugin_uninstall_operation(&intent.operation_id)
         .await
