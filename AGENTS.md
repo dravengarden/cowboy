@@ -207,6 +207,25 @@ list and the affected paths, and give a reason for `high`.
   CLI remains supported for unavailable live MCP capabilities and the explicit
   native/host/identity boundaries in `docs/agent-api.md`. Do not replay an unknown
   effect under a new ID or interpret accepted submission as confirmed completion.
+- **Long-wait pre-dispatch triage (Phase 2B)**: before delegating work from an
+  active session, match the waiting path to expected duration and mutability so
+  long waits do not keep a parent turn open across prompt-cache expiry:
+  - Long (>3–5 min heuristic) **read-only** work (code/design reviews, broad
+    codebase or transcript analyses): dispatch via `calls.start` / `review.start`
+    with `notify:true` and end the parent turn cleanly instead of polling
+    `calls.wait`; read `calls.result` when the durable `[Cowboy]` completion
+    notice arrives (Phase 2A guarantees recovery across restarts and rollovers).
+  - Long **write** work: route to an independent isolated session in its own
+    worktree (`sessions.create` + `queue.submit` with `notify:true`, or
+    `cowboy session prompt --notify`), then end the parent turn.
+  - **Short critical-path** work (<3–5 min): reserve native subagents (Codex
+    `spawn_agent`+`wait_agent`, Claude `Task`) for work that belongs inside the
+    current turn.
+  - Never abort, reset, or force-compact an in-flight native turn to dodge
+    cache expiry. Measure decoupling with ordinary resume first before enabling
+    opt-in `rollover_on_notify` (Phase 2C). See
+    [`docs/wait-cache-observability.md`](docs/wait-cache-observability.md) and
+    [`docs/agent-api.md`](docs/agent-api.md#pre-dispatch-triage-long-waits-and-prompt-cache).
 - **Configuration**: the Service and each Device own one TOML file through the
   unified framework in `src/config.rs`; see `docs/configuration.md`. Decide
   every new setting with its "Where a setting belongs" rule (wiring/secret →
