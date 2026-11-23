@@ -251,3 +251,20 @@ test("a helper whose process tree exits slowly after its stop is confirmed, not 
   assert.equal(turn.uncertain, undefined);
   assert.deepEqual(uncertain, []);
 });
+
+test("an ended turn waits for a slow-exiting command to stop instead of leaving it to expiry", async (t) => {
+  const { facade, call, methods } = await fixture(t);
+  // Exits 7 s after SIGTERM, beyond the former 5 s turn-end confirmation.
+  const ran = await call("RunCommand", {
+    command:
+      'sleep 100 >/dev/null 2>&1 & child=$!; trap \'kill "$child"; wait "$child"; sleep 7; exit 0\' TERM; wait',
+    // Long enough for the shell to install its trap.
+    wait_seconds: 1,
+  });
+  assert.match(ran.text, /^Still running/);
+  const started = Date.now();
+  await facade.endTurn("s1");
+  assert.ok(Date.now() - started >= 6000, "the turn end waited for the exit");
+  assert.equal(facade.session("s1").commands.size, 0, "the stop was confirmed at turn end");
+  assert.equal(methods().filter((method) => method === "process/terminate").length, 1);
+});

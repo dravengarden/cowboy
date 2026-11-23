@@ -1,7 +1,7 @@
 # Uncertain effect recovery across Controller restarts
 
-Status: L1 and L3 are implemented and accepted (2026-11-23). L1w is in design
-review. L2 and L4 are designed here and implemented later.
+Status: L1 and L3 are implemented and accepted (2026-11-23). L1b replaces the rejected
+L1w. L2 and L4 are designed here and implemented later.
 
 ## Problem
 
@@ -66,11 +66,10 @@ A `RunCommand` was still running at turn end. The facade's `endTurn` stops a
 session's commands, and that `process/terminate` was in flight when the
 worker's own teardown closed the endpoint. The worker ledger recorded the
 undelivered stop as uncertain (`undelivered`, class F3). The command's process
-tree exited shortly afterwards. The facade's 5 s confirmation was not
-involved: the park was recorded 2.4 s after the turn ended. The facade path is
-a real gap all the same (`runUntracked` reports `process/terminate` after
-5 s), so L1 now observes a stopped helper for up to 60 s. The case itself
-needs the worker-side slice L1w.
+tree exited shortly afterwards. The stop in flight was not `endTurn`'s own:
+`endTurn` had confirmed for only 5 s and left the command to its expiry
+timer, whose background stop or read the teardown cut off. L1b (below)
+removes that.
 
 ## What the transport already guarantees
 
@@ -209,127 +208,59 @@ Tests:
 - a relay drop (socket terminated) at each step still fences and reports, as
   today.
 
-## L1w: a stop whose reply was lost is settled by the worker (worker release)
+## L1b: an ended turn confirms its commands' stops (Plugin release)
 
-Status: design, for design review. The worker ledger
-(`src/worker_execution/ledger.rs`) is the trusted recorder, so the decision
-stays there. The confined proxy can still only add uncertainty.
+Replaces the worker-side design L1w, which design review rejected (see below).
 
-### Scope
+### What the second case actually was
 
-Only `process/terminate`. A stop has no effect beyond ending its process, so
-proof that the process ended settles it completely. Every other
-result-carrying request and every mutation keeps today's immediate park.
+The proxy answers a prompt only after the facade's `endTurn`, which stops the
+session's running commands. That stop was confirmed for only 5 s. A command
+whose process tree exited later (here a packaged conformance run under
+`nix develop`) stayed tracked, and its expiry timer kept sending stops and
+confirmation reads every 5 s after the turn had completed. At 04:50:02 the
+completed turn let the worker's generation cutover proceed. Teardown stopped
+the proxy unit while one of those background requests was in flight, and the
+worker ledger recorded it as undelivered (F3).
 
-Two ledger paths record a lost stop today. Both change:
+### Change
 
-- `undelivered`: the worker's relay finished and holds the keeper's reply,
-  but the native socket closed first. This is the observed case: the endpoint
-  closed at worker teardown. The worker invoked the stop under one keeper
-  operation id, which the keeper journal admits once, so the reply is the
-  stop's real outcome.
-- the relay's lost invocation: the worker's own call lost its reply after
-  possible admission (`invoke_classified` → `Err(true)`, the 180 s bound).
-  Whether the stop reached the executor is unknown.
+`endTurn` waits up to `LIMITS.stopConfirmMs` (60 s) for its commands' stops to
+be confirmed, the same bound L1 gives a stopped helper. A command that exits
+in time is forgotten before the turn completes. Nothing of the turn is still
+being stopped when the worker may tear down, so no request can be cut off. A
+cancellation keeps the 5 s wait, because the native cancel follows this cleanup.
+With L1's one-stop-per-process rule, the expiry of a command that outlives the
+60 s only observes; it never repeats the signal. Such a command is still
+running after its turn, which is exactly what an uncertain effect should
+report, so a later cut-off read still parks the session, as today.
 
-### Rule
+Test: a command whose process tree exits 7 s after SIGTERM is confirmed and
+forgotten at turn end, with a single `process/terminate`.
 
-1. Reply known (`undelivered`) and `running: false`: the process had already
-   ended, so the stop is settled. Nothing is recorded.
-2. Otherwise (`running: true`, or the reply is unknown), a pending stop is
-   recorded durably before the relay task ends: process id, the turn it
-   belongs to, and a deadline 60 s from now (wall clock, Unix ms). If that
-   write fails, the stop is published as uncertain at once (fail closed,
-   today's behaviour).
-3. The worker observes the process with read-only `process/read`
-   (`afterSeq: null`, `maxBytes: 1`, `waitMs: 1000`), invoked like
-   `Client::terminate` under fresh keeper operation ids. It never sends
-   another `process/terminate`: a delivered stop must not be repeated, and an
-   undelivered one is not replayed. The process ended when a read reports
-   `exited`, or when the executor answers exactly `unknown process id <id>`
-   (E1; the ledger's looser `unknown_process` substring match is not
-   evidence here). A ledger refusal, a transport loss or any other error is
-   not evidence and the observation continues.
-4. Ended before the deadline: the pending stop is removed durably. Nothing is
-   published, so nothing parks.
-5. Deadline reached, still running or unreadable: the pending stop is removed
-   and the stop is published exactly as today (`mark_uncertain`, sequence
-   allocated then), in one ledger write.
+### Worker-side settlement (L1w): not adopted
 
-Sequences are allocated only at publication (step 5), never for a pending
-stop. A settled stop therefore never consumes, reverts or reuses a sequence
-the Controller may have seen or acknowledged.
+The design deferred publishing a lost stop behind a durable pending record in
+the worker ledger and settled it by observation. Design review (high,
+`call-830719b8`) found it unsound in ways that need changes well beyond this
+fix:
 
-### Ordering with turns, teardown and successors
+- `exited` precedes `closed`, and a process id alone cannot prove permanent
+  absence across a keeper replacement or a late start;
+- the worker's own cleanup paths (`cancel_turn`, `finish_turn`, `settle_all`)
+  send their own stops, so "one stop per process" needs a worker-wide stop
+  admission;
+- a crash between the keeper's admission and the loss classification leaves
+  no record, and the existing `mark_uncertain` publishes even when its write
+  failed, so a sequence can be reused after acknowledgement;
+- prompt admission can race a late publication, both after `TurnEnded` and at
+  a successor's handshake;
+- a helper's stop can hide an unknown publish outcome;
+- an older worker launched as a fallback drops unknown record fields.
 
-- Turn end: `finish_turn`'s settlement also waits for the turn's pending
-  stops, bounded by their deadlines, so `TurnEnded` (and with it the
-  Controller's next dispatch) follows the stop's resolution. A stop is
-  published before its turn's completion, as an uncertain effect is today.
-  A pending stop recorded after its turn's completion was already emitted
-  (the stop raced the turn end) belongs to no open turn. The worker keeps
-  observing it, and a publication then parks the session before its next
-  dispatch.
-- Teardown: `settle_all` waits for pending stops inside the existing 60 s
-  `TEARDOWN_SETTLE`. Whatever is still pending stays in the durable record.
-- Successor worker (replacement or crash): `Ledger::open` loads pending stops.
-  Before the worker reports its session ready, it observes each one until
-  its deadline, with at least one read. Then it settles or publishes each, as
-  above. No prompt can reach the session before that. A deadline already
-  past gets one read: ended settles it, anything else publishes it.
-- New losses while stops are pending are recorded and published as today.
-  Pending stops are independent entries and are never merged into them.
-
-### Durability and rollback
-
-- The pending stops live in the existing schema-1 record as
-  `pending_stops: [{process, turn, deadline_ms}]`, with `serde(default)` and
-  `skip_serializing_if = "Vec::is_empty"`. `Record` does not deny unknown
-  fields, so an older worker reads the file. The file stays bounded by the
-  existing 256 KiB limit, and pending stops are capped at 64 (beyond that, a
-  lost stop is published at once).
-- Rollback limitation: an older worker drops the field when it next rewrites
-  the record. A pending stop recorded by a newer worker and still unresolved
-  when an older worker takes over is lost, a fail-open case bounded to that
-  60 s window. Worker generation rollbacks are explicit maintenance, and its
-  runbook must first check the session ledgers for `pending_stops` (or let
-  them drain for 60 s). A stronger alternative, publishing under a provisional
-  sequence that an older worker would report, is rejected: settling would then
-  have to revert a sequence the Controller may already have stored as
-  observed.
-
-### Not changed
-
-The Controller, the wire, the Machine broker and the facade are unchanged.
-The keeper's per-operation journal stays as it is; L1w only adds read-only
-observation on top of it. L4's banner target (`process:<id>`, "still
-running") needs the optional wire field described under L4 and is not part of
-L1w.
-
-### Tests
-
-Ledger unit tests with a scripted client:
-
-- an undelivered stop with `running: false`: nothing pending, nothing
-  published;
-- `running: true` then `exited`: settled, no sequence used;
-- E1 settles; a ledger refusal or a similar message does not;
-- still running at the deadline: published once with a fresh sequence;
-- a failed pending write publishes at once;
-- turn end waits for a pending stop;
-- teardown leaves an unresolved stop durable, and a reopened ledger
-  observes and settles it before ready;
-- an older record without the field reads unchanged;
-- no second `process/terminate` is ever sent.
-
-An execution-host conformance case runs the observed incident: a worker
-replaced while a turn-end stop of a slow-exiting process tree is in flight
-ends with no uncertain effect.
-
-### Release
-
-Worker code: `.#cowboy-machine-release` with a worker pin advance, through the
-Machine maintenance runbook. It can ride with the next scheduled pin advance.
+Two of these are pre-existing ledger weaknesses, independent of L1w: publishing
+a sequence whose write failed, and the multiple worker stop paths. They are
+recorded under Open items and belong with L2.
 
 ## L3: shorter Controller outages (Machine host release)
 
@@ -449,11 +380,10 @@ findings are folded in. L2 is implemented later, after its own design review.
   sees before choosing the action. When several effects are unresolved, the
   note lists every effect the acknowledgement covers. Until per-effect records
   exist (L2), the action is offered only for a single unresolved effect.
-- A stop that stays uncertain after L1w's 60 s observation shows that its
-  process is still running, with its command id.
-- Auto-clear: an outcome proven by L1 never parks, and a stop proven by L1w is
-  never published. One proven later by the
-  worker clears through L2 without owner action.
+- A stop that stays uncertain after L1b's 60 s turn-end confirmation shows
+  that its process is still running, with its command id.
+- Auto-clear: an outcome proven by L1 or L1b never parks. One proven later by
+  the worker clears through L2 without owner action.
 
 ## Open items
 
@@ -462,13 +392,19 @@ findings are folded in. L2 is implemented later, after its own design review.
   a blackholed first address cannot starve a reachable fallback. Today a dial
   outside the window is unbounded, as it always was.
 - F7 worker fix (with L2).
+- Worker ledger: `mark_uncertain` publishes a sequence even when the ledger
+  write failed, so a successor can reuse an acknowledged sequence. Publish
+  only after the write commits, and hold dispatch on failure (with L2).
+- Worker stop paths (`cancel_turn`, `finish_turn`, `settle_all`) each send
+  their own `process/terminate`: give the worker one stop admission per
+  process (with L2).
 
 ## Release artifacts
 
 | Slice | Artifacts                                                                                                                                                                                                    |
 | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | L1    | Antigravity Plugin (facade only)                                                                                                                                                                             |
-| L1w   | `.#cowboy-machine-release` with a worker pin advance, after its own design review                                                                                                                            |
+| L1b   | Antigravity Plugin (facade only)                                                                                                                                                                             |
 | L3    | Machine host release: Hawk uses the writer-preserving `.#cowboy-machine-writer-host-release` (active deletion writer); OVH uses `.#cowboy-machine-host-release`. Both retain the accepted worker pin         |
 | L4    | Banner wording now needs nothing. `target`, settlement and Check-and-resume follow L2                                                                                                                        |
 | L2    | Controller reader, then the Machine broker codec staged with an accepted compatible worker pin, then `.#cowboy-machine-release` with a worker pin advance (includes the F7 fix), then the Antigravity Plugin |

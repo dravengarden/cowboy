@@ -222,9 +222,15 @@ export class Facade {
       await Promise.allSettled([...turn.inflight]);
     }
     const commands = [...session.commands.values()];
+    // An ended turn waits up to `stopConfirmMs` for its commands' process
+    // trees to exit, so nothing of the turn is still being stopped once it
+    // completes (a worker replaced at the turn's end otherwise cuts off that
+    // stop mid-request, which parks the session). A cancellation keeps the
+    // short wait: its native cancel follows this cleanup.
+    const confirmMs = cancelled ? 5000 : LIMITS.stopConfirmMs;
     await Promise.all(
       commands.map(async (command) => {
-        if (await this.terminate(command).catch(() => false)) {
+        if (await this.terminate(command, confirmMs).catch(() => false)) {
           this.forget(session, command);
         }
       }),
