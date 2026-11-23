@@ -596,13 +596,25 @@ Nothing beyond placement is designed here.
 
 ## Owner decisions needed
 
-- **L0 go.** Resident Machine release on Hawk, then OVH.
-- **L0-6.** The remedy selection once the data is in.
-- **D1. Agent identity on Hawk.** Either:
-  - keep `draven`, with the operator SSH identity and owner credentials moved
-    out (I-1); or
-  - create a new `cowboy-agent` UID, with a chown of the agent tree and
-    separate Git and SSH credentials.
+Decided by the owner on 2026-11-23 (relayed by coordinator
+`sess-1794888946545`):
+
+- **L0: go.**
+  - Hawk first, then OVH. The coordinator performs the activations.
+  - A worker pin advance is allowed if L0-0 requires one. It goes through the
+    Machine maintenance runbook.
+  - Data collection runs for two weeks or 5 gaps. Then the owner selects the
+    remedy (L0-7).
+- **D1: keep `draven` as the Hawk agent identity.** Later Part I slices
+  will:
+  - migrate the operator SSH identity and the owner's CLI and browser
+    credentials out of `draven` (I-1);
+  - reduce sudo to fixed wrappers.
+
+  The `cowboy-agent` UID alternative is not pursued.
+
+Still open:
+
 - **D2. Admin path.** Either a `hawk-admin` login whose key is held only on
   owner devices (mirroring OVH's `ovh-operator`), or `pam_u2f`.
 - **D3. R1.** Accept agent-initiated activation as recorded authority, or
