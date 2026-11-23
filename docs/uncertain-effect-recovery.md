@@ -521,9 +521,11 @@ post-reconnect check and Check-and-resume follow L2 as designed below.
   outside the window is unbounded, as it always was.
 - L1c's worker half ships with the next worker pin advance (not the current
   L0 one); its proxy half with the next Antigravity Plugin release.
-- Worker-side durable relay accounting, so a reply arriving after the worker
-  exited still parks (pre-existing; `Relays::drop` records on a detached
-  task).
+- L2: worker-side durable relay accounting, so a reply arriving after the
+  worker exited still parks. Pre-existing: `Relays::drop` records undelivered
+  replies on a detached task, so a worker that exits first records nothing.
+- L2: a cleanup read admitted after the drain count reached zero but before
+  the unit stops can be cut off. It parks (fail closed), but needlessly.
 
 ## Release artifacts
 
