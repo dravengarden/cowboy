@@ -5066,21 +5066,8 @@ impl SqliteStorage {
     }
 
     pub(super) async fn clear_events(&self, session_id: &str, calls_before_ms: i64) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("DELETE FROM events WHERE session_id = ?1")
-            .bind(session_id)
-            .execute(&mut *tx)
+        self.clear_conversation(session_id, calls_before_ms, None)
             .await
-            .with_context(|| format!("DELETE SQLite events for {session_id}"))?;
-        super::session_widgets::clear_transcript_projections_sqlite(&mut tx, session_id).await?;
-        super::managed_calls::clear_calls_on_transcript_clear_sqlite(
-            &mut tx,
-            session_id,
-            calls_before_ms,
-        )
-        .await?;
-        tx.commit().await?;
-        Ok(())
     }
 
     pub(super) fn artifact_path(&self, name: &str) -> Option<std::path::PathBuf> {

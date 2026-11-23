@@ -531,6 +531,9 @@ impl Supervisor {
         if self.hub.is_managed_child(session_id) {
             return Err("managed child conversations do not accept steering".into());
         }
+        if self.hub.clear_pending(session_id) {
+            return Err("the conversation is being cleared; send after it finishes".into());
+        }
         // Do not prepare, wake or replace a worker for this operation.
         self.runtime_for_session(session_id)?.start_steer_targeted(
             session_id,

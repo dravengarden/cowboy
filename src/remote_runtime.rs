@@ -27,6 +27,8 @@ use crate::core::{Event, Hub, Status, config_option_accepts};
 pub mod account_stop;
 mod broker_protocol;
 mod config_sync;
+#[cfg(test)]
+mod context_fence_tests;
 mod native_admission;
 mod notice_recovery;
 mod pending_commands;
@@ -2089,8 +2091,12 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                     // Account signals and uncertain effects of an admitted
                     // epoch are observed even while its transcript is not
                     // projected (a reset).
+                    // A turn ending retires its own pending prompt by turn id,
+                    // also when Clear fences the epoch that ran it.
                     turn_end::signal(shared, &session_id, &event);
+                    turn_end::ended(shared, &session_id, &event);
                     record_uncertain_effect(shared, &session_id, &event);
+                    let _projection = shared.hub.runtime_projection_guard();
                     let resetting = shared.resetting.lock().contains(&session_id);
                     let stale_idle = matches!(
                         event,
@@ -2109,7 +2115,9 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                             runtime_seq,
                             "ignoring stale idle status while a newer turn is active"
                         );
-                    } else if !resetting && shared.hub.accepts_runtime_projection(&session_id) {
+                    } else if !resetting
+                        && snapshot::admits_event(shared, &session_id, &worker_epoch, &event)
+                    {
                         if let Some((machine, telemetry)) = shared.telemetry.lock().as_ref() {
                             telemetry.record_runtime_spans(machine, &session_id, &diagnostics);
                         }
@@ -2118,7 +2126,6 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                         let is_config_options =
                             matches!(&event, RuntimeEvent::ConfigOptions { .. });
                         resolve_steering_update(shared, &session_id, &event);
-                        turn_end::ended(shared, &session_id, &event);
                         update_snapshot_from_event(shared, &session_id, runtime_seq, &event);
                         if let RuntimeEvent::Status {
                             state: WorkerState::Crashed | WorkerState::Exited,
@@ -2416,6 +2423,11 @@ async fn adopt_snapshot(shared: &Shared, worker: &WorkerSnapshot) {
 }
 
 fn project_snapshot(shared: &Shared, worker: &WorkerSnapshot) {
+    // A worker of a cleared context owns nothing: no cache entry, launch or notice.
+    let _projection = shared.hub.runtime_projection_guard();
+    if !snapshot::current_context(shared, worker) {
+        return;
+    }
     update_declaration(shared, worker);
     shared
         .workers
@@ -2448,6 +2460,10 @@ async fn merge_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
             continue;
         }
         native_admission::snapshot(shared, &worker, || {
+            let _projection = shared.hub.runtime_projection_guard();
+            if !snapshot::current_context(shared, &worker) {
+                return;
+            }
             update_declaration(shared, &worker);
             apply_snapshot(shared, &worker);
             acknowledge_pending_ensure_from_snapshot(shared, &worker);
@@ -2462,7 +2478,7 @@ async fn merge_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
 }
 
 fn update_declaration(shared: &Shared, worker: &WorkerSnapshot) {
-    if !shared.hub.accepts_runtime_projection(&worker.session_id) {
+    if !snapshot::admits_worker(shared, worker) {
         return;
     }
     let Some(mut session) = worker.launch.clone() else {

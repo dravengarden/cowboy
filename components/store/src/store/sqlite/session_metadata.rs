@@ -91,3 +91,64 @@ impl SqliteStorage {
         Ok(())
     }
 }
+
+impl SqliteStorage {
+    pub(in crate::store) async fn clear_conversation(
+        &self,
+        session_id: &str,
+        calls_before_ms: i64,
+        fence: Option<crate::store::session_metadata::ClearFence<'_>>,
+    ) -> Result<()> {
+        self.clear_conversation_inner(session_id, Some(calls_before_ms), fence)
+            .await
+    }
+
+    /// See `PostgresStorage::clear_conversation_inner`.
+    pub(in crate::store) async fn clear_conversation_inner(
+        &self,
+        session_id: &str,
+        transcript: Option<i64>,
+        fence: Option<crate::store::session_metadata::ClearFence<'_>>,
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        if let Some(calls_before_ms) = transcript {
+            sqlx::query("DELETE FROM events WHERE session_id = ?1")
+                .bind(session_id)
+                .execute(&mut *tx)
+                .await
+                .with_context(|| format!("DELETE SQLite events for {session_id}"))?;
+            crate::store::session_widgets::clear_transcript_projections_sqlite(&mut tx, session_id)
+                .await?;
+            crate::store::managed_calls::clear_calls_on_transcript_clear_sqlite(
+                &mut tx,
+                session_id,
+                calls_before_ms,
+            )
+            .await?;
+        }
+        if let Some((fence_key, fence)) = fence {
+            let now = now_ms();
+            sqlx::query(
+                "UPDATE sessions SET agent_session_id = NULL, updated_at_ms = ?1 WHERE id = ?2",
+            )
+            .bind(now)
+            .bind(session_id)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("UPDATE SQLite session agent_session_id {session_id}"))?;
+            sqlx::query(
+                "INSERT INTO settings(key, value, updated_at_ms) VALUES (?1, ?2, ?3) \
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value, \
+                 updated_at_ms = excluded.updated_at_ms",
+            )
+            .bind(fence_key)
+            .bind(fence)
+            .bind(now)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("UPSERT SQLite Hub setting {fence_key}"))?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+}

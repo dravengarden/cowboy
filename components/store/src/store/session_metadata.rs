@@ -102,7 +102,127 @@ impl Store {
     }
 }
 
+/// Clear conversation's restart fence: the discarded native ids under their
+/// registered setting key. Written with the native id's removal.
+pub type ClearFence<'a> = (&'a str, &'a serde_json::Value);
+
+fn checked_fence(fence: Option<ClearFence<'_>>) -> Result<Option<(&str, serde_json::Value)>> {
+    fence
+        .map(|(key, value)| {
+            anyhow::ensure!(
+                crate::model::settings_keys::is_persisted_setting_key(key),
+                "unsupported Hub setting"
+            );
+            let mut value = value.clone();
+            strip_nul(&mut value);
+            Ok((key, value))
+        })
+        .transpose()
+}
+
+impl Store {
+    /// Forget the session's native id and record its fence in one transaction,
+    /// so neither persists without the other (context renewal, fork reset).
+    pub async fn clear_agent_session_id(
+        &self,
+        session_id: &str,
+        fence_key: &str,
+        fence: &serde_json::Value,
+    ) -> Result<()> {
+        let fence = checked_fence(Some((fence_key, fence)))?;
+        let fence = fence.as_ref().map(|(key, value)| (*key, value));
+        match &self.backend {
+            StorageBackend::Postgres(backend) => {
+                backend
+                    .clear_conversation_inner(session_id, None, fence)
+                    .await
+            }
+            StorageBackend::Sqlite(backend) => {
+                backend
+                    .clear_conversation_inner(session_id, None, fence)
+                    .await
+            }
+        }
+    }
+
+    /// Clear conversation as one transaction: delete the transcript and its
+    /// projections, archive old Calls and, with `fence`, forget the native id
+    /// and record the fence. A failure keeps the transcript and the context.
+    pub async fn clear_conversation(
+        &self,
+        session_id: &str,
+        calls_before_ms: i64,
+        fence: Option<ClearFence<'_>>,
+    ) -> Result<()> {
+        let fence = checked_fence(fence)?;
+        let fence = fence.as_ref().map(|(key, value)| (*key, value));
+        match &self.backend {
+            StorageBackend::Postgres(backend) => {
+                backend
+                    .clear_conversation_inner(session_id, Some(calls_before_ms), fence)
+                    .await
+            }
+            StorageBackend::Sqlite(backend) => {
+                backend
+                    .clear_conversation_inner(session_id, Some(calls_before_ms), fence)
+                    .await
+            }
+        }
+    }
+}
+
 impl PostgresStorage {
+    pub(super) async fn clear_conversation(
+        &self,
+        session_id: &str,
+        calls_before_ms: i64,
+        fence: Option<ClearFence<'_>>,
+    ) -> Result<()> {
+        self.clear_conversation_inner(session_id, Some(calls_before_ms), fence)
+            .await
+    }
+
+    /// `transcript`: delete it, archiving Calls created before this time.
+    async fn clear_conversation_inner(
+        &self,
+        session_id: &str,
+        transcript: Option<i64>,
+        fence: Option<ClearFence<'_>>,
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        if let Some(calls_before_ms) = transcript {
+            sqlx::query("DELETE FROM events WHERE session_id = $1")
+                .bind(session_id)
+                .execute(&mut *tx)
+                .await
+                .with_context(|| format!("DELETE events for {session_id}"))?;
+            session_widgets::clear_transcript_projections_pg(&mut tx, session_id).await?;
+            // Archive old Calls while keeping unconfirmed opted-in notices visible.
+            managed_calls::clear_calls_on_transcript_clear_pg(&mut tx, session_id, calls_before_ms)
+                .await?;
+        }
+        if let Some((fence_key, fence)) = fence {
+            sqlx::query(
+                "UPDATE sessions SET agent_session_id = NULL, updated_at = now() WHERE id = $1",
+            )
+            .bind(session_id)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("UPDATE session agent_session_id {session_id}"))?;
+            sqlx::query(
+                "INSERT INTO settings(key, value, updated_at) VALUES ($1, $2, now()) \
+                 ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = now()",
+            )
+            .bind(fence_key)
+            .bind(fence)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("UPSERT Hub setting {fence_key}"))?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn update_session_usage(
         &self,
         session_id: &str,

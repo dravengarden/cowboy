@@ -25,6 +25,7 @@ use super::{CoreCommand, Duration, Frame, HashMap, HashSet, Mutex, Result, Share
 /// the declaration meets ordinary admission, as before.
 const PLAN_WAIT: Duration = Duration::from_secs(60);
 const RECHECK: Duration = Duration::from_secs(2);
+const CLEARED_CANCEL_DETAIL: &str = "The conversation was cleared, but its fresh agent could not start yet; send a message or Retry to start it";
 
 static WAITING: std::sync::LazyLock<Mutex<HashMap<String, std::time::Instant>>> =
     std::sync::LazyLock::new(Default::default);
@@ -153,6 +154,14 @@ pub(super) async fn denied<W: tokio::io::AsyncWrite + Unpin>(
 
 /// Withdraw a reset whose declaration was denied before its stop left.
 /// Returns false when `session_id` has no such reset in flight.
+///
+/// Known limit: absence from `sent` is the evidence that the stop never
+/// left, and a reconnect clears `sent`. A stop written before a disconnect,
+/// whose ACK was lost and whose declaration is denied on replay, is treated
+/// as unsent: the staged replacement is discarded and a Clear's session
+/// reports Crashed from the cached old worker. That fails closed (Retry starts
+/// a fresh worker). Closing it needs connection-independent attempt evidence,
+/// such as an attempted-send record that survives reconnect.
 fn cancel(shared: &Shared, session_id: &str) -> bool {
     if !shared.resetting.lock().contains(session_id) {
         return false;
@@ -195,13 +204,26 @@ fn cancel(shared: &Shared, session_id: &str) -> bool {
             cancel_reason,
         );
     }
-    let status = shared
-        .workers
-        .lock()
-        .get(session_id)
-        .map_or(Status::Crashed, |worker| super::worker_status(worker.state));
+    let kept = shared.workers.lock().get(session_id).cloned();
+    // A Clear fenced the kept worker's context for good: it fails closed, and
+    // the next prompt or Retry recycles the session into a fresh worker.
+    let cleared = kept.as_ref().is_some_and(|worker| {
+        !shared.hub.admit_runtime_epoch(
+            session_id,
+            &worker.worker_epoch,
+            worker.agent_session_id.as_deref(),
+        )
+    });
+    let (status, detail) = if cleared {
+        (Status::Crashed, Some(CLEARED_CANCEL_DETAIL.to_owned()))
+    } else {
+        (
+            kept.map_or(Status::Crashed, |worker| super::worker_status(worker.state)),
+            None,
+        )
+    };
     tracing::warn!(session = %session_id, ?status, "reset declaration denied; reset cancelled");
-    shared.hub.set_status(session_id, status, None);
+    shared.hub.set_status(session_id, status, detail);
     true
 }
 
@@ -340,6 +362,48 @@ mod tests {
         assert!(runtime.shared.workers.lock().contains_key("denied"));
         assert_eq!(hub.status("denied"), Some(super::super::Status::Busy));
         assert!(WAITING.lock().get("denied").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_clear_fails_closed_and_keeps_the_old_context_fenced() {
+        let hub = Hub::new();
+        bound_session(&hub, "kept");
+        let worker = super::super::tests::snapshot("kept");
+        let runtime = RemoteRuntime::for_test(hub.clone(), vec![worker.clone()]);
+        runtime.connect_for_test();
+        assert!(super::super::apply_snapshot(&runtime.shared, &worker));
+        hub.prepare_context_reset("kept");
+        runtime.reset(worker.launch.clone().unwrap());
+        let expired = std::time::Instant::now()
+            .checked_sub(PLAN_WAIT + Duration::from_secs(1))
+            .unwrap();
+        WAITING.lock().insert("kept".to_owned(), expired);
+        let commands = wire(&runtime).await;
+        assert!(!commands.iter().any(reset_stop), "{commands:?}");
+        // No fresh agent yet: the session needs a restart instead of
+        // silently running the cleared context.
+        assert_eq!(hub.status("kept"), Some(super::super::Status::Crashed));
+        super::super::handle_frame(
+            &runtime.shared,
+            Frame::WorkerEvent {
+                session_id: "kept".into(),
+                worker_epoch: worker.worker_epoch.clone(),
+                runtime_seq: 5,
+                event: super::super::RuntimeEvent::ContextUsage {
+                    used: 7,
+                    size: 10,
+                    raw: serde_json::Value::Null,
+                    observed_at_ms: 1,
+                },
+                diagnostics: Vec::new(),
+            },
+            &mut tokio::io::sink(),
+        )
+        .await
+        .unwrap();
+        let meta = hub.session_info("kept").unwrap().meta;
+        assert_eq!(meta.context_used, 0);
+        assert_eq!(meta.agent_session_id, None);
     }
 
     #[tokio::test]
