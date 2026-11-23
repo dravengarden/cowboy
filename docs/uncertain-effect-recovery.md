@@ -235,8 +235,25 @@ With L1's one-stop-per-process rule, the expiry of a command that outlives the
 running after its turn, which is exactly what an uncertain effect should
 report, so a later cut-off read still parks the session, as today.
 
-Test: a command whose process tree exits 7 s after SIGTERM is confirmed and
-forgotten at turn end, with a single `process/terminate`.
+Every caller of a command's stop shares one stop promise. The turn's end
+joins a stop already in flight (from `StopCommand` or expiry) instead of
+leaving its reply outstanding, and it takes the stop over from the expiry
+timer, handing it back if the close stays unconfirmed. One deadline covers the
+stop's reply and the confirming reads. A command's start is tracked on the
+turn until its handle is registered, so the turn's end always sees it.
+
+Bounded residuals, all failing closed (a cut-off request still parks):
+
+- A subagent's turn end keeps the 5 s wait, because its parent bounds the
+  child's settlement on its own (about 30 s).
+- A read already in flight when the deadline passes cannot be withdrawn.
+- A forced exit (the watchdog kills `agy`) closes the endpoint without
+  waiting for the confirmation.
+
+Tests: a command whose process tree exits 7 s after SIGTERM is confirmed and
+forgotten at turn end with a single `process/terminate`; the turn's end joins
+a stop whose reply is held; a command whose start is pending when the turn
+ends is registered, stopped and forgotten.
 
 ### Worker-side settlement (L1w): not adopted
 

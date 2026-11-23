@@ -268,3 +268,34 @@ test("an ended turn waits for a slow-exiting command to stop instead of leaving 
   assert.equal(facade.session("s1").commands.size, 0, "the stop was confirmed at turn end");
   assert.equal(methods().filter((method) => method === "process/terminate").length, 1);
 });
+
+test("the turn's end joins a stop still in flight instead of leaving its reply outstanding", async (t) => {
+  let held = 0;
+  const { facade, call, endpoint } = await fixture(t, {
+    // The first stop's reply is held for a second.
+    delay: (method) => (method === "process/terminate" && held++ === 0 ? 1000 : 0),
+  });
+  const ran = await call("RunCommand", { command: "sleep 30", wait_seconds: 1 });
+  assert.match(ran.text, /^Still running \(command_id: (\S+)\)/);
+  const id = ran.text.match(/command_id: (\S+)\)/)[1];
+  // A StopCommand sends the stop; the turn ends while its reply is held.
+  const stopping = call("StopCommand", { command_id: id });
+  await new Promise((done) => setTimeout(done, 100));
+  await facade.endTurn("s1");
+  const answered = endpoint.calls.filter((entry) => entry.method === "process/terminate");
+  assert.equal(answered.length, 1, "one stop, joined by the turn's end");
+  // The stop's reply arrived before the turn's end returned.
+  assert.ok(Date.now() - answered[0].at >= 1000);
+  await stopping;
+});
+
+test("a command whose start is still pending when the turn ends is stopped by the turn's end", async (t) => {
+  const { facade, call } = await fixture(t, {
+    delay: (method) => (method === "process/start" ? 500 : 0),
+  });
+  const running = call("RunCommand", { command: "sleep 30", wait_seconds: 0 });
+  await new Promise((done) => setTimeout(done, 100));
+  await facade.endTurn("s1");
+  assert.equal(facade.session("s1").commands.size, 0, "registered, then stopped and forgotten");
+  await running;
+});
