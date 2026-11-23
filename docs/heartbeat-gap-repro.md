@@ -68,7 +68,11 @@ DUR=180 tools/heartbeat-gap-repro/run.sh
 The script prints the results path. On Hawk, set `FLAKE` to the real path of
 the Columbus `machines` flake. `run.sh` does this by default.
 
-## Results, 2026-11-23
+## Results, 2026-11-23 (synthetic stand-in)
+
+These are synthetic results from the stand-in, not records of the real
+broker. L0-5 requires the real broker's L0-1 records under each load, and
+that comparison is still open.
 
 Run conditions:
 
@@ -76,10 +80,13 @@ Run conditions:
   all units stayed active through a window that started after startup and the
   counter baseline.
 - Hawk load average was 15 at the start and 27 at the end.
-- The isolation check reported a host change. It came from another session's
-  Hawk machine transaction, which reloaded the `nixos-fw` nftables chains;
-  `/var/lib/hawk-deployments/current.json` was written at 07:11:43, inside
-  the run. A user-network guest cannot create host nftables chains.
+- **Host isolation: inconclusive for this run.** The isolation check
+  reported a host change: `nixos-fw` nftables chains, with the
+  `rpfilter drop` log rule removed. Another session's Hawk machine
+  transaction overlapped the run; `/var/lib/hawk-deployments/current.json`
+  was written at 07:11:43. A user-network guest cannot change host
+  nftables. Even so, the diff was not reconciled line by line with that
+  deployment, and no clean rerun was recorded.
 
 Each row is a single run of 180 s, so the remedy rows are single
 observations.
@@ -134,23 +141,33 @@ How to read the columns:
 
 ### Limits
 
-- **A stand-in, not the real broker.** The harness does not run the changed
-  Cowboy broker, so it cannot show what L0 records under each load.
-  - L0's records will come from Hawk itself (L0-7).
-  - The sampler's own cost was measured separately on Hawk's live cgroups:
-    6.5 ms per 10 s tick over 145 scopes. See the
-    [L0 implementation](host-isolation-design.md#l0-implementation) section.
-- **Scaled, not identical.** Hawk's pressure profile differs: 93 GiB,
-  hundreds of tasks, real build and test loads. A 4 GiB guest cannot show
-  that memory throttling alone reaches 45 s on Hawk. It only shows that the
-  mechanism stalls the sender, and that the split or the policy remedy
-  removes it.
-- **Single runs under a busy host.** One 180 s run per case, while other
-  sessions loaded Hawk, so small differences are not significant.
+- **Synthetic, not the real broker.** The stand-in has no broker sweep,
+  frame-refresh or backlog-deferral logic. It cannot show what L0 records
+  under each load, so L0-5's controlled comparison stays open. The sampler's
+  own cost was measured separately on Hawk: 6.5 ms per 10 s tick over 145
+  scopes, in the
+  [L0 implementation](host-isolation-design.md#l0-implementation) section.
+- **Scaled, not identical.** Hawk's pressure profile differs. A 4 GiB guest
+  shows that shared `MemoryHigh` throttling stalls an allocating sender for
+  seconds. It cannot show whether that reaches 45 s on Hawk.
+- **Single runs.** Each case ran once while other sessions loaded Hawk. The
+  split and policy rows show reduced stalls (0 ms and 54 ms) in those runs.
+  Whether either remedy works is L0-7's decision.
+- **Known harness limits.** Review round 3 of the harness
+  (`call-a1d954d9e1f6e889086c8d01`) found these. They were not fixed,
+  because the three-round review budget is used up:
+  - The VM directory is protected only by its own mode, so a writable
+    parent directory could replace it.
+  - Teardown checks only for the `active` state. It does not confirm that
+    each unit is gone.
+  - Journal completeness is not reconciled against producer-side sequence
+    numbers.
+  - The window starts after a fixed 2 s warm-up, not after a confirmed
+    handshake.
+  - The window cuts use wall time, while gaps use a monotonic clock.
+    Counter deltas can cover slightly different intervals.
+  - Send latency is aggregated over completion records; the other worker
+    timings come from broker receipts.
 
-These results inform the L0-7 decision. They do not replace it:
-
-| Hawk's gap records show | Remedy |
-|---|---|
-| Memory pressure on the worker's ancestors | Start with the policy remedy (`max-only`) |
-| A frame blocked in its payload phase (`gap_frame_phase`, `gap_slowest_frame_*`) | L-lane |
+  These bound how precisely the table can be read. None of them affects
+  the qualitative pattern, which all three runs reproduced.
