@@ -1293,6 +1293,28 @@ warm-lanes:
 compact RECIPE:
     #!/usr/bin/env bash
     set -euo pipefail
+    # Full gates from parallel task worktrees share one host. Unbounded, they
+    # drove Hawk's load past 400 and timed out worker heartbeats, so a gate
+    # takes one of COWBOY_GATE_SLOTS host-wide slots (default 2; 0 disables)
+    # and waits for a free one. The lock is released when this script exits.
+    slots="${COWBOY_GATE_SLOTS:-2}"
+    if [[ "$slots" =~ ^[1-9][0-9]*$ ]] && command -v flock >/dev/null; then
+      slot_dir="${XDG_RUNTIME_DIR:-/tmp}/cowboy-gate-slots"
+      mkdir -p "$slot_dir"
+      announced=""
+      while :; do
+        for ((i = 0; i < slots; i++)); do
+          exec {slot_fd}>"$slot_dir/$i.lock"
+          if flock -n "$slot_fd"; then break 2; fi
+          exec {slot_fd}>&-
+        done
+        if [[ -z "$announced" ]]; then
+          echo "{{RECIPE}}: all $slots gate slots are busy; waiting (COWBOY_GATE_SLOTS)" >&2
+          announced=1
+        fi
+        sleep 5
+      done
+    fi
     build_dir() { (cd "$1" && cargo metadata --format-version 1 --no-deps --locked | jq -r '.build_directory // .target_directory'); }
     root="$PWD"
     main_build="$(build_dir .)"
