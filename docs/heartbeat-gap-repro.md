@@ -72,63 +72,65 @@ the Columbus `machines` flake. `run.sh` does this by default.
 
 Run conditions:
 
-- Guest: 4 vCPU and 4 GiB, using the hardened harness (every case valid: all
-  units stayed active through the window).
-- Hawk load average was 9 at the start and 109 at the end. Other sessions'
-  gates and builds were running at the same time.
-- The isolation check reported a host change. That change was a Hawk machine
-  transaction run by another session at 06:25-06:39 (revision `7b52c632`),
-  which loaded the `nixos-fw` nftables tables. A user-network guest cannot
-  create host nftables tables.
+- Guest: 4 vCPU and 4 GiB, using the hardened harness. Every case was valid:
+  all units stayed active through a window that started after startup and the
+  counter baseline.
+- Hawk load average was 15 at the start and 27 at the end.
+- The isolation check reported a host change. It came from another session's
+  Hawk machine transaction, which reloaded the `nixos-fw` nftables chains;
+  `/var/lib/hawk-deployments/current.json` was written at 07:11:43, inside
+  the run. A user-network guest cannot create host nftables chains.
 
-Each row is a single run of 180 s, so the remedy comparisons are single
+Each row is a single run of 180 s, so the remedy rows are single
 observations.
 
-| Case | Heartbeats | Max receive gap (ms) | Max silence (ms) | > 45 s | Max send latency (ms) | Alloc stall (ms) | Lock wait (ms) | Worker memory `full` stall (ms) | Slice `memory.high` events |
+| Case | Heartbeats | Max receive gap (ms) | > 45 s | Max send latency (ms) | Overdue at wake (ms) | Alloc stall (ms) | Lock wait (ms) | Worker memory `full` stall (ms) | Slice `memory.high` events |
 |---|---|---|---|---|---|---|---|---|---|
-| baseline | 18 | 10,001 | 10,027 | 0 | 2 | 0 | 0 | 0 | 0 |
-| cpu | 18 | 10,419 | 10,419 | 0 | 450 | 367 | 0 | 0 | 0 |
-| memory-high | 18 | 11,352 | 11,352 | 0 | 1,394 | 1,391 | 0 | **1,443** | 22,852 |
-| io | 18 | 10,004 | 10,059 | 0 | 4 | 1 | 0 | 0 | 0 |
-| combined | 18 | 12,043 | 12,043 | 0 | **2,043** | 1,091 | 0 | **8,050** | 352,819 |
-| frame-block | 15 | **51,620** | **52,529** | **2** | **46,126** | 0 | **46,126** | 0 | 0 |
-| split-memory | 18 | 10,000 | 10,025 | 0 | 0 | 0 | 0 | **0** | 44,993 |
-| max-only | 18 | 10,054 | 10,054 | 0 | 86 | 86 | 0 | 116 | 0 |
+| baseline | 18 | 10,000 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| cpu | 18 | 10,005 | 0 | 11 | 0 | 0 | 0 | 0 | 0 |
+| memory-high | 18 | **16,836** | 0 | **6,860** | 0 | 1,300 | 0 | **8,556** | 23,837 |
+| io | 18 | 10,073 | 0 | 5 | 0 | 3 | 0 | 0 | 0 |
+| combined | 18 | 12,711 | 0 | 2,711 | 0 | 1,263 | 0 | **5,647** | 312,880 |
+| frame-block | 15 | **51,602** | **2** | **46,124** | 36,124 | 0 | **46,124** | 0 | 0 |
+| split-memory | 18 | 10,000 | 0 | 0 | 0 | 0 | 0 | **0** | 21,447 |
+| max-only | 18 | 10,016 | 0 | 24 | 0 | 24 | 0 | 54 | 0 |
 
 How to read the columns:
 
-- **Max silence** includes the time before the first heartbeat and after the
-  last one.
-- **Send latency** is measured from a beat's deadline to its write
-  completion.
-- An earlier run of the first harness (no validity checks or silence fields)
-  showed the same pattern, with a 51.6 s frame-block gap.
+- **Max receive gap** includes silence before the first and after the last
+  heartbeat in the window.
+- **Send latency** runs from a beat's deadline to its write completion.
+- **Overdue at wake** applies to beats that were already late when the loop
+  reached them, behind an earlier stall. Their timer lateness is not counted
+  as wake lateness, which stayed at most 10 ms in every case.
+- Two earlier runs, before the window and teardown fixes, showed the same
+  pattern, each with a 51.6 s frame-block gap.
 
 ### What the results show
 
-- **Shared `MemoryHigh` throttling stalls the heartbeat sender.** In
-  `memory-high` and `combined`, the worker shares the throttled slice. It
-  spent 1.4-8.0 s of the 180 s fully stalled on memory, and a beat's
-  deadline-to-write latency reached 2.0 s. The largest receive gap was
-  12.0 s. At 4 GiB with these loads, the stall stayed in seconds and never
-  approached 45 s.
+- **Shared `MemoryHigh` throttling stalls the heartbeat sender.**
+  - In `memory-high` and `combined` the worker shares the throttled slice. It
+    spent 5.6-8.6 s of the 180 s fully stalled on memory.
+  - A beat's deadline-to-write latency reached 6.9 s, and the largest
+    receive gap was 16.8 s.
+  - At 4 GiB with these loads, this never reached 45 s.
 - **Split run (one observation).** In `split-memory` the same load drove the
-  task slice over `MemoryHigh` 44,993 times. The worker in
+  task slice over `MemoryHigh` 21,447 times. The worker in
   `cowboy-control.slice` recorded zero memory stall and zero send latency.
 - **Policy run (one observation).** In `max-only`, with no shared
-  `MemoryHigh`, the worker recorded 116 ms of stall.
+  `MemoryHigh`, the worker recorded 54 ms of stall and 24 ms of send
+  latency.
 - Neither single run establishes how well a remedy works; that decision is
   L0-7's, from Hawk's own records.
-- **CPU and I/O alone added at most 0.45 s** at these weights and sizes.
-- **Only frame blocking crosses 45 s between receipts.** In `frame-block`
-  the heartbeat waited 46 s for the writer lock behind 32 MiB frames that the
-  broker read deliberately slowly. That produced two closed gaps above 45 s,
-  with a 51.6 s maximum. This is a receive-gap measurement, not an isolation:
-  - the real broker refreshes liveness on any decoded frame;
-  - it defers isolation while bytes are queued;
-  - it checks only every 15 s.
-
-  Isolation conclusions belong to L0's sweep records on Hawk.
+- **CPU and I/O alone added at most 11 ms** at these weights and sizes.
+- **Only frame blocking crosses 45 s between receipts.**
+  - In `frame-block` the heartbeat waited 46 s for the writer lock behind
+    32 MiB frames that the broker read deliberately slowly.
+  - That produced two closed gaps above 45 s, with a 51.6 s maximum.
+  - This is a receive-gap measurement, not an isolation. The real broker
+    refreshes liveness on any decoded frame, defers isolation while bytes
+    are queued, and checks only every 15 s.
+  - Isolation conclusions belong to L0's sweep records on Hawk.
 
 ### Limits
 
