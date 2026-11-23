@@ -1,8 +1,7 @@
 # Uncertain effect recovery across Controller restarts
 
 Status: design (2026-11-23, revised after design review rounds 1 and 2). L1
-and L3 are implemented first. L2 and L4 are designed here and implemented
-later.
+and L3 are implemented. L1w, L2 and L4 are designed here and implemented later.
 
 ## Problem
 
@@ -18,15 +17,15 @@ it. Example: `sess-1795343291454`, sequence 6, `process/terminate` of an
 
 Evidence from the Controller journal (VictoriaLogs) and the OVH journal:
 
-| UTC          | Event                                                                                   |
-| ------------ | --------------------------------------------------------------------------------------- |
-| 03:05:55.67  | `cowboy.service` stopping; OVH Machine: `Connection reset without closing handshake`    |
-| 03:05:57–13  | OVH Machine reconnect attempts at 1.5, 4, 8.6, 17 s (exponential backoff 1, 2, 4, 8, 16) |
-| 03:06:14     | `cowboy.service` started                                                                |
-| 03:06:32.64  | OVH Machine authenticated again (next backoff slot): **37 s** without a Controller      |
-| 03:06:36.5   | Held worker invocations complete: `call_observed` 19–41 s for many sessions, no losses   |
-| 03:06:39.8   | `sess-1795343291454`: uncertain `process/terminate` recorded                            |
-| 03:06:40.4   | Its prompt finished `cancelled` (the proxy ends a turn with an unknown effect)          |
+| UTC         | Event                                                                                    |
+| ----------- | ---------------------------------------------------------------------------------------- |
+| 03:05:55.67 | `cowboy.service` stopping; OVH Machine: `Connection reset without closing handshake`     |
+| 03:05:57–13 | OVH Machine reconnect attempts at 1.5, 4, 8.6, 17 s (exponential backoff 1, 2, 4, 8, 16) |
+| 03:06:14    | `cowboy.service` started                                                                 |
+| 03:06:32.64 | OVH Machine authenticated again (next backoff slot): **37 s** without a Controller       |
+| 03:06:36.5  | Held worker invocations complete: `call_observed` 19–41 s for many sessions, no losses   |
+| 03:06:39.8  | `sess-1795343291454`: uncertain `process/terminate` recorded                             |
+| 03:06:40.4  | Its prompt finished `cancelled` (the proxy ends a turn with an unknown effect)           |
 
 No `response_timeout`, `call_failed` or `execution.disconnected` event exists
 for that worker (PID 624848). Every transport call was answered. The
@@ -51,6 +50,28 @@ The edit had in fact been applied. In the reproduction the file holds the new
 bytes and the turn is still fenced. The transport never lost anything; the
 facade misread "process forgotten" as "termination unconfirmed".
 
+### Second case: a stop lost in worker teardown
+
+`sess-1795399435399` (Antigravity) parked with `process/terminate`, sequence
+2, with no Controller restart. OVH journal:
+
+| UTC          | Event                                                                                                                |
+| ------------ | -------------------------------------------------------------------------------------------------------------------- |
+| 04:50:02.028 | the 63-minute prompt finished; the ledger fenced the turn (`cancelled`)                                              |
+| 04:50:02.087 | `execution endpoint disconnected` (`endpoint_failed`)                                                                |
+| 04:50:02.178 | the account sandbox unit (the proxy) stopped; the worker was replaced for a generation cutover (new worker 04:50:18) |
+| 04:50:04.460 | Controller: uncertain `process/terminate` recorded                                                                   |
+
+A `RunCommand` was still running at turn end. The facade's `endTurn` stops a
+session's commands, and that `process/terminate` was in flight when the
+worker's own teardown closed the endpoint. The worker ledger recorded the
+undelivered stop as uncertain (`undelivered`, class F3). The command's process
+tree exited shortly afterwards. The facade's 5 s confirmation was not
+involved: the park was recorded 2.4 s after the turn ended. The facade path is
+a real gap all the same (`runUntracked` reports `process/terminate` after
+5 s), so L1 now observes a stopped helper for up to 60 s. The case itself
+needs the worker-side slice L1w.
+
 ## What the transport already guarantees
 
 The task statement assumed a keeper journal had to be built. Most of it exists:
@@ -70,15 +91,15 @@ The task statement assumed a keeper journal had to be built. Most of it exists:
 
 What remains is above and beside that path:
 
-| Class | Where                                                                                                                                                       | Who records it                       | Layer    |
-| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ | -------- |
-| F1    | Facade: `unknown process id` for a process it started (the outage outlasted the executor's 30 s retention); misread as "termination unconfirmed"               | facade report                        | L1       |
-| F2    | Facade: its own wall-clock bounds (publish 30 s, terminate 5 s) elapse while requests are held                                                               | facade report                        | L3 (window), unchanged otherwise |
-| F3    | The worker's native socket closes with requests outstanding; the client rejects them "result unknown"                                                       | worker ledger `undelivered` + facade | L2       |
-| F4    | Worker-level loss: the 180 s bound, or a final refusal after admission                                                                                      | worker ledger                        | L2       |
-| F5    | Keeper lost (`Unknown`, `EnvironmentLost`)                                                                                                                  | worker ledger                        | genuine  |
-| F6    | The outage itself: a 19 s Controller restart plus up to 16 s of reconnect backoff, longer than the executor's 30 s retention                                  | (cause of F1/F2)                     | L3       |
-| F7    | Existing worker bug: after a lost reply, a resend refused for another reason (for example `WorkspaceChanged`) is reported "not sent", although the first send may have been admitted | worker (understates)                 | L2       |
+| Class | Where                                                                                                                                                                                | Who records it                       | Layer                            |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------ | -------------------------------- |
+| F1    | Facade: `unknown process id` for a process it started (the outage outlasted the executor's 30 s retention); misread as "termination unconfirmed"                                     | facade report                        | L1                               |
+| F2    | Facade: its own wall-clock bounds (publish 30 s, terminate 5 s) elapse while requests are held                                                                                       | facade report                        | L3 (window), unchanged otherwise |
+| F3    | The worker's native socket closes with requests outstanding; the client rejects them "result unknown"                                                                                | worker ledger `undelivered` + facade | L2                               |
+| F4    | Worker-level loss: the 180 s bound, or a final refusal after admission                                                                                                               | worker ledger                        | L2                               |
+| F5    | Keeper lost (`Unknown`, `EnvironmentLost`)                                                                                                                                           | worker ledger                        | genuine                          |
+| F6    | The outage itself: a 19 s Controller restart plus up to 16 s of reconnect backoff, longer than the executor's 30 s retention                                                         | (cause of F1/F2)                     | L3                               |
+| F7    | Existing worker bug: after a lost reply, a resend refused for another reason (for example `WorkspaceChanged`) is reported "not sent", although the first send may have been admitted | worker (understates)                 | L2                               |
 
 F7 can understate uncertainty, so it is a pre-existing safety bug, not a
 source of false parks. It is fixed in the worker with L2. `invoke_classified`
@@ -131,14 +152,14 @@ output the facade has not read. Those are lost.
 
 ### What changes
 
-| Situation                                                       | Today                                                     | With L1                                                                                                                                                                                              |
-| --------------------------------------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Any reader sees E1                                              | remote error thrown; callers misread it                   | the process is marked `closed`, `ended: "forgotten"`, `exitCode` kept if an exit was already observed, otherwise `null`. No further read, terminate or signal is sent for it                         |
-| Publish helper ends by E1, and its `applied`/`conflict` report was already read | `UncertainEffect("process/terminate")`                    | the report decides, as for a normal exit                                                                                                                                                              |
-| Publish helper ends by E1 without a complete report             | `UncertainEffect("process/terminate")`                    | the existing post-error check: read the file; if its digest equals `expect`, `applied`. This is the same evidence `publish` already accepts after a helper error. Anything else: `UncertainEffect("file publish")` and the file's `observed` digest is dropped, so `EditFile` refuses until the file is read again |
-| `RunCommand` (or a continuation) ends by E1                     | "refused the request: unknown process id", output lost   | `Exit code: unknown (the command's process ended while the Machine connection was interrupted; its remaining output is unavailable)` plus the output read so far. Not an uncertain effect: the command was admitted and is no longer running. The narrower fact is stated, not success |
-| `StopCommand` / expiry / `terminate()` confirming read sees E1  | `terminate()` rejects, caller treats it as unconfirmed   | confirmed closed                                                                                                                                                                                      |
-| Lost replies, timeouts, refusals                                | fence + park                                              | unchanged                                                                                                                                                                                             |
+| Situation                                                                       | Today                                                  | With L1                                                                                                                                                                                                                                                                                                            |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Any reader sees E1                                                              | remote error thrown; callers misread it                | the process is marked `closed`, `ended: "forgotten"`, `exitCode` kept if an exit was already observed, otherwise `null`. No further read, terminate or signal is sent for it                                                                                                                                       |
+| Publish helper ends by E1, and its `applied`/`conflict` report was already read | `UncertainEffect("process/terminate")`                 | the report decides, as for a normal exit                                                                                                                                                                                                                                                                           |
+| Publish helper ends by E1 without a complete report                             | `UncertainEffect("process/terminate")`                 | the existing post-error check: read the file; if its digest equals `expect`, `applied`. This is the same evidence `publish` already accepts after a helper error. Anything else: `UncertainEffect("file publish")` and the file's `observed` digest is dropped, so `EditFile` refuses until the file is read again |
+| `RunCommand` (or a continuation) ends by E1                                     | "refused the request: unknown process id", output lost | `Exit code: unknown (the command's process ended while the Machine connection was interrupted; its remaining output is unavailable)` plus the output read so far. Not an uncertain effect: the command was admitted and is no longer running. The narrower fact is stated, not success                             |
+| `StopCommand` / expiry / `terminate()` confirming read sees E1                  | `terminate()` rejects, caller treats it as unconfirmed | confirmed closed                                                                                                                                                                                                                                                                                                   |
+| Lost replies, timeouts, refusals                                                | fence + park                                           | unchanged                                                                                                                                                                                                                                                                                                          |
 
 The helper is never signalled on the E1 path: E1 means it had already ended. A
 helper that is still running at its deadline is terminated exactly as today,
@@ -188,6 +209,40 @@ Tests:
 - a relay drop (socket terminated) at each step still fences and reports, as
   today.
 
+## L1w: a stop whose reply was lost is settled by the worker (worker release)
+
+Owner of the decision: the worker ledger, the trusted recorder. Applies to
+`process/terminate` only: a stop has no effect beyond ending the process, so
+proof that the process ended settles it. Other result-carrying requests are
+unchanged.
+
+- When a `process/terminate` reply is undelivered, or its own invocation is
+  lost, the ledger does not publish an uncertain effect at once. It writes a
+  durable pending record (process id, sequence) in a sibling file next to the
+  schema-1 ledger, which an older worker ignores. It then observes the process
+  itself: idempotent `process/terminate`, and `process/read` until exited,
+  closed, or `unknown process id` (E1). The process id was admitted by this
+  session's ledger, so it names this executor's process.
+- Confirmed ended within 60 s: the pending record is removed and nothing is
+  published.
+- Still running after 60 s, unreadable, or the worker shuts down first (its
+  teardown waits for pending observations only within its existing settle
+  bound): the effect is published as today, as uncertain `process/terminate`.
+  The snapshot gains the process id for the L4 banner ("still running", with
+  its command id).
+- A worker that starts and finds a pending record (its predecessor crashed or
+  was replaced) observes the process the same way before publishing. It fails
+  closed (publishes) if the record is unreadable. A rollback to an older worker
+  ignores the sibling file. It loses only a pending stop whose observation
+  never finished, and that window is bounded by 60 s.
+- Escalation: the executor protocol offers no kill signal (only `terminate`
+  and an interrupt). A SIGKILL of the process group needs keeper support and
+  belongs to L2. The 60 s observation covers trees that exit after their
+  signal.
+- Release: worker code, so `.#cowboy-machine-release` with a worker pin
+  advance. It needs its own design review (it adds a durable worker file)
+  before implementation.
+
 ## L3: shorter Controller outages (Machine host release)
 
 L3 does not make anything correct that is not already correct. It shrinks the
@@ -195,10 +250,12 @@ window in which F1/F2 can happen, for every Provider including Claude.
 
 Of the observed 37 s outage, about 18 s was the Machine's own backoff
 (1, 2, 4, 8, 16 s). A Machine whose connection had been sustained (the
-existing reset condition, at least the 30 s cap) now retries at 1 s intervals,
-each dial and handshake bounded to 5 s, inside a non-extending 60 s
-rapid-retry window from the disconnect. After the window, or after any
-authentication refusal, it falls back to the existing exponential backoff. The
+existing reset condition, at least the 30 s cap) now retries failed dials at
+1 s intervals inside a non-extending 60 s rapid-retry window from the
+disconnect. Each dial and WebSocket handshake is bounded to 10 s (it had no
+bound). After the window, or after any failure once a WebSocket opened (an
+authentication refusal included), it falls back to the existing exponential
+backoff. The
 rule is local to `machine_cli/reconnect.rs`. It needs no Controller change, no
 close code and no protocol version, and it covers both relay legs (Hawk and
 OVH Machines). The target is an outage close to the Controller's own ~19 s
@@ -301,14 +358,18 @@ findings are folded in. L2 is implemented later, after its own design review.
   sees before choosing the action. When several effects are unresolved, the
   note lists every effect the acknowledgement covers. Until per-effect records
   exist (L2), the action is offered only for a single unresolved effect.
-- Auto-clear: an outcome proven by L1 never parks. One proven later by the
+- A stop that stays uncertain after L1w's 60 s observation shows that its
+  process is still running, with its command id.
+- Auto-clear: an outcome proven by L1 never parks, and a stop proven by L1w is
+  never published. One proven later by the
   worker clears through L2 without owner action.
 
 ## Release artifacts
 
-| Slice | Artifacts                                                                                                                                                                                                                   |
-| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| L1    | Antigravity Plugin (facade only)                                                                                                                                                                                            |
-| L3    | Machine host release: Hawk uses the writer-preserving `.#cowboy-machine-writer-host-release` (active deletion writer); OVH uses `.#cowboy-machine-host-release`. Both retain the accepted worker pin |
-| L4    | Banner wording now needs nothing. `target`, settlement and Check-and-resume follow L2                                                                                                                                       |
+| Slice | Artifacts                                                                                                                                                                                                    |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| L1    | Antigravity Plugin (facade only)                                                                                                                                                                             |
+| L1w   | `.#cowboy-machine-release` with a worker pin advance, after its own design review                                                                                                                            |
+| L3    | Machine host release: Hawk uses the writer-preserving `.#cowboy-machine-writer-host-release` (active deletion writer); OVH uses `.#cowboy-machine-host-release`. Both retain the accepted worker pin         |
+| L4    | Banner wording now needs nothing. `target`, settlement and Check-and-resume follow L2                                                                                                                        |
 | L2    | Controller reader, then the Machine broker codec staged with an accepted compatible worker pin, then `.#cowboy-machine-release` with a worker pin advance (includes the F7 fix), then the Antigravity Plugin |
