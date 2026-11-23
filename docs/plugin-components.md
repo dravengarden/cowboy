@@ -500,6 +500,10 @@ state-store's dependent packages and the plugin-api consumers without changing
 native pins. It removes the temporary root `@std/assert` dependency; package
 closure validation remains strict and historical release records stay unchanged.
 
+Scoped release 3.144.0 records app-shell 1.1.43 for the already-committed
+`ScrollEdges` change in `ede6ce8c5`, which 3.143.0 did not cover. No Plugin
+closure or native pin changes; the worker registry input stays at 3.143.0.
+
 Scoped release 3.130.0 records app-shell 1.1.42 for the already-committed
 reader top-edge change in `ab64737d0`, which 3.129.0 did not cover. No Plugin
 closure or native pin changes; the worker registry input stays at 3.129.0.
