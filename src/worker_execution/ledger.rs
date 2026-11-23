@@ -150,9 +150,10 @@ struct State {
     servers: HashSet<String>,
     /// Extension calls admitted and not yet settled.
     calls: usize,
-    /// Processes a stop was sent for (or may have been) by the unit or by
-    /// the worker: one stop per process, never a second signal.
-    stopped: HashSet<String>,
+    /// The one stop of each tracked process, by the unit or by the worker:
+    /// never a second signal. Retired when the process's end is observed or
+    /// a new start reuses its id.
+    stops: HashMap<String, watch::Sender<Stop>>,
     /// The durable record could not be written: an uncertain effect may be
     /// published but not durable, so no further effect is admitted.
     unwritable: bool,
@@ -186,6 +187,37 @@ pub struct Ledger {
 impl std::fmt::Debug for Ledger {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Ledger").field("path", &self.path).finish()
+    }
+}
+
+/// The state of one process's stop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Stop {
+    /// Its owner is sending it.
+    Pending,
+    /// Sent, or possibly sent (its reply was lost): never sent again.
+    Sent,
+    /// Certainly never sent: the next caller sends it.
+    NotSent,
+}
+
+/// A caller's part in a process's one stop.
+pub(super) enum StopClaim {
+    Owner,
+    Joined(watch::Receiver<Stop>),
+}
+
+/// The outcome of a joined stop once its owner finished.
+async fn joined(mut stop: watch::Receiver<Stop>) -> Stop {
+    loop {
+        let state = *stop.borrow_and_update();
+        if state != Stop::Pending {
+            return state;
+        }
+        if stop.changed().await.is_err() {
+            // The owner went away without an outcome: possibly sent.
+            return Stop::Sent;
+        }
     }
 }
 
@@ -295,6 +327,9 @@ impl Ledger {
     /// a turn, drained before the turn's completion.
     pub(super) fn admit_call(&self) -> Result<Admitted, &'static str> {
         let mut state = self.state.lock();
+        if state.unwritable {
+            return Err("the execution ledger cannot be written; the tool call was refused");
+        }
         let turn = state
             .active_turn()
             .ok_or("no Cowboy turn is running; the tool call was refused")?;
@@ -352,7 +387,11 @@ impl Ledger {
         params: &Value,
     ) -> Result<Option<Admitted>, &'static str> {
         let mut state = self.state.lock();
-        if state.unwritable && MUTATIONS.contains(&method) {
+        // Only observation and stopping remain while effects cannot be
+        // recorded durably.
+        if state.unwritable
+            && (MUTATIONS.contains(&method) || matches!(method, "process/write" | "process/signal"))
+        {
             return Err("the execution ledger cannot be written; the change was refused");
         }
         // The worker's own MCP servers are not the unit's processes, also
@@ -375,6 +414,17 @@ impl Ledger {
         let process = process_id(params)
             .filter(|process| !process.is_empty() && process.len() <= 256)
             .ok_or("process start needs a valid processId")?;
+        // A stop of an earlier process with this id is still in flight: it
+        // must not act on the new one. A finished stop belongs to the old
+        // lifetime and is retired.
+        if state
+            .stops
+            .get(&process)
+            .is_some_and(|stop| *stop.borrow() == Stop::Pending)
+        {
+            return Err("a stop of this process id is still in flight; process start refused");
+        }
+        state.stops.remove(&process);
         let turn = match state.active_turn() {
             Some(turn) => turn,
             None if state.readiness && !state.closed => {
@@ -430,7 +480,17 @@ impl Ledger {
 
     /// The target's evidence that `process` is gone.
     pub fn exited(&self, process: &str) {
-        if self.state.lock().processes.remove(process).is_some() {
+        let mut state = self.state.lock();
+        // Its stop is over with it (a stop still in flight keeps its owner).
+        if state
+            .stops
+            .get(process)
+            .is_some_and(|stop| *stop.borrow() != Stop::Pending)
+        {
+            state.stops.remove(process);
+        }
+        if state.processes.remove(process).is_some() {
+            drop(state);
             self.changed.send_modify(|value| *value += 1);
         }
     }
@@ -442,15 +502,41 @@ impl Ledger {
         !self.state.lock().probes.contains(process)
     }
 
-    /// Claim the one stop of `process`: `false` when a stop was already sent
-    /// (or may have been), by the unit or by the worker.
-    pub(super) fn claim_stop(&self, process: &str) -> bool {
-        self.state.lock().stopped.insert(process.to_owned())
+    /// Take the one stop of `process`: its owner sends it, any other caller
+    /// joins it and learns its outcome. A stop certainly never sent is taken
+    /// anew by the next caller.
+    pub(super) fn begin_stop(&self, process: &str) -> StopClaim {
+        let mut state = self.state.lock();
+        if let Some(stop) = state.stops.get(process)
+            && *stop.borrow() != Stop::NotSent
+        {
+            return StopClaim::Joined(stop.subscribe());
+        }
+        state
+            .stops
+            .insert(process.to_owned(), watch::channel(Stop::Pending).0);
+        StopClaim::Owner
     }
 
-    /// A claimed stop was certainly never sent: a later stop may be sent.
-    pub(super) fn release_stop(&self, process: &str) {
-        self.state.lock().stopped.remove(process);
+    /// The state of `process`'s stop, if one was taken.
+    pub(super) fn stop_state(&self, process: &str) -> Option<watch::Receiver<Stop>> {
+        self.state
+            .lock()
+            .stops
+            .get(process)
+            .map(watch::Sender::subscribe)
+    }
+
+    /// The owner's stop of `process` was sent (or may have been), or was
+    /// certainly not.
+    pub(super) fn finish_stop(&self, process: &str, sent: bool) {
+        let mut state = self.state.lock();
+        if let Some(stop) = state.stops.get(process) {
+            stop.send_replace(if sent { Stop::Sent } else { Stop::NotSent });
+            if !sent {
+                state.stops.remove(process);
+            }
+        }
     }
 
     pub(super) fn mark_uncertain(&self, method: &str) {
@@ -615,6 +701,15 @@ const KNOWN_EFFECTS: &[&str] = &[
     "process/read",
 ];
 
+/// Whether a stop's outcome proves it never reached the process: refused
+/// before it was sent, or answered with the executor's error.
+fn definitely_not_sent(result: &Result<Value, bool>) -> bool {
+    match result {
+        Err(admitted) => !admitted,
+        Ok(reply) => reply.get("error").is_some(),
+    }
+}
+
 fn refused(message: &str) -> Value {
     json!({"error": {"code": -32000, "message": message}})
 }
@@ -740,9 +835,13 @@ impl Client {
             .then(|| process.clone())
             .flatten();
         if let Some(process) = &stop
-            && !ledger.claim_stop(process)
+            && let StopClaim::Joined(stop) = ledger.begin_stop(process)
         {
-            return json!({"result": {}});
+            // Joined: the outcome of the stop another path is sending.
+            return match joined(stop).await {
+                Stop::NotSent => refused("the stop was not sent; send it again"),
+                _ => json!({"result": {}}),
+            };
         }
         let start = (method == "process/start")
             .then(|| process.clone())
@@ -753,13 +852,8 @@ impl Client {
             ledger.settled(admitted, start.as_deref());
         }
         // A stop that certainly never ran may be sent again later.
-        if let Some(process) = &stop
-            && match &result {
-                Err(admitted) => !admitted,
-                Ok(reply) => reply.get("error").is_some(),
-            }
-        {
-            ledger.release_stop(process);
+        if let Some(process) = &stop {
+            ledger.finish_stop(process, !definitely_not_sent(&result));
         }
         match result {
             Ok(reply) => {
@@ -921,17 +1015,20 @@ impl Client {
         let attempt = async {
             ledger.wait_until(|ledger| !ledger.starting(&process)).await;
             // One stop per process: after the unit's or another worker path's
-            // stop, this only observes.
-            if ledger.claim_stop(&process) {
-                let sent = self
-                    .invoke_classified(
-                        "process/terminate".to_owned(),
-                        json!({"processId": process}),
-                    )
-                    .await;
-                if matches!(sent, Err(false)) {
-                    ledger.release_stop(&process);
-                }
+            // stop, this only observes. The stop runs on its own task, so the
+            // bounded exit wait below never drops one that may be queued.
+            if let StopClaim::Owner = ledger.begin_stop(&process) {
+                let (client, owner, id) = (Arc::clone(self), Arc::clone(&ledger), process.clone());
+                ledger.runtime.spawn(async move {
+                    let sent = client
+                        .invoke_classified("process/terminate".to_owned(), json!({"processId": id}))
+                        .await;
+                    owner.finish_stop(&id, !definitely_not_sent(&sent));
+                });
+            }
+            // Observed once the stop has an outcome (within this bound).
+            if let Some(stop) = ledger.stop_state(&process) {
+                joined(stop).await;
             }
             loop {
                 let read = self

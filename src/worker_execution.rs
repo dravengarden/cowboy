@@ -105,7 +105,6 @@ impl Client {
             .filter_map(|pending| {
                 if reconnect || pending.sent.is_none_or(|sent| sent.elapsed() >= RETRY) {
                     pending.sent = Some(Instant::now());
-                    pending.sends = pending.sends.saturating_add(1);
                     Some(Frame::ExecutionRequest {
                         request: Box::new(pending.request.clone()),
                     })
@@ -114,6 +113,18 @@ impl Client {
                 }
             })
             .collect()
+    }
+
+    /// `frame` is about to be written: one send attempt of its request. A
+    /// write that fails part-way still counts (it may have reached the
+    /// broker); frames after it in the batch are never attempted.
+    pub fn sending<'frame>(&self, frame: &'frame Frame) -> &'frame Frame {
+        if let Frame::ExecutionRequest { request } = frame
+            && let Some(pending) = self.pending.lock().get_mut(&request.request_id)
+        {
+            pending.sends = pending.sends.saturating_add(1);
+        }
+        frame
     }
 
     pub fn complete(&self, reply: RuntimeReply) {

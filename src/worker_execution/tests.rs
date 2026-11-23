@@ -83,6 +83,8 @@ impl Target {
         let task = tokio::spawn(async move {
             while notified.recv().await.is_some() {
                 for frame in relay.frames(false) {
+                    // Delivered to the scripted relay: one send attempt.
+                    relay.sending(&frame);
                     let Frame::ExecutionRequest { request } = frame else {
                         continue;
                     };
@@ -1026,7 +1028,9 @@ async fn a_refusal_after_a_resend_does_not_hide_a_possible_admission() {
     });
     eventually(|| !target.held.lock().is_empty()).await;
     // A reconnect resends the same request under its identity.
-    assert_eq!(target.client.frames(true).len(), 1);
+    let resent = target.client.frames(true);
+    assert_eq!(resent.len(), 1);
+    target.client.sending(&resent[0]);
     let request = target.held.lock().pop().unwrap();
     answer(
         &target.client,
@@ -1324,4 +1328,169 @@ async fn a_drain_acknowledgement_is_answered_by_the_endpoint_and_never_forwarded
             .await
     );
     assert!(target.log().is_empty());
+}
+
+#[tokio::test]
+async fn a_batch_entry_never_written_is_not_a_send() {
+    // The second entry of a batch whose first write failed was never sent:
+    // its later refusal on its first actual send is not an admission.
+    let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
+        "fs/writeFile" => Reply::Hold,
+        _ => completed(json!({"result": {}})),
+    }));
+    let ledger = ledger(&target.client, None);
+    ledger.begin_turn("turn-1");
+    let client = Arc::clone(&target.client);
+    let relay = tokio::spawn(async move {
+        client
+            .relay(
+                "fs/writeFile".into(),
+                json!({"path": "file:///target/a", "dataBase64": ""}),
+            )
+            .await
+    });
+    eventually(|| !target.held.lock().is_empty()).await;
+    // A reconnect batch is built but its write fails before this entry.
+    assert_eq!(target.client.frames(true).len(), 1);
+    let request = target.held.lock().pop().unwrap();
+    answer(
+        &target.client,
+        request,
+        Response::Refused {
+            reason: wire::Refusal::WorkspaceChanged,
+        },
+    );
+    let reply = relay.await.unwrap();
+    assert!(reply.pointer("/error/data").is_none());
+    assert!(ledger.uncertain_effect().is_none());
+}
+
+#[tokio::test]
+async fn an_unwritable_ledger_refuses_extension_calls_and_process_signals_but_not_cleanup() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("ledger");
+    std::fs::create_dir(&directory).unwrap();
+    let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
+        "fs/writeFile" => Reply::Answer(Response::Operation {
+            outcome: Outcome::Unknown,
+        }),
+        _ => completed(json!({"result": {}})),
+    }));
+    let ledger = ledger(&target.client, Some(directory.join("session.json")));
+    ledger.begin_turn("turn-1");
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o500)).unwrap();
+    target
+        .client
+        .relay(
+            "fs/writeFile".into(),
+            json!({"path": "file:///target/a", "dataBase64": ""}),
+        )
+        .await;
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(ledger.admit_call().is_err());
+    for method in ["process/write", "process/signal"] {
+        let refused = target
+            .client
+            .relay(method.into(), json!({"processId": "p1"}))
+            .await;
+        assert!(refused.get("error").is_some(), "{method}");
+    }
+    // Observation and stopping remain.
+    for method in ["process/read", "process/terminate"] {
+        let reply = target
+            .client
+            .relay(method.into(), json!({"processId": "p1"}))
+            .await;
+        assert!(reply.get("result").is_some(), "{method}");
+    }
+}
+
+#[tokio::test]
+async fn an_overlapping_stop_joins_the_first_and_learns_its_outcome() {
+    // The first stop is refused before admission: a joined caller is told to
+    // send it again, and the next stop is sent.
+    let refusals = Arc::new(Mutex::new(1usize));
+    let left = Arc::clone(&refusals);
+    let target = Target::new(Arc::new(move |invocation| {
+        match invocation.method.as_str() {
+            "process/terminate" if { *left.lock() > 0 } => {
+                *left.lock() -= 1;
+                Reply::Hold
+            }
+            _ => completed(json!({"result": {"running": false}})),
+        }
+    }));
+    let ledger = ledger(&target.client, None);
+    ledger.begin_turn("turn-1");
+    let first = {
+        let client = Arc::clone(&target.client);
+        tokio::spawn(async move {
+            client
+                .relay("process/terminate".into(), json!({"processId": "p1"}))
+                .await
+        })
+    };
+    eventually(|| !target.held.lock().is_empty()).await;
+    let second = {
+        let client = Arc::clone(&target.client);
+        tokio::spawn(async move {
+            client
+                .relay("process/terminate".into(), json!({"processId": "p1"}))
+                .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!second.is_finished(), "joined, not answered at once");
+    let request = target.held.lock().pop().unwrap();
+    answer(
+        &target.client,
+        request,
+        Response::Refused {
+            reason: wire::Refusal::WorkspaceChanged,
+        },
+    );
+    assert!(first.await.unwrap().get("error").is_some());
+    let joined = second.await.unwrap();
+    assert!(
+        joined["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("send it again")
+    );
+    // The next stop is sent.
+    let again = target
+        .client
+        .relay("process/terminate".into(), json!({"processId": "p1"}))
+        .await;
+    assert!(again.get("result").is_some());
+}
+
+#[tokio::test]
+async fn a_stop_retires_with_its_process_and_never_reaches_a_reused_id() {
+    let target = Target::new(processes());
+    let ledger = ledger(&target.client, None);
+    ledger.begin_turn("turn-1");
+    target
+        .client
+        .relay("process/start".into(), start("p1"))
+        .await;
+    target
+        .client
+        .relay("process/terminate".into(), json!({"processId": "p1"}))
+        .await;
+    ledger.exited("p1");
+    // A new process with the same id gets its own stop.
+    target
+        .client
+        .relay("process/start".into(), start("p1"))
+        .await;
+    target.client.cancel_turn();
+    eventually(|| ledger.live().is_empty()).await;
+    let stops = target
+        .log()
+        .iter()
+        .filter(|entry| entry.starts_with("process/terminate"))
+        .count();
+    assert_eq!(stops, 2);
 }

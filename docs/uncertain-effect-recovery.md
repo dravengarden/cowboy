@@ -410,6 +410,39 @@ receipts and ship first. All are in `src/worker_execution{,/ledger}.rs`.
   sent but never reached the executor, the process is left to the keeper's
   unattended reap, the existing backstop.
 
+Code review round 1 (`call-8a6c5e81`, high) and its fixes:
+
+- Sends are counted at each frame's own write boundary (`Client::sending`),
+  no longer for the whole batch in `frames()`. A frame after a failed write
+  in the same batch was never sent, and a refusal of its first real send is
+  not an admission.
+- The unwritable latch covers every effectful admission: mutations,
+  `process/write`, `process/signal`, and extension calls (`admit_call`).
+  Observation (`process/read`) and stopping (`process/terminate`) remain for
+  cleanup.
+- A process's one stop has an owner and a state (`Pending`, `Sent`,
+  `NotSent`). An overlapping caller, whether the unit or a worker path, joins
+  it and learns its real outcome: a stop certainly never sent gets a
+  retryable refusal and the next caller sends it. Stops are retired when the
+  process's end is observed or when a new start reuses the id. A start is
+  refused while a stop of that id is still in flight. The worker's own stop
+  runs on its own task, so the bounded exit wait never drops a stop that may
+  still be queued. An executor error releases the stop like a refusal before
+  sending.
+- Residual (high 1): a sequence the Controller acknowledged after the
+  worker's ledger write failed can be reused only if a successor also sees a
+  wall clock set back past that sequence. Closing it needs a Controller-side
+  floor (below). It is not in this worker-only slice.
+
+Proposed floor, the narrowest form. `StartSession` gains an optional
+`uncertain_floor: Option<u64>`. The Controller fills it from its durable
+per-session record, as `max(observed, acknowledged)`. `StartSession` does not
+deny unknown fields, so an older Machine ignores it. The broker passes it to
+the worker as launch wiring, which an older worker ignores. The worker seeds
+the ledger with `max(record, floor)` at `Ledger::open`, before it admits any
+effect. Each side degrades to today's behaviour when the other is older. It
+needs a Controller release and a Machine release with a worker pin advance.
+
 Tests: a resend followed by `WorkspaceChanged` is uncertain, while a refusal
 of the only send is not. The unit's stop and the worker's cancellation send
 one `process/terminate`. An unwritable ledger publishes and then refuses
