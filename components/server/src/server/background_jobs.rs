@@ -326,7 +326,22 @@ async fn apply_store_batch_with_acks(
                 )
                 .await;
                 reducer.clear_session(session_id);
-                ok &= retry_store_write(store, &write).await;
+                let cleared = retry_store_write(store, &write).await;
+                if let StoreWrite::ClearEvents {
+                    ack_id: Some(id), ..
+                } = &write
+                    && let Some(acks) = acks
+                {
+                    acks.complete(
+                        *id,
+                        if cleared {
+                            Ok(true)
+                        } else {
+                            Err("Clear was not saved".to_owned())
+                        },
+                    );
+                }
+                ok &= cleared;
             }
             other => {
                 ok &= flush_event_batch(
@@ -842,6 +857,7 @@ async fn clear_context(store: &Store, write: &StoreWrite) -> anyhow::Result<()> 
             session_id,
             calls_before_ms,
             fence,
+            ..
         } => {
             let fence = fence.as_ref().map(|(key, value)| (key.as_str(), value));
             store

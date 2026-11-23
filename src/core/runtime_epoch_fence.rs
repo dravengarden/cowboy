@@ -170,7 +170,19 @@ impl Hub {
         session_id: &str,
         native: Option<String>,
     ) -> (String, serde_json::Value) {
-        let key = cleared_key(session_id);
+        let (key, fence) = self.fence_discarding(session_id, native);
+        self.with_settings_mut(|settings| {
+            Self::commit_setting_locked(settings, key.clone(), fence.clone())
+        });
+        (key, fence)
+    }
+
+    /// The fence that discarding `native` would record; changes nothing.
+    pub(super) fn fence_discarding(
+        &self,
+        session_id: &str,
+        native: Option<String>,
+    ) -> (String, serde_json::Value) {
         let mut cleared = self.cleared_native(session_id);
         if let Some(native) = native
             && !cleared.contains(&native)
@@ -179,11 +191,7 @@ impl Hub {
             let excess = cleared.len().saturating_sub(MAX_CLEARED_NATIVE);
             cleared.drain(..excess);
         }
-        let fence = serde_json::json!(cleared);
-        self.with_settings_mut(|settings| {
-            Self::commit_setting_locked(settings, key.clone(), fence.clone())
-        });
-        (key, fence)
+        (cleared_key(session_id), serde_json::json!(cleared))
     }
 
     /// The fence setting as Clear persists it with the transcript deletion.

@@ -54,8 +54,10 @@ mod mobile_review;
 use mobile_review::*;
 mod session_attention;
 pub use session_attention::SessionAttention;
+mod clear_conversation;
 mod lost_execution;
 mod runtime_epoch_fence;
+pub use clear_conversation::ClearCommit;
 pub use runtime_epoch_fence::RuntimeEpoch;
 mod runtime_reconciliation;
 mod session_trash;
@@ -1207,6 +1209,8 @@ pub enum StoreWrite {
         session_id: String,
         calls_before_ms: i64,
         fence: Option<(String, serde_json::Value)>,
+        /// Completed through the store acknowledgement sink (user Clear).
+        ack_id: Option<u64>,
     },
     DeleteSession(String),
     /// Persist a session's queue + drafts (whole lists, as JSONB) so staged
@@ -3552,6 +3556,13 @@ impl Hub {
     /// dormant session has no worker snapshot to re-seed it, so leaving them
     /// here would keep the old context ring and Usage panel after Clear.
     pub fn prepare_context_reset(&self, session_id: &str) {
+        self.reset_context(session_id, true);
+    }
+
+    /// [`Self::prepare_context_reset`]; `persist: false` when a user Clear has
+    /// already committed the native id's removal with its transcript. Returns
+    /// the fence it recorded in memory.
+    fn reset_context(&self, session_id: &str, persist: bool) -> (String, serde_json::Value) {
         // Clearing a fork, even before its first launch, discards the copy.
         self.discard_native_fork(session_id);
         let guard = self.runtime_projection_exclusive();
@@ -3583,22 +3594,37 @@ impl Hub {
             })
         };
         let (fence_key, fence) = self.record_cleared_native(session_id, discarded);
-        if let Some(tx) = self.inner.store_tx.as_ref() {
+        if persist && let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::ClearAgentSession {
                 session_id: session_id.to_owned(),
-                fence_key,
-                fence,
+                fence_key: fence_key.clone(),
+                fence: fence.clone(),
             });
         }
         drop(guard);
         if usage_changed {
             self.broadcast_sessions();
         }
+        (fence_key, fence)
     }
 
     /// Destructively clear one session's transcript while keeping its sequence
     /// watermark monotonic, so delayed clients cannot collide with old seq ids.
     pub fn clear_transcript(&self, session_id: &str) {
+        self.clear_transcript_memory(session_id);
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            // One transaction with the native id's removal and its fence: a
+            // failed write keeps both the transcript and the old context.
+            let _ = tx.send(StoreWrite::ClearEvents {
+                session_id: session_id.to_owned(),
+                calls_before_ms: chrono::Utc::now().timestamp_millis(),
+                fence: Some(self.cleared_fence(session_id)),
+                ack_id: None,
+            });
+        }
+    }
+
+    fn clear_transcript_memory(&self, session_id: &str) {
         {
             let mut sessions = self.inner.sessions.lock();
             let Some(session) = sessions.get_mut(session_id) else {
@@ -3614,15 +3640,6 @@ impl Hub {
         if let Some(ledger) = self.inner.background.lock().get_mut(session_id) {
             ledger.marks.clear();
             ledger.latest.clear();
-        }
-        if let Some(tx) = self.inner.store_tx.as_ref() {
-            // One transaction with the native id's removal and its fence: a
-            // failed write keeps both the transcript and the old context.
-            let _ = tx.send(StoreWrite::ClearEvents {
-                session_id: session_id.to_owned(),
-                calls_before_ms: chrono::Utc::now().timestamp_millis(),
-                fence: Some(self.cleared_fence(session_id)),
-            });
         }
     }
 

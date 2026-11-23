@@ -310,7 +310,7 @@ pub(super) fn reset_session_command(
     if let Some(refusal) = provider_accounts::retirement::session_refusal(state, &session_id) {
         return ControlFlow::Continue(Err(refusal.to_owned()));
     }
-    ControlFlow::Continue({
+    {
         if state.hub.session_info(&session_id).is_some_and(|info| {
             info.meta.execution_binding.is_some()
                 && !(info.meta.status == Status::Exited
@@ -335,10 +335,10 @@ pub(super) fn reset_session_command(
                             && state.hub.session_has_in_flight_prompt(&session_id) == in_flight
                             && state.hub.in_flight_prompt_epoch(&session_id) == turn
                             && !state.hub.session_is_trashed(&session_id) => {
-                            state.hub.prepare_context_reset(&session_id);
-                            crate::subagent_transcripts::fence(&session_id);
-                            state.hub.clear_transcript(&session_id);
-                            state.hub.mark_context_cleared(&session_id);
+                            if let Err(error) = clear_conversation(&state, &session_id).await {
+                                state.hub.broadcast_error(Some(session_id), error);
+                                return;
+                            }
                             let result = match recovery {
                                 Some(intent) => state.supervisor.recover_execution_session(&session_id, intent),
                                 None => state.supervisor.reset_session(&session_id),
@@ -355,25 +355,42 @@ pub(super) fn reset_session_command(
             return ControlFlow::Break(true);
         }
         // "Clear conversation" (see Inbound::ResetSession). Order matters:
-        // 1. Forget the resumable agent id so the respawn does a FRESH
-        //    session/new (clean context) instead of session/load.
-        // 2. Destructively clear the old in-memory + durable transcript.
-        // 3. Drop the new timeline boundary marker.
-        // 4. Atomically fence + replace the worker. This must not use the
+        // 1. Durably delete the transcript and forget the resumable agent id
+        //    with its restart fence, in one acknowledged transaction; a failure
+        //    leaves the session and its worker untouched.
+        // 2. Apply it to the Hub (fresh context, divider marker), so the
+        //    respawn does a FRESH session/new instead of session/load.
+        // 3. Atomically fence + replace the worker. This must not use the
         //    permanent delete path: the Machine broker retains delete tombstones to
         //    reject stale launches for genuinely deleted sessions.
-        state.hub.prepare_context_reset(&session_id);
-        crate::subagent_transcripts::fence(&session_id);
-        state.hub.clear_transcript(&session_id);
-        state.hub.mark_context_cleared(&session_id);
-        match state.supervisor.reset_session(&session_id) {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                tracing::warn!(session_id = %session_id, error = %e, "reset: respawn failed");
-                Ok(())
+        let state = Arc::clone(state);
+        tokio::spawn(async move {
+            if let Err(error) = clear_conversation(&state, &session_id).await {
+                state.hub.broadcast_error(Some(session_id), error);
+                return;
             }
-        }
-    })
+            if let Err(e) = state.supervisor.reset_session(&session_id) {
+                tracing::warn!(session_id = %session_id, error = %e, "reset: respawn failed");
+            }
+        });
+        ControlFlow::Break(true)
+    }
+}
+
+/// Commit a user Clear durably, then apply it to the Hub. Nothing changes when
+/// the store refuses or fails the combined write.
+async fn clear_conversation(state: &AppState, session_id: &str) -> Result<(), String> {
+    let commit = match state.hub.begin_clear_conversation(session_id)? {
+        None => None,
+        Some((ack, commit)) => match ack.await {
+            Ok(Ok(_)) => Some(commit),
+            Ok(Err(error)) => return Err(format!("Clear was not saved: {error}")),
+            Err(_) => return Err("Clear was not saved: the store writer stopped".to_owned()),
+        },
+    };
+    crate::subagent_transcripts::fence(session_id);
+    state.hub.finish_clear_conversation(session_id, commit);
+    Ok(())
 }
 
 /// Open a session, reviving it unless its last turn was interrupted or it

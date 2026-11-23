@@ -154,6 +154,14 @@ pub(super) async fn denied<W: tokio::io::AsyncWrite + Unpin>(
 
 /// Withdraw a reset whose declaration was denied before its stop left.
 /// Returns false when `session_id` has no such reset in flight.
+///
+/// Known limit: absence from `sent` is the evidence that the stop never
+/// left, and a reconnect clears `sent`. A stop written before a disconnect,
+/// whose ACK was lost and whose declaration is denied on replay, is treated
+/// as unsent: the staged replacement is discarded and a Clear's session
+/// reports Crashed from the cached old worker. That fails closed (Retry starts
+/// a fresh worker). Closing it needs connection-independent attempt evidence,
+/// such as an attempted-send record that survives reconnect.
 fn cancel(shared: &Shared, session_id: &str) -> bool {
     if !shared.resetting.lock().contains(session_id) {
         return false;
