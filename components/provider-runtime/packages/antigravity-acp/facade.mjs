@@ -232,12 +232,20 @@ export class Facade {
     const confirmMs = cancelled || session.parent !== undefined ? 5000 : LIMITS.stopConfirmMs;
     await Promise.all(
       commands.map(async (command) => {
-        // The turn's end takes the stop over from the expiry timer, and
-        // hands it back if the close stays unconfirmed.
+        // The turn's end takes the stop over from the expiry timer (one
+        // owner, also across overlapping cleanups), and hands it back if
+        // the close stays unconfirmed.
         clearTimeout(command.timer);
-        if (await this.terminate(command, confirmMs).catch(() => false)) {
-          this.forget(session, command);
-        } else if (session.commands.get(command.processId) === command) {
+        command.cleaning = (command.cleaning ?? 0) + 1;
+        let closed;
+        try {
+          closed = await this.terminate(command, confirmMs).catch(() => false);
+        } finally {
+          command.cleaning -= 1;
+        }
+        if (closed) this.forget(session, command);
+        else if (command.cleaning === 0 && session.commands.get(command.processId) === command) {
+          clearTimeout(command.timer);
           command.timer = setTimeout(() => this.expire(session, command), 5000);
           command.timer.unref?.();
         }
@@ -1041,7 +1049,9 @@ export class Facade {
       });
       try {
         await Promise.race([
-          this.read(process, Math.min(500, remaining), { lostIsUncertain: false }),
+          // Not sent at all once the deadline passed while it waited in
+          // the reader chain.
+          this.read(process, Math.min(500, remaining), { lostIsUncertain: false, deadline }),
           expired,
         ]);
       } finally {
@@ -1266,7 +1276,13 @@ export class Facade {
    * when that reader returns before it.
    */
   async expire(session, running) {
-    if (running.closed || session.commands.get(running.processId) !== running) {
+    // The turn's cleanup owns the stop while it runs and re-arms the timer
+    // itself when the close stays unconfirmed.
+    if (
+      running.closed ||
+      running.cleaning > 0 ||
+      session.commands.get(running.processId) !== running
+    ) {
       return;
     }
     if (running.busy) {
@@ -1277,7 +1293,7 @@ export class Facade {
     running.busy = true;
     try {
       if (await this.terminate(running).catch(() => false)) this.forget(session, running);
-      else {
+      else if (!(running.cleaning > 0)) {
         // Not confirmed yet: try again; the handle stays until it is.
         running.timer = setTimeout(() => this.expire(session, running), 5000);
         running.timer.unref?.();

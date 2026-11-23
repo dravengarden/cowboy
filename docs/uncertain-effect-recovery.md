@@ -249,6 +249,27 @@ Bounded residuals, all failing closed (a cut-off request still parks):
 - A read already in flight when the deadline passes cannot be withdrawn.
 - A forced exit (the watchdog kills `agy`) closes the endpoint without
   waiting for the confirmation.
+- Code review round 2 (`call-be58c4f5`) found further interleavings: a
+  reader may forget a closed command while a stop reply is pending, a stop
+  whose 5 s confirmation timed out may later be reported lost after the tool
+  answered, a reconnect may delay a send past the deadline, and a cancelled
+  root turn's final cleanup shares the watchdog's window.
+
+These residuals have one cause: the worker stops the unit while that unit
+still has relayed requests in flight. The facade cannot close every
+interleaving from its side, so they are left to L1c.
+
+### L1c: the worker drains a unit's relays before stopping it (proposed)
+
+At teardown (generation cutover, hibernation, stop), the worker fences the
+unit's new mutations as today, then waits a bounded time (10 s, inside the
+existing 60 s `TEARDOWN_SETTLE`) until the endpoint has no relay in flight,
+and only then stops the account sandbox unit. Replies then reach the facade,
+nothing is undelivered, and the ledger records nothing. A unit that keeps
+issuing requests is stopped at the bound, and its cut-off requests park the
+session as today (fail closed). No durable state, wire or Controller change
+is involved. Worker code: `.#cowboy-machine-release` with a worker pin advance.
+It needs its own short design review.
 
 Tests: a command whose process tree exits 7 s after SIGTERM is confirmed and
 forgotten at turn end with a single `process/terminate`; the turn's end joins
