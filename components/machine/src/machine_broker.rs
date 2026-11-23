@@ -29,8 +29,10 @@ use crate::runtime_wire::{
 mod account_unit;
 mod account_worker;
 mod cleanups;
+mod core_overflow;
 pub mod deletions;
 mod incarnations;
+pub mod liveness;
 mod mcp_launch;
 mod namespace;
 mod readmission;
@@ -451,6 +453,7 @@ struct Broker {
     #[cfg(test)]
     deleted_session_owner_collected: AtomicBool,
     next_connection: AtomicU64,
+    liveness: liveness::Hub,
     next_lease: AtomicU64,
 }
 
@@ -553,6 +556,7 @@ impl Broker {
             #[cfg(test)]
             deleted_session_owner_collected: AtomicBool::new(false),
             next_connection: AtomicU64::new(1),
+            liveness: liveness::Hub::default(),
             next_lease: AtomicU64::new(1),
         }
     }
@@ -3909,6 +3913,8 @@ async fn run_broker(
     // A cancelled server must not retain the durable namespace's owner lock
     // through an orphaned monitor task.
     let _monitor = BrokerMonitor(tokio::spawn(monitor_workers(Arc::clone(&broker))));
+    let sampler = Arc::clone(&broker);
+    let _liveness = BrokerMonitor(tokio::spawn(async move { sampler.liveness.run().await }));
     let _account_recovery = BrokerMonitor(tokio::spawn(recover_account_stops(
         Arc::clone(&broker),
         account_stops,
@@ -4063,6 +4069,7 @@ async fn monitor_workers(broker: Arc<Broker>) {
         let sweep =
             broker.take_stale_workers(WORKER_HEARTBEAT_TIMEOUT, WORKER_BACKLOG_ISOLATION_LIMIT);
         for (session_id, unread_bytes, silent) in sweep.lagging {
+            broker.liveness.deferred(&session_id, unread_bytes, silent);
             tracing::warn!(
                 session = %session_id,
                 unread_bytes,
@@ -4071,6 +4078,9 @@ async fn monitor_workers(broker: Arc<Broker>) {
             );
         }
         for (session_id, peer, detail) in sweep.isolated {
+            broker
+                .liveness
+                .isolated(&session_id, peer.connection_id, &detail);
             tracing::error!(
                 session = %session_id,
                 generation = %peer.snapshot.generation,
@@ -4253,79 +4263,6 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
     Ok(())
 }
 
-/// The acknowledgement that refuses `command` when the core queue is full.
-/// A deletion has none: the controller forgets a stopped session's declaration
-/// even on refusal, so it keeps the reconnect path and its full replay.
-fn overflow_refusal(command: &CoreCommand) -> Option<(String, String)> {
-    match command {
-        CoreCommand::RecoverExecutionSession {
-            session,
-            command_id,
-            ..
-        }
-        | CoreCommand::ReadmitAccountSession {
-            session,
-            command_id,
-            ..
-        } => Some((session.session_id.clone(), command_id.clone())),
-        CoreCommand::EnsureSession { session } => Some((
-            session.session_id.clone(),
-            format!("ensure:{}", session.session_id),
-        )),
-        CoreCommand::StopSession {
-            session_id,
-            command_id,
-        } if command_id.starts_with("reset-") => Some((session_id.clone(), command_id.clone())),
-        CoreCommand::CancelTurn {
-            session_id,
-            command_id,
-            ..
-        }
-        | CoreCommand::Steer {
-            session_id,
-            command_id,
-            ..
-        }
-        | CoreCommand::Prompt {
-            session_id,
-            command_id,
-            ..
-        }
-        | CoreCommand::Cancel {
-            session_id,
-            command_id,
-        }
-        | CoreCommand::CancelSubagent {
-            session_id,
-            command_id,
-            ..
-        }
-        | CoreCommand::Permission {
-            session_id,
-            command_id,
-            ..
-        }
-        | CoreCommand::SetConfigOption {
-            session_id,
-            command_id,
-            ..
-        }
-        | CoreCommand::HibernateSession {
-            session_id,
-            command_id,
-        }
-        | CoreCommand::QuiesceAccountSession {
-            session_id,
-            command_id,
-            ..
-        } => Some((session_id.clone(), command_id.clone())),
-        CoreCommand::StopSession { .. }
-        | CoreCommand::DrainSession { .. }
-        | CoreCommand::SetDesiredGeneration { .. }
-        | CoreCommand::RollProvider { .. } => None,
-    }
-}
-
 async fn handle_core(
     broker: Arc<Broker>,
     lease: u64,
@@ -4376,7 +4313,9 @@ async fn handle_core(
                     // every queued command at once; a rejected ack is
                     // requeued or surfaced by the controller.
                     Err(mpsc::error::TrySendError::Full(command)) => {
-                        let Some((session_id, command_id)) = overflow_refusal(&command) else {
+                        let Some((session_id, command_id)) =
+                            core_overflow::overflow_refusal(&command)
+                        else {
                             anyhow::bail!(
                                 "Machine core command queue saturated; reconnecting controller"
                             );
@@ -4845,7 +4784,17 @@ async fn handle_worker(
     epoch: &str,
     reader: &mut tokio::net::unix::OwnedReadHalf,
 ) -> Result<()> {
-    while let Some(frame) = read_frame(reader).await? {
+    let unit = (broker.args.spawn_mode == SpawnMode::SystemdUser)
+        .then(|| worker_unit_name(&broker.args.socket, session_id));
+    let peer = reader.as_ref().peer_cred().ok().and_then(|peer| peer.pid());
+    let observed = broker.liveness.connect(
+        session_id,
+        connection_id,
+        epoch,
+        unit,
+        peer.and_then(|pid| u32::try_from(pid).ok()),
+    );
+    while let Some(frame) = liveness::read_frame(reader, &observed).await? {
         broker.touch_worker(session_id, connection_id);
         if !broker.worker_matches(session_id, connection_id, epoch) {
             tracing::warn!(session = session_id, %epoch, "ignoring frame from fenced worker");
@@ -4959,7 +4908,7 @@ async fn handle_worker(
                 }
             }
             Frame::CommandAck { .. } => broker.send_controller(frame),
-            Frame::Heartbeat => {}
+            Frame::Heartbeat => observed.heartbeat(),
             other => tracing::debug!(?other, "ignoring non-worker runtime frame"),
         }
     }

@@ -330,6 +330,8 @@ pub const DEVICE_BROWSER_MAX_WIDTH: Key<i64> = Key::new(Scope::Device, "browser.
 pub const DEVICE_BROWSER_MAX_HEIGHT: Key<i64> = Key::new(Scope::Device, "browser.max_height");
 pub const DEVICE_BROWSER_IPV4_ONLY: Key<bool> = Key::new(Scope::Device, "browser.ipv4_only");
 
+pub const DEVICE_HEARTBEAT_GAP_SAMPLER: Key<bool> =
+    Key::new(Scope::Device, "diagnostics.heartbeat_gap_sampler");
 pub const DEVICE_FILE_BUFFERS_ENABLED: Key<bool> = Key::new(Scope::Device, "file_buffers.enabled");
 pub const DEVICE_FILE_BUFFERS_MAX_FILE_SIZE: Key<u64> =
     Key::new(Scope::Device, "file_buffers.max_file_size");
@@ -446,6 +448,13 @@ pub static DEVICE_FIELDS: &[Field] = &[
         default: Value::Duration(Duration::from_hours(7 * 24)),
         reload: Reload::Live,
         doc: "Remove a cached runtime artifact once no retained Plugin generation\nreferences it and it has not been written for this long.",
+    },
+    Field {
+        key: "diagnostics.heartbeat_gap_sampler",
+        kind: Kind::Bool,
+        default: Value::Bool(true),
+        reload: Reload::Live,
+        doc: "Attribute worker heartbeat gaps: the Machine broker samples cgroup pressure\nof live workers and their ancestors every 10 s and logs it with each gap.\nfalse stops the sampling and unit queries; gap records stay, without scopes.\nRemove the key, rather than setting it, before rolling back to a release\nthat does not know it.",
     },
     Field {
         key: "file_buffers.enabled",

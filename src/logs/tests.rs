@@ -866,3 +866,30 @@ fn aggregated_metrics_cap_the_same_groups_as_a_scan_on_equal_timestamps() {
         serde_json::to_value(&scanned).unwrap()
     );
 }
+
+/// Machine telemetry keeps only allowlisted fields. Every field the broker's
+/// heartbeat-gap records emit must survive that projection, or the journal
+/// would hold evidence that VictoriaLogs silently lost.
+#[test]
+fn heartbeat_gap_fields_reach_machine_telemetry() {
+    let source = include_str!("../../components/machine/src/machine_broker/liveness.rs");
+    let names: std::collections::BTreeSet<&str> = source
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("gap_"))
+        .filter_map(|line| {
+            let name = line.split([' ', ',', ':']).next()?;
+            let rest = &line[name.len()..];
+            // Event fields (`name = value` or shorthand `name,`), not struct
+            // fields (`name: value`).
+            (rest.starts_with(" =") || rest == ",").then_some(name)
+        })
+        .collect();
+    assert!(names.len() >= 30, "{names:?}");
+    for name in names {
+        assert!(
+            super::capture::telemetry_field(name).is_some(),
+            "{name} is dropped by the telemetry allowlist"
+        );
+    }
+}

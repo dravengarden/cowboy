@@ -50,6 +50,15 @@ schema = 1
 # duration string such as "6h", from 1h to 365d; applies live.
 # artifact_cache_unreferenced_after = "7d"
 
+[diagnostics]
+# Attribute worker heartbeat gaps: the Machine broker samples cgroup pressure
+# of live workers and their ancestors every 10 s and logs it with each gap.
+# false stops the sampling and unit queries; gap records stay, without scopes.
+# Remove the key, rather than setting it, before rolling back to a release
+# that does not know it.
+# boolean (true or false); applies live.
+# heartbeat_gap_sampler = true
+
 [file_buffers]
 # Remote sessions keep a verified copy of each file they read and edit it
 # with a hash-checked splice on the target instead of resending the file.

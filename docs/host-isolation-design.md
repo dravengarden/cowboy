@@ -207,6 +207,58 @@ are used up, so these amendments are **unreviewed**.
   | CPU or I/O pressure | Weights, then the split |
   | A broker stall | A broker-side design |
 
+### L0 implementation
+
+The code is in `components/machine/src/machine_broker/liveness.rs`. It is
+implemented on its branch and **not deployed**.
+
+**Hooks in the broker.**
+- `handle_worker` reads frames through `liveness::read_frame`. That is
+  `runtime_wire::read_frame` plus phase and progress stamps, with the same
+  framing.
+- The `Heartbeat` arm stamps the heartbeat clock.
+- `monitor_workers` forwards each backlog extension and isolation.
+
+All of these update atomics and `try_send` into a 64-slot queue. A full queue
+counts drops and does not block.
+
+**One sampler task.**
+- **Binding.** For each new connection it runs a bounded
+  `systemctl --user show` (5 s timeout) for `ControlGroup` and
+  `InvocationID`. It then verifies that the `SO_PEERCRED` peer is in that
+  cgroup, through a `/proc/<pid>` directory handle.
+- **Sampling.** Every 10 s it reads the counters of each bound worker scope.
+  Ancestors, the broker's unit and the host are deduplicated across workers
+  and read once each. It runs on one blocking thread with
+  `openat2(BENEATH|NO_SYMLINKS|NO_MAGICLINKS)` on validated cgroup2 and proc
+  roots, and keeps 10 samples per scope.
+
+**Records.** For each gap the sampler logs:
+- one `cowboy.machine.heartbeat_gap` record;
+- one `cowboy.machine.heartbeat_gap.scope` record per scope, with deltas
+  against the sample before the gap and a `gap_coverage_ms`.
+
+All fields are `gap_*`, and an unreadable value is `-1`.
+
+**Telemetry.** Machine telemetry keeps every `gap_*` field: a test asserts the
+allowlist covers each one. Drops are logged as
+`cowboy.machine.heartbeat_gap.dropped`.
+
+**Kill switch.**
+- The Device setting `diagnostics.heartbeat_gap_sampler` (default `true`,
+  applies live) controls it.
+- `false` stops the unit queries and the sampling; gap records stay.
+- Agents discover it through Cowboy MCP `configuration.schema("device")`.
+  Writing Device configuration stays an operator action.
+
+**Query** (VictoriaLogs on Hawk):
+
+```text
+event_name:"cowboy.machine.heartbeat_gap" OR event_name:"cowboy.machine.heartbeat_gap.scope"
+```
+
+Join the two record types on `cowboy.heartbeat_gap.id`, within one session.
+
 ### L0 rollout
 
 | Step | What | Deploys via | Rollback | Flags |
