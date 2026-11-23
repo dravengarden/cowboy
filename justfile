@@ -11,7 +11,7 @@
 # Directories are Cargo flags, never CARGO_* variables: sccache hashes those
 # into every crate's key, so a checkout path there makes every key unique to
 # the checkout and no other worktree ever hits.
-rust_test_args := "-p cowboy -p cowboy-cli -p cowboy-store -p cowboy-server-auth -p cowboy-server-accounts -p cowboy-server-code -p cowboy-server-code-buffers -p cowboy-server-plugins -p cowboy-server-runtime -p cowboy-server-agent-api -p cowboy-server-telemetry -p cowboy-server -p cowboy-machine -p cowboy-integration-tests -p cowboy-provider-sdk -p cowboy-plugin-sdk --all-targets --all-features --locked --target-dir " + justfile_directory() + "/target/test-graph"
+rust_test_args := "-p cowboy -p cowboy-cli -p cowboy-store -p cowboy-wire -p cowboy-server-auth -p cowboy-server-accounts -p cowboy-server-code -p cowboy-server-code-buffers -p cowboy-server-plugins -p cowboy-server-runtime -p cowboy-server-agent-api -p cowboy-server-telemetry -p cowboy-server -p cowboy-machine -p cowboy-integration-tests -p cowboy-provider-sdk -p cowboy-plugin-sdk --all-targets --all-features --locked --target-dir " + justfile_directory() + "/target/test-graph"
 # How every recipe runs that graph. The invoking Codex Plugin exports its own
 # signed package path; Cowboy's unit tests exercise embedded fixtures and must
 # not inherit that runtime. The graph always keeps rustc incremental state,
@@ -19,7 +19,7 @@ rust_test_args := "-p cowboy -p cowboy-cli -p cowboy-store -p cowboy-server-auth
 # 114s without (2026-11-21 on Hawk), for about 9G of incremental cache. Each
 # invocation must agree, since the setting is part of Cargo's fingerprint.
 rust_test_env := "env -u COWBOY_PROVIDER_PACKAGE_PATH -u CARGO_INCREMENTAL"
-# The wire, standalone Machine and code-adapter test slices select features of
+# The standalone Machine and code-adapter test slices select features of
 # their own, so they share no workspace artifacts with the main graph. They
 # compile under a Cargo profile of their own (`gate-slices`, identical to dev):
 # Cargo locks each profile's build and artifact directories, so only a separate
@@ -32,7 +32,6 @@ rust_test_env := "env -u COWBOY_PROVIDER_PACKAGE_PATH -u CARGO_INCREMENTAL"
 # CARGO_MANIFEST_DIR).
 rust_slice_env := "env -u COWBOY_PROVIDER_PACKAGE_PATH -u CARGO_INCREMENTAL"
 rust_slice_profile := "gate-slices"
-rust_wire_args := "--locked -p cowboy-wire --features full,machine-host --all-targets"
 rust_machine_args := "--locked --no-default-features --features machine-host -p cowboy -p cowboy-cli -p cowboy-store -p cowboy-machine --lib"
 rust_code_adapter_args := "--locked --no-default-features --features code-adapter --lib"
 
@@ -886,7 +885,7 @@ zed-lint:
     cd plugins/zed/adapter && cargo clippy --all-targets --locked -- -D warnings
 
 zed-test:
-    cd plugins/zed/adapter && cargo test --all-targets --locked
+    cd plugins/zed/adapter && cargo nextest run --all-targets --locked
 
 zed-check: zed-lint zed-test
 
@@ -1002,8 +1001,6 @@ test-rust:
     # binary concurrently; libtest runs them one after another, so the slowest
     # library suites used to add up (152s against 62s for the same 3553 tests).
     {{rust_test_env}} cargo nextest run {{rust_test_args}}
-    # The shared wire crate is a workspace member, so the root package does not run its tests.
-    {{rust_slice_env}} cargo test --profile {{rust_slice_profile}} {{rust_wire_args}}
     # The standalone Machine ships without Controller modules. Compile and run
     # its test slice too; cargo check alone does not cover cfg(test) boundaries.
     {{rust_slice_env}} cargo nextest run --cargo-profile {{rust_slice_profile}} {{rust_machine_args}}
@@ -1021,17 +1018,12 @@ test-graph-build:
     tmp="target/test-graph/artifacts.$$.json"
     trap 'rm -f "$tmp"' EXIT
     {{rust_test_env}} cargo test {{rust_test_args}} --no-run --message-format=json-render-diagnostics > "$tmp"
-    # cowboy-cli has no integration tests, so `cargo test --no-run` does not emit
-    # the non-test `cowboy` executable needed by composition-check and logs-conformance.
-    {{rust_test_env}} cargo build --locked --all-features -p cowboy-cli --bin cowboy --target-dir "{{justfile_directory()}}/target/test-graph" --message-format=json-render-diagnostics >> "$tmp"
     mv -f "$tmp" target/test-graph/artifacts.json
 
 # Compiles the test slices `test-rust` runs, so `check` can build them beside
 # the main graph; `test-rust` then only runs them. The execution host shares
 # their directory and comes first: the script suites wait for it.
 test-rust-slices-build: claude-remote-prepare
-    {{rust_slice_env}} cargo test --profile {{rust_slice_profile}} {{rust_wire_args}} --no-run
-    {{rust_slice_env}} cargo build --profile {{rust_slice_profile}} --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack
     {{rust_slice_env}} cargo test --profile {{rust_slice_profile}} {{rust_machine_args}} --no-run
     {{rust_slice_env}} cargo test --profile {{rust_slice_profile}} {{rust_code_adapter_args}} --no-run
 
@@ -1160,11 +1152,11 @@ check: toolchain-check
     reap
     just idb-conformance-check site-check native-shell-check lint-plugins plugin-check
     reap
-    # provider-build-check only needs cowboy-plugin-pack from test-rust-slices-build,
-    # so start it in the background as soon as the slices finish while test-graph-build
-    # is still compiling.
+    # Start provider-build-check as soon as test-rust-slices-build releases the
+    # gate-slices build lock, so cowboy-plugin-pack and the plugin package checks
+    # run in the background while test-graph-build finishes.
     collect_named test-rust-slices-build
-    background provider-build-check "COWBOY_PLUGIN_PACK_BIN=$PWD/target/{{rust_slice_profile}}/cowboy-plugin-pack"
+    background provider-build-check "$cargo_js"
     collect_named test-graph-build
     export COWBOY_TEST_GRAPH_ARTIFACTS="$PWD/target/test-graph/artifacts.json"
     just composition-check
@@ -1178,7 +1170,7 @@ check: toolchain-check
     unset MAKEFLAGS
     { exec 9>&-; } 2>/dev/null || true
     # Run the two full-core nextest suites alone first, then overlap the small
-    # post-suites (wire, code-adapter, python, postgres, logs-conformance).
+    # post-suites (code-adapter, python, postgres, logs-conformance).
     {{rust_test_env}} cargo nextest run {{rust_test_args}}
     {{rust_slice_env}} cargo nextest run --cargo-profile {{rust_slice_profile}} {{rust_machine_args}}
     post_jobs=()
@@ -1193,7 +1185,6 @@ check: toolchain-check
       ) >"$logs/post-$name.log" 2>&1 &
       post_jobs+=("$!:$name")
     }
-    run_post wire {{rust_slice_env}} cargo test --profile {{rust_slice_profile}} {{rust_wire_args}}
     run_post code-adapter {{rust_slice_env}} cargo test --profile {{rust_slice_profile}} {{rust_code_adapter_args}}
     run_post idle-sessions python3 -m unittest discover -s tools -p ovh_machine_idle_sessions_test.py
     run_post test-postgres just test-postgres
