@@ -27,6 +27,7 @@ cowboy-server-agent-api = { version = "0.1.0", path = "../server-agent-api" }
 cowboy-server-routes = { version = "0.1.0", path = "../server-routes" }
 cowboy-server-runtime = { version = "0.1.0", path = "../server-runtime" }
 cowboy = { version = "0.1.0", path = "../.." }
+cowboy-cli = { version = "0.1.0", path = "../cli" }
 clap = { version = "4", features = ["derive", "env"] }
 futures = "0.3"
 tokio = { version = "1", features = ["full"] }

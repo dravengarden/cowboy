@@ -821,7 +821,20 @@ impl Store {
         owner: &str,
         share_id: &str,
         machine_id: &str,
-        connection_is_current: impl FnOnce() -> bool,
+        connection_is_current: impl FnOnce() -> bool + Send,
+    ) -> Result<bool> {
+        let mut check = Some(connection_is_current);
+        let mut run = || check.take().expect("connection_is_current invoked once")();
+        self.record_browser_share_revocation_inner(owner, share_id, machine_id, &mut run)
+            .await
+    }
+
+    async fn record_browser_share_revocation_inner(
+        &self,
+        owner: &str,
+        share_id: &str,
+        machine_id: &str,
+        connection_is_current: &mut (dyn FnMut() -> bool + Send),
     ) -> Result<bool> {
         let key = share_key(owner, share_id);
         macro_rules! record { ($db:expr) => {{

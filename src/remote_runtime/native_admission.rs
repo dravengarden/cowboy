@@ -65,12 +65,12 @@ fn portable_vault(
 /// vault), and the vault key is rechecked inside the lock. Disabling,
 /// revocation and key commits take that lock, so none completes during a
 /// bounded write or projection. Never consults the default account.
-async fn with_portable<T, F: std::future::Future<Output = Result<T>>>(
+async fn with_portable<T: Send, F: std::future::Future<Output = Result<T>> + Send>(
     shared: &Shared,
     store: &crate::store::Store,
     owner: &str,
     meta: &crate::model::SessionMeta,
-    action: impl FnOnce() -> F,
+    action: impl FnOnce() -> F + Send,
 ) -> Result<T> {
     let (scope, credential) = portable_vault(shared, meta).context("portable_key_unavailable")?;
     let serves = |account: &crate::store::provider_accounts::Account| {
@@ -126,7 +126,7 @@ pub(super) async fn event(
     shared: &Shared,
     session_id: &str,
     worker_epoch: &str,
-    project: impl FnOnce(),
+    project: impl FnOnce() + Send,
 ) -> bool {
     let worker = shared.workers.lock().get(session_id).cloned();
     let named = shared
@@ -176,7 +176,7 @@ pub(super) async fn event(
 pub(super) async fn snapshot(
     shared: &Shared,
     worker: &WorkerSnapshot,
-    project: impl FnOnce(),
+    project: impl FnOnce() + Send,
 ) -> bool {
     let meta = shared
         .hub
@@ -418,7 +418,7 @@ fn reserve_for_write(
 /// Any failure after starting a write closes the transport: partially written
 /// frames must never be treated as safe rejection.
 #[allow(clippy::too_many_lines)]
-pub(super) async fn send<W: tokio::io::AsyncWrite + Unpin>(
+pub(super) async fn send<W: tokio::io::AsyncWrite + Unpin + Send>(
     shared: &Shared,
     writer: &mut W,
     expected: Option<(&str, u64)>,
@@ -533,7 +533,7 @@ pub(super) async fn send<W: tokio::io::AsyncWrite + Unpin>(
     Ok(SendOutcome::Denied)
 }
 
-async fn send_portable<W: tokio::io::AsyncWrite + Unpin>(
+async fn send_portable<W: tokio::io::AsyncWrite + Unpin + Send>(
     shared: &Shared,
     writer: &mut W,
     store: &crate::store::Store,

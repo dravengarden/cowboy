@@ -24,6 +24,7 @@ import { rustCode, stripRustTests } from "./check-structure.ts";
 
 export const CRATES: Record<string, string> = {
   cowboy: "src",
+  cowboy_cli: "components/cli/src",
   cowboy_store: "components/store/src",
   cowboy_server_accounts: "components/server-accounts/src",
   cowboy_server_auth: "components/server-auth/src",

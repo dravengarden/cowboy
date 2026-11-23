@@ -4,11 +4,11 @@
 #[cfg(unix)]
 pub use cowboy::local_operator;
 pub use cowboy::{
-    admin, agent_model, auth_plugins, browser_device, cli, client_auth, core, core_passkeys,
+    admin, agent_model, auth_plugins, browser_device, client_auth, core, core_passkeys,
     core_security, machine_auth, machine_control, machine_convergence, machine_protocol, oidc,
     operation_budget, otlp, passkey, persistence, plugin_activation, plugin_catalog, plugin_dir,
     plugin_host, plugin_operation, plugin_storage, product_auth, provider_account,
-    provider_catalog, runtime, runtime_router, store, supervisor, telemetry_binding,
+    provider_catalog, runtime, runtime_router, serve_args, store, supervisor, telemetry_binding,
     telemetry_plugin, usage,
 };
 

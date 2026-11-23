@@ -22,6 +22,10 @@ enum BindingUse<'a> {
     ),
 }
 
+type BoxedUnitFuture<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>>;
+type BoxedAsyncAction<'a> = Box<dyn FnOnce() -> BoxedUnitFuture<'a> + Send + 'a>;
+
 impl Store {
     /// Call only after the exact Broker readmission ACK. The callback checks
     /// the live runtime connection; failure rolls back the finished flag.
@@ -30,7 +34,7 @@ impl Store {
         owner: &str,
         operation: &str,
         admitted: &crate::provider_account::PreparedBinding,
-        validate: impl FnOnce() -> Result<()>,
+        validate: impl FnOnce() -> Result<()> + Send,
     ) -> Result<()> {
         let intent = self
             .native_session_transition(owner, operation)
@@ -89,7 +93,7 @@ impl Store {
         owner: &str,
         operation: &str,
         commit: &super::super::transitions::BindingCommit,
-        validate: impl FnOnce() -> Result<()>,
+        validate: impl FnOnce() -> Result<()> + Send,
     ) -> Result<()> {
         if let Some(old) = self
             .native_session_transition_commit(owner, operation)
@@ -114,11 +118,11 @@ impl Store {
     /// Queue one idempotent migration stop under current account, target-login
     /// and original-session admission. The callback checks the live runtime.
     #[allow(dead_code, reason = "public migration remains gated")]
-    pub async fn dispatch_native_session_transition_stop<T>(
+    pub async fn dispatch_native_session_transition_stop<T: Send>(
         &self,
         owner: &str,
         operation: &str,
-        enqueue: impl FnOnce(&super::super::transitions::Intent) -> Result<T>,
+        enqueue: impl FnOnce(&super::super::transitions::Intent) -> Result<T> + Send,
     ) -> Result<T> {
         let intent = self
             .native_session_transition(owner, operation)
@@ -141,7 +145,7 @@ impl Store {
         owner: &str,
         operation: &str,
         evidence: &super::super::revocation::stops::Evidence,
-        connection_is_current: impl FnOnce() -> bool,
+        connection_is_current: impl FnOnce() -> bool + Send,
     ) -> Result<()> {
         evidence.require_transition_stop(operation)?;
         if let Some(old) = self
@@ -208,7 +212,7 @@ impl Store {
         operation: &str,
         completion: &NativeCompletion,
         session: crate::model::SessionMeta,
-        project: impl FnOnce(crate::model::SessionMeta) -> Result<()>,
+        project: impl FnOnce(crate::model::SessionMeta) -> Result<()> + Send,
     ) -> Result<()> {
         self.insert_native_session(owner, operation, completion, &session)
             .await?;
@@ -221,12 +225,12 @@ impl Store {
     /// The callback must not await or reenter Store; no authorization object is
     /// returned for later reuse. Callers also check their live connection and
     /// the action's own permission before enqueuing any Machine command.
-    pub async fn with_native_login_binding<T>(
+    pub async fn with_native_login_binding<T: Send>(
         &self,
         owner: &str,
         operation: &str,
         completion: &NativeCompletion,
-        action: impl FnOnce() -> Result<T>,
+        action: impl FnOnce() -> Result<T> + Send,
     ) -> Result<T> {
         self.native_binding_action(owner, operation, completion, BindingUse::Latest, || {
             std::future::ready(action())
@@ -237,13 +241,16 @@ impl Store {
     /// Only for bounded transport writes or synchronous projection of an
     /// already committed binding. Hold revocation admission through the action;
     /// neither a queued frame nor a projection proves remote completion.
-    pub async fn with_native_session_binding<T, F: std::future::Future<Output = Result<T>>>(
+    pub async fn with_native_session_binding<
+        T: Send,
+        F: std::future::Future<Output = Result<T>> + Send,
+    >(
         &self,
         owner: &str,
         operation: &str,
         completion: &NativeCompletion,
         session: &str,
-        action: impl FnOnce() -> F,
+        action: impl FnOnce() -> F + Send,
     ) -> Result<T> {
         self.native_binding_action(
             owner,
@@ -262,15 +269,15 @@ impl Store {
     /// Admit runtime traffic for a session pinned to `version`/`digest`, which
     /// registration accepted as the login's release or a compatible later one.
     pub async fn with_native_session_release_binding<
-        T,
-        F: std::future::Future<Output = Result<T>>,
+        T: Send,
+        F: std::future::Future<Output = Result<T>> + Send,
     >(
         &self,
         owner: &str,
         operation: &str,
         completion: &NativeCompletion,
         session: &crate::model::SessionMeta,
-        action: impl FnOnce() -> F,
+        action: impl FnOnce() -> F + Send,
     ) -> Result<T> {
         self.native_binding_action(
             owner,
@@ -321,15 +328,42 @@ impl Store {
         .await
     }
 
-    #[allow(clippy::too_many_lines)] // Keep both backends in one ordered admission transaction.
-    async fn native_binding_action<T, F: std::future::Future<Output = Result<T>>>(
+    async fn native_binding_action<T: Send, F: std::future::Future<Output = Result<T>> + Send>(
         &self,
         owner: &str,
         operation: &str,
         completion: &NativeCompletion,
         usage: BindingUse<'_>,
-        action: impl FnOnce() -> F,
+        action: impl FnOnce() -> F + Send,
     ) -> Result<T> {
+        let mut out: Option<T> = None;
+        let slot = &mut out;
+        self.native_binding_action_inner(
+            owner,
+            operation,
+            completion,
+            usage,
+            Box::new(move || {
+                let fut = action();
+                Box::pin(async move {
+                    *slot = Some(fut.await?);
+                    Ok(())
+                })
+            }),
+        )
+        .await?;
+        Ok(out.expect("native_binding_action completed without producing output"))
+    }
+
+    #[allow(clippy::too_many_lines)] // Keep both backends in one ordered admission transaction.
+    async fn native_binding_action_inner<'a>(
+        &'a self,
+        owner: &'a str,
+        operation: &'a str,
+        completion: &'a NativeCompletion,
+        usage: BindingUse<'a>,
+        action: BoxedAsyncAction<'a>,
+    ) -> Result<()> {
         let profile = &completion.profile;
         anyhow::ensure!(!profile.account_id.is_default(), "native_account_required");
         let fingerprint = profile
@@ -471,9 +505,10 @@ impl Store {
             tx.commit().await?;
             result
         }}; }
-        Ok(match &self.backend {
+        match &self.backend {
             StorageBackend::Postgres(db) => admit!(db, "revoked_at"),
             StorageBackend::Sqlite(db) => admit!(db, "revoked_at_ms"),
-        })
+        }
+        Ok(())
     }
 }

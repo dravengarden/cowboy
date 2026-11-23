@@ -354,12 +354,12 @@ pub async fn refresh(
 /// account is available, still serves this Provider and its vault holds
 /// exactly the target's generations. What `enqueue` returned is kept even if
 /// the lock transaction then fails: an enqueued command's reply decides.
-pub async fn under_account_lock<T>(
+pub async fn under_account_lock<T: Send>(
     state: &AppState,
     owner: &str,
     id: &ProviderAccountId,
     target: &Target,
-    enqueue: impl FnOnce() -> Result<T, &'static str>,
+    enqueue: impl FnOnce() -> Result<T, &'static str> + Send,
 ) -> (Option<T>, &'static str) {
     let Some(store) = state.store.as_ref() else {
         return (None, "unavailable");

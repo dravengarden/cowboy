@@ -2322,7 +2322,7 @@ async fn core_security_without_auth_plugins_supports_setup_login_and_session_reo
     )
     .unwrap();
     std::fs::set_permissions(&core_path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let mut args = crate::cli::ServeArgs::test_plugin_check(&root);
+    let mut args = crate::serve_args::ServeArgs::test_plugin_check(&root);
     args.database_url = Some(format!(
         "sqlite://{}",
         root.join("cowboy.sqlite3").display()

@@ -25,7 +25,20 @@ impl Store {
         owner: &str,
         operation: &str,
         evidence: &Evidence,
-        connection_is_current: impl FnOnce() -> bool,
+        connection_is_current: impl FnOnce() -> bool + Send,
+    ) -> Result<Evidence> {
+        let mut check = Some(connection_is_current);
+        let mut run = || check.take().expect("connection_is_current invoked once")();
+        self.record_provider_remote_wipe_inner(owner, operation, evidence, &mut run)
+            .await
+    }
+
+    async fn record_provider_remote_wipe_inner(
+        &self,
+        owner: &str,
+        operation: &str,
+        evidence: &Evidence,
+        connection_is_current: &mut (dyn FnMut() -> bool + Send),
     ) -> Result<Evidence> {
         ensure!(
             evidence.generation > 0 && evidence.generation < u64::MAX,

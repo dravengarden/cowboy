@@ -270,7 +270,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         usage,
         code_cache,
         code_navigation_admission: args.code_navigation_admission
-            == crate::cli::CodeNavigationAdmission::Candidate,
+            == crate::serve_args::CodeNavigationAdmission::Candidate,
         project_placement: crate::project_placement::Store::new(
             &args.data_dir,
             args.execution_runtime_machine,

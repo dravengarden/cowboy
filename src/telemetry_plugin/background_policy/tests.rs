@@ -225,28 +225,3 @@ fn background_permits_bind_full_batch_and_original_budget_without_cross_purpose_
     assert!(!permit.check(&attempt));
     assert!(permit.remaining().is_zero());
 }
-
-#[test]
-fn background_and_legacy_cli_modes_are_mutually_exclusive() {
-    use clap::Parser as _;
-    assert!(
-        crate::cli::Cli::try_parse_from([
-            "cowboy",
-            "serve",
-            "--telemetry-plugin-config",
-            "/private/legacy.json",
-            "--telemetry-managed-export-policy",
-            "/private/managed.json",
-        ])
-        .is_err()
-    );
-    assert!(
-        crate::cli::Cli::try_parse_from([
-            "cowboy",
-            "serve",
-            "--telemetry-managed-export-policy",
-            "/private/managed.json",
-        ])
-        .is_ok()
-    );
-}

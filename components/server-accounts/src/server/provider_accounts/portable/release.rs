@@ -107,10 +107,10 @@ pub async fn register(
 
 /// Run one portable session's release change under the owner's account lock
 /// on its exact persisted binding, with the vault key held Ready.
-pub async fn with_release_admission<T>(
+pub async fn with_release_admission<T: Send>(
     state: &AppState,
     meta: &crate::core::SessionMeta,
-    action: impl FnOnce() -> Result<T, String>,
+    action: impl FnOnce() -> Result<T, String> + Send,
 ) -> Result<T, String> {
     let owner = meta
         .owner_user_id

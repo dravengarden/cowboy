@@ -100,20 +100,54 @@ pub(super) fn missing(receipt: &Receipt) -> Vec<(&'static str, String)> {
         .collect()
 }
 
+type BoxedUnitFuture<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>>;
+type BoxedAsyncAction<'a> = Box<dyn FnOnce() -> BoxedUnitFuture<'a> + Send + 'a>;
+
 impl Store {
     /// Run `action` while the owner's account lock holds: the account is
     /// available, serves the caller (`serves`), and for sessions the exact
     /// row is inserted or locked. Revocation, disabling and key commits take
     /// the same lock, so none can complete inside `action`. `action` must not
     /// reenter Store; it is bounded to a vault check plus one write/projection.
-    pub async fn with_portable_account<T, F: std::future::Future<Output = Result<T>>>(
+    pub async fn with_portable_account<
+        T: Send,
+        F: std::future::Future<Output = Result<T>> + Send,
+    >(
         &self,
         owner: &str,
         account: &ProviderAccountId,
         usage: Use<'_>,
-        serves: impl Fn(&Account) -> bool,
-        action: impl FnOnce() -> F,
+        serves: impl Fn(&Account) -> bool + Sync,
+        action: impl FnOnce() -> F + Send,
     ) -> Result<T> {
+        let mut out: Option<T> = None;
+        let slot = &mut out;
+        self.with_portable_account_inner(
+            owner,
+            account,
+            usage,
+            &serves,
+            Box::new(move || {
+                let fut = action();
+                Box::pin(async move {
+                    *slot = Some(fut.await?);
+                    Ok(())
+                })
+            }),
+        )
+        .await?;
+        Ok(out.expect("with_portable_account completed without producing output"))
+    }
+
+    async fn with_portable_account_inner<'a>(
+        &'a self,
+        owner: &'a str,
+        account: &'a ProviderAccountId,
+        usage: Use<'a>,
+        serves: &'a (dyn Fn(&Account) -> bool + Sync),
+        action: BoxedAsyncAction<'a>,
+    ) -> Result<()> {
         ensure!(!account.is_default(), "named_account_required");
         if let Use::Insert(m) | Use::Existing(m) = usage {
             ensure!(
@@ -128,11 +162,11 @@ impl Store {
         }
         match usage {
             Use::Commit => self
-                .mark_portable(owner, account, None, &serves, None, || Ok(()))
+                .mark_portable(owner, account, None, serves, None, &mut || Ok(()))
                 .await
                 .map(drop)?,
             Use::SignIn(identity) => {
-                self.mark_portable(owner, account, Some(identity), &serves, None, || Ok(()))
+                self.mark_portable(owner, account, Some(identity), serves, None, &mut || Ok(()))
                     .await
                     .map(drop)?;
             }
@@ -185,10 +219,11 @@ impl Store {
             tx.commit().await?;
             result
         }}; }
-        Ok(match &self.backend {
+        match &self.backend {
             StorageBackend::Postgres(db) => admit!(db),
             StorageBackend::Sqlite(db) => admit!(db),
-        })
+        }
+        Ok(())
     }
 
     /// The owner of a named account. Machine refresh evidence names only the
@@ -284,7 +319,20 @@ impl Store {
         owner: &str,
         operation: &str,
         evidence: &RemoteWipe,
-        connection_is_current: impl FnOnce() -> bool,
+        connection_is_current: impl FnOnce() -> bool + Send,
+    ) -> Result<RemoteWipe> {
+        let mut check = Some(connection_is_current);
+        let mut run = || check.take().expect("connection_is_current invoked once")();
+        self.record_portable_remote_wipe_inner(owner, operation, evidence, &mut run)
+            .await
+    }
+
+    async fn record_portable_remote_wipe_inner(
+        &self,
+        owner: &str,
+        operation: &str,
+        evidence: &RemoteWipe,
+        connection_is_current: &mut (dyn FnMut() -> bool + Send),
     ) -> Result<RemoteWipe> {
         macro_rules! record { ($db:expr, $revoked:literal) => {{
             let mut tx = $db.pool.begin().await?;

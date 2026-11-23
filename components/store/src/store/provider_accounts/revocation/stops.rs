@@ -51,13 +51,31 @@ impl Store {
     /// Queue an idempotent stop while account and enrollment admission is
     /// locked. The callback must check the live runtime and must not await or
     /// reenter Store. A commit error after enqueue is an unknown outcome.
-    pub async fn dispatch_provider_account_stop<T>(
+    pub async fn dispatch_provider_account_stop<T: Send>(
         &self,
         owner: &str,
         operation: &str,
         scope: &Evidence,
-        enqueue: impl FnOnce() -> Result<T>,
+        enqueue: impl FnOnce() -> Result<T> + Send,
     ) -> Result<T> {
+        let mut enqueue = Some(enqueue);
+        let mut out: Option<T> = None;
+        let mut run = || {
+            out = Some(enqueue.take().expect("enqueue invoked once")()?);
+            Ok(())
+        };
+        self.dispatch_provider_account_stop_inner(owner, operation, scope, &mut run)
+            .await?;
+        Ok(out.expect("dispatch_provider_account_stop produced output"))
+    }
+
+    async fn dispatch_provider_account_stop_inner(
+        &self,
+        owner: &str,
+        operation: &str,
+        scope: &Evidence,
+        enqueue: &mut (dyn FnMut() -> Result<()> + Send),
+    ) -> Result<()> {
         anyhow::ensure!(!scope.account_id.is_default(), "named_account_required");
         macro_rules! dispatch { ($db:expr, $revoked:literal) => {{
             let mut tx = $db.pool.begin().await?;
@@ -81,14 +99,14 @@ impl Store {
             let key: Option<String> = sqlx::query_scalar("SELECT encryption_public_key FROM machines WHERE id=$1")
                 .bind(&scope.machine_id).fetch_one(&mut *tx).await?;
             anyhow::ensure!(key.is_some_and(|key| crate::digest::hex_sha256(key.as_bytes()) == scope.recipient_fingerprint), "machine_enrollment_changed");
-            let result = enqueue()?;
+            enqueue()?;
             tx.commit().await?;
-            result
         }}; }
-        Ok(match &self.backend {
+        match &self.backend {
             StorageBackend::Postgres(db) => dispatch!(db, "revoked_at"),
             StorageBackend::Sqlite(db) => dispatch!(db, "revoked_at_ms"),
-        })
+        }
+        Ok(())
     }
 
     /// Historical read only, including after enrollment changes. Never use this
@@ -133,7 +151,20 @@ impl Store {
         owner: &str,
         operation: &str,
         evidence: &Evidence,
-        connection_is_current: impl FnOnce() -> bool,
+        connection_is_current: impl FnOnce() -> bool + Send,
+    ) -> Result<Evidence> {
+        let mut check = Some(connection_is_current);
+        let mut run = || check.take().expect("connection_is_current invoked once")();
+        self.record_provider_account_stop_inner(owner, operation, evidence, &mut run)
+            .await
+    }
+
+    async fn record_provider_account_stop_inner(
+        &self,
+        owner: &str,
+        operation: &str,
+        evidence: &Evidence,
+        connection_is_current: &mut (dyn FnMut() -> bool + Send),
     ) -> Result<Evidence> {
         anyhow::ensure!(!evidence.account_id.is_default(), "named_account_required");
         anyhow::ensure!(

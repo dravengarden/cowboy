@@ -418,11 +418,11 @@ pub async fn apply_session_provider_reload(
 /// release and login generation, and the login must still be admitted (not
 /// cancelled, revoked, disabled or re-enrolled). Without a verified move, a
 /// named session never changes release here.
-pub async fn with_release_admission<T>(
+pub async fn with_release_admission<T: Send>(
     state: &AppState,
     meta: &crate::core::SessionMeta,
     target: &ResolvedProviderGeneration,
-    action: impl FnOnce(Option<&crate::core::NamedReleaseCarry>) -> Result<T, String>,
+    action: impl FnOnce(Option<&crate::core::NamedReleaseCarry>) -> Result<T, String> + Send,
 ) -> Result<T, String> {
     let Some(named) = target.named_carry.as_ref() else {
         return action(None);

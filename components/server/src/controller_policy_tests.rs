@@ -1,4 +1,4 @@
-use crate::cli::ServeArgs;
+use crate::serve_args::ServeArgs;
 use crate::telemetry_plugin::controller_policy::*;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;

@@ -9,7 +9,7 @@ rust-version = "1.98.1"
 
 [workspace]
 resolver = "3"
-members = ["components/codeact-runtime", "components/integration-tests", "components/machine", "components/plugin-sdk", "components/provider-sdk", "components/server", "components/server-accounts",
+members = ["components/cli", "components/codeact-runtime", "components/integration-tests", "components/machine", "components/plugin-sdk", "components/provider-sdk", "components/server", "components/server-accounts",
   "components/server-auth", "components/server-code",
   "components/server-code-buffers", "components/server-plugins", "components/server-agent-api", "components/server-routes", "components/server-runtime", "components/server-telemetry", "components/store", "components/wire"]
 exclude = ["plugins/zed/adapter"]
@@ -36,12 +36,10 @@ full = [
   "dep:png",
   "dep:reqwest",
   "dep:ring",
-  "dep:rpassword",
   "dep:rustls",
   "dep:semver",
   "dep:shell-words",
   "dep:sqlx",
-  "dep:tar",
   "dep:tokio-util",
   "dep:toml",
   "dep:tree-sitter",
@@ -68,11 +66,9 @@ machine-host = [
   "dep:notify",
   "dep:reqwest",
   "dep:ring",
-  "dep:rpassword",
   "dep:rustls",
   "dep:semver",
   "dep:shell-words",
-  "dep:tar",
   "dep:toml",
   "dep:url",
   "cowboy-wire/machine-host",
@@ -91,11 +87,6 @@ code-adapter = [
   "dep:tree-sitter-tags",
   "dep:tree-sitter-typescript",
 ]
-
-[[bin]]
-name = "cowboy"
-path = "src/main.rs"
-test = false
 
 [[bin]]
 name = "cowboy-acp-worker"
@@ -145,7 +136,6 @@ sha2 = "0.10"
 url = { version = "2", optional = true }
 uuid = { version = "1", default-features = false, features = ["std", "v4"] }
 flate2 = { version = "1", optional = true }
-tar = { version = "0.4", optional = true }
 # parking_lot Mutex: non-poisoning. A panic inside a critical section drops the
 # guard and frees the lock instead of poisoning it, which would otherwise make
 # every other task's lock-acquire panic too — a daemon-wide cascade. Hub holds
@@ -163,7 +153,6 @@ web-push-native = { version = "0.5", default-features = false, optional = true }
 p256 = { version = "0.13", features = ["ecdsa", "pem", "pkcs8"], optional = true }
 ring = { version = "0.17", optional = true }
 rand = "0.8"
-rpassword = { version = "=7.5.4", optional = true }
 cowboy-provider-sdk = { version = "=3.7.0", path = "components/provider-sdk", optional = true }
 cowboy-wire = { version = "0.1.0", path = "components/wire", optional = true }
 cowboy-store = { version = "0.1.0", path = "components/store", default-features = false, optional = true }

@@ -22,8 +22,6 @@ pub mod account_sandbox;
 #[cfg(feature = "full")]
 pub mod acp;
 #[cfg(feature = "full")]
-pub mod acp_bridge;
-#[cfg(feature = "full")]
 pub mod acp_memory;
 #[cfg(feature = "full")]
 pub use cowboy_store::admin;
@@ -43,12 +41,8 @@ pub mod browser_device;
 pub mod cgroup;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod claude_shell;
-#[cfg(any(feature = "full", feature = "machine-host"))]
-pub mod cli;
 #[cfg(feature = "full")]
 pub use cowboy_store::client_auth;
-#[cfg(feature = "full")]
-pub mod client_auth_client;
 #[cfg(any(feature = "full", feature = "code-adapter"))]
 pub mod code_adapter;
 #[cfg(any(feature = "full", feature = "machine-host"))]
@@ -117,14 +111,10 @@ pub mod local_operator;
 pub mod logs;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub use cowboy_wire::machine_auth;
-#[cfg(feature = "machine-host")]
-pub mod machine_components;
 #[cfg(feature = "full")]
 pub mod machine_control;
 #[cfg(feature = "full")]
 pub mod machine_convergence;
-#[cfg(any(feature = "full", feature = "machine-host"))]
-pub mod machine_install;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod machine_lanes;
 #[cfg(any(feature = "full", feature = "machine-host"))]
@@ -187,8 +177,6 @@ pub use cowboy_store::plugin_storage;
 #[cfg(feature = "full")]
 pub use cowboy_store::product_auth;
 #[cfg(feature = "full")]
-pub mod product_cli;
-#[cfg(feature = "full")]
 pub mod project_placement;
 #[cfg(feature = "full")]
 pub use cowboy_store::prompt_origin;
@@ -208,8 +196,6 @@ pub mod provider_catalog;
 pub mod provider_info;
 #[cfg(feature = "full")]
 pub use cowboy_store::provider_service;
-#[cfg(feature = "machine-host")]
-pub mod provider_usage_spool;
 #[cfg(feature = "full")]
 pub mod remote_runtime;
 #[cfg(feature = "full")]

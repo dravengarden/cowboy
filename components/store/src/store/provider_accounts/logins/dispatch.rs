@@ -10,14 +10,33 @@ impl Store {
     /// Only the fresh claimant may call this once. The synchronous callback
     /// must check the live connection and must not await or reenter Store.
     /// A commit error after the callback is an unknown outcome, never retry-send.
-    pub async fn with_provider_login_dispatch<T>(
+    pub async fn with_provider_login_dispatch<T: Send>(
         &self,
         owner: &str,
         operation: &str,
         claim: &Claim,
         scope: &DispatchScope,
-        action: impl FnOnce() -> Result<T>,
+        action: impl FnOnce() -> Result<T> + Send,
     ) -> Result<T> {
+        let mut action = Some(action);
+        let mut out: Option<T> = None;
+        let mut run = || {
+            out = Some(action.take().expect("action invoked once")()?);
+            Ok(())
+        };
+        self.with_provider_login_dispatch_inner(owner, operation, claim, scope, &mut run)
+            .await?;
+        Ok(out.expect("with_provider_login_dispatch produced output"))
+    }
+
+    async fn with_provider_login_dispatch_inner(
+        &self,
+        owner: &str,
+        operation: &str,
+        claim: &Claim,
+        scope: &DispatchScope,
+        action: &mut (dyn FnMut() -> Result<()> + Send),
+    ) -> Result<()> {
         anyhow::ensure!(claim.fresh, "login_dispatch_not_fresh");
         macro_rules! dispatch { ($db:expr, $revoked:literal) => {{
             let mut tx = $db.pool.begin().await?;
@@ -49,13 +68,13 @@ impl Store {
             current.dispatch_registry_revision = Some(scope.registry_revision);
             sqlx::query("UPDATE provider_login_operations SET value=$3 WHERE owner_user_id=$1 AND operation_id=$2")
                 .bind(owner).bind(operation).bind(serde_json::to_string(&current)?).execute(&mut *tx).await?;
-            let result = action()?;
+            action()?;
             tx.commit().await?;
-            result
         }}; }
-        Ok(match &self.backend {
+        match &self.backend {
             StorageBackend::Postgres(db) => dispatch!(db, "revoked_at"),
             StorageBackend::Sqlite(db) => dispatch!(db, "revoked_at_ms"),
-        })
+        }
+        Ok(())
     }
 }

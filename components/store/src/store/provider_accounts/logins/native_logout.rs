@@ -17,12 +17,12 @@ impl Store {
     /// proposal has no outcome yet; the callback must return the response
     /// future without polling it. Recorded failure or confirmed cleanup
     /// suppresses redispatch; success alone still permits scoped cleanup.
-    pub async fn with_native_logout_dispatch<T>(
+    pub async fn with_native_logout_dispatch<T: Send>(
         &self,
         owner: &str,
         login_operation: &str,
         proposal: &Completion,
-        dispatch: impl FnOnce() -> Result<T>,
+        dispatch: impl FnOnce() -> Result<T> + Send,
     ) -> Result<Option<T>> {
         ensure!(
             proposal.observation.succeeded.is_none()
@@ -46,7 +46,7 @@ impl Store {
         owner: &str,
         login_operation: &str,
         completion: &Completion,
-        connection_is_current: impl FnOnce() -> bool,
+        connection_is_current: impl FnOnce() -> bool + Send,
     ) -> Result<Receipt> {
         self.native_logout_admission(owner, login_operation, completion, true, || {
             ensure!(connection_is_current(), "machine_connection_changed");
@@ -56,14 +56,34 @@ impl Store {
         .map(|(receipt, ())| receipt)
     }
 
-    async fn native_logout_admission<T: Default>(
+    async fn native_logout_admission<T: Default + Send>(
         &self,
         owner: &str,
         login_operation: &str,
         completion: &Completion,
         record: bool,
-        action: impl FnOnce() -> Result<T>,
+        action: impl FnOnce() -> Result<T> + Send,
     ) -> Result<(Receipt, T)> {
+        let mut action = Some(action);
+        let mut out: Option<T> = None;
+        let mut run = || {
+            out = Some(action.take().expect("action invoked once")()?);
+            Ok(())
+        };
+        let receipt = self
+            .native_logout_admission_inner(owner, login_operation, completion, record, &mut run)
+            .await?;
+        Ok((receipt, out.unwrap_or_default()))
+    }
+
+    async fn native_logout_admission_inner(
+        &self,
+        owner: &str,
+        login_operation: &str,
+        completion: &Completion,
+        record: bool,
+        action: &mut (dyn FnMut() -> Result<()> + Send),
+    ) -> Result<Receipt> {
         let scope = &completion.observation.request;
         ensure!(
             !scope.account_id.is_default()
@@ -101,7 +121,7 @@ impl Store {
                 ensure!(old == &expected, "native_logout_conflict");
                 if !cleanup_progress && (record || !cleanup_pending) {
                     tx.commit().await?;
-                    return Ok((login, T::default()));
+                    return Ok(login);
                 }
             }
             ensure!(login.input.account_id == scope.account_id && login.provider_id == scope.provider_id
@@ -135,14 +155,14 @@ impl Store {
             let key: Option<String> = sqlx::query_scalar("SELECT encryption_public_key FROM machines WHERE id=$1")
                 .bind(&completion.machine_id).fetch_one(&mut *tx).await?;
             ensure!(key.is_some_and(|key| crate::digest::hex_sha256(key.as_bytes()) == completion.recipient_fingerprint), "machine_enrollment_changed");
-            let output = action()?;
+            action()?;
             if record {
                 login.native_logout = Some(completion.clone());
                 sqlx::query("UPDATE provider_login_operations SET value=$3 WHERE owner_user_id=$1 AND operation_id=$2")
                     .bind(owner).bind(login_operation).bind(serde_json::to_string(&login)?).execute(&mut *tx).await?;
             }
             tx.commit().await?;
-            (login, output)
+            login
         }}; }
         Ok(match &self.backend {
             StorageBackend::Postgres(db) => record!(db, "revoked_at"),

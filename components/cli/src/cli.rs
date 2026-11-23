@@ -515,33 +515,28 @@ pub fn mask_secret(value: &str) -> String {
 }
 
 #[cfg(feature = "full")]
-impl ServeArgs {
-    #[must_use]
-    pub fn database_url(&self) -> Option<&str> {
-        self.database_url
-            .as_deref()
-            .or(self.postgres_url.as_deref())
-    }
-
-    /// Hermetic argument fixture without inherited deployment configuration.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn test_plugin_check(data_dir: &Path) -> Self {
-        let cli = Cli::try_parse_from(["cowboy", "serve", "--check-plugin-hosts"]).unwrap();
-        let Command::Serve(mut args) = cli.command else {
-            panic!("serve command expected");
-        };
-        data_dir.clone_into(&mut args.data_dir);
-        args.plugin_catalog_dir = None;
-        args.plugin_host_config = None;
-        args.core_security_config = None;
-        args.auth_config = None;
-        args.cardea_oidc_config = None;
-        args.database_url = None;
-        args.postgres_url = None;
-        args.telemetry_writer_policy = None;
-        args.telemetry_managed_export_policy = None;
-        args.telemetry_plugin_config = None;
-        args.product_auth_enabled = false;
-        *args
-    }
+#[cfg(all(test, feature = "full"))]
+#[test]
+fn background_and_legacy_cli_modes_are_mutually_exclusive() {
+    use clap::Parser as _;
+    assert!(
+        Cli::try_parse_from([
+            "cowboy",
+            "serve",
+            "--telemetry-plugin-config",
+            "/private/legacy.json",
+            "--telemetry-managed-export-policy",
+            "/private/managed.json",
+        ])
+        .is_err()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "cowboy",
+            "serve",
+            "--telemetry-managed-export-policy",
+            "/private/managed.json",
+        ])
+        .is_ok()
+    );
 }

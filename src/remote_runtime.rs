@@ -54,7 +54,7 @@ const BROKER_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
 const BROKER_CONNECTION_STABLE_AFTER: Duration = Duration::from_secs(10);
 const BROKER_FRAME_SEND_TIMEOUT: Duration = Duration::from_secs(15);
 
-async fn write_broker_frame<W: tokio::io::AsyncWrite + Unpin>(
+async fn write_broker_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
     writer: &mut W,
     frame: &Frame,
 ) -> Result<()> {
@@ -840,7 +840,7 @@ impl RemoteRuntime {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub async fn send_native_test<W: tokio::io::AsyncWrite + Unpin>(
+    pub async fn send_native_test<W: tokio::io::AsyncWrite + Unpin + Send>(
         &self,
         writer: &mut W,
         command: CoreCommand,
@@ -1778,7 +1778,7 @@ async fn connected(
     }
 }
 
-async fn send_pending<W: tokio::io::AsyncWrite + Unpin>(
+async fn send_pending<W: tokio::io::AsyncWrite + Unpin + Send>(
     shared: &Shared,
     writer: &mut W,
 ) -> Result<()> {
@@ -1946,7 +1946,7 @@ fn command_supported(shared: &Shared, command: &CoreCommand) -> bool {
     }
 }
 
-async fn send_declarations<W: tokio::io::AsyncWrite + Unpin>(
+async fn send_declarations<W: tokio::io::AsyncWrite + Unpin + Send>(
     shared: &Shared,
     writer: &mut W,
 ) -> Result<()> {
@@ -2052,7 +2052,7 @@ fn reject_foreign_frame(shared: &Shared, session_id: &str, frame: &str) {
 use crate::subagent_transcripts::divert;
 
 #[allow(clippy::too_many_lines)] // One exhaustive wire-frame dispatch keeps broker ordering visible.
-async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
+async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
     shared: &Shared,
     frame: Frame,
     writer: &mut W,

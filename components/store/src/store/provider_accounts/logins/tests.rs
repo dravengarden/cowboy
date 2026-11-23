@@ -243,14 +243,14 @@ async fn assert_native_logout_dispatch(
     proposal.observation.succeeded = None;
     proposal.observation.profile_cleaned = false;
     proposal.observation.process_trees_exited = false;
-    let called = std::cell::Cell::new(false);
+    let called = std::sync::atomic::AtomicBool::new(false);
     let result = store
         .with_native_logout_dispatch("login-owner", "logout-login", &proposal, || {
-            called.set(true);
+            called.store(true, std::sync::atomic::Ordering::Relaxed);
             Ok(42)
         })
         .await;
-    assert_eq!(called.get(), admitted);
+    assert_eq!(called.load(std::sync::atomic::Ordering::Relaxed), admitted);
     if admitted {
         assert_eq!(result.unwrap(), Some(42));
     } else {
@@ -331,15 +331,15 @@ async fn fresh_dispatch_contract(
         registry_revision: revision,
         recipient_fingerprint: crate::digest::hex_sha256(key.as_bytes()),
     };
-    let calls = std::cell::Cell::new(0);
+    let calls = std::sync::atomic::AtomicUsize::new(0);
     store
         .with_provider_login_dispatch("login-owner", "bind", claim, &dispatch_scope, || {
-            calls.set(calls.get() + 1);
+            calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok(())
         })
         .await
         .unwrap();
-    assert_eq!(calls.get(), 1);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
     let persisted = store
         .provider_login_receipt("login-owner", "bind")
         .await

@@ -61,7 +61,6 @@ pub use sha2::{Digest as _, Sha256};
 pub use agent_client_protocol::schema::v1::ContentBlock;
 
 pub use crate::acp::AgentCommand;
-pub use crate::cli::ServeArgs;
 pub use crate::core::{
     CodeReadScope, CommandOutcome, DispatchReq, Envelope, Event, FanoutFrame, Hub, Inbound,
     Outbound, PersistenceHealth, RestoredSession, SessionOrigin, Status, StoreReceiver, StoreSink,
@@ -76,6 +75,7 @@ pub use crate::product_auth::ProductPrincipal;
 pub use crate::remote_runtime::{RemoteBootstrap, RemoteRuntime};
 pub use crate::runtime::RuntimeHealth;
 pub use crate::runtime_router::RuntimeRouter;
+pub use crate::serve_args::ServeArgs;
 pub use crate::session_folders::{FolderActor, project_folders_value};
 pub use crate::store::Store;
 pub use crate::supervisor::Supervisor;

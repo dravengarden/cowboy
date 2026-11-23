@@ -66,6 +66,7 @@ tempfile = { version = "3", optional = true }
 # Helix / Zed use). See src/files.rs.
 
 [dev-dependencies]
+cowboy-cli = { version = "0.1.0", path = "../cli" }
 cowboy = { version = "0.1.0", path = "../..", features = ["test-support"] }
 cowboy-server-auth = { version = "0.1.0", path = "../server-auth", features = ["test-support"] }
 cowboy-server-telemetry = { version = "0.1.0", path = "../server-telemetry", features = ["test-support"] }

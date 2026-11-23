@@ -11,7 +11,7 @@
 # Directories are Cargo flags, never CARGO_* variables: sccache hashes those
 # into every crate's key, so a checkout path there makes every key unique to
 # the checkout and no other worktree ever hits.
-rust_test_args := "-p cowboy -p cowboy-store -p cowboy-server-auth -p cowboy-server-accounts -p cowboy-server-code -p cowboy-server-code-buffers -p cowboy-server-plugins -p cowboy-server-runtime -p cowboy-server-agent-api -p cowboy-server-telemetry -p cowboy-server -p cowboy-machine -p cowboy-integration-tests -p cowboy-provider-sdk -p cowboy-plugin-sdk --all-targets --all-features --locked --target-dir " + justfile_directory() + "/target/test-graph"
+rust_test_args := "-p cowboy -p cowboy-cli -p cowboy-store -p cowboy-server-auth -p cowboy-server-accounts -p cowboy-server-code -p cowboy-server-code-buffers -p cowboy-server-plugins -p cowboy-server-runtime -p cowboy-server-agent-api -p cowboy-server-telemetry -p cowboy-server -p cowboy-machine -p cowboy-integration-tests -p cowboy-provider-sdk -p cowboy-plugin-sdk --all-targets --all-features --locked --target-dir " + justfile_directory() + "/target/test-graph"
 # How every recipe runs that graph. The invoking Codex Plugin exports its own
 # signed package path; Cowboy's unit tests exercise embedded fixtures and must
 # not inherit that runtime. The graph always keeps rustc incremental state,
@@ -33,7 +33,7 @@ rust_test_env := "env -u COWBOY_PROVIDER_PACKAGE_PATH -u CARGO_INCREMENTAL"
 rust_slice_env := "env -u COWBOY_PROVIDER_PACKAGE_PATH -u CARGO_INCREMENTAL"
 rust_slice_profile := "gate-slices"
 rust_wire_args := "--locked -p cowboy-wire --features full,machine-host --all-targets"
-rust_machine_args := "--locked --no-default-features --features machine-host -p cowboy -p cowboy-store -p cowboy-machine --lib"
+rust_machine_args := "--locked --no-default-features --features machine-host -p cowboy -p cowboy-cli -p cowboy-store -p cowboy-machine --lib"
 rust_code_adapter_args := "--locked --no-default-features --features code-adapter --lib"
 
 default:
@@ -258,7 +258,7 @@ build: build-web
 
 # Build the user-scoped Machine bootstrap commands on macOS or Linux.
 build-machine-bootstrap:
-    cargo build --release --locked --no-default-features --features machine-host -p cowboy --bin cowboy -p cowboy-machine --bin cowboy-machine --bin cowboy-machine-install
+    cargo build --release --locked --no-default-features --features machine-host -p cowboy-cli --bin cowboy -p cowboy-machine --bin cowboy-machine --bin cowboy-machine-install
     cargo build --release --locked --no-default-features --features code-adapter --bin cowboy-code-adapter
     cargo build --release --locked --bin cowboy-acp-worker
 
@@ -986,7 +986,7 @@ release-sources-check:
       (cd "$tree" && cargo check --target-dir "$target" --config "build.build-dir=\"$target\"" --locked "$@")
     }
     check cowboy-machine-src "${built_sources[0]}" --no-default-features --features machine-host \
-      -p cowboy --bin cowboy -p cowboy-machine \
+      -p cowboy-cli --bin cowboy -p cowboy-machine \
       --bin cowboy-machine --bin cowboy-machine-install --bin cowboy-execution-host
     check cowboy-code-adapter-src "${built_sources[1]}" --no-default-features --features code-adapter \
       --bin cowboy-code-adapter
@@ -1021,6 +1021,9 @@ test-graph-build:
     tmp="target/test-graph/artifacts.$$.json"
     trap 'rm -f "$tmp"' EXIT
     {{rust_test_env}} cargo test {{rust_test_args}} --no-run --message-format=json-render-diagnostics > "$tmp"
+    # cowboy-cli has no integration tests, so `cargo test --no-run` does not emit
+    # the non-test `cowboy` executable needed by composition-check and logs-conformance.
+    {{rust_test_env}} cargo build --locked --all-features -p cowboy-cli --bin cowboy --target-dir "{{justfile_directory()}}/target/test-graph" --message-format=json-render-diagnostics >> "$tmp"
     mv -f "$tmp" target/test-graph/artifacts.json
 
 # Compiles the test slices `test-rust` runs, so `check` can build them beside

@@ -99,6 +99,25 @@
         ./components/machine/src/bin/cowboy-machine-install.rs
         ./components/machine/src/bin/cowboy-execution-host.rs
       ];
+      cli-files = [
+        ./components/cli/Cargo.toml
+        ./components/cli/src
+      ];
+      cli-machine-files = [
+        ./components/cli/Cargo.toml
+        ./components/cli/src/lib.rs
+        ./components/cli/src/main.rs
+        ./components/cli/src/cli.rs
+        ./components/cli/src/machine_components.rs
+        ./components/cli/src/machine_components
+        ./components/cli/src/machine_install.rs
+        ./components/cli/src/machine_install
+      ];
+      cli-stub-files = [
+        ./components/cli/Cargo.toml
+        ./components/cli/src/lib.rs
+        ./components/cli/src/main.rs
+      ];
       codeact-runtime-files = [
         ./components/codeact-runtime
       ];
@@ -232,7 +251,7 @@
           ./tests/fixtures/telemetry-recovery-surface.json
           ./tests/fixtures/telemetry-binding-surface.json
           ./tests/fixtures/plugin-lifecycle-history.json
-        ] ++ plugin-contract-files ++ wire-files ++ store-files ++ server-files ++ machine-files ++ integration-tests-stub-files ++ plugin-host-files);
+        ] ++ plugin-contract-files ++ wire-files ++ store-files ++ server-files ++ cli-files ++ machine-files ++ integration-tests-stub-files ++ plugin-host-files);
       };
 
       # Machine has a deliberately tiny source closure and is packaged
@@ -244,8 +263,6 @@
           ./Cargo.toml
           ./Cargo.lock
           ./src/lib.rs
-          ./src/main.rs
-          ./src/cli.rs
           ./src/config.rs
           ./src/config
           ./src/logs.rs
@@ -276,10 +293,6 @@
           ./components/store/src/managed_calls.rs
           ./components/store/src/managed_calls
           ./src/component_proof.rs
-          ./src/machine_components.rs
-          ./src/machine_components
-          ./src/machine_install.rs
-          ./src/machine_install
           ./packaging/cowboy-machine.service
           ./src/session_deletion_admission.rs
           ./src/session_deletion_admission
@@ -298,7 +311,6 @@
           ./src/provider/deepseek_cache.rs
           ./src/provider/deepseek_context.rs
           ./components/store/src/provider_behavior.rs
-          ./src/provider_usage_spool.rs
           ./src/provider_catalog.rs
           ./src/runtime_trace.rs
           ./components/store/src/session_workspace.rs
@@ -306,7 +318,7 @@
           ./src/workspace_extensions.rs
           ./src/workspace_extensions
           ./src/workspace_roots.rs
-        ] ++ plugin-contract-files ++ wire-files ++ store-stub-files ++ machine-files ++ server-stub-files ++ integration-tests-stub-files ++ [
+        ] ++ plugin-contract-files ++ wire-files ++ store-stub-files ++ cli-machine-files ++ machine-files ++ server-stub-files ++ integration-tests-stub-files ++ [
           (pkgs.lib.fileset.fileFilter (file: file.name == "host.json") ./plugins)
         ]);
       };
@@ -335,7 +347,7 @@
           # compiles the wire modules.
           ./components/wire/Cargo.toml
           ./components/wire/src/lib.rs
-        ] ++ store-lib-stub-files ++ server-stub-files ++ machine-stub-files ++ integration-tests-stub-files);
+        ] ++ store-lib-stub-files ++ cli-stub-files ++ server-stub-files ++ machine-stub-files ++ integration-tests-stub-files);
       };
 
 
@@ -593,7 +605,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-Ds3Q6R5IscCqiBD86WT3ZGSuSq8j36XI9Vv8ye5VnGA=";
+        hash = "sha256-JubqJxOfTOhKPOPv7yDiHEdxsDVd6YN+EGAJcY+YkXc=";
         preBuild = staticCratesVendorPatch + ''
           export PATH="${cardeaVendorGit}/bin:$PATH"
         '';
@@ -696,7 +708,7 @@
         src = cowboy-src;
         cargoDeps = cowboy-cargo-deps;
         cargoBuildFlags = builtins.tail (pkgs.lib.splitString " " cowboy-controller-cargo-args);
-        cargoTestFlags = [ "-p" "cowboy" "-p" "cowboy-store" "-p" "cowboy-server-accounts" "-p" "cowboy-server-auth" "-p" "cowboy-server-code" "-p" "cowboy-server-code-buffers" "-p" "cowboy-server-plugins" "-p" "cowboy-server-runtime" "-p" "cowboy-server-agent-api" "-p" "cowboy-server-telemetry" "-p" "cowboy-server" "-p" "cowboy-wire" ];
+        cargoTestFlags = [ "-p" "cowboy" "-p" "cowboy-cli" "-p" "cowboy-store" "-p" "cowboy-server-accounts" "-p" "cowboy-server-auth" "-p" "cowboy-server-code" "-p" "cowboy-server-code-buffers" "-p" "cowboy-server-plugins" "-p" "cowboy-server-runtime" "-p" "cowboy-server-agent-api" "-p" "cowboy-server-telemetry" "-p" "cowboy-server" "-p" "cowboy-wire" ];
         # cowboy-server dev-depends on cowboy-machine, which enables the
         # machine-host tests of the base crate in this build. This one runs a
         # real nested cargo build, which the sandbox (no writable toolchain
@@ -724,7 +736,7 @@
         buildInputs = [ pkgs.openssl ];
         cargoVendorDir = cowboy-crane-vendor;
         cargoExtraArgs =
-          "--locked --no-default-features --features machine-host -p cowboy --bin cowboy -p cowboy-machine --bin cowboy-machine --bin cowboy-machine-install --bin cowboy-execution-host";
+          "--locked --no-default-features --features machine-host -p cowboy-cli --bin cowboy -p cowboy-machine --bin cowboy-machine --bin cowboy-machine-install --bin cowboy-execution-host";
         doCheck = false;
       };
       cowboy-machine-deps = craneLib.buildDepsOnly (cowboy-machine-common // {
@@ -1180,7 +1192,7 @@
         test -e ${machine-src}/components/wire/src/machine_protocol/installation_revision.rs
         test -e ${machine-src}/components/store/src/provider_behavior.rs
         test -e ${machine-src}/src/provider_catalog.rs
-        test -e ${machine-src}/src/provider_usage_spool.rs
+        test -e ${machine-src}/components/machine/src/provider_usage_spool.rs
         test -e ${machine-src}/components/store/src/session_workspace.rs
         test -e ${machine-src}/components/store/src/session_workspace/storage.rs
         test -e ${machine-src}/src/durable_state.rs
@@ -1188,8 +1200,8 @@
         test -e ${machine-src}/src/session_deletion_admission.rs
         test -e ${machine-src}/src/session_deletion_admission/reader_floor.rs
         test -e ${machine-src}/src/component_proof.rs
-        test -e ${machine-src}/src/machine_install/signed_bootstrap.rs
-        test -e ${machine-src}/src/machine_install/bootstrap_probe.rs
+        test -e ${machine-src}/components/cli/src/machine_install/signed_bootstrap.rs
+        test -e ${machine-src}/components/cli/src/machine_install/bootstrap_probe.rs
         test ! -e ${cowboy}/bin/cowboy-machine
         test ! -e ${cowboy}/bin/cowboy-machine-install
         test -x ${cowboy}/bin/cowboy-codex-app-server

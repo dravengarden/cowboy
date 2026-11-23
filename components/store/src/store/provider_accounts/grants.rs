@@ -112,13 +112,31 @@ impl Store {
     /// Linearize one synchronous action against account edits and Machine
     /// revocation. Callbacks must not await or reenter the Store. Subsequent
     /// revocation still needs its own runtime cleanup; this is not a lease.
-    pub async fn with_provider_grant_admission<T>(
+    pub async fn with_provider_grant_admission<T: Send>(
         &self,
         owner: &str,
         operation: &str,
         machine: &str,
-        action: impl FnOnce(&Admission) -> Result<T>,
+        action: impl FnOnce(&Admission) -> Result<T> + Send,
     ) -> Result<T> {
+        let mut action = Some(action);
+        let mut out: Option<T> = None;
+        let mut run = |admission: &Admission| {
+            out = Some(action.take().expect("action invoked once")(admission)?);
+            Ok(())
+        };
+        self.with_provider_grant_admission_inner(owner, operation, machine, &mut run)
+            .await?;
+        Ok(out.expect("with_provider_grant_admission produced output"))
+    }
+
+    async fn with_provider_grant_admission_inner(
+        &self,
+        owner: &str,
+        operation: &str,
+        machine: &str,
+        action: &mut (dyn FnMut(&Admission) -> Result<()> + Send),
+    ) -> Result<()> {
         macro_rules! admit { ($db:expr, $revoked:literal) => {{
             let mut tx = $db.pool.begin().await?;
             let locked = sqlx::query("UPDATE provider_account_registries SET revision=revision WHERE owner_user_id=$1")
@@ -145,14 +163,14 @@ impl Store {
                     && account.provider_id == receipt.provider_id && account.available()
                     && account.identity_fingerprint.as_ref() == Some(&receipt.identity_fingerprint)),
                 "Provider grant account admission changed");
-            let result = action(&Admission { receipt, recipient })?;
+            action(&Admission { receipt, recipient })?;
             tx.commit().await?;
-            result
         }}; }
-        Ok(match &self.backend {
+        match &self.backend {
             StorageBackend::Postgres(db) => admit!(db, "revoked_at"),
             StorageBackend::Sqlite(db) => admit!(db, "revoked_at_ms"),
-        })
+        }
+        Ok(())
     }
 
     /// Recovery lookup only; this receipt never authorizes credential delivery.

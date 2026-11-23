@@ -102,7 +102,20 @@ impl Store {
         owner: &str,
         revocation: &str,
         evidence: &Evidence,
-        connection_is_current: impl FnOnce() -> bool,
+        connection_is_current: impl FnOnce() -> bool + Send,
+    ) -> Result<Evidence> {
+        let mut check = Some(connection_is_current);
+        let mut run = || check.take().expect("connection_is_current invoked once")();
+        self.record_provider_account_removal_inner(owner, revocation, evidence, &mut run)
+            .await
+    }
+
+    async fn record_provider_account_removal_inner(
+        &self,
+        owner: &str,
+        revocation: &str,
+        evidence: &Evidence,
+        connection_is_current: &mut (dyn FnMut() -> bool + Send),
     ) -> Result<Evidence> {
         macro_rules! record { ($db:expr, $revoked:literal) => {{
             let mut tx = $db.pool.begin().await?;

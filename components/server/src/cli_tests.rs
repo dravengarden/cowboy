@@ -1,6 +1,6 @@
 use clap::Parser as _;
 
-use crate::cli::{Cli, Command, mask_secret};
+use cowboy_cli::cli::{Cli, Command, mask_secret};
 
 #[test]
 #[cfg(unix)]
@@ -105,7 +105,7 @@ fn catalog_inspection_and_host_preflight_are_distinct_commands() {
 async fn catalog_inspection_does_not_validate_host_policy_or_create_service_state() {
     let root = std::env::temp_dir().join(format!("cowboy-cli-catalog-{}", uuid::Uuid::new_v4()));
     for (catalog_only, hosts) in [(true, false), (false, true), (false, false)] {
-        let mut args = crate::cli::ServeArgs::test_plugin_check(&root);
+        let mut args = crate::serve_args::ServeArgs::test_plugin_check(&root);
         args.check_plugin_hosts = hosts;
         args.check_plugin_catalog = catalog_only;
         args.plugin_catalog_dir = Some(root.join("missing-catalog"));
@@ -136,7 +136,7 @@ async fn plugin_preflight_exits_before_service_identity_or_other_startup_effects
             .unwrap()
             .as_nanos()
     ));
-    let mut args = crate::cli::ServeArgs::test_plugin_check(&root);
+    let mut args = crate::serve_args::ServeArgs::test_plugin_check(&root);
     args.plugin_catalog_dir = Some(root.join("external"));
     // Normal startup must read this file, so success also proves the
     // diagnostic returns before unrelated component setup.
@@ -231,7 +231,7 @@ fn navigation_policy_defaults_closed_and_requires_explicit_candidate() {
     };
     assert_eq!(
         args.code_navigation_admission,
-        crate::cli::CodeNavigationAdmission::Closed
+        crate::serve_args::CodeNavigationAdmission::Closed
     );
     let Command::Serve(args) = Cli::try_parse_from([
         "cowboy",
@@ -246,7 +246,7 @@ fn navigation_policy_defaults_closed_and_requires_explicit_candidate() {
     };
     assert_eq!(
         args.code_navigation_admission,
-        crate::cli::CodeNavigationAdmission::Candidate
+        crate::serve_args::CodeNavigationAdmission::Candidate
     );
     for value in ["true", "enabled", "21"] {
         assert!(

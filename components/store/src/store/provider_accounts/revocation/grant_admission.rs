@@ -8,12 +8,12 @@ impl Store {
     /// Serialize local cleanup with account edits and grant promotion. The
     /// callback must not await or reenter Store. A commit failure after the
     /// callback is an unknown outcome; retry must inspect the same vault.
-    pub async fn with_provider_grant_revocation<T>(
+    pub async fn with_provider_grant_revocation<T: Send>(
         &self,
         owner: &str,
         operation: &str,
         grant_operation: &str,
-        cleanup: impl FnOnce(&grants::Receipt) -> Result<T>,
+        cleanup: impl FnOnce(&grants::Receipt) -> Result<T> + Send,
     ) -> Result<T> {
         self.with_grant_cleanup(
             owner,
@@ -30,7 +30,7 @@ impl Store {
         owner: &str,
         operation: &str,
         grant_operation: &str,
-        cleanup: impl FnOnce(&grants::Receipt) -> Result<LocalWipe>,
+        cleanup: impl FnOnce(&grants::Receipt) -> Result<LocalWipe> + Send,
     ) -> Result<LocalWipe> {
         self.with_grant_cleanup(
             owner,
@@ -45,14 +45,52 @@ impl Store {
         .await
     }
 
-    async fn with_grant_cleanup<T>(
+    async fn with_grant_cleanup<T: Send>(
         &self,
         owner: &str,
         operation: &str,
         grant_operation: &str,
-        replay: impl FnOnce(&LocalWipe) -> Option<T>,
-        cleanup: impl FnOnce(&grants::Receipt) -> Result<(T, Option<LocalWipe>)>,
+        replay: impl FnOnce(&LocalWipe) -> Option<T> + Send,
+        cleanup: impl FnOnce(&grants::Receipt) -> Result<(T, Option<LocalWipe>)> + Send,
     ) -> Result<T> {
+        let mut replay = Some(replay);
+        let mut cleanup = Some(cleanup);
+        let mut out_replay: Option<T> = None;
+        let mut out_cleanup: Option<T> = None;
+        let mut run_replay = |evidence: &LocalWipe| {
+            if let Some(value) = replay.take().expect("replay invoked once")(evidence) {
+                out_replay = Some(value);
+                true
+            } else {
+                false
+            }
+        };
+        let mut run_cleanup = |grant: &grants::Receipt| {
+            let (value, evidence) = cleanup.take().expect("cleanup invoked once")(grant)?;
+            out_cleanup = Some(value);
+            Ok(evidence)
+        };
+        self.with_grant_cleanup_inner(
+            owner,
+            operation,
+            grant_operation,
+            &mut run_replay,
+            &mut run_cleanup,
+        )
+        .await?;
+        Ok(out_replay
+            .or(out_cleanup)
+            .expect("with_grant_cleanup produced output"))
+    }
+
+    async fn with_grant_cleanup_inner(
+        &self,
+        owner: &str,
+        operation: &str,
+        grant_operation: &str,
+        replay: &mut (dyn FnMut(&LocalWipe) -> bool + Send),
+        cleanup: &mut (dyn FnMut(&grants::Receipt) -> Result<Option<LocalWipe>> + Send),
+    ) -> Result<()> {
         macro_rules! revoke { ($db:expr) => {{
             let mut tx = $db.pool.begin().await?;
             let locked = sqlx::query("UPDATE provider_account_registries SET revision=revision WHERE owner_user_id=$1")
@@ -75,9 +113,9 @@ impl Store {
                 && account.provider_id == grant.provider_id && account.revoking && !account.enabled), "account_not_revoking");
             ensure!(!matches!(grant.phase, grants::Phase::Prepared), "grant_cancellation_required");
             if let Some(evidence) = revocation.local_wipes.get(grant_operation)
-                && let Some(result) = replay(evidence) {
+                && replay(evidence) {
                 tx.commit().await?;
-                return Ok(result);
+                return Ok(());
             }
             let plan = revocation.revocation.as_ref().ok_or_else(|| anyhow::anyhow!("revocation_plan_missing"))?;
             for target in &plan.sessions {
@@ -95,7 +133,7 @@ impl Store {
                 let login = serde_json::from_str(&value)?;
                 validate_login_cleanup(&revocation, target, &login, operation)?;
             }
-            let (result, evidence) = cleanup(&grant)?;
+            let evidence = cleanup(&grant)?;
             if let Some(evidence) = evidence {
                 ensure!(match (&grant.phase, &evidence) {
                     (grants::Phase::Committed { generation }, LocalWipe::Wiped { generation: wiped }) =>
@@ -109,12 +147,12 @@ impl Store {
                     .bind(owner).bind(operation).bind(serde_json::to_string(&revocation)?).execute(&mut *tx).await?;
             }
             tx.commit().await?;
-            result
         }}; }
-        Ok(match &self.backend {
+        match &self.backend {
             StorageBackend::Postgres(db) => revoke!(db),
             StorageBackend::Sqlite(db) => revoke!(db),
-        })
+        }
+        Ok(())
     }
 }
 

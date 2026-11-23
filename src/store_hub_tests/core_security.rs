@@ -5,7 +5,7 @@ use cowboy_store::core_security::tests::{Fixture, fresh_round_trip, write_config
 /// Omitting both the core-security config and the database must not start an
 /// in-memory Controller, and a database alone is not enough either.
 fn preparation_refuses(fixture: Fixture) {
-    let mut args = crate::cli::ServeArgs::test_plugin_check(fixture.root.path());
+    let mut args = crate::serve_args::ServeArgs::test_plugin_check(fixture.root.path());
     assert!(
         crate::plugin_activation::prepare_controller_hosts(&args).is_err(),
         "omitting both config and DB must not start in-memory"
@@ -20,7 +20,7 @@ fn core_preflight_with_empty_catalog_needs_no_local_auth_plugin_and_writes_nothi
     let path = root.path().join("core.json");
     write_config(&path, "fresh");
     let data = root.path().join("absent-data");
-    let mut args = crate::cli::ServeArgs::test_plugin_check(&data);
+    let mut args = crate::serve_args::ServeArgs::test_plugin_check(&data);
     args.core_security_config = Some(path);
     args.database_url = Some(format!("sqlite://{}", data.join("core.sqlite").display()));
     args.product_auth_enabled = true;

@@ -246,3 +246,39 @@ pub enum CodeNavigationAdmission {
     Closed,
     Candidate,
 }
+
+impl ServeArgs {
+    #[must_use]
+    pub fn database_url(&self) -> Option<&str> {
+        self.database_url
+            .as_deref()
+            .or(self.postgres_url.as_deref())
+    }
+
+    /// Hermetic argument fixture without inherited deployment configuration.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn test_plugin_check(data_dir: &std::path::Path) -> Self {
+        use clap::Parser as _;
+        #[derive(clap::Parser)]
+        struct ServeOnly {
+            #[command(flatten)]
+            args: ServeArgs,
+        }
+        let mut args = ServeOnly::try_parse_from(["cowboy", "--check-plugin-hosts"])
+            .unwrap()
+            .args;
+        data_dir.clone_into(&mut args.data_dir);
+        args.plugin_catalog_dir = None;
+        args.plugin_host_config = None;
+        args.core_security_config = None;
+        args.auth_config = None;
+        args.cardea_oidc_config = None;
+        args.database_url = None;
+        args.postgres_url = None;
+        args.telemetry_writer_policy = None;
+        args.telemetry_managed_export_policy = None;
+        args.telemetry_plugin_config = None;
+        args.product_auth_enabled = false;
+        args
+    }
+}

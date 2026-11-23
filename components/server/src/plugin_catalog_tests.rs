@@ -1037,7 +1037,7 @@ async fn bootstrap_storage_selection_is_checked_before_database_or_state_creatio
     let passkey = publish_local_auth_fixture(&root, "passkey", false);
     let data_dir = root.join("controller");
     let args = || {
-        let mut args = crate::cli::ServeArgs::test_plugin_check(&data_dir);
+        let mut args = crate::serve_args::ServeArgs::test_plugin_check(&data_dir);
         args.plugin_catalog_dir = Some(root.join("external"));
         args.database_url = Some("postgresql://fixture@127.0.0.1:1/never-connect".to_owned());
         args
@@ -1076,7 +1076,7 @@ async fn bootstrap_storage_selection_is_checked_before_database_or_state_creatio
         fs::remove_file(root.join("external").join(format!("passkey.{extension}"))).unwrap();
     }
     let before = state_fingerprint(&root);
-    let mut args = crate::cli::ServeArgs::test_plugin_check(&data_dir);
+    let mut args = crate::serve_args::ServeArgs::test_plugin_check(&data_dir);
     args.plugin_catalog_dir = Some(root.join("external"));
     args.database_url = Some("postgresql://fixture@127.0.0.1:1/never-connect".to_owned());
     let error = crate::server::serve(args).await.unwrap_err();
@@ -1345,7 +1345,7 @@ async fn plugin_preflight_verifies_exact_releases_without_mutating_or_contacting
     publish_auth_fixture(&root, "password", "2.0.0", |_| {});
     let path = write_host_policy(&root, &[&password, &passkey]);
     let data_dir = root.join("controller");
-    let mut args = crate::cli::ServeArgs::test_plugin_check(&data_dir);
+    let mut args = crate::serve_args::ServeArgs::test_plugin_check(&data_dir);
     args.plugin_catalog_dir = Some(root.join("external"));
     args.plugin_host_config = Some(path.clone());
     args.product_auth_enabled = true;
@@ -1400,7 +1400,7 @@ async fn plugin_preflight_verifies_exact_releases_without_mutating_or_contacting
     invalid.signature = "invalid".to_owned();
     fs::write(&release_path, serde_json::to_vec(&invalid).unwrap()).unwrap();
     let before = state_fingerprint(&root);
-    let mut args = crate::cli::ServeArgs::test_plugin_check(&data_dir);
+    let mut args = crate::serve_args::ServeArgs::test_plugin_check(&data_dir);
     args.plugin_catalog_dir = Some(root.join("external"));
     args.plugin_host_config = Some(path);
     assert!(crate::plugin_activation::prepare_controller_hosts(&args).is_err());
@@ -1417,7 +1417,7 @@ async fn plugin_preflight_and_startup_reject_unready_hosts_before_creating_state
     let before = state_fingerprint(&root);
     let mut failures = Vec::new();
     for check in [true, false] {
-        let mut args = crate::cli::ServeArgs::test_plugin_check(&data_dir);
+        let mut args = crate::serve_args::ServeArgs::test_plugin_check(&data_dir);
         args.product_auth_enabled = true;
         args.plugin_host_config = Some(path.clone());
         args.check_plugin_hosts = check;
@@ -1439,11 +1439,11 @@ async fn plugin_preflight_and_startup_reject_unready_hosts_before_creating_state
     let dir = crate::plugin_dir::PluginDir::open(&data_dir).unwrap();
     dir.record_catalog_only().unwrap();
     let before = state_fingerprint(&root);
-    let args = crate::cli::ServeArgs::test_plugin_check(&data_dir);
+    let args = crate::serve_args::ServeArgs::test_plugin_check(&data_dir);
     let error = crate::server::serve(args).await.unwrap_err();
     assert!(format!("{error:#}").contains("previously activated catalog_only"));
     assert_eq!(before, state_fingerprint(&root));
-    let mut args = crate::cli::ServeArgs::test_plugin_check(&data_dir);
+    let mut args = crate::serve_args::ServeArgs::test_plugin_check(&data_dir);
     args.plugin_host_config = Some(path);
     let (catalog, _, _) = crate::plugin_activation::prepare_controller_hosts(&args).unwrap();
     let report = serde_json::to_value(catalog.host_preflight_report().unwrap()).unwrap();

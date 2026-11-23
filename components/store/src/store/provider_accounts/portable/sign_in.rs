@@ -84,9 +84,9 @@ impl Store {
         owner: &str,
         account: &ProviderAccountId,
         identity: Option<&NativeIdentity>,
-        serves: &impl Fn(&Account) -> bool,
+        serves: &(dyn Fn(&Account) -> bool + Sync),
         login: Option<&SignInLogin<'_>>,
-        precheck: impl FnOnce() -> Result<()>,
+        precheck: &mut (dyn FnMut() -> Result<()> + Send),
     ) -> Result<u64> {
         macro_rules! mark { ($db:expr, $revoked:literal) => {{
             let mut tx = $db.pool.begin().await?;
@@ -139,15 +139,45 @@ impl Store {
     /// write, returning its generation) under a fresh lock that rechecks the
     /// account, its bound identity and the login, which then records the
     /// generation. `precheck` (step 1) admits the live candidate.
-    pub async fn commit_subscription_sign_in<T>(
+    pub async fn commit_subscription_sign_in<T: Send>(
         &self,
         owner: &str,
         account: &ProviderAccountId,
         identity: &NativeIdentity,
         login: SignInLogin<'_>,
-        precheck: impl FnOnce() -> Result<()>,
-        write: impl FnOnce(u64) -> Result<(T, u64)>,
+        precheck: impl FnOnce() -> Result<()> + Send,
+        write: impl FnOnce(u64) -> Result<(T, u64)> + Send,
     ) -> Result<T> {
+        let mut precheck = Some(precheck);
+        let mut run_precheck = || precheck.take().expect("precheck invoked once")();
+        let mut write = Some(write);
+        let mut out: Option<T> = None;
+        let mut run_write = |floor| {
+            let (result, generation) = write.take().expect("write invoked once")(floor)?;
+            out = Some(result);
+            Ok(generation)
+        };
+        self.commit_subscription_sign_in_inner(
+            owner,
+            account,
+            identity,
+            login,
+            &mut run_precheck,
+            &mut run_write,
+        )
+        .await?;
+        Ok(out.expect("commit_subscription_sign_in produced output"))
+    }
+
+    async fn commit_subscription_sign_in_inner(
+        &self,
+        owner: &str,
+        account: &ProviderAccountId,
+        identity: &NativeIdentity,
+        login: SignInLogin<'_>,
+        precheck: &mut (dyn FnMut() -> Result<()> + Send),
+        write: &mut (dyn FnMut(u64) -> Result<u64> + Send),
+    ) -> Result<()> {
         let serves = |_: &Account| true;
         let floor = self
             .mark_portable(
@@ -172,16 +202,16 @@ impl Store {
             let fingerprint = identity.fingerprint(&current.provider_id).map_err(|code| anyhow::anyhow!(code))?;
             ensure!(current.portable_credentials && current.identity_fingerprint.as_ref() == Some(&fingerprint), "native_identity_mismatch");
             let mut receipt = login_admitted!(tx, $revoked, owner, account, login, None::<&Account>);
-            let (result, generation) = write(floor)?;
+            let generation = write(floor)?;
             receipt.vault_generation = Some(generation);
             sqlx::query("UPDATE provider_login_operations SET value=$1 WHERE owner_user_id=$2 AND request_id=$3")
                 .bind(serde_json::to_string(&receipt)?).bind(owner).bind(login.request_id).execute(&mut *tx).await?;
             tx.commit().await?;
-            result
         }}; }
-        Ok(match &self.backend {
+        match &self.backend {
             StorageBackend::Postgres(db) => commit!(db, "revoked_at"),
             StorageBackend::Sqlite(db) => commit!(db, "revoked_at_ms"),
-        })
+        }
+        Ok(())
     }
 }

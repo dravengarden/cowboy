@@ -393,7 +393,7 @@ async fn verified_sdk_context_obeys_native_purpose_role_aba_disabled_freeze_and_
             } else {
                 at
             };
-            let catalog = crate::cli::cardea::proposal(
+            let catalog = cowboy_cli::cli::cardea::proposal(
                 "cowboy-production",
                 "https://cowboy.example",
                 &"A".repeat(43),

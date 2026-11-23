@@ -8,9 +8,9 @@ license = "MIT"
 rust-version = "1.98.1"
 
 [features]
-full = ["cowboy/full"]
-machine-host = ["cowboy/machine-host"]
-test-support = ["cowboy/test-support"]
+full = ["cowboy/full", "cowboy-cli/full"]
+machine-host = ["cowboy/machine-host", "cowboy-cli/machine-host"]
+test-support = ["cowboy/test-support", "cowboy-cli/test-support"]
 
 [lib]
 name = "cowboy_machine"
@@ -36,6 +36,7 @@ test = false
 
 [dependencies]
 cowboy = { version = "0.1.0", path = "../..", default-features = false }
+cowboy-cli = { version = "0.1.0", path = "../cli", default-features = false }
 agent-client-protocol = { version = "3.6", features = ["unstable_end_turn_token_usage", "unstable_subagents"] }
 clap = { version = "4", features = ["derive", "env"] }
 futures = "0.3"
@@ -45,6 +46,7 @@ tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
 # the build does not compile AWS-LC alongside ring for the same TLS stack.
 reqwest = { version = "0.13", default-features = false, features = ["form", "json", "query", "rustls-no-provider", "stream"] }
 # GHSA-2mjx-qc3c-rqvc: older 0.23 handshakes can cross encryption boundaries.
+rusqlite = { version = "0.32", features = ["bundled"] }
 rustls = { version = "0.23.45", default-features = false, features = ["ring"] }
 chrono = { version = "0.4", features = ["serde"] }
 axum = { version = "0.8", features = ["ws"] }
