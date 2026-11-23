@@ -7,12 +7,17 @@ use super::{
 /// The session accepts runtime projection and `worker` belongs to its current
 /// context (`Hub::admit_runtime_epoch`): Clear fences the epochs it discarded.
 pub(super) fn admits_worker(shared: &Shared, worker: &WorkerSnapshot) -> bool {
-    shared.hub.accepts_runtime_projection(&worker.session_id)
-        && shared.hub.admit_runtime_epoch(
-            &worker.session_id,
-            &worker.worker_epoch,
-            worker.agent_session_id.as_deref(),
-        )
+    shared.hub.accepts_runtime_projection(&worker.session_id) && current_context(shared, worker)
+}
+
+/// `worker` belongs to the session's current context; one of a cleared context
+/// owns nothing, not even the worker cache entry.
+pub(super) fn current_context(shared: &Shared, worker: &WorkerSnapshot) -> bool {
+    shared.hub.admit_runtime_epoch(
+        &worker.session_id,
+        &worker.worker_epoch,
+        worker.agent_session_id.as_deref(),
+    )
 }
 
 /// [`admits_worker`] for one streamed event of `epoch`.

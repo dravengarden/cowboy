@@ -2425,7 +2425,7 @@ async fn adopt_snapshot(shared: &Shared, worker: &WorkerSnapshot) {
 fn project_snapshot(shared: &Shared, worker: &WorkerSnapshot) {
     // A worker of a cleared context owns nothing: no cache entry, launch or notice.
     let _projection = shared.hub.runtime_projection_guard();
-    if !snapshot::admits_worker(shared, worker) {
+    if !snapshot::current_context(shared, worker) {
         return;
     }
     update_declaration(shared, worker);
@@ -2461,7 +2461,7 @@ async fn merge_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
         }
         native_admission::snapshot(shared, &worker, || {
             let _projection = shared.hub.runtime_projection_guard();
-            if !snapshot::admits_worker(shared, &worker) {
+            if !snapshot::current_context(shared, &worker) {
                 return;
             }
             update_declaration(shared, &worker);
