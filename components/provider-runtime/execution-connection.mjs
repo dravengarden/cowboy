@@ -157,7 +157,7 @@ export class Connection {
    * reads whose outcome does not matter.
    */
   request(method, params, { timeoutMs } = {}) {
-    if (this.closed || this.stopped) {
+    if (this.closed || this.stopped || this.draining) {
       return Promise.reject(new Error("Execution unavailable; no replay"));
     }
     // Abandoned requests may still run on the executor, so they count.
@@ -200,6 +200,8 @@ export class Connection {
    * count: nobody reads their reply.
    */
   async idle(ms) {
+    // From now on nothing new is sent: only replies already owed drain.
+    this.draining = true;
     const deadline = Date.now() + ms;
     while (this.pending.size > 0 && !this.closed) {
       if (Date.now() >= deadline) return false;

@@ -308,7 +308,6 @@ test("at exit the connection waits for in-flight requests, bounded, and the faca
   const ran = await call("RunCommand", { command: "sleep 30", wait_seconds: 0 });
   assert.match(ran.text, /^Still running/);
   const connection = facade.connection;
-  assert.equal(await connection.idle(10), true, "idle: immediate");
   hold = 600;
   const process = [...facade.session("s1").commands.values()][0];
   const read = facade.read(process, 0, { lostIsUncertain: false });
@@ -317,6 +316,11 @@ test("at exit the connection waits for in-flight requests, bounded, and the faca
   assert.equal(await connection.idle(50), false, "a held reply bounds the wait");
   assert.equal(await connection.idle(5000), true, "then drains once answered");
   await read;
+  // Draining: nothing new is sent, only replies already owed arrive.
+  await assert.rejects(
+    connection.call("fs/getMetadata", { path: "file:///" }),
+    /Execution unavailable/,
+  );
   // Quiesced: the command's expiry starts no stop or read.
   facade.quiesce();
   const before = endpoint.calls.length;

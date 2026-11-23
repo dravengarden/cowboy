@@ -26,6 +26,16 @@ pub(super) struct Done {
 }
 
 impl Done {
+    /// Whether the agent side acts on this reply's result.
+    pub fn carries_result(&self) -> bool {
+        self.carries_result
+    }
+
+    /// The request's method.
+    pub fn method(&self) -> &str {
+        &self.method
+    }
+
     /// The reply frame for the agent side.
     pub fn frame(&self) -> Result<String> {
         let mut reply = self.reply.clone();
@@ -60,11 +70,17 @@ impl Relays {
         self.pending
     }
 
-    /// Relay one request on its own task.
-    pub fn spawn(&mut self, id: Value, method: String, params: Value) {
+    /// Relay one request on its own task, counted by `in_flight` until its
+    /// reply was handled.
+    pub fn spawn(
+        &mut self,
+        id: Value,
+        method: String,
+        params: Value,
+        in_flight: crate::account_sandbox::RelayGuard,
+    ) {
         let (client, sender) = (Arc::clone(&self.client), self.sender.clone());
         self.pending += 1;
-        let in_flight = self.client.relays.enter();
         tokio::spawn(async move {
             let carries_result = client.carries_result(&method, &params);
             let reply = client.relay(method.clone(), params).await;

@@ -278,10 +278,11 @@ Proxy half (Antigravity Plugin):
 
 - At exit, `facade.quiesce()` stops every command's expiry timer and makes
   expiry and turn cleanup start no new stop or read.
-- `Connection.idle(10 s)` then waits until no request awaits its reply, and
-  only then does the proxy close the connection. A reply that arrived resolved
-  its facade call, so receipt is proven on the facade side, not just a socket
-  write.
+- `Connection.idle(10 s)` then admits no new request at the connection
+  boundary, waits until no request awaits its reply, and only then does the
+  proxy close the connection. A reply that arrived resolved its facade call.
+- A closed ACP output pipe (the worker closed it first) no longer ends the
+  proxy before the drain: late writes are dropped.
 
 Worker half (worker release):
 
@@ -289,12 +290,20 @@ Worker half (worker release):
   `Relays::spawn` until the reply is written or recorded undelivered. It
   travels in `ExecutionBridge`, so no module edge is added.
 - `SandboxUnit::stop` first enters the drain state. From then on the endpoint
-  relays only `process/read` and `process/terminate`, and refuses everything
-  else, including `process/write` and `process/signal`, before forwarding.
-  It then waits up to 10 s for the count to reach zero, and only then asks
-  the daemon to stop the unit.
-- At the bound the unit is stopped as today. A reply cut off then is recorded
-  undelivered and parks the session (fail closed).
+  relays only `process/read`, `process/terminate` and the unit's
+  `cowboy/uncertainEffect` report (recorded, never forwarded). It refuses
+  everything else, including `process/write` and `process/signal`, before
+  forwarding. Admission and counting are one step (`RelayQuiet::try_enter`
+  counts first, then checks the drain), so a stop that saw zero after
+  raising the drain cannot miss a later request.
+- It then waits, within 10 s overall, for the count to reach zero and then
+  for the unit to exit on its own. The proxy exits only after its own drain,
+  so that exit proves every reply was read.
+- If the unit must be stopped first (bound reached), any result-carrying
+  reply written during the drain may be unread, so it is recorded as an
+  uncertain effect (fail closed). A reply cut off in flight is recorded
+  undelivered as before.
+- A replacement unit (initialize retry) starts with the drain state reset.
 
 Scope and residuals:
 
@@ -308,6 +317,8 @@ Scope and residuals:
   relay accounting removes it. That is an open item.
 - The count is per execution client. After an initialize retry, a new unit
   can wait on an old unit's relays, which only delays it, bounded.
+- The Antigravity Plugin's owned-source integrity must be refreshed by the
+  component release for these bytes.
 - A cleanup read admitted after the count reached zero but before the stop
   can still be cut off, and parks the session.
 

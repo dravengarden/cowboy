@@ -1154,6 +1154,7 @@ async fn a_relay_counts_in_flight_until_its_reply_is_handled() {
         json!(1),
         "fs/readFile".into(),
         json!({"path": "file:///target/a"}),
+        quiet.try_enter("fs/readFile").unwrap(),
     );
     eventually(|| !target.held.lock().is_empty()).await;
     assert_eq!(quiet.in_flight(), 1);
@@ -1187,6 +1188,7 @@ async fn a_relay_whose_socket_closed_counts_until_recorded_undelivered() {
         json!(1),
         "process/terminate".into(),
         json!({"processId": "p1"}),
+        quiet.try_enter("process/terminate").unwrap(),
     );
     eventually(|| !target.held.lock().is_empty()).await;
     // The unit's connection ends with the stop in flight.
@@ -1203,11 +1205,17 @@ async fn a_relay_whose_socket_closed_counts_until_recorded_undelivered() {
 
 #[test]
 fn a_draining_unit_relays_only_cleanup() {
-    let quiet = crate::account_sandbox::RelayQuiet::default();
-    assert!(quiet.admits("fs/writeFile"));
+    let quiet = Arc::new(crate::account_sandbox::RelayQuiet::default());
+    assert!(quiet.try_enter("fs/writeFile").is_some());
+    assert_eq!(quiet.in_flight(), 0, "a dropped guard leaves no count");
     quiet.begin_drain();
-    assert!(quiet.admits("process/read"));
-    assert!(quiet.admits("process/terminate"));
+    for method in [
+        "process/read",
+        "process/terminate",
+        "cowboy/uncertainEffect",
+    ] {
+        assert!(quiet.try_enter(method).is_some(), "{method}");
+    }
     for method in [
         "fs/writeFile",
         "process/start",
@@ -1215,6 +1223,30 @@ fn a_draining_unit_relays_only_cleanup() {
         "process/signal",
         "fs/readFile",
     ] {
-        assert!(!quiet.admits(method), "{method}");
+        assert!(quiet.try_enter(method).is_none(), "{method}");
     }
+    assert_eq!(quiet.in_flight(), 0, "a refused entry leaves no count");
+    // A replacement unit relays everything again.
+    quiet.end_drain();
+    assert!(quiet.try_enter("fs/writeFile").is_some());
+}
+
+#[test]
+fn a_forced_stop_records_a_reply_written_while_draining_as_unknown() {
+    let quiet = Arc::new(crate::account_sandbox::RelayQuiet::default());
+    let recorded = Arc::new(Mutex::new(Vec::<String>::new()));
+    let sink = Arc::clone(&recorded);
+    quiet.set_unreceived(Box::new(move |method| sink.lock().push(method.to_owned())));
+    // Written before the drain: the proxy read it as usual.
+    quiet.written("process/read");
+    quiet.begin_drain();
+    quiet.written("process/terminate");
+    quiet.forced();
+    assert_eq!(*recorded.lock(), ["process/terminate"]);
+    // A unit that exited on its own proved receipt: nothing to record.
+    quiet.begin_drain();
+    quiet.written("process/terminate");
+    quiet.end_drain();
+    quiet.forced();
+    assert_eq!(recorded.lock().len(), 1);
 }

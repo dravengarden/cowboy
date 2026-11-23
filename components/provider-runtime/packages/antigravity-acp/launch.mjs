@@ -466,7 +466,14 @@ export async function runProxy({
   runtime.catch((error) =>
     process.stderr.write(`cowboy: Antigravity unavailable: ${error.message}\n`),
   );
-  const write = (stream) => (message) => stream.write(`${JSON.stringify(message)}\n`);
+  // The worker may close the ACP output first at exit; a late update must not
+  // end this process while its execution replies still drain.
+  output.on?.("error", () => {});
+  const write = (stream) => (message) => {
+    if (!stream.destroyed && stream.writable !== false) {
+      stream.write(`${JSON.stringify(message)}\n`);
+    }
+  };
   const proxy = new AcpProxy({
     agent: write(agy.stdin),
     client: write(output),

@@ -151,12 +151,25 @@ pub struct ExecutionBridge {
 
 /// Relays of one unit's execution endpoint whose reply has not yet been
 /// written to the unit or recorded undelivered (design L1c).
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct RelayQuiet {
     count: std::sync::atomic::AtomicUsize,
     idle: tokio::sync::Notify,
-    /// The unit is being stopped: only cleanup reads and stops relay.
+    /// The unit is being stopped: only cleanup requests relay.
     draining: std::sync::atomic::AtomicBool,
+    /// Result-carrying replies written while draining: proven received only
+    /// when the unit exits on its own (the proxy exits after its replies).
+    written: parking_lot::Mutex<Vec<String>>,
+    /// Records a reply the unit may never have read as an unknown outcome.
+    unreceived: std::sync::OnceLock<Box<dyn Fn(&str) + Send + Sync>>,
+}
+
+impl std::fmt::Debug for RelayQuiet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RelayQuiet")
+            .field("in_flight", &self.in_flight())
+            .finish_non_exhaustive()
+    }
 }
 
 /// One relay in flight; dropped once its reply was handled.
@@ -168,7 +181,7 @@ impl Drop for RelayGuard {
         if self
             .0
             .count
-            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel)
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst)
             == 1
         {
             self.0.idle.notify_waiters();
@@ -176,32 +189,73 @@ impl Drop for RelayGuard {
     }
 }
 
+/// Requests a draining unit may still send: reading and stopping what it
+/// started, and its report of an unknown outcome (recorded, never relayed).
+fn cleanup(method: &str) -> bool {
+    matches!(
+        method,
+        "process/read" | "process/terminate" | "cowboy/uncertainEffect"
+    )
+}
+
 impl RelayQuiet {
-    /// Count one relay until the returned guard is dropped.
+    /// Count one relay of `method` until the returned guard is dropped, or
+    /// `None` when a draining unit may not send it. Counting comes first, so
+    /// a stop that saw the count at zero after raising the drain refuses
+    /// every later request but cleanup.
     #[must_use]
-    pub fn enter(self: &std::sync::Arc<Self>) -> RelayGuard {
-        self.count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-        RelayGuard(std::sync::Arc::clone(self))
+    pub fn try_enter(self: &std::sync::Arc<Self>, method: &str) -> Option<RelayGuard> {
+        self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let guard = RelayGuard(std::sync::Arc::clone(self));
+        (cleanup(method) || !self.draining.load(std::sync::atomic::Ordering::SeqCst))
+            .then_some(guard)
     }
 
     /// The unit is being stopped: from now on only cleanup requests relay.
     pub fn begin_drain(&self) {
+        self.written.lock().clear();
         self.draining
-            .store(true, std::sync::atomic::Ordering::Release);
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
-    /// Whether `method` may still relay: anything before the drain, then
-    /// only reading a process and stopping one.
+    /// A new unit starts: it relays everything again.
+    pub fn end_drain(&self) {
+        self.draining
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        self.written.lock().clear();
+    }
+
+    /// Whether the unit is being stopped.
     #[must_use]
-    pub fn admits(&self, method: &str) -> bool {
-        !self.draining.load(std::sync::atomic::Ordering::Acquire)
-            || matches!(method, "process/read" | "process/terminate")
+    pub fn draining(&self) -> bool {
+        self.draining.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// A result-carrying reply of `method` was written while draining.
+    pub fn written(&self, method: &str) {
+        if self.draining() {
+            self.written.lock().push(method.to_owned());
+        }
+    }
+
+    /// Where a reply the unit may never have read is recorded.
+    pub fn set_unreceived(&self, record: Box<dyn Fn(&str) + Send + Sync>) {
+        let _ = self.unreceived.set(record);
+    }
+
+    /// The unit is stopped before it exited on its own: every
+    /// result-carrying reply written while draining may be unread.
+    pub fn forced(&self) {
+        let written = std::mem::take(&mut *self.written.lock());
+        if let (Some(record), Some(method)) = (self.unreceived.get(), written.last()) {
+            record(method);
+        }
     }
 
     /// Relays in flight now.
     #[must_use]
     pub fn in_flight(&self) -> usize {
-        self.count.load(std::sync::atomic::Ordering::Acquire)
+        self.count.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Wait until no relay is in flight, at most `bound`; `false` when the

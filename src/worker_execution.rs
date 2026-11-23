@@ -547,6 +547,14 @@ impl Endpoint {
         }
         let descriptor = serde_json::to_vec(&descriptor)?;
         let relays = Arc::clone(&client.relays);
+        // A reply a force-stopped unit may never have read is an unknown
+        // outcome, recorded by the session's ledger (design L1c).
+        let weak = Arc::downgrade(&client);
+        relays.set_unreceived(Box::new(move |method| {
+            if let Some(ledger) = weak.upgrade().as_ref().and_then(|client| client.ledger()) {
+                ledger.mark_uncertain(method);
+            }
+        }));
         let (listeners, mut received) = mpsc::unbounded_channel::<OwnedFd>();
         let mut admission = Admission::new(token, Arc::clone(&client));
         let listener = tokio::spawn(async move {
@@ -708,14 +716,14 @@ where
                         ids.insert(id.to_string());
                         let method = message["method"].as_str().context("execution method missing")?.to_owned();
                         let params = native_params(&message);
-                        if !client.relays.admits(&method) {
-                            // The unit is being stopped: no new effect, only
-                            // the cleanup of what it started (design L1c).
+                        // A unit being stopped sends only the cleanup of what
+                        // it started (design L1c).
+                        let Some(in_flight) = client.relays.try_enter(&method) else {
                             ids.remove(&id.to_string());
                             writer.send(refusal(&id, "The session is ending; this request was not admitted")).await?;
                             continue;
-                        }
-                        relays.spawn(id, method, params);
+                        };
+                        relays.spawn(id, method, params, in_flight);
                     }
                     _ => bail!("unsupported execution frame"),
                 }
@@ -725,6 +733,9 @@ where
                 if let Err(error) = writer.send(Message::Text(done.frame()?.into())).await {
                     relays.undelivered(&done);
                     return Err(error.into());
+                }
+                if done.carries_result() {
+                    client.relays.written(done.method());
                 }
             }
             result = &mut events => {
