@@ -28,17 +28,24 @@ const other: SessionMeta = {
 };
 
 test("composer session slice ignores invisible session-list churn", () => {
-  const before = composerSessionSlice([active, other], active.id);
+  const reading = { used: 10, size: 100, raw: null, observed_at_ms: 2 };
+  const before = composerSessionSlice([{ ...active, usage: reading }, other], active.id);
   const after = composerSessionSlice([
     {
       ...active,
       status: "running",
-      usage: { used: 10, size: 100, raw: null, observed_at_ms: 2 },
+      usage: { ...reading, raw: { cost: { amount: 1 } } },
     },
     { ...other, status: "busy", context_used: 80, context_size: 100 },
   ], active.id);
 
   assert(sameComposerSessionSlice(before, after));
+  // A fresh report repeating the counters settles a compaction refresh.
+  const reported = composerSessionSlice([
+    { ...active, usage: { ...reading, observed_at_ms: 3 } },
+    other,
+  ], active.id);
+  assert(!sameComposerSessionSlice(before, reported));
   assertEquals(after.destinations, [{
     id: "other",
     title: "Other",

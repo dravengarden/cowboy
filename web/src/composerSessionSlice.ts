@@ -19,6 +19,8 @@ export interface ComposerSessionSlice {
   contextSize: number;
   /** A completed compaction left the reading as history. */
   contextStale: boolean;
+  /** When the agent measured the reading; 0 when unknown. */
+  contextObservedAtMs: number;
   /** Set while the reading is a persisted one from a stopped worker. */
   contextRecordedAtMs: number | undefined;
   destinations: ComposerDestination[];
@@ -47,6 +49,7 @@ export function composerSessionSlice(
     contextUsed: active?.context_used ?? 0,
     contextSize: active?.context_size ?? 0,
     contextStale: contextStaleAfterCompaction(active),
+    contextObservedAtMs: active?.usage?.observed_at_ms ?? 0,
     contextRecordedAtMs: recordedContextUsageAt(active),
     destinations: sessions
       .filter((session) => session.id !== sessionId)
@@ -69,6 +72,7 @@ export function sameComposerSessionSlice(
       a.contextUsed === b.contextUsed &&
       a.contextSize === b.contextSize &&
       a.contextStale === b.contextStale &&
+      a.contextObservedAtMs === b.contextObservedAtMs &&
       a.contextRecordedAtMs === b.contextRecordedAtMs &&
       a.destinations.length === b.destinations.length &&
       a.destinations.every((destination, index) => {

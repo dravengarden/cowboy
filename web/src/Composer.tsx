@@ -832,6 +832,7 @@ export function ComposerWorkspace({
     status,
     serverUsed: sessionState.contextUsed,
     serverSize: sessionState.contextSize,
+    serverObservedAt: sessionState.contextObservedAtMs,
     serverStale: sessionState.contextStale,
     completionSeq: timelineState.completionSeq,
   });

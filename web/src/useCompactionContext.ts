@@ -2,19 +2,26 @@ import { useCallback, useEffect, useState } from "react";
 import type { Status } from "./protocol";
 import {
   contextValueFromSessionInfo,
-  type ContextValue,
+  type ContextReading,
+  freshContextReading,
 } from "./sessionInfoContext";
 
-interface ContextOverride extends ContextValue {
-  serverUsed: number;
-  serverSize: number;
+/** A read-through of the Controller's reading, kept until the broadcast moves. */
+interface ContextOverride extends ContextReading {
+  server: ContextReading;
 }
 
 interface CompactRequest {
-  baseline: ContextValue;
+  baseline: ContextReading;
   completionSeq: number;
   sawBusy: boolean;
   startedAt: number;
+}
+
+function sameReading(a: ContextReading, b: ContextReading): boolean {
+  return (
+    a.used === b.used && a.size === b.size && a.observedAt === b.observedAt && a.stale === b.stale
+  );
 }
 
 /**
@@ -25,13 +32,17 @@ interface CompactRequest {
  * Bridge the short gap between an agent finishing `/compact` and the canonical
  * sessions broadcast reaching the client. The per-session info endpoint reads
  * the same live Hub metadata, so it is a safe read-through while WebSocket
- * delivery catches up. The broadcast always wins as soon as it changes.
+ * delivery catches up. Both inputs settle the refresh only with a reading the
+ * Controller marked stale or one measured after the click (its observation
+ * time, not its counters, identifies it). The broadcast always wins as soon as
+ * it changes.
  */
 export function useCompactionContext({
   sessionId,
   status,
   serverUsed,
   serverSize,
+  serverObservedAt = 0,
   serverStale = false,
   completionSeq,
 }: {
@@ -39,6 +50,8 @@ export function useCompactionContext({
   status: Status;
   serverUsed: number;
   serverSize: number;
+  /** `usage.observed_at_ms` of the broadcast reading; 0 when unknown. */
+  serverObservedAt?: number;
   serverStale?: boolean;
   completionSeq: number;
 }): {
@@ -59,12 +72,17 @@ export function useCompactionContext({
   const beginRefresh = useCallback((): void => {
     setOverride(null);
     setRequest({
-      baseline: { used: serverUsed, size: serverSize },
+      baseline: {
+        used: serverUsed,
+        size: serverSize,
+        observedAt: serverObservedAt,
+        stale: serverStale,
+      },
       completionSeq,
       sawBusy: false,
       startedAt: Date.now(),
     });
-  }, [completionSeq, serverSize, serverUsed]);
+  }, [completionSeq, serverObservedAt, serverSize, serverStale, serverUsed]);
 
   // The canonical mark settles a refresh either way: set, nothing newer
   // exists to poll for; cleared, the server holds the fresh reading, even
@@ -83,40 +101,33 @@ export function useCompactionContext({
   useEffect(() => {
     if (
       override &&
-      (serverUsed !== override.serverUsed || serverSize !== override.serverSize)
+      !sameReading(override.server, {
+        used: serverUsed,
+        size: serverSize,
+        observedAt: serverObservedAt,
+        stale: serverStale,
+      })
     ) {
       setOverride(null);
     }
-  }, [override, serverSize, serverUsed]);
-
-  useEffect(() => {
-    if (!request || completionSeq <= request.completionSeq) return;
-    const { baseline } = request;
-    if (serverUsed !== baseline.used || serverSize !== baseline.size) {
-      setOverride(null);
-    } else {
-      // Codex app-server emits `thread/compacted` but no fresh token-usage frame
-      // until the next model turn. Keeping the pre-compact number is definitely
-      // wrong. The post-compact total is unknown (not zero), so hide the
-      // determinate ring until that canonical frame arrives instead of
-      // presenting either the stale percentage or a misleading 0%. The server
-      // change effect above replaces it automatically.
-      setOverride({ used: 0, size: 0, serverUsed, serverSize });
-    }
-    setRequest(null);
-  }, [completionSeq, request, serverSize, serverUsed]);
+  }, [override, serverObservedAt, serverSize, serverStale, serverUsed]);
 
   useEffect(() => {
     if (!request) return;
+    const server: ContextReading = {
+      used: serverUsed,
+      size: serverSize,
+      observedAt: serverObservedAt,
+      stale: serverStale,
+    };
     const { baseline } = request;
 
     // A live sessions broadcast is canonical. During the turn it can contain
-    // intermediate usage, so only settle after the compact turn is no longer
-    // busy. This is the race that previously left the ring at its old value.
-    if (
-      status !== "busy" &&
-      (serverUsed !== baseline.used || serverSize !== baseline.size)
-    ) {
+    // intermediate usage, so only settle after the compact turn has completed
+    // or is no longer busy. This is the race that previously left the ring at
+    // its old value.
+    const ended = status !== "busy" || completionSeq > request.completionSeq;
+    if (ended && freshContextReading(server, baseline)) {
       setOverride(null);
       setRequest(null);
       return;
@@ -128,17 +139,15 @@ export function useCompactionContext({
     const refresh = async (): Promise<void> => {
       attempts += 1;
       try {
-        const response = await fetch(
-          `/api/sessions/${encodeURIComponent(sessionId)}/info`,
-          { cache: "no-store" },
-        );
+        const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/info`, {
+          cache: "no-store",
+        });
         if (response.ok) {
           const value = contextValueFromSessionInfo(await response.json());
           if (!value) throw new Error("invalid session info context usage");
-          const { used, size } = value;
-          if (used !== baseline.used || size !== baseline.size) {
+          if ((value.stale && !baseline.stale) || freshContextReading(value, baseline)) {
             if (!cancelled) {
-              setOverride({ used, size, serverUsed, serverSize });
+              setOverride({ ...value, server });
               setRequest(null);
             }
             return;
@@ -165,7 +174,16 @@ export function useCompactionContext({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [request, serverSize, serverUsed, sessionId, status]);
+  }, [
+    completionSeq,
+    request,
+    serverObservedAt,
+    serverSize,
+    serverStale,
+    serverUsed,
+    sessionId,
+    status,
+  ]);
 
   if (serverStale) {
     return {
@@ -180,11 +198,8 @@ export function useCompactionContext({
   return {
     used: override?.used ?? serverUsed,
     size: override?.size ?? serverSize,
-    stale: false,
-    // An override with no size is the honest "awaiting the provider's next
-    // usage frame" state after Codex compaction. Keep the tooltip explicit
-    // until a subsequent model turn supplies canonical token usage.
-    refreshing: request !== null || (override !== null && override.size === 0),
+    stale: override?.stale ?? false,
+    refreshing: request !== null,
     beginRefresh,
     cancelRefresh,
   };

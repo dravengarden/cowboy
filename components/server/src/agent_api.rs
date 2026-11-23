@@ -449,7 +449,7 @@ export type SessionView = {id:string;title:string;provider:string;provider_versi
   provider_account_id:string;status:"starting"|"running"|"busy"|"exited"|"crashed"|"interrupted"|string;
   machine:string;workspace:string|null;cwd:string;paused:boolean;
   execution:{machine:string;workspace:string;cwd:string}|null;
-  queued:number;drafts:number;events:number;background_tasks:number;context:{used:number;size:number}|null};
+  queued:number;drafts:number;events:number;background_tasks:number;context:{used:number;size:number;stale_after_compaction?:true}|null};
 export type SessionUsageView = {session_id:string;provider:string;account:string|null;context:SessionView["context"];usage:{used:number;size:number;observed_at_ms:number;raw:unknown}|null};
 // Session usage is context/cost reported by that exact Provider generation, not account quota.
 "#,

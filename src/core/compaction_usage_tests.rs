@@ -123,11 +123,15 @@ fn a_compaction_without_a_usage_report_leaves_the_reading_as_history() {
 
     // The next real report replaces the reading and clears the mark, even
     // when its counters happen to repeat the old ones.
-    hub.set_session_usage("agy", live(492_536));
+    let report = SessionUsage {
+        observed_at_ms: 2,
+        ..live(492_536)
+    };
+    hub.set_session_usage("agy", report.clone());
     let fresh = meta(&hub, "agy");
     assert!(!fresh.context_usage_stale());
-    assert_eq!(fresh.usage, Some(live(492_536)));
-    assert_eq!(persisted(&mut rx), vec![Some(live(492_536))]);
+    assert_eq!(fresh.usage, Some(report.clone()));
+    assert_eq!(persisted(&mut rx), vec![Some(report)]);
 }
 
 #[test]
@@ -231,7 +235,7 @@ fn the_mark_survives_serialization_and_older_readings_have_none() {
 
 #[test]
 fn usage_an_older_antigravity_proxy_relays_during_compact_stays_history() {
-    // Before cowboy-antigravity-acp 1.0.24 the proxy relayed the usage of the
+    // Before cowboy-antigravity-acp 1.0.25 the proxy relayed the usage of the
     // `/compact` prompt itself, which measures the summarized history.
     let (hub, mut rx) = hub_with("agy-old");
     hub.set_session_usage("agy-old", live(480_000));
@@ -241,7 +245,7 @@ fn usage_an_older_antigravity_proxy_relays_during_compact_stays_history() {
     turn_end(&hub, "agy-old");
     let stale = meta(&hub, "agy-old");
     assert!(stale.context_usage_stale());
-    assert_eq!(stale.context_used, 488_059);
+    assert_eq!(stale.context_used, 480_000, "the summarized history is no reading");
     persisted(&mut rx);
     hub.set_session_usage("agy-old", live(61_000));
     assert!(!meta(&hub, "agy-old").context_usage_stale());
@@ -255,4 +259,49 @@ fn clear_and_compaction_writes_reach_storage_in_their_hub_order() {
     hub.prepare_context_reset("ordered");
     let writes = persisted(&mut rx);
     assert_eq!(writes.last(), Some(&None), "Clear's reset is the last word");
+}
+
+#[test]
+fn an_older_antigravity_proxy_cannot_clear_a_stale_mark_in_a_failed_compaction() {
+    let (hub, _rx) = hub_with("agy-again");
+    hub.set_session_usage("agy-again", live(480_000));
+    compaction_with(&hub, "agy-again", "agy-compact-1", "completed");
+    assert!(meta(&hub, "agy-again").context_usage_stale());
+
+    for (id, end) in [("agy-compact-2", "failed"), ("agy-compact-3", "cancelled")] {
+        compaction_with(&hub, "agy-again", id, "in_progress");
+        hub.set_session_usage("agy-again", live(490_000));
+        compaction_with(&hub, "agy-again", id, end);
+        let after = meta(&hub, "agy-again");
+        assert!(after.context_usage_stale(), "{end} keeps the mark");
+        assert_eq!(after.context_used, 480_000);
+    }
+}
+
+#[test]
+fn republished_accounting_is_no_fresh_reading() {
+    // Per-model quota rows at a turn end republish the last reading with its
+    // observation time and new accounting fields.
+    let (hub, mut rx) = hub_with("acct");
+    hub.set_session_usage("acct", live(400_000));
+    let mut republished = live(400_000);
+    republished.raw["_meta"] = serde_json::json!({"model_usage": [{"model": "m", "turns": 1}]});
+
+    compaction(&hub, "acct", "completed");
+    persisted(&mut rx);
+    hub.set_session_usage("acct", republished.clone());
+    let kept = meta(&hub, "acct");
+    assert!(kept.context_usage_stale(), "accounting keeps the stale mark");
+    assert_eq!(kept.usage.expect("reading").raw["_meta"], republished.raw["_meta"]);
+    assert!(persisted(&mut rx).iter().all(|w| w.as_ref().is_some_and(SessionUsage::stale_after_compaction)));
+
+    let (hub, _rx) = hub_with("acct-running");
+    hub.set_session_usage("acct-running", live(400_000));
+    compaction(&hub, "acct-running", "in_progress");
+    hub.set_session_usage("acct-running", republished);
+    compaction(&hub, "acct-running", "completed");
+    assert!(
+        meta(&hub, "acct-running").context_usage_stale(),
+        "accounting during a compaction reports nothing about the compacted context"
+    );
 }

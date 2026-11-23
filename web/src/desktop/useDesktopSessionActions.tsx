@@ -104,6 +104,7 @@ export function useDesktopSessionActions(sessionId: string, status: Status): Des
     status,
     serverUsed: session?.context_used ?? 0,
     serverSize: session?.context_size ?? 0,
+    serverObservedAt: session?.usage?.observed_at_ms ?? 0,
     serverStale: contextStaleAfterCompaction(session),
     completionSeq: timeline.completionSeq,
   });

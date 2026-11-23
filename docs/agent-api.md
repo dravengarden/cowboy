@@ -342,6 +342,12 @@ bindings remain null. The Provider ID (for example `codex`) is not assumed to be
 the account key (for example `openai`). Session context consumption is not
 account quota or a total billed-token counter.
 
+After a completed compaction that no usage report followed, `context` carries
+`stale_after_compaction: true` (and `usage.compacted_at_ms` its time) in
+`sessions.info`, `sessions.list` and both usage reads: `used`/`size` are the
+pre-compaction history, and the compacted context's size is unknown until the
+agent's next usage report replaces the reading.
+
 ### Account usage and quota
 
 `usage.list()` lists the active Plugin-defined account keys, labels, status,

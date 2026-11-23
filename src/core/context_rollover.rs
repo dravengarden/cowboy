@@ -27,7 +27,7 @@ pub(super) enum CompactionUsage {
     /// A compaction whose reports during it measure the history being
     /// summarized: Antigravity's proxy synthesizes these (`agy-compact-`
     /// IDs) around an ordinary prompt, and a proxy before
-    /// `cowboy-antigravity-acp` 1.0.24 still relays that prompt's usage.
+    /// `cowboy-antigravity-acp` 1.0.25 still relays that prompt's usage.
     Unmeasured,
 }
 
@@ -193,7 +193,7 @@ impl Hub {
     /// the resumed context's real size, so idle hibernation and context
     /// rollover would treat a large expired context as empty. Only Clear and
     /// renewal, which discard the native context, reset the reading.
-    pub fn set_session_usage(&self, session_id: &str, usage: crate::agent_model::SessionUsage) {
+    pub fn set_session_usage(&self, session_id: &str, mut usage: crate::agent_model::SessionUsage) {
         if usage.used == 0 && usage.size == 0 {
             return;
         }
@@ -201,22 +201,39 @@ impl Hub {
             let mut sessions = self.inner.sessions.lock();
             match sessions.get_mut(session_id) {
                 Some(s) => {
+                    // Reports during a compaction that measures the history
+                    // being summarized (an Antigravity proxy before
+                    // `cowboy-antigravity-acp` 1.0.25 relays them) say nothing
+                    // about the context: keep the stored reading and its mark.
+                    if s.compaction_usage == CompactionUsage::Unmeasured {
+                        return;
+                    }
+                    let stored = s.meta.usage.as_ref();
+                    // Per-model accounting republished onto the last reading
+                    // keeps that reading's observation time: it measures
+                    // nothing new, so it keeps a stale mark and proves no
+                    // report during a compaction.
+                    let republished = stored.is_some_and(|stored| {
+                        stored.observed_at_ms != 0
+                            && stored.observed_at_ms == usage.observed_at_ms
+                            && (stored.used, stored.size) == (usage.used, usage.size)
+                    });
+                    let stale_mark = stored.and_then(|stored| stored.compacted_at_ms);
                     // A counter-only snapshot (a worker reconnecting) repeats
                     // what the worker last saw, not a measurement of the
                     // compacted context; only a live report replaces a stale one.
-                    let live = !usage.raw.is_null();
-                    if live && let CompactionUsage::Running { reported } = &mut s.compaction_usage {
+                    let fresh = !usage.raw.is_null() && !republished;
+                    if fresh && let CompactionUsage::Running { reported } = &mut s.compaction_usage {
                         *reported = true;
                     }
-                    if !live
-                        && s.meta
-                            .usage
-                            .as_ref()
-                            .is_some_and(crate::agent_model::SessionUsage::stale_after_compaction)
-                    {
-                        return;
+                    if !fresh && stale_mark.is_some() {
+                        if !republished {
+                            return;
+                        }
+                        usage.compacted_at_ms = stale_mark;
                     }
-                    if let Some(native_id) = s.meta.agent_session_id.as_ref()
+                    if !republished
+                        && let Some(native_id) = s.meta.agent_session_id.as_ref()
                         && !s.meta.provider_generation_digest.is_empty()
                         && usage.size > 0
                     {
