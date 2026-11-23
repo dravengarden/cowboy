@@ -232,7 +232,7 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
     ),
     (
         "0089_prompt_dispatches.sql",
-        "70ce5a6b616064d21cff27edf94ba79f78b5149610e5fd4605b30b5e0a082abc",
+        "e8811cbc6138dd72447b9119f5d7695f8685370e0e6b94a70d0c1a805989d150",
     ),
 ];
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
@@ -458,7 +458,7 @@ const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     ),
     (
         "0063_prompt_dispatches.sql",
-        "70ce5a6b616064d21cff27edf94ba79f78b5149610e5fd4605b30b5e0a082abc",
+        "e8811cbc6138dd72447b9119f5d7695f8685370e0e6b94a70d0c1a805989d150",
     ),
 ];
 

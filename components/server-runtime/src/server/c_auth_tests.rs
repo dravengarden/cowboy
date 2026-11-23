@@ -158,6 +158,7 @@ fn move_draft_refuses_missing_foreign_trashed_system_and_managed_child_targets()
         ("trashed", false),
         ("sys", true),
         ("child", false),
+        ("closing", false),
     ] {
         hub.create_local_session(
             id.into(),
@@ -168,11 +169,17 @@ fn move_draft_refuses_missing_foreign_trashed_system_and_managed_child_targets()
             system,
         );
     }
-    let mk = |id: &str, owner: &str, system: bool, trashed: Option<i64>, managed_child: bool| {
+    let mk = |id: &str,
+              owner: &str,
+              system: bool,
+              trashed: Option<i64>,
+              managed_child: bool,
+              closing: bool| {
         let mut meta = hub.session_info(id).unwrap().meta;
         meta.owner_user_id = Some(owner.into());
         meta.system = system;
         meta.trashed_at_ms = trashed;
+        meta.closing = closing;
         if managed_child {
             let binding = crate::execution_environment::ManagedChildV1 {
                 schema: 1,
@@ -205,16 +212,17 @@ fn move_draft_refuses_missing_foreign_trashed_system_and_managed_child_targets()
         }
     };
     hub.restore_reconciling_runtime(vec![
-        mk("src", "user-a", false, None, false),
-        mk("ok-dst", "user-a", false, None, false),
-        mk("foreign", "user-b", false, None, false),
-        mk("trashed", "user-a", false, Some(1_000), false),
-        mk("sys", "user-a", true, None, false),
-        mk("child", "user-a", false, None, true),
+        mk("src", "user-a", false, None, false, false),
+        mk("ok-dst", "user-a", false, None, false, false),
+        mk("foreign", "user-b", false, None, false, false),
+        mk("trashed", "user-a", false, Some(1_000), false, false),
+        mk("sys", "user-a", true, None, false, false),
+        mk("child", "user-a", false, None, true, false),
+        mk("closing", "user-a", false, None, false, true),
     ]);
     assert!(hub.is_managed_child("child"));
 
-    for bad_target in ["missing", "foreign", "trashed", "sys", "child"] {
+    for bad_target in ["missing", "foreign", "trashed", "sys", "child", "closing"] {
         assert!(
             client_commands::refuse_move_draft_target_in(
                 &hub,

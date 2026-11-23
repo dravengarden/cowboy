@@ -1747,6 +1747,8 @@ impl Store {
     }
 
     pub async fn purge_deleted(&self, retention_days: i64) -> Result<u64> {
+        self.purge_prompt_dispatches_for_expired_sessions(retention_days)
+            .await?;
         dispatch_storage!(self, purge_deleted(retention_days))
     }
 

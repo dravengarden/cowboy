@@ -186,6 +186,41 @@ async fn assert_prompt_dispatches_hydration_and_queue_contract(
         loaded.queue[1].initiator,
         Some(DeliveryOrigin::peer("agent-1"))
     );
+
+    // Write-behind race: recording dispatch provenance before InsertSession
+    // flushes must succeed, survive purge_deleted of unrelated expired sessions,
+    // and hydrate once InsertSession lands.
+    let unflushed = "pd-unflushed";
+    let early = PromptDispatchRecord {
+        session_id: unflushed.into(),
+        cmid: "initial:pd-unflushed".into(),
+        origin: DeliveryOrigin::peer("creator-1"),
+        trigger: DeliveryOrigin::peer("creator-1"),
+        dispatched_at_ms: 600,
+    };
+    assert!(
+        store
+            .record_prompt_dispatch_if_compatible(&early)
+            .await
+            .unwrap()
+    );
+    // Purging expired soft-deleted sessions drops `deleted`'s dispatches but
+    // preserves both active and not-yet-flushed sessions.
+    let _ = store.purge_deleted(0).await.unwrap();
+    assert_eq!(
+        store.prompt_dispatch(deleted, "cmid-del").await.unwrap(),
+        None
+    );
+    assert_eq!(
+        store
+            .prompt_dispatch(unflushed, "initial:pd-unflushed")
+            .await
+            .unwrap(),
+        Some(early.clone())
+    );
+    store.insert_session(&session(unflushed)).await.unwrap();
+    let hydrated = store.recent_prompt_dispatches(10).await.unwrap();
+    assert!(hydrated.iter().any(|r| r == &early));
 }
 
 #[tokio::test]

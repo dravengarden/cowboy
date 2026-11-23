@@ -970,7 +970,7 @@ pub(crate) fn refuse_move_draft_target_in(
             "not allowed to mutate destination session",
         );
     }
-    if info.meta.system || hub.is_managed_child(to_session) {
+    if info.meta.closing || info.meta.system || hub.is_managed_child(to_session) {
         return reject(
             CommandOutcome::Rejected,
             "cannot move drafts into this destination session",

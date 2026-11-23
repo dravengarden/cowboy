@@ -131,9 +131,6 @@ impl Hub {
         let origin = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
         let dispatch_origin =
             crate::prompt_origin::compute_dispatch_origin(Some(&origin), Some(&origin));
-        if dispatch_origin.is_owner() {
-            self.notify_human_turn(session_id);
-        }
         let req = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -172,10 +169,13 @@ impl Hub {
                 explicit: true,
                 origin: Some(origin.clone()),
                 initiator: Some(origin.clone()),
-                dispatch_origin,
+                dispatch_origin: dispatch_origin.clone(),
                 trigger: origin,
             }
         };
+        if dispatch_origin.is_owner() {
+            self.notify_human_turn(session_id);
+        }
         self.send_dispatch(req);
         true
     }

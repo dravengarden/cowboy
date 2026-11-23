@@ -149,6 +149,20 @@ impl Store {
         }
         Ok(map)
     }
+
+    /// Delete `prompt_dispatches` belonging to soft-deleted sessions about to
+    /// be hard-purged. Scoped strictly to expired rows in `sessions` so a
+    /// brand-new session whose `StoreWrite::InsertSession` has not flushed yet
+    /// is never touched.
+    pub(super) async fn purge_prompt_dispatches_for_expired_sessions(
+        &self,
+        retention_days: i64,
+    ) -> Result<()> {
+        dispatch!(
+            self,
+            purge_prompt_dispatches_for_expired_sessions_raw(retention_days)
+        )
+    }
 }
 
 macro_rules! shared_impl {
@@ -230,6 +244,28 @@ shared_impl!(PostgresStorage, "s.deleted_at IS NULL");
 shared_impl!(SqliteStorage, "s.deleted_at_ms IS NULL");
 
 impl PostgresStorage {
+    async fn purge_prompt_dispatches_for_expired_sessions_raw(
+        &self,
+        retention_days: i64,
+    ) -> Result<()> {
+        sqlx::query(
+            "DELETE FROM prompt_dispatches WHERE session_id IN ( \
+             SELECT id FROM sessions WHERE deleted_at IS NOT NULL \
+             AND COALESCE(purge_after_at, deleted_at + make_interval(days => $1::int)) < now() \
+             AND NOT EXISTS (SELECT 1 FROM managed_agent_calls AS call \
+                 WHERE (call.parent_session_id = sessions.id OR call.child_session_id = sessions.id) \
+                 AND call.state NOT IN ('completed', 'failed', 'cancelled')) \
+             AND NOT EXISTS (SELECT 1 FROM plugin_uninstall_operations AS operation \
+                 WHERE operation.machine_id = sessions.machine_id AND operation.plugin_id = sessions.provider \
+                 AND operation.phase NOT IN ('completed', 'compensated', 'aborted')))",
+        )
+        .bind(i32::try_from(retention_days).unwrap_or(3))
+        .execute(&self.pool)
+        .await
+        .context("purge prompt_dispatches for expired sessions")?;
+        Ok(())
+    }
+
     async fn prompt_dispatches_by_cmids_raw(
         &self,
         session_id: &str,
@@ -248,6 +284,30 @@ impl PostgresStorage {
 }
 
 impl SqliteStorage {
+    async fn purge_prompt_dispatches_for_expired_sessions_raw(
+        &self,
+        retention_days: i64,
+    ) -> Result<()> {
+        let retention_ms = retention_days.saturating_mul(86_400_000);
+        sqlx::query(
+            "DELETE FROM prompt_dispatches WHERE session_id IN ( \
+             SELECT id FROM sessions WHERE deleted_at_ms IS NOT NULL \
+             AND COALESCE(purge_after_at_ms, deleted_at_ms + ?1) <= ?2 \
+             AND NOT EXISTS (SELECT 1 FROM managed_agent_calls AS call \
+                 WHERE (call.parent_session_id = sessions.id OR call.child_session_id = sessions.id) \
+                 AND call.state NOT IN ('completed', 'failed', 'cancelled')) \
+             AND NOT EXISTS (SELECT 1 FROM plugin_uninstall_operations AS operation \
+                 WHERE operation.machine_id = sessions.machine_id AND operation.plugin_id = sessions.provider \
+                 AND operation.phase NOT IN ('completed', 'compensated', 'aborted')))",
+        )
+        .bind(retention_ms)
+        .bind(chrono::Utc::now().timestamp_millis())
+        .execute(&self.pool)
+        .await
+        .context("purge SQLite prompt_dispatches for expired sessions")?;
+        Ok(())
+    }
+
     async fn prompt_dispatches_by_cmids_raw(
         &self,
         session_id: &str,
