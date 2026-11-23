@@ -26,6 +26,13 @@ use rustix::net::{RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFl
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+/// Linux receives descriptors close-on-exec atomically; macOS has no
+/// MSG_CMSG_CLOEXEC, so `receive` sets the flag on each descriptor instead.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const RECV_FLAGS: RecvFlags = RecvFlags::CMSG_CLOEXEC;
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+const RECV_FLAGS: RecvFlags = RecvFlags::empty();
+
 pub use crate::runtime_wire::AccountUnitHandle as UnitHandle;
 
 pub const PROTOCOL: &str = "cowboy-account-sandbox-v1";
@@ -537,7 +544,7 @@ impl Client {
                 &self.stream,
                 &mut [IoSliceMut::new(&mut buffer)],
                 &mut control,
-                RecvFlags::CMSG_CLOEXEC,
+                RECV_FLAGS,
             )
             .map_err(|error| match error {
                 rustix::io::Errno::AGAIN => {
@@ -547,7 +554,14 @@ impl Client {
             })?;
             for message in control.drain() {
                 if let RecvAncillaryMessage::ScmRights(received) = message {
-                    fds.extend(received);
+                    for fd in received {
+                        // Without MSG_CMSG_CLOEXEC (macOS) close-on-exec is
+                        // set right after receipt instead of atomically.
+                        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+                        rustix::io::fcntl_setfd(&fd, rustix::io::FdFlags::CLOEXEC)
+                            .context("marking a received descriptor close-on-exec")?;
+                        fds.push(fd);
+                    }
                 }
             }
             ensure!(
