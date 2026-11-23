@@ -111,14 +111,20 @@ tells the worker only what is confirmed, from an authoritative final snapshot:
 - If a replay's answer lists no `model` option with a current value, the model is
   **unknown**: the proxy forwards no label, and an earlier snapshot is not reused.
 - agy's own `config_option_update` frames for a session this host opened are
-  **fenced by default** (`Subagents.configFence`, filled in `adopt`, 1024 ids, oldest
-  evicted). Only a child that started with nothing replayed onto it is let through,
+  **fenced by default** (`Subagents.configFence`, filled in `adopt`, never evicted
+  while the session may still speak: an id leaves only when agy confirms
+  `session/close`, after which it emits nothing for it). Only a child that started
+  with nothing replayed onto it is let through,
   and then its updates describe its unchanged default. A child with replayed
   settings stays fenced for good, for the ordering reason above. A session whose
   start was abandoned, or that agy answered after its request timed out, is fenced
   too: the worker has no row for it, and an update for a session the worker does not
   know would be read as the parent's configuration. The fence is separate from
-  `children`, which the proxy prunes (64 settled) while the worker keeps the row.
+  `children`, which the proxy prunes (64 settled) while the worker keeps the row. A
+  configuration update of a session nobody claimed (a refused or unanswered open)
+  is dropped when the quarantine is released, since it would be read as the
+  parent's; the root session's own configuration also arrives in its `session/new`
+  answer.
 - When the child is announced the proxy sends exactly one `config_option_update`
   under the child's session id, carrying only the `model` option as a complete ACP
   select option (`id`, `name`, `category`, `type`, `currentValue`, `options`). A choice
@@ -145,8 +151,10 @@ opening update and a later update both withheld; answers that list no
 configuration, no model option or no model value leave no label while the child is
 still announced; a child with no replays still shows agy's own updates; an
 oversized choice list is sent empty as a complete select option; an abandoned child's
-late update and a replayed child's after the proxy pruned it never reach the worker; a
-refused replay still fails the start.
+late update, a replayed child's after the proxy pruned it, and an unclaimed
+session's quarantined update after a refused open never reach the worker; the fence
+survives thousands of later adoptions and ends at a confirmed close; a refused replay
+still fails the start.
 
 ### Acceptance
 

@@ -43,7 +43,8 @@ session's `configOptions`, then the full set the last replayed parent setting
 the worker exactly one `config_option_update` with that `model` option (a complete
 select option; a choice list over 32 KiB is sent empty). agy's own
 `config_option_update` frames for a session the proxy opened are withheld by
-default: only a child that started with nothing replayed onto it hears them. Once
+default, until agy confirms the session closed: only a child that started with
+nothing replayed onto it hears them. Once
 settings were replayed onto a child, none can be ordered against the replays, and
 an abandoned or late session has no worker row, so those stay withheld. A replay
 whose answer lists no model leaves the model unknown, so the child has no label

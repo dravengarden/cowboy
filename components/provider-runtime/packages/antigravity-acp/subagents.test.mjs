@@ -1162,8 +1162,10 @@ test("a model choice list too large to forward is sent empty, as a complete sele
 test("an abandoned child's late configuration update never reaches the worker", async () => {
   const made = await parent();
   const { proxy, client, control } = made;
-  // The child opens, then cannot start: agy's log is unavailable.
+  // The child opens, then cannot start: agy's log is unavailable. Its close is
+  // still unanswered when the late update arrives.
   control.mark = undefined;
+  control.ignore.add("session/close");
   control.newResult = () => configOptions("m-new");
   await assert.rejects(startChild(made), /log is unavailable/);
   await flush();
@@ -1173,7 +1175,52 @@ test("an abandoned child's late configuration update never reaches the worker", 
     childUpdate("child-1", { sessionUpdate: "config_option_update", ...configOptions("m-late") }),
   );
   await flush();
-  assert.deepEqual(configUpdates(client, "child-1"), []);
+  assert.deepEqual(
+    client.filter((message) => message.params?.update?.sessionUpdate === "config_option_update"),
+    [],
+  );
+  assert.equal(proxy.subagents.configUpdateIgnored("child-1"), true);
+});
+
+test("a fenced session stays fenced however many others open, until agy closes it", async () => {
+  const made = await parent();
+  const { subagents } = made.proxy;
+  subagents.adopt("abandoned-early");
+  for (let index = 0; index < 5000; index++) subagents.adopt(`later-${index}`);
+  assert.equal(subagents.configUpdateIgnored("abandoned-early"), true);
+  // The live root is never fenced.
+  assert.equal(subagents.configUpdateIgnored("s"), false);
+  // Closed natively: nothing more can arrive for it.
+  subagents.closeById("abandoned-early");
+  await flush();
+  assert.equal(subagents.configUpdateIgnored("abandoned-early"), false);
+  assert.equal(subagents.configUpdateIgnored("later-1"), true);
+});
+
+test("a refused child open does not flush a quarantined configuration update to the parent", async () => {
+  const made = await parent();
+  const { proxy, agent, client, control } = made;
+  control.ignore.add("session/new");
+  const starting = proxy.subagents.start("s", { prompt: "x" }).then(
+    () => undefined,
+    (error) => error,
+  );
+  await flush(1);
+  const [created] = sent(agent, "session/new");
+  client.length = 0;
+  // A frame of a session nobody has claimed yet waits for the open's answer.
+  await proxy.fromAgent(
+    childUpdate("ghost", { sessionUpdate: "config_option_update", ...configOptions("m-ghost") }),
+  );
+  assert.equal(client.length, 0);
+  // agy refuses the open: the quarantine is released, minus that update.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: created.id,
+    error: { code: -32603, message: "refused" },
+  });
+  assert.match((await starting).message, /could not start/i);
+  await flush();
   assert.deepEqual(
     client.filter((message) => message.params?.update?.sessionUpdate === "config_option_update"),
     [],

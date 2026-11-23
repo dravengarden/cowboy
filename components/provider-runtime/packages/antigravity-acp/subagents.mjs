@@ -48,8 +48,6 @@ const MAX_HELD = 256;
 const MAX_OPTIONS = 64;
 /** The largest choice list of the model option that is forwarded. */
 const MODEL_CHOICES_BYTES = 32 * 1024;
-/** Native sessions whose configuration updates stay fenced after they end. */
-const MAX_FENCED = 1024;
 
 const TURN_ENDED = "The turn ended before the subagent started.";
 const MODE_CHANGED = "The session's mode changed before the subagent started.";
@@ -159,7 +157,9 @@ export class Subagents {
     this.quarantine = [];
     /**
      * Native sessions this host opened whose own `config_option_update` frames
-     * the worker must not hear (see `configUpdateIgnored`). Independent of
+     * the worker must not hear (see `configUpdateIgnored`). Never evicted while
+     * the session may still speak: an id leaves only when agy confirms
+     * `session/close`, after which it emits nothing for it. Independent of
      * `children`, which prunes settled children while the worker keeps their row.
      */
     this.configFence = new Set();
@@ -336,11 +336,7 @@ export class Subagents {
     // Fenced from the start: only a child that started, with nothing replayed
     // onto it, is let through (`start`). One that is abandoned, or whose answer
     // came after its request timed out, never reaches the worker's configuration.
-    this.configFence.delete(sessionId);
     this.configFence.add(sessionId);
-    if (this.configFence.size > MAX_FENCED) {
-      this.configFence.delete(this.configFence.values().next().value);
-    }
     const held = [];
     this.quarantine = this.quarantine.filter((frame) => {
       if (frame.params?.sessionId !== sessionId) return true;
@@ -352,7 +348,12 @@ export class Subagents {
 
   /** No start is opening a session any more: unclaimed frames take the ordinary path. */
   releaseQuarantine() {
-    const frames = this.quarantine;
+    // A configuration update of a session nobody claimed (its open was refused,
+    // or never answered) would be read as the parent's: it is dropped. The root
+    // session's own configuration also arrives in its `session/new` answer.
+    const frames = this.quarantine.filter(
+      (frame) => frame.params?.update?.sessionUpdate !== "config_option_update",
+    );
     this.quarantine = [];
     frames
       .reduce((done, frame) => done.then(() => this.proxy.fromAgent(frame)), Promise.resolve())
@@ -768,6 +769,8 @@ export class Subagents {
     this.request("session/close", { sessionId: id }, 5000)
       .then((reply) => {
         if (strict && reply.error !== undefined) throw new Error("close refused");
+        // Closed: agy emits nothing more for it, so its fence entry can go.
+        if (reply.error === undefined) this.configFence.delete(id);
       })
       .catch(() => {
         // A session that never ran a prompt does nothing, but one `agy` will
