@@ -63,6 +63,7 @@
     "session_context::rollover::get": "sessions.context_rollover",
     "session_context::rollover::set": "sessions.context_rollover_set",
     "session_context::duplicate": "sessions.duplicate",
+    "session_context::duplicate_options": "exception:browser — previewing a copy's options fills the Web fork form before it is submitted; an agent reads the target's signed choices from plugins.catalog and passes config to sessions.duplicate, which validates it.",
     "session_context::continue_here": "exception:browser — keeping a handed-off session open only lifts a Web read-only presentation; agents and scripts were never refused writes to it.",
     "config_revert::get": "sessions.config_revert",
     "config_revert::restore": "sessions.config_revert_restore",
