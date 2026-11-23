@@ -133,6 +133,15 @@ preset = "gemini-neon-high"
 values = { model = "gemini-4-neon", thought_level = "high" }
 
 [[targets]]
+id = "gemini-4-neon:xhigh@antigravity"
+vendor = "google"
+model = "gemini-4-neon"
+effort = "xhigh"
+provider = "antigravity"
+preset = "gemini-neon-xhigh"
+values = { model = "gemini-4-neon", thought_level = "xhigh" }
+
+[[targets]]
 id = "gemini-4-hydrogen:xhigh@antigravity"
 vendor = "google"
 model = "gemini-4-hydrogen"

@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "antigravity",
-  "version": "0.2.33",
+  "version": "0.2.34",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.7.0",
   "display": {
@@ -71,6 +71,16 @@
       "values": {
         "model": "gemini-4-neon",
         "thought_level": "high"
+      }
+    },
+    {
+      "id": "gemini-neon-xhigh",
+      "name": "Gemini 4 Neon · Extra",
+      "detail": "Gemini 4 Neon · Extra thinking",
+      "is_default": false,
+      "values": {
+        "model": "gemini-4-neon",
+        "thought_level": "xhigh"
       }
     },
     {

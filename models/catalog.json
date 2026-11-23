@@ -14,7 +14,7 @@
     "normalized_capability_rows": 118,
     "excluded_after_snapshot": 0,
     "methodology": "sha256:1a7de7d9cd0a1c404047d76b6a593960df7c2a8ec2cb733b81766a0613f3d9a3",
-    "targets": "sha256:6352e91f4b469d63d4e2d7fa67201bc509ea4a8471c0bfa6f8be66e55f491592"
+    "targets": "sha256:e9ffcbed4cde117ea1b5e094d103b5b81a071214f343b9db6703ea5f74df2dc8"
   },
   "bindings": [
     {
@@ -123,6 +123,15 @@
       "values": {
         "model": "gemini-4-neon",
         "thought_level": "high"
+      }
+    },
+    {
+      "id": "gemini-4-neon:xhigh@antigravity",
+      "provider": "antigravity",
+      "preset": "gemini-neon-xhigh",
+      "values": {
+        "model": "gemini-4-neon",
+        "thought_level": "xhigh"
       }
     },
     {
@@ -772,6 +781,47 @@
       "values": {
         "model": "gemini-4-neon",
         "thought_level": "high"
+      },
+      "executable": true,
+      "provisional": false,
+      "tasks": {
+        "agentic_coding": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "code_review": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "reasoning": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "long_context": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "tool_use": {
+          "status": "insufficient",
+          "lineages": 0
+        },
+        "writing": {
+          "status": "insufficient",
+          "lineages": 0
+        }
+      },
+      "cost_groups": {}
+    },
+    {
+      "id": "gemini-4-neon:xhigh@antigravity",
+      "vendor": "google",
+      "model": "gemini-4-neon",
+      "effort": "xhigh",
+      "provider": "antigravity",
+      "preset": "gemini-neon-xhigh",
+      "values": {
+        "model": "gemini-4-neon",
+        "thought_level": "xhigh"
       },
       "executable": true,
       "provisional": false,

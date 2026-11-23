@@ -1041,8 +1041,8 @@ Built on what `agy` 1.5.9 returns over ACP during owner-driven sessions; no
 request is added for any of it.
 
 - **Recommended cards.** `configuration_presets` follow the `configOptions`
-  of `session/new` (`agy` 1.5.9, 2026-11-21): Gemini 4 Neon High, Gemini 4
-  Hydrogen Extra and High (default), then Claude Opus 5.5 High and Claude
+  of `session/new` (`agy` 1.5.9, 2026-11-21): Gemini 4 Neon High (default)
+  and Extra, Gemini 4 Hydrogen Extra and High, then Claude Opus 5.5 High and Claude
   Sonnet 5.5 High, which `agy` serves on the same Google account's quota.
   Each card sets `model` and `thought_level`. The reasoning list is
   model-scoped (Gemini 4 offers `low`…`xhigh`, the Claude models
