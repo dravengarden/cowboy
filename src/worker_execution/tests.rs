@@ -1269,12 +1269,12 @@ async fn a_batch_entry_never_written_is_not_a_send() {
     assert!(ledger.uncertain_effect().is_none());
 }
 
+/// What a ledger's observer was told: each published method and sequence.
+type Published = Arc<Mutex<Vec<(String, u64)>>>;
+
 /// A ledger whose next durable write fails: a directory now occupies its
 /// path, so the atomic rename cannot replace it (whatever the privileges).
-fn unwritable_ledger(
-    target: &Target,
-    root: &std::path::Path,
-) -> (Arc<Ledger>, Arc<Mutex<Vec<(String, u64)>>>) {
+fn unwritable_ledger(target: &Target, root: &std::path::Path) -> (Arc<Ledger>, Published) {
     let path = root.join("session.json");
     let ledger = ledger(&target.client, Some(path.clone()));
     std::fs::create_dir(&path).unwrap();
