@@ -2,7 +2,11 @@ import { desktopSize } from "../surface/desktopSize";
 import { alpha, Box, ButtonBase, Divider, Stack, Tooltip } from "@mui/material";
 import { useExploreSessionState } from "../explore/exploreStore";
 import type { Status } from "../protocol";
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useState, useSyncExternalStore } from "react";
+import {
+  productSessionAlertVisible,
+  subscribeProductSessionAlertVisible,
+} from "../auth/productSessionAlertHost";
 import { retrySyncNow, useHeldDeliveries, useStoreSelector, useSyncStatus } from "../store";
 import {
   attentionCount,
@@ -17,6 +21,7 @@ import { useComposerSourceMode } from "../composerSourceMode";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
 import { DesktopKeycap, DesktopShortcut } from "./commands/DesktopKeycap";
 import {
+  type DesktopCommand,
   useDesktopCommandActions,
   useDesktopCommandSelector,
 } from "./commands/DesktopCommandProvider";
@@ -243,31 +248,36 @@ function statusPaneLabel(
 }
 
 const EMPTY_TOP_BAR_HINTS: readonly RegionHint[] = [];
+const EMPTY_TOP_BAR_COMMANDS: readonly DesktopCommand[] = [];
 
-function sameRegionHints(
-  previous: readonly RegionHint[],
-  next: readonly RegionHint[],
+function sameCommandRefs(
+  previous: readonly DesktopCommand[],
+  next: readonly DesktopCommand[],
 ): boolean {
   if (previous === next) return true;
   if (previous.length !== next.length) return false;
   for (let i = 0; i < previous.length; i += 1) {
-    if (
-      previous[i]!.keys !== next[i]!.keys ||
-      previous[i]!.label !== next[i]!.label ||
-      previous[i]!.availability !== next[i]!.availability
-    ) return false;
+    if (previous[i] !== next[i]) return false;
   }
   return true;
 }
 
 function useStatusLineSubscriptions(focusedRegion: string | null) {
-  const topBarHints = useDesktopCommandSelector(
+  useSyncExternalStore(
+    subscribeProductSessionAlertVisible,
+    () => (focusedRegion === "topbar.controls" ? productSessionAlertVisible() : false),
+    () => false,
+  );
+  const topBarCommands = useDesktopCommandSelector(
     (registered) =>
       focusedRegion === "topbar.controls"
-        ? topBarRegionHints(registered)
-        : EMPTY_TOP_BAR_HINTS,
-    sameRegionHints,
+        ? registered.filter((command) => command.regions?.includes("topbar.controls"))
+        : EMPTY_TOP_BAR_COMMANDS,
+    sameCommandRefs,
   );
+  const topBarHints = focusedRegion === "topbar.controls"
+    ? topBarRegionHints(topBarCommands)
+    : EMPTY_TOP_BAR_HINTS;
   const hasApprovalChoice = useDesktopCommandSelector((registered) =>
     registered.some((command) => command.id.startsWith("approval.choice."))
   );

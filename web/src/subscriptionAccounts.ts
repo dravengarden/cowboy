@@ -205,11 +205,20 @@ export function validSubscriptionSnapshot(value: unknown, owner: string | undefi
 }
 
 const empty: { data?: SubscriptionSnapshot; error: string } = { error: "" };
+const ERROR_RETRY_COOLDOWN_MS = 15_000;
 let snapshot = empty;
 let snapshotOwner: string | undefined;
 let pending: Promise<void> | undefined;
 let invalidated = false;
+let lastFailureAt = 0;
+let retryTimer: ReturnType<typeof setTimeout> | undefined;
 const listeners = new Set<() => void>();
+function cancelRetry(): void {
+  if (retryTimer !== undefined) {
+    clearTimeout(retryTimer);
+    retryTimer = undefined;
+  }
+}
 function current() {
   return !productSessionSignal().aborted && snapshotOwner === productSyncPrincipal() ? snapshot : empty;
 }
@@ -220,6 +229,7 @@ function publish() { for (const listener of listeners) listener(); }
 async function refresh(): Promise<void> {
   if (productSessionSignal().aborted || !productSyncPrincipal()) return;
   if (pending) return pending;
+  cancelRetry();
   pending = (async () => {
     do {
       invalidated = false;
@@ -231,12 +241,14 @@ async function refresh(): Promise<void> {
         const value: unknown = await response.json();
         if (signal.aborted || owner !== productSyncPrincipal()) return;
         if (!validSubscriptionSnapshot(value, owner)) throw new Error("Account inventory changed. Reload to continue.");
+        lastFailureAt = 0;
         const old = current().data;
         if (!old || old.dataset.dataset_id !== value.dataset.dataset_id ||
           value.registry.revision >= old.registry.revision
         ) { snapshot = { data: withoutLegacyShareMembers(value), error: "" }; snapshotOwner = owner; }
       } catch (cause) {
         if (!signal.aborted && owner === productSyncPrincipal()) {
+          lastFailureAt = Date.now();
           snapshot = { ...current(), error: cause instanceof Error ? cause.message : "Could not load registered accounts." };
           snapshotOwner = owner;
         }
@@ -248,6 +260,12 @@ async function refresh(): Promise<void> {
     // A preference event can run after the loop's final check but before this
     // continuation. Keep it in the same refresh promise instead of losing it.
     if (invalidated && listeners.size > 0 && !productSessionSignal().aborted) return refresh();
+    if (!current().data && current().error && listeners.size > 0 && !productSessionSignal().aborted && retryTimer === undefined) {
+      retryTimer = setTimeout(() => {
+        retryTimer = undefined;
+        if (listeners.size > 0 && !productSessionSignal().aborted) void refresh();
+      }, ERROR_RETRY_COOLDOWN_MS);
+    }
     return undefined;
   });
   return pending;
@@ -270,12 +288,13 @@ function subscribe(listener: () => void) {
     listeners.delete(listener);
     if (listeners.size === 0) {
       invalidated = true;
+      cancelRetry();
       window.removeEventListener(PREFERENCES_CHANGED, changed);
       productSessionSignal().removeEventListener("abort", clear);
     }
   };
 }
-function clear() { snapshot = empty; snapshotOwner = undefined; publish(); }
+function clear() { cancelRetry(); lastFailureAt = 0; snapshot = empty; snapshotOwner = undefined; publish(); }
 /** Browser fixtures share one page: start a surface from a first load. */
 export function resetSubscriptionAccountsForTest(): void { invalidated = false; clear(); }
 
@@ -290,7 +309,8 @@ export function useSubscriptionAccounts(connected = true) {
   const previous = useRef(connected);
   useEffect(() => {
     const snap = current();
-    if ((!snap.data && !snap.error) || invalidated || (connected && !previous.current)) void refresh();
+    const retryAllowed = !snap.error || Date.now() - lastFailureAt >= ERROR_RETRY_COOLDOWN_MS;
+    if ((!snap.data && retryAllowed) || invalidated || (connected && !previous.current)) void refresh();
     previous.current = connected;
   }, [connected]);
   return { ...value, refresh: reload };
