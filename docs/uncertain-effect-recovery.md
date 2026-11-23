@@ -282,8 +282,12 @@ Proxy half (Antigravity Plugin):
   boundary (except a report of an unknown outcome), and waits until no
   request awaits its reply, twice in a row, so a report caused by a late
   reply is sent and answered too.
-- Only then does the proxy send `cowboy/drained`, its acknowledgement that
-  every reply it awaited arrived, and close the connection.
+- It first waits for the facade's admitted turn work to settle
+  (`facade.settled`), including a publish that is waiting for a notification
+  with no request pending, through its verification and report. Only then,
+  within the same 10 s, does the proxy send `cowboy/drained`, its
+  acknowledgement that every reply it awaited arrived, and close the
+  connection. If time runs out, it sends no acknowledgement.
 - A closed ACP output pipe (the worker closed it first) no longer ends the
   proxy before the drain: late writes are dropped.
 
@@ -303,12 +307,15 @@ Worker half (worker release):
   unit's `cowboy/drained`, which the endpoint answers itself and never
   forwards. Only that acknowledgement proves receipt. A unit exit, a
   disconnect or the bound does not.
-- Every reply written while draining is held as unproven until the
-  acknowledgement arrives. Without one, the stop is forced, and each unproven
-  reply goes through the ledger's existing undelivered classification. That
-  covers mutations, result-carrying reads and stops, and extension results,
-  while a definite refusal does not park. The same applies to a reply written
-  after the forced transition or after the acknowledgement.
+- Every reply written while draining is classified at once with the
+  ledger's undelivered rules (`unread_effects`). These cover mutations,
+  result-carrying reads and stops, and extension results, and a definite
+  refusal leaves no effect. Only the effects' names are kept, at most 256;
+  beyond that they are recorded at once. They stay unproven until the
+  acknowledgement arrives on the same socket. If the stop is forced, or the
+  socket ends while draining, they are recorded as uncertain. So is a reply
+  written after either, or after the acknowledgement. A reopened socket can
+  never acknowledge an earlier socket's replies.
 - A replacement unit (initialize retry) has its drain state reset before its
   listener is published.
 

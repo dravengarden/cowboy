@@ -149,14 +149,18 @@ pub struct ExecutionBridge {
     pub relays: std::sync::Arc<RelayQuiet>,
 }
 
-/// Records one reply the unit may never have read as the ledger would an
-/// undelivered one.
-pub type Unreceived = Box<dyn FnOnce() + Send>;
+/// Records effects whose replies the unit may never have read as uncertain
+/// (the session's ledger).
+pub type Recorder = Box<dyn Fn(&[String]) + Send + Sync>;
+
+/// Unproven effects kept while draining; beyond it they are recorded at once.
+const MAX_UNPROVEN: usize = 256;
 
 /// Replies written while the unit drains and what is known of their receipt.
 #[derive(Default)]
 struct Receipts {
-    unproven: Vec<Unreceived>,
+    /// Effects of replies written since the drain began, not yet proven read.
+    unproven: Vec<String>,
     /// The unit acknowledged its drain: every earlier reply was read.
     acknowledged: bool,
     /// The unit is stopped without that acknowledgement.
@@ -174,6 +178,7 @@ pub struct RelayQuiet {
     draining: std::sync::atomic::AtomicBool,
     receipts: parking_lot::Mutex<Receipts>,
     acknowledged: tokio::sync::Notify,
+    recorder: std::sync::OnceLock<Recorder>,
 }
 
 impl std::fmt::Debug for RelayQuiet {
@@ -249,19 +254,41 @@ impl RelayQuiet {
         self.draining.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// A reply was written to the unit. While draining its receipt is proven
-    /// only by the unit's later acknowledgement; once the unit is stopped
-    /// without one (or acknowledged before this reply), `unreceived` runs.
-    pub fn written(&self, unreceived: Unreceived) {
-        if !self.draining() {
+    /// Where unread effects are recorded.
+    pub fn set_recorder(&self, recorder: Recorder) {
+        let _ = self.recorder.set(recorder);
+    }
+
+    fn record(&self, effects: &[String]) {
+        if let (Some(recorder), false) = (self.recorder.get(), effects.is_empty()) {
+            recorder(effects);
+        }
+    }
+
+    /// A reply leaving `effects` unknown unless read was written to the unit.
+    /// While draining its receipt is proven only by the unit's later
+    /// acknowledgement on the same socket; after a forced stop, after the
+    /// acknowledgement, or beyond the bound they are recorded at once.
+    pub fn written(&self, effects: &[&str]) {
+        if effects.is_empty() || !self.draining() {
             return;
         }
         let mut receipts = self.receipts.lock();
-        if receipts.forced || receipts.acknowledged {
+        if receipts.forced
+            || receipts.acknowledged
+            || receipts.unproven.len() + effects.len() > MAX_UNPROVEN
+        {
             drop(receipts);
-            unreceived();
+            self.record(
+                &effects
+                    .iter()
+                    .map(|effect| (*effect).to_owned())
+                    .collect::<Vec<_>>(),
+            );
         } else {
-            receipts.unproven.push(unreceived);
+            receipts
+                .unproven
+                .extend(effects.iter().map(|effect| (*effect).to_owned()));
         }
     }
 
@@ -277,6 +304,14 @@ impl RelayQuiet {
         }
         drop(receipts);
         self.acknowledged.notify_waiters();
+    }
+
+    /// The unit's socket ended: while draining, its unproven replies stay
+    /// unproven for good (a later socket cannot acknowledge them).
+    pub fn socket_ended(&self) {
+        if self.draining() {
+            self.forced();
+        }
     }
 
     /// Wait at most `bound` for the unit's drain acknowledgement.
@@ -304,9 +339,7 @@ impl RelayQuiet {
             receipts.forced = true;
             std::mem::take(&mut receipts.unproven)
         };
-        for unreceived in unproven {
-            unreceived();
-        }
+        self.record(&unproven);
     }
 
     /// Relays in flight now.

@@ -470,11 +470,15 @@ impl Admission {
         self.tasks.spawn(async move {
             let _permit = permit;
             let session = client.session.clone();
+            let relays = Arc::clone(&client.relays);
             if serve(socket, &token, client).await.is_err() {
                 // Do not log frames, capabilities or arbitrary
                 // native error text from the private endpoint.
                 tracing::warn!(event_name = "cowboy.execution.disconnected", %session, reason = "endpoint_failed", "execution endpoint disconnected");
             }
+            // Receipts belong to this socket: another one can never
+            // acknowledge what this one wrote (design L1c).
+            relays.socket_ended();
         });
     }
 
@@ -547,6 +551,12 @@ impl Endpoint {
         }
         let descriptor = serde_json::to_vec(&descriptor)?;
         let relays = Arc::clone(&client.relays);
+        let weak = Arc::downgrade(&client);
+        relays.set_recorder(Box::new(move |effects| {
+            if let Some(client) = weak.upgrade() {
+                client.unread(effects);
+            }
+        }));
         let (listeners, mut received) = mpsc::unbounded_channel::<OwnedFd>();
         let mut admission = Admission::new(token, Arc::clone(&client));
         let listener = tokio::spawn(async move {

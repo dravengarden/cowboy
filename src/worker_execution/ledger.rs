@@ -580,6 +580,41 @@ fn next_sequence(previous: u64) -> u64 {
     previous.saturating_add(1).max(now)
 }
 
+/// The effects a reply the agent side never read leaves unknown: a mutation
+/// or a result-carrying request the target answered (or whose outcome is
+/// already unknown), and an extension call that ran (an unknown outcome was
+/// already recorded by its broker). A definite refusal leaves none.
+pub(super) fn unread_effects(
+    method: &str,
+    carries_result: bool,
+    reply: &Value,
+) -> Vec<&'static str> {
+    let answered = reply.get("result").is_some()
+        || reply.pointer("/error/data/outcome") == Some(&json!("unknown"));
+    let mut effects = Vec::new();
+    if (MUTATIONS.contains(&method) || carries_result)
+        && answered
+        && let Some(known) = KNOWN_EFFECTS.iter().find(|known| **known == method)
+    {
+        effects.push(*known);
+    }
+    if method == super::extension_broker::EXTENSION_CALL && reply.get("result").is_some() {
+        effects.push("tools/call");
+    }
+    effects
+}
+
+/// Methods an unread reply can leave uncertain (a static name each).
+const KNOWN_EFFECTS: &[&str] = &[
+    "fs/writeFile",
+    "fs/remove",
+    "fs/copy",
+    "fs/createDirectory",
+    "process/start",
+    "process/terminate",
+    "process/read",
+];
+
 fn refused(message: &str) -> Value {
     json!({"error": {"code": -32000, "message": message}})
 }
@@ -773,15 +808,18 @@ impl Client {
         let Some(ledger) = self.ledger() else {
             return;
         };
-        let answered = reply.get("result").is_some()
-            || reply.pointer("/error/data/outcome") == Some(&json!("unknown"));
-        if (MUTATIONS.contains(&method) || carries_result) && answered {
-            ledger.mark_uncertain(method);
+        for effect in unread_effects(method, carries_result, reply) {
+            ledger.mark_uncertain(effect);
         }
-        // An extension call that ran but whose result never reached the
-        // unit (an unknown outcome was already recorded by the broker).
-        if method == super::extension_broker::EXTENSION_CALL && reply.get("result").is_some() {
-            ledger.mark_uncertain("tools/call");
+    }
+
+    /// Record effects whose replies the unit may never have read, as
+    /// classified by [`unread_effects`].
+    pub(super) fn unread(&self, effects: &[String]) {
+        if let Some(ledger) = self.ledger() {
+            for effect in effects {
+                ledger.mark_uncertain(effect);
+            }
         }
     }
 

@@ -513,7 +513,16 @@ export async function runProxy({
   // here would leave its effect unknown to the worker (design L1c). No new
   // facade work starts meanwhile.
   ready?.facade.quiesce();
-  if (await ready?.connection.idle(DRAIN_MS)) await ready.connection.drained(DRAIN_MS);
+  // Acknowledged only once the facade's admitted work settled (a publish
+  // waiting for a notification included) and no reply is owed; otherwise the
+  // worker records its drained replies as possibly unread (fail closed).
+  const deadline = Date.now() + DRAIN_MS;
+  if (
+    (await ready?.facade.settled(DRAIN_MS)) &&
+    (await ready.connection.idle(Math.max(0, deadline - Date.now())))
+  ) {
+    await ready.connection.drained(Math.max(1, deadline - Date.now()));
+  }
   ready?.connection.close();
   return signal ? 1 : (code ?? 1);
 }

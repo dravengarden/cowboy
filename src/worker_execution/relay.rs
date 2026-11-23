@@ -105,15 +105,12 @@ impl Relays {
     /// unit drains is proven read only by the unit's own exit (design L1c).
     pub fn delivered(&self, done: &Done) {
         if self.client.relays.draining() {
-            let (client, method, carries_result, reply) = (
-                Arc::clone(&self.client),
-                done.method.clone(),
+            // Classified now: only the effects' names are kept.
+            self.client.relays.written(&super::ledger::unread_effects(
+                &done.method,
                 done.carries_result,
-                done.reply.clone(),
-            );
-            self.client.relays.written(Box::new(move || {
-                client.undelivered(&method, carries_result, &reply);
-            }));
+                &done.reply,
+            ));
         }
     }
 

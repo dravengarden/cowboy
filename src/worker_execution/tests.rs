@@ -1231,32 +1231,79 @@ fn a_draining_unit_relays_only_cleanup() {
     assert!(quiet.try_enter("fs/writeFile").is_some());
 }
 
+fn recorded_quiet() -> (
+    Arc<crate::account_sandbox::RelayQuiet>,
+    Arc<Mutex<Vec<String>>>,
+) {
+    let quiet = Arc::new(crate::account_sandbox::RelayQuiet::default());
+    let recorded = Arc::new(Mutex::new(Vec::<String>::new()));
+    let sink = Arc::clone(&recorded);
+    quiet.set_recorder(Box::new(move |effects| {
+        sink.lock().extend_from_slice(effects)
+    }));
+    (quiet, recorded)
+}
+
 #[test]
 fn only_the_units_acknowledgement_proves_a_drained_reply_was_read() {
-    let quiet = Arc::new(crate::account_sandbox::RelayQuiet::default());
-    let recorded = Arc::new(Mutex::new(Vec::<&'static str>::new()));
-    let record = |name: &'static str| -> crate::account_sandbox::Unreceived {
-        let sink = Arc::clone(&recorded);
-        Box::new(move || sink.lock().push(name))
-    };
+    let (quiet, recorded) = recorded_quiet();
     // Before the drain the unit reads its replies as usual.
-    quiet.written(record("before"));
+    quiet.written(&["process/read"]);
     // Acknowledged: nothing is recorded.
     quiet.begin_drain();
-    quiet.written(record("read"));
+    quiet.written(&["process/terminate"]);
     quiet.acknowledge();
     assert!(recorded.lock().is_empty());
     // A reply after the acknowledgement is unread (the unit is closing).
-    quiet.written(record("after-ack"));
-    assert_eq!(*recorded.lock(), ["after-ack"]);
+    quiet.written(&["process/read"]);
+    assert_eq!(*recorded.lock(), ["process/read"]);
     // Stopped without an acknowledgement: every drained reply, also one
     // written after the forced stop, is recorded.
     quiet.begin_drain();
-    quiet.written(record("unproven"));
+    quiet.written(&["fs/writeFile"]);
     quiet.forced();
-    quiet.written(record("late"));
+    quiet.written(&["tools/call"]);
     quiet.acknowledge();
-    assert_eq!(*recorded.lock(), ["after-ack", "unproven", "late"]);
+    assert_eq!(
+        *recorded.lock(),
+        ["process/read", "fs/writeFile", "tools/call"]
+    );
+}
+
+#[test]
+fn a_replacement_socket_cannot_acknowledge_an_earlier_sockets_replies() {
+    let (quiet, recorded) = recorded_quiet();
+    quiet.begin_drain();
+    quiet.written(&["process/terminate"]);
+    // The socket ends before the unit read it; a new socket acknowledges.
+    quiet.socket_ended();
+    quiet.acknowledge();
+    assert_eq!(*recorded.lock(), ["process/terminate"]);
+}
+
+#[test]
+fn unproven_receipts_are_bounded() {
+    let (quiet, recorded) = recorded_quiet();
+    quiet.begin_drain();
+    for _ in 0..300 {
+        quiet.written(&["process/read"]);
+    }
+    // Beyond the bound they are recorded at once instead of kept.
+    assert!(!recorded.lock().is_empty());
+    quiet.acknowledge();
+    assert!(recorded.lock().len() <= 300);
+}
+
+#[test]
+fn an_unread_refusal_leaves_no_effect_and_an_answered_mutation_does() {
+    use super::ledger::unread_effects;
+    let refusal = json!({"error": {"code": -32000, "message": "refused"}});
+    assert!(unread_effects("fs/writeFile", false, &refusal).is_empty());
+    assert_eq!(
+        unread_effects("fs/writeFile", false, &json!({"result": {}})),
+        ["fs/writeFile"]
+    );
+    assert!(unread_effects("fs/readFile", false, &json!({"result": {}})).is_empty());
 }
 
 #[tokio::test]

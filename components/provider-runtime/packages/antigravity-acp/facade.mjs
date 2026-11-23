@@ -269,6 +269,26 @@ export class Facade {
     }
   }
 
+  /**
+   * Wait at most `ms` until every session's admitted turn work (a publish
+   * through its verification and report included) settled; `false` when the
+   * bound ended the wait.
+   */
+  async settled(ms) {
+    const work = [...this.sessions.values()].flatMap((session) => [
+      ...(session.turn?.inflight ?? []),
+    ]);
+    let timer;
+    const expired = new Promise((resolve) => {
+      timer = setTimeout(() => resolve(false), ms);
+    });
+    try {
+      return await Promise.race([Promise.allSettled(work).then(() => true), expired]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   /** Stop tracking a command whose process is gone. */
   forget(session, command) {
     clearTimeout(command.timer);
