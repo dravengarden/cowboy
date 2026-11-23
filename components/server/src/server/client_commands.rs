@@ -250,7 +250,7 @@ pub(super) fn submit_command(
         }
         if force
             && let Some(refusal) =
-                provider_accounts::retirement::session_refusal(state, &session_id)
+                provider_accounts::retirement::session_refusal(&state.accounts, &session_id)
         {
             // Nothing queued, nothing cancelled: a retired session only parks.
             return ControlFlow::Continue(Err(refusal.to_owned()));
@@ -307,7 +307,9 @@ pub(super) fn reset_session_command(
 ) -> ControlFlow<bool, Result<(), String>> {
     // Before either path clears anything: a retired card's session could
     // never start again, so its history stays and the guidance is returned.
-    if let Some(refusal) = provider_accounts::retirement::session_refusal(state, &session_id) {
+    if let Some(refusal) =
+        provider_accounts::retirement::session_refusal(&state.accounts, &session_id)
+    {
         return ControlFlow::Continue(Err(refusal.to_owned()));
     }
     ControlFlow::Continue({
@@ -463,7 +465,9 @@ pub(super) fn prompt_command(
     content: Vec<serde_json::Value>,
 ) -> ControlFlow<bool, Result<(), String>> {
     // Never wake or feed a worker of a retired legacy card.
-    if let Some(refusal) = provider_accounts::retirement::session_refusal(state, &session_id) {
+    if let Some(refusal) =
+        provider_accounts::retirement::session_refusal(&state.accounts, &session_id)
+    {
         return ControlFlow::Continue(Err(refusal.to_owned()));
     }
     ControlFlow::Continue({
@@ -635,7 +639,9 @@ pub(super) fn force_push_queued(
     session_id: &str,
     id: &str,
 ) -> Result<(), String> {
-    if let Some(refusal) = provider_accounts::retirement::session_refusal(state, session_id) {
+    if let Some(refusal) =
+        provider_accounts::retirement::session_refusal(&state.accounts, session_id)
+    {
         return Err(refusal.to_owned());
     }
     state.hub.request_send_queued(session_id, id); // promote to front either way
@@ -652,7 +658,9 @@ pub(super) fn force_push_queued(
 pub(super) fn force_cancel_with_watchdog(state: &AppState, session_id: &str) -> Result<(), String> {
     // Never cancel a retired session's live turn for a send that will only
     // park; an explicit Stop takes its own path.
-    if let Some(refusal) = provider_accounts::retirement::session_refusal(state, session_id) {
+    if let Some(refusal) =
+        provider_accounts::retirement::session_refusal(&state.accounts, session_id)
+    {
         return Err(refusal.to_owned());
     }
     let Some(cancelled_revision @ (Status::Busy | Status::Starting, _)) =

@@ -1,0 +1,56 @@
+[package]
+name = "cowboy-server-accounts"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Controller Provider accounts, native/portable logins, usage, controls, revocation, and Machine browsers"
+license = "MIT"
+rust-version = "1.98.1"
+
+[lib]
+name = "cowboy_server_accounts"
+path = "src/lib.rs"
+
+[features]
+default = ["full"]
+full = []
+machine-host = ["cowboy/machine-host", "cowboy-server-auth/machine-host"]
+test-support = ["cowboy/test-support", "cowboy-server-auth/test-support"]
+
+[dependencies]
+cowboy = { version = "0.1.0", path = "../.." }
+cowboy-plugin-sdk = { version = "1.20.0", path = "../plugin-sdk" }
+cowboy-provider-sdk = { version = "3.7.0", path = "../provider-sdk" }
+cowboy-server-auth = { version = "0.1.0", path = "../server-auth" }
+anyhow = "1"
+axum = { version = "0.8", features = ["ws"] }
+base64 = "0.22"
+futures = "0.3"
+parking_lot = "0.12"
+semver = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+cowboy = { version = "0.1.0", path = "../..", features = ["test-support"] }
+cowboy-server-auth = { version = "0.1.0", path = "../server-auth", features = ["test-support"] }
+cowboy-wire = { version = "0.1.0", path = "../wire", features = ["test-fixtures"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+tempfile = "3"
+tokio = { version = "1", features = ["test-util"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+
+[lints.rust]
+warnings = "deny"
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "allow", priority = -1 }
+
+[package.metadata.cargo-machete]
+ignored = ["cowboy-wire"]

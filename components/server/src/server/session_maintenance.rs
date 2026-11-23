@@ -9,7 +9,7 @@ use crate::machine_protocol::MachineCapacity;
 
 pub(super) mod crashed_workers;
 
-pub(super) const WAIT_PREFIX: &str = "Waiting for resources: ";
+pub(super) use cowboy_server_auth::server::WAIT_PREFIX;
 pub(super) const MACHINE_CONNECTION_WAIT: &str = "waiting for Machine connection";
 /// The wait of an admitted prompt whose execution Machine is offline or booting.
 pub(super) const TARGET_WAIT_REASON: &str = "the execution Machine is not ready";
@@ -144,7 +144,7 @@ fn execution_target_connected(state: &AppState, meta: &crate::core::SessionMeta)
 
 /// A named-only account parks the session's queue: show why and skip it.
 fn account_parked(state: &Arc<AppState>, meta: &crate::core::SessionMeta) -> bool {
-    let reason = provider_accounts::controls::parked_reason(state, meta);
+    let reason = provider_accounts::controls::parked_reason(&state.accounts, meta);
     if let Some(reason) = &reason {
         wait(&state.hub, &meta.id, reason);
     }
@@ -169,7 +169,7 @@ pub(super) fn has_waiters(state: &AppState, machine: &str) -> bool {
                 i.queue_count > 0
                     && (!i.meta.paused || state.hub.explicit_wait(&s.id))
                     // Parked for good: no worker slot can ever serve it.
-                    && !provider_accounts::retirement::session_retired(state, &i.meta)
+                    && !provider_accounts::retirement::session_retired(&state.accounts, &i.meta)
             })
     })
 }
@@ -206,7 +206,7 @@ fn admit(state: &Arc<AppState>, session: &str) -> Result<Box<dyn Send>, String> 
         .hub
         .session_info(session)
         .ok_or("Session no longer exists")?;
-    provider_accounts::controls::revival_gate(state, &info.meta)?;
+    provider_accounts::controls::revival_gate(&state.accounts, &info.meta)?;
     let machine = &info.meta.machine_id;
     if machine == "local" {
         return Ok(Box::new(()));
@@ -232,7 +232,7 @@ pub(super) fn reload_lease(state: &Arc<AppState>, session: &str) -> Result<Box<d
     if !holds_worker_slot(&state.runtime_router, &info.meta) {
         return admit(state, session);
     }
-    provider_accounts::controls::revival_gate(state, &info.meta)?;
+    provider_accounts::controls::revival_gate(&state.accounts, &info.meta)?;
     session_reclaim::decisions(&info.meta.machine_id)
         .try_lock_owned()
         .map(|guard| Box::new(guard) as Box<dyn Send>)

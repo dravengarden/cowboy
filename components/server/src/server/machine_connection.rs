@@ -1,8 +1,8 @@
 //! The authenticated Machine connection: handshake, writer and runtime tunnel
 //! tasks, per-frame handling, provider authentication sync and presence.
 
-pub(super) use super::random_machine_token;
-use super::*;
+pub(super) use super::*;
+use tokio::net::UnixStream;
 
 mod frames;
 use frames::*;
@@ -445,52 +445,6 @@ pub(super) async fn await_machine_command(
     }
 }
 
-pub(super) async fn sync_provider_auth_to_machine(
-    state: &Arc<AppState>,
-    machine_id: &str,
-    provider_id: &str,
-) -> Result<u64, String> {
-    sync_provider_account_auth_to_machine(
-        state,
-        machine_id,
-        provider_id,
-        &crate::provider_account::ProviderAccountId::default(),
-    )
-    .await
-}
-
-pub(super) async fn sync_provider_account_auth_to_machine(
-    state: &Arc<AppState>,
-    machine_id: &str,
-    provider_id: &str,
-    account_id: &crate::provider_account::ProviderAccountId,
-) -> Result<u64, String> {
-    let connection = state.machine_control.operation_connection(machine_id)?;
-    let (envelope, sealed_to) =
-        sealed_auth_envelope_for_machine(state, machine_id, provider_id, account_id).await?;
-    let generation = state
-        .provider_auth_sync
-        .apply(&state.machine_control, &connection, envelope)
-        .await?;
-    // The durable per-Machine acknowledgement the reconciler and the
-    // retirement's startup gate read.
-    let scope = if account_id.is_default() {
-        Some(Arc::clone(&state.provider_auth))
-    } else {
-        state.provider_auth.existing_account(account_id)
-    };
-    // Exactly the enrollment the envelope was sealed to, never a key read
-    // after the receipt (a re-enrollment may have landed meanwhile).
-    let enrollment = crate::admin::hex_sha256(sealed_to.as_bytes());
-    if let Some(scope) = scope
-        && let Err(error) =
-            scope.record_delivery(provider_id, (machine_id, &enrollment), generation)
-    {
-        tracing::warn!(%error, %machine_id, %provider_id, "recording a credential delivery acknowledgement");
-    }
-    Ok(generation)
-}
-
 pub(super) async fn reconcile_machine_account_grants(
     state: &Arc<AppState>,
     machine_id: &str,
@@ -517,7 +471,7 @@ pub(super) async fn reconcile_machine_account_grants(
                 "account credential reconciliation remains pending");
         }
     }
-    provider_accounts::portable::reconcile_machine(state, machine_id).await;
+    provider_accounts::portable::reconcile_machine(&state.accounts, machine_id).await;
     Ok(())
 }
 
@@ -563,7 +517,7 @@ pub(super) async fn accept_service_auth_candidate(
 ) -> Result<(), String> {
     if !account_id.is_default() {
         return provider_accounts::login::accept(
-            state,
+            &state.accounts,
             provider_accounts::login::Candidate {
                 machine: machine_id,
                 request: request_id,
@@ -1128,7 +1082,7 @@ pub(super) async fn handle_machine_ws(
 /// with it.
 fn release_connection(state: &AppState, connection: &crate::machine_control::ConnectionToken) {
     state.machine_control.remove_if_current(connection);
-    state.browsers.disconnected(connection);
+    state.accounts.browsers.disconnected(connection);
 }
 
 /// Records what the connecting Machine offers: its session capacity for
@@ -1143,7 +1097,10 @@ fn observe_hello_capabilities(
     state
         .session_maintenance
         .observe_capacity(&hello.machine_id, hello.capacity.clone());
-    state.browsers.connected(connection, hello.browser.clone());
+    state
+        .accounts
+        .browsers
+        .connected(connection, hello.browser.clone());
 }
 
 /// Converges a reconnected Machine's account grants, interrupted plugin
@@ -1156,7 +1113,7 @@ fn spawn_machine_reconnect_sync(
     // Re-learn the browsers this Machine still holds; nothing from an
     // earlier connection is trusted.
     tokio::spawn(provider_accounts::browser::refresh_placements(
-        Arc::clone(state),
+        Arc::clone(&state.accounts),
         connection.clone(),
     ));
     let sync_state = Arc::clone(state);
@@ -1169,7 +1126,7 @@ fn spawn_machine_reconnect_sync(
     // A Machine that restarted mid-install proves an interrupted staging
     // attempt durably at startup; release its Service fence without an Operator.
     tokio::spawn(plugin_install::recover_interrupted_staging(
-        Arc::clone(state),
+        Arc::clone(&state.plugins),
         hello.machine_id.clone(),
         connection.clone(),
     ));
@@ -1264,7 +1221,9 @@ fn install_machine_runtime(
     if let Some(store) = state.store.as_ref() {
         runtime.attach_native_admission(machine_id.clone(), store.clone());
     }
-    runtime.set_turn_end_listener(super::provider_accounts::controls::turn_end_listener(state));
+    runtime.set_turn_end_listener(super::provider_accounts::controls::turn_end_listener(
+        &state.accounts,
+    ));
     // Finding 11: if this runtime's teardown requeue finishes after a replacement
     // runtime already connected and ran `wake_notices_for_machine`, wake the
     // dormant (`Exited`) parent now.

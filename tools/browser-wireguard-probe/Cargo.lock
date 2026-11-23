@@ -475,6 +475,8 @@ dependencies = [
 [[package]]
 name = "gotatun"
 version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4578da6dc5281756ef0277a8ab92fd390b472b87b939c89252130be9ca28812b"
 dependencies = [
  "aead",
  "base64",
@@ -504,7 +506,6 @@ dependencies = [
  "tokio-util",
  "tracing",
  "typed-builder",
- "web-time",
  "windows-sys 0.61.2",
  "x25519-dalek",
  "zerocopy",
@@ -1387,16 +1388,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23f0c9c52aa7cd7d77769a4cfe2a9adb1b331f489a41d912ce14513d5ab995c6"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "web-time"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
-dependencies = [
- "js-sys",
- "wasm-bindgen",
 ]
 
 [[package]]

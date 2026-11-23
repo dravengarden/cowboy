@@ -6,153 +6,6 @@ use std::time::Duration;
 
 pub(super) mod reconciler;
 
-#[derive(Clone)]
-pub(super) struct ProviderAuthExecutor {
-    pub(super) native_login: Option<provider_accounts::login::NativeLogin>,
-    pub(super) named_login: Option<provider_accounts::login::NamedLogin>,
-    pub(super) cancel_requested: bool,
-    pub(super) owner_user_id: String,
-    pub(super) account_id: crate::provider_account::ProviderAccountId,
-    pub(super) machine_id: String,
-    pub(super) connection: crate::machine_control::ConnectionToken,
-    pub(super) provider_id: String,
-    pub(super) provider_version: String,
-    pub(super) generation_digest: String,
-    pub(super) auth_contract_fingerprint: String,
-    pub(super) auth_method: String,
-    pub(super) expected_generation: u64,
-    pub(super) promotion_started: bool,
-    pub(super) expires_at_ms: i64,
-}
-
-impl ProviderAuthExecutor {
-    pub(super) fn auth_scope<'a>(
-        &'a self,
-        state: &'a AppState,
-    ) -> Option<&'a crate::provider_service::ProviderAuthService> {
-        if self.native_login.is_some() {
-            return None;
-        }
-        Some(
-            self.named_login
-                .as_ref()
-                .map_or(&state.provider_auth, |login| &login.scope),
-        )
-    }
-    pub(super) fn owned_by(&self, owner: &str, provider: &str) -> bool {
-        self.owner_user_id == owner && self.provider_id == provider
-    }
-
-    // Called while holding the executor map lock. A failed validation/commit
-    // must remain retryable; only durable credential ownership consumes it.
-    pub(super) fn promote_once<T, E>(
-        &mut self,
-        commit: impl FnOnce(u64) -> Result<T, E>,
-    ) -> Result<Option<T>, E> {
-        if self.promotion_started {
-            return Ok(None);
-        }
-        let committed = commit(self.expected_generation)?;
-        self.promotion_started = true;
-        Ok(Some(committed))
-    }
-
-    pub(super) fn active(&self, control: &MachineControl, timestamp: i64) -> bool {
-        !self.cancel_requested
-            && self.expires_at_ms > timestamp
-            && control.is_current(&self.connection)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn accepts_candidate(
-        &self,
-        machine_id: &str,
-        account_id: &crate::provider_account::ProviderAccountId,
-        provider_id: &str,
-        auth_method: &str,
-        provider_version: &str,
-        generation_digest: &str,
-        auth_contract_fingerprint: &str,
-    ) -> bool {
-        self.machine_id == machine_id
-            && self.account_id == *account_id
-            && self.provider_id == provider_id
-            && self.provider_version == provider_version
-            && self.generation_digest == generation_digest
-            && self.auth_contract_fingerprint == auth_contract_fingerprint
-            && self.auth_method == auth_method
-    }
-}
-
-pub(super) fn reconcile_provider_auth_executors(
-    executors: &mut HashMap<String, ProviderAuthExecutor>,
-    provider_id: &str,
-    timestamp: i64,
-    control: &MachineControl,
-) -> ProviderAuthReconciliation {
-    let mut expired = Vec::new();
-    executors.retain(|request_id, executor| {
-        if !executor.account_id.is_default() {
-            return true;
-        }
-        let active = executor.active(control, timestamp);
-        if !active {
-            expired.push((executor.provider_id.clone(), request_id.clone()));
-        }
-        active
-    });
-    let active = executors
-        .iter()
-        .filter(|(_, executor)| {
-            executor.account_id.is_default() && executor.provider_id == provider_id
-        })
-        .max_by_key(|(_, executor)| executor.expires_at_ms)
-        .map(|(request_id, executor)| (request_id.clone(), executor.clone()));
-    ProviderAuthReconciliation { expired, active }
-}
-
-pub(super) fn resumed_provider_authentication_response(
-    request_id: String,
-    executor: &ProviderAuthExecutor,
-    request: &ProviderAuthStartRequest,
-    owner_user_id: &str,
-) -> Response {
-    // Default credentials remain Service-wide, but the temporary native login
-    // and its challenges belong only to the initiating product user.
-    if executor.owner_user_id != owner_user_id {
-        return (
-            StatusCode::CONFLICT,
-            "Provider authentication is already in progress",
-        )
-            .into_response();
-    }
-    if executor.auth_method != request.method
-        || request
-            .machine_id
-            .as_ref()
-            .is_some_and(|id| id != &executor.machine_id)
-        || executor.provider_version != request.provider_version
-        || executor.generation_digest != request.generation_digest
-    {
-        return (
-            StatusCode::CONFLICT,
-            "A different authentication flow is active; cancel it before starting another",
-        )
-            .into_response();
-    }
-    (
-        StatusCode::ACCEPTED,
-        Json(serde_json::json!({
-            "request_id": request_id,
-            "expires_at_ms": executor.expires_at_ms,
-            "method": executor.auth_method,
-            "machine_id": executor.machine_id,
-            "resumed": true,
-        })),
-    )
-        .into_response()
-}
-
 pub(super) async fn connected_provider_authentication_executors(
     state: &AppState,
     include_machine: bool,
@@ -179,70 +32,9 @@ pub(super) async fn provider_installations(
     state: &AppState,
     connected_only: bool,
 ) -> Vec<(String, crate::machine_protocol::PluginInventory)> {
-    catalogued_installations(state, connected_only, true)
+    catalogued_installations(&state.accounts, connected_only, true)
         .await
         .unwrap_or_default()
-}
-
-/// Active installations of a catalogued release on enrolled, unrevoked
-/// Machines. `runtime_policy` additionally applies the Provider execution
-/// policy (where a Provider may run); credential discovery does not, since
-/// Service credentials reach every enrolled Machine. An unreadable Machine
-/// list is an error, never an empty result; an undecodable inventory is
-/// skipped for executor selection (`runtime_policy`) and an error otherwise.
-pub(in crate::server) async fn catalogued_installations(
-    state: &AppState,
-    connected_only: bool,
-    runtime_policy: bool,
-) -> Result<Vec<(String, crate::machine_protocol::PluginInventory)>, ()> {
-    let store = state.store.as_ref().ok_or(())?;
-    let machines = store.list_machines().await.map_err(|_| ())?;
-    let connected = state.machine_control.connected_machine_ids();
-    let mut installations = Vec::new();
-    for machine in machines
-        .into_iter()
-        .filter(|machine| !machine.revoked && (!connected_only || connected.contains(&machine.id)))
-    {
-        let Ok(providers) = serde_json::from_value::<Vec<crate::machine_protocol::PluginInventory>>(
-            machine
-                .inventory
-                .get("plugins")
-                .or_else(|| machine.inventory.get("providers"))
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!([])),
-        ) else {
-            // Executor selection is best-effort; credential discovery must
-            // not read an undecodable inventory as "no installation here".
-            if runtime_policy {
-                continue;
-            }
-            return Err(());
-        };
-        for installed in providers.into_iter().filter(|provider| {
-            provider.state == crate::machine_protocol::PluginInstallationState::Active
-        }) {
-            if runtime_policy
-                && !state
-                    .supervisor
-                    .runtime_allowed(&installed.plugin_id, &machine.id)
-            {
-                continue;
-            }
-            if state
-                .provider_catalog
-                .package(
-                    &installed.plugin_id,
-                    &installed.plugin_version,
-                    &installed.generation_digest,
-                )
-                .is_none()
-            {
-                continue;
-            }
-            installations.push((machine.id.clone(), installed));
-        }
-    }
-    Ok(installations)
 }
 
 pub(super) fn submit_provider_auth_code(
@@ -303,7 +95,7 @@ pub(super) async fn cancel_provider_auth_request(
         )
             .into_response();
     };
-    let cleanup = provider_accounts::login::cancel(state, &executor, &request_id).await;
+    let cleanup = provider_accounts::login::cancel(&state.accounts, &executor, &request_id).await;
     if let Err(error) = cleanup {
         return (StatusCode::SERVICE_UNAVAILABLE, error).into_response();
     }
@@ -325,7 +117,7 @@ pub(super) async fn cancel_provider_auth_request(
 /// after every Provider Catalog refresh and periodically; it never overwrites
 /// a Provider that already has durable authentication state.
 pub(super) async fn adopt_shared_provider_authentication(state: &Arc<AppState>) {
-    provider_accounts::portable::adopt(state).await;
+    provider_accounts::portable::adopt(&state.accounts).await;
     let mut adopted = Vec::new();
     for scope in state.provider_catalog.authentication_scopes() {
         let packages = state
@@ -353,83 +145,13 @@ pub(super) async fn distribute_and_mark_provider_auth(
     Vec<crate::provider_service::ProviderAuthenticationStatus>,
     BTreeMap<String, ProviderDistributionOutcome>,
 ) {
-    distribute_and_mark_scope(state, &state.provider_auth, &Default::default(), statuses).await
-}
-
-/// Deliver one Service-held credential scope (the default account or a named
-/// portable account) to every enrolled Machine and record the outcome.
-pub(super) async fn distribute_and_mark_scope(
-    state: &Arc<AppState>,
-    scope: &Arc<crate::provider_service::ProviderAuthService>,
-    account: &crate::provider_account::ProviderAccountId,
-    statuses: Vec<crate::provider_service::ProviderAuthenticationStatus>,
-) -> (
-    Vec<crate::provider_service::ProviderAuthenticationStatus>,
-    BTreeMap<String, ProviderDistributionOutcome>,
-) {
-    let mut next = Vec::with_capacity(statuses.len());
-    let mut replicas = BTreeMap::new();
-    for status in statuses {
-        let provider_id = status.provider_id.clone();
-        let outcome = distribute_account_auth(state, &provider_id, account).await;
-        match scope.mark_distribution(&provider_id, status.auth_generation, outcome.state()) {
-            Ok(marked) => {
-                replicas.insert(provider_id, outcome);
-                next.push(marked);
-            }
-            Err(error) => {
-                tracing::warn!(%error, %provider_id, "ignoring stale Provider auth distribution result");
-                next.push(scope.status(&provider_id).unwrap_or(status));
-            }
-        }
-    }
-    (next, replicas)
-}
-
-async fn distribute_account_auth(
-    state: &Arc<AppState>,
-    provider_id: &str,
-    account: &crate::provider_account::ProviderAccountId,
-) -> ProviderDistributionOutcome {
-    let connected = state.machine_control.connected_machine_ids();
-    let Some(store) = state.store.as_ref() else {
-        return ProviderDistributionOutcome {
-            failed: 1,
-            ..ProviderDistributionOutcome::default()
-        };
-    };
-    // The same recipients the reconciler and the retirement gate use.
-    let enrolled = match store.credential_recipients().await {
-        Ok(recipients) => recipients,
-        Err(error) => {
-            tracing::warn!(%error, %provider_id, "listing enrolled Machines for Provider auth sync");
-            return ProviderDistributionOutcome {
-                failed: 1,
-                ..ProviderDistributionOutcome::default()
-            };
-        }
-    };
-    let mut outcome = ProviderDistributionOutcome::default();
-    for (machine_id, _) in enrolled {
-        if !connected.contains(&machine_id) {
-            outcome.pending += 1;
-            continue;
-        }
-        match sync_provider_account_auth_to_machine(state, &machine_id, provider_id, account).await
-        {
-            Ok(auth_generation) => {
-                outcome.succeeded += 1;
-                outcome
-                    .synchronized_generations
-                    .insert(machine_id, auth_generation);
-            }
-            Err(error) => {
-                outcome.failed += 1;
-                tracing::warn!(%error, %machine_id, %provider_id, "Provider auth replica sync failed");
-            }
-        }
-    }
-    outcome
+    distribute_and_mark_scope(
+        &state.accounts,
+        &state.provider_auth,
+        &Default::default(),
+        statuses,
+    )
+    .await
 }
 
 pub(super) async fn reconcile_account_refresh(
@@ -482,8 +204,9 @@ pub(super) async fn sync_and_mark_account_grant(
     account_id: &crate::provider_account::ProviderAccountId,
 ) -> Result<(), String> {
     let generation =
-        sync_provider_account_auth_to_machine(state, machine_id, provider_id, account_id).await?;
-    provider_auth_scope_for_machine(state, machine_id, account_id)
+        sync_provider_account_auth_to_machine(&state.accounts, machine_id, provider_id, account_id)
+            .await?;
+    provider_auth_scope_for_machine(&state.accounts, machine_id, account_id)
         .await?
         .mark_distribution(
             provider_id,
@@ -553,8 +276,8 @@ pub(super) async fn named_upgrade_target(
         .native_login_for_registered_session(owner, &meta.id)
         .await
         .map_err(|error| error.to_string())?;
-    if native.is_none() && provider_accounts::portable::provider(state, &meta.provider) {
-        return provider_accounts::portable::upgrade_target(state, meta).await;
+    if native.is_none() && provider_accounts::portable::provider(&state.accounts, &meta.provider) {
+        return provider_accounts::portable::upgrade_target(&state.accounts, meta).await;
     }
     let (operation, completion) =
         native.ok_or("this session's subscription login is no longer admitted")?;
@@ -649,25 +372,6 @@ pub(super) fn installed_upgrade_target_from(
     Ok(generation)
 }
 
-/// Whether `next` is `previous` plus further sign-in methods. A session can
-/// only be bound to a method its release offered, and each of those is
-/// unchanged, so it keeps an identical authentication contract. Claude Code
-/// 3.20.1 added the named "claude-subscription" method this way; comparing
-/// whole-section fingerprints pinned every 3.20.0 session to 3.20.0 forever.
-pub(super) fn authentication_only_adds_methods(
-    previous: &cowboy_provider_sdk::AuthenticationContract,
-    next: &cowboy_provider_sdk::AuthenticationContract,
-) -> bool {
-    let mut widened = previous.clone();
-    widened.methods.clone_from(&next.methods);
-    next.methods.len() > previous.methods.len()
-        && widened == *next
-        && previous
-            .methods
-            .iter()
-            .all(|method| next.methods.contains(method))
-}
-
 pub(super) async fn apply_session_provider_reload(
     state: &AppState,
     meta: &crate::core::SessionMeta,
@@ -724,7 +428,7 @@ pub(super) async fn with_release_admission<T>(
         return action(None);
     };
     let Some((operation, completion)) = &named.native else {
-        return provider_accounts::portable::with_release_admission(state, meta, || {
+        return provider_accounts::portable::with_release_admission(&state.accounts, meta, || {
             action(Some(&named.carry))
         })
         .await;
@@ -761,42 +465,4 @@ pub(super) async fn repin_dormant_session(
         )
     })
     .await
-}
-
-pub(super) fn resolve_scheduling_auth_generation(
-    installed: &crate::machine_protocol::PluginInventory,
-    authentication_required: bool,
-    service_auth: Option<&crate::provider_service::ProviderAuthenticationStatus>,
-) -> Result<Option<u64>, String> {
-    if !authentication_required {
-        return Ok(None);
-    }
-    let provider_id = &installed.plugin_id;
-    let service_auth = service_auth.ok_or_else(|| {
-        format!("Provider {provider_id:?} is not authenticated at Cowboy Service scope")
-    })?;
-    if service_auth.authentication_state
-        != crate::provider_service::ServiceAuthenticationState::Ready
-    {
-        return Err(format!(
-            "Provider {provider_id:?} authentication is not ready at Cowboy Service scope"
-        ));
-    }
-    if installed.replica_state != crate::machine_protocol::ProviderReplicaState::Current
-        || installed.materialization_state
-            != crate::machine_protocol::ProviderMaterializationState::Current
-    {
-        return Err(format!(
-            "Provider {provider_id:?} Service authentication is not synchronized to this Machine"
-        ));
-    }
-    let installed_generation = installed
-        .auth_generation
-        .ok_or_else(|| "Provider auth generation is missing".to_owned())?;
-    if installed_generation != service_auth.auth_generation {
-        return Err(format!(
-            "Provider {provider_id:?} Service authentication generation is not synchronized to this Machine"
-        ));
-    }
-    Ok(Some(installed_generation))
 }

@@ -44,33 +44,6 @@ pub(super) async fn api_provider_catalog_refresh(State(state): State<Arc<AppStat
     }
 }
 
-pub(super) fn provider_compatibility_response(
-    problem: cowboy_provider_sdk::ProviderCompatibilityProblem,
-) -> Response {
-    (
-        StatusCode::CONFLICT,
-        Json(serde_json::json!({
-            "error": "provider_incompatible",
-            "code": problem.code,
-            "detail": problem.detail,
-        })),
-    )
-        .into_response()
-}
-
-pub(super) fn provider_auth_sync_required_before_install(
-    authentication: Option<&crate::provider_service::ProviderAuthenticationStatus>,
-    installed: Option<&crate::machine_protocol::PluginInventory>,
-) -> bool {
-    let Some(authentication) = authentication else {
-        return false;
-    };
-    !installed.is_some_and(|provider| {
-        provider.auth_generation == Some(authentication.auth_generation)
-            && provider.replica_state == crate::machine_protocol::ProviderReplicaState::Current
-    })
-}
-
 pub(super) async fn api_provider_auth_commit(
     State(state): State<Arc<AppState>>,
     Path(provider_id): Path<String>,
@@ -417,7 +390,7 @@ pub(super) async fn api_provider_auth_events(
         executor.filter(|value| value.owned_by(&auth.principal.user_id, &provider_id))
     else {
         return provider_accounts::login::native_events(
-            &state,
+            &state.accounts,
             &auth.principal.user_id,
             &provider_id,
             &request_id,
@@ -427,7 +400,7 @@ pub(super) async fn api_provider_auth_events(
     };
     if executor.native_login.is_some() {
         return provider_accounts::login::native_events(
-            &state,
+            &state.accounts,
             &auth.principal.user_id,
             &provider_id,
             &request_id,
@@ -439,7 +412,8 @@ pub(super) async fn api_provider_auth_events(
         if let Some(active) = state.provider_auth_executors.lock().get_mut(&request_id) {
             active.cancel_requested = true;
         }
-        let cleanup = provider_accounts::login::cancel(&state, &executor, &request_id).await;
+        let cleanup =
+            provider_accounts::login::cancel(&state.accounts, &executor, &request_id).await;
         if let Err(error) = cleanup {
             return (StatusCode::SERVICE_UNAVAILABLE, error).into_response();
         }
@@ -462,7 +436,7 @@ pub(super) async fn api_provider_auth_events(
     if executor.named_login.is_some()
         && executor.promotion_started
         && let Err(error) =
-            provider_accounts::login::recover_pending(&state, &executor, &request_id).await
+            provider_accounts::login::recover_pending(&state.accounts, &executor, &request_id).await
     {
         return (StatusCode::SERVICE_UNAVAILABLE, error).into_response();
     }
@@ -527,114 +501,6 @@ pub(super) fn provider_auth_recovery_generations(
         .then_some((expected_generation, status.auth_generation))
 }
 
-pub(super) async fn provider_auth_envelope_for_machine(
-    state: &Arc<AppState>,
-    machine_id: &str,
-    provider_id: &str,
-) -> Result<crate::machine_protocol::SealedProviderAuth, String> {
-    provider_account_auth_envelope_for_machine(
-        state,
-        machine_id,
-        provider_id,
-        &crate::provider_account::ProviderAccountId::default(),
-    )
-    .await
-}
-
-pub(super) async fn provider_account_auth_envelope_for_machine(
-    state: &Arc<AppState>,
-    machine_id: &str,
-    provider_id: &str,
-    account_id: &crate::provider_account::ProviderAccountId,
-) -> Result<crate::machine_protocol::SealedProviderAuth, String> {
-    sealed_auth_envelope_for_machine(state, machine_id, provider_id, account_id)
-        .await
-        .map(|(envelope, _)| envelope)
-}
-
-/// The envelope for `machine_id` and the enrolled encryption key it was
-/// sealed to: an acknowledgement belongs to exactly that enrollment.
-pub(super) async fn sealed_auth_envelope_for_machine(
-    state: &Arc<AppState>,
-    machine_id: &str,
-    provider_id: &str,
-    account_id: &crate::provider_account::ProviderAccountId,
-) -> Result<(crate::machine_protocol::SealedProviderAuth, String), String> {
-    let store = state
-        .store
-        .as_ref()
-        .ok_or_else(|| "Provider authentication sync requires persistence".to_owned())?;
-    let public_key = store
-        .machine_encryption_public_key(machine_id)
-        .await
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| format!("Machine {machine_id:?} has no enrolled encryption key"))?;
-    // A named portable account's key lives at account scope and is sealed to
-    // any enrolled Machine; native accounts keep their per-Machine grants.
-    if let Some(scope) = provider_accounts::portable::scope(state, account_id, provider_id) {
-        if !provider_accounts::portable::machine_ready(state, machine_id, provider_id) {
-            return Err("machine_update_required".into());
-        }
-        return scope
-            .seal_for_machine(provider_id, &public_key)
-            .map(|envelope| (envelope, public_key))
-            .map_err(|error| error.to_string());
-    }
-    let scope = provider_auth_scope_for_machine(state, machine_id, account_id).await?;
-    if account_id.is_default()
-        || scope.status(provider_id).is_some_and(|status| {
-            status.authentication_state
-                == crate::provider_service::ServiceAuthenticationState::SignedOut
-        })
-    {
-        let envelope = scope
-            .seal_for_machine(provider_id, &public_key)
-            .map_err(|error| error.to_string())?;
-        if !account_id.is_default()
-            && envelope.action != crate::machine_protocol::ProviderAuthAction::Wipe
-        {
-            return Err("Provider grant changed during cleanup".into());
-        }
-        Ok((envelope, public_key))
-    } else {
-        scope
-            .seal_current_grant(store, machine_id, provider_id)
-            .await
-            .map(|envelope| (envelope, public_key))
-            .map_err(|error| error.to_string())
-    }
-}
-
-pub(super) async fn provider_auth_scope_for_machine(
-    state: &Arc<AppState>,
-    machine_id: &str,
-    account_id: &crate::provider_account::ProviderAccountId,
-) -> Result<Arc<crate::provider_service::ProviderAuthService>, String> {
-    if account_id.is_default() {
-        return Ok(Arc::clone(&state.provider_auth));
-    }
-    if state
-        .machine_control
-        .connection_protocol(machine_id)
-        .is_none()
-    {
-        return Err("Machine does not support named Provider accounts".to_owned());
-    }
-    let store = state
-        .store
-        .as_ref()
-        .ok_or("Provider authentication requires persistence")?;
-    let key = store
-        .machine_encryption_public_key(machine_id)
-        .await
-        .map_err(|error| error.to_string())?
-        .ok_or("Machine has no enrolled encryption key")?;
-    state
-        .provider_auth
-        .existing_machine_grant(account_id, &key)
-        .map_err(|error| error.to_string())
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn accept_provider_auth_refresh_candidate(
     state: &Arc<AppState>,
@@ -692,7 +558,7 @@ pub(super) async fn accept_provider_auth_refresh_candidate(
         .provider_catalog
         .packages_for_authentication_scope(portable_schema);
     if let Some(routed) = provider_accounts::portable::route_refresh(
-        state,
+        &state.accounts,
         machine_id,
         account_id,
         &package,
@@ -718,7 +584,7 @@ pub(super) async fn accept_provider_auth_refresh_candidate(
         method.native_identity.as_ref(),
         native_identity.filter(|_| !account_id.is_default()),
     )?;
-    let scope = provider_auth_scope_for_machine(state, machine_id, account_id).await?;
+    let scope = provider_auth_scope_for_machine(&state.accounts, machine_id, account_id).await?;
     let result = if account_id.is_default() {
         scope
             .compare_and_swap_refresh(&packages, &bundle, provider_id, expected_generation)
@@ -743,7 +609,7 @@ pub(super) async fn accept_provider_auth_refresh_candidate(
         crate::provider_service::ProviderAuthRefreshResult::Stale { current_generation } => {
             return provider_accounts::portable::forward_or_restore(
                 (request_id, current_generation),
-                state,
+                &state.accounts,
                 machine_id,
                 &package,
                 &bundle,
@@ -856,145 +722,6 @@ pub(super) fn provider_usage_source_is_authorized(
                         || usage.activity_agents.iter().any(|entry| entry.id == agent))
             })
         })
-}
-
-pub(super) fn provider_reload_contract_compatible(
-    previous: &cowboy_provider_sdk::ProviderManifest,
-    next: &cowboy_provider_sdk::ProviderManifest,
-) -> bool {
-    previous.id == next.id
-        && (previous.compatibility.auth_contract_fingerprint
-            == next.compatibility.auth_contract_fingerprint
-            || authentication_only_adds_methods(&previous.authentication, &next.authentication))
-        && previous.authentication.projection_schema == next.authentication.projection_schema
-        && previous.authentication.portable_schema == next.authentication.portable_schema
-        && previous.runtime.behavior.session == next.runtime.behavior.session
-        && previous.runtime.behavior.configuration == next.runtime.behavior.configuration
-}
-
-pub(super) fn provider_inventory_contract_matches(
-    installed: &crate::machine_protocol::PluginInventory,
-    provider_fingerprint: &str,
-    plugin_fingerprint: Option<&str>,
-) -> bool {
-    plugin_fingerprint == Some(installed.contract_fingerprint.as_str())
-        || ((installed.installation_revision.is_none() || plugin_fingerprint.is_none())
-            && provider_fingerprint == installed.contract_fingerprint)
-}
-
-pub(super) fn resolve_provider_generation(
-    catalog: &crate::provider_catalog::ProviderCatalog,
-    plugins: &crate::plugin_catalog::PluginCatalog,
-    inventory: &[crate::machine_protocol::PluginInventory],
-    provider_id: &str,
-    service_auth: Option<&crate::provider_service::ProviderAuthenticationStatus>,
-) -> Result<ResolvedProviderGeneration, String> {
-    resolve_provider_generation_with_auth(
-        catalog,
-        plugins,
-        inventory,
-        provider_id,
-        SchedulingAuthentication::Service(service_auth),
-    )
-}
-
-pub(super) enum SchedulingAuthentication<'a> {
-    /// Installation discovery only; never use this result to launch a session.
-    Discovery,
-    Service(Option<&'a crate::provider_service::ProviderAuthenticationStatus>),
-    Native(&'a crate::provider_account::NativeProfileReceipt),
-    /// A named portable account's own Service vault entry.
-    Portable(&'a crate::provider_service::ProviderAuthenticationStatus),
-}
-
-pub(super) fn resolve_provider_generation_with_auth(
-    catalog: &crate::provider_catalog::ProviderCatalog,
-    plugins: &crate::plugin_catalog::PluginCatalog,
-    inventory: &[crate::machine_protocol::PluginInventory],
-    provider_id: &str,
-    authentication: SchedulingAuthentication<'_>,
-) -> Result<ResolvedProviderGeneration, String> {
-    let installed = inventory
-        .iter()
-        .find(|provider| {
-            provider.plugin_id == provider_id
-                && provider.state == crate::machine_protocol::PluginInstallationState::Active
-        })
-        .ok_or_else(|| format!("Provider {provider_id:?} is not installed on this Machine"))?;
-    let package = catalog
-        .package(
-            provider_id,
-            &installed.plugin_version,
-            &installed.generation_digest,
-        )
-        .ok_or_else(|| {
-            format!(
-                "installed Provider generation {} is not trusted by this Catalog",
-                installed.generation_digest
-            )
-        })?;
-    // Generic Plugin inventory uses the outer, signed Plugin fingerprint. Old
-    // Machines still project the inner Provider fingerprint; accept that only
-    // for untracked inventories while the reader bridge is rolling out. An
-    // exact signed legacy-only Provider Catalog generation has no outer Plugin
-    // contract at all; adopting its slot must not break its existing scheduler.
-    let exact_plugin = plugins
-        .resolve(
-            provider_id,
-            Some(&installed.plugin_version),
-            Some(&installed.generation_digest),
-        )
-        .ok();
-    if !provider_inventory_contract_matches(
-        installed,
-        &package.contract_fingerprint,
-        exact_plugin
-            .as_ref()
-            .map(|trusted| trusted.release.contract_fingerprint.as_str()),
-    ) {
-        return Err(
-            "installed Provider contract fingerprint does not match the Catalog".to_owned(),
-        );
-    }
-    let service_lineage = matches!(
-        authentication,
-        SchedulingAuthentication::Service(_) | SchedulingAuthentication::Portable(_)
-    );
-    let auth_generation = match authentication {
-        SchedulingAuthentication::Discovery => None,
-        SchedulingAuthentication::Portable(status) => {
-            provider_accounts::portable::scheduling_generation(
-                package.manifest.authentication.required,
-                status,
-            )?
-        }
-        SchedulingAuthentication::Service(service_auth) => resolve_scheduling_auth_generation(
-            installed,
-            package.manifest.authentication.required,
-            service_auth,
-        )?,
-        SchedulingAuthentication::Native(profile) => {
-            let signed_in = catalog.package(
-                provider_id,
-                &profile.provider_version,
-                &profile.generation_digest,
-            );
-            Some(provider_accounts::native_generation::resolve(
-                profile,
-                installed,
-                &package.manifest,
-                signed_in.as_ref().map(|signed_in| &signed_in.manifest),
-            )?)
-        }
-    };
-    Ok(ResolvedProviderGeneration {
-        version: installed.plugin_version.clone(),
-        digest: installed.generation_digest.clone(),
-        auth_generation,
-        behavior: package.manifest.runtime.behavior,
-        named_carry: None,
-        service_lineage,
-    })
 }
 
 #[cfg(test)]

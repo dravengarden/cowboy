@@ -60,7 +60,7 @@ pub(super) async fn read(state: &AppState, scope: &SessionReadScope, locator: Lo
                 .is_some_and(|trust| trust.current(&state.hub))
                 && session::current(&state.hub, &state.machine_control, scope)
         },
-        |query| language::query_open_buffer(state, scope, &locator.path, query),
+        |query| language::query_open_buffer(&state.code, scope, &locator.path, query),
     );
     // Bound this optional read, without waiting for analysis or retaining a
     // lease. Cancelling the observer never authorizes a retry of an effect.

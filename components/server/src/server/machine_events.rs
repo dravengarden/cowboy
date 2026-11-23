@@ -160,7 +160,7 @@ pub(super) async fn accept_machine_service_auth_candidate(
             }) else {
                 return;
             };
-            let Some(scope) = executor.auth_scope(&candidate_state) else {
+            let Some(scope) = executor.auth_scope(&candidate_state.accounts) else {
                 return;
             };
             scope.fail_authentication(&provider_id, &request_id);
@@ -235,7 +235,7 @@ pub(super) async fn accept_machine_auth_refresh_candidate(
                 "Machine-refreshed Provider credentials were rejected"
             );
             if let Err(reconcile_error) = sync_provider_account_auth_to_machine(
-                &refresh_state,
+                &refresh_state.accounts,
                 &refresh_machine_id,
                 &provider_id,
                 &account_id,

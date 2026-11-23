@@ -203,7 +203,14 @@ async fn install(
         Err(status) => return status.into_response(),
     };
     tracing::info!(actor = ?approval.actor(), "local Operator requested Plugin installation");
-    plugin_install::confirmed_install(state, machine, plugin, request, approval).await
+    plugin_install::confirmed_install(
+        Arc::clone(&state.plugins),
+        machine,
+        plugin,
+        request,
+        approval,
+    )
+    .await
 }
 
 async fn project_request(
@@ -247,7 +254,14 @@ async fn reconcile_install(
         %operation,
         "local Operator requested Plugin installation receipt reconciliation"
     );
-    plugin_install::confirmed_reconcile_install(state, machine, plugin, operation, approval).await
+    plugin_install::confirmed_reconcile_install(
+        Arc::clone(&state.plugins),
+        machine,
+        plugin,
+        operation,
+        approval,
+    )
+    .await
 }
 
 async fn reconcile_uninstall(
@@ -260,8 +274,14 @@ async fn reconcile_uninstall(
         Ok(approval) => approval,
         Err(status) => return status.into_response(),
     };
-    plugin_uninstall::confirmed_reconcile_uninstall(state, machine, plugin, operation, approval)
-        .await
+    plugin_uninstall::confirmed_reconcile_uninstall(
+        Arc::clone(&state.plugins),
+        machine,
+        plugin,
+        operation,
+        approval,
+    )
+    .await
 }
 
 /// The same preview the browser gets, with the host grant as its actor. It
@@ -274,7 +294,13 @@ async fn uninstall_plan(
     if !grant.current() {
         return StatusCode::FORBIDDEN.into_response();
     }
-    super::preview_machine_plugin_uninstall(state, machine, plugin, grant.actor()).await
+    super::preview_machine_plugin_uninstall(
+        Arc::clone(&state.plugins),
+        machine,
+        plugin,
+        grant.actor(),
+    )
+    .await
 }
 
 /// Consume a preview this same grant created. The preview's owner, target and
@@ -292,7 +318,14 @@ async fn uninstall(
         Err(status) => return status.into_response(),
     };
     tracing::info!(actor = ?approval.actor(), "local Operator requested Plugin uninstall");
-    plugin_uninstall::confirmed_uninstall(state, machine, plugin, request, approval).await
+    plugin_uninstall::confirmed_uninstall(
+        Arc::clone(&state.plugins),
+        machine,
+        plugin,
+        request,
+        approval,
+    )
+    .await
 }
 
 struct OwnerLock(File);
@@ -381,10 +414,6 @@ pub(super) fn start(data_dir: &std::path::Path, state: Arc<AppState>) -> anyhow:
             post(uninstall),
         )
         .route(
-            "/v1/machines/{id}/plugins/{plugin}/operations",
-            get(plugin_install::api_machine_plugin_install_operations),
-        )
-        .route(
             "/v1/machines/{id}/plugins/{plugin}/operations/{operation}/reconcile",
             post(reconcile_install),
         )
@@ -395,12 +424,20 @@ pub(super) fn start(data_dir: &std::path::Path, state: Arc<AppState>) -> anyhow:
             axum::routing::put(api_usage_executor_update),
         )
         .route(
-            "/v1/machines/{id}/plugins/{plugin}/uninstall-operations",
-            get(plugin_uninstall::api_machine_plugin_operations),
-        )
-        .route(
             "/v1/machines/{id}/plugins/{plugin}/uninstall-operations/{operation}/reconcile",
             post(reconcile_uninstall),
+        )
+        .merge(
+            Router::new()
+                .route(
+                    "/v1/machines/{id}/plugins/{plugin}/operations",
+                    get(plugin_install::api_machine_plugin_install_operations),
+                )
+                .route(
+                    "/v1/machines/{id}/plugins/{plugin}/uninstall-operations",
+                    get(plugin_uninstall::api_machine_plugin_operations),
+                )
+                .with_state(Arc::clone(&state.plugins)),
         )
         .route("/v1/usage/{provider}", post(api_usage_provider_refresh))
         .with_state(state)

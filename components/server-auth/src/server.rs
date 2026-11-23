@@ -37,8 +37,11 @@ pub mod http_policy;
 pub mod operator_approval;
 pub mod product_auth_api;
 pub mod product_continuation;
+pub mod provider_auth_sync;
 pub mod secure_transport;
+pub mod sync_dataset;
 pub mod types;
+pub mod web_security;
 
 pub use admin_api::*;
 pub use http_policy::*;

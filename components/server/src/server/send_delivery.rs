@@ -85,7 +85,9 @@ pub(super) fn begin(
     if crate::session_context::pending(&state.hub, session) {
         return Err("Context changes are pending. Wait for this turn to finish, then send normally, or cancel those changes.".into());
     }
-    if let Some(refusal) = super::provider_accounts::retirement::session_refusal(state, session) {
+    if let Some(refusal) =
+        super::provider_accounts::retirement::session_refusal(&state.accounts, session)
+    {
         return Err(refusal.into());
     }
     let blocks = build_prompt_blocks(text, content).ok_or("empty prompt")?;
@@ -199,7 +201,9 @@ async fn interrupt_once(
         return refuse("empty prompt");
     }
     // Before any hold or cancellation: the replacement could only park.
-    if let Some(refusal) = super::provider_accounts::retirement::session_refusal(state, session) {
+    if let Some(refusal) =
+        super::provider_accounts::retirement::session_refusal(&state.accounts, session)
+    {
         return refuse(refusal);
     }
     if state.supervisor.delivery_target(session).as_ref() != Some(target) {

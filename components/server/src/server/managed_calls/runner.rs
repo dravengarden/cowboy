@@ -477,7 +477,7 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
             advance(state, store, record, fail("identity_mismatch", None)).await;
             return Step::Again;
         }
-        if let Some(code) = retirement::call_refusal(state, child) {
+        if let Some(code) = retirement::call_refusal(&state.accounts, child) {
             advance(state, store, record, fail(code, None)).await;
             return Step::Again;
         }
@@ -1071,7 +1071,7 @@ async fn register_child(state: &AppState, record: &Record, cwd: &str) -> Result<
         )
         .map_err(|_| "provider_unavailable")?;
     super::super::provider_accounts::registration::register(
-        state,
+        &state.accounts,
         registration,
         generation.auth_generation,
     )
@@ -1359,7 +1359,7 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
 /// across a restart), or a continued child of a retired legacy card.
 async fn withdraw_unstarted(state: &AppState, store: &Store, record: &Record) -> Option<Step> {
     let cancelled = record.cancel_requested_at_ms.is_some();
-    let retired = retirement::call_refusal(state, &record.child_session_id);
+    let retired = retirement::call_refusal(&state.accounts, &record.child_session_id);
     if record.state != State::Running
         || !(cancelled || retired.is_some() || review_admissible(state, record).is_err())
     {
@@ -1420,7 +1420,7 @@ async fn reconfirm(
     request: &Request,
 ) -> Result<(), Step> {
     // A retired card's child is settled, never reconfirmed or prompted.
-    if let Some(code) = retirement::call_refusal(state, &record.child_session_id) {
+    if let Some(code) = retirement::call_refusal(&state.accounts, &record.child_session_id) {
         advance(state, store, record, fail(code, None)).await;
         return Err(Step::Again);
     }

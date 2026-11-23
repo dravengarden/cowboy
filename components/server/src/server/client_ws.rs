@@ -285,13 +285,6 @@ pub(super) fn project_outbound(
     }
 }
 
-pub(super) fn ws_close_auth_required() -> Message {
-    Message::Close(Some(CloseFrame {
-        code: WS_AUTH_REQUIRED_CLOSE_CODE,
-        reason: "auth_required".into(),
-    }))
-}
-
 pub(super) fn ws_close_capacity_required() -> Message {
     Message::Close(Some(CloseFrame {
         code: WS_CAPACITY_REQUIRED_CLOSE_CODE,
@@ -307,70 +300,15 @@ pub(super) async fn principal_still_valid(
     device_identity: Option<&crate::client_auth::DeviceAccessIdentity>,
     expected: &ProductPrincipal,
 ) -> bool {
-    if !state.product_auth_enabled {
-        return true;
-    }
-    let Some(store) = state.store.as_ref() else {
-        return false;
-    };
-    let current = if let Some(identity) = device_identity {
-        let Some(token) = bearer else {
-            return false;
-        };
-        if !state
-            .device_access
-            .token_still_valid(token, identity, auth_now_ms())
-        {
-            return false;
-        }
-        if !identity.is_automation()
-            && !store
-                .list_user_devices_for_user(&identity.user_id)
-                .await
-                .is_ok_and(|devices| {
-                    devices.iter().any(|device| {
-                        device.id == identity.device_id && device.revoked_at_ms.is_none()
-                    })
-                })
-        {
-            state.device_access.revoke_device(&identity.device_id);
-            return false;
-        }
-        match store.user_by_id(&identity.user_id).await {
-            Ok(Some(user)) if user.disabled_at_ms.is_none() => {
-                Some(product_principal(&state.hub, &user))
-            }
-            _ => None,
-        }
-    } else if via_cookie {
-        let Some(token) = cookie_token else {
-            return false;
-        };
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::COOKIE,
-            format!("{}={token}", crate::product_auth::USER_SESSION_COOKIE)
-                .parse()
-                .unwrap_or_else(|_| header::HeaderValue::from_static("")),
-        );
-        match product_session_and_user_from_store_cookie(store, &headers).await {
-            Some((session, user))
-                if ensure_product_session_fresh(store, &session, &state.product_authentication)
-                    .await
-                    .is_ok() =>
-            {
-                Some(product_principal(&state.hub, &user))
-            }
-            _ => None,
-        }
-    } else if let Some(token) = bearer {
-        product_from_bearer(store, &state.hub, token).await
-    } else {
-        None
-    };
-    current.is_some_and(|principal| {
-        principal.user_id == expected.user_id && !principal.username.is_empty()
-    })
+    cowboy_server_auth::server::principal_still_valid_for(
+        ProductRequestAuth::from(state),
+        via_cookie,
+        cookie_token,
+        bearer,
+        device_identity,
+        expected,
+    )
+    .await
 }
 
 pub(super) async fn handle_ws(

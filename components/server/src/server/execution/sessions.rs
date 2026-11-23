@@ -249,7 +249,7 @@ async fn create_checked(
         resolve_machine_workspace(&workspaces, Some(&request.cwd))?
     };
     let mut generation = provider_accounts::registration::generation(
-        state,
+        &state.accounts,
         &providers(runtime),
         &request.provider,
         &authenticated.principal.user_id,
@@ -337,7 +337,8 @@ async fn create_checked(
             .map(|_| format!("execution-initial:{session_id}")),
     )
     .await?;
-    provider_accounts::registration::register(state, registration, scheduling_generation).await?;
+    provider_accounts::registration::register(&state.accounts, registration, scheduling_generation)
+        .await?;
     folder_defaults::apply_created(
         state,
         &authenticated.principal,
@@ -377,7 +378,7 @@ async fn apply_create_defaults(
             value(&defaults, DefaultKey::Provider).unwrap_or_else(|| "claude-code".into());
     }
     let provider_account_id = super::super::provider_accounts::resolve_for_create(
-        state,
+        &state.accounts,
         &principal.user_id,
         &request.provider,
         request.provider_account_id.as_ref(),

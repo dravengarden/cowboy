@@ -103,18 +103,30 @@
         ./components/codeact-runtime
       ];
       server-subcrate-files = [
+        ./components/server-accounts/Cargo.toml
+        ./components/server-accounts/src
         ./components/server-auth/Cargo.toml
         ./components/server-auth/src
+        ./components/server-code/Cargo.toml
+        ./components/server-code/src
         ./components/server-code-buffers/Cargo.toml
         ./components/server-code-buffers/src
+        ./components/server-plugins/Cargo.toml
+        ./components/server-plugins/src
         ./components/server-telemetry/Cargo.toml
         ./components/server-telemetry/src
       ];
       server-subcrate-stub-files = [
+        ./components/server-accounts/Cargo.toml
+        ./components/server-accounts/src/lib.rs
         ./components/server-auth/Cargo.toml
         ./components/server-auth/src/lib.rs
+        ./components/server-code/Cargo.toml
+        ./components/server-code/src/lib.rs
         ./components/server-code-buffers/Cargo.toml
         ./components/server-code-buffers/src/lib.rs
+        ./components/server-plugins/Cargo.toml
+        ./components/server-plugins/src/lib.rs
         ./components/server-telemetry/Cargo.toml
         ./components/server-telemetry/src/lib.rs
       ];
@@ -672,7 +684,7 @@
         src = cowboy-src;
         cargoDeps = cowboy-cargo-deps;
         cargoBuildFlags = builtins.tail (pkgs.lib.splitString " " cowboy-controller-cargo-args);
-        cargoTestFlags = [ "-p" "cowboy" "-p" "cowboy-store" "-p" "cowboy-server-auth" "-p" "cowboy-server-code-buffers" "-p" "cowboy-server-telemetry" "-p" "cowboy-server" "-p" "cowboy-wire" ];
+        cargoTestFlags = [ "-p" "cowboy" "-p" "cowboy-store" "-p" "cowboy-server-accounts" "-p" "cowboy-server-auth" "-p" "cowboy-server-code" "-p" "cowboy-server-code-buffers" "-p" "cowboy-server-plugins" "-p" "cowboy-server-telemetry" "-p" "cowboy-server" "-p" "cowboy-wire" ];
         # cowboy-server dev-depends on cowboy-machine, which enables the
         # machine-host tests of the base crate in this build. This one runs a
         # real nested cargo build, which the sandbox (no writable toolchain

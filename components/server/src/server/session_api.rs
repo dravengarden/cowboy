@@ -353,7 +353,9 @@ pub(super) async fn api_session_prompt(
     if delivery == SendDelivery::Interrupt {
         // Before touching the queue: an interrupt of a retired session only
         // parks, so nothing is queued and nothing cancelled.
-        if let Some(refusal) = provider_accounts::retirement::session_refusal(&state, &session_id) {
+        if let Some(refusal) =
+            provider_accounts::retirement::session_refusal(&state.accounts, &session_id)
+        {
             return (StatusCode::CONFLICT, refusal).into_response();
         }
         let Some(queued) =
@@ -505,7 +507,7 @@ async fn resolve_new_session_defaults(
             .unwrap_or_else(|| "claude-code".into());
     }
     let provider_account_id = match provider_accounts::resolve_for_create(
-        state,
+        &state.accounts,
         &principal.user_id,
         &req.provider,
         req.provider_account_id.as_ref(),
@@ -641,7 +643,7 @@ async fn create_machine_session(
         })
         .unwrap_or_default();
     let mut provider_generation = match provider_accounts::registration::generation(
-        state,
+        &state.accounts,
         &providers,
         &req.provider,
         &principal.user_id,
@@ -718,9 +720,8 @@ async fn create_machine_session(
     {
         return (StatusCode::CONFLICT, error).into_response();
     }
-    if let Err(error) =
-        provider_accounts::registration::register(state, registration, scheduling_generation).await
-    {
+    use provider_accounts::registration::register;
+    if let Err(error) = register(&state.accounts, registration, scheduling_generation).await {
         return (StatusCode::CONFLICT, error).into_response();
     }
 

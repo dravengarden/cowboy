@@ -23,7 +23,7 @@ pub(super) async fn cancel_request(
     let owner = account_owner(state, meta).await?;
     Ok(success(
         super::super::provider_accounts::login::continue_request(
-            state,
+            &state.accounts,
             &owner,
             &input.account_id,
             &input.request_id,

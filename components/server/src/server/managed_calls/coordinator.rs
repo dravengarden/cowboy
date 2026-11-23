@@ -686,9 +686,10 @@ async fn quota_evidence(
         let mut accounts = Vec::new();
         if let Some(owner) = meta.owner_user_id.as_deref() {
             for id in named {
-                let read = super::super::provider_accounts::usage::read_one(state, owner, id)
-                    .await
-                    .unwrap_or_else(|code| json!({"account_id":id,"reason":code}));
+                let read =
+                    super::super::provider_accounts::usage::read_one(&state.accounts, owner, id)
+                        .await
+                        .unwrap_or_else(|code| json!({"account_id":id,"reason":code}));
                 accounts.push(super::selection::named_quota(&read, now, interval));
             }
         }
@@ -883,7 +884,10 @@ fn continued_agent(state: &AppState, conversation: &Conversation) -> Result<Opti
     match state.hub.session_info(child_session_id) {
         // It ran on a retired card: continue in a new agent instead.
         Some(child)
-            if super::super::provider_accounts::retirement::session_retired(state, &child.meta) =>
+            if super::super::provider_accounts::retirement::session_retired(
+                &state.accounts,
+                &child.meta,
+            ) =>
         {
             Err(error("named_account_required", "not_submitted"))
         }

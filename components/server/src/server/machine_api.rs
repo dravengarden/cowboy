@@ -30,31 +30,6 @@ pub(super) async fn api_machine_events(
     .into_response()
 }
 
-pub(super) fn machine_diagnostic_event_visible(
-    event: &crate::machine_protocol::MachineEvent,
-) -> bool {
-    use crate::machine_protocol::MachineEvent;
-    match event {
-        MachineEvent::LoginChallenge { .. }
-        | MachineEvent::LoginState { .. }
-        | MachineEvent::ServiceAuthCandidate { .. }
-        | MachineEvent::NativeProfileCompleted { .. }
-        | MachineEvent::NativeProfileObserved { .. }
-        | MachineEvent::NativeLogoutObserved { .. }
-        | MachineEvent::LoginStopObserved { .. }
-        | MachineEvent::WorkerExitObserved { .. }
-        | MachineEvent::AccountSandboxFenceObserved { .. }
-        | MachineEvent::AccountSandboxRemoveObserved { .. }
-        | MachineEvent::NativeBindingPrepared { .. }
-        | MachineEvent::ProviderAuthRefreshCandidate { .. }
-        | MachineEvent::Browser { .. } => false,
-        MachineEvent::CommandResult { request_id, .. } => {
-            !request_id.starts_with("provider-login-")
-        }
-        _ => true,
-    }
-}
-
 pub(super) fn machine_workspace_ids_sha256(inventory: &serde_json::Value) -> Option<String> {
     let mut ids = inventory
         .get("workspaces")?
@@ -274,13 +249,6 @@ pub(super) fn machine_command_error_status(error: &str) -> StatusCode {
     }
 }
 
-pub(super) fn machine_request_id(prefix: &str) -> String {
-    format!(
-        "{prefix}-{}",
-        random_machine_token().unwrap_or_else(|_| now_ms().to_string())
-    )
-}
-
 pub(super) async fn api_machine_refresh(
     State(state): State<Arc<AppState>>,
     Path(machine_id): Path<String>,
@@ -438,14 +406,15 @@ pub(super) async fn api_machine_plugin_uninstall_plan(
     authenticated: Option<Extension<AuthenticatedProductRequest>>,
     headers: HeaderMap,
 ) -> Response {
-    let actor = match plugin_uninstall::request_actor(&state, authenticated, &headers) {
+    let actor = match plugin_uninstall::request_actor(&state.plugins, authenticated, &headers) {
         Ok(actor) => actor,
         Err(status) => return status.into_response(),
     };
-    if let Some(refusal) = service_managed_refusal(&state, &machine_id) {
+    if let Some(refusal) = service_managed_refusal(&state.plugins, &machine_id) {
         return refusal;
     }
-    preview_machine_plugin_uninstall(state, machine_id, provider_id, actor).await
+    preview_machine_plugin_uninstall(Arc::clone(&state.plugins), machine_id, provider_id, actor)
+        .await
 }
 
 pub(super) async fn api_machine_service(

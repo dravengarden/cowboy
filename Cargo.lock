@@ -940,8 +940,11 @@ dependencies = [
  "cowboy-codeact-runtime",
  "cowboy-plugin-sdk",
  "cowboy-provider-sdk",
+ "cowboy-server-accounts",
  "cowboy-server-auth",
+ "cowboy-server-code",
  "cowboy-server-code-buffers",
+ "cowboy-server-plugins",
  "cowboy-server-telemetry",
  "cowboy-wire",
  "fs2",
@@ -952,7 +955,6 @@ dependencies = [
  "rand 0.8.8",
  "regex",
  "reqwest",
- "rusqlite",
  "rustls",
  "semver",
  "serde",
@@ -968,6 +970,31 @@ dependencies = [
  "tower-http",
  "tracing",
  "url",
+ "uuid",
+]
+
+[[package]]
+name = "cowboy-server-accounts"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "cowboy",
+ "cowboy-plugin-sdk",
+ "cowboy-provider-sdk",
+ "cowboy-server-auth",
+ "cowboy-wire",
+ "futures",
+ "parking_lot",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
  "uuid",
  "x25519-dalek",
 ]
@@ -1004,6 +1031,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "cowboy-server-code"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "cowboy",
+ "cowboy-server-auth",
+ "cowboy-server-code-buffers",
+ "cowboy-wire",
+ "futures",
+ "parking_lot",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+ "x25519-dalek",
+]
+
+[[package]]
 name = "cowboy-server-code-buffers"
 version = "0.1.0"
 dependencies = [
@@ -1021,6 +1074,28 @@ dependencies = [
  "tempfile",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "cowboy-server-plugins"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "cowboy",
+ "cowboy-plugin-sdk",
+ "cowboy-provider-sdk",
+ "cowboy-server-auth",
+ "cowboy-wire",
+ "parking_lot",
+ "rand 0.8.8",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

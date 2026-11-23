@@ -39,6 +39,7 @@ use std::net::SocketAddr;
 use std::path::{Component, Path as FsPath, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::sync::{mpsc, watch};
 
 use anyhow::Context as _;
 use axum::Router;
@@ -63,19 +64,17 @@ use agent_client_protocol::schema::v1::ContentBlock;
 
 use crate::acp::AgentCommand;
 use crate::cli::ServeArgs;
-use crate::code_adapter::CodeOperation;
-use crate::code_review::CodeProvider as _;
 use crate::core::{
     CodeReadScope, CommandOutcome, DispatchReq, Envelope, Event, FanoutFrame, Hub, Inbound,
     Outbound, PersistenceHealth, RestoredSession, SessionOrigin, Status, StoreReceiver, StoreSink,
     StoreWrite, project_sync_value,
 };
-use crate::diff_snapshot::{DiffSnapshotCache, DiffSnapshotKey};
+use crate::diff_snapshot::DiffSnapshotCache;
 use crate::machine_control::MachineControl;
 use crate::machine_protocol::CONTROLLER_RECONNECT_MAX_BACKOFF_SECONDS;
 use crate::observability::{Observability, SubmitReceipt, TelemetryBatch};
 use crate::persistence::EventReducer;
-use crate::product_auth::{ProductPrincipal, WS_AUTH_REQUIRED_CLOSE_CODE};
+use crate::product_auth::ProductPrincipal;
 use crate::remote_runtime::{RemoteBootstrap, RemoteRuntime};
 use crate::runtime::RuntimeHealth;
 use crate::runtime_router::RuntimeRouter;
@@ -84,10 +83,6 @@ use crate::store::Store;
 use crate::supervisor::Supervisor;
 use crate::usage::UsageService;
 use crate::web_push::WebPushService;
-#[cfg(test)]
-use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
-use tokio::net::UnixStream;
-use tokio::sync::{mpsc, watch};
 use tokio_util::io::ReaderStream;
 
 mod agent_api;
@@ -96,7 +91,6 @@ mod background_tasks;
 mod background_tasks_tests;
 mod cardea_authorization;
 pub use cowboy_server_code_buffers::server::code_buffers;
-mod code_reads;
 mod draft_documents;
 mod execution;
 #[cfg(unix)]
@@ -109,41 +103,43 @@ pub use cowboy_server_auth::server::operator_approval;
 mod peer_notices;
 #[cfg(test)]
 mod persistence_tests;
-pub mod plugin_install;
+pub use cowboy_server_plugins::server::plugin_install;
 mod preferences;
-mod provider_accounts;
+pub use cowboy_server_accounts::server::{
+    AccountsState, NamedReleaseMove, ProviderAuthExecutor, ProviderAuthStartRequest,
+    ProviderDistributionOutcome, ResetRequest, ResolvedProviderGeneration,
+    SchedulingAuthentication, catalogued_installations, distribute_and_mark_scope,
+    provider_accounts, provider_auth_scope_for_machine, provider_reload_contract_compatible,
+    reconcile_provider_auth_executors, resolve_provider_generation,
+    resolve_provider_generation_with_auth, resumed_provider_authentication_response,
+    sync_provider_account_auth_to_machine,
+};
+#[cfg(test)]
+pub use cowboy_server_accounts::server::{
+    authentication_only_adds_methods, provider_inventory_contract_matches,
+    resolve_scheduling_auth_generation,
+};
 mod superagent;
-mod workspace_extensions;
 use plugin_install::api_machine_plugin_install;
 mod plugin_history;
-mod plugin_uninstall;
+#[cfg(test)]
 pub use cowboy_server_auth::server::product_continuation;
+pub use cowboy_server_plugins::server::plugin_uninstall;
+#[cfg(test)]
+pub use cowboy_server_plugins::server::provider_auth_sync_required_before_install;
+pub use cowboy_server_plugins::server::{
+    PluginInstallRequest, PluginUninstallRequest, PluginsState, agent_plugin_install_compatibility,
+    plugin_install_compatibility, preview_machine_plugin_uninstall, service_managed_refusal,
+};
 mod projects;
-pub mod provider_auth_sync;
-mod sync_dataset;
+pub use cowboy_server_auth::server::provider_auth_sync;
+pub use cowboy_server_auth::server::sync_dataset;
+pub use cowboy_server_auth::server::web_security;
 pub use cowboy_server_telemetry::server::telemetry_binding;
-mod web_security;
-mod zed_session;
 use plugin_uninstall::{
     api_machine_plugin_operation_receipt, api_machine_plugin_operations,
     api_machine_plugin_recovery_assessment, api_machine_plugin_uninstall,
 };
-
-#[derive(Clone)]
-struct PluginUninstallPlan {
-    actor: crate::plugin_operation::Actor,
-    machine_id: String,
-    plugin_id: String,
-    plugin_version: String,
-    generation_digest: String,
-    installation_revision:
-        Option<crate::machine_protocol::installation_revision::InstallationRevision>,
-    contract_fingerprint: String,
-    session_ids: Vec<String>,
-    active_session_ids: Vec<String>,
-    purge_after_ms: i64,
-    expires_at_ms: i64,
-}
 
 struct ProviderReloadFence {
     fences: PluginLifecycleFences,
@@ -167,24 +163,6 @@ impl ProviderReloadFence {
 impl Drop for ProviderReloadFence {
     fn drop(&mut self) {
         self.fences.write().remove(&self.key);
-    }
-}
-
-const fn provider_session_has_active_turn(status: crate::agent_model::Status) -> bool {
-    matches!(status, crate::agent_model::Status::Busy)
-}
-
-struct ProviderAuthReconciliation {
-    expired: Vec<(String, String)>,
-    active: Option<(String, ProviderAuthExecutor)>,
-}
-
-impl ProviderAuthReconciliation {
-    fn resumable(&self, active_request_id: Option<&str>) -> Option<(String, ProviderAuthExecutor)> {
-        self.active
-            .as_ref()
-            .filter(|(request_id, _)| active_request_id == Some(request_id.as_str()))
-            .cloned()
     }
 }
 
@@ -230,8 +208,6 @@ const MACHINE_RECONNECT_SWEEP_INTERVAL: std::time::Duration = std::time::Duratio
 
 /// Let restore, listener binding, and Machine reconnection settle before the
 /// optional account collectors start their short-lived provider processes.
-const PROVIDER_UNINSTALL_RETENTION_MS: i64 = 3 * 24 * 60 * 60 * 1_000;
-const PROVIDER_UNINSTALL_PLAN_TTL_MS: i64 = 10 * 60 * 1_000;
 
 #[derive(Debug, PartialEq, Eq)]
 enum ScheduledResetFailurePolicy {
@@ -484,7 +460,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         Arc::clone(&provider_catalog),
         shutdown_rx.clone(),
     );
-    let state = Arc::new(AppState {
+    let state = AppState::build(state::AppStateInputs {
         service_id,
         service_config_path,
         service_config,
@@ -497,60 +473,32 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         runtime_router,
         machine_control,
         machine_snapshots,
-        session_maintenance: session_maintenance::Coordinator::default(),
-        browsers: provider_accounts::browser::coordinator::Coordinator::default(),
         plugin_catalog,
         plugin_storage,
         provider_catalog,
         provider_auth,
-        provider_auth_sync: provider_auth_sync::Coordinator::default(),
-        provider_auth_executors: parking_lot::Mutex::new(HashMap::new()),
-        plugin_uninstall_plans: parking_lot::Mutex::new(HashMap::new()),
-        plugin_resolution_plans: plugin_uninstall::resolution::ResolutionPlans::default(),
-        telemetry_resolution_plans: Arc::default(),
-        telemetry_recovery_plans: Arc::default(),
-        telemetry_binding_plans: Arc::default(),
         telemetry_binding_fence,
         telemetry_writer_admission,
         plugin_lifecycle_fences,
-        session_create_replays: Arc::default(),
         desired_machine_components,
         component_convergence,
         convergence_freeze,
         desired_machine_plugins,
-        web_roots: web_roots::WebRoots::new(args.web_root.clone()),
         web_root: args.web_root,
         usage,
-        diff_snapshots: DiffSnapshotCache::default(),
-        file_cursors: code_reads::file_pages::PageCursors::default(),
         code_cache,
-        code_buffers: Arc::default(),
         code_navigation_admission: args.code_navigation_admission
             == crate::cli::CodeNavigationAdmission::Candidate,
         project_placement: crate::project_placement::Store::new(
             &args.data_dir,
             args.execution_runtime_machine,
         )?,
-        execution_preparations: parking_lot::Mutex::default(),
-        workspace_preparations: parking_lot::Mutex::default(),
-        execution_readiness: Default::default(),
-        lost_turns: Default::default(),
-        execution_closures: Arc::default(),
-        managed_calls: Arc::default(),
-        extensions: state::SessionExtensions::default(),
         colocated_machines: args.colocated_machines.iter().cloned().collect(),
         zed_adapter_socket: args.zed_adapter_socket,
         observability,
         web_push,
-        notifications: notifications::Presence::default(),
-        public_origins: Arc::new(crate::product_auth::load_public_origins()),
         product_auth_enabled: args.product_auth_enabled,
         product_authentication,
-        oidc_transactions: Arc::new(crate::oidc::OidcTransactions::default()),
-        oidc_native_handoffs: Arc::new(crate::oidc::NativeHandoffs::default()),
-        device_authorizations: Arc::new(crate::client_auth::DeviceAuthorizations::default()),
-        device_access: Arc::new(crate::client_auth::DeviceAccessSessions::default()),
-        capacity_runtime: Arc::new(ActiveCapacityRuntime::default()),
     });
     let web_push_task = spawn_notifications(&state);
     let dispatcher_task = spawn_dispatcher(&state, dispatch_rx);
@@ -826,7 +774,7 @@ async fn serve_axum(
     state: Arc<AppState>,
     shutdown_tx: watch::Sender<bool>,
 ) -> anyhow::Result<()> {
-    provider_accounts::browser::install_observer(&state);
+    provider_accounts::browser::install_observer(&state.accounts);
     session_maintenance::start(&state);
     session_maintenance::crashed_workers::start(&state);
     session_reclaim::listen_for_wakes(&state);
@@ -871,8 +819,8 @@ async fn serve_axum(
 
     let app = Router::new()
         .merge(routes::platform_routes(&state))
-        .merge(routes::provider_routes())
-        .merge(routes::machine_routes())
+        .merge(routes::provider_routes(&state))
+        .merge(routes::machine_routes(&state))
         .merge(routes::session_routes(&state))
         .merge(routes::code_routes(&state))
         // Everything else: the separately deployed SPA, with index.html
@@ -918,10 +866,10 @@ async fn serve_axum(
             adopt_shared_provider_authentication(&adoption_state).await;
         }),
         tokio::spawn(session_trash::run_retention(Arc::clone(&state))),
-        tokio::spawn(provider_accounts::run_recovery(Arc::clone(&state))),
+        tokio::spawn(provider_accounts::run_recovery(Arc::clone(&state.accounts))),
         tokio::spawn(run_usage_broadcast(Arc::clone(&state))),
         tokio::spawn(superagent::run(Arc::clone(&state))),
-        tokio::spawn(provider_accounts::usage::run(Arc::clone(&state))),
+        tokio::spawn(provider_accounts::usage::run(Arc::clone(&state.accounts))),
         tokio::spawn(session_context::rollover::observe(Arc::clone(&state))),
     ];
     let code_buffers = Arc::clone(&state.code_buffers);
@@ -1084,12 +1032,6 @@ struct ResetScheduleRequest {
     confirm: String,
 }
 
-#[derive(Deserialize)]
-struct ResetRequest {
-    confirm: String,
-    expected_credit_id: String,
-}
-
 use crate::usage::now_ms;
 
 #[derive(Debug, Default, Deserialize)]
@@ -1123,34 +1065,6 @@ mod diagnostic_log_query_tests;
 
 #[cfg(test)]
 mod trashed_session_command_tests;
-
-/// One selectable working directory for the New Session dialog's dropdown.
-#[derive(Debug, Serialize)]
-struct Workspace {
-    /// Sent to the daemon as `cwd` (absolute paths are honoured as-is).
-    value: String,
-    /// Short display name shown in the dropdown.
-    label: String,
-    /// Secondary line — the resolved absolute path or a description.
-    help: String,
-    /// Columbus registry id; absent for host-level roots.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    project: Option<String>,
-    /// Durable central work items projected onto this project.
-    active_work_items: Vec<WorkspaceWorkItem>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct WorkspaceWorkItem {
-    id: String,
-    title: String,
-    #[serde(default)]
-    projects: Vec<String>,
-    #[serde(default)]
-    recipe: String,
-    #[serde(default)]
-    blocked: bool,
-}
 
 #[derive(Debug, Serialize)]
 struct MachineDeploymentHealthResponse {
@@ -1212,21 +1126,6 @@ struct PluginCallIdentity {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct PluginInstallRequest {
-    operation_id: String,
-    version: String,
-    digest: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct PluginUninstallRequest {
-    plan_id: String,
-    #[serde(default)]
-    confirm_active_sessions: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct ProviderAuthCommitRequest {
     /// Exact Provider-declared authentication method that produced this bundle.
     method: String,
@@ -1240,42 +1139,8 @@ struct ProviderAuthCommitRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ProviderAuthStartRequest {
-    #[serde(default)]
-    machine_id: Option<String>,
-    method: String,
-    provider_version: String,
-    generation_digest: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct ProviderAuthSubmitRequest {
     code: String,
-}
-
-#[derive(Debug, Default, Serialize)]
-struct ProviderDistributionOutcome {
-    succeeded: usize,
-    failed: usize,
-    pending: usize,
-    #[serde(skip)]
-    synchronized_generations: BTreeMap<String, u64>,
-}
-
-impl ProviderDistributionOutcome {
-    const fn state(&self) -> crate::provider_service::ServiceDistributionState {
-        use crate::provider_service::ServiceDistributionState;
-        if self.failed == 0 && self.pending == 0 {
-            ServiceDistributionState::Current
-        } else if self.succeeded == 0 && self.failed == 0 {
-            ServiceDistributionState::Pending
-        } else if self.succeeded == 0 && self.pending == 0 {
-            ServiceDistributionState::Failed
-        } else {
-            ServiceDistributionState::Partial
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1410,31 +1275,6 @@ struct NewSessionRequest {
     initial_prompt: Option<String>,
 }
 
-#[derive(Clone)]
-struct ResolvedProviderGeneration {
-    version: String,
-    digest: String,
-    auth_generation: Option<u64>,
-    behavior: cowboy_provider_sdk::ProviderBehaviorContract,
-    /// Set only by [`named_upgrade_target`]: authorizes moving one named
-    /// session to this release on its existing login.
-    named_carry: Option<NamedReleaseMove>,
-    /// The Service vault owns this credential lineage (no native sign-in).
-    service_lineage: bool,
-}
-
-/// A verified move of one named session to another release: the Hub proof
-/// and the native login (operation, completion) whose runtime admission must
-/// hold around the change; `None` for a portable account's vault key.
-#[derive(Clone)]
-struct NamedReleaseMove {
-    carry: crate::core::NamedReleaseCarry,
-    native: Option<(
-        String,
-        crate::store::provider_accounts::logins::NativeCompletion,
-    )>,
-}
-
 /// Response body for `POST /api/sessions`.
 #[derive(Debug, Serialize)]
 struct NewSessionResponse {
@@ -1455,376 +1295,8 @@ struct PreparedMachineWorkspace {
     created: bool,
 }
 
-/// Request body used by a Columbus checkout migration after the replacement
-/// checkout has reached its stable path and before old worktree storage is
-/// removed.
-#[derive(Debug, Deserialize)]
-struct ReconcileProjectSessionsRequest {
-    project: String,
-    #[serde(default)]
-    dry_run: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct ReconcileProjectSessionsResponse {
-    session_ids: Vec<String>,
-    native_thread_ids: HashMap<String, String>,
-}
-
 #[cfg(test)]
 mod machine_provider_tests;
-
-/// Query string for `GET /api/sessions/{id}/files` — the composer's `@` picker.
-#[derive(Debug, Deserialize)]
-struct FileSearchQuery {
-    /// Fuzzy query; empty returns the "most useful" files (shallow + recent).
-    #[serde(default)]
-    q: String,
-    #[serde(default = "default_file_limit")]
-    limit: usize,
-}
-
-#[derive(Debug, Serialize)]
-struct FileSearchResponse {
-    files: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct FileTreeQuery {
-    #[serde(default)]
-    path: String,
-    #[serde(default = "default_file_tree_limit")]
-    limit: usize,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct FileTreeEntry {
-    name: String,
-    path: String,
-    kind: &'static str,
-    ignored: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct FileTreeResponse {
-    api_version: u8,
-    path: String,
-    revision: String,
-    entries: Vec<FileTreeEntry>,
-    truncated: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodeChangeResponse {
-    path: String,
-    old_path: Option<String>,
-    status: &'static str,
-    staged: bool,
-    unstaged: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    fingerprint: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    additions: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    deletions: Option<u32>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodeChangesResponse {
-    api_version: u8,
-    head: Option<String>,
-    revision: String,
-    changes: Vec<CodeChangeResponse>,
-    truncated: bool,
-    comparison: Option<String>,
-    default_comparison: Option<String>,
-    comparisons: Vec<crate::code_review::GitComparison>,
-    committed_comparisons: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    fetched_at_ms: Option<u64>,
-    /// Review can fetch the compared branch here; Machine adapters cannot yet.
-    fetch_available: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct CodeFetchRequest {
-    comparison: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct CodeChangesQuery {
-    comparison: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodeRepositoryResponse {
-    api_version: u8,
-    commits: Vec<crate::code_review::GitCommitSummary>,
-    history_truncated: bool,
-    worktrees: Vec<crate::code_review::GitWorktreeSummary>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    target: Option<crate::code_review::GitChangeTarget>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodeCommitResponse {
-    api_version: u8,
-    #[serde(flatten)]
-    commit: crate::code_review::GitCommitDetail,
-}
-
-#[derive(Debug, Deserialize)]
-struct CodeRepositoryQuery {
-    after: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CodeCommitQuery {
-    oid: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct CodeCommitDiffQuery {
-    oid: String,
-    path: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodeManifestResponse {
-    api_version: u8,
-    provider: String,
-    revision: String,
-    head: Option<String>,
-    project: String,
-    branch: Option<String>,
-    worktree: Option<String>,
-    change_count: usize,
-    language: CodeLanguageCapabilities,
-    buffer_mode: code_buffers::ReviewMode,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodeLanguageCapabilities {
-    provider: &'static str,
-    state: &'static str,
-    diagnostics: bool,
-    inlay_hints: bool,
-    semantic_tokens: bool,
-    hover: bool,
-    navigation: bool,
-    outline: bool,
-}
-
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-struct CodeBufferVersion {
-    replica_id: u32,
-    timestamp: u32,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodeInlayHint {
-    offset: u64,
-    label: String,
-    kind: Option<String>,
-    padding_left: bool,
-    padding_right: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodeLanguageResponse {
-    api_version: u8,
-    path: String,
-    version: Vec<CodeBufferVersion>,
-    diagnostics: Vec<CodeDiagnostic>,
-    inlay_hints: Vec<CodeInlayHint>,
-    semantic_tokens: Vec<u32>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodeHoverBlock {
-    text: String,
-    language: Option<String>,
-    markdown: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodeHoverResponse {
-    api_version: u8,
-    path: String,
-    contents: Vec<CodeHoverBlock>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodeLocation {
-    path: String,
-    start: CodePoint,
-    end: CodePoint,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodeNavigationResponse {
-    api_version: u8,
-    path: String,
-    locations: Vec<CodeLocation>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodeDocumentSymbol {
-    name: String,
-    kind: i32,
-    start: CodePoint,
-    end: CodePoint,
-    selection_start: CodePoint,
-    selection_end: CodePoint,
-    children: Vec<CodeDocumentSymbol>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodeOutlineResponse {
-    api_version: u8,
-    path: String,
-    symbols: Vec<CodeDocumentSymbol>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CodeDiffQuery {
-    path: Option<String>,
-    cursor: Option<String>,
-    #[serde(default = "default_code_context")]
-    context: usize,
-    #[serde(default = "default_true")]
-    show_whitespace: bool,
-    #[serde(default)]
-    scope: CodeDiffScope,
-    comparison: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize, Clone, Copy)]
-#[serde(rename_all = "lowercase")]
-enum CodeDiffScope {
-    #[default]
-    Combined,
-    Staged,
-    Unstaged,
-}
-
-fn default_true() -> bool {
-    true
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodeDiffResponse {
-    api_version: u8,
-    path: String,
-    revision: String,
-    text: String,
-    added: usize,
-    removed: usize,
-    truncated: bool,
-    next_cursor: Option<String>,
-    limited: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct CodeFileQuery {
-    path: String,
-    cursor: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CodeBufferLeaseRequest {
-    path: String,
-    lease_id: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodeBufferLeaseResponse {
-    api_version: u8,
-    path: String,
-    leases: usize,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodeFileResponse {
-    api_version: u8,
-    path: String,
-    revision: String,
-    text: String,
-    size: u64,
-    truncated: bool,
-    next_cursor: Option<String>,
-    limited: bool,
-}
-
-const WORKSPACE_CODE_CONTEXT_PREFIX: &str = "workspace::";
-
-struct ResolvedCodeContext {
-    cwd: String,
-    scope: CodeReadScope,
-}
-
-// Legacy resource calls retain their separate original-connection operation
-// boundary. Buffered language reads use code_reads' product and route binding.
-struct SessionCodeContext {
-    machine_id: String,
-    cwd: String,
-    scope: crate::core::SessionCodeScope,
-}
-
-#[cfg(test)]
-mod workspace_code_context_tests;
-
-#[derive(Debug, Deserialize)]
-struct CodeLanguageQuery {
-    path: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct CodeHoverQuery {
-    path: String,
-    row: u32,
-    column: u32,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-enum CodeNavigationKind {
-    Definition,
-    Declaration,
-    TypeDefinition,
-    Implementation,
-    References,
-}
-
-#[derive(Debug, Deserialize)]
-struct CodeNavigationQuery {
-    path: String,
-    row: u32,
-    column: u32,
-    kind: CodeNavigationKind,
-}
 
 #[derive(Debug, Serialize)]
 struct HistoryResponse {
@@ -2081,9 +1553,6 @@ mod websocket_send_tests;
 mod code_tree_cache_tests;
 
 #[cfg(test)]
-mod zed_adapter_tests;
-
-#[cfg(test)]
 mod bootstrap_tests;
 
 #[cfg(test)]
@@ -2104,8 +1573,10 @@ pub(super) use product_auth_api::*;
 mod usage_api;
 use usage_api::*;
 
-mod code_api;
 use code_api::*;
+pub use cowboy_server_code::server::{
+    CodeState, code_api, code_context, code_reads, types::*, workspace_extensions, zed_session,
+};
 
 mod machine_api;
 use machine_api::*;
@@ -2142,7 +1613,6 @@ use plugin_api::*;
 mod provider_auth_flow;
 use provider_auth_flow::*;
 
-mod code_context;
 use code_context::*;
 mod client_commands;
 use client_commands::*;

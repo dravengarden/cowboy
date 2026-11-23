@@ -30,7 +30,7 @@ async fn observe(
     path: &str,
     trust: &crate::core::LanguageServerTrust,
 ) -> (anyhow::Result<ZedAdapterResponse>, bool) {
-    let first = observe_open_buffer(state, observed, path).await;
+    let first = observe_open_buffer(&state.code, observed, path).await;
     if !trust.current(&state.hub) {
         return (Err(anyhow::anyhow!("restricted")), false);
     }
@@ -55,7 +55,7 @@ async fn observe(
         if !trust.current(&state.hub) {
             return (Err(anyhow::anyhow!("restricted")), true);
         }
-        let reply = observe_open_buffer(state, observed, path).await;
+        let reply = observe_open_buffer(&state.code, observed, path).await;
         let analysed = matches!(&reply, Ok(ZedAdapterResponse::BufferLanguage { analysis: Some(servers), .. })
             if !servers.is_empty() && servers.iter().all(|server| server.state != AnalysisState::Unknown));
         if analysed || reply.is_err() || tokio::time::Instant::now() >= deadline {
@@ -89,7 +89,7 @@ async fn refresh(
     let query = language::Query::RefreshedLanguage {
         refresh: language::AgentOwned::AgentOwned,
     };
-    let reply = language::query_open_buffer(state, observed, path, query).await;
+    let reply = language::query_open_buffer(&state.code, observed, path, query).await;
     let reloaded = matches!(&reply, Ok(ZedAdapterResponse::BufferLanguage { refresh: Some(outcome), .. })
         if outcome == "reloaded");
     if !reloaded || !trust.current(&state.hub) {
@@ -102,7 +102,7 @@ async fn refresh(
             return latest;
         }
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-        latest = observe_open_buffer(state, observed, path).await;
+        latest = observe_open_buffer(&state.code, observed, path).await;
         let settled = matches!(&latest, Ok(ZedAdapterResponse::BufferLanguage {
             source_state: SourceState::Matching, analysis: Some(servers), .. })
             if !servers.is_empty() && servers.iter().all(|server| server.state != AnalysisState::Unknown));
@@ -239,7 +239,10 @@ async fn read_with_acquisition(
             )
             .await
         } else {
-            (observe_open_buffer(state, observed, &path).await, false)
+            (
+                observe_open_buffer(&state.code, observed, &path).await,
+                false,
+            )
         };
         files.push(match reply {
             Ok(ZedAdapterResponse::BufferLanguage {

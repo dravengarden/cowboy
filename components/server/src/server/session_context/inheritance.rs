@@ -167,7 +167,7 @@ pub(super) async fn target_generation(
     )
     .map_err(|_| "Target Provider inventory is unavailable")?;
     let account = provider_accounts::resolve_for_create(
-        state,
+        &state.accounts,
         &auth.principal.user_id,
         &selection.provider,
         Some(&selection.provider_account_id),
@@ -175,7 +175,7 @@ pub(super) async fn target_generation(
     .await
     .map_err(str::to_owned)?;
     provider_accounts::registration::generation(
-        state,
+        &state.accounts,
         &inventory,
         &selection.provider,
         &auth.principal.user_id,

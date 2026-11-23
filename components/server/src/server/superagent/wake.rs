@@ -166,7 +166,7 @@ pub(super) async fn quota_ready(
             .ok_or("quota_unavailable")?
     } else {
         super::super::provider_accounts::usage::read_one(
-            state,
+            &state.accounts,
             owner,
             &coordinator.provider_account_id,
         )

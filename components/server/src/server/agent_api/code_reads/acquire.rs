@@ -148,7 +148,7 @@ pub(super) async fn acquire(
     if !trust.current(&state.hub) || trust.scope().session_id() != session {
         return Err("restricted");
     }
-    let context = session_code_context(state, session).ok_or("unavailable")?;
+    let context = session_code_context(&state.code, session).ok_or("unavailable")?;
     if trust.scope() != &context.scope {
         return Err("restricted");
     }
@@ -276,7 +276,7 @@ pub(super) async fn release_stale(state: &AppState) {
         let (session, path) = &key;
         // Missing or replaced context cannot authorize a native Close. The
         // original Machine retains its owner, quota and idle cleanup anyway.
-        let Some(context) = session_code_context(state, session) else {
+        let Some(context) = session_code_context(&state.code, session) else {
             continue;
         };
         if holding.scope.as_ref() != Some(&context.scope)

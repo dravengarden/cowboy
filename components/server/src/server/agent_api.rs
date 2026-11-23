@@ -346,7 +346,7 @@ impl Host for SessionHost<'_> {
             "accounts.list" => {
                 only_keys(&args, &[])?;
                 let owner = actions::account_owner(self.state, self.meta).await?;
-                super::provider_accounts::read_value(self.state, &owner)
+                super::provider_accounts::read_value(&self.state.accounts, &owner)
                     .await
                     .map_err(str::to_owned)
             }
@@ -358,7 +358,7 @@ impl Host for SessionHost<'_> {
                 }
                 let owner = actions::account_owner(self.state, self.meta).await?;
                 let mut value = super::provider_accounts::transitions::status(
-                    self.state,
+                    &self.state.accounts,
                     &owner,
                     &actions::document_operation(&self.meta.id, operation),
                 )
@@ -374,7 +374,7 @@ impl Host for SessionHost<'_> {
                     arg_str(&args, "account_id")?.to_owned(),
                 )
                 .map_err(|_| "invalid_argument".to_owned())?;
-                super::provider_accounts::lifecycle::status(self.state, &owner, &account)
+                super::provider_accounts::lifecycle::status(&self.state.accounts, &owner, &account)
                     .await
                     .map_err(str::to_owned)
             }
@@ -394,7 +394,7 @@ impl Host for SessionHost<'_> {
                 .map_err(|_| "invalid_argument".to_owned())?;
                 if op == "accounts.login_status" {
                     return super::provider_accounts::login::continue_request(
-                        self.state,
+                        &self.state.accounts,
                         &owner,
                         &account,
                         arg_str(&args, "request_id")?,
@@ -410,9 +410,14 @@ impl Host for SessionHost<'_> {
                     .remove("account_id");
                 let query =
                     serde_json::from_value(query).map_err(|_| "invalid_argument".to_owned())?;
-                super::provider_accounts::login::logins_value(self.state, &owner, &account, query)
-                    .await
-                    .map_err(str::to_owned)
+                super::provider_accounts::login::logins_value(
+                    &self.state.accounts,
+                    &owner,
+                    &account,
+                    query,
+                )
+                .await
+                .map_err(str::to_owned)
             }
             "accounts.usage" => self.account_usage(&args).await,
             "accounts.browser" => self.account_browser(&args).await,
@@ -424,7 +429,7 @@ impl Host for SessionHost<'_> {
                 )
                 .map_err(|_| "invalid_argument".to_owned())?;
                 super::provider_accounts::login::options_value(
-                    self.state,
+                    &self.state.accounts,
                     &owner,
                     &account,
                     arg_str(&args, "machine_id")?,
@@ -754,9 +759,10 @@ impl SessionHost<'_> {
         let account = arg_str(args, "account_id")?
             .parse()
             .map_err(str::to_owned)?;
-        let value = super::provider_accounts::usage::read_one(self.state, &owner, &account)
-            .await
-            .map_err(str::to_owned)?;
+        let value =
+            super::provider_accounts::usage::read_one(&self.state.accounts, &owner, &account)
+                .await
+                .map_err(str::to_owned)?;
         actions::read_parent(&self.state.hub, self.state.store.as_ref(), self.meta).await?;
         Ok(value)
     }
@@ -772,9 +778,14 @@ impl SessionHost<'_> {
             None | Some(Value::Null) => None,
             Some(_) => Some(arg_str(args, "machine_id")?),
         };
-        super::provider_accounts::browser::state_value(self.state, &owner, &account, machine)
-            .await
-            .map_err(str::to_owned)
+        super::provider_accounts::browser::state_value(
+            &self.state.accounts,
+            &owner,
+            &account,
+            machine,
+        )
+        .await
+        .map_err(str::to_owned)
     }
 
     async fn calls(&self, action: Action) -> Result<Value, String> {

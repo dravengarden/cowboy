@@ -647,3 +647,99 @@ pub fn provider_auth_path(path: &str) -> bool {
         }
     })
 }
+
+pub const WAIT_PREFIX: &str = "Waiting for resources: ";
+
+pub const fn provider_session_has_active_turn(status: crate::agent_model::Status) -> bool {
+    matches!(status, crate::agent_model::Status::Busy)
+}
+
+/// The active installation of `provider_id` among already loaded Machine
+/// records, so one pass over many sessions reads the Machines once.
+pub fn active_machine_plugin(
+    machines: &[crate::store::MachineRecord],
+    machine_id: &str,
+    provider_id: &str,
+) -> Result<crate::machine_protocol::PluginInventory, String> {
+    let machine = machines
+        .iter()
+        .find(|machine| machine.id == machine_id && !machine.revoked)
+        .ok_or_else(|| format!("unknown or revoked Machine {machine_id:?}"))?;
+    let providers: Vec<crate::machine_protocol::PluginInventory> = machine
+        .inventory
+        .get("plugins")
+        .or_else(|| machine.inventory.get("providers"))
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default();
+    providers
+        .into_iter()
+        .find(|provider| {
+            provider.plugin_id == provider_id
+                && provider.state == crate::machine_protocol::PluginInstallationState::Active
+        })
+        .ok_or_else(|| {
+            format!("Provider {provider_id:?} is not installed on Machine {machine_id:?}")
+        })
+}
+
+pub async fn current_machine_plugin_from_store(
+    store: Option<&Store>,
+    machine_id: &str,
+    provider_id: &str,
+) -> Result<crate::machine_protocol::PluginInventory, String> {
+    let store = store.ok_or_else(|| "Provider lifecycle requires persistence".to_owned())?;
+    let machines = store
+        .list_machines()
+        .await
+        .map_err(|error| error.to_string())?;
+    active_machine_plugin(&machines, machine_id, provider_id)
+}
+
+pub fn machine_request_id(prefix: &str) -> String {
+    format!(
+        "{prefix}-{}",
+        random_machine_token().unwrap_or_else(|_| crate::usage::now_ms().to_string())
+    )
+}
+
+pub fn ws_close_auth_required() -> Message {
+    Message::Close(Some(axum::extract::ws::CloseFrame {
+        code: crate::product_auth::WS_AUTH_REQUIRED_CLOSE_CODE,
+        reason: "auth_required".into(),
+    }))
+}
+
+pub fn new_reset_idempotency_key() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    format!(
+        "cowboy-reset-{}-{}-{}",
+        std::process::id(),
+        crate::usage::now_ms(),
+        NEXT.fetch_add(1, Ordering::Relaxed),
+    )
+}
+
+pub fn machine_diagnostic_event_visible(event: &crate::machine_protocol::MachineEvent) -> bool {
+    use crate::machine_protocol::MachineEvent;
+    match event {
+        MachineEvent::LoginChallenge { .. }
+        | MachineEvent::LoginState { .. }
+        | MachineEvent::ServiceAuthCandidate { .. }
+        | MachineEvent::NativeProfileCompleted { .. }
+        | MachineEvent::NativeProfileObserved { .. }
+        | MachineEvent::NativeLogoutObserved { .. }
+        | MachineEvent::LoginStopObserved { .. }
+        | MachineEvent::WorkerExitObserved { .. }
+        | MachineEvent::AccountSandboxFenceObserved { .. }
+        | MachineEvent::AccountSandboxRemoveObserved { .. }
+        | MachineEvent::NativeBindingPrepared { .. }
+        | MachineEvent::ProviderAuthRefreshCandidate { .. }
+        | MachineEvent::Browser { .. } => false,
+        MachineEvent::CommandResult { request_id, .. } => {
+            !request_id.starts_with("provider-login-")
+        }
+        _ => true,
+    }
+}

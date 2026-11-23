@@ -103,7 +103,7 @@ async fn deliver(
     cmid: &str,
 ) -> Result<(), String> {
     let target = context.target();
-    super::super::provider_accounts::controls::handoff(state, target, || {
+    super::super::provider_accounts::controls::handoff(&state.accounts, target, || {
         let key = super::super::provider_fence_key_for_session(&state.hub, target);
         let fences = state.plugin_lifecycle_fences.read();
         if key

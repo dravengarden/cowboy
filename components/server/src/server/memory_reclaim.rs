@@ -435,6 +435,7 @@ fn tick(state: &Arc<AppState>, devices: &mut HashMap<String, DeviceState>) {
 fn resend(state: &AppState, pending: &mut BrowserPending, now: Instant) -> Option<Box<Observed>> {
     let answer = pending.answer.lock().take()?;
     let latest = state
+        .accounts
         .browsers
         .state_on(&pending.machine_id, pending.account.as_str());
     let current = state.machine_control.is_current(&answer.connection);
@@ -461,12 +462,19 @@ fn spawn_query(
     let state = Arc::clone(state);
     let machine_id = machine_id.to_owned();
     tokio::spawn(async move {
-        let query = super::provider_accounts::browser::query_machine(&state, &machine_id, &account);
+        let query = super::provider_accounts::browser::query_machine(
+            &state.accounts,
+            &machine_id,
+            &account,
+        );
         let Some(event) = query.await else {
             return;
         };
         if let Some(answer) = answer
-            && let Some(observed) = state.browsers.state_on(&machine_id, account.as_str())
+            && let Some(observed) = state
+                .accounts
+                .browsers
+                .state_on(&machine_id, account.as_str())
             && observed.event == event
             && state.machine_control.is_current(&observed.connection)
         {
@@ -481,7 +489,8 @@ fn spawn_hibernate(state: &Arc<AppState>, observed: Observed, dispatch: &Dispatc
     let state = Arc::clone(state);
     let done = Arc::clone(&dispatch.done);
     tokio::spawn(async move {
-        let result = super::provider_accounts::browser::hibernate_instance(&state, &observed).await;
+        let result =
+            super::provider_accounts::browser::hibernate_instance(&state.accounts, &observed).await;
         done.store(true, Ordering::Release);
         if let Err(error) = result {
             tracing::warn!(%error, "memory reclaim browser hibernate failed");
@@ -499,6 +508,7 @@ fn decide(
     min_idle: Duration,
 ) -> Step {
     let running: Vec<Observed> = state
+        .accounts
         .browsers
         .running_on(machine_id)
         .into_iter()
@@ -522,6 +532,7 @@ fn decide(
             (&pending.machine_id, pending.incarnation),
             &pending.connection,
             state
+                .accounts
                 .browsers
                 .state_on(&pending.machine_id, pending.account.as_str())
                 .as_ref(),
@@ -564,8 +575,8 @@ fn decide(
     // A reconnected Machine's placements are unresolved until its new
     // connection answers for each: a surviving browser is neither running
     // nor stopping in the cache meanwhile, yet holds memory.
-    let stopping = state.browsers.stopping_on(machine_id);
-    let unresolved = state.browsers.unresolved_on(machine_id);
+    let stopping = state.accounts.browsers.stopping_on(machine_id);
+    let unresolved = state.accounts.browsers.unresolved_on(machine_id);
     let now = Instant::now();
     for account in stopping
         .iter()

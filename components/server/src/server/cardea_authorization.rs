@@ -201,7 +201,7 @@ impl Application for Io {
             &user,
         )?;
         let input = decode_input(ctx.plan())?;
-        if super::service_managed_refusal(&self.state, &input.machine).is_some() {
+        if super::service_managed_refusal(&self.state.plugins, &input.machine).is_some() {
             return Err(Error::PermissionDenied);
         }
         let approval =
@@ -209,7 +209,7 @@ impl Application for Io {
         // Existing installer owns target observation, signed release checks,
         // session leases, Machine CAS, dispatch and durable recovery evidence.
         let _response = self.runtime.block_on(plugin_install::confirmed_install(
-            self.state.clone(),
+            Arc::clone(&self.state.plugins),
             input.machine,
             input.plugin,
             PluginInstallRequest {
@@ -270,7 +270,7 @@ impl adapter::Plans for Plans {
             serde_json::from_value(input).map_err(|_| Error::InvalidContract)?;
         if selected.target.is_some()
             || selected.envelope_digest.is_some()
-            || super::service_managed_refusal(&io.state, &selected.machine).is_some()
+            || super::service_managed_refusal(&io.state.plugins, &selected.machine).is_some()
         {
             return Err(Error::InvalidContract);
         }
@@ -282,7 +282,7 @@ impl adapter::Plans for Plans {
         if io
             .runtime
             .block_on(plugin_install_compatibility(
-                &io.state,
+                &io.state.plugins,
                 &selected.machine,
                 release.desired(),
             ))
@@ -295,7 +295,7 @@ impl adapter::Plans for Plans {
             && io
                 .runtime
                 .block_on(agent_plugin_install_compatibility(
-                    &io.state,
+                    &io.state.plugins,
                     &selected.machine,
                     release.desired(),
                 ))

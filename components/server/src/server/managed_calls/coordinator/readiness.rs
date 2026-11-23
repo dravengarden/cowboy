@@ -286,7 +286,10 @@ pub(in crate::server::managed_calls) async fn provider_readiness(
     let account = match owner {
         Some(owner) => {
             match super::super::super::provider_accounts::resolve_for_create(
-                state, owner, provider, None,
+                &state.accounts,
+                owner,
+                provider,
+                None,
             )
             .await
             {
@@ -304,7 +307,12 @@ pub(in crate::server::managed_calls) async fn provider_readiness(
     let resolved = match owner {
         Some(owner) if !account.is_default() => {
             super::super::super::provider_accounts::registration::generation(
-                state, &inventory, provider, owner, &account, machine,
+                &state.accounts,
+                &inventory,
+                provider,
+                owner,
+                &account,
+                machine,
             )
             .await
         }

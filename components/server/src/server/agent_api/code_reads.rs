@@ -121,7 +121,7 @@ pub(super) async fn read(
     }
     let value = match request {
         Request::Search(params) => {
-            let result = content_search(state, &scope, cwd, params.query())
+            let result = content_search(&state.code, &scope, cwd, params.query())
                 .await
                 .map_err(failed)?;
             json!({
@@ -131,7 +131,7 @@ pub(super) async fn read(
             })
         }
         Request::Outline(path) => {
-            let symbols = structure_outline(state, &scope, cwd, path.clone())
+            let symbols = structure_outline(&state.code, &scope, cwd, path.clone())
                 .await
                 .map_err(failed)?;
             json!({"state":"complete","precision":"heuristic","path":path,"symbols":symbols})
@@ -140,7 +140,7 @@ pub(super) async fn read(
             unreachable!("answered above")
         }
         Request::Symbols(query, limit) => {
-            let found = workspace_symbols(state, &scope, cwd, query, limit)
+            let found = workspace_symbols(&state.code, &scope, cwd, query, limit)
                 .await
                 .map_err(failed)?;
             json!({
@@ -218,7 +218,7 @@ async fn checks(state: &AppState, meta: &SessionMeta) -> Result<Value, String> {
     let CodeReadScope::Session(observed) = &scope else {
         return Err("unavailable".into());
     };
-    let declared = declared_checks(state, &scope, observed.session().cwd().to_owned()).await;
+    let declared = declared_checks(&state.code, &scope, observed.session().cwd().to_owned()).await;
     if !session::current(&state.hub, &state.machine_control, observed) {
         return Err("code_context_changed".into());
     }
@@ -349,7 +349,7 @@ pub(super) async fn check(
         .get("check")
         .and_then(Value::as_str)
         .ok_or("invalid_argument")?;
-    match start_check(state, &meta.id, check, operation).await {
+    match start_check(&state.code, &meta.id, check, operation).await {
         Ok(CheckStarted::New(run)) => Ok(json!({"status":"accepted","run":run})),
         Ok(CheckStarted::Existing(run)) => Ok(json!({"status":"existing","run":run})),
         Err(error) if error.starts_with("restricted") => Err("restricted"),

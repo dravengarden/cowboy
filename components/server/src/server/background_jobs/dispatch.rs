@@ -59,7 +59,7 @@ pub(in crate::server) async fn dispatch_one(state: Arc<AppState>, req: DispatchR
     }
     // Named-only accounts: admission, account state and uncertain effects,
     // before anything can revive a worker.
-    let gate = provider_accounts::controls::before_dispatch(&state, &req.session_id);
+    let gate = provider_accounts::controls::before_dispatch(&state.accounts, &req.session_id);
     match gate.await {
         Ok(()) => dispatch_admitted(state, req).await,
         Err(reason) => {
@@ -304,7 +304,7 @@ fn check_sync_dispatch_gates_locked(
     // The account gate ran before the asynchronous recovery above; an
     // uncertain effect, signal or block that arrived meanwhile parks the
     // prompt here, with nothing awaited between this check and the send.
-    if let Some(wait) = provider_accounts::controls::handoff_refusal(state, session_id) {
+    if let Some(wait) = provider_accounts::controls::handoff_refusal(&state.accounts, session_id) {
         return SyncSendOutcome::HandoffRefusal(wait);
     }
     SyncSendOutcome::Ready

@@ -45,7 +45,7 @@ pub(super) async fn api_metrics(State(state): State<Arc<AppState>>) -> Response 
         None => (0, i64::try_from(state.hub.event_total()).unwrap_or(0), 0),
     };
     let runtime = state.runtime_router.stats();
-    let code_cache = state.code_cache.metrics();
+    let code_cache = state.code.code_cache.metrics();
     let daemon_memory = daemon_memory();
     let cgroup_memory = crate::memory_observability::own_cgroup_memory().unwrap_or_default();
     let hub_memory = state.hub.memory_stats();
@@ -279,17 +279,6 @@ pub(super) fn parse_usage_activity_filter(
         models: selected_activity_filters(query.model.as_deref(), allowed_models)?,
         agents: selected_activity_filters(query.agent.as_deref(), allowed_agents)?,
     })
-}
-
-pub(super) fn new_reset_idempotency_key() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(1);
-    format!(
-        "cowboy-reset-{}-{}-{}",
-        std::process::id(),
-        now_ms(),
-        NEXT.fetch_add(1, Ordering::Relaxed),
-    )
 }
 
 pub(super) fn reset_provider_supported(state: &AppState, provider: &str) -> bool {

@@ -275,7 +275,7 @@ pub(super) fn spawn_dispatcher(
 ) -> tokio::task::JoinHandle<()> {
     super::mcp_bindings::launch::start(state);
     // Account controls settle reservations and fences the dispatcher relies on.
-    super::provider_accounts::controls::start(state);
+    super::provider_accounts::controls::start(&state.accounts);
     // Resends every unacknowledged credential generation (wipes included).
     super::provider_auth_flow::reconciler::start(state);
     state.runtime_health.set_dispatcher(true);

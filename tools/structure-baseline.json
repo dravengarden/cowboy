@@ -125,7 +125,7 @@
     "components/server/src/server/managed_calls/coordinator.rs::start": 208,
     "components/server/src/server/managed_calls/runner.rs::launch": 152,
     "components/server/src/server/managed_calls/runner.rs::observe": 188,
-    "components/server/src/server/plugin_install.rs::confirmed_reconcile_install": 201,
+    "components/server-plugins/src/server/plugin_install.rs::confirmed_reconcile_install": 201,
     "components/server/src/server/provider_api.rs::api_provider_auth_start": 189,
     "components/server/src/server/provider_reset_timer.rs::spawn_provider_reset_timer": 203,
     "components/server/src/server/session_api.rs::create_machine_session": 188,

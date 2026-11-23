@@ -198,8 +198,13 @@ async fn pass(state: &Arc<AppState>) {
                     continue;
                 }
                 // Records the acknowledgement on success.
-                match sync_provider_account_auth_to_machine(state, &machine, provider, &account)
-                    .await
+                match sync_provider_account_auth_to_machine(
+                    &state.accounts,
+                    &machine,
+                    provider,
+                    &account,
+                )
+                .await
                 {
                     Ok(generation) => {
                         BACKOFF.lock().succeeded(&key);

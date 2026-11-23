@@ -134,7 +134,7 @@ impl MachineLink<'_> {
                 let completion_connection = (*connection).clone();
                 tokio::spawn(async move {
                     if let Err(code) = provider_accounts::login::accept_native_completion(
-                        &completion_state,
+                        &completion_state.accounts,
                         &completion_connection,
                         &profile,
                     )
@@ -513,7 +513,7 @@ impl MachineLink<'_> {
                     && executor.provider_id == *provider
                     && !executor.promotion_started
                     && executor.active(&state.machine_control, now_ms())
-            }) && let Some(scope) = executor.auth_scope(state)
+            }) && let Some(scope) = executor.auth_scope(&state.accounts)
             {
                 scope.fail_authentication(provider, request_id);
             }

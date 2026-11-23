@@ -428,7 +428,7 @@ pub(super) async fn set(
         if let Some(target) = &edit.next_agent {
             validate_target(target)?;
             provider_accounts::resolve_for_create(
-                &state,
+                &state.accounts,
                 &auth.principal.user_id,
                 &target.provider,
                 Some(&target.provider_account_id),

@@ -338,7 +338,7 @@ async fn deliver(
     paths: Vec<String>,
     target: crate::send_delivery::DeliveryTarget,
 ) {
-    let Some(context) = super::super::super::session_code_context(state, session) else {
+    let Some(context) = super::super::super::session_code_context(&state.code, session) else {
         return;
     };
     let mut relative_paths: Vec<String> = paths

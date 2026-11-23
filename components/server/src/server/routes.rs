@@ -17,7 +17,15 @@ pub(super) fn platform_routes(state: &AppState) -> Router<Arc<AppState>> {
         .route("/healthz", get(healthz))
         .route("/version", get(version))
         .route("/api/metrics", get(api_metrics))
-        .route("/api/sync/dataset", get(sync_dataset::get_dataset))
+        .route(
+            "/api/sync/dataset",
+            get(
+                |State(state): State<Arc<AppState>>,
+                 Extension(auth): Extension<AuthenticatedProductRequest>| async move {
+                    sync_dataset::dataset_response(&state.service_id, &auth.principal)
+                },
+            ),
+        )
         .route("/api/preferences/{scope}", get(preferences::read))
         .route("/api/superagent/activity", get(superagent::activity))
         .route(
@@ -51,8 +59,8 @@ pub(super) fn platform_routes(state: &AppState) -> Router<Arc<AppState>> {
 }
 
 /// Provider account, usage, Plugin and Provider authentication routes.
-pub(super) fn provider_routes() -> Router<Arc<AppState>> {
-    Router::new()
+pub(super) fn provider_routes(state: &AppState) -> Router<Arc<AppState>> {
+    let accounts = Router::new()
         .route(
             "/api/provider-accounts",
             get(provider_accounts::read)
@@ -111,6 +119,9 @@ pub(super) fn provider_routes() -> Router<Arc<AppState>> {
                 .layer(DefaultBodyLimit::max(16 * 1024)),
         )
         .merge(provider_browser_routes())
+        .with_state(Arc::clone(&state.accounts));
+    Router::new()
+        .merge(accounts)
         .route("/api/usage", get(api_usage).post(api_usage_refresh))
         .route("/api/usage/executors", get(api_usage_executors))
         .route(
@@ -184,7 +195,7 @@ pub(super) fn provider_routes() -> Router<Arc<AppState>> {
 /// Owner-operated Machine browsers for named accounts: state, lifecycle
 /// commands and the viewer's display stream. No route couples a browser to
 /// a Provider login.
-fn provider_browser_routes() -> Router<Arc<AppState>> {
+fn provider_browser_routes() -> Router<Arc<AccountsState>> {
     Router::new()
         .route(
             "/api/provider-accounts/{account_id}/browser",
@@ -222,106 +233,122 @@ fn provider_browser_routes() -> Router<Arc<AppState>> {
 }
 
 /// Machine registry, enrollment, connection, Plugin installation and project routes.
-pub(super) fn machine_routes() -> Router<Arc<AppState>> {
+pub(super) fn machine_routes(state: &AppState) -> Router<Arc<AppState>> {
+    let plugin_ops = Router::new()
+        .route(
+            "/api/machines/{id}/providers/{provider_id}",
+            post(api_machine_plugin_install),
+        )
+        .route(
+            "/api/machines/{id}/plugins/{provider_id}",
+            post(api_machine_plugin_install),
+        )
+        .route(
+            "/api/machines/{id}/providers/{provider_id}/uninstall",
+            post(api_machine_plugin_uninstall),
+        )
+        .route(
+            "/api/machines/{id}/plugins/{provider_id}/uninstall",
+            post(api_machine_plugin_uninstall),
+        )
+        .route(
+            "/api/machines/{id}/plugins/{provider_id}/operations",
+            get(api_machine_plugin_operations),
+        )
+        .route(
+            "/api/machines/{id}/plugins/{provider_id}/installation-operations",
+            get(plugin_install::api_machine_plugin_install_operations),
+        )
+        .route(
+            "/api/machines/{id}/plugins/{provider_id}/operations/{operation_id}/machine-receipt",
+            get(api_machine_plugin_operation_receipt),
+        )
+        .route(
+            "/api/machines/{id}/plugins/{provider_id}/operations/{operation_id}/recovery-assessment",
+            get(api_machine_plugin_recovery_assessment),
+        )
+        .route(
+            "/api/machines/{id}/plugins/{provider_id}/operations/{operation_id}/resolution-plan",
+            post(plugin_uninstall::resolution::api_resolution_plan),
+        )
+        .route(
+            "/api/machines/{id}/plugins/{provider_id}/operations/{operation_id}/resolve",
+            post(plugin_uninstall::resolution::api_resolve),
+        )
+        .route(
+            "/api/machines/{id}/plugins/{provider_id}/operations/{operation_id}/resolution",
+            get(plugin_uninstall::resolution::api_resolution_receipt),
+        )
+        .with_state(Arc::clone(&state.plugins));
     Router::new()
-    .route("/api/project-policies", get(projects::policies))
-    .route("/api/project-placements", get(projects::placements))
-    .route("/api/machines/{id}/projects", get(projects::list).post(projects::request))
-    .route("/api/machines/{id}/project-policy", put(projects::update_policy))
-    .route("/api/machines", get(api_machines))
-    .route(
-        "/api/machines/enrollment",
-        post(api_machine_create_enrollment).delete(api_machine_cancel_enrollment),
-    )
-    .route("/api/machines/{id}/events", get(api_machine_events))
-    .route(
-        "/api/machines/{id}/deployment-health",
-        get(api_machine_deployment_health),
-    )
-    .route(
-        "/api/machines/{id}/durable-state",
-        get(api_machine_durable_state),
-    )
-    .route("/api/machines/{id}/plugins", get(api_machine_plugins))
-    .route(
-        "/api/machines/{id}/providers/{provider_id}",
-        post(api_machine_plugin_install),
-    )
-    .route(
-        "/api/machines/{id}/plugins/{provider_id}",
-        post(api_machine_plugin_install),
-    )
-    .route(
-        "/api/machines/{id}/providers/{provider_id}/uninstall-plan",
-        post(api_machine_plugin_uninstall_plan),
-    )
-    .route(
-        "/api/machines/{id}/plugins/{provider_id}/uninstall-plan",
-        post(api_machine_plugin_uninstall_plan),
-    )
-    .route(
-        "/api/machines/{id}/providers/{provider_id}/uninstall",
-        post(api_machine_plugin_uninstall),
-    )
-    .route(
-        "/api/machines/{id}/plugins/{provider_id}/uninstall",
-        post(api_machine_plugin_uninstall),
-    )
-    .route(
-        "/api/machines/{id}/plugins/{provider_id}/operations",
-        get(api_machine_plugin_operations),
-    )
-    .route(
-        "/api/machines/{id}/plugins/{provider_id}/installation-operations",
-        get(plugin_install::api_machine_plugin_install_operations),
-    )
-    .route(
-        "/api/machines/{id}/plugins/{provider_id}/lifecycle-history",
-        get(plugin_history::get_history),
-    )
-    .route(
-        "/api/machines/{id}/plugins/{provider_id}/operations/{operation_id}/machine-receipt",
-        get(api_machine_plugin_operation_receipt),
-    )
-    .route(
-        "/api/machines/{id}/plugins/{provider_id}/operations/{operation_id}/recovery-assessment",
-        get(api_machine_plugin_recovery_assessment),
-    )
-    .route(
-        "/api/machines/{id}/plugins/{provider_id}/operations/{operation_id}/resolution-plan",
-        post(plugin_uninstall::resolution::api_resolution_plan),
-    )
-    .route(
-        "/api/machines/{id}/plugins/{provider_id}/operations/{operation_id}/resolve",
-        post(plugin_uninstall::resolution::api_resolve),
-    )
-    .route(
-        "/api/machines/{id}/plugins/{provider_id}/operations/{operation_id}/resolution",
-        get(plugin_uninstall::resolution::api_resolution_receipt),
-    )
-    .route("/api/machines/{id}/refresh", post(api_machine_refresh))
-    .route(
-        "/api/machines/{id}/components/reconcile",
-        post(api_machine_reconcile),
-    )
-    .route(
-        "/api/machines/{id}/components/reconcile-one",
-        post(api_machine_reconcile_one),
-    )
-    .route(
-        "/api/machines/{id}/components/update-npm",
-        post(api_machine_update_npm),
-    )
-    .route("/api/machines/{id}/revoke", post(api_machine_revoke))
-    .route("/api/machine/service", get(api_machine_service))
-    .route("/api/machine/enroll", post(api_machine_enroll))
-    .route("/api/machine/connect", any(machine_ws_upgrade))
-    .route(crate::machine_lanes::LANE_PATH, any(machine_lanes::upgrade))
-    .route(
-        crate::machine_protocol::machine_browser::STREAM_PATH,
-        any(provider_accounts::browser::machine_stream::upgrade),
-    )
-    .route("/api/machines/{id}/maintenance", put(session_maintenance::configure))
+        .merge(plugin_ops)
+        .route("/api/project-policies", get(projects::policies))
+        .route("/api/project-placements", get(projects::placements))
+        .route(
+            "/api/machines/{id}/projects",
+            get(projects::list).post(projects::request),
+        )
+        .route(
+            "/api/machines/{id}/project-policy",
+            put(projects::update_policy),
+        )
+        .route("/api/machines", get(api_machines))
+        .route(
+            "/api/machines/enrollment",
+            post(api_machine_create_enrollment).delete(api_machine_cancel_enrollment),
+        )
+        .route("/api/machines/{id}/events", get(api_machine_events))
+        .route(
+            "/api/machines/{id}/deployment-health",
+            get(api_machine_deployment_health),
+        )
+        .route(
+            "/api/machines/{id}/durable-state",
+            get(api_machine_durable_state),
+        )
+        .route("/api/machines/{id}/plugins", get(api_machine_plugins))
+        .route(
+            "/api/machines/{id}/providers/{provider_id}/uninstall-plan",
+            post(api_machine_plugin_uninstall_plan),
+        )
+        .route(
+            "/api/machines/{id}/plugins/{provider_id}/uninstall-plan",
+            post(api_machine_plugin_uninstall_plan),
+        )
+        .route(
+            "/api/machines/{id}/plugins/{provider_id}/lifecycle-history",
+            get(plugin_history::get_history),
+        )
+        .route("/api/machines/{id}/refresh", post(api_machine_refresh))
+        .route(
+            "/api/machines/{id}/components/reconcile",
+            post(api_machine_reconcile),
+        )
+        .route(
+            "/api/machines/{id}/components/reconcile-one",
+            post(api_machine_reconcile_one),
+        )
+        .route(
+            "/api/machines/{id}/components/update-npm",
+            post(api_machine_update_npm),
+        )
+        .route("/api/machines/{id}/revoke", post(api_machine_revoke))
+        .route("/api/machine/service", get(api_machine_service))
+        .route("/api/machine/enroll", post(api_machine_enroll))
+        .route("/api/machine/connect", any(machine_ws_upgrade))
+        .route(crate::machine_lanes::LANE_PATH, any(machine_lanes::upgrade))
+        .merge(
+            Router::new()
+                .route(
+                    crate::machine_protocol::machine_browser::STREAM_PATH,
+                    any(provider_accounts::browser::machine_stream::upgrade),
+                )
+                .with_state(Arc::clone(&state.accounts)),
+        )
+        .route(
+            "/api/machines/{id}/maintenance",
+            put(session_maintenance::configure),
+        )
 }
 
 /// Linked context, its handoff to a new agent, and forks.
@@ -398,7 +425,7 @@ pub(super) fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
             "/api/sessions/{id}/calls/approval",
             post(managed_calls::decide_approval),
         )
-        .merge(session_tool_routes())
+        .merge(session_tool_routes(state))
         .route("/api/agent-tools", get(agent_tools::list))
         .route(
             "/api/folders",
@@ -431,10 +458,6 @@ pub(super) fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
             "/api/execution-environments",
             get(execution::sessions::availability),
         )
-        .route(
-            "/api/sessions/reconcile-project",
-            post(api_reconcile_project_sessions),
-        )
         .route("/api/sessions/{id}/info", get(api_session_info))
         .route(
             "/api/sessions/{id}/reload",
@@ -443,7 +466,6 @@ pub(super) fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
                 .put(session_provider_updates::configure),
         )
         .route("/api/sessions/{id}/hibernate", post(api_session_hibernate))
-        .route("/api/sessions/{id}/review-fetch", post(api_review_fetch))
         .route(
             "/api/session-maintenance",
             get(session_maintenance::inventory),
@@ -511,7 +533,7 @@ pub(super) fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
 
 /// Code browsing, intelligence, buffer and workspace routes.
 pub(super) fn code_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
-    Router::new()
+    Router::<Arc<AppState>>::new()
         .merge(code_buffers::routes(code_buffers::Context {
             service_id: state.service_id.clone(),
             hub: state.hub.clone(),
@@ -524,63 +546,76 @@ pub(super) fn code_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
             device_access: Arc::clone(&state.device_access),
             product_authentication: Arc::clone(&state.product_authentication),
         }))
-        .route("/api/workspaces", get(api_workspaces))
-        .route("/api/sessions/{id}/files", get(api_search_files))
-        .route("/api/code/sessions/{id}/tree", get(api_file_tree))
-        .merge(code_api::search_routes())
-        .merge(code_api::check_routes())
-        .route("/api/code/sessions/{id}/manifest", get(api_code_manifest))
-        .route("/api/code/sessions/{id}/changes", get(api_code_changes))
-        .route(
-            "/api/code/sessions/{id}/extensions",
-            get(workspace_extensions::inventory),
-        )
-        .route(
-            "/api/code/sessions/{id}/extensions/resources",
-            get(workspace_extensions::resources),
-        )
-        .route(
-            "/api/code/sessions/{id}/repository",
-            get(api_code_repository),
-        )
-        .route("/api/code/sessions/{id}/commit", get(api_code_commit))
-        .route(
-            "/api/code/sessions/{id}/commit-diff",
-            get(api_code_commit_diff),
-        )
-        .route("/api/code/sessions/{id}/diff", get(api_code_diff))
-        .route("/api/code/sessions/{id}/file", get(api_code_file))
-        .route("/api/code/sessions/{id}/file-raw", get(api_code_file_raw))
-        .route("/api/code/sessions/{id}/blob", get(api_code_blob))
-        .route("/api/code/sessions/{id}/file-blob", get(api_code_file_blob))
-        .route("/api/code/sessions/{id}/language", get(api_code_language))
-        .route(
-            "/api/code/sessions/{id}/intelligence/hover",
-            get(api_code_hover),
-        )
-        .route(
-            "/api/code/sessions/{id}/intelligence/navigation",
-            get(api_code_navigation),
-        )
-        .route(
-            "/api/code/sessions/{id}/intelligence/outline",
-            get(api_code_outline),
-        )
-        .route(
-            "/api/code/sessions/{id}/buffer",
-            put(api_code_buffer_open).delete(api_code_buffer_close),
+        .merge(
+            Router::new()
+                .route(
+                    "/api/code/sessions/{id}/extensions",
+                    get(workspace_extensions::inventory),
+                )
+                .route(
+                    "/api/code/sessions/{id}/extensions/resources",
+                    get(workspace_extensions::resources),
+                )
+                .route(
+                    "/api/sessions/reconcile-project",
+                    post(api_reconcile_project_sessions),
+                )
+                .route("/api/sessions/{id}/review-fetch", post(api_review_fetch))
+                .route("/api/workspaces", get(api_workspaces))
+                .route("/api/sessions/{id}/files", get(api_search_files))
+                .route("/api/code/sessions/{id}/tree", get(api_file_tree))
+                .merge(code_api::search_routes())
+                .merge(code_api::check_routes())
+                .route("/api/code/sessions/{id}/manifest", get(api_code_manifest))
+                .route("/api/code/sessions/{id}/changes", get(api_code_changes))
+                .route(
+                    "/api/code/sessions/{id}/repository",
+                    get(api_code_repository),
+                )
+                .route("/api/code/sessions/{id}/commit", get(api_code_commit))
+                .route(
+                    "/api/code/sessions/{id}/commit-diff",
+                    get(api_code_commit_diff),
+                )
+                .route("/api/code/sessions/{id}/diff", get(api_code_diff))
+                .route("/api/code/sessions/{id}/file", get(api_code_file))
+                .route("/api/code/sessions/{id}/file-raw", get(api_code_file_raw))
+                .route("/api/code/sessions/{id}/blob", get(api_code_blob))
+                .route("/api/code/sessions/{id}/file-blob", get(api_code_file_blob))
+                .route("/api/code/sessions/{id}/language", get(api_code_language))
+                .route(
+                    "/api/code/sessions/{id}/intelligence/hover",
+                    get(api_code_hover),
+                )
+                .route(
+                    "/api/code/sessions/{id}/intelligence/navigation",
+                    get(api_code_navigation),
+                )
+                .route(
+                    "/api/code/sessions/{id}/intelligence/outline",
+                    get(api_code_outline),
+                )
+                .route(
+                    "/api/code/sessions/{id}/buffer",
+                    put(api_code_buffer_open).delete(api_code_buffer_close),
+                )
+                .with_state(Arc::clone(&state.code)),
         )
 }
 
-fn session_tool_routes() -> Router<Arc<AppState>> {
+fn session_tool_routes(state: &AppState) -> Router<Arc<AppState>> {
     Router::new()
         .route(
             "/api/sessions/{id}/tools",
             get(agent_tools::session).put(agent_tools::configure_session),
         )
-        .route(
-            "/api/sessions/{id}/uncertain-effect/acknowledge",
-            post(provider_accounts::controls::http::http_acknowledge),
+        .merge(
+            Router::new()
+                .route(
+                    "/api/sessions/{id}/uncertain-effect/acknowledge",
+                    post(provider_accounts::controls::http::http_acknowledge),
+                )
+                .with_state(Arc::clone(&state.accounts)),
         )
         .merge(mcp_bindings::routes())
 }

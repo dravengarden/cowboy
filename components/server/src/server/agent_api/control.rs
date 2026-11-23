@@ -18,6 +18,7 @@ mod account_routes;
 mod browser_routes;
 mod context_routes;
 mod spawn;
+mod substate_routes;
 
 static EFFECTS: LazyLock<Arc<Semaphore>> = LazyLock::new(|| Arc::new(Semaphore::new(16)));
 
@@ -445,16 +446,7 @@ fn route(name: &str) -> Option<(&'static str, &'static str, MethodRouter<Arc<App
             "/api/execution-environments",
             get(web::execution::sessions::availability),
         ),
-        "plugins.machine_receipt" => (
-            "GET",
-            "/api/machines/{machine}/plugins/{plugin}/operations/{operation}/machine-receipt",
-            get(web::api_machine_plugin_operation_receipt),
-        ),
-        "plugins.recovery_assessment" => (
-            "GET",
-            "/api/machines/{machine}/plugins/{plugin}/operations/{operation}/recovery-assessment",
-            get(web::api_machine_plugin_recovery_assessment),
-        ),
+
         "sessions.calls" => (
             "GET",
             "/api/sessions/{session_id}/calls",
@@ -485,7 +477,6 @@ fn route(name: &str) -> Option<(&'static str, &'static str, MethodRouter<Arc<App
             "/api/machines/{machine}/plugins/{plugin}/lifecycle-history",
             get(web::plugin_history::get_history),
         ),
-        "projects.workspaces" => ("GET", "/api/workspaces", get(web::api_workspaces)),
         "sessions.questions" => (
             "GET",
             "/api/sessions/{session_id}/question-pages",
@@ -517,11 +508,6 @@ fn route(name: &str) -> Option<(&'static str, &'static str, MethodRouter<Arc<App
             "/api/sessions/{session_id}/config-revert/restore",
             post(web::config_revert::restore),
         ),
-        "sessions.review_fetch" => (
-            "POST",
-            "/api/sessions/{session_id}/review-fetch",
-            post(web::api_review_fetch),
-        ),
         "queue.policy_set" => (
             "PUT",
             "/api/sessions/{session_id}/delivery-policy",
@@ -543,16 +529,7 @@ fn route(name: &str) -> Option<(&'static str, &'static str, MethodRouter<Arc<App
             "/api/machines/{machine}/plugins",
             get(web::api_machine_plugins),
         ),
-        "plugins.operations" => (
-            "GET",
-            "/api/machines/{machine}/plugins/{plugin}/operations",
-            get(web::api_machine_plugin_operations),
-        ),
-        "plugins.install_operations" => (
-            "GET",
-            "/api/machines/{machine}/plugins/{plugin}/installation-operations",
-            get(web::plugin_install::api_machine_plugin_install_operations),
-        ),
+
         "machines.health" => (
             "GET",
             "/api/machines/{machine}/deployment-health",
@@ -692,9 +669,7 @@ fn route(name: &str) -> Option<(&'static str, &'static str, MethodRouter<Arc<App
             get(web::draft_documents::history_snapshot),
         ),
         _ => {
-            return context_routes::context_route(name)
-                .or_else(|| browser_routes::browser_route(name))
-                .or_else(|| account_routes::account_route(name));
+            return context_routes::context_route(name);
         }
     })
 }
@@ -1006,7 +981,7 @@ async fn dispatch(
         only_keys(&input, &["machine", "plugin", "version", "digest", "body"])?;
         let machine = arg_str(&input, "machine")?.to_owned();
         let plugin = arg_str(&input, "plugin")?.to_owned();
-        if web::service_managed_refusal(state, &machine).is_some() {
+        if web::service_managed_refusal(&state.plugins, &machine).is_some() {
             return Err("service_managed_membership".into());
         }
         let approval = web::operator_approval::OperatorApproval::capture_agent(
@@ -1032,7 +1007,7 @@ async fn dispatch(
                         .to_owned(),
                 };
                 web::plugin_install::confirmed_install(
-                    Arc::clone(state),
+                    Arc::clone(&state.plugins),
                     machine,
                     plugin,
                     request,
@@ -1043,7 +1018,7 @@ async fn dispatch(
             "plugins.uninstall_plan" => {
                 only_keys(&input, &["machine", "plugin"])?;
                 web::preview_machine_plugin_uninstall(
-                    Arc::clone(state),
+                    Arc::clone(&state.plugins),
                     machine,
                     plugin,
                     approval.actor().clone(),
@@ -1055,7 +1030,7 @@ async fn dispatch(
                 let request = serde_json::from_value(input["body"].clone())
                     .map_err(|_| "invalid_argument")?;
                 web::plugin_uninstall::confirmed_uninstall(
-                    Arc::clone(state),
+                    Arc::clone(&state.plugins),
                     machine,
                     plugin,
                     request,
@@ -1173,10 +1148,10 @@ async fn dispatch(
             && !id.is_default()
         {
             let owner = super::actions::account_owner(state, parent).await?;
-            super::super::provider_accounts::usage::refresh_one(state, &owner, &id)
+            super::super::provider_accounts::usage::refresh_one(&state.accounts, &owner, &id)
                 .await
                 .map_err(str::to_owned)?;
-            return super::super::provider_accounts::usage::read_one(state, &owner, &id)
+            return super::super::provider_accounts::usage::read_one(&state.accounts, &owner, &id)
                 .await
                 .map_err(str::to_owned);
         }
@@ -1185,7 +1160,7 @@ async fn dispatch(
         if account.is_none()
             && let Ok(owner) = super::actions::account_owner(state, parent).await
         {
-            super::super::provider_accounts::usage::refresh_owner_accounts(state, &owner);
+            super::super::provider_accounts::usage::refresh_owner_accounts(&state.accounts, &owner);
         }
         let snapshot = state
             .usage
@@ -1211,7 +1186,8 @@ async fn dispatch(
         only_keys(&input, &["machine"])?;
         input = json!({"query":{"machine_id":arg_str(&input,"machine")?}});
     }
-    let (method, pattern, handler) = route(name).ok_or("unknown_operation")?;
+    let (method, pattern, router) =
+        substate_routes::resolve_router(state, name).ok_or("unknown_operation")?;
     if !spec.write && input.get("body").is_some() {
         return Err("invalid_argument".into());
     }
@@ -1236,12 +1212,7 @@ async fn dispatch(
         })
         .body(Body::from(body.to_string()))
         .map_err(|_| "invalid_argument")?;
-    let response = Router::new()
-        .route(pattern, handler)
-        .with_state(Arc::clone(state))
-        .oneshot(request)
-        .await
-        .map_err(|_| "unavailable")?;
+    let response = router.oneshot(request).await.map_err(|_| "unavailable")?;
     let result = response_value(response, spec.write).await?;
     if let Some(spawn) = spawn {
         let actor = web::folder_actor(state, &auth.principal);

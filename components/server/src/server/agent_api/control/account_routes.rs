@@ -6,7 +6,11 @@ use super::*;
 /// The product route behind an account-control operation, if `name` is one.
 pub(super) fn account_route(
     name: &str,
-) -> Option<(&'static str, &'static str, MethodRouter<Arc<AppState>>)> {
+) -> Option<(
+    &'static str,
+    &'static str,
+    MethodRouter<Arc<web::AccountsState>>,
+)> {
     Some(match name {
         "accounts.control" => (
             "POST",

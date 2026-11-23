@@ -5,7 +5,11 @@ use super::*;
 /// The product route behind a browser control operation, if `name` is one.
 pub(super) fn browser_route(
     name: &str,
-) -> Option<(&'static str, &'static str, MethodRouter<Arc<AppState>>)> {
+) -> Option<(
+    &'static str,
+    &'static str,
+    MethodRouter<Arc<web::AccountsState>>,
+)> {
     Some(match name {
         "accounts.browser_open" => (
             "POST",

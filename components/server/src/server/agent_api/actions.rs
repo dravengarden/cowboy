@@ -538,9 +538,11 @@ async fn transition_plan(
     input.target_login_operation = document_operation(&meta.id, &input.target_login_operation);
     let owner = account_owner(state, meta).await?;
     let operation = document_operation(&meta.id, operation);
-    super::super::provider_accounts::transitions::plan(state, &owner, &operation, input).await?;
+    super::super::provider_accounts::transitions::plan(&state.accounts, &owner, &operation, input)
+        .await?;
     Ok(success(
-        super::super::provider_accounts::transitions::status(state, &owner, &operation).await?,
+        super::super::provider_accounts::transitions::status(&state.accounts, &owner, &operation)
+            .await?,
     ))
 }
 
@@ -618,7 +620,7 @@ async fn execute(
             let owner = account_owner(state, meta).await?;
             Ok(success(
                 super::super::provider_accounts::transitions::reconcile(
-                    state,
+                    &state.accounts,
                     &owner,
                     &document_operation(&meta.id, operation),
                 )
@@ -635,13 +637,17 @@ async fn execute(
             let owner = account_owner(state, meta).await?;
             if let Some(account) = input.account_id {
                 return Ok(success(
-                    super::super::provider_accounts::lifecycle::resume(state, &owner, &account)
-                        .await?,
+                    super::super::provider_accounts::lifecycle::resume(
+                        &state.accounts,
+                        &owner,
+                        &account,
+                    )
+                    .await?,
                 ));
             }
             Ok(success(
                 super::super::provider_accounts::reconcile(
-                    state,
+                    &state.accounts,
                     &owner,
                     &document_operation(&meta.id, operation),
                 )
@@ -658,7 +664,7 @@ async fn execute(
             let owner = account_owner(state, meta).await?;
             Ok(success(
                 super::super::provider_accounts::login::cancel_operation(
-                    state,
+                    &state.accounts,
                     &owner,
                     &document_operation(&meta.id, operation),
                 )
@@ -669,7 +675,7 @@ async fn execute(
             let input = serde_json::from_value(args).map_err(|_| "invalid_argument")?;
             let owner = account_owner(state, meta).await?;
             let value = super::super::provider_accounts::lifecycle::start(
-                state,
+                &state.accounts,
                 &owner,
                 &document_operation(&meta.id, operation),
                 input,
@@ -686,7 +692,7 @@ async fn execute(
             let owner = account_owner(state, meta).await?;
             Ok(success(
                 super::super::provider_accounts::login::start_operation(
-                    state,
+                    &state.accounts,
                     &owner,
                     &document_operation(&meta.id, operation),
                     input,
@@ -699,7 +705,7 @@ async fn execute(
                 serde_json::from_value(args).map_err(|_| "invalid_argument")?;
             let owner = account_owner(state, meta).await?;
             let value = super::super::provider_accounts::update_value(
-                state,
+                &state.accounts,
                 &owner,
                 &document_operation(&meta.id, operation),
                 &input,
@@ -858,7 +864,7 @@ async fn receipt(
             let owner = account_owner(state, meta).await?;
             Ok(success(
                 super::super::provider_accounts::login::operation_receipt(
-                    state,
+                    &state.accounts,
                     &owner,
                     &document_operation(&meta.id, &input.operation),
                 )
