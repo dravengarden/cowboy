@@ -151,8 +151,12 @@ impl Hub {
                 event,
                 cmid,
             };
-            if let Event::Update { update } = &envelope.event
-                && crate::prompt_origin::starts_owner_turn(envelope.cmid.as_deref(), update)
+            // A send begins one turn at its first chunk, however many blocks follow.
+            if crate::prompt_origin::is_owner_chunk(&envelope)
+                && !s
+                    .log
+                    .last()
+                    .is_some_and(crate::prompt_origin::is_owner_chunk)
             {
                 s.owner_turn_seq = Some(seq);
             }

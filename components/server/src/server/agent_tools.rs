@@ -165,14 +165,20 @@ struct CallsPolicyWire {
     targets: Vec<CallTarget>,
     default: String,
     max_concurrent: u16,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     max_per_turn: Option<u16>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     max_per_session: Option<u16>,
     #[serde(default = "enabled_by_default")]
     images: bool,
     #[serde(default)]
     self_images: bool,
+}
+
+/// A budget field is either omitted or a number: an explicit `null` is
+/// refused, so presence can always be told from the decoded value.
+fn present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<u16>, D::Error> {
+    u16::deserialize(deserializer).map(Some)
 }
 
 impl From<CallsPolicyWire> for CallsPolicy {
@@ -536,6 +542,14 @@ mod turn_limit_tests {
         let duplicated = text.replacen("\"enabled\":true", "\"enabled\":true,\"enabled\":false", 1);
         assert_ne!(duplicated, text, "the fixture has an enabled field");
         assert!(serde_json::from_str::<AgentUpdate>(&duplicated).is_err());
+        // An explicit null cannot hide that both budget fields were sent.
+        let nulled = text.replacen(
+            "\"max_per_turn\":4",
+            "\"max_per_turn\":null,\"max_per_session\":32",
+            1,
+        );
+        assert_ne!(nulled, text, "the fixture has a max_per_turn field");
+        assert!(serde_json::from_str::<AgentUpdate>(&nulled).is_err());
         // A NUL would be dropped by the settings stores and change what the
         // saved limit was bound to.
         let mut tools = AgentTools::builtin("codex");

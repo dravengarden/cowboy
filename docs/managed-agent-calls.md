@@ -305,20 +305,25 @@ failed or cancelled call, a dismissed call and a continuation round all spent
 budget. A replayed `request_id` returns the original call and keeps its turn.
 A call admitted before the column existed carries `NULL` and counts in no turn.
 
-The turn begins at the chunk that carries the client message id of the owner's
-send (`prompt_origin::starts_owner_turn`). A send's later blocks carry no id, a
-steered block of an older worker is not stamped, and a chunk no send claimed (an
-ACP client's unmatched text) has none: none of them begins a turn, so a send
-has one anchor however many blocks it has. The Hub remembers the latest such
-sequence per session (`owner_turn_seq`), so the turn survives the transcript
-trimming it out of memory and a cleared transcript. Admission reads that, else
-the Hub's retained log (which also holds events the store has not written yet,
-whatever the client bootstrap window shows), else durable history (200 events
-per page, three seconds). When it cannot, it refuses with the retryable
-`capacity` code and a `reason` (`session_unavailable`,
-`owner_turn_scan_timeout` or `owner_turn_history_unavailable`) rather than
-guess; nothing is recorded. A racing duplicate of the same `request_id` that was
-admitted meanwhile is answered with its receipt, not with the refusal.
+A turn begins at the first chunk of the owner's send
+(`prompt_origin::newest_owner_turn`): the first of the newest run of consecutive
+user-role chunks the Hub stamped with a human origin and whose message id, if it
+kept one, is not an automation's. A send's later blocks (a context preamble
+ahead of the owner's words, images) extend the run and are one anchor; a direct
+WebSocket prompt without an id is stamped and counts; a chunk nobody stamped (an
+ACP client's unmatched text, a steered block of an older worker) and rows from
+before the stamp never do, whatever their text. The Hub remembers the latest
+such sequence per session (`owner_turn_seq`), restored from the retained log
+at start, so the turn survives the transcript trimming it out of memory and a
+cleared transcript. Admission reads that, else the Hub's retained log (which
+also holds events the store has not written yet, whatever the client bootstrap
+window shows), else durable history (200 events per page, three seconds). When
+it cannot, it refuses with the retryable `capacity` code and a `reason`
+(`session_unavailable`, `owner_turn_scan_timeout` or
+`owner_turn_history_unavailable`) rather than guess; nothing is recorded. A
+racing duplicate of the same `request_id` that was admitted meanwhile is
+answered with its receipt, not with the refusal; a continuation replays under
+`auto` or its child's own agent.
 
 **What the budget cannot promise.** The owner's prompt is recognized by its
 client message id and the origin the Hub stamps on its echo, not by
@@ -328,11 +333,13 @@ a turn because their message ids look like the owner's: an agent's
 `sessions.context_send` (`context-<operation>`), `sessions.create` with
 `initial_prompt` (`initial:`), a delegated `sessions.retry` (`cowboy-retry:`,
 which can resend a wake or a notice), and activating a draft an agent edited
-(it keeps the draft's own id). An owner prompt whose text is runtime markup or
-whose operation id begins `__wake__` is missed. The remembered turn is lost
+(it keeps the draft's own id). An owner prompt sent with an operation id that
+begins `__wake__` or another automation prefix is missed; an id longer than the
+128 bytes the store keeps is dropped on restore, which the stamp survives. The remembered turn is lost
 when the Controller restarts after the owner's prompt left the retained log
 before the store wrote it, or after the transcript was cleared (the cleared
-history is gone), and then reads as the previous turn or none. A call's first
+history is gone), and then reads as the previous turn or none; so does an
+owner prompt older than the stamp. A call's first
 request can reach the Controller before the prompt echo is projected, in which
 case it counts against the previous turn. Undecodable durable rows can make a
 history page look empty. Closing these needs a trusted sender stamped at each

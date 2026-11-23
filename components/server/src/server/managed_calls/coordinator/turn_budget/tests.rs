@@ -61,13 +61,28 @@ impl Fixture {
     /// A prompt as the Hub records it: the origin its cmid selects is stamped
     /// on the echoed user-role chunk.
     fn prompt(&self, cmid: Option<&str>) {
+        self.prompt_text(cmid, "prompt");
+    }
+
+    fn prompt_text(&self, cmid: Option<&str>, text: &str) {
         let mut update = json!({
             "sessionUpdate": "user_message_chunk",
-            "content": {"type": "text", "text": "prompt"}
+            "content": {"type": "text", "text": text}
         });
         apply_prompt_origin(&mut update, &origin_from_cmid(cmid));
         self.hub
             .push_tagged(PARENT, Event::Update { update }, cmid.map(str::to_owned));
+    }
+
+    /// A user-role chunk no send claimed and the Hub never stamped, as an ACP
+    /// client's unmatched text arrives.
+    fn unclaimed_chunk(&self) {
+        self.hub.push(
+            PARENT,
+            Event::Update {
+                update: json!({"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"unmatched"}}),
+            },
+        );
     }
 
     fn work(&self) {
@@ -237,8 +252,39 @@ async fn an_owner_prompt_starts_a_fresh_budget_and_keeps_the_old_turn_counted() 
         );
     }
     // A chunk no send claimed (an ACP client's unmatched text) is no turn.
-    fixture.prompt(None);
+    fixture.unclaimed_chunk();
     assert_eq!(refused(fixture.call().await).0, "call_limit");
+}
+
+#[tokio::test]
+async fn a_send_with_a_context_preamble_is_the_owners_turn() {
+    let mut fixture = Fixture::new(1).await;
+    fixture.prompt(Some("cmid-1"));
+    fixture.work();
+    let first = fixture.spend(1).await;
+    assert_eq!(refused(fixture.call().await).0, "call_limit");
+    // Linked context rides ahead of the owner's text: the id and a runtime
+    // looking block first, the owner's words without an id second.
+    fixture.prompt_text(
+        Some("cmid-2"),
+        "<system-reminder>linked context</system-reminder>",
+    );
+    fixture.prompt_text(None, "Continue");
+    let second = fixture.spend(1).await;
+    assert_ne!(first, second, "the owner's send reset the budget");
+    assert_eq!(refused(fixture.call().await).0, "call_limit");
+}
+
+#[tokio::test]
+async fn a_direct_prompt_without_an_id_is_the_owners_turn() {
+    // The authenticated WebSocket `prompt` command sends no client id.
+    let mut fixture = Fixture::new(1).await;
+    fixture.prompt(Some("cmid-1"));
+    fixture.work();
+    fixture.spend(1).await;
+    assert_eq!(refused(fixture.call().await).0, "call_limit");
+    fixture.prompt(None);
+    fixture.spend(1).await;
 }
 
 #[tokio::test]

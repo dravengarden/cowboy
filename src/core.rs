@@ -567,7 +567,7 @@ struct Session {
     reached_start: bool,
     next_seq: u64,
     /// Sequence of the event that began the session's latest owner turn
-    /// ([`crate::prompt_origin::starts_owner_turn`]). Unlike `log` it survives
+    /// ([`crate::prompt_origin::newest_owner_turn`]). Unlike `log` it survives
     /// trimming and a cleared transcript, so a call budget never loses its
     /// turn to eviction. `None` until a person prompts it in this lifetime.
     owner_turn_seq: Option<u64>,
@@ -2131,6 +2131,7 @@ impl Hub {
                     self.inner.store_tx.is_some(),
                     &mut reached_start,
                 );
+                let owner_turn_seq = crate::prompt_origin::newest_owner_turn(&log);
                 for envelope in &log {
                     let _ = history_reducer.reduce(envelope.clone());
                 }
@@ -2150,7 +2151,7 @@ impl Hub {
                         event_count,
                         reached_start,
                         next_seq,
-                        owner_turn_seq: None,
+                        owner_turn_seq,
                         last_activity: restored_last_activity(last_event_at_ms, now_ms()),
                         config_options,
                         config_previews: ConfigPreviews::default(),

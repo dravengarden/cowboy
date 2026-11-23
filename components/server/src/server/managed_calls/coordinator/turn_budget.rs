@@ -13,7 +13,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::error;
-use crate::core::{Envelope, Event, Hub};
+use crate::core::{Envelope, Hub};
 use crate::managed_calls::service::OWNER_TURN_NONE;
 use crate::store::Store;
 
@@ -28,18 +28,9 @@ const SCAN_DEADLINE: Duration = Duration::from_secs(3);
 #[cfg(test)]
 mod tests;
 
-/// Whether a timeline event begins an owner turn.
-fn is_owner_prompt(event: &Envelope) -> bool {
-    matches!(&event.event, Event::Update { update }
-        if crate::prompt_origin::starts_owner_turn(event.cmid.as_deref(), update))
-}
-
-/// The sequence of the newest owner prompt in `log`, in any order.
+/// The sequence of the newest owner turn in `log`, as a ledger stamp.
 fn newest_owner_prompt(log: &[Envelope]) -> Option<i64> {
-    log.iter()
-        .filter(|event| is_owner_prompt(event))
-        .filter_map(|event| i64::try_from(event.seq).ok())
-        .max()
+    crate::prompt_origin::newest_owner_turn(log).and_then(|seq| i64::try_from(seq).ok())
 }
 
 /// The owner turn a call admitted now counts against: the newest owner
@@ -51,7 +42,7 @@ fn newest_owner_prompt(log: &[Envelope]) -> Option<i64> {
 /// guess.
 async fn current_turn(hub: &Hub, store: &Store, parent: &str) -> Result<i64, &'static str> {
     let scan = hub
-        .newest_in_retained_log(parent, is_owner_prompt)
+        .newest_in_retained_log(parent, crate::prompt_origin::newest_owner_turn)
         .ok_or("session_unavailable")?;
     if let Some(turn) = scan.newest_match.and_then(|seq| i64::try_from(seq).ok()) {
         return Ok(turn);
