@@ -794,12 +794,9 @@ provider-build-check:
       cargo test --locked -p cowboy-plugin-sdk --all-targets
     fi
     pack="${COWBOY_PLUGIN_PACK_BIN:-}"
-    if [ -z "$pack" ] && [ -n "${COWBOY_TEST_GRAPH_ARTIFACTS:-}" ] && [ -r "$COWBOY_TEST_GRAPH_ARTIFACTS" ]; then
-      pack="$(just test-graph-bin cowboy-plugin-pack)"
-    fi
     if [ -z "$pack" ]; then
-      cargo build --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack
-      pack="$PWD/target/debug/cowboy-plugin-pack"
+      {{rust_slice_env}} cargo build --profile {{rust_slice_profile}} --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack
+      pack="$PWD/target/{{rust_slice_profile}}/cowboy-plugin-pack"
     fi
     export COWBOY_PLUGIN_PACK_BIN="$pack"
     just plugin-build-all &
@@ -1014,6 +1011,7 @@ test-graph-build:
 # their directory and comes first: the script suites wait for it.
 test-rust-slices-build: claude-remote-prepare
     {{rust_slice_env}} cargo test --profile {{rust_slice_profile}} {{rust_wire_args}} --no-run
+    {{rust_slice_env}} cargo build --profile {{rust_slice_profile}} --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack
     {{rust_slice_env}} cargo test --profile {{rust_slice_profile}} {{rust_machine_args}} --no-run
     {{rust_slice_env}} cargo test --profile {{rust_slice_profile}} {{rust_code_adapter_args}} --no-run
 
