@@ -4,7 +4,7 @@ import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import { useNativeAccountUsage } from "./nativeAccountUsage";
 import { loadUsageSnapshot, useStoreSelector } from "./store";
 import { subscriptionQuotaHint } from "./usageLimits";
-import { accountServes, providerDefault } from "./subscriptionAccounts";
+import { accountServes, peekSubscriptionAccounts, providerDefault } from "./subscriptionAccounts";
 import { type ControlledAccounts, loadedAccountControl, namedOnlyProvider, pickerUnavailableReason, signInObservation, validAccountControls } from "./accountControls";
 
 interface Account { id: string; provider_id: string; label: string; enabled: boolean }
@@ -78,7 +78,8 @@ function subscriptionUnavailableReason(data: Accounts | undefined, provider: str
 
 /** The choosable accounts of the picker. A named-only Provider lists only
  * its named accounts: admitted, signed-in, `ok` ones enabled, every other
- * one disabled with its reason, and nothing preselected. */
+ * one disabled with its reason (`soleChoosableAccount` preselects one only
+ * when it is the only enabled choice). */
 export function subscriptionChoices(data: Accounts | undefined, provider: string, loginReason: (id: string) => string | undefined, now = Date.now()) {
   const accounts = data?.registry.accounts.filter((account) => accountServes(data, account.provider_id, provider)) ?? [];
   const namedOnly = namedOnlyProvider(data, provider);
@@ -89,6 +90,19 @@ export function subscriptionChoices(data: Accounts | undefined, provider: string
     reason: subscriptionUnavailableReason(data, provider, account.id) ??
       (namedOnly ? pickerUnavailableReason(loadedAccountControl(data, account.id), loginReason(account.id), now) : loginReason(account.id)),
   }));
+}
+
+/** A named-only Provider's only usable account, which the picker preselects;
+ * empty while none or several are choosable. */
+export function soleChoosableAccount(
+  data: Accounts | undefined,
+  provider: string,
+  loginReason: (id: string) => string | undefined,
+  now = Date.now(),
+): string {
+  if (!data) return "";
+  const usable = subscriptionChoices(data, provider, loginReason, now).filter((account) => !account.reason);
+  return usable.length === 1 ? usable[0]!.id : "";
 }
 
 /** One shared creation field for desktop and mobile; never selects a Machine. */
@@ -118,9 +132,11 @@ export function useSessionSubscription(active: boolean, provider: string, prefer
   const hinted = !namedOnly && preferred && subscriptionAllowed(data, provider, preferred) && !loginReason(preferred) ? preferred : "";
   // Resolve the default in this snapshot. Creation must submit the exact
   // account shown in the field, even if another client changes the default.
-  // A named-only Provider's account is never preselected.
+  // A named-only Provider preselects only its sole choosable account; with
+  // several, the user picks (nothing rotates accounts automatically).
   const value = choice || hinted || (data && !namedOnly
-    ? providerDefault(data, provider) || (noDefaultAccount(data, provider) ? "" : "default") : "");
+    ? providerDefault(data, provider) || (noDefaultAccount(data, provider) ? "" : "default")
+    : soleChoosableAccount(data, provider, loginReason));
   useEffect(() => {
     if (!active) return;
     const changed = (event: Event) => {
@@ -134,7 +150,8 @@ export function useSessionSubscription(active: boolean, provider: string, prefer
     if (!active) { setData(undefined); select({ provider: "", id: "" }); return; }
     const abort = new AbortController();
     setError(false);
-    setData(undefined);
+    // Show the page's shared inventory at once; this exact read replaces it.
+    setData(peekSubscriptionAccounts() as Accounts | undefined);
     void fetch("/api/provider-accounts", { cache: "no-store", signal: abort.signal })
       .then(async (response) => {
         if (!response.ok) throw new Error("unavailable");

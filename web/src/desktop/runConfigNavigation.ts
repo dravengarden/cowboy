@@ -414,16 +414,19 @@ export function runConfigKey(
 }
 
 /** The panel's keymap while the dialog is open: the cursor starts on the
- *  first field and keys resolve through `runConfigKey`. */
+ *  first field (or, for Replace or fork, on its form) and keys resolve
+ *  through `runConfigKey`. */
 export function useRunConfigKeyboard(
   open: boolean,
   panelRef: RefObject<HTMLDivElement | null>,
+  start: "first" | "new_from" = "first",
 ): void {
   useEffect(() => {
     if (!open) return undefined;
     // Open on the first field, the presets when they exist. Provider options
     // and presets can arrive a moment after the dialog, so keep following
-    // the first field until the user moves.
+    // the first field until the user moves. Replace or fork waits for its
+    // form, which appears once the session's context has loaded.
     let settled = false;
     let tries = 0;
     let focusFirst = 0;
@@ -432,14 +435,24 @@ export function useRunConfigKeyboard(
       // pull focus out of a list they just opened, and the menu's focus trap
       // then parks it on the popup frame where j/k start nowhere.
       if (settled || popupOpen()) return;
-      const firstRow = panelRef.current?.querySelector<HTMLElement>(
-        "[data-config-row]",
-      );
-      if (firstRow && !firstRow.contains(document.activeElement)) {
-        focusConfigRow(firstRow);
+      if (start === "new_from") {
+        const form = panelRef.current?.querySelector<HTMLElement>(
+          "[data-new-session-editor]",
+        );
+        const stop = form ? modalStops(form)[0] : undefined;
+        if (form && stop && !form.contains(document.activeElement)) {
+          focusModalStop(stop);
+        }
+      } else {
+        const firstRow = panelRef.current?.querySelector<HTMLElement>(
+          "[data-config-row]",
+        );
+        if (firstRow && !firstRow.contains(document.activeElement)) {
+          focusConfigRow(firstRow);
+        }
       }
       tries += 1;
-      if (!settled && tries < 90) {
+      if (!settled && tries < (start === "new_from" ? 600 : 90)) {
         focusFirst = requestAnimationFrame(placeCursor);
       }
     };
@@ -522,5 +535,5 @@ export function useRunConfigKeyboard(
       untrack();
       globalThis.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [open, panelRef]);
+  }, [open, panelRef, start]);
 }

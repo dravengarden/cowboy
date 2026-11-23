@@ -23,6 +23,7 @@ import {
   resetProviderCatalog,
 } from "./providerCatalogRegistry";
 import type { Envelope, SessionMeta, Status } from "./protocol";
+import { newFromFetch, newFromMachine, openNewFrom } from "./desktopPerfNewFrom";
 
 const SESSIONS = 250;
 const BUSY = 8;
@@ -125,6 +126,8 @@ interface PerfApi {
   churn(ms: number, everyMs: number): Promise<number>;
   /** Activate `count` different session rows one after another. */
   switchSessions(count: number): Promise<number[]>;
+  /** Open Replace or fork (the Sessions `f` action) `count` times. */
+  openNewFrom(count: number): Promise<{ openMs: number; menuMs: number }[]>;
   measure<T>(
     run: () => Promise<T>,
   ): Promise<
@@ -138,6 +141,19 @@ interface PerfApi {
       durationMs: number;
     }
   >;
+}
+
+function perfProviderEntry() {
+  const entry = managementEntryFixture("example");
+  entry.publisher = entry.manifest.publisher;
+  entry.manifest.authentication.required = false;
+  entry.manifest.authentication.methods = [];
+  return entry;
+}
+
+/** Idle sessions on Hawk: a busy one waits for its turn before a fork. */
+function idleHawkSessions(sessions: readonly SessionMeta[], count: number): string[] {
+  return Array.from({ length: count }, (_, i) => sessions[BUSY + 20 + 2 * i]!.id);
 }
 
 export async function runDesktopPerfFixture(): Promise<string[]> {
@@ -187,6 +203,8 @@ export async function runDesktopPerfFixture(): Promise<string[]> {
     return timeline;
   };
 
+  const entry = perfProviderEntry();
+
   class FixtureSocket {
     static current: FixtureSocket;
     static OPEN = 1;
@@ -204,6 +222,7 @@ export async function runDesktopPerfFixture(): Promise<string[]> {
       setTimeout(() => {
         this.onopen?.();
         this.publish({ type: "sessions", sessions });
+        this.publish({ type: "machines", machines: [newFromMachine(entry, BUSY)] });
         this.publish({ type: "bootstrap_complete" });
       }, 20);
     }
@@ -218,10 +237,6 @@ export async function runDesktopPerfFixture(): Promise<string[]> {
   globalThis.WebSocket = FixtureSocket as unknown as typeof WebSocket;
   bindProductSyncPrincipal("perf-fixture");
   localStorage.setItem("cowboy:active", sessions[0]!.id);
-  const entry = managementEntryFixture("example");
-  entry.publisher = entry.manifest.publisher;
-  entry.manifest.authentication.required = false;
-  entry.manifest.authentication.methods = [];
   const originalFetch = globalThis.fetch;
   const fetchCounts = new Map<string, number>();
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -265,7 +280,7 @@ export async function runDesktopPerfFixture(): Promise<string[]> {
     if (url.pathname === "/api/usage") {
       return Response.json({ providers: [], observed_at_ms: Date.now() });
     }
-    return new Response("Isolated fixture", { status: 404 });
+    return (await newFromFetch(url.pathname)) ?? new Response("Isolated fixture", { status: 404 });
   }) as typeof fetch;
   resetProviderCatalog();
   await loadProviderCatalog();
@@ -459,6 +474,7 @@ export async function runDesktopPerfFixture(): Promise<string[]> {
     stream,
     churn,
     switchSessions,
+    openNewFrom: (count) => openNewFrom(idleHawkSessions(sessions, count), sessions, until),
     measure,
   };
   Object.assign(globalThis, {

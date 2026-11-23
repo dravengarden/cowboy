@@ -720,7 +720,8 @@ it); macOS Chrome binds none of them.
   a session in the row's directory (nvim-tree's add), `r` (or `i`)
   renames, `x` moves to Trash (an idle session at once with Undo, a working
   session or a folder after confirmation), `f` opens Replace or fork for a
-  session that can still choose its next agent, and `,` opens the row's
+  session that can still choose its next agent (the Run configuration
+  cursor starts on that form's first field once it has loaded), and `,` opens the row's
   settings (Session Settings, or a folder's directory defaults). They match
   the letters of the actions modal `s` opens. All are region-scoped bare
   letters resolved from physical codes, and a key strip at the foot of the

@@ -84,6 +84,7 @@ try {
     churn: "cowboyPerf.measure(() => cowboyPerf.churn(5000, 250))",
     stream: "cowboyPerf.measure(() => cowboyPerf.stream(8000))",
     switch: "cowboyPerf.measure(() => cowboyPerf.switchSessions(8))",
+    "new-from": "cowboyPerf.measure(() => cowboyPerf.openNewFrom(3))",
   };
   for (const [name, expression] of Object.entries(scenarios)) {
     if (only && !only.includes(name)) continue;

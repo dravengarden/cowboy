@@ -279,6 +279,11 @@ function clear() { snapshot = empty; snapshotOwner = undefined; publish(); }
 /** Browser fixtures share one page: start a surface from a first load. */
 export function resetSubscriptionAccountsForTest(): void { invalidated = false; clear(); }
 
+/** The shared inventory already loaded on this page, without a request. */
+export function peekSubscriptionAccounts(): SubscriptionSnapshot | undefined {
+  return current().data;
+}
+
 /** Read-only account inventory; mutations continue through the shared writer. */
 export function useSubscriptionAccounts(connected = true) {
   const value = useSyncExternalStore(subscribe, current, () => empty);

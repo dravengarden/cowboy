@@ -4,6 +4,7 @@ import { newSessionProjectPreference } from "./newSessionProjectPreference";
 import { useEffect, useMemo, useState } from "react";
 import { projectAgentPluginInventory } from "@cowboy/provider-ui";
 import type { MachineSummary } from "./protocol";
+import { productSyncPrincipal } from "./productSyncIdentity";
 import { defaultNewSessionProvider } from "./newSessionProvider";
 import type { FolderDefaults } from "./folderDefaults";
 import type { FolderSessionHints } from "./folderSessionHints";
@@ -26,6 +27,38 @@ interface Placements {
   machine_id: string;
   default_runtime_machine_id: string | null;
   placements: Placement[];
+}
+
+// The last answers on this page, per signed-in user: a reopened form shows
+// them at once while the same reads revalidate them. Creation still rechecks
+// the exact Machine on the server.
+let lastPolicies: { owner: string; value: ProjectPolicies } | undefined;
+const lastPlacements = new Map<string, Placements>();
+const placementKey = (machineId: string): string =>
+  JSON.stringify([productSyncPrincipal() ?? "", machineId]);
+function cachedPolicies(): ProjectPolicies | undefined {
+  const owner = productSyncPrincipal();
+  return owner && lastPolicies?.owner === owner ? lastPolicies.value : undefined;
+}
+async function readPolicies(signal: AbortSignal): Promise<ProjectPolicies> {
+  const owner = productSyncPrincipal();
+  const value = await projectJson<ProjectPolicies>("/api/project-policies", {
+    signal,
+  });
+  if (owner && owner === productSyncPrincipal()) lastPolicies = { owner, value };
+  return value;
+}
+async function readPlacements(
+  machineId: string,
+  signal: AbortSignal,
+): Promise<Placements> {
+  const key = placementKey(machineId);
+  const value = await projectJson<Placements>(
+    `/api/project-placements?${new URLSearchParams({ machine_id: machineId })}`,
+    { signal },
+  );
+  if (key === placementKey(machineId)) lastPlacements.set(key, value);
+  return value;
 }
 
 export function useProjectPlacement(
@@ -78,13 +111,11 @@ export function useProjectPlacement(
     if (!open) return;
     const controller = new AbortController();
     setError("");
-    setPolicies(undefined);
+    setPolicies(cachedPolicies());
     setAvailability(undefined);
     setProjectKey("");
     setInstallationKey("");
-    void projectJson<ProjectPolicies>("/api/project-policies", {
-      signal: controller.signal,
-    })
+    void readPolicies(controller.signal)
       .then((value) => {
         if (!controller.signal.aborted) setPolicies(value);
       })
@@ -96,14 +127,15 @@ export function useProjectPlacement(
   useEffect(() => {
     if (!open || !machineId || !policies) return;
     const controller = new AbortController();
-    setAvailability(undefined);
+    // Keep the shown answer for this Machine while it revalidates, so an
+    // inventory change does not blank the installation picker.
+    setAvailability((current) =>
+      current?.machine_id === machineId
+        ? current
+        : lastPlacements.get(placementKey(machineId))
+    );
     setError("");
-    void projectJson<Placements>(
-      `/api/project-placements?${new URLSearchParams({
-        machine_id: machineId,
-      })}`,
-      { signal: controller.signal },
-    )
+    void readPlacements(machineId, controller.signal)
       .then((value) => {
         if (!controller.signal.aborted) setAvailability(value);
       })

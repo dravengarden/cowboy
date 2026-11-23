@@ -403,8 +403,9 @@ Sign out (keeps history), Block/Unblock, Remove account (confirmation).
 **Sign-in dialog**: native login state, the account browser entry, the code
 field; no link outside the account browser.
 
-**New session picker**: one entry per admitted, signed-in, `ok` account; never
-preselected; others disabled with the reason; no default entry.
+**New session picker**: one entry per admitted, signed-in, `ok` account;
+preselected only when it is the sole choosable one; others disabled with the
+reason; no default entry.
 
 **Session header and Settings**: account name and state; a parked queue shows
 why.
@@ -656,9 +657,9 @@ R3-4, R3-9, R3-10, R3-13 and R3-16, with these concrete choices:
   fences), Force release (turn held, stop confirmed); Block, Sign out and
   Force release confirm first. Sign-in, Machine browser and Remove account
   stay the existing controls; "Use by default" is hidden.
-- **Picker**: no default entry and nothing preselected; an account is
-  choosable only when admitted, signed in and `ok`, otherwise listed disabled
-  with the reason.
+- **Picker**: no default entry; the sole choosable account is preselected,
+  several leave the choice to the user. An account is choosable only when
+  admitted, signed in and `ok`, otherwise listed disabled with the reason.
 - **Session**: Session Settings show the account state; a parked queue (or an
   uncertain effect) shows why in Settings and in the composer's register line,
   with Acknowledge for an uncertain effect (method shown; the target must be

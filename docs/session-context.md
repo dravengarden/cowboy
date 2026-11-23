@@ -31,7 +31,10 @@ Session Settings answers independent questions, each in one place:
   **Fork to new session** keeps both live.
 
 The form preselects the current installation and subscription, or the staged
-target. How history travels follows from the target and is stated under the
+target. A named-only Provider (Antigravity) preselects its account only when
+exactly one is choosable. Choosing another Provider's installation starts on
+that Provider's recommended preset; the same Provider keeps inheriting the
+current model and reasoning. How history travels follows from the target and is stated under the
 pickers, not chosen. **More options** holds what the destination needs before
 its first turn: project, the optional preset of the target agent (for the same
 Provider an empty preset inherits current model and reasoning) and **Inherit

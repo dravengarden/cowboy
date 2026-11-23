@@ -22,6 +22,7 @@ import { setSessionConfigOptions } from "../store";
 import { SessionToolsSection } from "../AgentToolsPanel";
 import { SessionContextSettings } from "../SessionContextSettings";
 import { DesktopModal } from "./DesktopModal";
+import type { SessionSettingsFocus } from "../sessionSettingsOpen";
 import type { DesktopShortcutGroup } from "./DesktopShortcutBar";
 import {
   ConfigOptionControl,
@@ -373,6 +374,7 @@ export function RunConfigurationDialog({
   dead,
   options,
   optionPresentations,
+  initialFocus = "agent",
 }: {
   open: boolean;
   onClose: () => void;
@@ -382,9 +384,11 @@ export function RunConfigurationDialog({
   dead: boolean;
   options: readonly ConfigOption[];
   optionPresentations: ReadonlyMap<string, ProviderConfigOptionPresentation>;
+  /** Replace or fork opens on its form in the Context pane. */
+  initialFocus?: SessionSettingsFocus;
 }): React.JSX.Element {
   const panelRef = useRef<HTMLDivElement>(null);
-  useRunConfigKeyboard(open, panelRef);
+  useRunConfigKeyboard(open, panelRef, initialFocus === "new_from" ? "new_from" : "first");
   const directConfigShortcuts = options.map(optionShortcut).filter(
     (shortcut): shortcut is string => shortcut !== undefined,
   );

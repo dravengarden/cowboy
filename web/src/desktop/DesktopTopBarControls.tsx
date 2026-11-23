@@ -1,12 +1,8 @@
 import { desktopSize } from "../surface/desktopSize";
 import { refreshAllUsage } from "../usageRefresh";
 import { ProviderUsageCredits } from "../ProviderUsageCredits";
-import {
-  CLOSE_SESSION_SETTINGS_EVENT,
-  OPEN_SESSION_SETTINGS_EVENT,
-  pendingSessionSettings,
-  sessionSettingsEventMatches,
-} from "../sessionSettingsOpen";
+import { useSessionSettingsRequests } from "./useSessionSettingsRequests";
+import { pendingSessionSettings } from "../sessionSettingsOpen";
 import {
   alpha,
   Box,
@@ -781,23 +777,10 @@ export function DesktopTopBarControls({
     "config" | "usage" | "update" | "reload" | null
   >(null);
   const configOpen = openSurface === "config";
-  useEffect(() => {
-    const openSettings = (event: Event): void => {
-      if (sessionSettingsEventMatches(event, sessionId)) setOpenSurface("config");
-    };
-    const closeSettings = (event: Event): void => {
-      if (sessionSettingsEventMatches(event, sessionId)) {
-        setOpenSurface((current) => current === "config" ? null : current);
-      }
-    };
-    if (pendingSessionSettings(sessionId)) setOpenSurface("config");
-    document.addEventListener(OPEN_SESSION_SETTINGS_EVENT, openSettings);
-    document.addEventListener(CLOSE_SESSION_SETTINGS_EVENT, closeSettings);
-    return () => {
-      document.removeEventListener(OPEN_SESSION_SETTINGS_EVENT, openSettings);
-      document.removeEventListener(CLOSE_SESSION_SETTINGS_EVENT, closeSettings);
-    };
-  }, [sessionId]);
+  const { configFocus, openConfig } = useSessionSettingsRequests(
+    sessionId,
+    setOpenSurface,
+  );
   const usageOpen = openSurface === "usage";
   const [usagePanel, setUsagePanel] = useState<"usage" | "logs">("usage");
   const usagePanelRef = useRef<HTMLDivElement>(null);
@@ -1186,7 +1169,7 @@ export function DesktopTopBarControls({
               }
               endIcon={<ExpandMore fontSize="small" />}
               disabled={configDisabled}
-              onClick={(): void => setOpenSurface("config")}
+              onClick={openConfig}
               sx={{
                 ...desktopEmbeddedControlSx({
                   open: configOpen,
@@ -1236,6 +1219,7 @@ export function DesktopTopBarControls({
         session={session}
         status={status}
         dead={dead}
+        initialFocus={configFocus}
         options={options}
         optionPresentations={optionPresentations}
       />

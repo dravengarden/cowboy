@@ -35,6 +35,7 @@ import {
   takeNewFromRequest,
 } from "./sessionSettingsOpen";
 import { newUuid } from "./uuid";
+import { useTargetPreset } from "./newSessionPreset";
 
 /** Three questions, one place each. How this agent runs lives in the Agent
  *  block above. Here: what the next message can read (Link sessions), and
@@ -288,7 +289,6 @@ function NewSessionForm({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [preset, setPreset] = useState(snapshot.next_agent?.preset || "");
   const [overrides, setOverrides] = useState<ForkConfig>({});
   const options = useStoreSelector((state) => state.configOptions.get(session.id));
   const custom = Object.keys(overrides).length > 0;
@@ -307,6 +307,7 @@ function NewSessionForm({
   const unresolved =
     observed.delivery?.state === "preparing" || observed.delivery?.state === "unknown";
   const presets = placement.installation?.entry.manifest.configuration.presets ?? [];
+  const [preset, setPreset] = useTargetPreset(snapshot.next_agent, provider, session.provider, presets);
   const validPreset = !preset || presets.some((entry) => `${provider}/${entry.id}` === preset);
   const sourceAccount = session.provider_account_id || "default";
   const account = snapshot.next_agent?.provider_account_id || sourceAccount;
@@ -438,7 +439,7 @@ function NewSessionForm({
         value={placement.installation?.value || ""}
         onChange={(value) => {
           if (placement.installations.find((item) => item.value === value)?.provider !== provider) {
-            setPreset("");
+            setPreset(undefined);
             setOverrides({});
           }
           placement.selectInstallation(value);

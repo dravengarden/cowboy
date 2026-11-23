@@ -8,7 +8,7 @@ import {
 } from "./accountControls";
 import { AccountControlsPanel } from "./AccountControlsPanel";
 import { UncertainEffectAcknowledge } from "./SessionAccountControl";
-import { namedOnlyLoginReason, subscriptionAllowed, subscriptionChoices } from "./SessionSubscription";
+import { namedOnlyLoginReason, subscriptionAllowed, subscriptionChoices, soleChoosableAccount } from "./SessionSubscription";
 import { SurfaceProvider } from "./surface/SurfaceProfile";
 
 const render = (element: React.ReactElement) => renderToStaticMarkup(createElement(SurfaceProvider, null, element));
@@ -118,7 +118,13 @@ test("the new-session picker offers only admitted, signed-in, ok accounts and ne
   // another one already runs is still choosable.
   const legacy = { ...control(), in_use_by: "s9" } as AccountControl;
   assertEquals(pickerUnavailableReason(legacy, undefined), undefined);
-  // Nothing is preselected: neither an empty choice nor the default account is allowed.
+  // The only enabled account is preselected; several leave the choice open.
+  assertEquals(soleChoosableAccount(data, "antigravity", () => undefined), ACCOUNT);
+  const both = { ...data, account_controls: { ...data.account_controls, accounts: [control(), control({ account_id: OTHER })] } };
+  assertEquals(soleChoosableAccount(both, "antigravity", () => undefined), "");
+  assertEquals(soleChoosableAccount(data, "antigravity", () => "Not signed in on a Machine"), "");
+  assertEquals(soleChoosableAccount(undefined, "antigravity", () => undefined), "");
+  // Neither an empty choice nor the default account is allowed.
   assert(!subscriptionAllowed(data, "antigravity", ""));
   assert(!subscriptionAllowed(data, "antigravity", "default"));
   assert(subscriptionAllowed(data, "antigravity", ACCOUNT));
