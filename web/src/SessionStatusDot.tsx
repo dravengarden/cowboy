@@ -11,6 +11,13 @@ import {
 } from "./backgroundActivity";
 import { glyphSize } from "./surface/desktopSize";
 
+// Activity rings draw at the settled dot's visual weight, not the full 1rem
+// slot: a 16px ring towers over the 10px dot and the adjacent Provider logo.
+// The horizontal inset keeps the same 1rem inline slot so titles stay aligned.
+const RING_PX = 11;
+const ringSize = glyphSize(RING_PX);
+const ringInset = glyphSize((16 - RING_PX) / 2);
+
 // Status is shown as a single color-coded activity mark (no text label), so the
 // hue has to carry the whole meaning. The palette tokens are chosen so the
 // colors read the same here and in any future status surface:
@@ -113,12 +120,12 @@ export function StatusDot({
       <CircularProgress
         data-session-activity={shown === "busy" ? "true" : undefined}
         data-session-starting={shown === "starting" ? "true" : undefined}
-        size="1rem"
+        size={ringSize}
         thickness={6}
         disableShrink
         color="inherit"
         aria-label={label}
-        sx={[{ flexShrink: 0, color: statusColor(shown) }, ...extra]}
+        sx={[{ flexShrink: 0, mx: ringInset, color: statusColor(shown) }, ...extra]}
       />
     )
     : (
@@ -162,7 +169,7 @@ function ProviderUpdateRing({
     return () => clearInterval(timer);
   }, []);
   const progress = providerUpdateProgress(startedAtMs, now);
-  const size = glyphSize(11);
+  const size = ringSize;
   return (
     <Tooltip title={`${label} (~${String(progress)}%)`} enterDelay={300}>
       <Box
@@ -178,6 +185,7 @@ function ProviderUpdateRing({
             flexShrink: 0,
             width: size,
             height: size,
+            mx: ringInset,
             color: statusColor("starting"),
           },
           ...extra,
