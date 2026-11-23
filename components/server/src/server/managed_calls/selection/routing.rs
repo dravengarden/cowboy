@@ -234,7 +234,16 @@ pub(super) fn analysis_choice(
         analysis.auto.iter().chain(&analysis.context_ask)
     };
     rows.clone()
-        .find_map(|row| pool.iter().find(|preset| row.matches_analysis(preset)))
+        .find_map(|row| {
+            if row.efforts.is_empty() {
+                pool.iter().find(|preset| row.matches_analysis(preset))
+            } else {
+                row.efforts.iter().find_map(|wanted| {
+                    pool.iter()
+                        .find(|preset| effort(preset) == wanted && row.matches_analysis(preset))
+                })
+            }
+        })
         .cloned()
 }
 

@@ -987,6 +987,7 @@ mod tests {
             Some("luna-6-max")
         );
         let claude = json!([
+            {"id":"sonnet-xhigh","values":{"model":"sonnet","effort":"xhigh"}},
             {"id":"opus-high","values":{"model":"opus","effort":"high"}},
             {"id":"sonnet-medium","values":{"model":"sonnet","effort":"medium"}}
         ]);
@@ -996,6 +997,7 @@ mod tests {
         );
         let agy = json!([
             {"id":"gemini-neon-high","values":{"model":"gemini-4-neon","thought_level":"high"}},
+            {"id":"gemini-hydrogen-xhigh","values":{"model":"gemini-4-hydrogen","thought_level":"xhigh"}},
             {"id":"gemini-hydrogen-high","values":{"model":"gemini-4-hydrogen","thought_level":"high"}},
             {"id":"claude-opus-high","values":{"model":"claude-opus-5-5","thought_level":"high"}}
         ]);
