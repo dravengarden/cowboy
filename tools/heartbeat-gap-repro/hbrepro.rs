@@ -1,9 +1,10 @@
 // Heartbeat-gap reproduction harness (docs/heartbeat-gap-repro.md).
 //
 // A std-only stand-in for the worker -> broker heartbeat path. It uses the
-// runtime wire's framing (4-byte big-endian length + JSON) and the worker's
-// shape: one writer shared by a 10 s heartbeat and bulk event frames, so a
-// heartbeat can wait behind a large frame exactly as `send_outbox` makes it.
+// runtime wire's framing (4-byte big-endian length + JSON) and one writer
+// shared by a 10 s heartbeat and bulk event frames, so a heartbeat can wait
+// behind a large frame as it does behind `send_outbox`. It is not the worker:
+// see the allocation probe below.
 //
 //   hbrepro broker <socket> <read_delay_us_per_64k>
 //   hbrepro worker <socket> <interval_ms> <bulk_bytes> <bulk_every_ms> <alloc_bytes_per_beat>
@@ -111,8 +112,11 @@ fn worker(args: &[String]) {
             std::thread::sleep(wait);
         }
         let woke = Instant::now();
-        // The real worker allocates per beat (serialization, outbox clone):
-        // touch fresh pages so memory.high throttling, if any, applies here.
+        // A synthetic pre-send pressure probe, not a model of the worker:
+        // the real worker serializes a small Heartbeat and sends it before
+        // cloning pending outbox events (src/worker.rs:812-814). Touching
+        // fresh pages here shows whether memory.high throttling stalls an
+        // allocating sender in this slice.
         let mut scratch = vec![0_u8; alloc];
         for page in scratch.iter_mut().step_by(4096) {
             *page = 1;
@@ -134,9 +138,11 @@ fn worker(args: &[String]) {
             return;
         }
         drop(stream);
+        // Deadline to write completion: what the broker actually waits for.
         eprintln!(
-            "{{\"event\":\"sent\",\"seq\":{seq},\"write_ms\":{}}}",
-            began.elapsed().as_millis()
+            "{{\"event\":\"sent\",\"seq\":{seq},\"write_ms\":{},\"send_latency_ms\":{}}}",
+            began.elapsed().as_millis(),
+            Instant::now().saturating_duration_since(due).as_millis()
         );
     }
 }

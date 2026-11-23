@@ -2,6 +2,11 @@
 # Runs inside the reproduction guest as root. One case = a broker, a worker
 # and its loads for $DUR seconds; results go to $OUT/summary.jsonl.
 set -euo pipefail
+# Guest only: this script changes slice properties and starts units.
+if [ ! -e /etc/hbrepro/guest ] || ! systemd-detect-virt --vm --quiet; then
+    echo "matrix.sh runs only inside the reproduction guest" >&2
+    exit 1
+fi
 DUR=${DUR:-180}
 OUT=${OUT:-/root/results}
 CPUS=$(nproc)
@@ -9,19 +14,30 @@ CG=/sys/fs/cgroup/cowboy.slice
 mkdir -p "$OUT"
 : >"$OUT/summary.jsonl"
 
-counter() { # file key -> value, or empty when unreadable
-    [ -r "$1" ] || return 0
+counter() { # file key -> value, or empty when unreadable or malformed
+    local value
     case "$2" in
-    some | full) awk -v k="$2" '$1 == k { for (i = 2; i <= NF; i++) if ($i ~ /^total=/) { sub("total=", "", $i); print $i } }' "$1" ;;
-    *) awk -v k="$2" '$1 == k { print $2 }' "$1" ;;
+    some | full) value=$(awk -v k="$2" '$1 == k { for (i = 2; i <= NF; i++) if ($i ~ /^total=/) { sub("total=", "", $i); print $i } }' "$1" 2>/dev/null) || value= ;;
+    *) value=$(awk -v k="$2" '$1 == k { print $2 }' "$1" 2>/dev/null) || value= ;;
     esac
+    [[ $value =~ ^[0-9]+$ ]] && echo "$value"
+    return 0
+}
+
+# Journal lines of the unit's current invocation only.
+unit_log() {
+    local id
+    id=$(systemctl show -p InvocationID --value "$1")
+    [ -n "$id" ] || return 1
+    journalctl -o cat "_SYSTEMD_INVOCATION_ID=$id"
 }
 
 load_command() {
     case "$1" in
-    cpu) echo "stress-ng --cpu $((CPUS * 8)) --timeout ${DUR}s" ;;
-    mem) echo "stress-ng --vm 4 --vm-bytes 2900M --vm-keep --timeout ${DUR}s" ;; # total, not per worker
-    io) echo "stress-ng --hdd 4 --hdd-bytes 256M --timeout ${DUR}s" ;;
+    # Loads outlive the measurement window; the case stops them.
+    cpu) echo "stress-ng --cpu $((CPUS * 8)) --timeout $((DUR + 60))s" ;;
+    mem) echo "stress-ng --vm 4 --vm-bytes 2900M --vm-keep --timeout $((DUR + 60))s" ;; # total, not per worker
+    io) echo "stress-ng --hdd 4 --hdd-bytes 256M --timeout $((DUR + 60))s" ;;
     esac
 }
 
@@ -54,18 +70,26 @@ run_case() {
     mem1=$(counter "$wcg/memory.pressure" full)
     cpu1=$(counter "$wcg/cpu.pressure" some)
     io1=$(counter "$wcg/io.pressure" full)
-    local end_ms result
+    local end_ms result valid=true unit
     end_ms=$(date +%s%3N)
     # A unit that died early is a failed observation, not a quiet one.
     result=$(systemctl show -p ActiveState --value "hb-worker-$name")
+    for unit in "hb-worker-$name" "hb-broker-$name" $(seq -f "hb-load-$name-%g" 1 "$i"); do
+        [ "$(systemctl show -p ActiveState --value "$unit")" = active ] || valid=false
+    done
+    if ! unit_log "hb-broker-$name" >"$OUT/$name.broker.log" || ! unit_log "hb-worker-$name" >"$OUT/$name.worker.log"; then
+        valid=false
+    fi
     systemctl stop "hb-worker-$name" "hb-broker-$name" 'hb-load-*' 2>/dev/null || true
     systemctl reset-failed 2>/dev/null || true
-    journalctl -o cat -u "hb-broker-$name" | grep '^{' >"$OUT/$name.broker.jsonl" || true
-    journalctl -o cat -u "hb-worker-$name" | grep '^{' >"$OUT/$name.worker.jsonl" || true
+    # Keep only records inside the measurement window.
+    grep '^{' "$OUT/$name.broker.log" | jq -c --argjson end "$end_ms" 'select(.recv_ms <= $end)' >"$OUT/$name.broker.jsonl" || true
+    grep '^{' "$OUT/$name.worker.log" >"$OUT/$name.worker.jsonl" || true
     delta() { if [ -n "$1" ] && [ -n "$2" ]; then echo $(($2 - $1)); else echo null; fi; }
     jq -cs --arg name "$name" --arg slice "$slice" --arg loads "$loads" --arg high "$high" \
         --argjson bulk "$bulk" --argjson delay "$delay" \
         --argjson start_ms "$start_ms" --argjson end_ms "$end_ms" --arg worker_state "$result" \
+        --argjson valid "$valid" \
         --argjson high_events "$(delta "$high0" "$high1")" --argjson mem_full_us "$(delta "$mem0" "$mem1")" \
         --argjson cpu_some_us "$(delta "$cpu0" "$cpu1")" --argjson io_full_us "$(delta "$io0" "$io1")" \
         --slurpfile sent "$OUT/$name.worker.jsonl" '
@@ -73,17 +97,19 @@ run_case() {
         # Silence before the first and after the last heartbeat counts too.
         | (if length > 0 then .[0].recv_ms - $start_ms else $end_ms - $start_ms end) as $leading
         | (if length > 0 then $end_ms - .[-1].recv_ms else 0 end) as $trailing
-        | {case: $name, worker_state: $worker_state,
+        | {case: $name, valid: $valid, worker_state: $worker_state,
            observed_ms: ($end_ms - $start_ms),
            leading_silence_ms: $leading, trailing_silence_ms: $trailing,
            max_silence_ms: ([$leading, $trailing] + $gaps | max), worker_slice: $slice, loads: $loads, memory_high: $high,
            bulk_bytes: $bulk, broker_delay_us_per_64k: $delay,
            heartbeats: length,
            max_gap_ms: ($gaps | max // null),
-           p95_gap_ms: ($gaps | sort | if length > 0 then .[(length * 95 / 100 | floor)] else null end),
+           # Nearest rank: ceil(0.95 n) - 1, zero-based.
+           p95_gap_ms: ($gaps | sort | if length > 0 then .[((length * 95 / 100) | ceil) - 1] else null end),
            gaps_over_20s: ($gaps | map(select(. > 20000)) | length),
            gaps_over_45s: ($gaps | map(select(. > 45000)) | length),
-           max_send_late_ms: (map(.frame.late_ms) | max // null),
+           max_wake_late_ms: (map(.frame.late_ms) | max // null),
+           max_send_latency_ms: ($sent | map(.send_latency_ms) | max // null),
            max_alloc_ms: (map(.frame.alloc_ms) | max // null),
            max_lock_ms: (map(.frame.lock_ms) | max // null),
            max_write_ms: ($sent | map(.write_ms) | max // null),

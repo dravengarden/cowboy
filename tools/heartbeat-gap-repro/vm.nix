@@ -33,6 +33,8 @@ in
     pkgs.jq
   ];
   environment.etc."hbrepro/matrix.sh".source = ./matrix.sh;
+  # matrix.sh refuses to run anywhere this marker is missing.
+  environment.etc."hbrepro/guest".text = "heartbeat-gap reproduction guest\n";
   systemd.slices.cowboy-agents.sliceConfig = {
     MemoryAccounting = true;
     MemoryHigh = "2G";

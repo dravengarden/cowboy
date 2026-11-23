@@ -1,8 +1,9 @@
 # Heartbeat-gap reproduction matrix (L0-b)
 
 This is step L0-b of [host isolation](host-isolation-design.md#l0-requirements).
-It tests which kinds of task load can delay a worker heartbeat past the
-broker's 45 s isolation timeout. The test runs in a disposable NixOS VM and
+It tests which kinds of task load can stretch the gap between heartbeat
+receipts beyond 45 s. The broker's isolation timeout is 45 s, so it serves as
+the reference here. The test runs in a disposable NixOS VM and
 changes nothing on the host.
 
 ## What it runs
@@ -21,13 +22,16 @@ How `hbrepro.rs` models the worker and broker:
 - It uses the runtime wire's framing: a 4-byte big-endian length, then JSON.
 - It copies the worker's shape: one writer is shared by a 10 s heartbeat and by
   bulk event frames.
-- It allocates 1 MiB on each beat, as the real worker does when serializing.
-  So `memory.high` throttling hits the sender exactly where it would hit the
-  real worker.
-- The worker reports three timings for each heartbeat:
-  - send lateness: the timer firing late;
+- It allocates 1 MiB on each beat. This is a synthetic pre-send pressure
+  probe, not a model of the worker. The real worker serializes a small
+  heartbeat and sends it before it clones any pending outbox events
+  (`src/worker.rs:812-814`). The probe shows whether `memory.high` throttling
+  stalls an allocating sender in that slice.
+- The worker reports these timings for each heartbeat:
+  - wake lateness: the timer firing late;
   - allocation stall;
-  - writer-lock wait: waiting behind a bulk frame.
+  - writer-lock wait: waiting behind a bulk frame;
+  - send latency: from the beat's deadline to write completion.
 - The broker reports the receive gap.
 
 The slices in `vm.nix` follow Hawk's ratio (48G high and 64G max out of
