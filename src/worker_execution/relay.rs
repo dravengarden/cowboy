@@ -20,6 +20,9 @@ pub(super) struct Done {
     /// Decided before the request ran (an exit forgets the process).
     carries_result: bool,
     reply: Value,
+    /// Counted in flight until this reply was handled (written to the unit,
+    /// or recorded undelivered): dropped with it.
+    _in_flight: crate::account_sandbox::RelayGuard,
 }
 
 impl Done {
@@ -61,6 +64,7 @@ impl Relays {
     pub fn spawn(&mut self, id: Value, method: String, params: Value) {
         let (client, sender) = (Arc::clone(&self.client), self.sender.clone());
         self.pending += 1;
+        let in_flight = self.client.relays.enter();
         tokio::spawn(async move {
             let carries_result = client.carries_result(&method, &params);
             let reply = client.relay(method.clone(), params).await;
@@ -69,6 +73,7 @@ impl Relays {
                 method,
                 carries_result,
                 reply,
+                _in_flight: in_flight,
             };
             if let Err(mpsc::error::SendError(done)) = sender.send(done) {
                 client.undelivered(&done.method, done.carries_result, &done.reply);

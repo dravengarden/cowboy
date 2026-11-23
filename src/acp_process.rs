@@ -45,7 +45,13 @@ enum Owner {
 struct SandboxUnit {
     client: Arc<Mutex<account_sandbox::Client>>,
     handle: account_sandbox::UnitHandle,
+    /// The unit's execution relays still owed a reply.
+    relays: Option<Arc<account_sandbox::RelayQuiet>>,
 }
+
+/// How long a unit's stop waits for its in-flight execution relays to be
+/// answered (design L1c); within the worker's teardown settlement.
+const UNIT_RELAY_DRAIN: Duration = Duration::from_secs(10);
 
 /// The daemon bounds the runtime units of one account (`limit`, its
 /// `max_runtime_units`): that many sessions of the account already run.
@@ -198,6 +204,7 @@ impl AgentProcess {
         let owner = Owner::Sandbox(SandboxUnit {
             client: Arc::new(Mutex::new(client)),
             handle: started.handle,
+            relays: bridge.as_ref().map(|bridge| Arc::clone(&bridge.relays)),
         });
         Ok((
             Self {
@@ -271,6 +278,20 @@ impl SandboxUnit {
     }
 
     async fn stop(self) {
+        // Replies the unit is still owed reach it before it stops: a reply
+        // cut off by the stop would leave its effect unknown (design L1c).
+        if let Some(relays) = &self.relays
+            && {
+                relays.begin_drain();
+                !relays.drained(UNIT_RELAY_DRAIN).await
+            }
+        {
+            tracing::warn!(
+                unit = %self.handle.unit,
+                in_flight = relays.in_flight(),
+                "account sandbox unit stopped with execution relays in flight"
+            );
+        }
         let (client, unit) = (Arc::clone(&self.client), self.handle.unit.clone());
         let stop = tokio::task::spawn_blocking(move || client.lock().stop_unit(&unit));
         match tokio::time::timeout(UNIT_STOP_TIMEOUT, stop).await {

@@ -69,6 +69,8 @@ pub struct Client {
     memory: OnceLock<MemoryBridge>,
     /// The session's extension servers, run by the worker for the unit.
     extensions: OnceLock<Arc<ExtensionBroker>>,
+    /// Relays whose reply the unit is still owed (design L1c).
+    relays: Arc<crate::account_sandbox::RelayQuiet>,
 }
 
 /// Wire calls at least this slow are logged individually.
@@ -91,6 +93,7 @@ impl Client {
             ledger: OnceLock::new(),
             memory: OnceLock::new(),
             extensions: OnceLock::new(),
+            relays: Arc::default(),
         })
     }
 
@@ -543,6 +546,7 @@ impl Endpoint {
             descriptor["extensions"] = extensions;
         }
         let descriptor = serde_json::to_vec(&descriptor)?;
+        let relays = Arc::clone(&client.relays);
         let (listeners, mut received) = mpsc::unbounded_channel::<OwnedFd>();
         let mut admission = Admission::new(token, Arc::clone(&client));
         let listener = tokio::spawn(async move {
@@ -579,6 +583,7 @@ impl Endpoint {
             crate::account_sandbox::ExecutionBridge {
                 descriptor,
                 listeners,
+                relays,
             },
         ))
     }
@@ -709,6 +714,13 @@ where
                             None | Some(Value::Null) => json!({}),
                             Some(params) => params.clone(),
                         };
+                        if !client.relays.admits(&method) {
+                            // The unit is being stopped: no new effect, only
+                            // the cleanup of what it started (design L1c).
+                            ids.remove(&id.to_string());
+                            writer.send(Message::Text(json!({"id":id,"error":{"code":-32000,"message":"The session is ending; this request was not admitted"}}).to_string().into())).await?;
+                            continue;
+                        }
                         relays.spawn(id, method, params);
                     }
                     _ => bail!("unsupported execution frame"),

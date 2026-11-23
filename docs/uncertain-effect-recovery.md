@@ -259,47 +259,63 @@ These residuals have one cause: the worker stops the unit while that unit
 still has relayed requests in flight. The facade cannot close every
 interleaving from its side, so they are left to L1c.
 
-### L1c: the worker drains a unit's relays before stopping it
+### L1c: drain in-flight requests at a graceful unit stop
 
-Status: design for a short review. The next worker pin advance ships it.
+Status: implemented, unmerged. Revised after design review
+(`call-4b479734`). Ships with the next worker pin advance, except for the
+proxy half, which is Plugin code (see Release).
 
-Where the race is. `acp.rs` ends a session through `process.shutdown()`. For
-an account-sandboxed unit, that calls `SandboxUnit::stop`, which asks the
-daemon to stop the unit at once. Relays the unit sent before then
-(`worker_execution::relay::Relays`) finish on their own tasks. If the unit's
-socket is gone when one finishes, its reply is recorded as undelivered, and a
-stop or a result-carrying read parks the session. Generation cutover,
-hibernation, an owner stop and every other teardown go through this path.
+Where the cut happens. When the worker ends a session, the ACP connection
+drops the proxy's stdio. The proxy ends `agy`'s stdin, and once `agy` exits
+it closes its execution connection at once (`launch.mjs`), with any facade
+request still in flight. The worker then stops the unit
+(`SandboxUnit::stop`). Either close can cut off a reply. The worker ledger
+then records it as undelivered and parks the session. In the 04:50 case the
+endpoint disconnected 60 ms after the turn ended, before the unit stopped
+(+150 ms). So the proxy's own close was the cut, and both halves are needed.
 
-Change:
+Proxy half (Antigravity Plugin):
 
-- `account_sandbox` gains `RelayQuiet`: an in-flight count with a `Notify`.
-  It lives with `ExecutionBridge` because `worker_execution` already depends
-  on `account_sandbox`, so this adds no module edge. `Client` holds it
-  (`Endpoint::start_unix` passes it into the bridge).
-- A relay counts from `Relays::spawn` until its `Done` is dropped, which
-  happens after its reply frame was written to the unit's socket, or after
-  it was recorded as undelivered. A guard inside `Done` does the decrement.
-- `SandboxUnit::stop` first waits until the count reaches zero, bounded by
-  `UNIT_RELAY_DRAIN` (10 s). Only then does it stop the unit. The unit stays
-  up during the wait, so replies reach the facade.
-- At the bound, the unit is stopped as today. A reply cut off then is
-  recorded as undelivered and parks the session. That is fail closed and
-  unchanged. A unit that keeps sending requests (a reader loop) ends the wait
-  only at the bound.
-- The wait sits inside the existing 60 s `TEARDOWN_SETTLE`, before
-  `settle_all`. The ledger fences new mutations at teardown exactly as
-  before, and reads and stops still relay.
-- Not changed: local (non-sandboxed) agents, the ledger, the wire, the
-  Controller, and the facade.
+- At exit, `facade.quiesce()` stops every command's expiry timer and makes
+  expiry and turn cleanup start no new stop or read.
+- `Connection.idle(10 s)` then waits until no request awaits its reply, and
+  only then does the proxy close the connection. A reply that arrived resolved
+  its facade call, so receipt is proven on the facade side, not just a socket
+  write.
 
-Tests (worker):
+Worker half (worker release):
 
-- a relay held at the target while teardown begins: the unit is stopped only
-  after the reply was delivered, and nothing is recorded uncertain;
-- a relay held past the bound: the unit is stopped at the bound, and the
-  reply is recorded undelivered;
-- no relay in flight: the stop is immediate.
+- `account_sandbox::RelayQuiet` counts the unit's relays from
+  `Relays::spawn` until the reply is written or recorded undelivered. It
+  travels in `ExecutionBridge`, so no module edge is added.
+- `SandboxUnit::stop` first enters the drain state. From then on the endpoint
+  relays only `process/read` and `process/terminate`, and refuses everything
+  else, including `process/write` and `process/signal`, before forwarding.
+  It then waits up to 10 s for the count to reach zero, and only then asks
+  the daemon to stop the unit.
+- At the bound the unit is stopped as today. A reply cut off then is recorded
+  undelivered and parks the session (fail closed).
+
+Scope and residuals:
+
+- Graceful stops through `process.shutdown()` only: cutover, owner stop,
+  ACP end. A forced stop stays immediate: the watchdog's hard recycle, an
+  external systemd stop of the worker, account quiesce or kill switch, or a
+  daemon stop on owner disconnect.
+- Pre-existing and unchanged: `Relays::drop` records undelivered replies on a
+  detached task, so a worker that exits before a late reply arrives records
+  nothing. The drain makes this much rarer, but only worker-side durable
+  relay accounting removes it. That is an open item.
+- The count is per execution client. After an initialize retry, a new unit
+  can wait on an old unit's relays, which only delays it, bounded.
+- A cleanup read admitted after the count reached zero but before the stop
+  can still be cut off, and parks the session.
+
+Tests: in the worker, a held relay keeps the count until its reply was
+handled; a relay whose socket closed counts until it is recorded undelivered,
+which still parks; a draining unit relays only cleanup. In the proxy, the
+connection waits for a held reply, bounded, and a quiesced facade's expiry
+sends nothing.
 
 ## L3: shorter Controller outages (Machine host release)
 
@@ -478,7 +494,11 @@ post-reconnect check and Check-and-resume follow L2 as designed below.
   with staggered attempts across the resolved addresses (Happy Eyeballs), so
   a blackholed first address cannot starve a reachable fallback. Today a dial
   outside the window is unbounded, as it always was.
-- L1c ships with the next worker pin advance (not the current L0 one).
+- L1c's worker half ships with the next worker pin advance (not the current
+  L0 one); its proxy half with the next Antigravity Plugin release.
+- Worker-side durable relay accounting, so a reply arriving after the worker
+  exited still parks (pre-existing; `Relays::drop` records on a detached
+  task).
 
 ## Release artifacts
 

@@ -144,6 +144,83 @@ pub const UNIT_EXEC_SOCKET: &str = "/run/cowboy-exec.sock";
 pub struct ExecutionBridge {
     pub descriptor: Vec<u8>,
     pub listeners: tokio::sync::mpsc::UnboundedSender<OwnedFd>,
+    /// The endpoint's relays still owed to the unit: its stop waits for
+    /// them (bounded), so no reply is cut off by the unit's own teardown.
+    pub relays: std::sync::Arc<RelayQuiet>,
+}
+
+/// Relays of one unit's execution endpoint whose reply has not yet been
+/// written to the unit or recorded undelivered (design L1c).
+#[derive(Debug, Default)]
+pub struct RelayQuiet {
+    count: std::sync::atomic::AtomicUsize,
+    idle: tokio::sync::Notify,
+    /// The unit is being stopped: only cleanup reads and stops relay.
+    draining: std::sync::atomic::AtomicBool,
+}
+
+/// One relay in flight; dropped once its reply was handled.
+#[derive(Debug)]
+pub struct RelayGuard(std::sync::Arc<RelayQuiet>);
+
+impl Drop for RelayGuard {
+    fn drop(&mut self) {
+        if self
+            .0
+            .count
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel)
+            == 1
+        {
+            self.0.idle.notify_waiters();
+        }
+    }
+}
+
+impl RelayQuiet {
+    /// Count one relay until the returned guard is dropped.
+    #[must_use]
+    pub fn enter(self: &std::sync::Arc<Self>) -> RelayGuard {
+        self.count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        RelayGuard(std::sync::Arc::clone(self))
+    }
+
+    /// The unit is being stopped: from now on only cleanup requests relay.
+    pub fn begin_drain(&self) {
+        self.draining
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Whether `method` may still relay: anything before the drain, then
+    /// only reading a process and stopping one.
+    #[must_use]
+    pub fn admits(&self, method: &str) -> bool {
+        !self.draining.load(std::sync::atomic::Ordering::Acquire)
+            || matches!(method, "process/read" | "process/terminate")
+    }
+
+    /// Relays in flight now.
+    #[must_use]
+    pub fn in_flight(&self) -> usize {
+        self.count.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Wait until no relay is in flight, at most `bound`; `false` when the
+    /// bound ended the wait.
+    pub async fn drained(&self, bound: Duration) -> bool {
+        tokio::time::timeout(bound, async {
+            loop {
+                let idle = self.idle.notified();
+                tokio::pin!(idle);
+                idle.as_mut().enable();
+                if self.in_flight() == 0 {
+                    return;
+                }
+                idle.await;
+            }
+        })
+        .await
+        .is_ok()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

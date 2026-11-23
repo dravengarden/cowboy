@@ -1135,3 +1135,86 @@ async fn an_unwritable_ledger_refuses_further_effects() {
             .contains("cannot be written")
     );
 }
+
+#[tokio::test]
+async fn a_relay_counts_in_flight_until_its_reply_is_handled() {
+    // Design L1c: a unit's stop waits for this count.
+    let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
+        "fs/readFile" => Reply::Hold,
+        _ => completed(json!({"result": {}})),
+    }));
+    let _ledger = ledger(&target.client, None);
+    let quiet = Arc::clone(&target.client.relays);
+    assert!(
+        quiet.drained(Duration::from_millis(10)).await,
+        "idle: immediate"
+    );
+    let mut relays = relay::Relays::new(Arc::clone(&target.client));
+    relays.spawn(
+        json!(1),
+        "fs/readFile".into(),
+        json!({"path": "file:///target/a"}),
+    );
+    eventually(|| !target.held.lock().is_empty()).await;
+    assert_eq!(quiet.in_flight(), 1);
+    assert!(
+        !quiet.drained(Duration::from_millis(50)).await,
+        "held past the bound"
+    );
+    let waiting = {
+        let quiet = Arc::clone(&quiet);
+        tokio::spawn(async move { quiet.drained(Duration::from_secs(10)).await })
+    };
+    target.release(json!({"result": {"dataBase64": ""}}));
+    // Finished but not yet handed to the unit: still owed.
+    let done = relays.next().await;
+    assert_eq!(quiet.in_flight(), 1);
+    drop(done);
+    assert!(waiting.await.unwrap(), "drained once the reply was handled");
+    assert_eq!(quiet.in_flight(), 0);
+}
+
+#[tokio::test]
+async fn a_relay_whose_socket_closed_counts_until_recorded_undelivered() {
+    let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
+        "process/terminate" => Reply::Hold,
+        _ => completed(json!({"result": {}})),
+    }));
+    let ledger = ledger(&target.client, None);
+    let quiet = Arc::clone(&target.client.relays);
+    let mut relays = relay::Relays::new(Arc::clone(&target.client));
+    relays.spawn(
+        json!(1),
+        "process/terminate".into(),
+        json!({"processId": "p1"}),
+    );
+    eventually(|| !target.held.lock().is_empty()).await;
+    // The unit's connection ends with the stop in flight.
+    drop(relays);
+    assert_eq!(quiet.in_flight(), 1);
+    target.release(json!({"result": {"running": false}}));
+    assert!(quiet.drained(Duration::from_secs(10)).await);
+    // Answered after the socket closed: recorded as undelivered (fail closed).
+    assert_eq!(
+        ledger.uncertain_effect().as_deref(),
+        Some("process/terminate")
+    );
+}
+
+#[test]
+fn a_draining_unit_relays_only_cleanup() {
+    let quiet = crate::account_sandbox::RelayQuiet::default();
+    assert!(quiet.admits("fs/writeFile"));
+    quiet.begin_drain();
+    assert!(quiet.admits("process/read"));
+    assert!(quiet.admits("process/terminate"));
+    for method in [
+        "fs/writeFile",
+        "process/start",
+        "process/write",
+        "process/signal",
+        "fs/readFile",
+    ] {
+        assert!(!quiet.admits(method), "{method}");
+    }
+}
