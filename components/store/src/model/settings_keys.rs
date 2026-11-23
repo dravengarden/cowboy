@@ -58,6 +58,17 @@ pub const SESSION_CLEARED_NATIVE_PREFIX: &str = "session_cleared_native:";
 /// The session whose agent spawned this one through the Agent API and had it
 /// filed beside it; the spawned id follows. Orders later spawns after it.
 pub const SESSION_SPAWNED_FROM_PREFIX: &str = "session_spawned_from:";
+/// The session whose agent created this one through the Agent API, wherever
+/// it was filed; the created id follows. Its messages may start call-budget
+/// turns (docs/managed-agent-calls.md#call-budgets).
+pub const SESSION_CREATED_BY_PREFIX: &str = "session_created_by:";
+/// The creator's messages that started call-budget turns in this session,
+/// newest last; the session id follows.
+pub const SESSION_TURN_GRANTS_PREFIX: &str = "session_turn_grants:";
+/// The newest event sequence when a transcript was cleared while the
+/// session's owner turn was not known; the session id follows. Its call budget
+/// refuses until a newer owner prompt or grant names a turn.
+pub const SESSION_OWNER_TURN_LOST_PREFIX: &str = "session_owner_turn_lost:";
 /// Per-session opt-in for idle Provider updates; the session id follows.
 pub const SESSION_PROVIDER_AUTO_UPDATE_PREFIX: &str = "session_provider_auto_update:";
 /// Per-session context renewal override (bool); the session id follows.
@@ -100,6 +111,9 @@ pub const SESSION_STATE_PREFIXES: &[&str] = &[
     SESSION_FORK_PREFIX,
     SESSION_CLEARED_NATIVE_PREFIX,
     SESSION_SPAWNED_FROM_PREFIX,
+    SESSION_CREATED_BY_PREFIX,
+    SESSION_TURN_GRANTS_PREFIX,
+    SESSION_OWNER_TURN_LOST_PREFIX,
     SESSION_CONFIG_REVERT_PREFIX,
     SESSION_MCP_BINDINGS_PREFIX,
     SESSION_MCP_DEFAULT_PREFIX,
@@ -127,6 +141,9 @@ pub fn is_persisted_setting_key(key: &str) -> bool {
             SESSION_FORK_PREFIX,
             SESSION_CLEARED_NATIVE_PREFIX,
             SESSION_SPAWNED_FROM_PREFIX,
+            SESSION_CREATED_BY_PREFIX,
+            SESSION_TURN_GRANTS_PREFIX,
+            SESSION_OWNER_TURN_LOST_PREFIX,
             SESSION_PROVIDER_AUTO_UPDATE_PREFIX,
             SESSION_CONTEXT_ROLLOVER_PREFIX,
             AGENT_TOOLS_PREFIX,
@@ -170,6 +187,9 @@ pub fn examples() -> Vec<String> {
         format!("{SESSION_FORK_PREFIX}sess-1"),
         format!("{SESSION_CLEARED_NATIVE_PREFIX}sess-1"),
         format!("{SESSION_SPAWNED_FROM_PREFIX}sess-1"),
+        format!("{SESSION_CREATED_BY_PREFIX}sess-1"),
+        format!("{SESSION_TURN_GRANTS_PREFIX}sess-1"),
+        format!("{SESSION_OWNER_TURN_LOST_PREFIX}sess-1"),
         format!("{SESSION_PROVIDER_AUTO_UPDATE_PREFIX}sess-1"),
         format!("{SESSION_CONTEXT_ROLLOVER_PREFIX}sess-1"),
         format!("{AGENT_TOOLS_PREFIX}codex"),
@@ -197,6 +217,9 @@ mod tests {
             "session.autoResume.default",
             "unrelated",
             SESSION_SPAWNED_FROM_PREFIX,
+            SESSION_CREATED_BY_PREFIX,
+            SESSION_TURN_GRANTS_PREFIX,
+            SESSION_OWNER_TURN_LOST_PREFIX,
             SESSION_PROVIDER_AUTO_UPDATE_PREFIX,
             AGENT_TOOLS_PREFIX,
             SESSION_TOOLS_PREFIX,

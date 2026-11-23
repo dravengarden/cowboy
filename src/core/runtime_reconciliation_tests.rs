@@ -68,6 +68,37 @@ fn a_restored_session_remembers_its_owner_turn_through_a_clear() {
 }
 
 #[test]
+fn a_send_cut_by_the_restored_tail_is_left_to_durable_history() {
+    let chunk = |seq: u64, cmid: Option<&str>| {
+        let mut update = serde_json::json!({"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"go"}});
+        crate::prompt_origin::apply_prompt_origin(
+            &mut update,
+            &crate::prompt_origin::origin_from_cmid(cmid),
+        );
+        Envelope {
+            session_id: "cut".to_owned(),
+            seq,
+            event: Event::Update { update },
+            cmid: cmid.map(str::to_owned),
+        }
+    };
+    let hub = Hub::new();
+    let mut restored = restored_busy("cut");
+    // The send began at 7, before the restored tail.
+    restored.log = vec![chunk(8, None), chunk(9, Some("call-notice:call-1"))];
+    restored.reached_start = false;
+    restored.event_count = 9;
+    restored.next_seq = 10;
+    hub.restore_reconciling_runtime(vec![restored]);
+    let scan = hub
+        .newest_in_retained_log("cut", crate::prompt_origin::newest_owner_turn)
+        .unwrap();
+    assert_eq!(scan.newest_match, None, "the fragment is no anchor");
+    assert_eq!(scan.first_seq, Some(8));
+    assert!(!scan.whole);
+}
+
+#[test]
 fn worker_replays_do_not_reset_the_idle_clock() {
     let hub = Hub::new();
     let mut idle = restored_busy("idle");

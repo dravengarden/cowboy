@@ -458,13 +458,63 @@ async fn durable_history_is_paged_until_the_newest_owner_prompt() {
         let expected = owner_at.map_or(OWNER_TURN_NONE, |seq| i64::try_from(seq).unwrap());
         // 450 events are three pages of 200: the prompt is on the last one.
         assert_eq!(
-            durable_turn(&fixture.store, PARENT, end).await,
+            durable_turn(&fixture.store, PARENT, end, None).await,
             Ok(expected)
         );
         // Reading only what precedes it finds an earlier owner prompt or none.
         assert_eq!(
-            durable_turn(&fixture.store, PARENT, 5).await,
+            durable_turn(&fixture.store, PARENT, 5, None).await,
             Ok(OWNER_TURN_NONE)
         );
     }
+}
+
+/// A send whose blocks straddle a history page is anchored at its first
+/// block, however the pages fall.
+#[tokio::test]
+async fn a_send_across_a_durable_page_boundary_is_one_anchor() {
+    use crate::core::Envelope;
+    let fixture = Fixture::new(2).await;
+    let rows: Vec<Envelope> = (0..450_u64)
+        .map(|seq| {
+            let owner = (240..=260).contains(&seq);
+            let update = if owner {
+                let mut update = json!({"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"block"}});
+                apply_prompt_origin(&mut update, &origin_from_cmid(Some("cmid-1")));
+                update
+            } else {
+                json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"progress"}})
+            };
+            Envelope {
+                session_id: PARENT.into(),
+                seq,
+                event: Event::Update { update },
+                cmid: (seq == 240).then(|| "cmid-1".to_owned()),
+            }
+        })
+        .collect();
+    fixture
+        .store
+        .upsert_event_batch(&rows, &std::collections::HashMap::new())
+        .await
+        .unwrap();
+    // The newest page is 250..449: it starts inside the send.
+    assert_eq!(
+        durable_turn(&fixture.store, PARENT, 450, None).await,
+        Ok(240)
+    );
+    // Reading only down to a granted turn: a send that began after it is
+    // found whole, one that began at or before it is none.
+    assert_eq!(
+        durable_turn(&fixture.store, PARENT, 450, Some(239)).await,
+        Ok(240)
+    );
+    assert_eq!(
+        durable_turn(&fixture.store, PARENT, 450, Some(240)).await,
+        Ok(OWNER_TURN_NONE)
+    );
+    assert_eq!(
+        durable_turn(&fixture.store, PARENT, 450, Some(249)).await,
+        Ok(OWNER_TURN_NONE)
+    );
 }

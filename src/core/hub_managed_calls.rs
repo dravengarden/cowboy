@@ -205,11 +205,31 @@ impl Hub {
         let sessions = self.inner.sessions.lock();
         let s = sessions.get(session_id)?;
         let in_log = find(&s.log);
+        let first_seq = s.log.first().map(|e| e.seq);
+        // A match at the log's first event may be a send whose first chunks
+        // were trimmed: the turn the Hub saw begin is that send's start, and
+        // one it never saw begin (restored from a cut tail) is not known here.
+        let cut = !s.reached_start && in_log.is_some() && in_log == first_seq;
         Some(RetainedLogScan {
-            newest_match: in_log.max(s.owner_turn_seq),
-            first_seq: s.log.first().map(|e| e.seq),
+            newest_match: if cut {
+                s.owner_turn_seq.filter(|seq| Some(*seq) <= in_log)
+            } else {
+                in_log.max(s.owner_turn_seq)
+            },
+            first_seq,
             whole: s.reached_start,
         })
+    }
+
+    /// Remember an owner turn found in durable history (older than the
+    /// retained log), unless the Hub already knows one at least as new, so a
+    /// cleared transcript keeps it.
+    pub fn remember_owner_turn(&self, session_id: &str, seq: u64) {
+        if let Some(s) = self.inner.sessions.lock().get_mut(session_id)
+            && s.owner_turn_seq.is_none_or(|known| known < seq)
+        {
+            s.owner_turn_seq = Some(seq);
+        }
     }
 
     /// Withdraw a call's still-queued prompt (cancelled, refused or finished).

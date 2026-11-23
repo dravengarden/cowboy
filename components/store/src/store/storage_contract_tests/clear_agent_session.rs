@@ -1,4 +1,5 @@
 use super::{Store, session, test_support};
+use crate::model::settings_keys;
 use serde_json::json;
 
 /// Clear forgets the native id and records its fence in one write.
@@ -59,10 +60,11 @@ async fn assert_clear_is_one_write(store: &Store) {
         "{}{id}",
         crate::model::settings_keys::SESSION_CLEARED_NATIVE_PREFIX
     );
+    let lost = format!("{}{id}", settings_keys::SESSION_OWNER_TURN_LOST_PREFIX);
     // A refused fence keeps the transcript and the native id.
     assert!(
         store
-            .clear_conversation(id, i64::MAX, Some(("unregistered", &json!([]))))
+            .clear_conversation(id, i64::MAX, Some(("unregistered", &json!([]))), None)
             .await
             .is_err()
     );
@@ -78,17 +80,19 @@ async fn assert_clear_is_one_write(store: &Store) {
         Some("native-2")
     );
     store
-        .clear_conversation(id, i64::MAX, Some((&key, &json!(["native-2"]))))
+        .clear_conversation(
+            id,
+            i64::MAX,
+            Some((&key, &json!(["native-2"]))),
+            Some((&lost, &json!(41))),
+        )
         .await
         .unwrap();
     assert_eq!(native(store.load_all().await.unwrap()), None);
-    assert!(
-        store
-            .load_settings()
-            .await
-            .unwrap()
-            .contains(&(key, json!(["native-2"])))
-    );
+    // The lost owner turn is written by the same transaction.
+    let settings = store.load_settings().await.unwrap();
+    assert!(settings.contains(&(key, json!(["native-2"]))));
+    assert!(settings.contains(&(lost, json!(41))));
 }
 
 #[tokio::test]

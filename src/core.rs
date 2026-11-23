@@ -56,6 +56,7 @@ mod session_attention;
 pub use session_attention::SessionAttention;
 mod clear_conversation;
 mod lost_execution;
+mod owner_turn_loss;
 mod runtime_epoch_fence;
 pub use clear_conversation::ClearCommit;
 pub use runtime_epoch_fence::RuntimeEpoch;
@@ -523,6 +524,35 @@ pub struct RestoredSession {
     pub last_event_at_ms: Option<i64>,
 }
 
+/// The owner turn a restored log shows. A send cut by the restored tail's
+/// start began on an older event: leave it to durable history rather than
+/// anchor the fragment.
+fn restored_owner_turn(log: &[Envelope], reached_start: bool) -> Option<u64> {
+    crate::prompt_origin::newest_owner_turn(log)
+        .filter(|seq| reached_start || log.first().is_none_or(|first| first.seq != *seq))
+}
+
+impl Hub {
+    /// A restored session's delivery hold, from its setting.
+    fn restored_delivery_hold(&self, id: &str) -> Option<String> {
+        self.setting(&format!(
+            "{}{id}",
+            settings_keys::SESSION_DELIVERY_HOLD_PREFIX
+        ))
+        .and_then(|value| value.as_str().map(str::to_owned))
+    }
+
+    /// Whether a restored session waits for resources by explicit request.
+    fn restored_explicit_wait(&self, id: &str) -> bool {
+        self.setting(&format!(
+            "{}{id}",
+            settings_keys::SESSION_RESOURCE_WAIT_PREFIX
+        ))
+        .and_then(|value| value.get("explicit").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false)
+    }
+}
+
 /// When a restored session was last active, from its newest durable event.
 /// Without a record (or with a clock in the future) it counts as just active,
 /// the conservative choice for every idle-based policy.
@@ -583,6 +613,8 @@ struct Session {
     /// trimming and a cleared transcript, so a call budget never loses its
     /// turn to eviction. `None` until a person prompts it in this lifetime.
     owner_turn_seq: Option<u64>,
+    /// Durable history was read to its start and holds no owner turn.
+    owner_turn_absent: bool,
     /// When the session last showed activity (see [`counts_as_activity`]).
     /// Monotonic; a restart restores it from the newest such durable event,
     /// so idle-based policies do not restart their wait on every deploy.
@@ -1213,6 +1245,8 @@ pub enum StoreWrite {
         fence: Option<(String, serde_json::Value)>,
         /// Completed through the store acknowledgement sink (user Clear).
         ack_id: Option<u64>,
+        /// `session_owner_turn_lost:<id>`, written in the same transaction.
+        turn_lost: Option<(String, serde_json::Value)>,
     },
     DeleteSession(String),
     /// Persist a session's queue + drafts (whole lists, as JSONB) so staged
@@ -2194,7 +2228,7 @@ impl Hub {
                     self.inner.store_tx.is_some(),
                     &mut reached_start,
                 );
-                let owner_turn_seq = crate::prompt_origin::newest_owner_turn(&log);
+                let owner_turn_seq = restored_owner_turn(&log, reached_start);
                 for envelope in &log {
                     let _ = history_reducer.reduce(envelope.clone());
                 }
@@ -2218,6 +2252,7 @@ impl Hub {
                         reached_start,
                         next_seq,
                         owner_turn_seq,
+                        owner_turn_absent: false,
                         last_activity: restored_last_activity(last_event_at_ms, now_ms()),
                         config_options,
                         config_previews: ConfigPreviews::default(),
@@ -2231,21 +2266,8 @@ impl Hub {
                                 worker.current_turn_id.is_some() || worker.pending_prompt_count > 0
                             }),
                         in_flight_epoch: 0,
-                        delivery_hold: self
-                            .setting(&format!(
-                                "{}{id}",
-                                settings_keys::SESSION_DELIVERY_HOLD_PREFIX
-                            ))
-                            .and_then(|value| value.as_str().map(str::to_owned)),
-                        explicit_wait: self
-                            .setting(&format!(
-                                "{}{id}",
-                                settings_keys::SESSION_RESOURCE_WAIT_PREFIX
-                            ))
-                            .and_then(|value| {
-                                value.get("explicit").and_then(serde_json::Value::as_bool)
-                            })
-                            .unwrap_or(false),
+                        delivery_hold: self.restored_delivery_hold(&id),
+                        explicit_wait: self.restored_explicit_wait(&id),
                         dispatch_pending: None,
                         dispatched_cmids: VecDeque::new(),
                         turn_completion_latched: false,
@@ -3024,6 +3046,7 @@ impl Hub {
                     reached_start: true,
                     next_seq: 0,
                     owner_turn_seq: None,
+                    owner_turn_absent: false,
                     last_activity: std::time::Instant::now(),
                     config_options: None,
                     config_previews: ConfigPreviews::default(),
@@ -3615,6 +3638,8 @@ impl Hub {
     /// Destructively clear one session's transcript while keeping its sequence
     /// watermark monotonic, so delayed clients cannot collide with old seq ids.
     pub fn clear_transcript(&self, session_id: &str) {
+        let turn_lost = self.owner_turn_lost(session_id);
+        self.apply_owner_turn_lost(turn_lost.clone());
         self.clear_transcript_memory(session_id);
         if let Some(tx) = self.inner.store_tx.as_ref() {
             // One transaction with the native id's removal and its fence: a
@@ -3624,6 +3649,7 @@ impl Hub {
                 calls_before_ms: chrono::Utc::now().timestamp_millis(),
                 fence: Some(self.cleared_fence(session_id)),
                 ack_id: None,
+                turn_lost,
             });
         }
     }

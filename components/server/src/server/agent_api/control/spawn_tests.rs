@@ -121,7 +121,7 @@ fn a_created_session_is_titled_and_filed_beside_its_creator() {
     )
     .unwrap();
     let (spawn, _) = prepared(json!({"title":"Port the parser"})).unwrap();
-    spawn.finish(&hub, "creator", &actor(), &receipt(201, "spawn"));
+    spawn.place(&hub, "creator", &actor(), &receipt(201, "spawn"));
     assert_eq!(
         hub.session_info("spawn").unwrap().meta.title,
         "Port the parser"
@@ -130,7 +130,7 @@ fn a_created_session_is_titled_and_filed_beside_its_creator() {
     // Without a title the creation-time default stays for the prompt to replace.
     session(&hub, "plain");
     let (spawn, _) = prepared(json!({})).unwrap();
-    spawn.finish(&hub, "creator", &actor(), &receipt(201, "plain"));
+    spawn.place(&hub, "creator", &actor(), &receipt(201, "plain"));
     assert_eq!(
         hub.session_info("plain").unwrap().meta.title,
         "codex · /worktrees/plain"
@@ -163,10 +163,15 @@ fn an_explicit_folder_is_never_overridden() {
     )
     .unwrap();
     let (spawn, _) = prepared(json!({"folder_id":"","title":"Elsewhere"})).unwrap();
-    spawn.finish(&hub, "creator", &actor(), &receipt(201, "spawn"));
+    spawn.place(&hub, "creator", &actor(), &receipt(201, "spawn"));
     assert_eq!(placement(&hub, "spawn").as_deref(), Some(""));
     assert_eq!(hub.session_info("spawn").unwrap().meta.title, "Elsewhere");
     assert_eq!(hub.setting("session_spawned_from:spawn"), None);
+    // Wherever it was filed, its creator is recorded for its call budget.
+    assert_eq!(
+        hub.setting("session_created_by:spawn"),
+        Some(json!("creator"))
+    );
 }
 
 #[test]
@@ -186,8 +191,9 @@ fn a_refused_creation_or_a_vanished_creator_never_fails_the_session() {
     .unwrap();
     // A rejected receipt names no session: nothing is renamed or moved.
     let (spawn, _) = prepared(json!({"title":"Never applied"})).unwrap();
-    spawn.finish(&hub, "creator", &actor(), &receipt(409, "spawn"));
+    spawn.place(&hub, "creator", &actor(), &receipt(409, "spawn"));
     assert_eq!(placement(&hub, "spawn"), None);
+    assert_eq!(hub.setting("session_created_by:spawn"), None);
     assert_eq!(
         hub.session_info("spawn").unwrap().meta.title,
         "codex · /worktrees/spawn"
@@ -195,14 +201,14 @@ fn a_refused_creation_or_a_vanished_creator_never_fails_the_session() {
     // A creator deleted in the meantime: the session keeps today's placement
     // and still gets its title.
     let (spawn, _) = prepared(json!({"title":"Orphan"})).unwrap();
-    spawn.finish(&hub, "deleted", &actor(), &receipt(201, "spawn"));
+    spawn.place(&hub, "deleted", &actor(), &receipt(201, "spawn"));
     assert_eq!(placement(&hub, "spawn"), None);
     assert_eq!(hub.session_info("spawn").unwrap().meta.title, "Orphan");
     // So does one in Trash.
     hub.trash_items(&actor(), &[], &["creator".into()], 1)
         .unwrap();
     let (spawn, _) = prepared(json!({})).unwrap();
-    spawn.finish(&hub, "creator", &actor(), &receipt(201, "spawn"));
+    spawn.place(&hub, "creator", &actor(), &receipt(201, "spawn"));
     assert_eq!(placement(&hub, "spawn"), None);
 }
 
@@ -240,4 +246,26 @@ fn a_malformed_body_is_refused_before_admission() {
     let input = json!({"body":{"title":" Fine "}});
     Spawn::check(&input).unwrap();
     assert_eq!(input["body"]["title"], " Fine ");
+}
+
+#[test]
+fn only_a_message_dispatch_would_prompt_can_grant_a_turn() {
+    assert!(deliverable(&json!({"session_id":"s","text":"go"})));
+    assert!(!deliverable(&json!({"session_id":"s","text":"  "})));
+    assert!(!deliverable(&json!({"session_id":"s"})));
+    // Content wins over text, and only blocks that decode count.
+    assert!(!deliverable(
+        &json!({"session_id":"s","text":"go","content":[{"type":"bogus"}]})
+    ));
+    assert!(deliverable(
+        &json!({"session_id":"s","content":[{"type":"text","text":"go"}]})
+    ));
+    // Blank text blocks are no message; an attachment is.
+    assert!(!deliverable(
+        &json!({"session_id":"s","content":[{"type":"text","text":" \n"}]})
+    ));
+    assert!(deliverable(&json!({"session_id":"s","content":[
+        {"type":"text","text":" "},
+        {"type":"image","data":"aGk=","mimeType":"image/png"}
+    ]})));
 }

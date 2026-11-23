@@ -152,6 +152,7 @@ async fn queued_clear_and_later_events_keep_fifo_through_shutdown() {
         calls_before_ms: 1,
         fence: None,
         ack_id: None,
+        turn_lost: None,
     }));
     assert!(sink.send(text(1, 12)));
     // Reserved control writes cannot overtake the earlier clear/new event pair.
