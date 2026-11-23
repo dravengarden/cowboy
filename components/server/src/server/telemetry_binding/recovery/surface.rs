@@ -20,7 +20,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-struct Preview {
+pub struct Preview {
     request: RecoveryRequest,
     budget: Option<OperationBudget>,
     // Bounded process-local query handle. Restart discards it, not Machine audit.
@@ -28,7 +28,7 @@ struct Preview {
 }
 
 #[derive(Default)]
-pub(in crate::server) struct Plans(parking_lot::Mutex<HashMap<String, Preview>>);
+pub struct Plans(pub parking_lot::Mutex<HashMap<String, Preview>>);
 
 impl Plans {
     fn insert(&self, request: RecoveryRequest, budget: OperationBudget) -> Result<()> {
@@ -179,7 +179,7 @@ impl PlanView {
 }
 
 #[derive(serde::Serialize)]
-struct ReceiptView {
+pub struct ReceiptView {
     schema: u16,
     resolution_id: String,
     operation_id: String,
@@ -204,7 +204,7 @@ impl ReceiptView {
         Self::from_audit(receipt)
     }
 
-    fn from_audit(
+    pub fn from_audit(
         receipt: &crate::machine_protocol::telemetry_recovery::RecoveryReceipt,
     ) -> Result<Self> {
         receipt.validate()?;
@@ -222,7 +222,7 @@ impl ReceiptView {
     }
 }
 
-pub(in crate::server) fn routes<S>() -> Router<S>
+pub fn routes<S>() -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
     ApiState: FromRef<S>,

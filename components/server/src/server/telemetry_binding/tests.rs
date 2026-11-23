@@ -1,24 +1,9 @@
 use super::*;
-use crate::machine_protocol::telemetry_binding::{BindingObservationSnapshot, BindingRejection};
+use crate::machine_protocol::telemetry_binding::BindingRejection;
 use crate::telemetry_binding::tests::{applied, observed};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 
-pub(super) struct FixtureEffects {
-    intent: Intent,
-    result: BindingObservation,
-    lose_ack: bool,
-    lose_query: bool,
-    revoke_on_dispatch: bool,
-    alive: AtomicBool,
-    sends: AtomicUsize,
-    queries: AtomicUsize,
-    checks: AtomicUsize,
-    revoke_on_check: Option<usize>,
-    authority: crate::server::operator_approval::TelemetryBindingAuthority,
-    hub: crate::core::Hub,
-    devices: crate::client_auth::DeviceAccessSessions,
-    authentication: crate::auth_plugins::ProductAuthentication,
-}
+pub(super) use super::test_fixtures::FixtureEffects;
 
 fn fixture(suffix: &str) -> Intent {
     let mut intent = crate::telemetry_binding::fixture(suffix);
@@ -26,64 +11,6 @@ fn fixture(suffix: &str) -> Intent {
         user_id: crate::product_auth::local_product_principal().user_id,
     };
     intent
-}
-
-impl FixtureEffects {
-    pub(super) fn new(intent: &Intent) -> Self {
-        let hub = crate::core::Hub::new();
-        let devices = crate::client_auth::DeviceAccessSessions::default();
-        let authentication = crate::auth_plugins::ProductAuthentication::test_default(None);
-        let auth = crate::server::ProductRequestAuth {
-            product_auth_enabled: false,
-            store: None,
-            hub: &hub,
-            device_access: &devices,
-            product_authentication: &authentication,
-        };
-        let verified = crate::server::AuthenticatedProductRequest {
-            permissions: None,
-            principal: crate::product_auth::local_product_principal(),
-            cookie_session: None,
-            device_identity: None,
-        };
-        let approval = crate::server::operator_approval::OperatorApproval::capture(
-            auth,
-            &intent.service_id,
-            Some(&verified),
-            &axum::http::HeaderMap::new(),
-        )
-        .unwrap();
-        let authority = approval.bind_telemetry(intent).unwrap();
-        Self {
-            intent: intent.clone(),
-            result: applied(intent),
-            lose_ack: false,
-            lose_query: false,
-            revoke_on_dispatch: false,
-            alive: AtomicBool::new(true),
-            sends: AtomicUsize::new(0),
-            queries: AtomicUsize::new(0),
-            checks: AtomicUsize::new(0),
-            revoke_on_check: None,
-            authority,
-            hub,
-            devices,
-            authentication,
-        }
-    }
-
-    pub(super) fn confirmation(&self) -> Confirmation<'_> {
-        Confirmation {
-            authority: &self.authority,
-            auth: crate::server::ProductRequestAuth {
-                product_auth_enabled: false,
-                store: None,
-                hub: &self.hub,
-                device_access: &self.devices,
-                product_authentication: &self.authentication,
-            },
-        }
-    }
 }
 
 async fn coordinate(
@@ -96,52 +23,6 @@ async fn coordinate(
     // Operator capture. Cookie/device/token revocation is covered alongside it
     // in operator_approval's real credential-backed fixtures.
     super::coordinate(store, fence, intent, effects.confirmation(), effects).await
-}
-
-impl Effects for FixtureEffects {
-    async fn authorized(&self, intent: &Intent) -> bool {
-        let check = self.checks.fetch_add(1, Ordering::Relaxed) + 1;
-        if self.revoke_on_check == Some(check) {
-            self.alive.store(false, Ordering::Release);
-        }
-        intent == &self.intent && self.within_budget()
-    }
-    fn within_budget(&self) -> bool {
-        self.alive.load(Ordering::Acquire)
-    }
-    async fn dispatch(&self, step: &BindingStep) -> Result<BindingObservation> {
-        assert_eq!(step, &self.intent.machine_step().unwrap());
-        assert_eq!(
-            self.sends.fetch_add(1, Ordering::Relaxed),
-            0,
-            "never retry a finite mutation"
-        );
-        if self.revoke_on_dispatch {
-            self.alive.store(false, Ordering::Release);
-        }
-        if self.lose_ack {
-            anyhow::bail!("hermetic lost ACK");
-        }
-        Ok(self.result.clone())
-    }
-    async fn observe(&self, step: &BindingStep) -> Result<BindingObservation> {
-        assert_eq!(step, &self.intent.machine_step().unwrap());
-        let count = self.queries.fetch_add(1, Ordering::Relaxed);
-        if count == 0 {
-            return Ok(BindingObservation::Observed {
-                snapshot: Box::new(BindingObservationSnapshot {
-                    request_digest: step.request_digest()?,
-                    receipt: None,
-                    current: self.intent.expected.clone(),
-                    unresolved: false,
-                }),
-            });
-        }
-        if self.lose_query {
-            anyhow::bail!("hermetic disconnected observation");
-        }
-        Ok(self.result.clone())
-    }
 }
 
 async fn store(root: &tempfile::TempDir) -> Store {

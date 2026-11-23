@@ -48,7 +48,7 @@ pub(super) async fn enrich_admin_status(
     status
 }
 
-pub(super) fn auth_now_ms() -> i64 {
+pub fn auth_now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 

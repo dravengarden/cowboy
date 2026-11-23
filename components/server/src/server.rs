@@ -104,11 +104,11 @@ mod machine_lanes;
 mod managed_calls;
 mod native_configuration;
 mod notifications;
-mod operator_approval;
+pub mod operator_approval;
 mod peer_notices;
 #[cfg(test)]
 mod persistence_tests;
-mod plugin_install;
+pub mod plugin_install;
 mod preferences;
 mod provider_accounts;
 mod superagent;
@@ -118,9 +118,9 @@ mod plugin_history;
 mod plugin_uninstall;
 mod product_continuation;
 mod projects;
-mod provider_auth_sync;
+pub mod provider_auth_sync;
 mod sync_dataset;
-mod telemetry_binding;
+pub mod telemetry_binding;
 mod web_security;
 mod zed_session;
 use plugin_uninstall::{
@@ -145,14 +145,15 @@ struct PluginUninstallPlan {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PluginFenceState {
+pub enum PluginFenceState {
     Installing,
     Uninstalling,
     Uninstalled,
     NeedsReconcile,
 }
 
-type PluginLifecycleFences = Arc<parking_lot::RwLock<HashMap<(String, String), PluginFenceState>>>;
+pub type PluginLifecycleFences =
+    Arc<parking_lot::RwLock<HashMap<(String, String), PluginFenceState>>>;
 
 /// Reserve the lifecycle before reading the active release, including across
 /// awaits. Reuse the non-destructive installing fence; cancellation releases it.
@@ -1106,12 +1107,12 @@ enum RouteAuth {
 /// authentication router. A verified request extension is reused by handlers:
 /// sender-constrained proof nonces must never be consumed twice.
 #[derive(Clone, Copy)] // Borrowed core services, not an approval or credential.
-struct ProductRequestAuth<'a> {
-    product_auth_enabled: bool,
-    store: Option<&'a Store>,
-    hub: &'a Hub,
-    device_access: &'a crate::client_auth::DeviceAccessSessions,
-    product_authentication: &'a crate::auth_plugins::ProductAuthentication,
+pub struct ProductRequestAuth<'a> {
+    pub product_auth_enabled: bool,
+    pub store: Option<&'a Store>,
+    pub hub: &'a Hub,
+    pub device_access: &'a crate::client_auth::DeviceAccessSessions,
+    pub product_authentication: &'a crate::auth_plugins::ProductAuthentication,
 }
 
 impl<'a> From<&'a AppState> for ProductRequestAuth<'a> {
@@ -1139,11 +1140,11 @@ impl<'a> From<&'a ProductAuthState> for ProductRequestAuth<'a> {
 }
 
 #[derive(Clone)]
-struct AuthenticatedProductRequest {
-    principal: ProductPrincipal,
-    cookie_session: Option<crate::store::ProductUserSession>,
-    device_identity: Option<crate::client_auth::DeviceAccessIdentity>,
-    permissions: Option<crate::core::ProductPermissionObservation>,
+pub struct AuthenticatedProductRequest {
+    pub principal: ProductPrincipal,
+    pub cookie_session: Option<crate::store::ProductUserSession>,
+    pub device_identity: Option<crate::client_auth::DeviceAccessIdentity>,
+    pub permissions: Option<crate::core::ProductPermissionObservation>,
 }
 
 impl AuthenticatedProductRequest {
@@ -2576,7 +2577,7 @@ mod routes;
 mod background_jobs;
 use background_jobs::*;
 
-mod http_policy;
+pub mod http_policy;
 use http_policy::*;
 
 mod static_web;

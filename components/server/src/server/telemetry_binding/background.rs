@@ -12,7 +12,7 @@ use crate::store::Store;
 use crate::telemetry_plugin::background_policy::BackgroundPolicy;
 use std::sync::Arc;
 
-pub(in crate::server) fn exporter(
+pub fn exporter(
     policy: Arc<BackgroundPolicy>,
     store: Store,
     control: Arc<MachineControl>,

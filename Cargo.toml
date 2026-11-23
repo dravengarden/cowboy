@@ -9,7 +9,7 @@ rust-version = "1.98.1"
 
 [workspace]
 resolver = "3"
-members = ["components/codeact-runtime", "components/machine", "components/plugin-sdk", "components/provider-sdk", "components/server", "components/store", "components/wire"]
+members = ["components/codeact-runtime", "components/integration-tests", "components/machine", "components/plugin-sdk", "components/provider-sdk", "components/server", "components/store", "components/wire"]
 exclude = ["plugins/zed/adapter"]
 
 [features]

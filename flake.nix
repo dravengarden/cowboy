@@ -117,6 +117,10 @@
         ./components/server/src/lib.rs
         ./components/server/src/main.rs
       ] ++ codeact-runtime-files;
+      integration-tests-stub-files = [
+        ./components/integration-tests/Cargo.toml
+        ./components/integration-tests/src/lib.rs
+      ];
       plugin-sdk-files = [
         ./components/plugin-sdk/Cargo.toml
         ./components/plugin-sdk/src
@@ -188,7 +192,7 @@
           ./tests/fixtures/telemetry-recovery-surface.json
           ./tests/fixtures/telemetry-binding-surface.json
           ./tests/fixtures/plugin-lifecycle-history.json
-        ] ++ plugin-contract-files ++ wire-files ++ store-files ++ server-files ++ machine-files ++ plugin-host-files);
+        ] ++ plugin-contract-files ++ wire-files ++ store-files ++ server-files ++ machine-files ++ integration-tests-stub-files ++ plugin-host-files);
       };
 
       # Machine has a deliberately tiny source closure and is packaged
@@ -262,7 +266,7 @@
           ./src/workspace_extensions.rs
           ./src/workspace_extensions
           ./src/workspace_roots.rs
-        ] ++ plugin-contract-files ++ wire-files ++ store-stub-files ++ machine-files ++ server-stub-files ++ [
+        ] ++ plugin-contract-files ++ wire-files ++ store-stub-files ++ machine-files ++ server-stub-files ++ integration-tests-stub-files ++ [
           (pkgs.lib.fileset.fileFilter (file: file.name == "host.json") ./plugins)
         ]);
       };
@@ -291,7 +295,7 @@
           # compiles the wire modules.
           ./components/wire/Cargo.toml
           ./components/wire/src/lib.rs
-        ] ++ store-lib-stub-files ++ server-stub-files ++ machine-stub-files);
+        ] ++ store-lib-stub-files ++ server-stub-files ++ machine-stub-files ++ integration-tests-stub-files);
       };
 
 

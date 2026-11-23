@@ -20,6 +20,7 @@ test = false
 default = ["full"]
 full = []
 machine-host = ["cowboy/machine-host"]
+test-support = ["cowboy/test-support", "dep:tempfile"]
 
 [dependencies]
 cowboy-codeact-runtime = { path = "../codeact-runtime" }
@@ -52,8 +53,6 @@ axum = { version = "0.8", features = ["ws"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["compression-br", "compression-gzip", "trace"] }
 tracing = "0.1"
-opentelemetry-proto = { version = "=0.32.0", default-features = false, features = ["gen-tonic-messages", "with-serde", "trace", "metrics", "logs"] }
-prost = "0.14"
 anyhow = "1"
 base64 = "0.22"
 sha2 = "0.10"
@@ -82,9 +81,8 @@ cowboy-plugin-sdk = { version = "=1.20.0", path = "../plugin-sdk" }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 ed25519-dalek = "2"
 fs2 = "0.4"
-libc = "0.2"
-rustix = { version = "1", features = ["process", "fs"] }
 regex = "1"
+tempfile = { version = "3", optional = true }
 # `@`-picker file search: gitignore-aware walk + fuzzy ranking (the matcher
 # Helix / Zed use). See src/files.rs.
 
@@ -92,7 +90,6 @@ regex = "1"
 tikv-jemallocator = "0.7"
 
 [dev-dependencies]
-cowboy-machine = { version = "0.1.0", path = "../machine", features = ["full", "machine-host", "test-support"] }
 cowboy = { version = "0.1.0", path = "../..", features = ["test-support"] }
 cowboy-wire = { version = "0.1.0", path = "../wire", features = ["test-fixtures"] }
 tempfile = "3"
@@ -108,5 +105,5 @@ pedantic = { level = "allow", priority = -1 }
 
 
 [package.metadata.cargo-machete]
-# cowboy-wire enables test fixtures; cowboy-machine supplies the Machine side to integration tests.
-ignored = ["cowboy-wire", "cowboy-machine"]
+# cowboy-wire enables test fixtures.
+ignored = ["cowboy-wire"]

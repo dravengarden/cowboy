@@ -464,7 +464,7 @@ impl Effects for LiveEffects {
     }
 }
 
-async fn dispatch(
+pub async fn dispatch(
     control: &MachineControl,
     connection: &ConnectionToken,
     desired: &DesiredPlugin,

@@ -53,7 +53,7 @@ struct Flight {
 }
 
 #[derive(Default)]
-pub(super) struct Coordinator {
+pub struct Coordinator {
     flights: Mutex<Vec<Arc<Flight>>>,
 }
 
@@ -133,7 +133,7 @@ impl Coordinator {
 
     /// Only Core's Service sealing path may call this. The Machine continues to
     /// verify signature, immutable replica semantics and materialization itself.
-    pub(super) async fn apply(
+    pub async fn apply(
         &self,
         control: &MachineControl,
         connection: &ConnectionToken,

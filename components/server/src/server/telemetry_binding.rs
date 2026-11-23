@@ -1,7 +1,7 @@
 //! Finite Service coordinator and connection-bound protocol-15 transport.
 //! Each purpose requires explicit per-target host policy, fresh Operator
 //! authority and original leases. Absent host policy leaves mutations closed.
-#![cfg_attr(not(test), allow(dead_code))]
+#![cfg_attr(not(any(test, feature = "test-support")), allow(dead_code))]
 
 use crate::machine_protocol::telemetry_binding::{BindingObservation, BindingOutcome, BindingStep};
 use crate::store::Store;
@@ -10,18 +10,20 @@ use crate::telemetry_binding::{
 };
 use anyhow::{Result, ensure};
 
-pub(super) mod background;
-mod export;
-mod http;
+pub mod background;
+pub mod export;
+pub mod http;
 #[cfg_attr(not(feature = "machine-host"), allow(dead_code))]
-mod live;
-pub(super) mod recovery;
-pub(super) mod resolution;
-pub(super) mod surface;
+pub mod live;
+pub mod recovery;
+pub mod resolution;
+pub mod surface;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_fixtures;
 
-struct Confirmation<'a> {
-    authority: &'a super::operator_approval::TelemetryBindingAuthority,
-    auth: super::ProductRequestAuth<'a>,
+pub struct Confirmation<'a> {
+    pub authority: &'a super::operator_approval::TelemetryBindingAuthority,
+    pub auth: super::ProductRequestAuth<'a>,
 }
 
 impl Confirmation<'_> {
@@ -47,7 +49,7 @@ impl Confirmation<'_> {
         valid
     }
 }
-trait Effects: Sync {
+pub trait Effects: Sync {
     /// Recheck the exact trusted release and original connection. The core
     /// Confirmation independently checks actual Operator authority above.
     fn authorized(&self, intent: &Intent) -> impl std::future::Future<Output = bool> + Send;
@@ -64,7 +66,7 @@ trait Effects: Sync {
     ) -> impl std::future::Future<Output = Result<BindingObservation>> + Send;
 }
 
-async fn advance(store: &Store, expected: &Operation, progress: Progress) -> Result<Operation> {
+pub async fn advance(store: &Store, expected: &Operation, progress: Progress) -> Result<Operation> {
     Ok(store
         .change_telemetry_binding(&Change::Advance { expected, progress }, &|| true)
         .await?
@@ -111,7 +113,7 @@ fn conclusion(intent: &Intent, observation: BindingObservation) -> Progress {
     }
 }
 
-async fn coordinate(
+pub async fn coordinate(
     store: &Store,
     fence: &LegacyFence,
     intent: &Intent,

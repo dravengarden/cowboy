@@ -25,7 +25,7 @@ enum Credential {
 }
 
 // Intentionally no Clone, Debug, Serialize, or Deserialize on either authority.
-pub(super) struct OperatorApproval {
+pub struct OperatorApproval {
     service: String,
     actor: Actor,
     credential: Credential,
@@ -132,7 +132,7 @@ impl OperatorApproval {
         })
     }
 
-    pub(super) fn capture(
+    pub fn capture(
         auth: ProductRequestAuth<'_>,
         service: &str,
         authenticated: Option<&AuthenticatedProductRequest>,
@@ -253,7 +253,7 @@ impl OperatorApproval {
 
     // A separate closed operation kind; an uninstall/resolution grant cannot
     // be converted into a telemetry binding or used to restore old credentials.
-    pub(super) fn bind_telemetry(
+    pub fn bind_telemetry(
         self,
         intent: &crate::telemetry_binding::Intent,
     ) -> Result<TelemetryBindingAuthority> {
@@ -340,11 +340,11 @@ impl OperatorApproval {
 mod installation;
 pub(super) use installation::{InstallationAuthority, InstallationReconciliationAuthority};
 mod telemetry_export;
-pub(super) use telemetry_export::TelemetryExportAuthority;
+pub use telemetry_export::TelemetryExportAuthority;
 mod telemetry_resolution;
-pub(super) use telemetry_resolution::TelemetryResolutionAuthority;
-pub(in crate::server) mod telemetry_recovery;
-pub(super) use telemetry_recovery::TelemetryRecoveryAuthority;
+pub use telemetry_resolution::TelemetryResolutionAuthority;
+pub mod telemetry_recovery;
+pub use telemetry_recovery::TelemetryRecoveryAuthority;
 
 pub(super) struct UninstallAuthority {
     approval: OperatorApproval,
@@ -385,7 +385,7 @@ impl UninstallAuthority {
 
 // Reader release: the authority is exercised in hermetic tests, not exposed by
 // a production mutation endpoint. Intentionally no Clone/serde/Debug.
-pub(super) struct TelemetryBindingAuthority {
+pub struct TelemetryBindingAuthority {
     approval: OperatorApproval,
     request_digest: crate::machine_protocol::telemetry_binding::BindingDigest,
     budget: OperationBudget,

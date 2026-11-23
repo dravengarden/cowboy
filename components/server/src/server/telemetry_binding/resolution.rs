@@ -12,9 +12,9 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-pub(in crate::server) mod surface;
+pub mod surface;
 
-trait Journal: Sync {
+pub trait Journal: Sync {
     fn read(
         &self,
         service: &str,
@@ -42,7 +42,7 @@ impl Journal for Store {
     }
 }
 
-trait Observation: Sync {
+pub trait Observation: Sync {
     fn current(&self) -> bool;
     fn observe(
         &self,
@@ -124,8 +124,8 @@ fn recorded(ledger: &Ledger, intent: &ResolutionIntent) -> Result<Option<Operati
     Ok(None)
 }
 
-#[cfg(test)]
-async fn coordinate(
+#[cfg(any(test, feature = "test-support"))]
+pub async fn coordinate(
     store: &impl Journal,
     intent: &ResolutionIntent,
     authority: TelemetryResolutionAuthority,
@@ -203,8 +203,8 @@ async fn coordinate_current(
 #[cfg(test)]
 mod tests;
 
-#[cfg(all(test, feature = "machine-host"))]
-pub(super) async fn resolve_fixture(
+#[cfg(all(any(test, feature = "test-support"), feature = "machine-host"))]
+pub async fn resolve_fixture(
     store: &Store,
     intent: &ResolutionIntent,
     auth: ProductRequestAuth<'_>,
@@ -213,10 +213,10 @@ pub(super) async fn resolve_fixture(
     let observer = control
         .map(|control| LiveObservation::capture(control, &intent.machine_id))
         .transpose()?;
-    coordinate(
+    self::coordinate(
         store,
         intent,
-        tests::authority(auth, intent),
+        crate::server::telemetry_binding::test_fixtures::resolution_authority(auth, intent),
         auth,
         observer.as_ref(),
     )

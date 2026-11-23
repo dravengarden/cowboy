@@ -15,7 +15,7 @@ use futures::future::BoxFuture;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub(super) trait Authority: Sync {
+pub trait Authority: Sync {
     fn remaining(&self) -> Duration;
     fn revoke(&self);
     fn reject_binding(&self);
@@ -45,7 +45,7 @@ impl Authority for BackgroundPermit {
     }
 }
 
-pub(super) struct ExportScope<A = TelemetryExportAuthority> {
+pub struct ExportScope<A = TelemetryExportAuthority> {
     resolved: ResolvedExport,
     authority: A,
     control: Arc<MachineControl>,
@@ -54,7 +54,7 @@ pub(super) struct ExportScope<A = TelemetryExportAuthority> {
 }
 
 impl ExportScope<TelemetryExportAuthority> {
-    pub(super) fn capture(
+    pub fn capture(
         attempt: ExportAttempt,
         approval: OperatorApproval,
         control: Arc<MachineControl>,
@@ -65,7 +65,7 @@ impl ExportScope<TelemetryExportAuthority> {
         Self::bind(attempt, authority, control, catalog, fences)
     }
 
-    pub(super) async fn execute(
+    pub async fn execute(
         self,
         store: &Store,
         auth: ProductRequestAuth<'_>,
@@ -78,7 +78,7 @@ impl ExportScope<TelemetryExportAuthority> {
 }
 
 impl ExportScope<BackgroundPermit> {
-    pub(super) fn background(
+    pub fn background(
         attempt: ExportAttempt,
         permit: BackgroundPermit,
         control: Arc<MachineControl>,
@@ -89,7 +89,7 @@ impl ExportScope<BackgroundPermit> {
         Self::bind(attempt, permit, control, catalog, fences)
     }
 
-    pub(super) async fn execute_background(self, store: &Store) -> Result<ExportReceipt> {
+    pub async fn execute_background(self, store: &Store) -> Result<ExportReceipt> {
         self.execute_with(store, || {
             Box::pin(async { self.authority.check(self.resolved.attempt()) })
         })

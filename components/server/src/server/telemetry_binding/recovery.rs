@@ -12,7 +12,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-pub(in crate::server) mod surface;
+pub mod surface;
 
 trait Effects: Sync {
     fn current(&self) -> bool;
@@ -216,8 +216,8 @@ async fn coordinate(
     Ok(observed)
 }
 
-#[cfg(test)]
-pub(in crate::server) fn request_fixture(
+#[cfg(any(test, feature = "test-support"))]
+pub fn request_fixture(
     before: &Operation,
     actor: &crate::plugin_operation::Actor,
 ) -> RecoveryRequest {
@@ -237,8 +237,8 @@ pub(in crate::server) fn request_fixture(
     }
 }
 
-#[cfg(all(test, feature = "machine-host"))]
-pub(super) async fn recover_fixture(
+#[cfg(all(any(test, feature = "test-support"), feature = "machine-host"))]
+pub async fn recover_fixture(
     store: &Store,
     request: &RecoveryRequest,
     auth: ProductRequestAuth<'_>,

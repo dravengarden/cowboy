@@ -1,0 +1,68 @@
+[package]
+name = "cowboy-integration-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Cross-boundary Controller + Machine integration and conformance tests"
+license = "MIT"
+rust-version = "1.98.1"
+
+[lib]
+name = "cowboy_integration_tests"
+path = "src/lib.rs"
+
+[features]
+default = ["full"]
+full = []
+machine-host = ["cowboy/machine-host", "cowboy-server/machine-host", "cowboy-machine/machine-host"]
+
+[dev-dependencies]
+cowboy = { version = "0.1.0", path = "../..", features = ["full", "machine-host", "test-support"] }
+cowboy-machine = { version = "0.1.0", path = "../machine", features = ["full", "machine-host", "test-support"] }
+cowboy-plugin-sdk = { version = "=1.20.0", path = "../plugin-sdk" }
+cowboy-provider-sdk = { version = "=3.7.0", path = "../provider-sdk" }
+cowboy-server = { version = "0.1.0", path = "../server", features = ["full", "machine-host", "test-support"] }
+cowboy-wire = { version = "0.1.0", path = "../wire", features = ["test-fixtures"] }
+anyhow = "1"
+axum = { version = "0.8", features = ["ws"] }
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+futures = "0.3"
+libc = "0.2"
+opentelemetry-proto = { version = "=0.32.0", default-features = false, features = ["gen-tonic-messages", "with-serde", "trace", "metrics", "logs"] }
+p256 = { version = "0.13", features = ["ecdsa", "pem", "pkcs8"] }
+parking_lot = "0.12"
+prost = "0.14"
+rand = "0.8"
+reqwest = { version = "0.13", default-features = false, features = ["form", "json", "query", "rustls-no-provider", "stream"] }
+rusqlite = { version = "0.32.1", features = ["bundled", "hooks"] }
+rustix = { version = "1", features = ["process", "fs"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring"] }
+sqlx = { version = "0.8", default-features = false, features = [
+  "runtime-tokio",
+  "postgres",
+  "sqlite",
+  "macros",
+  "chrono",
+  "json",
+  "migrate",
+  "tls-rustls",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"
+tokio = { version = "1", features = ["full", "test-util"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
+url = "2"
+
+[lints.rust]
+warnings = "deny"
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "allow", priority = -1 }
+
+[package.metadata.cargo-machete]
+ignored = ["cowboy-wire"]

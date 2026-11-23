@@ -3,7 +3,7 @@
 use super::*;
 use crate::machine_protocol::telemetry_export::{ATTEMPT_BUDGET, ExportAttempt};
 
-pub(in crate::server) struct TelemetryExportAuthority {
+pub struct TelemetryExportAuthority {
     approval: OperatorApproval,
     digest: crate::machine_protocol::telemetry_binding::BindingDigest,
     budget: OperationBudget,

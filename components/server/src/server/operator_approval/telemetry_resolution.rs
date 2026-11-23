@@ -7,7 +7,7 @@ use crate::telemetry_binding::{
     resolution::{ResolutionIntent, ResolutionPermit},
 };
 
-pub(in crate::server) struct TelemetryResolutionAuthority {
+pub struct TelemetryResolutionAuthority {
     approval: OperatorApproval,
     digest: BindingDigest,
     budget: OperationBudget,

@@ -45,7 +45,7 @@ impl From<&Progress> for Phase {
 }
 
 #[derive(serde::Serialize)]
-pub(in crate::server::telemetry_binding) struct OperationView {
+pub struct OperationView {
     operation_id: String,
     machine_id: String,
     operation_digest: BindingDigest,
@@ -56,7 +56,7 @@ pub(in crate::server::telemetry_binding) struct OperationView {
 }
 
 impl OperationView {
-    pub(in crate::server::telemetry_binding) fn new(operation: &Operation) -> Result<Self> {
+    pub fn new(operation: &Operation) -> Result<Self> {
         Ok(Self {
             operation_id: operation.intent.operation_id.clone(),
             machine_id: operation.intent.machine_id.clone(),

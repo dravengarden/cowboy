@@ -16,7 +16,7 @@ pub(in crate::server) fn recovery_actor(actor: &Actor) -> RecoveryActor {
     }
 }
 
-pub(in crate::server) struct TelemetryRecoveryAuthority {
+pub struct TelemetryRecoveryAuthority {
     approval: OperatorApproval,
     before: Operation,
     digest: BindingDigest,

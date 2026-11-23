@@ -822,6 +822,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "cowboy-integration-tests"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "cowboy",
+ "cowboy-machine",
+ "cowboy-plugin-sdk",
+ "cowboy-provider-sdk",
+ "cowboy-server",
+ "cowboy-wire",
+ "futures",
+ "libc",
+ "opentelemetry-proto",
+ "p256",
+ "parking_lot",
+ "prost",
+ "rand 0.8.8",
+ "reqwest",
+ "rusqlite",
+ "rustix",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "url",
+]
+
+[[package]]
 name = "cowboy-machine"
 version = "0.1.0"
 dependencies = [
@@ -903,25 +938,20 @@ dependencies = [
  "clap",
  "cowboy",
  "cowboy-codeact-runtime",
- "cowboy-machine",
  "cowboy-plugin-sdk",
  "cowboy-provider-sdk",
  "cowboy-wire",
  "ed25519-dalek",
  "fs2",
  "futures",
- "libc",
  "mime_guess",
- "opentelemetry-proto",
  "p256",
  "parking_lot",
  "percent-encoding",
- "prost",
  "rand 0.8.8",
  "regex",
  "reqwest",
  "rusqlite",
- "rustix",
  "rustls",
  "semver",
  "serde",

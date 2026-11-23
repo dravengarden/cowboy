@@ -16,16 +16,16 @@ use axum::{
 };
 use std::{collections::HashMap, time::Duration};
 
-pub(in crate::server::telemetry_binding) mod view;
+pub mod view;
 use view::{Action, PlanView, ReceiptView, StatusView};
 
-struct Preview {
+pub struct Preview {
     intent: ResolutionIntent,
     budget: OperationBudget,
 }
 
 #[derive(Default)]
-pub(in crate::server) struct Plans(parking_lot::Mutex<HashMap<String, Preview>>);
+pub struct Plans(pub parking_lot::Mutex<HashMap<String, Preview>>);
 
 impl Plans {
     fn insert(&self, preview: Preview) -> Result<()> {
@@ -117,7 +117,7 @@ struct Confirmation {
     action: Action,
 }
 
-pub(in crate::server) fn routes<S>() -> Router<S>
+pub fn routes<S>() -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
     ApiState: FromRef<S>,

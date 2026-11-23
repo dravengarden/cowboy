@@ -3,8 +3,6 @@
 
 use super::*;
 use crate::composition::telemetry::ResolvedBinding;
-#[cfg(all(test, feature = "machine-host"))]
-use crate::machine_control::ConnectionToken;
 use crate::machine_control::MachineControl;
 use crate::plugin_catalog::PluginCatalog;
 use crate::telemetry_plugin::writer_admission::{BindingWrites, WriteScope};
@@ -13,7 +11,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-pub(super) struct LiveEffects {
+pub struct LiveEffects {
     control: Arc<MachineControl>,
     catalog: Arc<PluginCatalog>,
     fences: crate::server::PluginLifecycleFences,
@@ -23,7 +21,7 @@ pub(super) struct LiveEffects {
 }
 
 impl LiveEffects {
-    pub(super) fn admit(mut self, scope: Option<WriteScope<BindingWrites>>) -> Self {
+    pub fn admit(mut self, scope: Option<WriteScope<BindingWrites>>) -> Self {
         self.admission = scope;
         self
     }
@@ -35,7 +33,7 @@ impl LiveEffects {
         })
     }
 
-    pub(super) fn bind(
+    pub fn bind(
         control: Arc<MachineControl>,
         catalog: Arc<PluginCatalog>,
         fences: crate::server::PluginLifecycleFences,
@@ -57,7 +55,7 @@ impl LiveEffects {
         Ok(effects)
     }
 
-    pub(super) fn current(&self) -> bool {
+    pub fn current(&self) -> bool {
         let valid = !self.ended.load(Ordering::Acquire)
             && self.resolved.current(&self.catalog, &self.control)
             && self.resolved.installation().is_none_or(|target| {
@@ -118,6 +116,3 @@ impl Effects for LiveEffects {
             .map_err(|_| anyhow::anyhow!("binding observation unavailable"))
     }
 }
-
-#[cfg(all(test, feature = "machine-host"))]
-pub(super) mod tests;

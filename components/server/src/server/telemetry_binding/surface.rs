@@ -39,7 +39,7 @@ enum Inspect {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum Action {
+pub enum Action {
     Select,
     Revoke,
     Restore,
@@ -55,18 +55,18 @@ impl From<&BindingChange> for Action {
     }
 }
 
-struct Preview {
-    intent: Intent,
-    before: BindingDigest,
-    budget: OperationBudget,
-    effects: LiveEffects,
+pub struct Preview {
+    pub intent: Intent,
+    pub before: BindingDigest,
+    pub budget: OperationBudget,
+    pub effects: LiveEffects,
 }
 
 #[derive(Default)]
-pub(in crate::server) struct Plans(parking_lot::Mutex<HashMap<String, Preview>>);
+pub struct Plans(pub parking_lot::Mutex<HashMap<String, Preview>>);
 
 impl Plans {
-    fn insert(&self, preview: Preview) -> Result<()> {
+    pub fn insert(&self, preview: Preview) -> Result<()> {
         let mut plans = self.0.lock();
         plans.retain(|_, p| !p.budget.expired());
         ensure!(plans.len() < 256, "binding preview capacity exhausted");
@@ -78,7 +78,7 @@ impl Plans {
         Ok(())
     }
 
-    fn consume(&self, actor: &Actor, service: &str, request: &Confirm) -> Result<Preview> {
+    pub fn consume(&self, actor: &Actor, service: &str, request: &Confirm) -> Result<Preview> {
         let mut plans = self.0.lock();
         let p = plans
             .get(&request.plan_id)
@@ -98,9 +98,9 @@ impl Plans {
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Confirm {
-    plan_id: String,
-    action: Action,
+pub struct Confirm {
+    pub plan_id: String,
+    pub action: Action,
 }
 
 #[derive(serde::Serialize)]
@@ -163,7 +163,7 @@ impl ReceiptView {
     }
 }
 
-fn fingerprint(ledger: &Option<Ledger>) -> Result<BindingDigest> {
+pub fn fingerprint(ledger: &Option<Ledger>) -> Result<BindingDigest> {
     Ok(binding_digest(&serde_json::to_vec(ledger)?))
 }
 
@@ -250,7 +250,7 @@ impl ApiState {
         Ok(intent)
     }
 
-    fn binding_effects(&self, intent: &Intent) -> Result<LiveEffects> {
+    pub fn binding_effects(&self, intent: &Intent) -> Result<LiveEffects> {
         LiveEffects::bind(
             self.control.clone(),
             self.catalog.clone(),
@@ -296,7 +296,7 @@ impl ApiState {
     }
 }
 
-pub(in crate::server) fn routes<S>() -> Router<S>
+pub fn routes<S>() -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
     ApiState: FromRef<S>,
