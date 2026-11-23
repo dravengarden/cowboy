@@ -259,46 +259,47 @@ These residuals have one cause: the worker stops the unit while that unit
 still has relayed requests in flight. The facade cannot close every
 interleaving from its side, so they are left to L1c.
 
-### L1c: the worker drains a unit's relays before stopping it (proposed)
+### L1c: the worker drains a unit's relays before stopping it
 
-At teardown (generation cutover, hibernation, stop), the worker fences the
-unit's new mutations as today, then waits a bounded time (10 s, inside the
-existing 60 s `TEARDOWN_SETTLE`) until the endpoint has no relay in flight,
-and only then stops the account sandbox unit. Replies then reach the facade,
-nothing is undelivered, and the ledger records nothing. A unit that keeps
-issuing requests is stopped at the bound, and its cut-off requests park the
-session as today (fail closed). No durable state, wire or Controller change
-is involved. Worker code: `.#cowboy-machine-release` with a worker pin advance.
-It needs its own short design review.
+Status: design for a short review. The next worker pin advance ships it.
 
-Tests: a command whose process tree exits 7 s after SIGTERM is confirmed and
-forgotten at turn end with a single `process/terminate`; the turn's end joins
-a stop whose reply is held; a command whose start is pending when the turn
-ends is registered, stopped and forgotten.
+Where the race is. `acp.rs` ends a session through `process.shutdown()`. For
+an account-sandboxed unit, that calls `SandboxUnit::stop`, which asks the
+daemon to stop the unit at once. Relays the unit sent before then
+(`worker_execution::relay::Relays`) finish on their own tasks. If the unit's
+socket is gone when one finishes, its reply is recorded as undelivered, and a
+stop or a result-carrying read parks the session. Generation cutover,
+hibernation, an owner stop and every other teardown go through this path.
 
-### Worker-side settlement (L1w): not adopted
+Change:
 
-The design deferred publishing a lost stop behind a durable pending record in
-the worker ledger and settled it by observation. Design review (high,
-`call-830719b8`) found it unsound in ways that need changes well beyond this
-fix:
+- `account_sandbox` gains `RelayQuiet`: an in-flight count with a `Notify`.
+  It lives with `ExecutionBridge` because `worker_execution` already depends
+  on `account_sandbox`, so this adds no module edge. `Client` holds it
+  (`Endpoint::start_unix` passes it into the bridge).
+- A relay counts from `Relays::spawn` until its `Done` is dropped, which
+  happens after its reply frame was written to the unit's socket, or after
+  it was recorded as undelivered. A guard inside `Done` does the decrement.
+- `SandboxUnit::stop` first waits until the count reaches zero, bounded by
+  `UNIT_RELAY_DRAIN` (10 s). Only then does it stop the unit. The unit stays
+  up during the wait, so replies reach the facade.
+- At the bound, the unit is stopped as today. A reply cut off then is
+  recorded as undelivered and parks the session. That is fail closed and
+  unchanged. A unit that keeps sending requests (a reader loop) ends the wait
+  only at the bound.
+- The wait sits inside the existing 60 s `TEARDOWN_SETTLE`, before
+  `settle_all`. The ledger fences new mutations at teardown exactly as
+  before, and reads and stops still relay.
+- Not changed: local (non-sandboxed) agents, the ledger, the wire, the
+  Controller, and the facade.
 
-- `exited` precedes `closed`, and a process id alone cannot prove permanent
-  absence across a keeper replacement or a late start;
-- the worker's own cleanup paths (`cancel_turn`, `finish_turn`, `settle_all`)
-  send their own stops, so "one stop per process" needs a worker-wide stop
-  admission;
-- a crash between the keeper's admission and the loss classification leaves
-  no record, and the existing `mark_uncertain` publishes even when its write
-  failed, so a sequence can be reused after acknowledgement;
-- prompt admission can race a late publication, both after `TurnEnded` and at
-  a successor's handshake;
-- a helper's stop can hide an unknown publish outcome;
-- an older worker launched as a fallback drops unknown record fields.
+Tests (worker):
 
-Two of these are pre-existing ledger weaknesses, independent of L1w: publishing
-a sequence whose write failed, and the multiple worker stop paths. They are
-recorded under Open items and belong with L2.
+- a relay held at the target while teardown begins: the unit is stopped only
+  after the reply was delivered, and nothing is recorded uncertain;
+- a relay held past the bound: the unit is stopped at the bound, and the
+  reply is recorded undelivered;
+- no relay in flight: the stop is immediate.
 
 ## L3: shorter Controller outages (Machine host release)
 
@@ -337,6 +338,45 @@ Activator quiet moment: not adopted. The component activator is
 Columbus-owned. Waiting for "no in-flight execution" on a busy Controller would
 delay releases without bound. L1 removes the observed false positive, and
 serializing concurrent activations is the coordinator's existing policy.
+
+## L2a: worker ledger hardening (worker release)
+
+Three pre-existing worker bugs the reviews found. They are independent of L2's
+receipts and ship first. All are in `src/worker_execution{,/ledger}.rs`.
+
+- F7, a refusal after a resend. The worker counts how often a pending request
+  was sent (`Pending::sends`). A response to a request sent more than once
+  answers a resend, and the keeper may have admitted an earlier send whose
+  reply was lost. So `invoke_classified` treats a later refusal as possible
+  admission (`Err(true)`), and a mutation becomes uncertain instead of "not
+  sent". A refusal of the only send keeps meaning "not admitted". Retries
+  after `Unavailable`/`Capacity` count as sends too, because the Controller
+  can report `Unavailable` after the Machine has received the request.
+- Sequence durability. `mark_uncertain` used to publish its sequence even
+  when the ledger write failed, so a successor reloading the older record
+  could reuse a sequence the Controller had already acknowledged. Sequences
+  are now `max(previous + 1, now in Unix ms)`. The Controller only compares
+  them (`observed`, `acknowledged`, `merge_uncertain_effect`), so no reader
+  changes, and a lost write can never cause reuse. A failed write still
+  publishes (fail closed) and marks the ledger unwritable, after which no
+  further mutation is admitted for the worker's lifetime.
+- One stop per process. The ledger records each process a stop was sent to,
+  or may have been, whether by the unit's relayed `process/terminate` or by
+  the worker's own `cancel_turn`, `finish_turn` or `settle_all`. Later stop
+  paths only observe, and a repeated stop from the unit is answered without
+  being forwarded. A stop that certainly never ran (refused before sending,
+  or answered with an error) releases the claim. If a stop may have been
+  sent but never reached the executor, the process is left to the keeper's
+  unattended reap, the existing backstop.
+
+Tests: a resend followed by `WorkspaceChanged` is uncertain, while a refusal
+of the only send is not. The unit's stop and the worker's cancellation send
+one `process/terminate`. An unwritable ledger publishes and then refuses
+further effects. The sequence assertions are now time-based.
+
+Release: worker code, so `.#cowboy-machine-release` with a worker pin
+advance. Sequences grow from small counters to Unix-ms values. An older
+worker reading a newer record continues with `+1`, which stays monotonic.
 
 ## L2: trusted receipts in the worker (design only; Machine release)
 
@@ -438,13 +478,7 @@ post-reconnect check and Check-and-resume follow L2 as designed below.
   with staggered attempts across the resolved addresses (Happy Eyeballs), so
   a blackholed first address cannot starve a reachable fallback. Today a dial
   outside the window is unbounded, as it always was.
-- F7 worker fix (with L2).
-- Worker ledger: `mark_uncertain` publishes a sequence even when the ledger
-  write failed, so a successor can reuse an acknowledged sequence. Publish
-  only after the write commits, and hold dispatch on failure (with L2).
-- Worker stop paths (`cancel_turn`, `finish_turn`, `settle_all`) each send
-  their own `process/terminate`: give the worker one stop admission per
-  process (with L2).
+- L1c ships with the next worker pin advance (not the current L0 one).
 
 ## Release artifacts
 
