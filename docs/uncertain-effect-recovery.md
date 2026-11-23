@@ -1,8 +1,8 @@
 # Uncertain effect recovery across Controller restarts
 
-Status: design (2026-11-23, revised after design review round 1). L3a and L1
-are implemented first, then L4 without `target`. L2 and L3b are designed here
-and implemented later.
+Status: design (2026-11-23, revised after design review rounds 1 and 2). L1
+and L3 are implemented first. L2 and L4 are designed here and implemented
+later.
 
 ## Problem
 
@@ -142,13 +142,32 @@ output the facade has not read. Those are lost.
 
 The helper is never signalled on the E1 path: E1 means it had already ended. A
 helper that is still running at its deadline is terminated exactly as today,
-and its publish stays uncertain, as today.
+and its publish stays uncertain, as today. E1 settles an outcome only when the
+ordinary poll meets it, before any cleanup started. During cleanup (after a
+timeout, truncation, loss or failure), E1 only confirms that the process is
+closed and never replaces the earlier timeout, loss or failure.
+
+A forgotten process's output may be incomplete. `runBounded` returns
+`forgotten: true`. `SearchFiles` answers a retryable read error instead of a
+possibly partial result. The readiness probe counts as failed, so the
+projection never claims a clean tree from missing output. `RunCommand` states
+that the remaining output is unavailable.
+
+When `RunCommand` reaches its deadline it terminates the command directly. A
+lost reply there is now classified like `StopCommand` (`UncertainEffect`), a
+pre-existing gap the review found.
+
+Whenever a publish ends uncertain (lost start, timed out, digest mismatch),
+the facade drops that file's `observed` digest in every session it serves, the
+parent and its subagents alike. The next `EditFile` of that path then needs a
+fresh `ReadFile`.
 
 The `applied` decision rests on the digest check `publish` already makes after
-a helper error. It shows only the file's current bytes. If another writer put
-identical bytes there, the agent's intended state still holds, which is all the
-tool result claims. No new evidence class is introduced. A digest equal to the
-base is never read as "not applied".
+a helper error. It shows only the file's current bytes, so the tool says
+exactly that: `Edited <file>: the requested content is verified on the target;
+the helper's own report was lost`. No replacement count is claimed, and no
+new evidence class is introduced. A digest equal to the base is never read as
+"not applied".
 
 ### Tests (fake endpoint)
 
@@ -169,42 +188,35 @@ Tests:
 - a relay drop (socket terminated) at each step still fences and reports, as
   today.
 
-## L3: shorter Controller outages (Controller release, then a Machine release)
+## L3: shorter Controller outages (Machine host release)
 
 L3 does not make anything correct that is not already correct. It shrinks the
 window in which F1/F2 can happen, for every Provider including Claude.
 
-L3a, Controller drain (Controller-only), all against one monotonic deadline
-taken at SIGTERM:
-
-1. Admission closes at once. `spawn_execution_request` is the single choke
-   point for the primary connection and the bulk lanes, and it refuses new
-   relays with `Unavailable`. The worker keeps them pending under the same
-   identity and re-sends them after reconnect.
-2. In-flight forwards may finish and queue their replies until SIGTERM + 3 s.
-   This runs concurrently with axum's existing graceful HTTP drain, not after
-   it. Long polls (`Events`, and `Invoke`/`Observe` waiting up to 20 s) are cut
-   at the bound: their repeat after reconnect is answered from the keeper's
-   journal.
-3. Each Machine connection then waits, within the same deadline, for its
-   writer queue to be empty, and sends Close 1012 ("service restart"). This is
-   best effort. A reply cut off here is re-sent and answered from the keeper's
-   journal. Delivery to the worker is never assumed.
-4. The existing persistence shutdown (telemetry, store writer, dispatcher)
-   keeps its budget unchanged and starts no later than SIGTERM + 3 s, inside
-   `TimeoutStopSec=30s`.
-
-L3b, Machine reconnect cadence (resident Machine code, separate Machine host
-release). A Machine whose Controller closed with 1012 retries at 1 s intervals,
+Of the observed 37 s outage, about 18 s was the Machine's own backoff
+(1, 2, 4, 8, 16 s). A Machine whose connection had been sustained (the
+existing reset condition, at least the 30 s cap) now retries at 1 s intervals,
 each dial and handshake bounded to 5 s, inside a non-extending 60 s
-rapid-retry window. After that it falls back to the exponential backoff. A
-reset that erased the close frame, an older Machine or an older Controller
-behaves as today, with no protocol version needed. The target, with both
-Machines upgraded and receiving 1012, is an outage close to the Controller's
-own ~19 s start, under the executor's 30 s retention. It is measured through
-the first successful relayed request after restart.
+rapid-retry window from the disconnect. After the window, or after any
+authentication refusal, it falls back to the existing exponential backoff. The
+rule is local to `machine_cli/reconnect.rs`. It needs no Controller change, no
+close code and no protocol version, and it covers both relay legs (Hawk and
+OVH Machines). The target is an outage close to the Controller's own ~19 s
+start, under the executor's 30 s retention. It is measured through the first
+successful relayed request after a restart. At most three Machines reconnect,
+so a 1 s cadence against a starting Controller is negligible load. A refused
+dial fails within milliseconds.
 
-L3c, activator quiet moment: not adopted. The component activator is
+Dropped after design review round 2: a Controller-side drain (refuse new
+relays, wait for in-flight forwards, close with 1012). It cut replies earlier
+than today's process exit, which widens F7 until F7 is fixed. It competed with
+the persistence shutdown for the 30 s stop budget. And it could not order a
+Close behind queued replies in the transport writer. Its only benefit, replies
+the Controller already had, is already recovered from the keeper's journal on
+resend. Reconsider it after F7 is fixed, as one shutdown schedule that reserves
+the store writer's time.
+
+Activator quiet moment: not adopted. The component activator is
 Columbus-owned. Waiting for "no in-flight execution" on a busy Controller would
 delay releases without bound. L1 removes the observed false positive, and
 serializing concurrent activations is the coordinator's existing policy.
@@ -246,12 +258,25 @@ findings are folded in. L2 is implemented later, after its own design review.
   auto-settlement for that session until the owner acknowledges. The ledger file
   keeps schema 1, and resolved marks live in a sibling file that an older
   worker ignores. Rollback to an older worker loses only auto-settlement.
+- Round 2 review constraints, required before implementation: a may-have-run
+  record is persisted before forwarding, and a failed write blocks the request
+  instead of only disabling auto-settlement. Settlement needs evidence for the
+  enclosing tool effect: a publish needs its report or file verification, not
+  only the helper's start and exit. A stop is settled only when no start can
+  still land. Admission tombstones outlive receipts, so an evicted receipt
+  answers `history_unavailable`, never "never seen". Effect ids are
+  single-assignment.
 - Rollout and floors. New snapshot fields (`settled_through`, L4's `target`
   and `checked`) are optional, but every hop decodes snapshots strictly. The
   Controller reader ships first, then the Machine broker, then workers emit them
   only when the broker's negotiated protocol is at least a new
   `UNCERTAIN_SETTLEMENT_PROTOCOL_VERSION` (as `retire_observation` does). The
-  F7 fix ships with the same worker.
+  OVH Machine broker re-encodes snapshots for the Controller, so it also
+  projects them down to the Controller's negotiated version (Welcome, snapshots
+  and replayed updates). A frame without settlement fields keeps the legacy
+  park. The F7 fix ships with the same worker. Retained host builds require
+  byte-identical shared wire sources, so the codec change is staged with an
+  accepted compatible worker pin.
 
 ## L4: recovery UX for what stays unknown (Controller + Web, later Plugin)
 
@@ -262,24 +287,28 @@ findings are folded in. L2 is implemented later, after its own design review.
   (`file:<workspace-relative path>` or `process:<id>`, at most 256 bytes,
   never content). Until a worker supplies `target` (L2 rollout order), the
   banner shows the method alone, as today.
-- "Check and resume" is one Controller transaction. It verifies the shown
+- "Check and resume" (implemented after L2, not before) is one Controller
+  transaction, serialized through the Hub queue writer. A prompt already in
+  dispatcher preflight is fenced too, and the next dispatch is reserved for the
+  inspection note across retries and restarts. It verifies the shown
   sequence is still the newest unacknowledged one, inserts a resume note at
   the front of the session's queue, and records the acknowledgement, all
   committed together. If any part fails, nothing changes and the session stays
   parked. The note names the operation and target and asks the agent to inspect
   the target (read the file, check the process or command result) before any
-  further change. For files the facade enforces this (L1 drops the `observed`
-  digest). For commands and extensions it is guidance only, which the owner
-  sees before choosing the action.
+  further change. The facade enforces it only where L1 drops the `observed`
+  digest (uncertain publishes). For commands and extensions it is guidance only, which the owner
+  sees before choosing the action. When several effects are unresolved, the
+  note lists every effect the acknowledgement covers. Until per-effect records
+  exist (L2), the action is offered only for a single unresolved effect.
 - Auto-clear: an outcome proven by L1 never parks. One proven later by the
   worker clears through L2 without owner action.
 
 ## Release artifacts
 
-| Slice | Artifacts                                                                                                                                       |
-| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| L3a   | Controller (`.#cowboy-controller-release`)                                                                                                      |
-| L1    | Antigravity Plugin (facade only)                                                                                                                |
-| L3b   | Machine host release (`.#cowboy-machine-host-release`; the reconnect loop is resident Machine code)                                             |
-| L4    | Controller + Web (banner, transaction); `target` arrives with L2                                                                                |
-| L2    | Controller reader, then Machine broker, then `.#cowboy-machine-release` with a worker pin advance (includes the F7 fix), then the Antigravity Plugin |
+| Slice | Artifacts                                                                                                                                                                                                                   |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| L1    | Antigravity Plugin (facade only)                                                                                                                                                                                            |
+| L3    | Machine host release: Hawk uses the writer-preserving `.#cowboy-machine-writer-host-release` (active deletion writer); OVH uses `.#cowboy-machine-host-release`. Both retain the accepted worker pin |
+| L4    | Banner wording now needs nothing. `target`, settlement and Check-and-resume follow L2                                                                                                                                       |
+| L2    | Controller reader, then the Machine broker codec staged with an accepted compatible worker pin, then `.#cowboy-machine-release` with a worker pin advance (includes the F7 fix), then the Antigravity Plugin |
