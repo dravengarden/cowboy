@@ -702,6 +702,25 @@ export async function runSessionContextBrowserConformance(
           ?.includes("uncommitted changes stay here") === true,
         `${mode}: the form says what happens to files`,
       );
+      {
+        // Outlined labels float half a line above their field: without real
+        // gaps the first label sits on the toggle and fields overlap.
+        const toggle = button("Replace or fork").getBoundingClientRect();
+        const installation = [
+          ...container.querySelectorAll("[data-new-session-editor] label"),
+        ]
+          .find((label) => label.textContent === "AI installation")!
+          .closest(".MuiFormControl-root")!
+          .getBoundingClientRect();
+        const subscription = container.querySelector(
+          "[data-new-session-editor] [data-session-subscription]",
+        )!.getBoundingClientRect();
+        check(
+          installation.top - toggle.bottom >= 8 &&
+            (desktop || subscription.top - installation.bottom >= 8),
+          `${mode}: the target fields keep their spacing below the toggle and each other`,
+        );
+      }
       if (desktop) {
         // Desktop shows every option at once, valued as the new agent starts.
         const model = () =>

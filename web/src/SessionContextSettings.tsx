@@ -112,7 +112,10 @@ export function SessionContextSettings({
       {provenance && <SessionProvenance sessionId={session.id} />}
       {/* A handed-off session's work moved on: a further switch or new links
           from here would split it, but a fork with chosen options stays. */}
-      <Stack spacing={1.5}>
+      {/* Flex gap, not Stack margins: the workbench wrapper and the form's
+          target group are `display: contents` off the Desktop workbench, and
+          margins on a box-less wrapper vanish, collapsing the fields together. */}
+      <Stack spacing={1.5} useFlexGap>
         {error && (
           <Alert severity="error" action={<Button onClick={() => void reload()}>Retry</Button>}>
             {error}
@@ -461,6 +464,7 @@ function NewSessionForm({
   return (
     <Stack
       spacing={1.5}
+      useFlexGap
       data-new-session-editor
       // React events bubble from the pickers' menu portals too.
       onClickCapture={() => setTouched(true)}
