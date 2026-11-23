@@ -716,8 +716,7 @@ where
                         ids.insert(id.to_string());
                         let method = message["method"].as_str().context("execution method missing")?.to_owned();
                         let params = native_params(&message);
-                        // A unit being stopped sends only the cleanup of what
-                        // it started (design L1c).
+                        // A unit being stopped sends only cleanup (L1c).
                         let Some(in_flight) = client.relays.try_enter(&method) else {
                             ids.remove(&id.to_string());
                             writer.send(refusal(&id, "The session is ending; this request was not admitted")).await?;
@@ -734,9 +733,7 @@ where
                     relays.undelivered(&done);
                     return Err(error.into());
                 }
-                if done.carries_result() {
-                    client.relays.written(done.method());
-                }
+                relays.delivered(&done);
             }
             result = &mut events => {
                 match result? {

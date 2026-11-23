@@ -26,16 +26,6 @@ pub(super) struct Done {
 }
 
 impl Done {
-    /// Whether the agent side acts on this reply's result.
-    pub fn carries_result(&self) -> bool {
-        self.carries_result
-    }
-
-    /// The request's method.
-    pub fn method(&self) -> &str {
-        &self.method
-    }
-
     /// The reply frame for the agent side.
     pub fn frame(&self) -> Result<String> {
         let mut reply = self.reply.clone();
@@ -108,6 +98,14 @@ impl Relays {
                 done
             }
             None => std::future::pending().await,
+        }
+    }
+
+    /// `done`'s reply was written to the agent side: one written while the
+    /// unit drains is proven read only by the unit's own exit (design L1c).
+    pub fn delivered(&self, done: &Done) {
+        if done.carries_result {
+            self.client.relays.written(&done.method);
         }
     }
 
