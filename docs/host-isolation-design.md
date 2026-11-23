@@ -1,548 +1,540 @@
-# Host isolation: a control identity and a task cgroup subtree
+# Host isolation: liveness split now, identity boundary next
 
-Status: **design, revision 1, not implemented.** Nothing here is activated on
+Status: **design, revision 2, not implemented.** Nothing here is activated on
 any host. Every step that touches networking, firewall rules, sudo policy or a
 deployment activation needs explicit owner confirmation before switching (see
 [Flags](#flags-needing-explicit-owner-confirmation)).
+
+Revision 1 proposed the whole boundary at once: a `cowboy` control UID, a root
+spawner, peer credentials on every socket, an agent-identity workspace bridge,
+and a migration of Machine and Controller state. Design review round 1,
+`call-2e66a341853f6559a49f6e30` (Codex Astra Max, risk high), ended
+`review_incomplete`, because the Columbus host files were outside the review
+root. It reported 3 critical and about 20 high findings. Almost all of them
+were in the identity migration, which is too large to converge in the remaining
+rounds. Revision 2 therefore narrows the scope:
+
+- **[Part L](#part-l-liveness-split-same-uid), the liveness split, is the
+  surviving implementable scope.**
+  - It moves the heartbeat sender out of the task cgroup subtree.
+  - It bounds the heartbeat behind bulk output.
+  - It keeps one UID and makes no security claim, so the round-1 identity
+    findings do not apply to it.
+- **[Part I](#part-i-identity-boundary-target-and-binding-requirements), the
+  identity boundary, is reduced to a target and binding requirements.**
+  - Every round-1 finding is recorded there, along with the owner decisions
+    it needs.
+  - Each sub-part needs its own design round before any implementation.
 
 ## Why
 
 On Hawk, all of the following run as `draven` (UID 1000):
 
 - the Controller (system `cowboy.service`, `User=draven`);
-- the Machine broker (user `cowboy-machine.service` in `user@1000`'s `app.slice`);
+- the Machine broker (user `cowboy-machine.service`, in `user@1000`'s
+  `app.slice`);
 - the ACP workers (`cowboy-worker-*`);
 - the execution keepers (`cowboy-execution-*`);
 - every agent tool process.
 
 The workers and keepers are transient units in one user slice,
-`cowboy.slice/cowboy-agents.slice`. That slice has a memory cap and no CPU
-weight. Three consequences follow:
+`cowboy.slice/cowboy-agents.slice`. That slice has `MemoryHigh=48G`,
+`MemoryMax=64G` and `MemorySwapMax=4G`, and no CPU weight.
 
-1. **Secrets.** A tool process can read every Controller and Machine secret:
-   - the Controller database (`/var/lib/cowboy/cowboy.sqlite3`);
-   - the provider vault and its signing key
-     (`/var/lib/cowboy/provider-auth-service/{vault.key,signer}`,
-     `components/store/src/provider_service.rs:191-221`);
-   - the Machine identity and provider replicas
-     (`~/.local/state/cowboy-machine/provider-auth/`, `materialized/`).
-2. **Forgery.** A tool process can forge any role on the local sockets. The
-   broker socket trusts the `role` in the hello (`PeerRole::Core` attaches as
-   the Controller lease, `machine_broker.rs:4131-4184`). The keeper, code,
-   Zed and usage-spool sockets rely only on directory modes. The managed-call
-   gateway checks `peer uid == euid` (`managed_calls/gateway.rs:143-160`),
-   which every tool process satisfies.
-3. **Starvation.** A tool process can starve the heartbeat path. Workers beat
-   every 10 s. The broker isolates after `WORKER_HEARTBEAT_TIMEOUT=45s`, swept
-   every 15 s (`machine_broker.rs:44-45`). Under load above 400 this produced
-   the observed 48-58 s isolations and sessions with uncertain effects.
+The provider adapter is a child process of its worker
+(`src/acp_process.rs:110-127`). Its tool processes sit in a leaf cgroup,
+`agent-<session>`, inside the worker's own unit (`src/cgroup.rs:37-62`). So:
 
-Same-UID equality also makes three things impossible:
+- **Liveness.** The worker's heartbeat is subject to the same `MemoryHigh`
+  reclaim throttling as the tools it hosts. That throttling
+  (`mem_cgroup_handle_over_high`) is the stall documented in Columbus
+  `critical-resources.md`. At equal CPU weight, the worker also competes with
+  every other session's tools.
+  - Workers beat every 10 s (`src/worker.rs:744,812`).
+  - The broker isolates a worker after `WORKER_HEARTBEAT_TIMEOUT=45s` and
+    sweeps every 15 s (`machine_broker.rs:44-45`).
+  - Together these produced the observed 48-58 s isolations under load above
+    400.
+- **Identity.** Any tool process can read every Controller and Machine
+  secret. It can also claim any broker role, because the broker trusts the
+  `role` sent in the hello (`machine_broker.rs:4131-4184`). And it passes the
+  managed-call gateway's `peer uid == euid` check
+  (`managed_calls/gateway.rs:143-160`). This blocks three things:
+  - an authenticated delivery origin (Antigravity round 3:
+    `docs/antigravity-parity-round-3.md` on `cowboy/sess-1795399435396`,
+    commit `4eed6b2d0`, owner decision 5; review
+    `call-1517db7ae578f9050a9232d4`);
+  - a guarded broker `Permission`/`SetConfigOption`;
+  - any user-MCP sandbox.
 
-- an authenticated delivery origin (blocking Antigravity round 3:
-  `docs/antigravity-parity-round-3.md` on `cowboy/sess-1795399435396`, commit
-  `4eed6b2d0`, "Owner decisions" item 5, review
-  `call-1517db7ae578f9050a9232d4`);
-- a guarded broker `Permission`/`SetConfigOption`;
-- any user-MCP sandbox.
+## Part L: liveness split (same UID)
 
-## Threat model
+### Goal and non-goals
 
-**Protected against.** A model-driven process running with the agent identity,
-including one that is prompt-injected. It may run arbitrary code as the agent
-UID, write anything the agent UID can write, and generate unlimited CPU,
-memory, I/O and process load inside the task subtree.
+**Goal.** Task load inside the task subtree, whether CPU, memory or I/O, never
+delays a worker heartbeat past the broker's timeout. Neither does adapter
+output, however large.
 
-**Assets:**
+**Non-goals.**
 
-- **A1, control secrets.** Controller DB and artifacts, provider vault and
-  signer, Machine identity key, provider replicas and materialized
-  generations, Cardea/OIDC client secrets, the operator grant.
-- **A2, control authority.** Claiming `Core` or `Worker` on the broker. Acting
-  as the Controller to a Machine, or as a Machine to the Controller. Starting
-  units through the spawner or the account sandbox.
-- **A3, origin.** The kernel-attested identity of a caller (control code, or
-  the agent of session S), on every control socket an agent can reach.
-- **A4, liveness.** The worker↔broker heartbeat, the Machine↔Controller link,
-  Controller HTTP, and the Stormbird data path keep their CPU, memory and I/O
-  under task load.
+- Part L makes no security claim. A tool can still stop a worker unit with
+  `systemctl --user stop`, or read secrets, as it can today.
+- Part L does not move the execution keeper. That split needs the
+  execution-lifetime work in [I-7](#i-7-lifetime-and-recovery).
 
-**Not protected (stated residuals):**
+### Cgroup layout (user manager of the Machine user)
 
-- **R1, granted deployment authority.** Agents are allowed to build and
-  activate machine generations and Cowboy components (owner deploy
-  preference). Activating a closure the agent built is root and control
-  authority by construction. The boundary makes that path explicit: it goes
-  through the machine transaction or a component activator, which records
-  receipts, pinned revisions and journal entries. It no longer happens through
-  ambient file or socket access. Closing R1 needs owner-gated activation
-  ([D3](#owner-decisions-needed)).
-- **R2, cross-session reads inside the agent UID.** All sessions' agent units
-  share the agent UID. One session's tools can read another session's
-  worktree and materialized provider home: `/proc/<pid>/root` needs only
-  `PTRACE_MODE_READ`, which Yama `ptrace_scope=1` does not restrict. Closing
-  R2 needs per-account or per-session UIDs, as `cga-<key>` already does on
-  OVH. That is the [follow-up F-UID](#follow-ups).
-- **R3, agent escape from the task budget, not from the identity.** A tool
-  can still use `systemd-run --user`, rootless Docker or `nohup` under
-  `user@1000`. That moves load out of `cowboy-tasks.slice` but not into the
-  control subtree: weights still favour control. It is treated as an
-  accounting gap, not a liveness break ([Cgroups](#cgroup-layout)).
-- **R4, the kernel and shared filesystems.** Kernel exploits, and filling a
-  filesystem that control state shares. Control state moves to `/var/lib`
-  (root fs), while task data stays on `fast0`/ZFS, so the fill case shrinks.
-  Kernel exploits stay out of scope.
-
-## Design summary
-
-| Element | Decision |
-|---|---|
-| Control identity | New static system user and group `cowboy` (no login shell, no sudo, no supplementary groups) on Hawk and OVH |
-| Agent identity | Hawk: `draven` (D1 default). OVH: `ubuntu`, unchanged |
-| Runs as `cowboy` | Controller, `cowboy-plugin-converge`, `cowboy-model-intel-audit`, Machine (broker, Controller link, usage spool, code/Zed adapters), ACP workers (`cowboy-acp-worker`), execution keepers (`cowboy-execution-host`), signed Plugin MCP servers |
-| Runs as agent | Provider adapters (codex-acp, claude-agent-acp, …) and all their tool children; `codex exec-server` and its commands; Machine browser; the new agent-side helper; future user-MCP sandboxes run under a further UID |
-| Unit creation across identities | One root spawner, `cowboy-spawner`: a generalization of OVH's `cowboy-account-sandbox`. Socket-activated, authorizes by `SO_PEERCRED`/`SO_PEERPIDFD`, closed profile set |
-| Peer authentication | Every Unix control socket checks the kernel peer: uid always, and the cgroup through a pidfd when the role is session-bound |
-| Filesystem rule | Control identity never opens paths in agent-writable trees. It talks to an agent-identity helper over a pipe ([R-CD](#r-cd-no-confused-deputy)) |
-| Cgroups | System-manager slices: `cowboy-control.slice` (protected) and `cowboy-tasks.slice` (budgeted), both directly under `-.slice` |
-
-The process split is the smallest one that meets goal (1): the heartbeat sender
-(the worker) must not share a UID with the tools. Today the provider adapter is
-the worker's child (`src/acp_process.rs:110-127`), and its tools sit in a leaf
-cgroup of the worker unit (`src/cgroup.rs:37-62`). The split moves the adapter
-into its own agent unit. The worker keeps the adapter's stdio, which ACP
-already speaks, so the wire is unchanged.
-
-## Identities
-
-### `cowboy` (control)
-
-- A static system UID/GID allocated in the NixOS module (Hawk) and by the
-  maintenance script (OVH). It does not use `DynamicUser`, because its state
-  is durable and its UID appears in peer checks and ACL-free modes.
-- It has no supplementary groups. The agent UID is never in group `cowboy`.
-- It owns:
-  - `/var/lib/cowboy` (Controller, 0750 → 0700);
-  - `/var/lib/cowboy-machine/<service-id>` (Machine state, moved from
-    `~/.local/state/cowboy-machine`);
-  - `/run/cowboy-machine` (0700; broker `m`, usage spool `u`, code `c`, Zed
-    `z`, keeper sockets, replacing `/tmp/cowboy-execution-1000` and
-    `%t/cowboy`).
-- Units use `ProtectHome=yes`, `ProtectSystem=strict` with explicit
-  `ReadWritePaths`, `NoNewPrivileges=yes`, `PrivateTmp=yes`. The Hawk module's
-  stated reason for running as `draven` ("workspace access",
-  `services/cowboy/default.nix` header) disappears under R-CD: control code no
-  longer needs workspace access.
-
-### Agent identity
-
-- **Hawk.** D1 default is `draven`: worktrees, SSH keys, `gh`, Git identity,
-  rootless Docker and the Nix profile all keep working unchanged.
-  - The alternative D1b is a new `cowboy-agent` UID. It would also separate
-    the human's own credentials (`~/.ssh`, `~/.config/cowboy/client-auth`,
-    shell rc files) from agents, at the cost of a full chown of
-    `/srv/storage/fast0/agent` and separate GitHub/SSH credentials.
-  - Under D1, any credential in `draven`'s home is agent-readable by
-    construction. That includes the human's Cowboy CLI credential and
-    signed-in Chrome profiles. Owner-class Cowboy authority must therefore
-    never be stored there ([D1](#owner-decisions-needed)).
-- **OVH.** `ubuntu` (UID 1000) stays the agent identity. It already has no
-  sudo; `ovh-operator` is the admin. The Machine moves from `ubuntu`'s user
-  manager to `cowboy`.
-
-### What the agent user loses (Hawk, D1)
-
-| Today | After | Why |
-|---|---|---|
-| `sudo` NOPASSWD `ALL` | NOPASSWD only for an allowlist: `machine-activate` (via `just sys-activate`), `cowboy-{web,controller,machine}-activate`, read-only `journalctl`, `systemctl status`/`show`, and the existing `sudo -u` paths the activators themselves use as root. Anything else needs the admin path (D2) | Root reads any secret; NOPASSWD ALL makes the UID split decorative |
-| Nix `trusted-users` | Ordinary `allowed-users` | A trusted user can import unsigned store paths and set substituters, which is root-equivalent. `nix build`, `nix develop` and `just sys-build` keep working as an ordinary user (the deployment doc already builds as the normal user) |
-| Supplementary group `root` (and review `argus`) | Removed | Group-root-readable files would leak |
-| Reading `/var/lib/cowboy`, Machine state, provider replicas, the operator grant | Denied | A1 |
-| `systemctl --user` control of `cowboy-machine`, `cowboy-worker-*`, `cowboy-execution-*` | Gone (they become system units owned by `cowboy`). Read status through `journalctl`/`systemctl status` (allowlisted) and Cowboy MCP | A2 |
-| `cowboy operator` as the Service account | Through `sudo -u cowboy cowboy operator …` only if D4 allowlists it; otherwise the owner's admin path | The operator socket is Admin authority |
-| Killing, ptracing or reading `/proc/<pid>/environ` of workers, the Machine or the Controller | Denied by the kernel (different UID) | A2, A4 |
-
-The agent keeps the following:
-
-- editing worktrees;
-- `git`, `ssh`, `gh`, Nix builds and dev shells;
-- rootless Docker;
-- user services in `user@1000`;
-- the Chrome debug bridge;
-- the deployment transactions, through the allowlist;
-- Cowboy MCP and the CLI through the managed-call gateway.
-
-The human `draven` loses the same sudo breadth unless the owner takes the
-admin path in D2.
-
-## Processes, units and cgroups
-
-### Cgroup layout
-
-All Cowboy units move to the **system** manager. They no longer live in
-`user@1000`, so control placement no longer depends on a user manager the
-agent UID controls. `user@1000` already carries the retained
-`restartIfChanged=false` pair for this reason.
+systemd derives slice nesting from dashes. The existing `cowboy-agents.slice`
+is already `cowboy.slice/cowboy-agents.slice`, so Part L adds a sibling to it
+rather than a new root:
 
 ```text
--.slice
-├── system.slice                      MemoryLow=2G (unchanged)
-│   ├── cowboy.service                Controller, User=cowboy, CPUWeight/IOWeight=1000, MemoryLow=1G
-│   ├── cowboy-spawner.service        root, socket-activated
-│   ├── cowboy-account-sandbox.*      (OVH only, root; merged into spawner later)
-│   └── stormbird-device.service      unchanged
-├── cowboy-control.slice              CPUWeight=1000, IOWeight=1000, MemoryLow=<sum, see D5>
-│   ├── cowboy-machine.service        User=cowboy, MemoryLow=1G
-│   ├── cowboy-worker-<h>-<sess>.service      User=cowboy, Restart=no, no Delegate
-│   └── cowboy-keeper-<incarnation>.service   User=cowboy
-├── cowboy-tasks.slice                CPUWeight=100, IOWeight=100, MemoryHigh=48G, MemoryMax=64G,
-│   │                                 MemorySwapMax=4G, TasksMax=<D5>
-│   ├── cowboy-agent-<sess>.service   User=<agent>, Delegate=yes (provider + tools)
-│   ├── cowboy-exec-<incarnation>.service     User=<agent>, MemoryMax=24G, MemorySwapMax=2G, OOMPolicy=continue
-│   ├── cowboy-browser-<instance>.service     User=<agent>, Delegate=yes
-│   ├── cowboy-agent-helper.service   User=<agent> (workspace bridge, below), CPUWeight=1000 within slice
-│   └── cowboy-sandbox.slice          reserved for future user-MCP units (below)
-└── user.slice                        draven's logins and user@1000 (dev servers, rootless Docker)
+user@1000.service
+├── app.slice                         MemoryLow=1G (unchanged)
+│   └── cowboy-machine.service        CPUWeight/IOWeight=1000, MemoryLow=1G (unchanged)
+├── cowboy.slice                      no MemoryHigh/MemoryMax (asserted)
+│   ├── cowboy-control.slice          NEW: CPUWeight=1000, IOWeight=1000, MemoryLow=<D5>
+│   │   └── cowboy-worker-<h>-<sess>.service    worker process only; no Delegate
+│   └── cowboy-agents.slice           unchanged budget: MemoryHigh=48G, MemoryMax=64G, MemorySwapMax=4G;
+│       │                             add CPUWeight=100, IOWeight=100
+│       ├── cowboy-agent-<h>-<sess>.service     NEW: provider adapter + tools, Delegate=yes
+│       ├── cowboy-execution-<inc>.service      unchanged (keeper+exec+commands; gap stays documented)
+│       └── cowboy-browser-<instance>.service   unchanged
+└── (other user services, rootless Docker)
 ```
 
-The critical-resources policy is preserved and extended:
+- **CPU.** Inside `cowboy.slice`, workers have weight 1000 and tasks 100, so
+  workers get at least about 90% of the slice whenever they are runnable.
+  `cowboy.slice` itself still competes with `app.slice` and other user
+  services at weight 100; Part L does not change that level. The heartbeat
+  needs microseconds of CPU. Its starvation came from the shared `MemoryHigh`
+  throttling and the equal weights, not from the `user@1000` level.
+  [Acceptance](#acceptance-part-l) measures this.
+- **Memory.** No ancestor of a worker carries `MemoryHigh` or `MemoryMax`.
+  `cowboy-control.slice` gets a `MemoryLow` sized from the measured worker RSS
+  times `--max-sessions` (D5). The Columbus assertions propagate it through
+  `cowboy.slice` and `user@1000`.
+- **Columbus.** The `critical-resources` assertions gain three checks:
+  - the worker unit's exact `ControlGroup` is under `cowboy-control.slice`;
+  - no task unit name is in that slice;
+  - `cowboy.slice` and `cowboy-control.slice` carry no `MemoryHigh` or
+    `MemoryMax`.
 
-- `cowboy.service` and `cowboy-machine.service` keep `CPUWeight=1000`,
-  `IOWeight=1000` and `MemoryLow=1G`. Their ancestors (`system.slice`,
-  `cowboy-control.slice`) carry `MemoryLow` at least the sum of their
-  protected children. No ancestor of a control unit carries `MemoryHigh` or
-  `MemoryMax`.
-- The heartbeat sender (the worker) is now in the protected subtree. At the
-  root level, `cowboy-control.slice` at weight 1000 competes with
-  `cowboy-tasks.slice`, `user.slice` and `system.slice` at 100 each. That gives
-  control at least ~75% of the CPU whenever it is runnable. Today the workers sit at
-  equal weight beside the commands.
-- The task memory budget moves unchanged from `cowboy-agents.slice` to
-  `cowboy-tasks.slice`.
-- The documented execution-isolation gap (keeper, executor and commands in
-  one `cowboy-execution-*` unit) closes for the keeper. The keeper is control;
-  `codex exec-server` and its commands are the task unit. The exec-server
-  stays with its commands. A stalled exec-server affects only its own session's
-  commands, never the heartbeat path. The Columbus deletion trigger for
-  `critical-resources.nix` is met once the Cowboy module provides these
-  slices; the module then shrinks to its assertions.
-- The Columbus assertions update in the same Columbus change:
-  - `cowboy-machine` must be in `cowboy-control.slice`;
-  - `cowboy` must be in `system.slice`;
-  - no task unit may be in `cowboy-control.slice`;
-  - the deployment check uses system paths, not the hard-coded UID-1000 user
-    paths (`critical-resources.nix:20`).
+  The deployment check reads the effective `memory.low`, `memory.max` and
+  `cpu.weight` at each ancestor. The working rule "never place task processes
+  in a protected control service" holds, because the worker unit contains only
+  `cowboy-acp-worker`.
 
-R3 (tools escaping to `user@1000`) leaves control protected, because
-`user.slice` is a weight-100 sibling of `cowboy-control.slice`. The extended
-[acceptance](#acceptance) measures it explicitly.
+### Unit split
 
-### Unit split per session
+The worker starts its adapter as a separate transient unit instead of a child
+process:
 
-| Unit | Identity | Contents | Started by |
-|---|---|---|---|
-| `cowboy-worker-<h>-<sess>` | `cowboy` | `cowboy-acp-worker`: broker connection, heartbeats, ACP framing, the delivery ledger | Machine, through the spawner profile `worker` (detached, as today: survives Machine restarts) |
-| `cowboy-agent-<sess>` | agent | The `cowboy-agent-helper` init, then the provider adapter and all tool children | Worker, through the spawner profile `agent` (attached: stdio pipes and a helper control pipe come back over `SCM_RIGHTS`; closing the spawner connection stops the unit, as the account sandbox does) |
-| `cowboy-keeper-<inc>` | `cowboy` | `cowboy-execution-host`: keeper socket, the contract and its lifetime | Machine, spawner profile `keeper` (detached) |
-| `cowboy-exec-<inc>` | agent | `cowboy-agent-helper`, then `codex exec-server --listen stdio` and its commands | Keeper, spawner profile `exec` (attached) |
+```text
+systemd-run --user --quiet --collect --pipe --service-type=exec \
+  --unit=cowboy-agent-<h>-<sess> --slice=cowboy-agents.slice \
+  -p KillMode=control-group -p Restart=no -p Delegate=yes -p TimeoutStopSec=15s \
+  -p BindsTo=cowboy-worker-<h>-<sess>.service -p After=cowboy-worker-<h>-<sess>.service \
+  [-p RestrictAddressFamilies=… from the signed network policy] \
+  -- <provider command> <args>
+```
 
-The attached lifetime matches today's: the adapter dies with its worker and
-the exec-server with its keeper. Detached lifetimes are unchanged, so
-Machine-restart retention and reboot convergence keep their current shape:
-the Machine re-adopts workers and keepers by unit name after a restart. A
-missing agent or exec unit is the same condition as a dead adapter child is
-today.
+Requirements:
 
-Containment becomes fail-closed. Today the adapter runs uncontained when its
-leaf cgroup cannot be created (`src/cgroup.rs:14-17`). Under the split, the
-spawner refuses to report success unless the unit is active in its slice.
+- **L-1. Stdio.** `--pipe` hands the worker's pipe descriptors to the service
+  directly, with no relay process. The ACP wire and the worker's framing are
+  unchanged.
+- **L-2. Placement is verified before use.** After the start, the worker reads
+  the unit's `ControlGroup` and `InvocationID` from the user manager. If the
+  unit is not active in `cowboy-agents.slice`, the worker refuses to send the
+  first ACP frame. This mode does not use the fail-open leaf cgroup
+  (`src/cgroup.rs:14-17`).
+- **L-3. Teardown.**
+  - "Kill the agent subtree" (`cgroup::kill_and_remove`,
+    `src/acp_process.rs:245,314`) becomes `systemctl --user kill
+    --signal=SIGKILL` on the exact unit, followed by waiting for `inactive`.
+  - `BindsTo=` stops the agent unit whenever the worker unit stops, for any
+    reason.
+  - The worker reports exit only once the agent unit is inactive, or is gone
+    and the recorded invocation is not running.
+- **L-4. Containment parity.** The fail-closed owner for named authentication
+  (`src/cgroup/containment`) and the proc-watcher (which reads the agent
+  cgroup) both switch to the agent unit's verified `ControlGroup`. A worker
+  that cannot establish that containment refuses the launch.
+- **L-5. Network policy follows the socket owner.** The signed Provider
+  network policy (`worker_launch::network_property`, `machine_broker.rs:3296`)
+  moves from the worker unit to the agent unit, which is where sockets are
+  opened. The broker keeps refusing it outside `systemd-user` mode. A worker
+  that cannot apply the policy to the agent unit refuses the launch.
+- **L-6. Environment.**
+  - The agent unit gets exactly the environment the adapter gets as a child
+    today, passed by `--setenv` or a 0600 environment file. It does not get
+    the user manager's default environment. Shell-init guards are removed as
+    they are today.
+  - No secret appears in argv or in any `systemd-run` property visible on the
+    user bus. A secret is only ever passed as a path to a 0600 file.
+- **L-7. Mode selection and rollback.**
+  - A Machine flag, `worker_agent_unit = true|false`, selects the mode for
+    each launch. It lives in Device configuration and is readable through
+    Cowboy MCP.
+  - The worker records the mode in its launch receipt, and live sessions keep
+    the mode they launched with.
+  - Rolling back means setting the flag to false. Split sessions then drain on
+    their next revive.
+  - A release that does not understand split sessions must never be
+    activated while any are live. The rollback runbook checks for this.
+- **L-8. Recovery.**
+  - A broker restart re-adopts workers by unit name, as it does today.
+  - Each agent unit belongs to its worker through `BindsTo=`. After a Machine
+    restart, a live worker still holds its agent's pipes, so nothing on the
+    agent side needs re-adoption.
+  - After a host reboot both units are gone, and the session recovers through
+    its existing revive path.
+  - A stale `cowboy-agent-*` unit whose worker is gone is stopped by
+    `BindsTo=`. If one outlives that, the broker's existing
+    `prepare_transient_unit` cleanup removes it before relaunch.
 
-### `cowboy-spawner` (root)
+### Heartbeat lane
 
-This is a generalization of `packaging/account-sandbox`. It reuses that
-package's unit-property code, `SCM_RIGHTS` return and close-to-stop
-semantics; on OVH the account sandbox becomes the spawner's `account` profile.
+Slice weights do not help when the heartbeat waits behind bulk output on the
+same writer. Today `heartbeat.tick()` writes the heartbeat frame and then the
+entire outbox (`src/worker.rs:812-813`). The broker also defers isolation for
+up to 300 s while it has unread bytes (`WORKER_BACKLOG_ISOLATION_LIMIT`).
 
-- Socket `/run/cowboy-spawner/control.sock`, mode `root:cowboy 0660`.
-- On accept it reads `SO_PEERCRED` and `SO_PEERPIDFD` (Linux ≥ 6.5; Hawk runs
-  6.18, and OVH needs 26.04's ≥ 6.17, checked by the installer). It
-  authorizes only `uid == cowboy`, and only when the pidfd's cgroup is
-  `cowboy-control.slice/cowboy-machine.service` or a
-  `cowboy-control.slice/cowboy-{worker,keeper}-*.service`. The account
-  sandbox today reads the peer but does not authorize with it
-  (`packaging/account-sandbox/src/server.rs:31-38`).
-- **Closed profile set.** `worker`, `keeper` (User=cowboy,
-  `cowboy-control.slice`); `agent`, `exec`, `browser`, `helper`
-  (User=<agent>, `cowboy-tasks.slice`); `account` (`cga-<key>`, OVH); and a
-  reserved `sandbox` that refuses until user MCP is designed. The caller
-  supplies only:
-  - the executable, from an allowlisted, digest-pinned store path or
-    generation, or the provider command already listed in the Machine's
-    configuration;
-  - argv;
-  - an environment filtered by the profile's allowlist;
-  - a working directory, which must sit below a configured worktree root for
-    agent profiles;
-  - the session or incarnation id, which derives the unit name.
+- **L-9. Bounded outbox writes.** `send_outbox` writes at most a bounded batch,
+  in bytes and in events, per wakeup, and yields between batches.
+- **L-10. Liveness is never queued behind data.** When a `Heartbeat` is due,
+  the writer sends it before the next data batch. Frames are never
+  interleaved.
+- **L-11. Broker side.** The broker acts on heartbeat frames ahead of data
+  frames it has already read from the same connection. A heartbeat counts as
+  liveness even while that backlog is still being processed.
+- **L-12. Worker memory bound.** The outbox has a byte ceiling.
+  - Reaching it applies backpressure to the read of the adapter's stdout.
+  - The existing delivery ledger keeps ordering.
+  - The protected worker never buffers unbounded adapter output.
 
-  A caller can never choose `User=`, `Slice=`, capabilities, `ReadWritePaths`
-  or the root of a bind mount.
-- Agent profiles do not set `NoNewPrivileges`, so the allowlisted `sudo`
-  still works from tools. They do not use `ProtectHome`, because the
-  developer workflow needs `$HOME`. They mount `TemporaryFileSystem=` over
-  `/var/lib/cowboy`, `/var/lib/cowboy-machine` and `/run/cowboy-machine` as
-  defense in depth; the modes alone already deny those paths.
-- **Credentials.** Materialized provider credentials and per-session tokens
-  reach an agent unit only through `SetCredential=` / `LoadCredential=` from a
-  control-owned staging file. They land in `$CREDENTIALS_DIRECTORY`, which is
-  readable only by that unit's user. The helper copies them into the
-  provider home.
+### Acceptance (Part L)
 
-### `cowboy-agent-helper` (agent identity)
+- **Load.** Run `stress-ng` (CPU, VM at `MemoryHigh`, I/O) and a fork storm
+  bounded by `TasksMax` inside `cowboy-agents.slice`, at load above 400 for 30
+  minutes.
+  - Expect zero heartbeat-timeout isolations.
+  - Expect a maximum heartbeat gap under 15 s.
+  - Repeat with the same load in a non-Cowboy `user@1000` service, and again
+    in a Nix build.
+- **Output flood.** An adapter writes 1 GiB to stdout while the broker reader
+  is deliberately slowed. Heartbeats still arrive within 15 s, worker RSS
+  stays under the ceiling, and no events are lost.
+- **Lifecycle.**
+  - Killing the worker stops the agent unit.
+  - Killing the agent makes the worker report exit.
+  - Restarting the Machine leaves workers and agents running.
+  - Rebooting a NixOS test VM converges the units with no human step.
+- **Policy.**
+  - With the IPv4-only network policy, a tool cannot open `AF_INET6`.
+  - A session whose agent unit cannot be placed is refused, never started
+    uncontained.
 
-A small binary that runs first in every agent-identity unit. It owns all
-filesystem access to agent-writable trees on behalf of control code:
+### Rollout (Part L)
 
-- per unit: it prepares the provider home (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`
-  from credentials), execs the adapter or exec-server as its child, and
-  serves a control pipe to its starter;
-- as the long-lived `cowboy-agent-helper.service`: the Machine's workspace
-  bridge. It handles worktree preparation (`git fetch`, `git worktree add`),
-  workspace listing, remote file buffers, code reads for review and Code
-  Intelligence, credential-home observation for token refresh, and session
-  cleanup of agent-owned paths.
-
-The existing keeper file helper (`COWBOY_EXECUTION_FILE_HELPER`) is the
-precedent; this widens it to one protocol.
-
-### R-CD: no confused deputy
-
-Control code never opens, stats, reads, writes, renames, deletes or
-`exec`s a path inside a tree the agent UID can write. It asks the helper,
-which acts with agent rights only and returns bytes.
-
-- **Why it is a rule, not a hardening.** If the Machine (`cowboy`) read a
-  refreshed `auth.json` or a workspace file directly, a tool could plant a
-  symlink to `/var/lib/cowboy/provider-auth-service/vault.key`. The Machine
-  would then ingest a control secret as a "provider credential", sync it to
-  the Controller, and materialize it into an agent home. `O_NOFOLLOW` or
-  `RESOLVE_BENEATH` on every call site is too easy to miss. Making the call
-  impossible is not.
-- **Enforcement:**
-  - the `cowboy` units' `ProtectHome=yes` and `ReadWritePaths` exclude every
-    worktree root and agent home, so a violation fails at the kernel;
-  - a lint forbids `std::fs` and `tokio::fs` on workspace path types in
-    control crates (a Rust module-layer rule beside the existing ratchets).
-- Data that flows from the helper to control code is untrusted input, as
-  the adapter's ACP output already is.
-- The Controller's own workspace reads move behind the Machine:
-  - the workspace picker (`--workspace-root /home/draven`) and any
-    Controller-side git or code reads become Machine requests answered by the
-    helper;
-  - the Hawk `--workspace-root` flag then names a Machine-side root rather
-    than a Controller-readable path.
-
-## Peer authentication on control sockets
-
-| Endpoint (after) | Owner, mode | Reachable by agent? | Kernel check |
-|---|---|---|---|
-| Broker `/run/cowboy-machine/<svc>/m` | `cowboy`, dir 0700 | No | uid == `cowboy`. `Core` additionally requires pidfd cgroup `cowboy-machine.service` (the in-process bridge) or `cowboy.service` (the Hawk co-located `remote_runtime` client). `Worker{session_id}` requires pidfd cgroup `cowboy-worker-*-<session_id>.service`. The hello's claimed role is ignored when it disagrees |
-| Usage spool `u`, code `c`, Zed `z`, keeper sockets | `cowboy`, 0700 dir | No | uid == `cowboy` plus the expected cgroup per socket |
-| Spawner | `root:cowboy` 0660 | No (not in group) | uid and cgroup as above |
-| Account sandbox (OVH, until merged) | `root:cowboy` 0660 (today `root:ubuntu`) | No | Today **any `ubuntu` tool can reach it**; after this change uid == `cowboy` plus cgroup |
-| Local operator `/var/lib/cowboy/local-operator/control.sock` | `cowboy` 0600 | No | Existing `peer uid ∈ {euid, 0}` (`src/local_operator.rs:111-127`), now meaning `cowboy` or root |
-| Managed-call gateway, per session | `cowboy`. The socket directory is bind-mounted into exactly one agent unit by the spawner; socket 0666 inside a 0711 directory | **Yes, by design** (Cowboy MCP and CLI) | uid ∈ agent UIDs **and** the pidfd cgroup is under `cowboy-agent-<S>.service` or `cowboy-exec-<inc of S>.service` **and** the capability hash matches S. A peer from another session presenting S's capability is refused, even though R2 lets it read S's context. The result is the attested origin `agent(S)` |
-| Agent helper control pipes | Pipes from the spawner | Only their own unit | Not a socket. The fd is the authority |
-| Worker execution endpoint (`ws://127.0.0.1:<port>` + bearer, `src/worker_execution.rs:467-489`) | Loopback TCP | Yes | Moves to a Unix socket inside the agent unit with the gateway's check (slice S6). Until then the bearer arrives only through `$CREDENTIALS_DIRECTORY` |
-| Memory relay, request-observation listener (loopback TCP + token) | Loopback TCP | Yes, by design | Same move to Unix with a peer check (S6). Tokens are per session and are no longer readable from control files |
-| Controller HTTP `:3333` | TCP | Yes | Bearer/device authentication, not kernel. No owner-class token is readable by the agent UID (D1). Optional skuid fence (S7, firewall) |
-| Machine→Controller link (Hawk loopback) | Outbound HTTP/WSS | n/a | Ed25519 challenge with a key only `cowboy` can read |
-
-Implementation notes:
-
-- A single helper crate exposes `PeerIdentity { uid, pid, pidfd, cgroup }`.
-  It reads `/proc/self/fdinfo` of the pidfd, then
-  `/proc/<pid>/cgroup`. It verifies the pidfd is still live after reading,
-  which closes the PID-reuse race.
-- The required checks come from configuration
-  (`[host_identity] control_uid, agent_uids`; Service and Device TOML per
-  `docs/configuration.md`, exposed read-only through Cowboy MCP).
-- With both values equal to the running euid (the pre-cutover default) the
-  checks reduce to today's behavior. That is what lets the code ship before
-  the host changes.
-- After cutover a mismatch refuses with a typed `peer_identity` error and a
-  counter. Nothing falls back.
-
-**Authenticated origin.** The attested `agent(S)` versus `control` origin on
-the gateway and broker is the kernel fact the Antigravity redesign asked for.
-Round-3 F1 can carry it as content origin. Owner authority still comes only
-from a verified human credential, never from a socket.
-
-## Future user-MCP sandbox (placement only)
-
-- **Place:** `cowboy-tasks.slice/cowboy-sandbox.slice/cowboy-mcp-<sess>-<server>.service`,
-  started through the spawner's `sandbox` profile. That profile stays refused
-  until a user-MCP design defines it.
-- **Identity:** a pool of static system users `cowboy-sbx-<n>`, allocated per
-  account or session by the spawner as `cga-<key>` is today. Never the agent
-  UID: the agent UID is exactly what a hostile MCP server must not obtain.
-- **Filesystem:**
-  - `ProtectSystem=strict`, `ProtectHome=tmpfs`, `PrivateTmp/Devices/IPC`,
-    `TemporaryFileSystem` over Cowboy state;
-  - read-only or read-write binds of the session worktree chosen by the
-    owner's grant;
-  - Landlock via the existing `exec-confined`.
-- **Network:**
-  - per unit, `RestrictAddressFamilies` and `IPAddressDeny=any` plus an
-    explicit `IPAddressAllow` (BPF, per unit);
-  - host nftables `meta skuid` / `socket cgroupv2` rules, as
-    `matrix-agent` already uses on Hawk;
-  - DNS through an allowlisting resolver to be designed.
-- **Authentication:** it reaches Cowboy only through a gateway socket whose
-  peer check yields `sandbox(S, server)`, never `agent(S)`.
-
-## Hosts
-
-### Hawk (Controller, Machine and execution for OVH runtimes)
-
-Everything above applies. Hawk's `cowboy-execution-*` keepers serve runtimes
-whose adapters run on OVH, so the keeper and exec split is what protects
-Hawk's tools from Hawk's control plane.
-
-### OVH (Machine and runtime; no Controller)
-
-- **Identities.** `cowboy` becomes the Machine identity. `ubuntu` stays the
-  agent identity, and `cga-<key>` keeps the Antigravity accounts.
-- **Units.**
-  - The Machine moves from `ubuntu`'s user unit
-    `cowboy-machine-svc-….service` to a system unit `User=cowboy`, installed
-    by the `service-managed-ubuntu` maintenance path (`ovh-operator`).
-  - Workers become system units under `cowboy-control.slice` via the spawner;
-    adapters become agent units as `ubuntu`.
-- **Memory.** Today `user-1000.slice` (`MemoryHigh=9.5G`, `MemoryMax=10.5G`)
-  holds the Machine, the workers and Matrix together. After the move:
-  - `cowboy-control.slice` gets `MemoryLow` and no max;
-  - `cowboy-tasks.slice` and `cowboy-accounts.slice` get the maxima;
-  - the existing invariant is kept: sshd and Stormbird stay outside every
-    budget.
-
-  The exact numbers for the 11 GiB host are D5.
-- **Account sandbox.** It moves to group `cowboy` with a uid and cgroup check
-  (this fixes today's gap), and later merges into the spawner as the
-  `account` profile.
-- **State.** It moves from `/home/ubuntu/.local/state/cowboy-machine/services/<svc>`
-  to `/var/lib/cowboy-machine/<svc>`.
-- **Distribution.** OVH is runtime-only with no Nix daemon, so the spawner and
-  helper ship inside the existing `cowboy-machine-release` closure. The
-  maintenance tooling (`tools/ovh_machine_host_maintenance.py`) installs the
-  system units.
-
-### Falcon and macbook-air
-
-- **Falcon (Machine only, `draven`, `systemd-user`): follow-up.** It applies
-  slices S1-S5 after Hawk has run them for two weeks without isolation
-  incidents. It needs no Controller step. Its sudo and trusted-user policy is
-  decided separately.
-- **macbook-air: non-goal.** It runs no Cowboy Machine or Controller. A
-  future macOS Machine would use `Direct` spawn mode and needs its own design
-  (no systemd, no `SO_PEERCRED`; `LOCAL_PEERCRED`/`getpeereid` instead).
-
-## Migration
-
-Every slice is independently deployable and reversible. Each follows the
-machine transaction (`machines/docs/nixos-deployment.md`) or a Cowboy component
-activator, and records its rollback. No durable data is deleted until a later
-slice has run cleanly for a week. Previous copies are kept read-only, with a
-SHA-256 manifest.
-
-| Slice | What | Deploys via | Rollback | Flags |
+| Step | What | Deploys via | Rollback | Flags |
 |---|---|---|---|---|
-| **S0** Peer-identity code, inert | The `PeerIdentity` crate; `[host_identity]` config defaulting to euid; checks on the broker, spawner client, gateway and Unix sockets; typed refusal and counters. No behavior change at default | Controller and Machine host releases | Previous release | None |
-| **S1** Spawner and unit split, same UID | `cowboy-spawner` and `cowboy-agent-helper`; new Machine spawn mode `spawner` (worker, agent, keeper, exec units in system `cowboy-control.slice` and `cowboy-tasks.slice`, all still `User=draven`); fail-closed containment; R-CD workspace bridge with the helper; Columbus critical-resources assertions updated. **Delivers goal (2) on its own: the heartbeat fix** | Columbus machine transaction (spawner, slices, module) **and** `.#cowboy-machine-release` (new worker binary, a pool/adapter boundary change, so the Machine maintenance boundary) | Config flag `spawn_mode = "systemd-user"` restores the old path for new sessions; live sessions drain naturally; Columbus descendant revert | Activation; Machine maintenance |
-| **S2** Agent privilege narrowing (Hawk) | sudo allowlist; drop `trusted-users` and group `root`; the D2 admin path | Columbus machine transaction | Descendant revert; activation runs as root, so a broken allowlist cannot lock it out, and `hawk-admin` or the console stays available | **sudo policy** |
-| **S3** `cowboy` user and Machine move | Create `cowboy`. Drain or hibernate sessions, stop the Machine, `cp -a` state to `/var/lib/cowboy-machine/<svc>` and chown, write the manifest, leave the original read-only. System `cowboy-machine.service` as `cowboy`; spawner `worker` and `keeper` profiles run as `cowboy`; `[host_identity]` set | Columbus transaction plus Machine maintenance | Stop the Machine, copy the newer state back with the manifest, chown to `draven`, revert the unit. Durable namespaces (deletions, incarnations) are copied only while the Machine is stopped, in both directions | Activation; Machine maintenance; **high risk: durable namespaces** |
-| **S4** Controller move | Stop `cowboy.service`, chown `/var/lib/cowboy` to `cowboy` (SQLite WAL checkpointed first), `User=cowboy`, `ProtectHome=yes`, `ReadWritePaths`; `cowboy-plugin-converge` and `cowboy-model-intel-audit` too; operator grant reissued; Controller `--workspace-root` behind the Machine | Columbus transaction (restarts the Controller; see the Deploy note in `AGENTS.md`) | chown back and revert the unit; the DB is unchanged by the move | Activation; **restarts the daemon driving sessions** |
-| **S5** Enforce | Remove the euid default and the old spawn mode; refusal on any peer mismatch; acceptance suite | Controller and Machine host releases | Previous release (the config default returns) | Activation |
-| **S6** Loopback listeners to Unix | Worker execution endpoint, memory relay and request observation move to agent-unit Unix sockets with peer checks | Machine release (maintenance) | Previous release | Machine maintenance |
-| **S7** Optional TCP fence | nftables `meta skuid` denying agent UIDs from control-only loopback TCP (if any remain after S6) and optionally from `:3333` | Columbus transaction | Descendant revert | **firewall / networking** |
-| **O1-O4** OVH | O1 = S0 (shared releases); O2 = S1 with spawner, slices and the account-sandbox socket check; O3 = S3 for `ubuntu`→`cowboy`, with no sudo step because `ubuntu` already lacks sudo; O4 = S5 and S6 | OVH maintenance (`ovh-operator`), Machine maintenance | As Hawk; the prior user unit and state stay installed until O4 | Activation; Machine maintenance; slice memory budgets |
+| L-a | Worker code (L-1 to L-12) with `worker_agent_unit` defaulting to false | The **worker pin advance** (`docs/machine-worker-pin-advance-runbook.md`), because the worker binary is in the retained `cowboy-workers` bundle. The resident fix then uses `.#cowboy-machine-writer-host-release`, because Hawk has an active deletion writer. **Never `.#cowboy-machine-release` on Hawk while the writer is active** (it builds `writer=false`) | Previous pin, per the runbook | Machine maintenance; owner go for the pin advance (it replaces every live Hawk worker generation) |
+| L-b | Columbus: `cowboy-control.slice` and its assertions, plus `CPUWeight`/`IOWeight` on `cowboy-agents.slice` | Columbus machine transaction from a fresh Columbus worktree | Descendant revert | Activation (user units only; no network change) |
+| L-c | Set `worker_agent_unit = true` on Hawk | Device configuration (run `cowboy config check` first) | Set the flag to false | None |
+| L-d | The same on OVH, then Falcon | OVH maintenance by `ovh-operator`; Falcon machine transaction | Set the flag to false | Activation |
 
-The ordering makes the heartbeat fix (S1) available before any identity change.
-S0 and S1 also unblock nothing security-wise by themselves: secrets stay
-readable until S3 and S4, and sudo still bypasses everything until S2.
+L-a and L-b are independent. L-b alone only creates an empty slice, and L-a
+alone is inert at its default. Each step can be rolled back on its own.
 
-## Acceptance
+## Part I: identity boundary (target and binding requirements)
 
-- **Load.** Run `stress-ng` CPU, VM and I/O, plus a fork bomb capped by
-  `TasksMax`, inside `cowboy-tasks.slice` at load above 400 for 30 minutes,
-  and the same load from `user@1000`. Expect zero heartbeat isolations,
-  `/healthz` p99 under 1 s, and every Machine presence intact.
-- **Secrets.** As the agent UID, from inside an agent unit, read every A1
-  path, `/proc/<pid>/{environ,mem,root}` of control processes, and the
-  control runtime directories. All are denied.
-- **Forgery.** As the agent UID:
-  - connect to the broker, spawner, account sandbox and operator sockets
-    (denied);
-  - present session S's gateway capability from session T (refused with
-    `peer_identity`).
+Part I is **not implementation-ready**. It records the target and the
+requirements every sub-design must satisfy, including all round-1 findings.
+Each sub-part I-1 to I-10 needs its own design document and review round.
 
-  As `cowboy` from an unexpected cgroup, claim `Core` (refused).
-- **R-CD.**
-  - Plant symlinks to A1 paths in a worktree and an agent home. Trigger
-    worktree preparation, a file buffer, a code read and a credential
-    refresh. No A1 byte leaves.
-  - Remove `ProtectHome` from a test unit: the lint still fails the build.
-- **Workflow.** From a session, run:
-  - `git push`, `ssh <alias>`, `nix develop -c just check-compact`;
-  - `just sys-build` and `just sys-activate ./result` (allowlist);
-  - rootless `docker run`, the Chrome bridge, Cowboy MCP read and execute.
+### Target
 
-  Then confirm `sudo cat /var/lib/cowboy/...` is refused.
-- **Reboot convergence.** Verify in a NixOS test VM, not on production hosts.
-  After reboot every unit returns, with no human step, in the right slice and
-  under the right UID.
+- **Identities.** A static system user `cowboy` runs the Controller, Machine,
+  workers and keepers. Agents run as an agent UID (D1). Future user MCP
+  servers run as a separate sandbox UID per account or per session.
+- **Spawner.** A root spawner starts units across identities. The precedent is
+  OVH's `cowboy-account-sandbox` (`packaging/account-sandbox`): file-backed
+  `LoadCredential`, a fixed command table, `SCM_RIGHTS` return and
+  close-to-stop.
+- **Peer checks.** Every Unix control socket checks its kernel peer.
+- **R-CD.** Control code never handles filesystem content that a task
+  controls.
+- **Placement.** Part L's slices move to the system manager with the same
+  shape.
+
+### Threat model and stated residuals
+
+**Protected against:** a model-driven process running under the agent
+identity, including a prompt-injected one.
+
+**Stated residuals:**
+
+- **R1.** Activating a closure an agent built remains root and control
+  authority (D3).
+- **R2.** All sessions share one agent UID, so one session can read **and
+  write** another session's homes and worktrees.
+  - A peer-cgroup check therefore identifies only the *observed unit*, not an
+    uncompromised session S.
+  - Authorizing on `agent(S)` requires per-session writable homes and
+    execution identities (I-5).
+- **R4.** Kernel exploits are out of scope.
+
+### Binding requirements from round 1
+
+#### I-1 Credential and operator identity separation (critical)
+
+- **The operator SSH identity.** `draven`'s SSH identity reaches OVH's
+  `ovh-operator`, which has NOPASSWD ALL
+  (`docs/antigravity-real-accounts-design.md:431`). An agent UID that holds
+  it is OVH root, with no activation and no receipt. The owner accepted this
+  as residual R3-1 for Antigravity on 2026-11-18. Part I cannot claim
+  control-secret protection while that acceptance stands, so D1 revisits it.
+  Before any Part I step:
+  - the operator SSH identity moves to an admin identity that agents cannot
+    read;
+  - agents reach OVH only through a scoped key or a fixed wrapper.
+- **Owner product credentials.** CLI device logins (`src/cli.rs:305`,
+  `docs/product-cli.md:14`) and browser sessions held under `draven` bypass
+  the managed-call gateway with account-wide authority.
+  - Inventory them, then revoke or relocate them.
+  - Give the automation that needs them a scoped credential. One example is
+    OVH rollout hibernation (`docs/ovh-machine-maintenance.md:59`).
+- **sudo.**
+  - Implement the allowlist as administrator-owned wrappers. Each wrapper
+    fixes its verbs, targets, arguments, environment and pager behavior.
+  - Never allow an unrestricted `cowboy operator`. It can enable its own
+    grant, freeze convergence and force session updates
+    (`src/local_operator.rs:183,209,385`).
+  - The admin login's startup files must be outside the agent UID's control.
+- **Root-equivalent memberships.** Remove Nix `trusted-users` and group `root`
+  from the agent UID.
+
+#### I-2 Spawner contract
+
+- **Caller-by-operation matrix.** Each caller may start only its own units:
+  - a worker starts only its own agent unit, for its own session;
+  - a keeper starts only its own exec unit;
+  - the Machine starts only workers and keepers.
+
+  No Provider command ever runs under a profile with the `cowboy` UID.
+- **Trusted launch reservation.** The target unit, exact executable,
+  arguments, environment and credential source come from a reservation the
+  trusted Machine records, never from caller fields.
+  - Keep the account daemon's fixed command table and its separate
+    administrative verbs (`packaging/account-sandbox/src/units.rs:14`,
+    `protocol.rs:57`).
+- **Secrets.**
+  - Deliver them only through `LoadCredential` from a spawner-owned private
+    file or descriptor.
+  - Never use `SetCredential`, whose literal data is visible over systemd IPC,
+    and never unit properties or argv.
+  - Verify manager visibility as the agent UID.
+- **Runtime projection.** Installed Provider executables and private
+  components live inside Machine state.
+  - Project the verified runtime read-only.
+  - Expose only the admitted working directory.
+  - Keep contracts and ownership markers private (`machine_plugins.rs:4538`,
+    `machine_cli/execution.rs:89`).
+
+#### I-3 Peer authentication
+
+- **What a pidfd proves.** A pidfd check authenticates the *connecting*
+  process at connect time. A descriptor can later be inherited or passed, and
+  cgroup membership can change.
+  - Bind admission to the exact Service, session, boot and systemd
+    `InvocationID`.
+  - Keep the broker namespace already encoded in the unit name
+    (`machine_broker.rs:3752`, `systemd_exit.rs:104`).
+  - For per-request origin, use per-message `SCM_CREDENTIALS`, or limit the
+    claim explicitly to the connecting process.
+- **Gateway clients.** Each client requires both the context-file owner and
+  the gateway peer to equal its own euid (`managed_calls/cli.rs:147`). The
+  Machine also replaces grant sockets and namespaces
+  (`managed_calls/host.rs:188`).
+  - Update both client checks.
+  - Publish rotating contexts and sockets through a stable, control-owned
+    per-session directory, never through a one-time bind mount.
+- **Account units.** Antigravity's Unix listener runs in a `cga-<key>` account
+  unit (`src/acp_process.rs:178`). Authenticate that exact account-unit
+  invocation; the generic agent and exec rule does not cover it.
+
+#### I-4 Filesystem view (R-CD)
+
+- **Hiding task roots.** `ProtectSystem=strict` only makes paths read-only,
+  and `ProtectHome` still leaves the `/srv` worktrees visible. Control units
+  need either a positive filesystem view (`TemporaryFileSystem=/` plus
+  explicit binds) or an explicit mask of every physical task root and alias.
+  - A Rust lint is only supplementary. Untyped paths, subprocesses and
+    inherited handles bypass it.
+  - Keep the keeper's workspace identity check through a trusted handle
+    (`execution_host.rs:174,403`).
+- **Subprocesses that process project or credential input.** Each one needs a
+  dedicated unprivileged profile, and the Machine keeps only coordination:
+  - Code host tools and Zed language servers for trusted workspaces
+    (`machine_code_plugins.rs:629`, `plugins/zed/adapter/src/trust.rs:3`);
+  - Provider install and refresh probes (`machine_plugins/auth_refresh.rs:208`).
+- **Execution environment.** Execution contracts capture
+  `HOME`/`USER`/`PATH`/`XDG_*` from the Machine. After a UID move they must
+  come from the agent account. Provision its SSH agent, bus, rootless Docker
+  socket and Nix profile explicitly.
+
+#### I-5 Provider credentials
+
+- **One refresh owner per account.** Per-unit credential copies would hand
+  two sessions of one account the same single-use refresh token. Keep one
+  account-scoped refresh directory, or serialize redemption through an
+  account owner, usage collectors included
+  (`docs/provider-credential-observation.md:28`, `machine_plugins.rs:1676`).
+- **Per-session identities first.** Per-session writable homes and execution
+  identities must exist before `agent(S)` is used for authorization (R2).
+
+#### I-6 Machine state move
+
+This covers S3 and O3 from revision 1.
+
+- **Writer-capable releases only.**
+  - Never deploy a `writer=false` release on a host with an active deletion
+    writer (`flake.nix:1053`, `machine_broker.rs:1403`).
+  - Advance the worker pin, then deploy a writer-host release
+    (`docs/machine-worker-pin-advance-runbook.md:81`).
+- **Recovery floors.** The floors compare absolute dataset paths and the
+  canonical state directory (`src/session_deletion_admission/owner_writer.rs:101`,
+  `reader_floor.rs:82`).
+  - Migrate the floors, the selected release and the cold bootstrap in one
+    transaction.
+  - Run startup checks in both the forward and the rollback direction.
+- **One owner at a time.**
+  - Persist one boot selector.
+  - Fence the old user unit and its socket. OVH's rollback helper otherwise
+    starts the old unit (`tools/ovh_machine_host_maintenance.py:124`;
+    `src/machine_install.rs:744`).
+  - Publish verified deletion, incarnation and cleanup state atomically,
+    because an absent record means empty (`machine_broker/namespace.rs:75`).
+- **No `cp -a` of the state.**
+  - Rebuild component links and execution GC roots
+    (`src/machine_components.rs:184`, `execution/retention.rs:30`).
+  - Keep task worktrees in place, because cleanup records identify them by
+    device and inode (`components/store/src/session_workspace.rs:865`).
+- **The identity key.**
+  - Any rollback copy holding `identity_ed25519` goes under an
+    administrator-only parent.
+  - Rotate the keys and credentials the old UID could read, through an
+    enrollment-preserving transition (`components/wire/src/machine_auth.rs:54`).
+
+#### I-7 Lifetime and recovery
+
+- **Unit names alone do not prove an exit.** After a split or a spawn-mode
+  rollback, a user-manager unit can be gone while a system-manager exec unit
+  still runs.
+  - Persist the manager, boot and invocation of both units.
+  - Reconcile the actual exit before any replacement.
+- **Spawner restarts.** Preserve uncertain effects across a spawner restart.
+  Closing the spawner connection must not silently stop attached units
+  (`machine_cli/execution/liveness.rs:64`,
+  `packaging/account-sandbox/src/daemon.rs:164`).
+- The keeper/exec split belongs here and follows Part L.
+
+#### I-8 Controller move
+
+An in-place chown leaves existing database descriptors usable by a `draven`
+process.
+
+- Quiesce writers.
+- Publish a verified copy on fresh inodes in a private directory.
+- Test with an old-UID descriptor held open across the cutover.
+
+#### I-9 Intermediate configurations
+
+Every intermediate step defines its callers and socket policy, or switches
+mutually dependent units atomically.
+
+- Hawk's co-located Core client runs in the Controller. It must move together
+  with the Machine socket policy, or keep a compatible path.
+- Ship a compatible cold bootstrap before introducing any new spawn flag.
+
+#### I-10 Transports, browser and network
+
+- **Unix sockets for loopback transports.** Moving the worker execution
+  endpoint and the memory relay to Unix sockets needs a versioned transport,
+  and the consumers must ship first. The pinned adapters accept only
+  `ws://127.0.0.1` (`provider-runtime/packages/codex-acp/launch.mjs:24`,
+  `plugins/claude-code/runtime/connection.mjs:26`, `src/acp_memory.rs:227`).
+- **Browser.** It needs:
+  - its own identity;
+  - a trusted verifier for the `/proc` and namespace checks the manager makes
+    today (`machine_browser/manager.rs:451`, `verify.rs:285`);
+  - only authorized channels exported.
+- **Network policy.** Enforce every signed or Device network policy on the
+  unit that opens the sockets, or refuse the launch. This covers IPv4-only and
+  the OVH account IP denials (`packaging/account-sandbox/src/units.rs:208`,
+  `docs/requirements.md:59`). Verify OVH native egress and its proxy route.
+- **Escaped load.** User services, rootless containers and `nix-daemon` builds
+  can exhaust global memory or PIDs regardless of CPU weights.
+  - Budget those subtrees and reserve host headroom.
+  - Test sshd, Stormbird and the heartbeat under memory and PID pressure.
+
+### Future user-MCP sandbox (placement only)
+
+- **Units.** `cowboy-mcp-<sess>-<server>.service`, in a dedicated sandbox slice
+  under the task subtree.
+- **Identity.** A pool of static `cowboy-sbx-<n>` users, never the agent UID.
+- **Filesystem.**
+  - `ProtectSystem=strict`, `ProtectHome=tmpfs` and `PrivateTmp/Devices/IPC`;
+  - `TemporaryFileSystem` over Cowboy state;
+  - grant-scoped worktree binds;
+  - Landlock through `exec-confined`.
+- **Network.** Per-unit `IPAddressDeny=any` plus an allowlist, and nftables
+  `meta skuid` / `socket cgroupv2` rules, as `matrix-agent` uses on Hawk.
+- **Authentication.** A gateway peer check yields `sandbox(S, server)`.
+
+Nothing beyond placement is designed here.
+
+### Hosts
+
+- **Hawk.** Runs the Controller and a Machine, and executes work for OVH
+  runtimes through its keepers. Part L comes first, then Part I.
+- **OVH.** Runs the Machine and the runtime, with no Controller. The agent
+  identity is `ubuntu`, which already has no sudo.
+  - Today the account-sandbox control socket is `root:ubuntu 0660`, and the
+    daemon reads the peer but does not authorize with it
+    (`packaging/account-sandbox/src/server.rs:31-38`). Any `ubuntu` tool can
+    therefore request account units.
+  - I-2 closes this. An interim fix that authorizes `uid == ubuntu` does not
+    help while tools share `ubuntu`, so the fix waits for Part I.
+- **Falcon (Machine only).** Part L follows Hawk. Part I is a follow-up.
+- **macbook-air.** A non-goal: it runs no Cowboy component.
 
 ## Flags needing explicit owner confirmation
 
-- **Activation.** S1, S2, S3, S4, S5 and every OVH slice. S3 and O3 include a
-  Machine maintenance boundary. S4 restarts the Controller.
-- **sudo / privilege policy.** S2, which also affects the human `draven`.
-- **Networking and firewall.**
-  - S7 (nftables).
-  - The spawner's per-unit `IPAddressDeny`/`RestrictAddressFamilies` for
-    agent profiles. Proposed: none for agent units, which keep today's
-    network.
-  - Any future sandbox network policy.
-  - Stormbird, routing, DNS and TUN are untouched by every slice.
-- **Durable data.** S3 and O3 copy Machine durable namespaces. Durable
-  namespaces are high-risk under the review policy, so verify them with the
-  manifest and keep the original.
+- **Part L.**
+  - The worker pin advance (L-a) replaces every live Hawk worker generation.
+  - The Columbus transaction (L-b) changes user units only. It makes no
+    network, firewall, DNS, routing or Stormbird change.
+  - The OVH maintenance (L-d).
+- **Part I.** Every sub-part, because they touch sudo policy, SSH identities,
+  durable Machine namespaces, a Controller restart, nftables and per-unit
+  network policy.
 
 ## Owner decisions needed
 
-- **D1. Agent identity on Hawk.**
-  - Default `draven` (narrowest). The human accepts that Hawk shell sessions
-    are agent-class, and owner-class Cowboy authority on Hawk lives only in
-    the Web/PWA devices and the admin path.
-  - Or D1b: a new `cowboy-agent` UID, a full chown of the agent tree, and
+- **Part L go**, including the worker pin advance.
+- **D1. Agent identity on Hawk.** Either:
+  - keep `draven`, with the operator SSH identity and owner credentials moved
+    out (I-1); or
+  - create a new `cowboy-agent` UID, with a chown of the agent tree and
     separate Git and SSH credentials.
-- **D2. Admin path.** A separate `hawk-admin` login with an SSH key held only
-  on owner devices and NOPASSWD ALL (mirrors OVH's `ovh-operator`), or a
-  password or `pam_u2f` on `draven`'s full sudo.
-- **D3. R1.** Accept that agent-initiated activation remains root and control
-  authority, recorded, as today's deploy preference requires. Or require an
-  owner approval on activations (a future design).
-- **D4.** Whether `sudo -u cowboy cowboy operator` is allowlisted for agent
-  Plugin upgrades (`docs/agent-driven-plugin-release.md`).
-- **D5. Budgets.** `TasksMax`, the control `MemoryLow` sum on Hawk, and the
-  OVH slice numbers on the 11 GiB host.
-- **D6.** Whether R2 (cross-session reads) is acceptable until the F-UID
-  follow-up.
-
-## Follow-ups
-
-- **F-UID.** Per-account or per-session agent UIDs for provider homes, on the
-  `cga-<key>` pattern, to close R2.
-- **User MCP design**, inside the reserved `sandbox` profile.
-- **Falcon rollout.**
-- **macOS `Direct` mode equivalent**, if a Mac Machine is ever introduced.
+- **D2. Admin path.** Either a `hawk-admin` login whose key is held only on
+  owner devices (mirroring OVH's `ovh-operator`), or `pam_u2f`.
+- **D3. R1.** Accept agent-initiated activation as recorded authority, or
+  require owner approval for it.
+- **D5. Budgets.** The `cowboy-control.slice` `MemoryLow`, the task
+  `TasksMax`, and the OVH numbers.
+- **D6. Origin ordering.** Whether per-session agent identities (I-5) must
+  exist before Antigravity round 3 uses `agent(S)` as an origin.
