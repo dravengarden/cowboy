@@ -225,15 +225,6 @@ impl Hub {
                 s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
                 s.in_flight = true;
                 s.dispatch_pending = Some(s.in_flight_epoch);
-                hub_dispatch_origin::note_dispatch_origin(
-                    s,
-                    session_id,
-                    &dispatch_cmid,
-                    dispatch_origin.clone(),
-                    trigger.clone(),
-                    now_ms(),
-                    m.content.len().max(1),
-                );
                 dispatch = Some(DispatchReq {
                     ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
                     session_id: session_id.to_owned(),

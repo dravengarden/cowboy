@@ -345,6 +345,7 @@ pub(super) fn project_worker_outcome(
         return None;
     }
     super::mark_projected_provider_auth_expired(shared, session_id, &event);
+    super::prompt_tracking::observe_worker_event(shared, session_id, &event);
     let deferred =
         super::divert(&shared.hub, key, runtime_seq, event).and_then(|event| match event {
             RuntimeEvent::UndeliveredPrompt {
@@ -353,6 +354,7 @@ pub(super) fn project_worker_outcome(
                 content,
                 error,
             } if cid.starts_with(CALL_NOTICE_PREFIX) => {
+                shared.in_flight_prompts.lock().retire_command(&command_id);
                 let text = content
                     .iter()
                     .filter_map(|value| value.get("text").and_then(serde_json::Value::as_str))
@@ -369,6 +371,22 @@ pub(super) fn project_worker_outcome(
                     error,
                     admitted: true,
                 })
+            }
+            RuntimeEvent::UndeliveredPrompt {
+                command_id,
+                cmid,
+                content,
+                error,
+            } => {
+                super::prompt_tracking::handle_undelivered_prompt(
+                    shared,
+                    session_id,
+                    &command_id,
+                    cmid.as_deref(),
+                    content,
+                    error,
+                );
+                None
             }
             other => {
                 super::apply_event(&shared.hub, session_id, other);
@@ -968,12 +986,11 @@ async fn abort_failed_execution_recovery(
                 }
             }
         } else {
-            let (origin, initiator) = cmid
-                .as_deref()
-                .and_then(|c| shared.hub.prompt_dispatch_record(session_id, c))
-                .map_or((None, None), |record| {
-                    (Some(record.origin), Some(record.trigger))
-                });
+            let (origin, initiator) = super::prompt_tracking::provenance_from_hub_or_reserved(
+                &shared.hub,
+                session_id,
+                cmid.as_deref(),
+            );
             shared
                 .hub
                 .requeue_prompt(session_id, text, content, cmid, origin, initiator);

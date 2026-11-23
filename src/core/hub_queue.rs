@@ -152,15 +152,6 @@ impl Hub {
             s.in_flight = true;
             s.dispatch_pending = Some(s.in_flight_epoch);
             Self::note_dispatched(s, Some(operation));
-            hub_dispatch_origin::note_dispatch_origin(
-                s,
-                session_id,
-                operation,
-                dispatch_origin.clone(),
-                origin.clone(),
-                now_ms(),
-                content.len().max(1),
-            );
             DispatchReq {
                 ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
                 session_id: session_id.to_owned(),
@@ -302,15 +293,6 @@ impl Hub {
             s.in_flight = true;
             s.dispatch_pending = Some(s.in_flight_epoch);
             Self::note_dispatched(s, Some(&dispatch_cmid));
-            hub_dispatch_origin::note_dispatch_origin(
-                s,
-                session_id,
-                &dispatch_cmid,
-                dispatch_origin.clone(),
-                record_trigger.clone(),
-                now_ms(),
-                head.content.len().max(1),
-            );
             DispatchReq {
                 ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
                 session_id: session_id.to_owned(),
@@ -524,15 +506,6 @@ impl Hub {
             s.dispatch_pending = None;
             // The prompt never ran: it is no longer "delivered", so the drain (or
             // a client resend) may hand it to a worker again.
-            let (recovered_origin, recovered_initiator) = if origin.is_none() && initiator.is_none()
-            {
-                cmid.as_deref()
-                    .and_then(|c| s.dispatched_origins.get(c))
-                    .map(|record| (Some(record.origin.clone()), Some(record.trigger.clone())))
-                    .unwrap_or((None, None))
-            } else {
-                (origin, initiator)
-            };
             if let Some(c) = cmid.as_deref() {
                 s.dispatched_cmids.retain(|seen| seen.cmid != c);
                 hub_dispatch_origin::remove_pending_echo(s, c);
@@ -551,8 +524,8 @@ impl Hub {
                         content,
                         cmid,
                         schedule: None,
-                        origin: recovered_origin,
-                        initiator: recovered_initiator,
+                        origin,
+                        initiator,
                     },
                 );
                 true
@@ -695,15 +668,6 @@ impl Hub {
                 s.in_flight = true;
                 s.dispatch_pending = Some(s.in_flight_epoch);
                 Self::note_dispatched(s, Some(&dispatch_cmid));
-                hub_dispatch_origin::note_dispatch_origin(
-                    s,
-                    session_id,
-                    &dispatch_cmid,
-                    dispatch_origin.clone(),
-                    initiator.clone(),
-                    now_ms(),
-                    content.len().max(1),
-                );
                 dispatch = Some(DispatchReq {
                     ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
                     session_id: session_id.to_owned(),

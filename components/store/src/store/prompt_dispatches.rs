@@ -71,7 +71,26 @@ impl Store {
         let existing = self
             .prompt_dispatch(&record.session_id, &record.cmid)
             .await?;
-        Ok(existing.is_some_and(|row| row.origin == record.origin))
+        let Some(row) = existing else {
+            return Ok(false);
+        };
+        if row.origin != record.origin {
+            return Ok(false);
+        }
+        // Keep origin and trigger immutable while recording the latest
+        // compatible send time so a requeued-and-resent prompt still wins
+        // restart pending-echo hydration over older already-echoed turns.
+        if record.dispatched_at_ms > row.dispatched_at_ms {
+            dispatch!(
+                self,
+                touch_prompt_dispatch_timestamp_raw(
+                    &record.session_id,
+                    &record.cmid,
+                    record.dispatched_at_ms,
+                )
+            )?;
+        }
+        Ok(true)
     }
 
     async fn record_prompt_dispatch_inserted(&self, record: &PromptDispatchRecord) -> Result<bool> {
@@ -202,6 +221,28 @@ macro_rules! shared_impl {
                 .await
                 .with_context(|| format!("INSERT prompt_dispatches ({session_id}, {cmid})"))?;
                 Ok(res.rows_affected())
+            }
+
+            async fn touch_prompt_dispatch_timestamp_raw(
+                &self,
+                session_id: &str,
+                cmid: &str,
+                dispatched_at_ms: i64,
+            ) -> Result<()> {
+                sqlx::query(
+                    "UPDATE prompt_dispatches \
+                     SET dispatched_at_ms = CASE WHEN dispatched_at_ms < $3 THEN $3 ELSE dispatched_at_ms END \
+                     WHERE session_id = $1 AND cmid = $2",
+                )
+                .bind(session_id)
+                .bind(cmid)
+                .bind(dispatched_at_ms)
+                .execute(&self.pool)
+                .await
+                .with_context(|| {
+                    format!("UPDATE prompt_dispatches timestamp ({session_id}, {cmid})")
+                })?;
+                Ok(())
             }
 
             async fn prompt_dispatch_raw(

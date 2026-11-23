@@ -384,6 +384,9 @@ async fn finish_dispatch_outcome(
             }
         }
         other => {
+            if let Some(id) = cmid.as_deref() {
+                hub.disarm_pending_echo(&session_id, id);
+            }
             let transient_disconnect = matches!(
                 &other,
                 SyncSendOutcome::SendError(error) if is_transient_machine_disconnect(error)

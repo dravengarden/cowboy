@@ -424,6 +424,7 @@ async fn deliver(
             tracing::info!(event_name = "cowboy.code.post_edit_push", session, outcome);
         }
         Err(reason) => {
+            state.hub.disarm_pending_echo(session, &cmid);
             super::deliveries::finish(session, &delivery_id, State::Refused, Some(&reason));
             tracing::info!(
                 event_name = "cowboy.code.post_edit_push",

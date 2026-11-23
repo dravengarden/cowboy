@@ -221,6 +221,38 @@ pub(in crate::remote_runtime) fn requeue_unsent_notices_on_disconnect(shared: &A
     }
 }
 
+fn requeue_rejected_ordinary_prompt(
+    shared: &Shared,
+    session_id: &str,
+    command_id: String,
+    content: Vec<serde_json::Value>,
+    cid: String,
+    reason: Option<String>,
+) {
+    let provenance = super::super::prompt_tracking::provenance_for_controller_command(
+        shared,
+        session_id,
+        &command_id,
+        Some(&cid),
+    );
+    super::super::handle_rejected_command_with_provenance(
+        &shared.hub,
+        session_id,
+        Some(CoreCommand::Prompt {
+            session_id: session_id.to_owned(),
+            command_id,
+            turn_id: String::new(),
+            content,
+            cmid: Some(cid),
+            trace: None,
+            echo_artifacts: false,
+            observe_subagents: false,
+        }),
+        reason,
+        Some(provenance),
+    );
+}
+
 /// Route a rejected `CoreCommand` back to `Hub`: ordinary prompts use
 /// `handle_rejected_command`, while `call-notice:` prompts use conditional
 /// durable requeue under `pending_commit_lock` so a late rejection can never
@@ -243,23 +275,10 @@ pub(in crate::remote_runtime) fn requeue_rejected_command(
         return;
     };
     if !cid.starts_with(CALL_NOTICE_PREFIX) {
-        super::super::handle_rejected_command(
-            &shared.hub,
-            session_id,
-            Some(CoreCommand::Prompt {
-                session_id: session_id.to_owned(),
-                command_id,
-                turn_id: String::new(),
-                content,
-                cmid: Some(cid),
-                trace: None,
-                echo_artifacts: false,
-                observe_subagents: false,
-            }),
-            reason,
-        );
+        requeue_rejected_ordinary_prompt(shared, session_id, command_id, content, cid, reason);
         return;
     }
+    shared.in_flight_prompts.lock().retire_command(&command_id);
     let reason = reason.unwrap_or_else(|| "runtime rejected command".to_owned());
     let fallback_text = content
         .iter()
@@ -386,6 +405,8 @@ pub(in crate::remote_runtime) fn revive_and_try_prompt(
             sent.remove(&ensure_key);
             pending.insert(ensure_key, CoreCommand::EnsureSession { session });
         }
+        let tracked_content = content.clone();
+        let tracked_cmid = cmid.clone();
         sent.remove(&command_id);
         pending.insert(
             command_id.clone(),
@@ -399,6 +420,13 @@ pub(in crate::remote_runtime) fn revive_and_try_prompt(
                 echo_artifacts,
                 observe_subagents: true,
             },
+        );
+        super::super::prompt_tracking::record_sent_prompt(
+            shared,
+            &session_id,
+            &command_id,
+            tracked_cmid.as_deref(),
+            &tracked_content,
         );
         drop(sent);
         drop(pending);

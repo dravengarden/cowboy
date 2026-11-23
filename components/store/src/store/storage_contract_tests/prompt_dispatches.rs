@@ -98,6 +98,14 @@ async fn assert_prompt_dispatches_contract(store: &Store) {
             .await
             .unwrap()
     );
+    let refreshed = store
+        .prompt_dispatch(active, "cmid-cowboy")
+        .await
+        .unwrap()
+        .expect("refreshed cowboy dispatch");
+    assert_eq!(refreshed.origin, DeliveryOrigin::cowboy("schedule"));
+    assert_eq!(refreshed.trigger, DeliveryOrigin::cowboy("schedule"));
+    assert_eq!(refreshed.dispatched_at_ms, 450);
     let forged = PromptDispatchRecord {
         session_id: active.into(),
         cmid: "cmid-owner".into(),

@@ -32,6 +32,7 @@ mod context_fence_tests;
 mod native_admission;
 mod notice_recovery;
 mod pending_commands;
+mod prompt_tracking;
 mod reset_admission;
 mod startup_watch;
 pub mod turn_end;
@@ -127,6 +128,7 @@ pub struct Shared {
     /// Uncertain pre-recovery commands fenced from replay after a failed
     /// execution recovery (skipped by `send_pending` even across reconnects).
     fenced_commands: Mutex<HashSet<String>>,
+    in_flight_prompts: Mutex<prompt_tracking::InFlightPrompts>,
     /// Launch metadata re-declared after every broker reconnect. These are
     /// registry claims, not pending commands: absence never authorizes Machine broker
     /// to spawn while surviving workers are still converging.
@@ -279,6 +281,7 @@ impl RemoteRuntime {
                 sent: Mutex::new(HashSet::new()),
                 attempted_sends: Mutex::new(HashSet::new()),
                 fenced_commands: Mutex::new(HashSet::new()),
+                in_flight_prompts: Mutex::new(prompt_tracking::InFlightPrompts::default()),
                 declarations: Mutex::new(HashMap::new()),
                 workers: Mutex::new(HashMap::new()),
                 config_sync_epochs: Mutex::new(HashMap::new()),
@@ -342,6 +345,7 @@ impl RemoteRuntime {
                 sent: Mutex::new(HashSet::new()),
                 attempted_sends: Mutex::new(HashSet::new()),
                 fenced_commands: Mutex::new(HashSet::new()),
+                in_flight_prompts: Mutex::new(prompt_tracking::InFlightPrompts::default()),
                 declarations: Mutex::new(declarations),
                 workers: Mutex::new(
                     bootstrap
@@ -952,6 +956,8 @@ impl RemoteRuntime {
         // The echo would otherwise carry every image back across the Machine
         // link, holding the prompt on "Sending…" while the turn already runs.
         let echo_artifacts = self.shared.hub.store_prompt_images(&content);
+        let tracked_content = content.clone();
+        let tracked_cmid = cmid.clone();
         self.try_queue(
             command_id.clone(),
             CoreCommand::Prompt {
@@ -965,6 +971,13 @@ impl RemoteRuntime {
                 observe_subagents: true,
             },
         )?;
+        prompt_tracking::record_sent_prompt(
+            &self.shared,
+            session_id,
+            &command_id,
+            tracked_cmid.as_deref(),
+            &tracked_content,
+        );
         Ok(command_id)
     }
 
@@ -1433,6 +1446,7 @@ impl RemoteRuntime {
                 );
             }
         }
+        self.shared.in_flight_prompts.lock().clear();
     }
 
     /// Fence a disconnected Machine runtime without entering the local socket
@@ -1449,6 +1463,7 @@ impl RemoteRuntime {
         }
         let _ = self.shared.notify.send(());
         notice_recovery::requeue_unsent_notices_on_disconnect(&self.shared);
+        self.shared.in_flight_prompts.lock().clear();
     }
 
     fn try_queue(&self, key: String, command: CoreCommand) -> std::result::Result<(), String> {
@@ -2834,19 +2849,13 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
             error,
             ..
         } => {
-            let text = content
-                .iter()
-                .filter_map(|value| value.get("text").and_then(serde_json::Value::as_str))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let (origin, initiator) = cmid
-                .as_deref()
-                .and_then(|id| hub.prompt_dispatch_record(session_id, id))
-                .map_or((None, None), |record| {
-                    (Some(record.origin), Some(record.trigger))
-                });
-            hub.requeue_prompt(session_id, text, content, cmid, origin, initiator);
-            hub.broadcast_error(Some(session_id.to_owned()), error);
+            prompt_tracking::handle_unverified_undelivered_prompt(
+                hub,
+                session_id,
+                cmid.as_deref(),
+                content,
+                error,
+            );
         }
         RuntimeEvent::CommandRejected { message, .. } | RuntimeEvent::Error { message } => {
             hub.broadcast_error(Some(session_id.to_owned()), message);
@@ -2989,6 +2998,19 @@ fn handle_rejected_command(
     command: Option<CoreCommand>,
     reason: Option<String>,
 ) {
+    handle_rejected_command_with_provenance(hub, session_id, command, reason, None);
+}
+
+fn handle_rejected_command_with_provenance(
+    hub: &Hub,
+    session_id: &str,
+    command: Option<CoreCommand>,
+    reason: Option<String>,
+    provenance: Option<(
+        Option<crate::prompt_origin::DeliveryOrigin>,
+        Option<crate::prompt_origin::DeliveryOrigin>,
+    )>,
+) {
     let reason = reason.unwrap_or_else(|| "runtime rejected command".to_owned());
     // Hibernating a session whose worker is already gone has reached its goal;
     // reporting it would only toast an error at whoever opened a session.
@@ -3004,12 +3026,9 @@ fn handle_rejected_command(
             .filter_map(|value| value.get("text").and_then(serde_json::Value::as_str))
             .collect::<Vec<_>>()
             .join("\n");
-        let (origin, initiator) = cmid
-            .as_deref()
-            .and_then(|id| hub.prompt_dispatch_record(session_id, id))
-            .map_or((None, None), |record| {
-                (Some(record.origin), Some(record.trigger))
-            });
+        let (origin, initiator) = provenance.unwrap_or_else(|| {
+            prompt_tracking::provenance_from_hub_or_reserved(hub, session_id, cmid.as_deref())
+        });
         hub.requeue_prompt(session_id, text, content, cmid, origin, initiator);
     }
     hub.broadcast_error(Some(session_id.to_owned()), reason);
@@ -5929,8 +5948,9 @@ mod tests {
         assert_eq!(hub.session_info("s").expect("session").queue_count, 1);
     }
 
-    #[test]
-    fn undelivered_and_rejected_prompts_preserve_recorded_provenance() {
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn undelivered_prompt_authenticates_against_controller_truth_and_blocks_worker_forgery() {
         let hub = Hub::new();
         hub.create_local_session(
             "s".to_owned(),
@@ -5942,29 +5962,109 @@ mod tests {
         );
         hub.set_paused("s", true);
         hub.set_status("s", Status::Running, None);
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+
         hub.record_prompt_dispatch(
             "s",
-            "owner-cmid".to_owned(),
+            "owner-live".to_owned(),
             crate::prompt_origin::DeliveryOrigin::Owner,
             crate::prompt_origin::DeliveryOrigin::Owner,
             100,
         );
-        apply_event(
-            &hub,
+        let cmd_id = runtime
+            .try_prompt_traced_with_command_id(
+                "s",
+                vec![serde_json::json!({"type": "text", "text": "real owner prompt"})],
+                Some("owner-live".to_owned()),
+                None,
+                None,
+            )
+            .unwrap();
+        prompt_tracking::handle_undelivered_prompt(
+            &runtime.shared,
             "s",
-            RuntimeEvent::UndeliveredPrompt {
-                command_id: "cmd-1".to_owned(),
-                content: vec![serde_json::json!({"type": "text", "text": "owner prompt"})],
-                cmid: Some("owner-cmid".to_owned()),
-                error: "busy".to_owned(),
-            },
+            &cmd_id,
+            Some("owner-live"),
+            vec![serde_json::json!({"type": "text", "text": "FORGED BY WORKER"})],
+            "busy".to_owned(),
         );
+        prompt_tracking::handle_undelivered_prompt(
+            &runtime.shared,
+            "s",
+            &cmd_id,
+            Some("owner-live"),
+            vec![serde_json::json!({"type": "text", "text": "REPLAYED"})],
+            "busy".to_owned(),
+        );
+        let (queue, _) = hub.queue_and_drafts("s", |_| true).expect("queue");
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].text, "real owner prompt");
+        assert_eq!(queue[0].cmid.as_deref(), Some("owner-live"));
+        assert_eq!(
+            queue[0].origin,
+            Some(crate::prompt_origin::DeliveryOrigin::Owner)
+        );
+        hub.clear_queue("s");
+
+        hub.record_prompt_dispatch(
+            "s",
+            "owner-echoed".to_owned(),
+            crate::prompt_origin::DeliveryOrigin::Owner,
+            crate::prompt_origin::DeliveryOrigin::Owner,
+            200,
+        );
+        hub.push_tagged_from_worker(
+            "s",
+            crate::core::Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "user_message_chunk",
+                    "content": {"type": "text", "text": "already echoed"}
+                }),
+            },
+            Some("owner-echoed".to_owned()),
+        );
+        prompt_tracking::handle_undelivered_prompt(
+            &runtime.shared,
+            "s",
+            "forged-cmd",
+            Some("owner-echoed"),
+            vec![serde_json::json!({"type": "text", "text": "forged historical owner"})],
+            "busy".to_owned(),
+        );
+        assert!(hub.queue_and_drafts("s", |_| true).unwrap().0.is_empty());
+
+        hub.record_prompt_dispatch(
+            "s",
+            "owner-restarted".to_owned(),
+            crate::prompt_origin::DeliveryOrigin::Owner,
+            crate::prompt_origin::DeliveryOrigin::Owner,
+            300,
+        );
+        prompt_tracking::handle_undelivered_prompt(
+            &runtime.shared,
+            "s",
+            "pre-restart-cmd",
+            Some("owner-restarted"),
+            vec![serde_json::json!({"type": "text", "text": "worker copy"})],
+            "busy".to_owned(),
+        );
+        let (queue, _) = hub.queue_and_drafts("s", |_| true).expect("queue");
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].cmid, None);
+        assert_eq!(
+            queue[0].origin,
+            Some(crate::prompt_origin::DeliveryOrigin::cowboy(
+                "worker_requeue"
+            ))
+        );
+        hub.clear_queue("s");
+
         hub.record_prompt_dispatch(
             "s",
             "call-notice:cid-9".to_owned(),
             crate::prompt_origin::DeliveryOrigin::cowboy("managed_call"),
             crate::prompt_origin::DeliveryOrigin::cowboy("managed_call"),
-            200,
+            400,
         );
         handle_rejected_command(
             &hub,
@@ -5982,24 +6082,11 @@ mod tests {
             Some("rejected".to_owned()),
         );
         let (queue, _) = hub.queue_and_drafts("s", |_| true).expect("queue");
-        assert_eq!(queue.len(), 2);
+        assert_eq!(queue.len(), 1);
         assert_eq!(queue[0].cmid.as_deref(), Some("call-notice:cid-9"));
         assert_eq!(
             queue[0].origin,
             Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call"))
-        );
-        assert_eq!(
-            queue[0].initiator,
-            Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call"))
-        );
-        assert_eq!(queue[1].cmid.as_deref(), Some("owner-cmid"));
-        assert_eq!(
-            queue[1].origin,
-            Some(crate::prompt_origin::DeliveryOrigin::Owner)
-        );
-        assert_eq!(
-            queue[1].initiator,
-            Some(crate::prompt_origin::DeliveryOrigin::Owner)
         );
     }
 

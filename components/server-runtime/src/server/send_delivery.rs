@@ -140,16 +140,20 @@ pub async fn begin_recorded(
     next_checkpoint: bool,
 ) -> Result<crate::remote_runtime::SteeringDelivery, String> {
     record_steer_dispatch(state, session, &cmid, caller).await?;
-    begin(
+    let outcome = begin(
         state,
         session,
         caller,
         text,
         content,
-        cmid,
+        cmid.clone(),
         target,
         next_checkpoint,
-    )
+    );
+    if outcome.is_err() {
+        state.hub.disarm_pending_echo(session, &cmid);
+    }
+    outcome
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -202,16 +206,22 @@ pub fn begin(
         origin.clone(),
         chrono::Utc::now().timestamp_millis(),
     );
-    let delivery = state.supervisor.start_steer(
+    let delivery = match state.supervisor.start_steer(
         session,
         blocks
             .into_iter()
             .map(|block| serde_json::to_value(block).expect("ACP content serializes"))
             .collect(),
-        cmid,
+        cmid.clone(),
         target,
         next_checkpoint,
-    )?;
+    ) {
+        Ok(delivery) => delivery,
+        Err(error) => {
+            state.hub.disarm_pending_echo(session, &cmid);
+            return Err(error);
+        }
+    };
     if origin.is_owner() {
         state.hub.notify_human_turn(session);
     }

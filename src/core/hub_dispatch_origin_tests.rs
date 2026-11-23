@@ -67,6 +67,13 @@ async fn automation_caller_never_becomes_owner_and_does_not_reset_unattended_str
         sched_rx.try_recv().is_err(),
         "Automation prompt must not notify scheduler of a human turn"
     );
+    hub.record_prompt_dispatch(
+        "auto-s",
+        req.cmid.clone().unwrap(),
+        req.dispatch_origin.clone(),
+        req.trigger.clone(),
+        10,
+    );
 
     hub.push_tagged_from_worker(
         "auto-s",
@@ -105,6 +112,13 @@ async fn automation_caller_never_becomes_owner_and_does_not_reset_unattended_str
         sched_rx.try_recv(),
         Ok(crate::scheduler::ScheduleCmd::HumanTurn { session_id }) if session_id == "auto-s"
     ));
+    hub.record_prompt_dispatch(
+        "auto-s",
+        req2.cmid.clone().unwrap(),
+        req2.dispatch_origin.clone(),
+        req2.trigger.clone(),
+        20,
+    );
     hub.push_tagged_from_worker(
         "auto-s",
         Event::Update {
@@ -367,6 +381,13 @@ async fn retry_uses_proven_original_origin_and_guards_against_toctou() {
     let req = rx.try_recv().unwrap();
     assert_eq!(req.dispatch_origin, DeliveryOrigin::Owner);
     let owner_retry_cmid = req.cmid.clone().unwrap();
+    hub.record_prompt_dispatch(
+        "retry-auth",
+        owner_retry_cmid.clone(),
+        req.dispatch_origin.clone(),
+        req.trigger.clone(),
+        15,
+    );
     finish_turn(&hub, "retry-auth", req);
 
     hub.set_status("retry-auth", Status::Crashed, Some("err".into()));
@@ -541,24 +562,19 @@ async fn send_now_by_owner_preserves_call_notice_and_peer_cmids_without_promotin
 }
 
 #[tokio::test]
-async fn requeue_without_explicit_origin_recovers_recorded_owner_and_notice_provenance() {
+async fn requeue_without_explicit_origin_never_silently_promotes_to_owner() {
     let (hub, mut rx) = hub_session("requeue-rec");
 
-    hub.submit(
+    hub.record_prompt_dispatch(
         "requeue-rec",
-        "owner hello".into(),
-        vec![],
-        Some("owner-orig".into()),
-        &RequestCaller::Person,
+        "owner-orig".into(),
+        DeliveryOrigin::Owner,
+        DeliveryOrigin::Owner,
+        100,
     );
-    let req = rx.try_recv().unwrap();
-    assert_eq!(req.cmid.as_deref(), Some("owner-orig"));
-    assert_eq!(req.dispatch_origin, DeliveryOrigin::Owner);
-    drop(req);
-
     hub.requeue_prompt(
         "requeue-rec",
-        "owner hello".into(),
+        "unverified requeue".into(),
         vec![],
         Some("owner-orig".into()),
         None,
@@ -567,31 +583,151 @@ async fn requeue_without_explicit_origin_recovers_recorded_owner_and_notice_prov
     hub.set_status("requeue-rec", Status::Running, None);
     hub.drain_head("requeue-rec", false, false, None);
     let resent = rx.try_recv().unwrap();
-    assert_eq!(resent.cmid.as_deref(), Some("owner-orig"));
-    assert_eq!(resent.dispatch_origin, DeliveryOrigin::Owner);
-    assert_eq!(resent.trigger, DeliveryOrigin::Owner);
-    finish_turn(&hub, "requeue-rec", resent);
-
-    hub.submit_call_notice("requeue-rec", "cid-2", "call done".into());
-    let notice_req = rx.try_recv().unwrap();
-    assert_eq!(notice_req.cmid.as_deref(), Some("call-notice:cid-2"));
-    drop(notice_req);
-
-    hub.requeue_prompt(
-        "requeue-rec",
-        "call done".into(),
-        vec![],
-        Some("call-notice:cid-2".into()),
-        None,
-        None,
-    );
-    hub.set_status("requeue-rec", Status::Running, None);
-    hub.drain_head("requeue-rec", false, false, None);
-    let notice_resent = rx.try_recv().unwrap();
-    assert_eq!(notice_resent.cmid.as_deref(), Some("call-notice:cid-2"));
     assert_eq!(
-        notice_resent.dispatch_origin,
-        DeliveryOrigin::cowboy("managed_call")
+        resent.dispatch_origin,
+        DeliveryOrigin::cowboy("legacy_queue"),
+        "blanket requeue without verified origin must fail closed as non-owner"
+    );
+}
+
+#[tokio::test]
+async fn requeued_prompt_resent_after_newer_echo_arms_on_restart_and_trimmed_echo_does_not() {
+    let (hub, _rx) = hub_session("restart-resent");
+    {
+        let mut sessions = hub.inner.sessions.lock();
+        let s = sessions.get_mut("restart-resent").unwrap();
+        s.reached_start = true;
+        s.next_seq = 2;
+        s.restored_last_event_at_ms = Some(200);
+        s.log.push(Envelope {
+            session_id: "restart-resent".into(),
+            seq: 1,
+            event: Event::Update {
+                update: json!({
+                    "sessionUpdate": "user_message_chunk",
+                    "content": {"type": "text", "text": "notice B"}
+                }),
+            },
+            cmid: Some("call-notice:b".into()),
+        });
+    }
+    hub.hydrate_prompt_dispatches(vec![
+        PromptDispatchRecord {
+            session_id: "restart-resent".into(),
+            cmid: "call-notice:b".into(),
+            origin: DeliveryOrigin::cowboy("managed_call"),
+            trigger: DeliveryOrigin::cowboy("managed_call"),
+            dispatched_at_ms: 200,
+        },
+        PromptDispatchRecord {
+            session_id: "restart-resent".into(),
+            cmid: "owner-a".into(),
+            origin: DeliveryOrigin::Owner,
+            trigger: DeliveryOrigin::Owner,
+            dispatched_at_ms: 300,
+        },
+    ]);
+    hub.push_tagged_from_worker(
+        "restart-resent",
+        Event::Update {
+            update: json!({
+                "sessionUpdate": "user_message_chunk",
+                "content": {"type": "text", "text": "owner A"}
+            }),
+        },
+        Some("owner-a".into()),
+    );
+    let chunks = user_chunks(&hub, "restart-resent");
+    assert_eq!(chunks.len(), 2);
+    assert_eq!(chunks[1].1["promptOrigin"]["actor"], "human");
+
+    let (hub2, _rx2) = hub_session("restart-trimmed");
+    {
+        let mut sessions = hub2.inner.sessions.lock();
+        let s = sessions.get_mut("restart-trimmed").unwrap();
+        s.reached_start = false;
+        s.next_seq = 51;
+        s.restored_last_event_at_ms = Some(1_000);
+        s.log.push(Envelope {
+            session_id: "restart-trimmed".into(),
+            seq: 50,
+            event: Event::Update {
+                update: json!({
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "later reply"}
+                }),
+            },
+            cmid: None,
+        });
+    }
+    hub2.hydrate_prompt_dispatches(vec![PromptDispatchRecord {
+        session_id: "restart-trimmed".into(),
+        cmid: "owner-trimmed".into(),
+        origin: DeliveryOrigin::Owner,
+        trigger: DeliveryOrigin::Owner,
+        dispatched_at_ms: 500,
+    }]);
+    hub2.push_tagged_from_worker(
+        "restart-trimmed",
+        Event::Update {
+            update: json!({
+                "sessionUpdate": "user_message_chunk",
+                "promptOrigin": {"actor": "human", "source": "composer"},
+                "content": {"type": "text", "text": "replayed trimmed owner"}
+            }),
+        },
+        Some("owner-trimmed".into()),
+    );
+    let chunks2 = user_chunks(&hub2, "restart-trimmed");
+    assert_eq!(chunks2.len(), 1);
+    assert_eq!(chunks2[0].1["promptOrigin"]["source"], "unverified_worker");
+}
+
+#[tokio::test]
+async fn pre_provenance_submit_and_conflicting_record_never_arm_stale_pending_echo() {
+    let (hub, mut rx) = hub_session("no-prearm");
+    hub.submit(
+        "no-prearm",
+        "owner text".into(),
+        vec![],
+        Some("shared-cmid".into()),
+        &RequestCaller::Person,
+    );
+    let _req = rx.try_recv().unwrap();
+    assert!(
+        !hub.inner.sessions.lock()["no-prearm"]
+            .pending_echoes
+            .contains_key("shared-cmid")
+    );
+    hub.record_prompt_dispatch(
+        "no-prearm",
+        "shared-cmid".into(),
+        DeliveryOrigin::Owner,
+        DeliveryOrigin::Owner,
+        100,
+    );
+    assert!(
+        hub.inner.sessions.lock()["no-prearm"]
+            .pending_echoes
+            .contains_key("shared-cmid")
+    );
+    hub.disarm_pending_echo("no-prearm", "shared-cmid");
+    assert!(
+        !hub.inner.sessions.lock()["no-prearm"]
+            .pending_echoes
+            .contains_key("shared-cmid")
+    );
+    hub.record_prompt_dispatch(
+        "no-prearm",
+        "shared-cmid".into(),
+        DeliveryOrigin::peer("attacker"),
+        DeliveryOrigin::peer("attacker"),
+        200,
+    );
+    assert!(
+        !hub.inner.sessions.lock()["no-prearm"]
+            .pending_echoes
+            .contains_key("shared-cmid")
     );
 }
 

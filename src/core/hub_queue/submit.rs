@@ -67,15 +67,6 @@ impl Hub {
                 s.dispatch_pending = Some(s.in_flight_epoch);
                 let dispatch_cmid = hub_dispatch_origin::ensure_dispatch_cmid(cmid);
                 Self::note_dispatched(s, Some(&dispatch_cmid));
-                hub_dispatch_origin::note_dispatch_origin(
-                    s,
-                    session_id,
-                    &dispatch_cmid,
-                    dispatch_origin.clone(),
-                    initiator.clone(),
-                    now_ms(),
-                    content.len().max(1),
-                );
                 dispatch = Some(DispatchReq {
                     ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
                     session_id: session_id.to_owned(),
@@ -170,15 +161,6 @@ impl Hub {
                 crate::prompt_origin::compute_dispatch_origin(head.origin.as_ref(), Some(&trigger));
             let dispatch_cmid = hub_dispatch_origin::ensure_dispatch_cmid(head.cmid);
             Self::note_dispatched(s, Some(&dispatch_cmid));
-            hub_dispatch_origin::note_dispatch_origin(
-                s,
-                session_id,
-                &dispatch_cmid,
-                dispatch_origin.clone(),
-                trigger.clone(),
-                now_ms(),
-                head.content.len().max(1),
-            );
             DispatchReq {
                 ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
                 session_id: session_id.to_owned(),

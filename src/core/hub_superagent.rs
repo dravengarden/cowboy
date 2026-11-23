@@ -42,13 +42,15 @@ impl Hub {
     pub fn abandon_superagent_prompt(&self, session_id: &str, cmid: &str) {
         {
             let mut sessions = self.inner.sessions.lock();
-            if let Some(s) = sessions.get_mut(session_id)
-                && s.dispatched_cmids
+            if let Some(s) = sessions.get_mut(session_id) {
+                hub_dispatch_origin::remove_pending_echo(s, cmid);
+                if s.dispatched_cmids
                     .iter()
                     .any(|p| p.cmid == cmid && p.epoch == s.in_flight_epoch)
-            {
-                s.in_flight = false;
-                s.dispatch_pending = None;
+                {
+                    s.in_flight = false;
+                    s.dispatch_pending = None;
+                }
             }
         }
         // Failed supervision never enters the durable user queue.
@@ -150,15 +152,6 @@ impl Hub {
             s.dispatch_pending = Some(s.in_flight_epoch);
             let origin = crate::prompt_origin::DeliveryOrigin::cowboy("superagent");
             Self::note_dispatched(s, Some(&cmid));
-            hub_dispatch_origin::note_dispatch_origin(
-                s,
-                session_id,
-                &cmid,
-                origin.clone(),
-                origin.clone(),
-                now_ms(),
-                1,
-            );
             DispatchReq {
                 ownership: DispatchOwnership::supervised(
                     self,
@@ -342,6 +335,13 @@ mod tests {
         let req = rx.recv().await.unwrap();
         assert!(!req.explicit);
         assert!(!crate::prompt_origin::origin_from_cmid(req.cmid.as_deref()).is_human());
+        hub.record_prompt_dispatch(
+            "worker",
+            cmid.into(),
+            req.dispatch_origin.clone(),
+            req.trigger.clone(),
+            1,
+        );
         hub.push_tagged(
             "worker",
             Event::Update {

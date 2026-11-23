@@ -683,14 +683,12 @@ struct Session {
     dispatched_cmids: VecDeque<DispatchedPrompt>,
     dispatched_origins: HashMap<String, crate::prompt_origin::PromptDispatchRecord>,
     dispatched_origin_order: VecDeque<String>,
-    /// Dispatches currently awaiting their first worker `user_message_chunk`
-    /// echo, mapped to `(origin, expected_block_count)`. Consumed once on echo
-    /// so a worker can never replay an already-echoed Owner cmid.
+    /// Single-use pending worker echoes `(origin, expected_blocks)`.
     pending_echoes: HashMap<String, (crate::prompt_origin::DeliveryOrigin, usize)>,
     pending_echo_order: VecDeque<String>,
-    /// Active contiguous `user_message_chunk` echo state: `(cmid, origin,
-    /// remaining_continuation_blocks)`. Cleared on any non-user event.
+    /// Active contiguous `user_message_chunk` echo `(cmid, origin, remaining)`.
     active_echo: Option<(Option<String>, crate::prompt_origin::DeliveryOrigin, usize)>,
+    restored_last_event_at_ms: Option<i64>,
     /// A worker reports the same completed turn through both `TurnEnded` and a
     /// trailing `Busy` -> `Running` lifecycle edge. The first edge may drain the
     /// next prompt before the second arrives. Latch that completion until the
@@ -2294,6 +2292,7 @@ impl Hub {
                         pending_echoes: HashMap::new(),
                         pending_echo_order: VecDeque::new(),
                         active_echo: None,
+                        restored_last_event_at_ms: last_event_at_ms,
                         turn_completion_latched: false,
                         provider_generation_missing: false,
                         lifecycle_epoch: 0,
@@ -3100,6 +3099,7 @@ impl Hub {
                     pending_echoes: HashMap::new(),
                     pending_echo_order: VecDeque::new(),
                     active_echo: None,
+                    restored_last_event_at_ms: None,
                     turn_completion_latched: false,
                     provider_generation_missing: false,
                     lifecycle_epoch: 0,

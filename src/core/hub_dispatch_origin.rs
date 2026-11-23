@@ -26,15 +26,12 @@ pub(super) fn ensure_dispatch_cmid(cmid: Option<String>) -> String {
     }
 }
 
-pub(super) fn note_pending_echo(
-    s: &mut Session,
-    cmid: &str,
-    origin: DeliveryOrigin,
-    expected_blocks: usize,
-) {
+fn note_pending_echo(s: &mut Session, cmid: &str, origin: DeliveryOrigin, expected_blocks: usize) {
     let blocks = expected_blocks.max(1);
     if let Some((existing_origin, existing_blocks)) = s.pending_echoes.get_mut(cmid) {
-        *existing_origin = origin;
+        if *existing_origin != origin {
+            return;
+        }
         *existing_blocks = (*existing_blocks).max(blocks);
         return;
     }
@@ -53,7 +50,7 @@ pub(super) fn remove_pending_echo(s: &mut Session, cmid: &str) {
     }
 }
 
-pub(super) fn note_dispatch_origin(
+fn note_dispatch_origin(
     s: &mut Session,
     session_id: &str,
     cmid: &str,
@@ -62,10 +59,17 @@ pub(super) fn note_dispatch_origin(
     dispatched_at_ms: i64,
     expected_blocks: usize,
 ) {
-    note_pending_echo(s, cmid, origin.clone(), expected_blocks);
-    if s.dispatched_origins.contains_key(cmid) {
+    if let Some(existing) = s.dispatched_origins.get_mut(cmid) {
+        if existing.origin != origin {
+            // Fail closed: never arm or mutate a conflicting provenance entry.
+            return;
+        }
+        existing.dispatched_at_ms = existing.dispatched_at_ms.max(dispatched_at_ms);
+        let kept_origin = existing.origin.clone();
+        note_pending_echo(s, cmid, kept_origin, expected_blocks);
         return;
     }
+    note_pending_echo(s, cmid, origin.clone(), expected_blocks);
     while s.dispatched_origin_order.len() >= MAX_SESSION_DISPATCH_ORIGINS {
         if let Some(oldest) = s.dispatched_origin_order.pop_front() {
             s.dispatched_origins.remove(&oldest);
@@ -86,7 +90,8 @@ pub(super) fn note_dispatch_origin(
 
 impl Hub {
     /// Record an authoritative dispatch origin in the Hub's per-session cache
-    /// and arm its single-use pending worker echo.
+    /// and arm its single-use pending worker echo. Called only AFTER durable
+    /// provenance validation succeeds.
     pub fn record_prompt_dispatch(
         &self,
         session_id: &str,
@@ -100,6 +105,52 @@ impl Hub {
             return;
         };
         note_dispatch_origin(s, session_id, &cmid, origin, trigger, dispatched_at_ms, 1);
+    }
+
+    /// Disarm a pending worker echo when a dispatch or steer fails before
+    /// handoff so refused attempts never leave stale echo authorizations.
+    pub fn disarm_pending_echo(&self, session_id: &str, cmid: &str) {
+        let mut sessions = self.inner.sessions.lock();
+        if let Some(s) = sessions.get_mut(session_id) {
+            remove_pending_echo(s, cmid);
+        }
+    }
+
+    /// Whether `cmid` has already echoed into this session's transcript.
+    #[must_use]
+    pub fn is_cmid_already_echoed(&self, session_id: &str, cmid: &str) -> bool {
+        let sessions = self.inner.sessions.lock();
+        let Some(s) = sessions.get(session_id) else {
+            return false;
+        };
+        s.dispatched_cmids
+            .iter()
+            .any(|seen| seen.cmid == cmid && seen.echoed)
+            || s.log.iter().any(|env| env.cmid.as_deref() == Some(cmid))
+    }
+
+    /// Consume a single-use pending echo authorization when an unverified
+    /// (e.g. post-restart) `UndeliveredPrompt` arrives for an un-echoed
+    /// dispatch. Returns `None` if already echoed or not armed.
+    pub fn take_pending_echo_for_undelivered(
+        &self,
+        session_id: &str,
+        cmid: &str,
+    ) -> Option<DeliveryOrigin> {
+        let mut sessions = self.inner.sessions.lock();
+        let s = sessions.get_mut(session_id)?;
+        let echoed = s
+            .dispatched_cmids
+            .iter()
+            .any(|seen| seen.cmid == cmid && seen.echoed)
+            || s.log.iter().any(|env| env.cmid.as_deref() == Some(cmid));
+        if echoed {
+            remove_pending_echo(s, cmid);
+            return None;
+        }
+        let (origin, _) = s.pending_echoes.remove(cmid)?;
+        s.pending_echo_order.retain(|id| id != cmid);
+        Some(origin)
     }
 
     /// Record the exact number of content blocks (including any prepended
@@ -125,12 +176,12 @@ impl Hub {
     /// Historical dispatches are placed in `dispatched_origins` for history
     /// scans and Retry lookups, NOT in `pending_echoes` (so a compromised
     /// worker cannot replay historical Owner cmids). Only the single newest
-    /// hydrated record per session whose `cmid` has not yet echoed into the
-    /// retained log is armed in `pending_echoes`, preserving in-flight echoes
-    /// across Controller restarts.
+    /// un-echoed hydrated record at the session's latest `dispatched_at_ms` is
+    /// armed in `pending_echoes`, provided its timestamp neither predates a
+    /// trimmed hot log nor predates a newer echoed user turn.
     pub fn hydrate_prompt_dispatches(&self, records: Vec<PromptDispatchRecord>) {
         let mut sessions = self.inner.sessions.lock();
-        let mut newest_per_session: HashMap<String, (String, DeliveryOrigin)> = HashMap::new();
+        let mut per_session: HashMap<String, Vec<PromptDispatchRecord>> = HashMap::new();
         for record in records {
             if let Some(s) = sessions.get_mut(&record.session_id) {
                 if !s.dispatched_origins.contains_key(&record.cmid) {
@@ -143,17 +194,40 @@ impl Hub {
                     s.dispatched_origins
                         .insert(record.cmid.clone(), record.clone());
                 }
-                newest_per_session.insert(record.session_id, (record.cmid, record.origin));
+                per_session
+                    .entry(record.session_id.clone())
+                    .or_default()
+                    .push(record);
             }
         }
-        for (session_id, (cmid, origin)) in newest_per_session {
-            if let Some(s) = sessions.get_mut(&session_id)
-                && !s
-                    .log
-                    .iter()
-                    .any(|env| env.cmid.as_deref() == Some(cmid.as_str()))
+        for (session_id, rows) in per_session {
+            let Some(s) = sessions.get_mut(&session_id) else {
+                continue;
+            };
+            let Some(max_ts) = rows.iter().map(|r| r.dispatched_at_ms).max() else {
+                continue;
+            };
+            let trimmed_floor = (!s.reached_start)
+                .then_some(s.restored_last_event_at_ms)
+                .flatten();
+            let candidate = rows
+                .into_iter()
+                .rev()
+                .filter(|r| r.dispatched_at_ms == max_ts)
+                .find(|r| {
+                    !s.log
+                        .iter()
+                        .any(|env| env.cmid.as_deref() == Some(r.cmid.as_str()))
+                });
+            if let Some(record) = candidate
+                && trimmed_floor.is_none_or(|floor| record.dispatched_at_ms >= floor)
             {
-                note_pending_echo(s, &cmid, origin, HYDRATED_PENDING_ECHO_MAX_BLOCKS);
+                note_pending_echo(
+                    s,
+                    &record.cmid,
+                    record.origin,
+                    HYDRATED_PENDING_ECHO_MAX_BLOCKS,
+                );
             }
         }
     }
