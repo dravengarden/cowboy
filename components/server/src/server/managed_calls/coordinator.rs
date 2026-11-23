@@ -122,6 +122,7 @@ fn review_fields(
     json!({
         "review_candidates": routine.list.iter().filter_map(|p| p["id"].as_str()).collect::<Vec<_>>(),
         "review_routing": super::selection::routing_view(runnable, provider, &policy.review, caller),
+        "analysis_routing": super::selection::analysis_routing_view(runnable, provider),
         "same_vendor": caller.0,
         // Analysis may run where no reviewer is eligible; a high-risk review
         // may still name an explicit-only reviewer.
@@ -1013,8 +1014,8 @@ async fn start(
     }) {
         return error("preset_unavailable", "not_submitted");
     }
-    if request.purpose.is_review()
-        && let Err(refused) = route_review(
+    if request.purpose.is_review() {
+        if let Err(refused) = route_review(
             state,
             meta,
             ledger,
@@ -1025,8 +1026,11 @@ async fn start(
             preset,
         )
         .await
-    {
-        return refused;
+        {
+            return refused;
+        }
+    } else {
+        super::selection::admit_analysis(&request, &runnable, &mut target, preset);
     }
     let call_id = random_id("call");
     let child_id = state.supervisor.reserve_session_id();

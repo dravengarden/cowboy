@@ -307,3 +307,58 @@ test("auditRouting catches stale evidence, unmatched rows and outdated field sna
     "routing.json/costs/gpt-6.2-sol:max: referenced field snapshot 2026-10-01.json is missing",
   ]);
 });
+
+import { summary } from "./score.ts";
+
+test("auditRouting validates analysis rows including thought_level presets", () => {
+  const routing: RoutingTable = {
+    schema: 1,
+    evidence: "2026-11-23",
+    providers: {
+      antigravity: {
+        analysis: {
+          auto: [{ family: "gemini-hydrogen", model: "gemini-4-hydrogen", efforts: ["high"] }],
+          context_ask: [{ family: "gemini-neon", model: "gemini-9-neon", efforts: ["high"] }],
+        },
+      },
+    },
+    costs: {},
+  };
+  const manifests = {
+    antigravity: {
+      configuration_presets: [
+        {
+          id: "gemini-hydrogen-high",
+          values: { model: "gemini-4-hydrogen", thought_level: "high" },
+        },
+      ],
+    },
+  };
+  assertEquals(auditRouting(routing, manifests, "2026-11-23"), [
+    "routing.json/antigravity.analysis.context_ask: row (gemini-neon model=gemini-9-neon efforts=high) matches no signed preset",
+  ]);
+});
+
+test("summary includes compact effective routing section when routing table is provided", () => {
+  const c = buildCatalog(m, [target("a", "2026-01-01")], inputs([]), inputs([]), "2026-11-23");
+  const routing: RoutingTable = {
+    schema: 1,
+    evidence: "2026-11-23",
+    providers: {
+      antigravity: {
+        analysis: {
+          auto: [{ family: "gemini-hydrogen", model: "gemini-4-hydrogen", efforts: ["high"] }],
+          context_ask: [
+            { family: "gemini-hydrogen", model: "gemini-4-hydrogen", efforts: ["high"] },
+          ],
+        },
+      },
+    },
+    costs: {
+      "gemini-4-hydrogen:high": { field: { purpose: "analysis", median_tokens: 59522, n: 43 } },
+    },
+  };
+  const text = summary(c, routing);
+  assertEquals(text.includes("## Effective routing (models/routing.json 2026-11-23)"), true);
+  assertEquals(text.includes("- antigravity: analysis gemini-4-hydrogen:high (~60k tok)"), true);
+});

@@ -247,6 +247,21 @@ _time:7d _stream:{_SYSTEMD_UNIT="cowboy.service"} "cowboy.review.routed" | unpac
 _time:7d _stream:{_SYSTEMD_UNIT="cowboy.service"} "cowboy.review.finished" | unpack_logfmt | stats by (model, effort, risk) count() reviews, median(total_tokens) tokens, median(duration_ms) ms, avg(findings) findings
 ```
 
+### Analysis and context-ask routing (2026-11-23)
+
+`models/routing.json` also carries an optional per-Provider `analysis` block
+(`auto` for workspace analysis and `context_ask` for session-history asks).
+For a fresh unnamed `analysis` call (no explicit `preset`, no Session Tools
+target pin), the Controller resolves the first runnable preset matching
+`context_ask` (when `sessions` is non-empty) or `auto`, logs
+`cowboy.analysis.routed`, and publishes each Provider's `analysis_routing` in
+`calls.capabilities` beside `review_routing`. Explicit presets and Tools pins
+are never refused by `analysis` routing, and Antigravity keeps its explicit-only
+admission boundary (`provider:"antigravity"` must still be named, while its
+unnamed `analysis` / `context_ask` calls resolve to `gemini-hydrogen-high`).
+The analysis model-family matcher stays separate from the reviewer allowlist so
+non-reviewer models never enter review candidates.
+
 ## Native coverage and residual gap
 
 Codex and Claude choose their own model only for their own turns; neither

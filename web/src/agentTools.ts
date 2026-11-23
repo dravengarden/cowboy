@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { providerDisplayName } from "./providerDisplayName";
 
 /** Agent tools the Controller enforces: per agent kind, per-session overrides. */
@@ -43,7 +37,10 @@ export interface ReviewPreferences {
   gpt_effort?: ReviewEffort;
 }
 export const DEFAULT_REVIEW_PREFERENCES: ReviewPreferences = {
-  claude: ["opus", "fable"], gpt: ["astra", "sol"], claude_effort: "max", gpt_effort: "max",
+  claude: ["opus", "fable"],
+  gpt: ["astra", "sol"],
+  claude_effort: "max",
+  gpt_effort: "max",
 };
 
 export interface AgentTools {
@@ -99,9 +96,21 @@ export interface RoutingCost {
   field?: { purpose: string; median_tokens: number; median_minutes: number; n: number };
 }
 /** docs/review-routing.md; read-only. Absent from older Controllers. */
+export interface AnalysisRouting {
+  auto: RoutingRow[];
+  context_ask?: RoutingRow[];
+}
 export interface ReviewRouting {
   evidence: string;
-  providers: Record<string, { high: RoutingTier; routine: RoutingTier; economy?: RoutingTier }>;
+  providers: Record<
+    string,
+    {
+      high?: RoutingTier;
+      routine?: RoutingTier;
+      economy?: RoutingTier;
+      analysis?: AnalysisRouting;
+    }
+  >;
   costs: Record<string, RoutingCost>;
 }
 
@@ -134,10 +143,10 @@ export function choiceFor(
   const same = presets.find((preset) => {
     const own = preset.values ?? {};
     const ownKeys = Object.keys(own).sort();
-    return ownKeys.length === keys.length &&
-      ownKeys.every((key, index) =>
-        key === keys[index] && own[key] === values[key]
-      );
+    return (
+      ownKeys.length === keys.length &&
+      ownKeys.every((key, index) => key === keys[index] && own[key] === values[key])
+    );
   });
   return same ? { preset: same.id } : { options: values };
 }
@@ -167,18 +176,17 @@ export function agentLabel(agent: string): string {
   if (agent === AUTO) return "Auto";
   const named = providerDisplayName(agent);
   if (named) return named;
-  return agent.split("-").map((part) =>
-    part.charAt(0).toUpperCase() + part.slice(1)
-  ).join(" ");
+  return agent
+    .split("-")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 /** Agents of one family review alike; an agent never calls its own family
  * (mirrors `same_family` in components/server/src/server/agent_tools.rs). */
 export function sameFamily(left: string, right: string): boolean {
   const family = (agent: string): string =>
-    ["claude", "codex"].find((name) =>
-      agent === name || agent.startsWith(`${name}-`)
-    ) ?? agent;
+    ["claude", "codex"].find((name) => agent === name || agent.startsWith(`${name}-`)) ?? agent;
   return family(left) === family(right);
 }
 
@@ -187,9 +195,7 @@ export function callableTargets(
   caller: string,
   catalog: ToolsCatalog,
 ): ToolsCatalog["call_targets"] {
-  return catalog.call_targets.filter((target) =>
-    !sameFamily(target.agent, caller)
-  );
+  return catalog.call_targets.filter((target) => !sameFamily(target.agent, caller));
 }
 
 /** Replace, add or remove one agent from a target list, keeping its order. */
@@ -201,23 +207,21 @@ export function withTarget(
 ): CallTarget[] {
   const existing = targets.find((target) => target.agent === agent);
   if (!allowed) return targets.filter((target) => target.agent !== agent);
-  const picked: TargetChoice = typeof choice === "string"
-    ? { preset: choice }
-    : choice ?? {};
-  const next: CallTarget = picked.preset !== undefined
-    ? { agent, preset: picked.preset }
-    : picked.options && Object.keys(picked.options).length > 0
-    ? { agent, options: picked.options }
-    : { agent };
+  const picked: TargetChoice = typeof choice === "string" ? { preset: choice } : (choice ?? {});
+  const next: CallTarget =
+    picked.preset !== undefined
+      ? { agent, preset: picked.preset }
+      : picked.options && Object.keys(picked.options).length > 0
+        ? { agent, options: picked.options }
+        : { agent };
   return existing
-    ? targets.map((target) => target.agent === agent ? next : target)
+    ? targets.map((target) => (target.agent === agent ? next : target))
     : [...targets, next];
 }
 
 /** Keep a default that still names an allowed agent. */
 export function normalizedDefault(policy: CallsPolicy): string {
-  return policy.default === AUTO ||
-      policy.targets.some((target) => target.agent === policy.default)
+  return policy.default === AUTO || policy.targets.some((target) => target.agent === policy.default)
     ? policy.default
     : AUTO;
 }
@@ -235,10 +239,7 @@ function sameTargets(left: CallTarget[], right: CallTarget[]): boolean {
 
 /** The minimal session override producing `next` over the agent defaults:
  * fields equal to the defaults are inherited, not copied. */
-export function overrideFor(
-  defaults: AgentTools,
-  next: AgentTools,
-): SessionToolsOverride {
+export function overrideFor(defaults: AgentTools, next: AgentTools): SessionToolsOverride {
   const override: SessionToolsOverride = { schema: 1 };
   const memory: NonNullable<SessionToolsOverride["memory"]> = {};
   if (next.memory.tools !== defaults.memory.tools) {
@@ -252,7 +253,10 @@ export function overrideFor(
   const review: Partial<ReviewPreferences> = {};
   for (const family of ["claude", "gpt"] as const) {
     const order = (next.calls.review ?? DEFAULT_REVIEW_PREFERENCES)[family];
-    if (JSON.stringify(order) !== JSON.stringify((defaults.calls.review ?? DEFAULT_REVIEW_PREFERENCES)[family])) {
+    if (
+      JSON.stringify(order) !==
+      JSON.stringify((defaults.calls.review ?? DEFAULT_REVIEW_PREFERENCES)[family])
+    ) {
       review[family] = order;
     }
   }
@@ -293,9 +297,9 @@ function renameKey<T>(value: T, from: string, to: string): T {
     return value.map((item) => renameKey(item, from, to)) as T;
   }
   if (value === null || typeof value !== "object") return value;
-  const entries = Object.entries(value as Record<string, unknown>).map((
-    [key, item],
-  ) => [key === from ? to : key, renameKey(item, from, to)] as const);
+  const entries = Object.entries(value as Record<string, unknown>).map(
+    ([key, item]) => [key === from ? to : key, renameKey(item, from, to)] as const,
+  );
   return Object.fromEntries(entries) as T;
 }
 
@@ -309,12 +313,10 @@ export function withWireKey<T>(value: T): T {
 
 async function json<T>(response: Response, what: string): Promise<T> {
   if (!response.ok) throw new Error(`${what} (${response.status})`);
-  return withMemoryKey(await response.json() as T);
+  return withMemoryKey((await response.json()) as T);
 }
 
-export async function fetchSessionTools(
-  session: string,
-): Promise<SessionToolsView> {
+export async function fetchSessionTools(session: string): Promise<SessionToolsView> {
   return await json(
     await fetch(`/api/sessions/${encodeURIComponent(session)}/tools`),
     "Tools unavailable",
@@ -323,13 +325,10 @@ export async function fetchSessionTools(
 
 // A start page and its settings sheet can display the same session together.
 // Fan out acknowledged writes; never retain a second copy of the document.
-const sessionToolsListeners = new Map<
-  string,
-  Set<(value: SessionToolsView) => void>
->();
+const sessionToolsListeners = new Map<string, Set<(value: SessionToolsView) => void>>();
 const sessionToolsWrites = new Set<string>();
 const sessionToolsWriteListeners = new Set<() => void>();
-const subscribeToolsWrites = (receive: () => void): () => void => {
+const subscribeToolsWrites = (receive: () => void): (() => void) => {
   sessionToolsWriteListeners.add(receive);
   return () => {
     sessionToolsWriteListeners.delete(receive);
@@ -367,9 +366,7 @@ export async function saveSessionTools(
   // Admission is synchronous, including two presses before React has painted
   // disabled controls. Only one whole-document write per session may be in flight.
   if (sessionToolsWrites.has(session)) {
-    throw new Error(
-      "Tools are already being saved. Try again when the save finishes.",
-    );
+    throw new Error("Tools are already being saved. Try again when the save finishes.");
   }
   sessionToolsWrites.add(session);
   notifyToolsWrites();
@@ -442,8 +439,7 @@ export function useRemoteDocument<T>(
     load().then(
       (loaded) => live && !received && setValue(loaded),
       (failure: unknown) =>
-        live && !received &&
-        setError(String((failure as Error).message ?? failure)),
+        live && !received && setError(String((failure as Error).message ?? failure)),
     );
     return () => {
       live = false;
@@ -452,21 +448,26 @@ export function useRemoteDocument<T>(
     // `key` names the document; `load` and `subscribe` close over that identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
-  const save = useCallback((write: () => Promise<T>, optimistic?: T) => {
-    const previous = value;
-    const revision = acknowledgedRevision.current;
-    if (optimistic !== undefined) setValue(optimistic);
-    setSaving(true);
-    write().then(
-      (saved) => {
-        setValue(saved);
-        setError(null);
-      },
-      (failure: unknown) => {
-        if (acknowledgedRevision.current === revision) setValue(previous);
-        setError(String((failure as Error).message ?? failure));
-      },
-    ).finally(() => setSaving(false));
-  }, [value]);
+  const save = useCallback(
+    (write: () => Promise<T>, optimistic?: T) => {
+      const previous = value;
+      const revision = acknowledgedRevision.current;
+      if (optimistic !== undefined) setValue(optimistic);
+      setSaving(true);
+      write()
+        .then(
+          (saved) => {
+            setValue(saved);
+            setError(null);
+          },
+          (failure: unknown) => {
+            if (acknowledgedRevision.current === revision) setValue(previous);
+            setError(String((failure as Error).message ?? failure));
+          },
+        )
+        .finally(() => setSaving(false));
+    },
+    [value],
+  );
   return { value, error, saving, save };
 }

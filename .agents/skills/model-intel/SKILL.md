@@ -34,7 +34,7 @@ both input sets so a later audit can tell whether its inputs are complete. Read
    runs `periodic-audit.ts` daily and writes the latest digest to
    `/var/lib/cowboy/model-intel/latest.{json,md}` (and logs
    `cowboy.model_intel.audit` to VictoriaLogs). A full refresh is warranted
-   when the audit reports catalog/routing drift, field cost drift, a matured
+   when the audit reports catalog/routing drift, field cost drift, quota pressure, a matured
    provisional window, a catalog older than 30 days, a Provider release that
    adds/retires/retargets a model, or a material new run. Otherwise answer
    from `models/summary.md`.

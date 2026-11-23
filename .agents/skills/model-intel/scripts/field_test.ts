@@ -86,3 +86,97 @@ test("summarizeTelemetry splits review and analysis calls and detects cost drift
     [],
   );
 });
+
+import { Database } from "bun:sqlite";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { computeQuotaBurn, readDeepSeekGatewayStats, readQuotaSnapshots } from "./field.ts";
+
+test("readQuotaSnapshots anonymizes windows and computeQuotaBurn correlates calls", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cowboy-quota-test-"));
+  try {
+    const usagePath = join(dir, "usage-named.json");
+    const nowMs = Date.parse("2026-11-23T12:00:00Z");
+    const resetSec = Math.floor(Date.parse("2026-11-28T00:00:00Z") / 1000);
+    writeFileSync(
+      usagePath,
+      JSON.stringify({
+        schema: 1,
+        entries: [
+          {
+            owner: "secret-owner",
+            account: "secret-uuid",
+            usage: {
+              provider: "openai",
+              status: "available",
+              observed_at_ms: nowMs - 5 * 60_000,
+              rate_limits: {
+                rateLimitsByLimitId: {
+                  codex: {
+                    primary: { usedPercent: 52, windowDurationMins: 10080, resetsAt: resetSec },
+                  },
+                },
+              },
+            },
+          },
+        ],
+      }),
+    );
+    const current = readQuotaSnapshots(usagePath, nowMs);
+    assertEquals(current.length, 1);
+    assertEquals(current[0]?.provider, "openai");
+    assertEquals(current[0]?.used_percent, 52);
+    assertEquals(current[0]?.stale, false);
+    const prev = [
+      {
+        ...current[0]!,
+        used_percent: 40,
+        observed_at_ms: current[0]!.observed_at_ms - 12 * 3_600_000,
+      },
+    ];
+    const burns = computeQuotaBurn(prev, current, () => 24);
+    assertEquals(burns, [
+      {
+        provider: "openai",
+        limit_id: "codex",
+        delta_used_percent: 12,
+        elapsed_hours: 12,
+        burn_percent_per_day: 24,
+        calls_in_window: 24,
+        estimated_percent_per_call: 0.5,
+      },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("readDeepSeekGatewayStats aggregates DeepSeek requests and cache hit ratio", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cowboy-ds-test-"));
+  try {
+    const dbPath = join(dir, "cowboy.sqlite3");
+    const db = new Database(dbPath);
+    db.exec(`CREATE TABLE provider_usage_events (
+      provider TEXT, agent TEXT, model_family TEXT, occurred_at_ms INTEGER,
+      input_tokens INTEGER, output_tokens INTEGER, cache_hit_tokens INTEGER, cache_miss_tokens INTEGER
+    )`);
+    const now = Date.parse("2026-11-23T00:00:00Z");
+    const ins = db.query("INSERT INTO provider_usage_events VALUES (?,?,?,?,?,?,?,?)");
+    ins.run("deepseek", "claude", "flash", now - 1000, 900, 100, 800, 200);
+    ins.run("deepseek", "claude", "flash", now - 2000, 1900, 100, 1600, 400);
+    db.close();
+    const stats = readDeepSeekGatewayStats(dbPath, now - 10_000);
+    assertEquals(stats, [
+      {
+        agent: "claude",
+        model_family: "flash",
+        requests: 2,
+        median_total_tokens: 1500,
+        cache_hit_ratio: 0.8,
+      },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

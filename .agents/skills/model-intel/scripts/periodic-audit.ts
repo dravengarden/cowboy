@@ -1,24 +1,33 @@
-// Read-only periodic audit for Cowboy model evidence, review routing, live
-// ledger costs, and Agent Provider harness dependencies.
+// Read-only periodic audit for Cowboy model evidence, review/analysis routing,
+// live ledger costs, quota pressure/burn, DeepSeek gateway telemetry, and
+// Agent Provider harness capabilities & dependencies.
 //
 // Usage (repository root, dev shell or bun):
 //   bun .agents/skills/model-intel/scripts/periodic-audit.ts \
 //     --repo . --database /var/lib/cowboy/cowboy.sqlite3 --days 14 \
 //     --check-upstream --out-dir /var/lib/cowboy/model-intel --logfmt
 //
-// Strictly read-only on the repository and Controller database: writes only
-// latest.json and latest.md under --out-dir (when given) and never mutates
-// Git checkouts, plugins, routing.json, or sessions.
+// Strictly read-only on the repository, Controller database and usage snapshot:
+// writes only latest.json, latest.md and anonymized quota-history.jsonl under
+// --out-dir (when given) and never mutates Git checkouts, plugins,
+// routing.json, or sessions.
 
 import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   type AuditReport,
   auditDependencies,
   type FetchFn,
 } from "../../release-cowboy-plugin/scripts/audit-dependencies.ts";
 import {
+  computeQuotaBurn,
+  type DeepSeekGatewayStat,
+  type QuotaBurn,
+  type QuotaWindow,
+  readCompletedCallCounts,
+  readDeepSeekGatewayStats,
   readLedgerCalls,
+  readQuotaSnapshots,
   summarizeTelemetry,
   type TelemetrySummary,
   writeFileGuarded,
@@ -42,7 +51,11 @@ export type HarnessSummary = {
   default_preset: string | null;
   preset_count: number;
   targets_covered: number;
+  managed_profiles: string[];
+  structured_output: boolean;
   routed_for_review: boolean;
+  routed_for_analysis: boolean;
+  runtime_pins: Record<string, string>;
 };
 
 export type PeriodicAuditReport = {
@@ -62,7 +75,19 @@ export type PeriodicAuditReport = {
         window_days: number;
         total_reviews: number;
         total_analyses: number;
+        deepseek_gateway: DeepSeekGatewayStat[];
       } & TelemetrySummary)
+    | {
+        available: false;
+        reason: string;
+      };
+  quota_telemetry:
+    | {
+        available: true;
+        windows: QuotaWindow[];
+        burns: QuotaBurn[];
+        pressure_alerts: string[];
+      }
     | {
         available: false;
         reason: string;
@@ -84,15 +109,50 @@ export type PeriodicAuditReport = {
 export type PeriodicAuditOptions = {
   repoRoot?: string;
   database?: string;
+  usageFile?: string;
+  quotaHistoryPath?: string;
   days?: number;
   asOf?: string;
   localObservations?: string;
   checkUpstream?: boolean;
   driftThreshold?: number;
   driftMinSamples?: number;
+  quotaPressurePercent?: number;
   fetchFn?: FetchFn;
   nowMs?: number;
 };
+
+function loadQuotaHistory(path: string | undefined): QuotaWindow[] {
+  if (!path || !existsSync(path)) return [];
+  const rows: QuotaWindow[] = [];
+  for (const line of readFileSync(path, "utf8").split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      rows.push(JSON.parse(line) as QuotaWindow);
+    } catch {
+      // Ignore malformed historical line.
+    }
+  }
+  return rows;
+}
+
+function saveQuotaHistory(
+  path: string,
+  previous: QuotaWindow[],
+  current: QuotaWindow[],
+  nowMs: number,
+  protectedDb?: string,
+) {
+  const cutoff = nowMs - 90 * 86_400_000;
+  const dedup = new Map<string, QuotaWindow>();
+  for (const row of [...previous, ...current]) {
+    if (row.observed_at_ms < cutoff) continue;
+    dedup.set(`${row.provider}|${row.limit_id}|${row.observed_at_ms}`, row);
+  }
+  const ordered = [...dedup.values()].sort((a, b) => a.observed_at_ms - b.observed_at_ms);
+  const text = ordered.map((row) => JSON.stringify(row)).join("\n") + (ordered.length ? "\n" : "");
+  writeFileGuarded(path, text, protectedDb);
+}
 
 export async function runPeriodicAudit(
   options: PeriodicAuditOptions = {},
@@ -147,19 +207,33 @@ export async function runPeriodicAudit(
       const covered = presets.filter((preset) =>
         targets.some((t) => t.provider === providerId && t.preset === preset.id),
       ).length;
+      const profiles = manifest.runtime?.managed_profiles ?? {};
+      const managedProfiles = Object.keys(profiles).sort();
+      const structuredOutput = Object.values(profiles).some((profile) =>
+        (profile.capabilities ?? []).includes("structured_output"),
+      );
+      const runtimePins = Object.fromEntries(
+        (manifest.runtime?.dependencies ?? []).map((dep) => [dep.id, dep.version]),
+      );
+      const providerRouting = routing?.providers[providerId];
       return {
         provider_id: providerId,
         version: manifest.version ?? "unknown",
         default_preset: presets.find((preset) => preset.is_default)?.id ?? null,
         preset_count: presets.length,
         targets_covered: covered,
-        routed_for_review: Boolean(routing?.providers[providerId]),
+        managed_profiles: managedProfiles,
+        structured_output: structuredOutput,
+        routed_for_review: Boolean(providerRouting?.routine || providerRouting?.high),
+        routed_for_analysis: Boolean(providerRouting?.analysis),
+        runtime_pins: runtimePins,
       };
     });
 
   let fieldTelemetry: PeriodicAuditReport["field_telemetry"];
   const database = options.database;
-  if (database && existsSync(database)) {
+  const dbExists = Boolean(database && existsSync(database));
+  if (database && dbExists) {
     try {
       const since = nowMs - windowDays * 86_400_000;
       const calls = readLedgerCalls(database, since, ["review", "design_review", "analysis"]);
@@ -167,11 +241,13 @@ export async function runPeriodicAudit(
         minSamples: options.driftMinSamples ?? 5,
         threshold: options.driftThreshold ?? 0.3,
       });
+      const deepseekGateway = readDeepSeekGatewayStats(database, since);
       fieldTelemetry = {
         available: true,
         window_days: windowDays,
         total_reviews: summary.review_groups.reduce((s, g) => s + g.n, 0),
         total_analyses: summary.analysis_groups.reduce((s, g) => s + g.n, 0),
+        deepseek_gateway: deepseekGateway,
         ...summary,
       };
     } catch (error) {
@@ -184,6 +260,53 @@ export async function runPeriodicAudit(
     fieldTelemetry = {
       available: false,
       reason: database ? `database not found at ${database}` : "no database path configured",
+    };
+  }
+
+  let quotaTelemetry: PeriodicAuditReport["quota_telemetry"];
+  const usageFile =
+    options.usageFile ?? (database ? join(dirname(database), "usage-named.json") : undefined);
+  const pressureThreshold = options.quotaPressurePercent ?? 80;
+  if (usageFile && existsSync(usageFile)) {
+    try {
+      const windows = readQuotaSnapshots(usageFile, nowMs);
+      const history = loadQuotaHistory(options.quotaHistoryPath);
+      const callCountCache = new Map<string, Record<string, number>>();
+      const callsForRange = (provider: string, sinceMs: number, untilMs: number) => {
+        if (!database || !dbExists) return 0;
+        const key = `${sinceMs}:${untilMs}`;
+        let counts = callCountCache.get(key);
+        if (!counts) {
+          counts = readCompletedCallCounts(database, sinceMs, untilMs);
+          callCountCache.set(key, counts);
+        }
+        return counts[provider] ?? 0;
+      };
+      const burns = computeQuotaBurn(history, windows, callsForRange);
+      const pressureAlerts = windows
+        .filter(
+          (w) =>
+            !w.stale &&
+            (w.window_duration_mins === null || w.window_duration_mins >= 1440) &&
+            w.used_percent >= pressureThreshold,
+        )
+        .map((w) => `${w.provider}/${w.limit_id} at ${w.used_percent}% used`);
+      quotaTelemetry = {
+        available: true,
+        windows,
+        burns,
+        pressure_alerts: pressureAlerts,
+      };
+    } catch (error) {
+      quotaTelemetry = {
+        available: false,
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+  } else {
+    quotaTelemetry = {
+      available: false,
+      reason: usageFile ? `usage snapshot not found at ${usageFile}` : "no usage file configured",
     };
   }
 
@@ -210,8 +333,6 @@ export async function runPeriodicAudit(
 
   const reasons: string[] = [];
   for (const finding of findings) {
-    // Missing local reference_only observations on a machine that does not store
-    // them is informational rather than an urgent action by itself.
     if (finding === "local reference-only observations unavailable; local inputs not verified") {
       continue;
     }
@@ -223,6 +344,11 @@ export async function runPeriodicAudit(
       reasons.push(
         `field-cost-drift: ${drift.target} median ${drift.live_median_tokens} vs recorded ${drift.recorded_median_tokens} (${pct}, n=${drift.n})`,
       );
+    }
+  }
+  if (quotaTelemetry.available) {
+    for (const alert of quotaTelemetry.pressure_alerts) {
+      reasons.push(`quota-pressure: ${alert}`);
     }
   }
   if (upstreamDependencies.checked) {
@@ -252,6 +378,7 @@ export async function runPeriodicAudit(
     catalog_audit: { as_of: asOf, findings },
     harness_inventory: harnessInventory,
     field_telemetry: fieldTelemetry,
+    quota_telemetry: quotaTelemetry,
     upstream_dependencies: upstreamDependencies,
   };
 }
@@ -274,15 +401,48 @@ export function renderMarkdown(report: PeriodicAuditReport): string {
     lines.push(...report.catalog_audit.findings.map((f) => `- ${f}`), "");
   }
   lines.push(
-    "## Harness inventory",
-    "| Provider | Version | Default preset | Presets (targeted) | Review routed |",
-    "| --- | --- | --- | --- | --- |",
-    ...report.harness_inventory.map(
-      (h) =>
-        `| ${h.provider_id} | ${h.version} | ${h.default_preset ?? "-"} | ${h.preset_count} (${h.targets_covered}) | ${h.routed_for_review ? "yes" : "no"} |`,
-    ),
+    "## Harness capability matrix",
+    "| Provider | Version | Default preset | Presets (targeted) | Managed profiles | Routing (review/analysis) | Runtime pins |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
+    ...report.harness_inventory.map((h) => {
+      const pins = Object.entries(h.runtime_pins)
+        .map(([k, v]) => `${k}@${v}`)
+        .join(", ");
+      const profiles = h.managed_profiles.length ? h.managed_profiles.join(", ") : "-";
+      const routed = `${h.routed_for_review ? "yes" : "no"}/${h.routed_for_analysis ? "yes" : "no"}`;
+      return `| ${h.provider_id} | ${h.version} | ${h.default_preset ?? "-"} | ${h.preset_count} (${h.targets_covered}) | ${profiles} | ${routed} | ${pins || "-"} |`;
+    }),
     "",
   );
+  lines.push("## Quota windows & burn");
+  if (!report.quota_telemetry.available) {
+    lines.push(`- Unavailable: ${report.quota_telemetry.reason}`, "");
+  } else {
+    const qt = report.quota_telemetry;
+    if (qt.windows.length > 0) {
+      lines.push(
+        "| Provider | Limit | Used % | Window (min) | Age (min) | Stale |",
+        "| --- | --- | --- | --- | --- | --- |",
+        ...qt.windows.map(
+          (w) =>
+            `| ${w.provider} | ${w.limit_id} | ${w.used_percent}% | ${w.window_duration_mins ?? "-"} | ${w.observed_age_mins} | ${w.stale ? "yes" : "no"} |`,
+        ),
+        "",
+      );
+    }
+    if (qt.burns.length > 0) {
+      lines.push(
+        "### Observed quota burn",
+        "| Provider | Limit | Delta % | Elapsed (h) | Burn %/day | Calls | Est. %/call |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+        ...qt.burns.map(
+          (b) =>
+            `| ${b.provider} | ${b.limit_id} | +${b.delta_used_percent}% | ${b.elapsed_hours} | ${b.burn_percent_per_day}% | ${b.calls_in_window} | ${b.estimated_percent_per_call ?? "-"} |`,
+        ),
+        "",
+      );
+    }
+  }
   lines.push("## Live ledger telemetry");
   if (!report.field_telemetry.available) {
     lines.push(`- Unavailable: ${report.field_telemetry.reason}`, "");
@@ -312,6 +472,18 @@ export function renderMarkdown(report: PeriodicAuditReport): string {
         ...ft.analysis_groups.map(
           (g) =>
             `| ${g.provider} | ${g.target} | ${g.n} | ${g.median_tokens ?? "-"} | ${g.median_minutes ?? "-"} |`,
+        ),
+        "",
+      );
+    }
+    if (ft.deepseek_gateway.length > 0) {
+      lines.push(
+        "### DeepSeek gateway usage",
+        "| Agent | Family | Requests | Median total tokens | Cache hit ratio |",
+        "| --- | --- | --- | --- | --- |",
+        ...ft.deepseek_gateway.map(
+          (d) =>
+            `| ${d.agent} | ${d.model_family} | ${d.requests} | ${d.median_total_tokens ?? "-"} | ${d.cache_hit_ratio !== null ? `${Math.round(d.cache_hit_ratio * 100)}%` : "-"} |`,
         ),
         "",
       );
@@ -359,10 +531,19 @@ export function formatLogfmt(report: PeriodicAuditReport): string {
     ["ledger_available", report.field_telemetry.available],
   ];
   if (report.field_telemetry.available) {
+    const dsReqs = report.field_telemetry.deepseek_gateway.reduce((s, d) => s + d.requests, 0);
     fields.push(
       ["reviews", report.field_telemetry.total_reviews],
       ["analyses", report.field_telemetry.total_analyses],
       ["cost_drifts", report.field_telemetry.cost_drifts.length],
+      ["deepseek_requests", dsReqs],
+    );
+  }
+  if (report.quota_telemetry.available) {
+    fields.push(
+      ["quota_windows", report.quota_telemetry.windows.length],
+      ["quota_pressure", report.quota_telemetry.pressure_alerts.length],
+      ["quota_burns", report.quota_telemetry.burns.length],
     );
   }
   if (report.upstream_dependencies.checked) {
@@ -388,6 +569,7 @@ if (import.meta.main) {
   };
   const repoRoot = option("--repo") ?? ".";
   const database = option("--database") ?? "/var/lib/cowboy/cowboy.sqlite3";
+  const usageFile = option("--usage-file");
   const days = Number(option("--days") ?? "14");
   const asOf = option("--as-of");
   const localObservations = option("--local-observations");
@@ -402,14 +584,20 @@ if (import.meta.main) {
     throw new Error("--drift-threshold must be a positive number");
   }
 
+  const nowMs = Date.now();
+  const quotaHistoryPath = outDir ? join(outDir, "quota-history.jsonl") : undefined;
+  const previousQuota = loadQuotaHistory(quotaHistoryPath);
   const report = await runPeriodicAudit({
     repoRoot,
     database,
+    usageFile,
+    quotaHistoryPath,
     days,
     asOf,
     localObservations,
     checkUpstream,
     driftThreshold,
+    nowMs,
   });
 
   const jsonText = `${JSON.stringify(report, null, 2)}\n`;
@@ -417,6 +605,15 @@ if (import.meta.main) {
     const protectedDb = existsSync(database) ? database : undefined;
     writeFileGuarded(join(outDir, "latest.json"), jsonText, protectedDb);
     writeFileGuarded(join(outDir, "latest.md"), renderMarkdown(report), protectedDb);
+    if (quotaHistoryPath && report.quota_telemetry.available) {
+      saveQuotaHistory(
+        quotaHistoryPath,
+        previousQuota,
+        report.quota_telemetry.windows,
+        nowMs,
+        protectedDb,
+      );
+    }
   } else {
     process.stdout.write(jsonText);
   }

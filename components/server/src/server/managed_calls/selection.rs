@@ -458,6 +458,59 @@ pub(super) fn routing_view(
     })
 }
 
+/// Automatic preset for a fresh unnamed `analysis` (or `context_ask`) call,
+/// from `models/routing.json` against the pinned generation's runnable presets.
+pub(super) fn analysis_preset(
+    runnable: &Value,
+    provider: &str,
+    context_ask: bool,
+) -> Option<String> {
+    let table = routing::TABLE.as_ref()?;
+    routing::analysis_choice(table, provider, runnable, context_ask)
+        .and_then(|preset| preset["id"].as_str().map(str::to_owned))
+}
+
+/// Route an unnamed fresh `analysis` (or `context_ask`) call to the cheap
+/// preset in `models/routing.json` when no explicit preset or Tools pin is set.
+pub(super) fn admit_analysis(
+    request: &crate::managed_calls::Request,
+    runnable: &Value,
+    target: &mut super::super::agent_tools::CallTarget,
+    preset: Option<&str>,
+) {
+    if !matches!(request.purpose, crate::managed_calls::Purpose::Analysis)
+        || !matches!(
+            request.conversation,
+            crate::managed_calls::Conversation::Fresh {}
+        )
+        || preset.is_some()
+        || target.preset.is_some()
+        || target.options.is_some()
+    {
+        return;
+    }
+    let context_ask = !request.context.sessions.is_empty();
+    if let Some(chosen) = analysis_preset(runnable, &target.agent, context_ask) {
+        tracing::info!(
+            event_name = "cowboy.analysis.routed",
+            request_id = %request.request_id,
+            provider = %target.agent,
+            context_ask,
+            preset = %chosen,
+            outcome = "automatic",
+            "analysis routed"
+        );
+        target.preset = Some(chosen);
+    }
+}
+
+/// Capabilities view of `provider`'s automatic analysis / context-ask routing.
+pub(super) fn analysis_routing_view(runnable: &Value, provider: &str) -> Value {
+    routing::TABLE.as_ref().map_or(Value::Null, |table| {
+        routing::analysis_view(table, provider, runnable)
+    })
+}
+
 /// The family/effort order that predates the routing table.
 /// The reviewer families `provider` may review with, in the session's order.
 /// Antigravity reviews only with Claude Opus (its named account's Claude
@@ -906,6 +959,61 @@ mod tests {
             review_preset(&choices, &choices, Some("gemini-neon-high")),
             Err("review_model_not_allowed")
         );
+    }
+
+    #[test]
+    fn analysis_routing_picks_cheap_presets_without_widening_reviewers() {
+        let codex = json!([
+            {"id":"astra-max","values":{"model":"gpt-6.2-astra","reasoning_effort":"max"}},
+            {"id":"sol-6-2-max","values":{"model":"gpt-6.2-sol","reasoning_effort":"max"}},
+            {"id":"sol-6-2-medium","values":{"model":"gpt-6.2-sol","reasoning_effort":"medium"}},
+            {"id":"luna-6-max","values":{"model":"gpt-6-luna","reasoning_effort":"max"}}
+        ]);
+        assert_eq!(
+            analysis_preset(&codex, "codex", false).as_deref(),
+            Some("sol-6-2-medium")
+        );
+        assert_eq!(
+            analysis_preset(&codex, "codex", true).as_deref(),
+            Some("sol-6-2-medium")
+        );
+        // Falls back to luna-6-max for context asks when sol-6-2-medium is absent.
+        let luna_only = json!([
+            {"id":"astra-max","values":{"model":"gpt-6.2-astra","reasoning_effort":"max"}},
+            {"id":"luna-6-max","values":{"model":"gpt-6-luna","reasoning_effort":"max"}}
+        ]);
+        assert_eq!(
+            analysis_preset(&luna_only, "codex", true).as_deref(),
+            Some("luna-6-max")
+        );
+        let claude = json!([
+            {"id":"opus-high","values":{"model":"opus","effort":"high"}},
+            {"id":"sonnet-medium","values":{"model":"sonnet","effort":"medium"}}
+        ]);
+        assert_eq!(
+            analysis_preset(&claude, "claude-code", false).as_deref(),
+            Some("sonnet-medium")
+        );
+        let agy = json!([
+            {"id":"gemini-neon-high","values":{"model":"gemini-4-neon","thought_level":"high"}},
+            {"id":"gemini-hydrogen-high","values":{"model":"gemini-4-hydrogen","thought_level":"high"}},
+            {"id":"claude-opus-high","values":{"model":"claude-opus-5-5","thought_level":"high"}}
+        ]);
+        assert_eq!(
+            analysis_preset(&agy, "antigravity", false).as_deref(),
+            Some("gemini-hydrogen-high")
+        );
+        assert_eq!(
+            analysis_preset(&agy, "antigravity", true).as_deref(),
+            Some("gemini-hydrogen-high")
+        );
+        let view = analysis_routing_view(&agy, "antigravity");
+        assert_eq!(view["automatic"]["preset"], "gemini-hydrogen-high");
+        assert_eq!(view["context_ask"]["preset"], "gemini-hydrogen-high");
+        // Reviewer allowlist remains strictly unaffected by analysis families.
+        assert_eq!(family("gemini-4-hydrogen"), None);
+        assert_eq!(family("gpt-6-luna"), None);
+        assert_eq!(family("sonnet"), None);
     }
 
     #[test]
