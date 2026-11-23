@@ -21,7 +21,7 @@ import { WorkspacePicker } from "./WorkspacePicker";
 import { AiInstallationPicker, installationCapacity } from "./AiInstallationPicker";
 import { useProjectPlacement } from "./useProjectPlacement";
 import { SessionSubscription, useSessionSubscription } from "./SessionSubscription";
-import { Fragment, lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { Alert, alpha, Box, Button, ButtonBase, Chip, CircularProgress, Divider, IconButton, List, ListItemIcon, ListItemText, ListSubheader, Menu, MenuItem, Skeleton, Stack, TextField, Tooltip, Typography, useMediaQuery, useTheme } from "@mui/material";
 import type { Theme } from "@mui/material";
@@ -42,7 +42,9 @@ import { isManagedChild } from "./managedCalls";
 import { SessionRowTitle } from "./SessionRowTitle";
 import { SessionActionBadge, SessionAttentionMenu } from "./SessionAttention";
 import { SessionObligationBadge, SessionsSyncedCaption } from "./SessionOfflineBadges";
-import { mergeSessionOverview, type SessionInfoPayload, sessionOverviewSections } from "./sessionOverview";
+import { type SessionInfoPayload } from "./sessionOverview";
+import { InfoRow, SessionOverviewRows } from "./SessionOverviewRows";
+export { InfoRow, SessionOverviewRows };
 import { useProviderCatalog } from "./providerCatalog";
 import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
 import { type SessionMeta } from "./protocol";
@@ -2306,10 +2308,9 @@ export function SessionList({
                     onOpenSettings={onOpenSettings}
                 />
             )}
-            <Menu
-                sx={{ display: desktop ? "none" : undefined }}
-                anchorEl={menuAnchor?.el ?? null}
-                open={!desktop && !!menuAnchor}
+            {!desktop && menuAnchor !== null && <Menu
+                anchorEl={menuAnchor.el}
+                open
                 onClose={(): void => setMenuAnchor(null)}
                 slotProps={{ paper: { sx: { minWidth: 180 } } }}
             >
@@ -2424,10 +2425,10 @@ export function SessionList({
                     </ListItemIcon>
                     <ListItemText primary="Move to Trash" />
                 </MenuItem>
-            </Menu>
-            {desktop && (
+            </Menu>}
+            {desktop && menuAnchor !== null && (
                 <DesktopModalShell
-                        open={!!menuAnchor}
+                        open
                         onClose={(): void => setMenuAnchor(null)}
                         title="Session"
                         description={`${menuAnchor?.row.title ?? ""} · ${menuAnchor?.row.cwd ?? ""}`}
@@ -2536,10 +2537,9 @@ export function SessionList({
                 </DesktopModalShell>
             )}
             {/* --- Folder layers (docs/sessions-folders.md) --- */}
-            <Menu
-                sx={{ display: desktop ? "none" : undefined }}
-                anchorEl={folderMenu?.el ?? null}
-                open={!desktop && !!folderMenu}
+            {!desktop && folderMenu !== null && <Menu
+                anchorEl={folderMenu.el}
+                open
                 onClose={(): void => setFolderMenu(null)}
                 slotProps={{ paper: { sx: { minWidth: 220 } } }}
             >
@@ -2623,10 +2623,10 @@ export function SessionList({
                     <ListItemIcon><DeleteOutline fontSize="medium" color="error" /></ListItemIcon>
                     <ListItemText primary="Delete folder" />
                 </MenuItem>
-            </Menu>
-            {desktop && (
+            </Menu>}
+            {desktop && folderMenu !== null && (
                 <DesktopModalShell
-                    open={!!folderMenu}
+                    open
                     onClose={(): void => setFolderMenu(null)}
                     title="Folder"
                     description={`${folderMenuFolder?.name ?? ""}${folderMenuFolder?.project && folderMenuFolder.project !== folderMenuFolder.name ? ` · project ${folderMenuFolder.project}` : ""} · ${String(folderMenuCount?.kind === "folder" ? folderMenuCount.sessionCount : 0)} items`}
@@ -3613,38 +3613,6 @@ export function LoadingState({ compact = false }: { compact?: boolean }): React.
 // --- Info: per-session dialog + the Settings storage panel ------------------
 // Both read the daemon's HTTP info endpoints (GET, no WS) and surface the
 // capacity numbers the audit flagged — events are the unbounded grower.
-
-// A label/value row used by both info surfaces.
-export function InfoRow({ k, v }: { k: string; v: string }): React.JSX.Element {
-    return (
-        <Stack direction="row" spacing={2} sx={{ justifyContent: "space-between", alignItems: "baseline" }}>
-            <Typography variant="caption" sx={{ color: "text.secondary", flexShrink: 0 }}>{k}</Typography>
-            <Typography variant="body2" sx={{ wordBreak: "break-all", textAlign: "right" }}>{v}</Typography>
-        </Stack>
-    );
-}
-
-export function SessionOverviewRows(
-    { info, live }: { info: SessionInfoPayload; live?: SessionMeta | null },
-): React.JSX.Element {
-    const { data: accounts } = useSubscriptionAccounts();
-    const merged = mergeSessionOverview(info, live);
-    const sections = sessionOverviewSections(merged);
-    const account = sessionAccountIdentity(accounts, merged);
-    sections[0]?.rows.splice(3, 0, { label: "Account", value: account.label });
-    return (
-        <Stack spacing={1.15} sx={{ mt: 1 }}>
-            {sections.map((section, index) => (
-                <Fragment key={section.key}>
-                    {index > 0 && <Divider />}
-                    {section.rows.map((row) => (
-                        <InfoRow key={row.label} k={row.label} v={row.value} />
-                    ))}
-                </Fragment>
-            ))}
-        </Stack>
-    );
-}
 
 export function DesktopSessionInfoPanel(
     { session }: { session: SessionMeta | null },

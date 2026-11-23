@@ -123,6 +123,7 @@ export function DesktopPermissionDock({
   return (
     <ApprovalDock
       kind="permission"
+      promptKey={`permission:${item.requestId}:${String(item.seq)}`}
       tone={question ? "primary" : "warning"}
       icon={question
         ? <HelpOutlineRounded sx={{ fontSize: desktopSize(16) }} />
@@ -208,6 +209,7 @@ function CallApprovalDock({
   return (
     <ApprovalDock
       kind="call"
+      promptKey={`call:${String(approval.prompt_revision ?? "")}:${String(approval.requests)}:${(approval.request_ids ?? []).join(",")}`}
       tone="primary"
       icon={<AccountTree sx={{ fontSize: desktopSize(16) }} />}
       title={callApprovalTitle(approval)}
@@ -269,6 +271,7 @@ function CallApprovalDock({
 
 function ApprovalDock({
   kind,
+  promptKey,
   tone,
   icon,
   title,
@@ -280,6 +283,7 @@ function ApprovalDock({
   children,
 }: {
   kind: "permission" | "call";
+  promptKey: string;
   tone: Tone;
   icon: ReactNode;
   title: string;
@@ -313,7 +317,7 @@ function ApprovalDock({
         ),
       })}
     >
-      <DesktopApprovalCommands choices={choices} available={!busy} />
+      <DesktopApprovalCommands choices={choices} available={!busy} promptKey={promptKey} />
       <Stack
         direction="row"
         alignItems="center"

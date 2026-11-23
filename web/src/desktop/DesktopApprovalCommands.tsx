@@ -29,10 +29,13 @@ export function desktopApprovalLeaderKey(index: number): string | null {
 export function DesktopApprovalCommands({
   choices,
   available,
+  promptKey = "",
 }: {
   choices: readonly DesktopApprovalChoice[];
   /** False while an answer is in flight: the keys then do nothing. */
   available: boolean;
+  /** Prompt identity and revision; advancing it re-registers commands so stale palette rows cannot answer a newer prompt. */
+  promptKey?: string;
 }): null {
   // Isolated fixtures mount the surface without a command host.
   const register = useOptionalDesktopCommands()?.register;
@@ -51,12 +54,12 @@ export function DesktopApprovalCommands({
   }, [leaderArmed]);
   const labels = choices.slice(0, DESKTOP_APPROVAL_CHOICE_LIMIT)
     .map((choice) => choice.label);
-  // Re-register only when the wording changes, not on every render.
-  const signature = JSON.stringify(labels);
+  // Re-register when the prompt identity/revision or wording changes, not on every render.
+  const signature = JSON.stringify([promptKey, labels]);
   useEffect(() => {
     if (!register) return undefined;
     seen.current = !armed.current;
-    const names = JSON.parse(signature) as string[];
+    const [, names] = JSON.parse(signature) as [string, string[]];
     const releases = names.map((label, index) =>
       register({
         id: `approval.choice.${String(index + 1)}`,

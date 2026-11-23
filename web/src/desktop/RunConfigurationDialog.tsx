@@ -1,5 +1,5 @@
 import { ScrollEdges } from "@cowboy/app-shell";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Box, Button, Stack, Typography } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import { Tune } from "@mui/icons-material";
@@ -18,7 +18,7 @@ import {
   runConfigDraftEdit,
   withRunConfigDraft,
 } from "../runConfigPresets";
-import { setSessionConfigOptions } from "../store";
+import { setSessionConfigOptions, useStoreSelector } from "../store";
 import { SessionToolsSection } from "../AgentToolsPanel";
 import { SessionContextSettings } from "../SessionContextSettings";
 import { DesktopModal } from "./DesktopModal";
@@ -231,6 +231,26 @@ function RunConfigApplyBar({
   );
 }
 
+const applyingSessions = new Set<string>();
+const applyingListeners = new Set<() => void>();
+function setSessionApplying(sessionId: string, active: boolean): void {
+  if (applyingSessions.has(sessionId) === active) return;
+  if (active) applyingSessions.add(sessionId);
+  else applyingSessions.delete(sessionId);
+  for (const listener of applyingListeners) listener();
+}
+function subscribeApplying(listener: () => void): () => void {
+  applyingListeners.add(listener);
+  return () => applyingListeners.delete(listener);
+}
+function useSessionApplying(sessionId: string): boolean {
+  return useSyncExternalStore(
+    subscribeApplying,
+    () => applyingSessions.has(sessionId),
+    () => false,
+  );
+}
+
 /** The Agent pane's draft: what it shows, what Apply sends, and the
  *  close that warns before it discards. */
 function useRunConfigDraft(
@@ -244,8 +264,15 @@ function useRunConfigDraft(
   // cache) once per key. Tools and linked sessions keep their own saves.
   const [configDraft, setConfigDraft] = useState<RunConfigDraft>({});
   const [discardArmed, setDiscardArmed] = useState(false);
-  const [applying, setApplying] = useState(false);
+  const applying = useSessionApplying(sessionId);
   const [applyError, setApplyError] = useState("");
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   const draftOptions = useMemo(
     () => withRunConfigDraft(options, configDraft),
     [options, configDraft],
@@ -275,19 +302,23 @@ function useRunConfigDraft(
     setApplyError("");
   }, []);
   const applyConfig = async (): Promise<void> => {
-    if (applying || !unsaved) return;
-    setApplying(true);
+    if (applyingSessions.has(sessionId) || !unsaved) return;
+    setSessionApplying(sessionId, true);
     setApplyError("");
     try {
       await setSessionConfigOptions(sessionId, draftChanges);
-      setConfigDraft({});
-      setDiscardArmed(false);
+      if (mountedRef.current) {
+        setConfigDraft({});
+        setDiscardArmed(false);
+      }
     } catch (cause) {
-      setApplyError(
-        cause instanceof Error ? cause.message : "Could not apply changes",
-      );
+      if (mountedRef.current) {
+        setApplyError(
+          cause instanceof Error ? cause.message : "Could not apply changes",
+        );
+      }
     } finally {
-      setApplying(false);
+      setSessionApplying(sessionId, false);
     }
   };
   // Closing never drops edits silently: the first Esc warns, the second
@@ -386,17 +417,52 @@ export function RunConfigurationDialog({
   optionPresentations: ReadonlyMap<string, ProviderConfigOptionPresentation>;
   /** Replace or fork opens on its form in the Context pane. */
   initialFocus?: SessionSettingsFocus;
+}): React.JSX.Element | null {
+  if (!open) return null;
+  return (
+    <RunConfigurationDialogContent
+      onClose={onClose}
+      sessionId={sessionId}
+      session={session}
+      status={status}
+      dead={dead}
+      options={options}
+      optionPresentations={optionPresentations}
+      initialFocus={initialFocus}
+    />
+  );
+}
+
+function RunConfigurationDialogContent({
+  onClose,
+  sessionId,
+  session,
+  status,
+  dead,
+  options,
+  optionPresentations,
+  initialFocus,
+}: {
+  onClose: () => void;
+  sessionId: string;
+  session: SessionMeta | undefined;
+  status: Status;
+  dead: boolean;
+  options: readonly ConfigOption[];
+  optionPresentations: ReadonlyMap<string, ProviderConfigOptionPresentation>;
+  initialFocus: SessionSettingsFocus;
 }): React.JSX.Element {
+  const liveSession = useStoreSelector((snapshot) => snapshot.sessionsById.get(sessionId)) ?? session;
   const panelRef = useRef<HTMLDivElement>(null);
-  useRunConfigKeyboard(open, panelRef, initialFocus === "new_from" ? "new_from" : "first");
+  useRunConfigKeyboard(true, panelRef, initialFocus === "new_from" ? "new_from" : "first");
   const directConfigShortcuts = options.map(optionShortcut).filter(
     (shortcut): shortcut is string => shortcut !== undefined,
   );
   const recommendedPresets = runConfigPresets(
-    session?.provider,
+    liveSession?.provider,
     options,
-    session?.provider_version,
-    session?.provider_generation_digest,
+    liveSession?.provider_version,
+    liveSession?.provider_generation_digest,
   );
   const {
     draftOptions,
@@ -410,10 +476,10 @@ export function RunConfigurationDialog({
     applyConfig,
     closeConfig,
     savedNames,
-  } = useRunConfigDraft(sessionId, options, open, onClose);
+  } = useRunConfigDraft(sessionId, options, true, onClose);
   return (
     <DesktopModal
-      open={open}
+      open
       onClose={closeConfig}
       title="Run configuration"
       description={dead
@@ -487,7 +553,7 @@ export function RunConfigurationDialog({
           title="Context"
           caption="Where the work goes, and what the next message reads"
         >
-          {session && <SessionContextSettings session={session} inlineLinks />}
+          {liveSession && <SessionContextSettings session={liveSession} inlineLinks />}
         </RunConfigPane>
       <ScrollEdges /></Box>
     </DesktopModal>

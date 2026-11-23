@@ -19,6 +19,37 @@ export interface UsageAccountCard {
   providerId?: string;
 }
 
+export function sameSessionQuotaInputs(
+  previous: readonly SessionMeta[],
+  next: readonly SessionMeta[],
+): boolean {
+  if (previous === next) return true;
+  let pi = 0;
+  let ni = 0;
+  const isQuotaInput = (s: SessionMeta): boolean =>
+    Boolean(s.provider_account_id && s.provider_account_id !== "default" && !s.closing && sessionQuota(s) !== undefined);
+  while (true) {
+    while (pi < previous.length && !isQuotaInput(previous[pi]!)) pi += 1;
+    while (ni < next.length && !isQuotaInput(next[ni]!)) ni += 1;
+    if (pi >= previous.length || ni >= next.length) {
+      return pi >= previous.length && ni >= next.length;
+    }
+    const a = previous[pi]!;
+    const b = next[ni]!;
+    if (
+      a !== b && (
+        a.id !== b.id ||
+        a.provider !== b.provider ||
+        a.provider_account_id !== b.provider_account_id ||
+        a.owner_user_id !== b.owner_user_id ||
+        sessionQuota(a) !== sessionQuota(b)
+      )
+    ) return false;
+    pi += 1;
+    ni += 1;
+  }
+}
+
 /** A session notice must use the same bound identity as Settings and About.
  * A retired legacy default account has no quota card at all. */
 export function sessionAccountQuota(

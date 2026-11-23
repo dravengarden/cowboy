@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import {
   type DesktopCommand,
-  useDesktopCommands,
+  useDesktopCommandActions,
 } from "../commands/DesktopCommandProvider";
 import { desktopLeaderSequence } from "../commands/workspaceShortcuts";
 import { desktopReviewShown } from "./desktopWorkView";
@@ -67,7 +67,7 @@ function navigatorKey(id: string, shortcut: string, title: string, run: () => vo
 /** The Review group's keys (`␣V…`) and the Navigator's own keys. The
  *  commands are registered once; they read the latest actions. */
 export function useReviewWorkbenchCommands(actions: ReviewWorkbenchActions): void {
-  const { register } = useDesktopCommands();
+  const { register } = useDesktopCommandActions();
   const latest = useRef(actions);
   latest.current = actions;
   const commands = useMemo((): DesktopCommand[] => {

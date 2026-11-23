@@ -21,6 +21,7 @@ import {
 import {
   type DesktopCommand,
   useDesktopCommand,
+  useDesktopCommandActions,
   useDesktopCommands,
 } from "./DesktopCommandProvider";
 import { DesktopShortcut } from "./DesktopKeycap";
@@ -109,15 +110,13 @@ export function DesktopCommandHost({
   /** A Draft, not a Session, is the workspace item. */
   draftOpen?: boolean;
 }): React.JSX.Element {
-  const registry = useDesktopCommands();
+  const registry = useDesktopCommandActions();
   const workspace = useDesktopWorkspace();
   useDesktopInsertCommand(draftOpen, workspace.focusRegion);
   const leader = useDesktopLeaderOptional();
   const leaderRef = useRef(leader);
   leaderRef.current = leader;
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState(0);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [recentOpen, setRecentOpen] = useState(false);
   // Commands are memoized; read the live jump list and handlers at run time.
@@ -141,12 +140,6 @@ export function DesktopCommandHost({
   };
   const openRecentRef = useRef(openRecent);
   openRecentRef.current = openRecent;
-  const paletteInputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (!paletteOpen) return undefined;
-    const frame = requestAnimationFrame(() => paletteInputRef.current?.focus());
-    return () => cancelAnimationFrame(frame);
-  }, [paletteOpen]);
   const clickFocusedItemAction = (action: "default" | "edit"): void => {
     const item = document.activeElement instanceof HTMLElement
       ? document.activeElement.closest<HTMLElement>("[data-desktop-item]")
@@ -177,8 +170,6 @@ export function DesktopCommandHost({
       sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.commandPalette),
       allowInEditor: true,
       run: () => {
-        setQuery("");
-        setSelected(0);
         setPaletteOpen(true);
       },
     },
@@ -572,36 +563,6 @@ export function DesktopCommandHost({
     workspace,
   ]);
 
-  const normalized = query.trim().toLowerCase();
-  // Only an open palette lists commands: each row evaluates its `when`
-  // predicate (often a DOM query), and this host re-renders on every
-  // workspace change.
-  const available = !paletteOpen ? [] : registry.list().filter((command) =>
-    command.id !== "commandPalette.open" &&
-    (!normalized ||
-      `${command.title} ${command.id} ${command.group} ${command.description ?? ""}`
-        .toLowerCase().includes(normalized))
-  );
-  // An explicit pick runs the command wherever the palette was opened: the
-  // focus scope only disambiguates keys (FOCUS.md "Commands and help").
-  const runCommand = (id: string): void => {
-    if (registry.execute(id, { anyScope: true })) setPaletteOpen(false);
-  };
-  useEffect(() => setSelected(0), [query]);
-  useEffect(() => {
-    if (selected >= available.length) {
-      setSelected(Math.max(0, available.length - 1));
-    }
-  }, [available.length, selected]);
-
-  const runSelected = (): void => {
-    const command = available[selected];
-    if (command) runCommand(command.id);
-  };
-  const selectedCommand = available[selected];
-  const selectedAvailable = selectedCommand !== undefined &&
-    selectedCommand.when?.() !== false;
-
   return (
     <>
       {commands.map((command) => (
@@ -619,40 +580,77 @@ export function DesktopCommandHost({
         onClose={(): void => setRecentOpen(false)}
         onOpen={(key): void => openRecentRef.current(key)}
       />
-      <DesktopModal
-        open={paletteOpen}
-        onClose={(): void => setPaletteOpen(false)}
-        title="Command Palette"
-        description="Search and run every registered Desktop command."
-        width={680}
-        shortcutGroups={[
-          {
-            slots: [
-              {
-                shortcut: DESKTOP_SHORTCUTS.commands,
-                label: "Palette",
-                availability: "active",
-              },
-            ],
-          },
-          {
-            label: "Navigate",
-            slots: [
-              {
-                shortcut: "↑/↓",
-                label: "Move",
-                availability: available.length > 0 ? "available" : "inactive",
-              },
-              {
-                shortcut: "Enter",
-                label: "Run",
-                availability: selectedAvailable ? "available" : "inactive",
-              },
-            ],
-          },
-          { slots: [{ shortcut: "Esc", label: "Close" }] },
-        ]}
-      >
+      {paletteOpen && (
+        <DesktopCommandPalette onClose={(): void => setPaletteOpen(false)} />
+      )}
+    </>
+  );
+}
+
+function paletteShortcutGroups(hasResults: boolean, selectedAvailable: boolean) {
+  return [
+    { slots: [{ shortcut: DESKTOP_SHORTCUTS.commands, label: "Palette", availability: "active" as const }] },
+    {
+      label: "Navigate",
+      slots: [
+        { shortcut: "↑/↓", label: "Move", availability: hasResults ? "available" as const : "inactive" as const },
+        { shortcut: "Enter", label: "Run", availability: selectedAvailable ? "available" as const : "inactive" as const },
+      ],
+    },
+    { slots: [{ shortcut: "Esc", label: "Close" }] },
+  ];
+}
+
+function DesktopCommandPalette({
+  onClose,
+}: {
+  onClose: () => void;
+}): React.JSX.Element {
+  // Mounted only while open, so subscribing to live command updates keeps
+  // dynamic rows (such as approvals) current without waking DesktopCommandHost.
+  const registry = useDesktopCommands();
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState(0);
+  const paletteInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => paletteInputRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  const normalized = query.trim().toLowerCase();
+  const available = registry.commands.filter((command) =>
+    command.id !== "commandPalette.open" &&
+    (!normalized ||
+      `${command.title} ${command.id} ${command.group} ${command.description ?? ""}`
+        .toLowerCase().includes(normalized))
+  );
+  // An explicit pick runs only the exact registered command instance this row
+  // presented: if an approval prompt changed before activation, reject it.
+  const runCommand = (command: DesktopCommand): void => {
+    const live = registry.list().find((entry) => entry.id === command.id);
+    if (live !== command) return;
+    if (registry.execute(command.id, { anyScope: true })) onClose();
+  };
+  useEffect(() => setSelected(0), [query]);
+  useEffect(() => {
+    if (selected >= available.length) setSelected(Math.max(0, available.length - 1));
+  }, [available.length, selected]);
+
+  const runSelected = (): void => {
+    const command = available[selected];
+    if (command) runCommand(command);
+  };
+  const selectedCommand = available[selected];
+  const selectedAvailable = selectedCommand !== undefined && selectedCommand.when?.() !== false;
+
+  return (
+    <DesktopModal
+      open
+      onClose={onClose}
+      title="Command Palette"
+      description="Search and run every registered Desktop command."
+      width={680}
+      shortcutGroups={paletteShortcutGroups(available.length > 0, selectedAvailable)}
+    >
       <Box sx={{ px: 1.5, pb: 1.5, pt: 1.25 }}>
         <Box
           sx={{
@@ -720,38 +718,58 @@ export function DesktopCommandHost({
             }}
           />
         </Box>
-        <List
-          dense
-          sx={{ maxHeight: "min(52vh, 460px)", overflowY: "auto", pt: 1 }}
-        >
-          {available.map((command, index) => (
-            <ListItemButton
-              key={command.id}
-              selected={index === selected}
-              disabled={command.when?.() === false}
-              onMouseMove={(): void => setSelected(index)}
-              onClick={(): void => runCommand(command.id)}
-              sx={{ borderRadius: 1.5 }}
-            >
-              <ListItemText
-                primary={command.title}
-                secondary={command.when?.() === false
-                  ? (typeof command.disabledReason === "function"
-                    ? command.disabledReason()
-                    : command.disabledReason ?? "Unavailable")
-                  : command.description ?? command.id}
-              />
-              {(command.shortcut || command.sequence) && (
-                <DesktopShortcut
-                  shortcut={command.shortcut ?? command.sequence?.join(" → ") ?? ""}
-                  availability={command.when?.() === false ? "inactive" : "available"}
-                />
-              )}
-            </ListItemButton>
-          ))}
-        <ScrollEdges /></List>
+        <DesktopCommandPaletteList
+          available={available}
+          selected={selected}
+          onHover={setSelected}
+          onRun={runCommand}
+        />
       </Box>
-      </DesktopModal>
-    </>
+    </DesktopModal>
+  );
+}
+
+function DesktopCommandPaletteList({
+  available,
+  selected,
+  onHover,
+  onRun,
+}: {
+  available: readonly DesktopCommand[];
+  selected: number;
+  onHover: (index: number) => void;
+  onRun: (command: DesktopCommand) => void;
+}): React.JSX.Element {
+  return (
+    <List
+      dense
+      sx={{ maxHeight: "min(52vh, 460px)", overflowY: "auto", pt: 1 }}
+    >
+      {available.map((command, index) => (
+        <ListItemButton
+          key={command.id}
+          selected={index === selected}
+          disabled={command.when?.() === false}
+          onMouseMove={(): void => onHover(index)}
+          onClick={(): void => onRun(command)}
+          sx={{ borderRadius: 1.5 }}
+        >
+          <ListItemText
+            primary={command.title}
+            secondary={command.when?.() === false
+              ? (typeof command.disabledReason === "function"
+                ? command.disabledReason()
+                : command.disabledReason ?? "Unavailable")
+              : command.description ?? command.id}
+          />
+          {(command.shortcut || command.sequence) && (
+            <DesktopShortcut
+              shortcut={command.shortcut ?? command.sequence?.join(" → ") ?? ""}
+              availability={command.when?.() === false ? "inactive" : "available"}
+            />
+          )}
+        </ListItemButton>
+      ))}
+    <ScrollEdges /></List>
   );
 }

@@ -143,7 +143,8 @@ import { useBootPresentation } from "./useBootPresentation";
 import { useOptionalDesktopWorkspace } from "./desktop/DesktopWorkspaceController";
 
 import { SettingsShell, type SettingsTab, type ProviderSettingsIntent, type ProviderSettingsTarget } from "./SettingsShell";
-import { SessionList, NO_COLLAPSED_FOLDERS, DesktopSidebarAction, CURRENT_ROW_FILL, CreateDialog, LoadingState, loadDesktopPaneCollapse, SessionOverviewRows, desktopPaneCollapseModule } from "./SessionList";
+import { NO_COLLAPSED_FOLDERS, DesktopSidebarAction, CURRENT_ROW_FILL, LoadingState, loadDesktopPaneCollapse, SessionOverviewRows, desktopPaneCollapseModule } from "./SessionList";
+import { sameAppChromeSessions, StableCreateDialog, StoreSessionList } from "./appSessionChrome";
 import { useDesktopSplitters, SIDEBAR_MIN, SIDEBAR_MAX, clampSidebarWidth, sidebarWidthStore } from "./desktopSplitters";
 export { CreateDialog } from "./SessionList";
 
@@ -273,7 +274,7 @@ const StoreTranscript = memo(function StoreTranscript({
     );
     const connected = useStoreSelector((snapshot) => snapshot.connected);
     const session = useStoreSelector((snapshot) =>
-        snapshot.sessions.find((candidate) => candidate.id === sessionId)
+        snapshot.sessionsById.get(sessionId)
     );
     const rawConfigOptions = useStoreSelector((snapshot) =>
         snapshot.configOptions.get(sessionId) ?? EMPTY_CONFIG_OPTIONS
@@ -385,7 +386,7 @@ export function App({
     const { catalog: providerCatalog } = useProviderCatalog();
     const clientUpdateSettings = useClientUpdateSettings();
     const desktopWorkspace = useOptionalDesktopWorkspace();
-    const sessions = useStoreSelector((snapshot) => snapshot.sessions);
+    const sessions = useStoreSelector((snapshot) => snapshot.sessions, sameAppChromeSessions);
     const trashedSessions = useStoreSelector((snapshot) => snapshot.trashedSessions);
     const lastError = useStoreSelector((snapshot) => snapshot.lastError);
     const sessionsLoaded = useStoreSelector((snapshot) => snapshot.sessionsLoaded);
@@ -890,8 +891,7 @@ export function App({
     }
 
     const list = (
-        <SessionList
-            sessions={sessionsForView}
+        <StoreSessionList pendingCreatedSession={pendingCreatedSession}
             drafts={draftLibrary.entries}
             onDraftAction={(action) => flushSync(() => setDraftAction(action))}
             onDraftCopy={(id, session) => {
@@ -2401,7 +2401,7 @@ export function App({
             {draftAction && <WorkspaceDraftActions key={draftAction.draft.id + draftAction.action}
                 request={draftAction} onClose={() => setDraftAction(null)} beforeLeave={draftBeforeLeave}
                 activeId={draftRoute.id} onRemoved={leaveDrafts} />}
-            <CreateDialog
+            <StableCreateDialog
                 onDraftCreated={(id) => pick(`draft:${id}`)}
                 open={dialogOpen}
                 initialFolder={newSessionFolderRef.current}
@@ -2428,7 +2428,7 @@ export function App({
                     }
                 }}
             />
-            <DeleteSessionShell
+            {pendingDelete && <DeleteSessionShell
                 session={pendingDelete}
                 onClose={(): void => setPendingDelete(null)}
                 onStopAndTrash={(): void => {
@@ -2439,7 +2439,7 @@ export function App({
                     if (pendingDelete) void deleteSession(pendingDelete.id);
                     setPendingDelete(null);
                 }}
-            />
+            />}
             {/* Folder sheets opened from inside the Sessions list mount here,
                 beside the session shells: outside the Mobile drawer layer and
                 inside the keyboard-resized app box (see SessionFolderUi). */}
@@ -2459,10 +2459,10 @@ export function App({
                 />
             )}
             <SessionInfoShell session={pendingInfo} onClose={(): void => setPendingInfo(null)} />
-            <SessionReloadDialog
+            {pendingReload && <SessionReloadDialog
                 session={pendingReload}
                 onClose={(): void => setPendingReload(null)}
-            />
+            />}
             <ResourceLightbox />
             <SettingsController
                 ref={settingsControllerRef}
@@ -2470,8 +2470,8 @@ export function App({
                 themeMode={themeMode}
                 onSetThemeMode={onSetThemeMode}
             />
-            <Snackbar
-                open={errorOpen}
+            {errorOpen && <Snackbar
+                open
                 // One duration for every notice (hover pauses it).
                 autoHideDuration={UNDO_NOTICE_MS}
                 onClose={(): void => setShownErrorSeq(lastError?.seq ?? 0)}
@@ -2513,7 +2513,7 @@ export function App({
                 >
                     {providerAuthShortcut?.message ?? lastError?.message ?? ""}
                 </Alert>
-            </Snackbar>
+            </Snackbar>}
         </Box>
     );
 }

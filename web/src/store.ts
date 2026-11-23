@@ -241,6 +241,7 @@ export interface State {
   connected: boolean;
   activeCapacity?: ClientCapacity;
   sessions: SessionMeta[];
+  sessionsById: ReadonlyMap<string, SessionMeta>;
   // Durable Machine registry projected by the Controller over the same product
   // WebSocket. Retain it across disconnects: transport loss is not evidence
   // that every enrolled Machine disappeared.
@@ -327,6 +328,7 @@ let errorSeq = 0;
 let state: State = {
   connected: false,
   sessions: [],
+  sessionsById: new Map(),
   machines: [],
   usage: null,
   machinesLoaded: false,
@@ -3272,13 +3274,12 @@ function liveFolders(raw: SessionFoldersValue): SessionFoldersValue {
 function commitSessions(): void {
   const titles = titleSync.view();
   const folders = foldersSync.view();
-  // Trashed sessions leave every live surface; only the Trash view reads them.
-  const { live, trashed } = splitTrashedSessions(
-    deriveSessions(rawSessions, titles, syncedKeyList(orderSync.view())),
-  );
+  const { live, trashed } = splitTrashedSessions(deriveSessions(rawSessions, titles, syncedKeyList(orderSync.view())));
+  const sessions = reuseUnchangedSessions(state.sessions, live);
   setState({
     ...state,
-    sessions: reuseUnchangedSessions(state.sessions, live),
+    sessions,
+    sessionsById: new Map(sessions.map((s) => [s.id, s])),
     trashedSessions: trashed.length === 0 && state.trashedSessions.length === 0
       ? state.trashedSessions
       : reuseUnchangedSessions(state.trashedSessions, trashed),

@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Tab, Tabs } from "@mui/material";
 import { desktopSize } from "../../surface/desktopSize";
 import { LeaderKeycap } from "../commands/DesktopKeycap";
@@ -30,7 +31,7 @@ const VIEWS: readonly {
 
 /** The work pane's title: its two views, each with the leader slot that
  *  shows it (`␣C`, `␣V`). Both views stay mounted behind the tabs. */
-export function DesktopWorkViewTabs({
+export const DesktopWorkViewTabs = memo(function DesktopWorkViewTabs({
   view,
   onChange,
 }: {
@@ -79,4 +80,4 @@ export function DesktopWorkViewTabs({
       ))}
     </Tabs>
   );
-}
+});

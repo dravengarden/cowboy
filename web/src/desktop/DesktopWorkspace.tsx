@@ -1,6 +1,6 @@
 import { desktopSize } from "../surface/desktopSize";
 import { alpha, Box, Typography } from "@mui/material";
-import { lazy, Suspense, useMemo } from "react";
+import { lazy, memo, Suspense, useMemo } from "react";
 import {
   type DesktopPane,
   useDesktopWorkspace,
@@ -174,7 +174,7 @@ function PaneHeader({
   );
 }
 
-export function DesktopWorkspace({
+export const DesktopWorkspace = memo(function DesktopWorkspace({
   promptWidth,
   resizing,
   onResizeStart,
@@ -452,4 +452,4 @@ export function DesktopWorkspace({
       )}
     </Box>
   );
-}
+});

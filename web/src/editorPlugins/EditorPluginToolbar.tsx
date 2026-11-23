@@ -10,7 +10,7 @@ import {
 } from "@mui/icons-material";
 import { Box, Button, Tooltip } from "@mui/material";
 import type { ReactNode } from "react";
-import { useDesktopCommands } from "../desktop/commands/DesktopCommandProvider";
+import { useDesktopCommandActions } from "../desktop/commands/DesktopCommandProvider";
 import { editorPluginCommandId } from "./appHost";
 import { useEditorPlugins } from "./EditorPluginManager";
 import type { EditorPluginIcon } from "./manifest";
@@ -33,7 +33,7 @@ export function EditorPluginToolbar(
   { kind, disabled }: { kind: "document" | "session"; disabled: boolean },
 ): React.JSX.Element | null {
   const { plugins } = useEditorPlugins();
-  const { execute } = useDesktopCommands();
+  const { execute } = useDesktopCommandActions();
   const buttons = plugins.flatMap((plugin) =>
     plugin.manifest.contexts.includes(kind) &&
       plugin.manifest.surfaces.includes("desktop")

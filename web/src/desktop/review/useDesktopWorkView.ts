@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   type DesktopCommand,
   useDesktopCommand,
@@ -58,10 +58,13 @@ export function useDesktopWorkView(sessionId: string): {
     : loadDesktopWorkView(sessionId);
   const [reviewMounted, setReviewMounted] = useState(view === "review");
   if (view === "review" && !reviewMounted) setReviewMounted(true);
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
   const showView = useCallback((next: DesktopWorkView): void => {
-    saveDesktopWorkView(sessionId, next);
-    setStored({ sessionId, view: next });
-  }, [sessionId]);
+    const id = sessionIdRef.current;
+    saveDesktopWorkView(id, next);
+    setStored({ sessionId: id, view: next });
+  }, []);
   useLayoutEffect(() => publishDesktopWorkView(view), [view]);
   useLayoutEffect(() => () => publishDesktopWorkView("conversation"), []);
   const showReview = useCallback((): void => {

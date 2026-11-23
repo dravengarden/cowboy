@@ -2,6 +2,7 @@ import { Box, Divider, ListItemText, Menu, MenuItem } from "@mui/material";
 import { Close, PushPin } from "@mui/icons-material";
 import { alpha, type Theme } from "@mui/material/styles";
 import {
+  memo,
   type ReactNode,
   useEffect,
   useLayoutEffect,
@@ -12,7 +13,8 @@ import {
 import { ShortcutKeycap } from "../ShortcutKeycap";
 import {
   type DesktopCommand,
-  useDesktopCommands,
+  useDesktopCommandActions,
+  useDesktopCommandSelector,
 } from "./commands/DesktopCommandProvider";
 import { LeaderKeycap } from "./commands/DesktopKeycap";
 import {
@@ -60,7 +62,7 @@ interface TabMenu {
  * pointer (click, middle click, double click, drag, context menu) and the
  * leader (`␣[` `␣]`, the `␣B` group) run the same functions.
  */
-export function DesktopTabStrip({
+export const DesktopTabStrip = memo(function DesktopTabStrip({
   items,
   currentKey,
   visits,
@@ -79,12 +81,8 @@ export function DesktopTabStrip({
   onRename: (key: string) => void;
   sx?: object;
 }): React.JSX.Element {
-  const registry = useDesktopCommands();
-  // A pending approval takes the digits (FOCUS.md "Approvals"); the tabs
-  // then show none, so every digit on screen does what it says.
-  const digits = !registry.commands.some((command) =>
-    command.id.startsWith("approval.choice.")
-  );
+  const registry = useDesktopCommandActions();
+  const digits = useDesktopCommandSelector((cmds) => !cmds.some((c) => c.id.startsWith("approval.choice.")));
   const [menu, setMenu] = useState<TabMenu | null>(null);
   const [drop, setDrop] = useState<{ key: string; after: boolean } | null>(
     null,
@@ -552,8 +550,8 @@ export function DesktopTabStrip({
       >
         <LeaderKeycap leaderKey={DESKTOP_TAB_GROUP} />
       </Box>
-      <Menu
-        open={menu !== null && menuItem !== undefined}
+      {menu !== null && menuItem !== undefined && <Menu
+        open
         onClose={(): void => setMenu(null)}
         anchorReference="anchorPosition"
         {...(menu ? { anchorPosition: { left: menu.left, top: menu.top } } : {})}
@@ -622,7 +620,7 @@ export function DesktopTabStrip({
             <ListItemText>Rename…</ListItemText>
           </MenuItem>
         )}
-      </Menu>
+      </Menu>}
     </Box>
   );
-}
+});

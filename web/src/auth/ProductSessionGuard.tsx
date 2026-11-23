@@ -12,6 +12,7 @@ import type {
 import { ProductRecentAuthSheet } from "./ProductRecentAuthSheet";
 import {
   productSessionAlertHost,
+  setProductSessionAlertVisible,
   subscribeProductSessionAlertHost,
 } from "./productSessionAlertHost";
 import {
@@ -22,6 +23,13 @@ import {
 import { HintTooltip } from "../HintTooltip";
 
 const FINAL_WARNING_MS = 30 * 60 * 1_000;
+
+function useDesktopReminderVisibility(visible: boolean): void {
+  useEffect(() => {
+    setProductSessionAlertVisible(visible);
+    return () => setProductSessionAlertVisible(false);
+  }, [visible]);
+}
 
 export function ProductSessionGuard({
   me,
@@ -96,12 +104,12 @@ export function ProductSessionGuard({
     return () => globalThis.cancelAnimationFrame(frame);
   }, [alertKey, desktopHost, mobile]);
 
+  const required = alert?.phase === "required", sheetOpen = Boolean(alert) && !suspended && (dialogOpen || required);
+  useDesktopReminderVisibility(me.auth_enabled !== false && Boolean(policy && alert && !mobile && !sheetOpen && (desktopHost || desktopFallbackReady)));
   if (me.auth_enabled === false || !policy || !alert) return null;
 
   const remaining = Math.max(0, alert.dueAtMs - serverNow);
-  const required = alert.phase === "required";
   const urgent = required || remaining <= FINAL_WARNING_MS;
-  const sheetOpen = !suspended && (dialogOpen || required);
   const label = sessionCountdownLabel(remaining);
   const title = required
     ? alert.kind === "passkey" ? "Passkey check required" : "Sign-in required"

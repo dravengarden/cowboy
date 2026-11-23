@@ -6,16 +6,22 @@ export interface ShortcutStroke {
   alt: boolean;
 }
 
+const PARSED_SHORTCUTS = new Map<string, ShortcutStroke>();
+
 export function parseShortcut(shortcut: string): ShortcutStroke {
+  const cached = PARSED_SHORTCUTS.get(shortcut);
+  if (cached !== undefined) return cached;
   const parts = shortcut.split("+").map((part) => part.trim()).filter(Boolean);
   const key = parts.at(-1)?.toLowerCase() ?? "";
-  return {
+  const stroke: ShortcutStroke = {
     key,
     mod: parts.slice(0, -1).some((part) => part.toLowerCase() === "mod"),
     ctrl: parts.slice(0, -1).some((part) => part.toLowerCase() === "ctrl"),
     shift: parts.slice(0, -1).some((part) => part.toLowerCase() === "shift"),
     alt: parts.slice(0, -1).some((part) => part.toLowerCase() === "alt"),
   };
+  PARSED_SHORTCUTS.set(shortcut, stroke);
+  return stroke;
 }
 
 export function matchesShortcut(

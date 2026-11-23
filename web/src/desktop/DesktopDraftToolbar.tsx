@@ -25,7 +25,7 @@ import { useComposerSourceMode } from "../composerSourceMode";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
 import {
   type DesktopCommand,
-  useDesktopCommands,
+  useDesktopCommandActions,
   useOptionalDesktopCommands,
 } from "./commands/DesktopCommandProvider";
 import { DesktopShortcut, LeaderKeycap } from "./commands/DesktopKeycap";
@@ -214,7 +214,7 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
       })),
     ];
   }, []);
-  const { register, execute } = useDesktopCommands();
+  const { register, execute } = useDesktopCommandActions();
   useEffect(() => {
     const remove = commands.map(register);
     return () => remove.forEach((fn) => fn());

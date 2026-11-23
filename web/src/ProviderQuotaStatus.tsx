@@ -19,7 +19,7 @@ import { loadUsageSnapshot, requestUsageRefresh, useStoreSelector } from "./stor
 import { lowPriorityInterval } from "./network/bandwidth";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { sessionAccountIdentity } from "./accountIdentity";
-import { sessionAccountQuota } from "./usageAccounts";
+import { sameSessionQuotaInputs, sessionAccountQuota } from "./usageAccounts";
 import { useNativeAccountUsage } from "./nativeAccountUsage";
 import { AccountParkedStatus } from "./SessionAccountControl";
 
@@ -55,12 +55,16 @@ export function ProviderQuotaStatus({
   const { catalog } = useProviderCatalog();
   // Shared Controller-owned usage: a refresh from any device updates it.
   const snapshot = useStoreSelector((state) => state.usage);
-  const sessions = useStoreSelector((state) => state.sessions);
-  const session = sessions.find((item) => item.id === sessionId && item.provider === provider);
+  const sessions = useStoreSelector((state) => state.sessions, sameSessionQuotaInputs);
+  const session = useStoreSelector((state) => {
+    const candidate = state.sessionsById.get(sessionId);
+    return candidate?.provider === provider ? candidate : undefined;
+  });
   const serviceAccount = Boolean(session && (!session.provider_account_id || session.provider_account_id === "default"));
   const { data: accounts } = useSubscriptionAccounts();
   const native = useNativeAccountUsage(accounts?.registry.revision);
   const [clock, setClock] = useState(() => Date.now());
+  const snapshotLoaded = snapshot !== null;
 
   useEffect(() => {
     if (!serviceAccount) return;
@@ -69,7 +73,7 @@ export function ProviderQuotaStatus({
       if (document.visibilityState === "hidden") return;
       void loadUsageSnapshot(controller.signal).catch(() => undefined);
     };
-    load();
+    if (!snapshotLoaded) load();
     const stop = lowPriorityInterval(load, USAGE_POLL_MS);
     document.addEventListener("visibilitychange", load);
     return (): void => {
@@ -77,7 +81,7 @@ export function ProviderQuotaStatus({
       stop();
       document.removeEventListener("visibilitychange", load);
     };
-  }, [provider, providerDigest, providerVersion, serviceAccount]);
+  }, [provider, providerDigest, providerVersion, serviceAccount, snapshotLoaded]);
   useEffect(() => setClock(Date.now()), [snapshot]);
 
   useEffect(() => {

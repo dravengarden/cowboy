@@ -7,6 +7,17 @@ import {
   useRef,
   useState,
 } from "react";
+import {
+  createCommandRegistryStore,
+  DESKTOP_FIELD_CURSOR_STYLES,
+  DesktopCommandContext,
+  type DesktopCommandInternalContextValue,
+  useDesktopCommand,
+  useDesktopCommandActions,
+  useDesktopCommands,
+  useDesktopCommandSelector,
+  useOptionalDesktopCommands,
+} from "./commandRegistryStore";
 import type { DesktopPane } from "../DesktopWorkspaceController";
 import { useDesktopWorkspace } from "../DesktopWorkspaceController";
 import { isMac } from "../../platform";
@@ -126,23 +137,10 @@ export interface DesktopCommand {
   run: () => void;
 }
 
-interface DesktopCommandContextValue {
-  register: (command: DesktopCommand) => () => void;
-  /** Run a command. A key resolves by focus scope; an explicit pick (the
-   *  Command Palette) passes `anyScope` so a Conversation or Top bar command
-   *  runs from wherever the palette was opened. `when` still applies. */
-  execute: (id: string, options?: { anyScope?: boolean }) => boolean;
-  list: () => DesktopCommand[];
-  commands: DesktopCommand[];
-}
-
 interface PendingJumpChord {
   region: string;
 }
 
-const DesktopCommandContext = createContext<DesktopCommandContextValue | null>(
-  null,
-);
 const DesktopListJumpContext = createContext<string | null>(null);
 
 /** A which-key group opens only when one of its commands can run now;
@@ -359,7 +357,10 @@ function isModifierKey(key: string): boolean {
 export function DesktopCommandProvider(
   { children }: { children: React.ReactNode },
 ): React.JSX.Element {
-  const commands = useRef(new Map<string, DesktopCommand>());
+  const storeRef = useRef<ReturnType<typeof createCommandRegistryStore<DesktopCommand>> | null>(null);
+  if (storeRef.current === null) storeRef.current = createCommandRegistryStore<DesktopCommand>();
+  const store = storeRef.current;
+  const commands = useRef(store.map);
   const itemChord = useRef<number | null>(null);
   // A pending `z` in a list: zz / zt / zb, and za / zM / zR in Sessions.
   const viewChord = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -373,7 +374,6 @@ export function DesktopCommandProvider(
   // A Space consumed as the leader must not also activate a focused button
   // on keyup (Firefox activates buttons on Space keyup).
   const swallowSpaceKeyUp = useRef(false);
-  const [revision, setRevision] = useState(0);
   const [pendingJumpRegion, setPendingJumpRegion] = useState<string | null>(null);
   // Hint labels on screen (FOCUS.md "Labels"): list `f` rows or the controls
   // of the topmost modal under its leader.
@@ -385,6 +385,8 @@ export function DesktopCommandProvider(
     setHintsState(next);
   }, []);
   const workspace = useDesktopWorkspace();
+  const focusRef = useRef({ focusedPane: workspace.focusedPane, focusedRegion: workspace.focusedRegion });
+  focusRef.current = { focusedPane: workspace.focusedPane, focusedRegion: workspace.focusedRegion };
   const clearWorkspaceCommand = useCallback((): void => {
     unlockEditableForLeader();
     leaderArmed.current = false;
@@ -428,36 +430,36 @@ export function DesktopCommandProvider(
       assertMacShortcutAllowed("workspace.prefix", prefixStroke);
       assertChromeShortcutAllowed("workspace.prefix", prefixStroke, isMac);
     }
-    assertShortcutRegistrationAllowed(command, commands.current.values());
-    commands.current.set(command.id, command);
-    setRevision((value) => value + 1);
+    assertShortcutRegistrationAllowed(command, store.map.values());
+    store.map.set(command.id, command);
+    store.notify();
     return () => {
-      if (commands.current.get(command.id) === command) {
-        commands.current.delete(command.id);
-        setRevision((value) => value + 1);
+      if (store.map.get(command.id) === command) {
+        store.map.delete(command.id);
+        store.notify();
       }
     };
-  }, []);
+  }, [store]);
   const execute = useCallback((
     id: string,
     { anyScope = false }: { anyScope?: boolean } = {},
   ): boolean => {
-    const command = commands.current.get(id);
+    const command = store.map.get(id);
     if (!command || command.when?.() === false) return false;
     if (
       !anyScope &&
-      !desktopCommandInScope(command, workspace.focusedPane, workspace.focusedRegion)
+      !desktopCommandInScope(command, focusRef.current.focusedPane, focusRef.current.focusedRegion)
     ) return false;
     command.run();
     return true;
-  }, [workspace.focusedPane, workspace.focusedRegion]);
-  const commandList = useMemo(() => [...commands.current.values()], [revision]);
-  const value = useMemo<DesktopCommandContextValue>(() => ({
+  }, [store]);
+  const value = useMemo<DesktopCommandInternalContextValue>(() => ({
     register,
     execute,
-    list: () => [...commands.current.values()],
-    commands: commandList,
-  }), [commandList, execute, register]);
+    list: store.list,
+    subscribe: store.subscribe,
+    getSnapshot: store.getSnapshot,
+  }), [execute, register, store]);
 
   // Vim Normal/Insert for native text fields follows focus (inputVim).
   useEffect(() => installInputVim(), []);
@@ -1424,23 +1426,7 @@ export function DesktopCommandProvider(
         <DesktopHintContext.Provider value={hints}>
           <DesktopListJumpContext.Provider value={pendingJumpRegion}>
             {/* The modal Normal cursor on a text field (modalNavigation). */}
-            <GlobalStyles
-              styles={(theme) => ({
-                "[data-desktop-field-cursor]": { outline: "none" },
-                "[data-desktop-field-cursor]:focus": {
-                  outline: `2px solid ${theme.palette.primary.main}`,
-                  outlineOffset: 2,
-                  borderRadius: 12,
-                },
-                // Vim Normal in a text field: the one-character selection
-                // is the block cursor; no caret blinks beside it.
-                "[data-vim-input-mode='normal']": { caretColor: "transparent" },
-                "[data-vim-input-mode='normal']::selection": {
-                  background: theme.palette.primary.main,
-                  color: theme.palette.primary.contrastText,
-                },
-              })}
-            />
+            <GlobalStyles styles={DESKTOP_FIELD_CURSOR_STYLES} />
             {children}
           </DesktopListJumpContext.Provider>
         </DesktopHintContext.Provider>
@@ -1449,31 +1435,14 @@ export function DesktopCommandProvider(
   );
 }
 
-export function useDesktopCommand(command: DesktopCommand): void {
-  const registry = useContext(DesktopCommandContext);
-  if (!registry) {
-    throw new Error(
-      "useDesktopCommand must be used inside DesktopCommandProvider",
-    );
-  }
-  useEffect(() => registry.register(command), [registry.register, command]);
-}
-
-export function useDesktopCommands(): DesktopCommandContextValue {
-  const registry = useContext(DesktopCommandContext);
-  if (!registry) {
-    throw new Error(
-      "useDesktopCommands must be used inside DesktopCommandProvider",
-    );
-  }
-  return registry;
-}
+export {
+  useDesktopCommand,
+  useDesktopCommandActions,
+  useDesktopCommands,
+  useDesktopCommandSelector,
+  useOptionalDesktopCommands,
+};
 
 export function useDesktopListJumpChord(region: string): boolean {
   return useContext(DesktopListJumpContext) === region;
-}
-
-/** Isolated editor fixtures may omit the Desktop command host. */
-export function useOptionalDesktopCommands(): DesktopCommandContextValue | null {
-  return useContext(DesktopCommandContext);
 }

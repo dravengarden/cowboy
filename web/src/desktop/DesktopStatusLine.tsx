@@ -2,8 +2,12 @@ import { desktopSize } from "../surface/desktopSize";
 import { alpha, Box, ButtonBase, Divider, Stack, Tooltip } from "@mui/material";
 import { useExploreSessionState } from "../explore/exploreStore";
 import type { Status } from "../protocol";
-import { useEffect, useState } from "react";
-import { retrySyncNow, useHeldDeliveries, useSyncStatus } from "../store";
+import { memo, useEffect, useState, useSyncExternalStore } from "react";
+import {
+  productSessionAlertVisible,
+  subscribeProductSessionAlertVisible,
+} from "../auth/productSessionAlertHost";
+import { retrySyncNow, useHeldDeliveries, useStoreSelector, useSyncStatus } from "../store";
 import {
   attentionCount,
   syncStatusDetail,
@@ -16,7 +20,11 @@ import { useVimSetting } from "../vimSetting";
 import { useComposerSourceMode } from "../composerSourceMode";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
 import { DesktopKeycap, DesktopShortcut } from "./commands/DesktopKeycap";
-import { useDesktopCommands } from "./commands/DesktopCommandProvider";
+import {
+  type DesktopCommand,
+  useDesktopCommandActions,
+  useDesktopCommandSelector,
+} from "./commands/DesktopCommandProvider";
 import { topBarRegionHints } from "./topBarRegionHints";
 import type { ShortcutAvailability } from "./commands/shortcutAvailability";
 import { useImeStatus } from "./vim/imeStatusStore";
@@ -239,7 +247,49 @@ function statusPaneLabel(
   return pane === "conversation" && reviewShown ? "review" : pane;
 }
 
-export function DesktopStatusLine({
+const EMPTY_TOP_BAR_HINTS: readonly RegionHint[] = [];
+const EMPTY_TOP_BAR_COMMANDS: readonly DesktopCommand[] = [];
+
+function sameCommandRefs(
+  previous: readonly DesktopCommand[],
+  next: readonly DesktopCommand[],
+): boolean {
+  if (previous === next) return true;
+  if (previous.length !== next.length) return false;
+  for (let i = 0; i < previous.length; i += 1) {
+    if (previous[i] !== next[i]) return false;
+  }
+  return true;
+}
+
+function useStatusLineSubscriptions(focusedRegion: string | null) {
+  useSyncExternalStore(
+    subscribeProductSessionAlertVisible,
+    () => (focusedRegion === "topbar.controls" ? productSessionAlertVisible() : false),
+    () => false,
+  );
+  const topBarCommands = useDesktopCommandSelector(
+    (registered) =>
+      focusedRegion === "topbar.controls"
+        ? registered.filter((command) => command.regions?.includes("topbar.controls"))
+        : EMPTY_TOP_BAR_COMMANDS,
+    sameCommandRefs,
+  );
+  const topBarHints = focusedRegion === "topbar.controls"
+    ? topBarRegionHints(topBarCommands)
+    : EMPTY_TOP_BAR_HINTS;
+  const hasApprovalChoice = useDesktopCommandSelector((registered) =>
+    registered.some((command) => command.id.startsWith("approval.choice."))
+  );
+  const hasSessionItems = useStoreSelector((snapshot) =>
+    focusedRegion === "sessions.list" || focusedRegion === "sessions.rail"
+      ? snapshot.sessions.length > 0 || snapshot.sessionFolders.folders.length > 0
+      : false
+  );
+  return { topBarHints, hasApprovalChoice, hasSessionItems };
+}
+
+export const DesktopStatusLine = memo(function DesktopStatusLine({
   sessionId,
   status,
 }: {
@@ -247,8 +297,9 @@ export function DesktopStatusLine({
   status: Status;
 }): React.JSX.Element {
   const workspace = useDesktopWorkspace();
-  const commands = useDesktopCommands();
+  const commands = useDesktopCommandActions();
   const { focusedPane, focusedRegion, mode } = workspace;
+  const { topBarHints, hasApprovalChoice, hasSessionItems } = useStatusLineSubscriptions(focusedRegion);
   const vimEnabled = useVimSetting();
   const sourceMode = useComposerSourceMode();
   const vimMode = useVimMode();
@@ -295,16 +346,13 @@ export function DesktopStatusLine({
     : ime.phase === "committed"
     ? "IME · COMMITTED"
     : null;
-  const regionElement = focusedRegion
+  const needsRegionElement = focusedRegion === "prompt.queued" ||
+    focusedRegion === "prompt.draft";
+  const regionElement = needsRegionElement
     ? document.querySelector<HTMLElement>(
       `[data-desktop-region="${CSS.escape(focusedRegion)}"]`,
     )
     : null;
-  // Only "is any item visible" matters; stop at the first instead of reading
-  // layout (`offsetParent`) for every row of a long list on each render.
-  const hasItems = regionElement !== null && regionElement.dataset.desktopNavigation !== "scroll" &&
-    [...regionElement.querySelectorAll<HTMLElement>("[data-desktop-item]")]
-      .some((element) => element.offsetParent !== null);
   const promptRegions = focusedPane === "prompt" &&
       focusedRegion?.startsWith("prompt.") === true &&
       focusedRegion !== "prompt.composer"
@@ -325,19 +373,18 @@ export function DesktopStatusLine({
       sourceMode,
       rawSync.phase === "live",
       vimEnabled,
-      focusedRegion === "topbar.controls" ? topBarRegionHints(commands.commands) : [],
+      topBarHints,
     ),
     // Window motion works from every region (FOCUS.md "Window motion").
     ...(focusedRegion ? [{ keys: "Ctrl+H/J/K/L", label: "Window" }] : []),
-    ...((focusedRegion === "sessions.list" || focusedRegion === "sessions.rail") && hasItems
+    ...((focusedRegion === "sessions.list" || focusedRegion === "sessions.rail") && hasSessionItems
       ? [{ keys: DESKTOP_SHORTCUTS.switchSession, label: "Switch" }]
       : []),
-    ...(regionElement?.dataset.desktopReorderable === "true" &&
-        focusedRegion !== "sessions.list"
+    ...(regionElement?.dataset.desktopReorderable === "true"
       ? [{ keys: "Shift+J/K", label: "Reorder" }]
       : []),
     // A pending approval answers from every focus (FOCUS.md "Approvals").
-    ...(document.querySelector("[data-desktop-approval-choice]")
+    ...(hasApprovalChoice
       ? [{ keys: DESKTOP_APPROVAL_SHORTCUT, label: "Answer" }]
       : []),
     ...(status === "busy"
@@ -538,4 +585,4 @@ export function DesktopStatusLine({
       </Stack>
     </Box>
   );
-}
+});

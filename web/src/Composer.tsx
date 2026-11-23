@@ -1368,21 +1368,21 @@ export function ComposerWorkspace({
           />
         </Box>
       )}
-      <ScheduleSheet
-        open={scheduleTarget !== null}
+      {scheduleTarget !== null && <ScheduleSheet
+        open
         onClose={(): void => setScheduleTarget(null)}
-        initial={scheduleTarget?.initial ?? null}
-        editing={scheduleTarget?.id !== undefined}
+        initial={scheduleTarget.initial}
+        editing={scheduleTarget.id !== undefined}
         onCommit={commitSchedule}
         onUnschedule={(): void => {
-          if (scheduleTarget?.id !== undefined) {
+          if (scheduleTarget.id !== undefined) {
             void unscheduleDraft(
               sessionId,
               scheduleTarget.id,
             ).catch(() => undefined);
           }
         }}
-      />
+      />}
       {
         /* Queue and drafts stay a stacked pair of headers. Exclusive
           disclosure means only one body is open, so each panel can own its
@@ -2514,14 +2514,14 @@ export function ComposerWorkspace({
           Both meaningfully change context, so neither fires on a bare tap; Clear
           is styled destructive (it discards the agent's memory of the chat). */
       }
-      <SessionActionConfirmDialog
+      {cmdConfirm !== null && <SessionActionConfirmDialog
         action={cmdConfirm}
         provider={providerName(provider, providerVersion, providerDigest)}
         activeTurn={busy || starting}
-        disableRestoreFocus={touchInput && cmdConfirm?.kind === "reset"}
+        disableRestoreFocus={touchInput && cmdConfirm.kind === "reset"}
         onClose={(): void => surfaces.close("context")}
         onConfirm={confirmSessionAction}
-      />
+      />}
       {
         /* Mobile fullscreen compose (the ↗ on touch). A near-full-screen sheet for
           comfortable long-form writing — the first-class editor + future home of a
@@ -2598,15 +2598,15 @@ export function ComposerWorkspace({
           navbar's Stop button keeps its own copy in SessionControls; both reuse
           StopConfirmDialog and only one is ever open at a time. */
       }
-      <StopConfirmDialog
-        open={cancelOpen}
+      {cancelOpen && <StopConfirmDialog
+        open
         onClose={(): void => surfaces.close("stop")}
         onConfirm={(): void => {
           importantHaptic();
           cancelTurn(sessionId);
           surfaces.close("stop");
         }}
-      />
+      />}
       {
         /* Owned here (not in the drafts panel) so the undo snackbar survives
           when moving the LAST draft unmounts that panel. */

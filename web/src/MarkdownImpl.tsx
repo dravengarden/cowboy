@@ -325,7 +325,7 @@ function CodeBlock({
 }): React.JSX.Element {
   const [copied, setCopied] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
-  const coarse = useMediaQuery("(hover:none), (pointer:coarse)");
+  const coarse = ((s) => s ? !s.hover || s.input === "touch" : globalThis.matchMedia?.("(hover:none), (pointer:coarse)").matches ?? false)(useContext(SurfaceContext));
   const onCopy = useCallback(() => {
     void copyText(code).then((ok) => {
       if (!ok) return;
