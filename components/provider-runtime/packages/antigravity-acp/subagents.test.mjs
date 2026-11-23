@@ -21,12 +21,18 @@ const flush = async (rounds = 6) => {
 const request = (id, method, params = {}) => ({ jsonrpc: "2.0", id, method, params });
 
 /**
+ * Subagent deadlines for tests that wait for a native request to time out.
+ * The ordinary default is long enough that a loaded host never misses a reply.
+ */
+const TIMING_OUT = { settleMs: 40, requestMs: 60 };
+
+/**
  * A proxy over a fake `agy`: it opens a native session for every
  * `session/new` and keeps every prompt open until the test ends it.
  */
 function unit({
   backend = () => ({ class: "ok", successes: 1, barrier: true, refusals: [] }),
-  subagents = { settleMs: 40, requestMs: 60 },
+  subagents = { settleMs: 40, requestMs: 1000 },
   projection = async (cwd) => `PROJECTION ${cwd}`,
 } = {}) {
   /** What the fake `agy` does besides answering every request. */
@@ -929,7 +935,7 @@ test("a session still opening is held until the worker knows the child", async (
 });
 
 test("a session agy opens after its request timed out is closed", async () => {
-  const made = await parent();
+  const made = await parent({ subagents: TIMING_OUT });
   const { proxy, agent, control } = made;
   control.ignore.add("session/new");
   const starting = proxy.subagents.start("s", { prompt: "x" }).then(
@@ -999,7 +1005,7 @@ test("an ended child's permission requests are refused and a late approval grant
 });
 
 test("a startup failure of an earlier turn does not refund the next turn's budget", async () => {
-  const made = await parent();
+  const made = await parent({ subagents: TIMING_OUT });
   const { proxy, agent, control } = made;
   control.ignore.add("session/new");
   const starting = proxy.subagents.start("s", { prompt: "x" }).then(
@@ -1438,7 +1444,7 @@ test("a forced exit answers a parent reply that was already being settled, once,
 });
 
 test("an open that timed out keeps holding unknown frames until it is reconciled", async () => {
-  const made = await parent();
+  const made = await parent({ subagents: TIMING_OUT });
   const { proxy, agent, client, control } = made;
   control.ignore.add("session/new");
   const starting = proxy.subagents.start("s", { prompt: "x" }).then(
@@ -1575,7 +1581,7 @@ test("frames naming a session before agy answers its creation are held too", asy
 });
 
 test("a timed-out ordinary request leaves no handler, and a late session that will not close ends the unit", async () => {
-  const made = await parent();
+  const made = await parent({ subagents: TIMING_OUT });
   const { proxy, agent, control } = made;
   await proxy.fromClient(request(20, "session/set_model", { sessionId: "s", modelId: "m" }));
   await proxy.fromAgent({ jsonrpc: "2.0", id: 20, result: {} });
@@ -1588,7 +1594,7 @@ test("a timed-out ordinary request leaves no handler, and a late session that wi
     false,
   );
   // A session agy opens late whose close is refused: the unit is ended.
-  const late = await parent();
+  const late = await parent({ subagents: TIMING_OUT });
   late.control.ignore.add("session/new");
   late.control.fail.set("session/close", "no");
   const starting = late.proxy.subagents.start("s", { prompt: "x" }).then(
