@@ -429,21 +429,7 @@ pub(super) async fn preference_owner(
     active_preference_owner(&state.hub, state.store.as_ref(), meta).await
 }
 
-pub(in crate::server) async fn read_parent(
-    hub: &crate::core::Hub,
-    store: Option<&crate::store::Store>,
-    meta: &SessionMeta,
-) -> Result<(), &'static str> {
-    if hub.session_info(&meta.id).is_none_or(|info| {
-        info.meta.system || info.meta.closing || info.meta.owner_user_id != meta.owner_user_id
-    }) {
-        return Err("permission_denied");
-    }
-    if meta.owner_user_id.is_some() {
-        active_preference_owner(hub, store, meta).await?;
-    }
-    Ok(())
-}
+pub(in crate::server) use super::super::agent_api_bridge::read_parent;
 
 pub(super) async fn account_owner(
     state: &AppState,
@@ -452,28 +438,7 @@ pub(super) async fn account_owner(
     document_owner(&state.hub, state.store.as_ref(), meta).await
 }
 
-async fn active_preference_owner(
-    hub: &crate::core::Hub,
-    store: Option<&crate::store::Store>,
-    meta: &SessionMeta,
-) -> Result<String, &'static str> {
-    let owner = meta.owner_user_id.as_deref().ok_or("permission_denied")?;
-    let user = store
-        .ok_or("unavailable")?
-        .user_by_id(owner)
-        .await
-        .map_err(|_| "unavailable")?
-        .ok_or("permission_denied")?;
-    if meta.system
-        || user.disabled_at_ms.is_some()
-        || hub
-            .session_info(&meta.id)
-            .is_none_or(|info| info.meta.closing || info.meta.owner_user_id != meta.owner_user_id)
-    {
-        return Err("permission_denied");
-    }
-    Ok(owner.to_owned())
-}
+use super::super::agent_api_bridge::active_preference_owner;
 
 pub(in crate::server) async fn invoke(
     state: &Arc<AppState>,

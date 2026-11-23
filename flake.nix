@@ -113,6 +113,8 @@
         ./components/server-code-buffers/src
         ./components/server-plugins/Cargo.toml
         ./components/server-plugins/src
+        ./components/server-runtime/Cargo.toml
+        ./components/server-runtime/src
         ./components/server-telemetry/Cargo.toml
         ./components/server-telemetry/src
       ];
@@ -127,6 +129,8 @@
         ./components/server-code-buffers/src/lib.rs
         ./components/server-plugins/Cargo.toml
         ./components/server-plugins/src/lib.rs
+        ./components/server-runtime/Cargo.toml
+        ./components/server-runtime/src/lib.rs
         ./components/server-telemetry/Cargo.toml
         ./components/server-telemetry/src/lib.rs
       ];
@@ -481,7 +485,7 @@
           ./components/plugin-api/types.ts
           ./components/server/src/server.rs
           ./components/server/src/server/routes.rs
-          ./components/server/src/server/startup_tasks.rs
+          ./components/server-runtime/src/server/startup_tasks.rs
           ./assets/brand
           ./site/assets
           ./README.md
@@ -581,7 +585,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-LsYBj01pgGtLSBFNpwoAIcAJEeMzbvd0dqIaHZIuR8w=";
+        hash = "sha256-Zv5ieHDTMcZbOoh8R4z1MRdCbwdgWp3ENuOUSAAk+Lg=";
         preBuild = staticCratesVendorPatch + ''
           export PATH="${cardeaVendorGit}/bin:$PATH"
         '';
@@ -684,7 +688,7 @@
         src = cowboy-src;
         cargoDeps = cowboy-cargo-deps;
         cargoBuildFlags = builtins.tail (pkgs.lib.splitString " " cowboy-controller-cargo-args);
-        cargoTestFlags = [ "-p" "cowboy" "-p" "cowboy-store" "-p" "cowboy-server-accounts" "-p" "cowboy-server-auth" "-p" "cowboy-server-code" "-p" "cowboy-server-code-buffers" "-p" "cowboy-server-plugins" "-p" "cowboy-server-telemetry" "-p" "cowboy-server" "-p" "cowboy-wire" ];
+        cargoTestFlags = [ "-p" "cowboy" "-p" "cowboy-store" "-p" "cowboy-server-accounts" "-p" "cowboy-server-auth" "-p" "cowboy-server-code" "-p" "cowboy-server-code-buffers" "-p" "cowboy-server-plugins" "-p" "cowboy-server-runtime" "-p" "cowboy-server-telemetry" "-p" "cowboy-server" "-p" "cowboy-wire" ];
         # cowboy-server dev-depends on cowboy-machine, which enables the
         # machine-host tests of the base crate in this build. This one runs a
         # real nested cargo build, which the sandbox (no writable toolchain

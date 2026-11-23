@@ -11,7 +11,7 @@ rust-version = "1.98.1"
 resolver = "3"
 members = ["components/codeact-runtime", "components/integration-tests", "components/machine", "components/plugin-sdk", "components/provider-sdk", "components/server", "components/server-accounts",
   "components/server-auth", "components/server-code",
-  "components/server-code-buffers", "components/server-telemetry", "components/store", "components/wire"]
+  "components/server-code-buffers", "components/server-plugins", "components/server-runtime", "components/server-telemetry", "components/store", "components/wire"]
 exclude = ["plugins/zed/adapter"]
 
 [features]

@@ -7,7 +7,7 @@ const store = await readFile(new URL("./store.ts", import.meta.url), "utf8");
 const settings = await readFile(new URL("./NotificationSettings.tsx", import.meta.url), "utf8");
 const server = await readFile(new URL("../../components/server/src/server.rs", import.meta.url), "utf8");
 const startupTasks = await readFile(
-  new URL("../../components/server/src/server/startup_tasks.rs", import.meta.url),
+  new URL("../../components/server-runtime/src/server/startup_tasks.rs", import.meta.url),
   "utf8",
 );
 

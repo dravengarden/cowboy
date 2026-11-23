@@ -30,6 +30,8 @@ const RUNNER: &str = include_str!("agent_api/runner.js");
 mod account_actions;
 mod actions;
 mod admission;
+mod bridge;
+pub(super) use bridge::Bridge;
 mod code_reads;
 pub(super) use code_reads::maintain_holdings;
 mod control;
@@ -43,10 +45,9 @@ mod widget_app_messages;
 mod widget_images;
 mod widget_interactions;
 mod widgets;
-pub(super) use actions::{invoke, read_parent};
+pub(super) use actions::invoke;
 pub(super) use widget_app_messages::api_widget_app_message;
 pub(super) use widget_interactions::{api_widget_interaction, recover_decisions};
-pub(super) use widgets::{WIDGET_WRITES, push as push_widget};
 /// Raw hot-log events one `session.events` call may coalesce.
 const EVENT_WINDOW: usize = 2000;
 

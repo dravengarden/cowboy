@@ -7,10 +7,7 @@ use crate::store::agent_api_operations::Admission;
 use crate::store::session_widgets::{PublishOutcome, StoredWidget, UpdateOutcome, WidgetWrite};
 use crate::widgets;
 
-/// Orders each widget's store write before its transcript push, so a later
-/// snapshot can never be fanned out before an earlier one.
-pub(in crate::server) static WIDGET_WRITES: LazyLock<tokio::sync::Mutex<()>> =
-    LazyLock::new(|| tokio::sync::Mutex::new(()));
+pub(in crate::server) use super::super::agent_api_bridge::WIDGET_WRITES;
 
 /// A write whose commit state is unknown: log the cause, report it opaquely.
 fn unknown(session: &str, error: impl std::fmt::Display) -> &'static str {
@@ -39,37 +36,7 @@ fn meta_view(widget: &StoredWidget) -> Value {
     })
 }
 
-pub(in crate::server) fn push(
-    state: &AppState,
-    session_id: &str,
-    widget: &StoredWidget,
-    operation: &str,
-    decided: Map<String, Value>,
-) {
-    let title = widget.document["title"]
-        .as_str()
-        .unwrap_or("Widget")
-        .to_owned();
-    let update = json!({
-        "sessionUpdate": "notice",
-        "severity": "info",
-        "title": title,
-        "description": widgets::description(&widget.document),
-        "_cowboy": {"widget": {
-            "widgetId": widget.widget_id,
-            "handle": widget.handle,
-            "revision": widget.revision,
-            "stateVersion": widget.state_version,
-            "publishedAtMs": widget.created_at_ms,
-            "updatedAtMs": widget.updated_at_ms,
-            "origin": {"kind": "mcp", "operation": operation},
-            "closed": widget.closed,
-            "decided": decided,
-            "document": widget.document,
-        }},
-    });
-    state.hub.push(session_id, Event::Update { update });
-}
+pub(in crate::server) use super::super::agent_api_bridge::push_widget as push;
 
 // Every result carries `schema`: the call gateway reports a reply without it as
 // `outcome_unknown`, hiding a definite refusal the ledger already recorded.

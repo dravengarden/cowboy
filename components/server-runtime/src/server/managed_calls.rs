@@ -1,0 +1,266 @@
+//! Product observations use the same parent visibility boundary as transcripts.
+
+mod approval;
+mod coordinator;
+mod history;
+mod notice_delivery;
+mod runner;
+mod selection;
+mod wait_observation;
+
+pub use coordinator::{
+    Coordinator, authorize, code_changes, code_observation_head, delete_child, dispatch_calls,
+    dispatch_calls_from, handle, image_capabilities, mcp_parent, mcp_ready, parent_deleted,
+    touch_code_observation,
+};
+pub use history::pin_bounds;
+pub use notice_delivery::{
+    DispatchGate, after_notice_dispatch_error, before_notice_dispatch, prepare_windowed_result,
+    prune_settled_restored_notices, read_windowed_result, spawn_commit_windowed_result,
+    wake_notices_for_machine,
+};
+
+use super::{AppState, AuthenticatedProductRequest, session_is_visible};
+use axum::{
+    Extension, Json,
+    extract::{Path, Query, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
+use serde::Deserialize;
+use serde_json::json;
+use std::sync::Arc;
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Page {
+    before: Option<String>,
+}
+
+pub async fn list(
+    State(state): State<Arc<AppState>>,
+    Extension(authenticated): Extension<AuthenticatedProductRequest>,
+    Path(parent): Path<String>,
+    Query(page): Query<Page>,
+) -> Response {
+    if !session_is_visible(&state.hub, &authenticated.principal, &parent) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if page
+        .before
+        .as_deref()
+        .is_some_and(|id| !crate::managed_calls::valid_id(id))
+    {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let Some(store) = &state.store else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    // Readiness is an observation, never a cached grant. Dispatch must derive
+    // authority again; reconnect or Reload may invalidate this immediately.
+    let parent_runtime_ready = state.hub.session_info(&parent).is_some_and(|info| {
+        state
+            .runtime_router
+            .runtime(&info.meta.machine_id)
+            .is_some_and(|runtime| {
+                runtime
+                    .managed_call_authority(&state.service_id, &info.meta)
+                    .is_ok()
+            })
+    });
+    let placement = state.hub.session_info(&parent).and_then(|info| {
+        crate::managed_calls::service::Ledger::for_parent(
+            store.clone(),
+            &state.service_id,
+            &info.meta,
+        )
+        .ok()
+        .map(|ledger| ledger.placement().clone())
+    });
+    match store.managed_calls(&parent, page.before.as_deref()).await {
+        Ok(calls) => {
+            let next = (calls.len() == 100).then(|| calls.last().unwrap().call_id.clone());
+            let ids: Vec<String> = calls.iter().map(|call| call.call_id.clone()).collect();
+            let deliveries = store
+                .call_notice_deliveries_for_parent(&parent, &ids)
+                .await
+                .unwrap_or_default();
+            let summaries: Vec<_> = calls
+                .iter()
+                .map(|call| {
+                    let mut summary = json!(call.summary());
+                    if let Some(delivery) = deliveries.get(&call.call_id) {
+                        summary["notice_delivery"] = json!(delivery);
+                    }
+                    summary
+                })
+                .collect();
+            Json(json!({"schema":1,"calls":summaries,"next_before":next,
+                "current_placement":placement,"parent_runtime_ready":parent_runtime_ready}))
+            .into_response()
+        }
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+pub async fn inspect(
+    State(state): State<Arc<AppState>>,
+    Extension(authenticated): Extension<AuthenticatedProductRequest>,
+    Path((parent, call)): Path<(String, String)>,
+) -> Response {
+    if !session_is_visible(&state.hub, &authenticated.principal, &parent) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(store) = &state.store else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    match store.managed_call(&parent, &call).await {
+        Ok(Some(record)) => match store.managed_call_dismissed(&parent, &call).await {
+            Ok(dismissed) => {
+                let notice_delivery = store
+                    .call_notice_delivery(&parent, &call)
+                    .await
+                    .ok()
+                    .flatten();
+                Json(json!({"schema":1,"call":record,"dismissed":dismissed,"notice_delivery":notice_delivery}))
+                    .into_response()
+            }
+            Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        },
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+/// A product user may stop a visible parent's call. Recording the request is
+/// not proof that the child stopped; the runner observes the actual outcome.
+pub async fn cancel(
+    State(state): State<Arc<AppState>>,
+    Extension(authenticated): Extension<AuthenticatedProductRequest>,
+    Path((parent, call)): Path<(String, String)>,
+) -> Response {
+    if !session_is_visible(&state.hub, &authenticated.principal, &parent)
+        || !crate::managed_calls::valid_id(&call)
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match coordinator::cancel_call(&state, &parent, &call).await {
+        Some(record) => Json(json!({"schema":1,"call":record.summary()})).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Dismissal {
+    call_ids: Vec<String>,
+    dismissed: bool,
+}
+
+/// Explicit, bounded selection. Never clear calls that finished after the
+/// person selected the rows. Retries and undo are idempotent.
+pub async fn dismiss(
+    State(state): State<Arc<AppState>>,
+    Extension(authenticated): Extension<AuthenticatedProductRequest>,
+    Path(parent): Path<String>,
+    Json(body): Json<Dismissal>,
+) -> Response {
+    if !session_is_visible(&state.hub, &authenticated.principal, &parent) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(info) = state.hub.session_info(&parent) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !authenticated
+        .principal
+        .can_mutate(info.meta.owner_user_id.as_deref())
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if body.call_ids.is_empty()
+        || body.call_ids.len() > 100
+        || body
+            .call_ids
+            .iter()
+            .any(|id| !crate::managed_calls::valid_id(id))
+    {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let Some(store) = &state.store else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let mut changed = Vec::new();
+    for id in &body.call_ids {
+        match store
+            .dismiss_managed_call(&parent, id, body.dismissed)
+            .await
+        {
+            Ok(true) => changed.push(id),
+            Ok(false) => {}
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        }
+    }
+    Json(json!({"call_ids":changed,"dismissed":body.dismissed})).into_response()
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalDecision {
+    decision: approval::Decision,
+    /// The `request_ids` of the prompt the person answered. A decision binds
+    /// to exactly these; absent only from Web clients older than the binding.
+    #[serde(default)]
+    presented: Option<Vec<String>>,
+    /// The answered prompt's revision (diagnostic; the set is authoritative).
+    #[serde(default)]
+    prompt_revision: Option<u64>,
+}
+
+/// A person's answer to the calls its session's agent is waiting for.
+pub async fn decide_approval(
+    State(state): State<Arc<AppState>>,
+    Extension(authenticated): Extension<AuthenticatedProductRequest>,
+    Path(parent): Path<String>,
+    Json(body): Json<ApprovalDecision>,
+) -> Response {
+    if !session_is_visible(&state.hub, &authenticated.principal, &parent) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(info) = state.hub.session_info(&parent) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !authenticated
+        .principal
+        .can_mutate(info.meta.owner_user_id.as_deref())
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if body
+        .presented
+        .as_ref()
+        .is_some_and(|ids| ids.is_empty() || ids.len() > 64 || ids.iter().any(|id| id.len() > 64))
+    {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let approvals = &state.managed_calls.approvals;
+    // Nothing the person saw is still waiting (it expired, or the agent
+    // stopped asking): refresh every viewer instead of deciding later arrivals.
+    let Some(agents) = approvals.decide(&parent, body.decision, body.presented.as_deref()) else {
+        state
+            .hub
+            .broadcast_call_approval(&parent, approvals.view(&parent, &info.meta.provider));
+        tracing::info!(
+            session = %parent,
+            prompt_revision = ?body.prompt_revision,
+            "call approval answered a prompt that no longer waits"
+        );
+        return StatusCode::CONFLICT.into_response();
+    };
+    if body.decision == approval::Decision::Session {
+        super::agent_tools::allow_session(&state, &info.meta, &agents);
+    }
+    state
+        .hub
+        .broadcast_call_approval(&parent, approvals.view(&parent, &info.meta.provider));
+    StatusCode::NO_CONTENT.into_response()
+}

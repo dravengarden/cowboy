@@ -27,12 +27,12 @@ pub use cowboy::{
     workspace_extensions,
 };
 
-pub mod agent_api;
+pub use cowboy_server_runtime::agent_api;
 #[cfg(feature = "test-support")]
 pub mod server;
 #[cfg(not(feature = "test-support"))]
 mod server;
-pub mod widgets;
+pub use cowboy_server_runtime::widgets;
 
 #[cfg(test)]
 mod cli_tests;

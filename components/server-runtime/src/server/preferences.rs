@@ -1,0 +1,218 @@
+//! One user-preference service shared by HTTP and the agent dispatcher.
+use super::*;
+use crate::store::preferences::{PreferenceChange, PreferenceResult};
+use serde_json::{Value, json};
+
+pub async fn read_value(state: &AppState, owner: &str, scope: &str) -> Result<Value, &'static str> {
+    let prefs = state
+        .store
+        .as_ref()
+        .ok_or("unavailable")?
+        .preferences(owner, scope)
+        .await
+        .map_err(|_| "unavailable")?
+        .ok_or("unknown_scope")?;
+    if scope != "about" {
+        return Ok(json!({"preferences":prefs}));
+    }
+    let machines = state
+        .machine_snapshots
+        .load()
+        .await
+        .map_err(|_| "unavailable")?;
+    // Discover names from Plugin metadata; configuring layout must not warm
+    // collectors or copy activity/usage payloads into the agent response.
+    // A retired legacy card is no usage card any more.
+    let mut usage = state.usage.plugin_bindings();
+    usage.retain(|binding| {
+        !crate::store::provider_accounts::legacy_cards::CARDS.contains(&binding.account.as_str())
+    });
+    usage.sort_by_key(|binding| binding.order.unwrap_or(u16::MAX));
+    let store = state.store.as_ref().ok_or("unavailable")?;
+    let registry = store
+        .provider_accounts(owner)
+        .await
+        .map_err(|_| "unavailable")?;
+    let mut usage_choices = usage
+        .iter()
+        .map(|binding| {
+            json!({"id":binding.account,"name":binding.product.as_deref().unwrap_or(&binding.account)})
+        })
+        .collect::<Vec<_>>();
+    usage_choices.extend(
+        registry
+            .accounts
+            .iter()
+            .map(|account| json!({"id":account.id,"name":account.label})),
+    );
+    Ok(json!({"preferences":prefs,"choices":{
+        "usage_order":usage_choices,
+        "machine_order":machines.iter().map(|m| json!({"id":m.id,"name":m.display_name})).collect::<Vec<_>>()
+    }}))
+}
+
+pub async fn update_value(
+    state: &AppState,
+    owner: &str,
+    operation: &str,
+    change: &PreferenceChange,
+    actor: Option<&crate::core::SessionMeta>,
+) -> Result<Value, &'static str> {
+    let _guard = if change.scope == crate::superagent::SCOPE {
+        let guard = superagent::WRITES.lock().await;
+        if state
+            .store
+            .as_ref()
+            .ok_or("unavailable")?
+            .preference_receipt(owner, operation)
+            .await
+            .map_err(|_| "unavailable")?
+            .is_none()
+        {
+            if let Some(actor) = actor {
+                superagent::validate_editor(state, owner, actor, &change.changes).await?;
+            }
+            superagent::validate_change(state, owner, &change.changes).await?;
+        }
+        Some(guard)
+    } else {
+        None
+    };
+    match state
+        .store
+        .as_ref()
+        .ok_or("unavailable")?
+        .update_preferences(owner, operation, change)
+        .await
+        .map_err(|_| "outcome_unknown")?
+    {
+        PreferenceResult::Applied(prefs) => {
+            state
+                .hub
+                .announce_preferences(owner, &prefs.scope, prefs.revision);
+            Ok(json!({"status":"committed","preferences":prefs}))
+        }
+        PreferenceResult::Conflict(current) => {
+            Ok(json!({"error":{"code":"revision_conflict"},"current":current}))
+        }
+        PreferenceResult::Invalid(code) => Err(code),
+    }
+}
+
+#[derive(Default, Deserialize)]
+pub struct Projection {
+    #[serde(default)]
+    compact: bool,
+}
+
+fn project_superagent(value: &mut Value, compact: bool) {
+    if compact {
+        for key in ["preferences", "current"] {
+            if value[key]["scope"] == crate::superagent::SCOPE {
+                value[key]["values"]["configuration"]["sources"] = json!([]);
+            }
+        }
+    }
+}
+
+pub async fn read(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthenticatedProductRequest>,
+    Path(scope): Path<String>,
+    Query(projection): Query<Projection>,
+) -> Response {
+    match read_value(&state, &auth.principal.user_id, &scope).await {
+        Ok(mut value) => {
+            project_superagent(&mut value, projection.compact);
+            value["dataset"] =
+                serde_json::to_value(sync_dataset::descriptor(&state.service_id, &auth.principal))
+                    .unwrap();
+            ([(header::CACHE_CONTROL, "no-store")], Json(value)).into_response()
+        }
+        Err(code) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":{"code":code}})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Update {
+    operation: String,
+    #[serde(default)]
+    dataset: Option<String>,
+    #[serde(flatten)]
+    change: PreferenceChange,
+}
+
+pub async fn update(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthenticatedProductRequest>,
+    headers: HeaderMap,
+    Query(projection): Query<Projection>,
+    Json(input): Json<Update>,
+) -> Response {
+    // Bind the write to the identity that read the editor, even after a cookie switch.
+    if input.change.scope == crate::superagent::SCOPE && !auth.principal.can_reorder() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if !headers
+        .get("x-cowboy-dataset")
+        .and_then(|v| v.to_str().ok())
+        .or(input.dataset.as_deref())
+        .is_some_and(|v| sync_dataset::matches(&state.service_id, &auth.principal, v))
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"error":{"code":"dataset_changed"}})),
+        )
+            .into_response();
+    }
+    match update_value(
+        &state,
+        &auth.principal.user_id,
+        &input.operation,
+        &input.change,
+        None,
+    )
+    .await
+    {
+        Ok(mut value) => {
+            project_superagent(&mut value, projection.compact);
+            (
+                if value.get("error").is_some() {
+                    StatusCode::CONFLICT
+                } else {
+                    StatusCode::OK
+                },
+                Json(value),
+            )
+                .into_response()
+        }
+        Err(code) => (
+            if code == "outcome_unknown" || code == "unavailable" {
+                StatusCode::SERVICE_UNAVAILABLE
+            } else {
+                StatusCode::UNPROCESSABLE_ENTITY
+            },
+            Json(json!({"error":{"code":code}})),
+        )
+            .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn preferences_http_input_rejects_authority_and_unknown_fields() {
+        let mut input = json!({"operation":"one","scope":"about","expected_revision":0,"changes":{"usage_order":[]}});
+        assert!(serde_json::from_value::<Update>(input.clone()).is_ok());
+        input["dataset"] = json!("observed-account-dataset");
+        assert!(serde_json::from_value::<Update>(input.clone()).is_ok());
+        input["owner"] = json!("victim");
+        assert!(serde_json::from_value::<Update>(input).is_err());
+    }
+}

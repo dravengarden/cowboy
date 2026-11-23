@@ -19,25 +19,17 @@ test = false
 [features]
 default = ["full"]
 full = []
-machine-host = ["cowboy/machine-host", "cowboy-server-accounts/machine-host", "cowboy-server-auth/machine-host", "cowboy-server-code/machine-host", "cowboy-server-code-buffers/machine-host", "cowboy-server-plugins/machine-host", "cowboy-server-telemetry/machine-host"]
-test-support = ["cowboy/test-support", "cowboy-server-accounts/test-support", "cowboy-server-auth/test-support", "cowboy-server-code/test-support", "cowboy-server-code-buffers/test-support", "cowboy-server-plugins/test-support", "cowboy-server-telemetry/test-support", "dep:tempfile"]
+machine-host = ["cowboy/machine-host", "cowboy-server-runtime/machine-host"]
+test-support = ["cowboy/test-support", "cowboy-server-runtime/test-support", "dep:tempfile"]
 
 [dependencies]
 cowboy-codeact-runtime = { path = "../codeact-runtime" }
-cowboy-server-accounts = { version = "0.1.0", path = "../server-accounts" }
-cowboy-server-auth = { version = "0.1.0", path = "../server-auth" }
-cowboy-server-plugins = { version = "0.1.0", path = "../server-plugins" }
-cowboy-server-code = { version = "0.1.0", path = "../server-code" }
-cowboy-server-code-buffers = { version = "0.1.0", path = "../server-code-buffers" }
-cowboy-server-telemetry = { version = "0.1.0", path = "../server-telemetry" }
+cowboy-server-runtime = { version = "0.1.0", path = "../server-runtime" }
 cowboy = { version = "0.1.0", path = "../.." }
 cardea-authorization = { git = "ssh://git@github.com/dravengarden/cardea.git", rev = "71f12d90bd1b3212f11530cbd0c20086317a5976", version = "=0.1.0" }
-cardea-core = { git = "ssh://git@github.com/dravengarden/cardea.git", rev = "71f12d90bd1b3212f11530cbd0c20086317a5976", version = "=0.1.0" }
-agent-client-protocol = { version = "3.6", features = ["unstable_end_turn_token_usage", "unstable_subagents"] }
 clap = { version = "4", features = ["derive", "env"] }
 futures = "0.3"
 tokio = { version = "1", features = ["full"] }
-tokio-util = { version = "0.7", features = ["compat", "io"] }
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
 # SQLx already selects rustls' ring provider. Keep Reqwest provider-neutral so
 # the build does not compile AWS-LC alongside ring for the same TLS stack.
@@ -74,12 +66,10 @@ parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 semver = "1"
-mime_guess = "2"
 p256 = { version = "0.13", features = ["ecdsa", "pem", "pkcs8"] }
 rand = "0.8"
 cowboy-provider-sdk = { version = "=3.7.0", path = "../provider-sdk" }
 cowboy-plugin-sdk = { version = "=1.20.0", path = "../plugin-sdk" }
-fs2 = "0.4"
 regex = "1"
 tempfile = { version = "3", optional = true }
 # `@`-picker file search: gitignore-aware walk + fuzzy ranking (the matcher
@@ -90,8 +80,7 @@ tikv-jemallocator = "0.7"
 
 [dev-dependencies]
 cowboy = { version = "0.1.0", path = "../..", features = ["test-support"] }
-cowboy-server-auth = { version = "0.1.0", path = "../server-auth", features = ["test-support"] }
-cowboy-server-telemetry = { version = "0.1.0", path = "../server-telemetry", features = ["test-support"] }
+cowboy-server-runtime = { version = "0.1.0", path = "../server-runtime", features = ["test-support"] }
 cowboy-wire = { version = "0.1.0", path = "../wire", features = ["test-fixtures"] }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
