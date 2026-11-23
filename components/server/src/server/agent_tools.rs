@@ -494,9 +494,35 @@ mod turn_limit_tests {
         // A Web bundle from before the change submits `max_per_session`.
         let update: AgentUpdate =
             serde_json::from_value(json!({"settings": legacy_document(json!(64))})).unwrap();
-        let settings = update.settings.unwrap();
+        let settings = update.tools().unwrap().unwrap();
         assert!(settings.validate());
         assert_eq!(settings.calls.max_per_turn, 16);
+        // Restoring the built-in defaults carries no settings at all.
+        let restore: AgentUpdate = serde_json::from_value(json!({"settings": null})).unwrap();
+        assert_eq!(restore.tools(), Ok(None));
+    }
+
+    #[test]
+    fn a_stale_bundle_that_echoes_the_new_limit_must_reload_instead_of_losing_an_edit() {
+        // The old selector wrote `max_per_session: 32` into a response that
+        // already held `max_per_turn: 4`: which one the person changed is
+        // unknowable, so neither is kept.
+        let mut mixed = legacy_document(json!(32));
+        mixed["calls"]["max_per_turn"] = json!(4);
+        let update: AgentUpdate = serde_json::from_value(json!({"settings": mixed})).unwrap();
+        assert_eq!(update.tools(), Err(()));
+        // A current client sends only the limit; anything malformed is refused.
+        let mut current = legacy_document(json!(1));
+        current["calls"]
+            .as_object_mut()
+            .unwrap()
+            .remove("max_per_session");
+        current["calls"]["max_per_turn"] = json!(4);
+        let update: AgentUpdate = serde_json::from_value(json!({"settings": current})).unwrap();
+        assert_eq!(update.tools().unwrap().unwrap().calls.max_per_turn, 4);
+        let update: AgentUpdate =
+            serde_json::from_value(json!({"settings": {"schema": 1}})).unwrap();
+        assert_eq!(update.tools(), Err(()));
     }
 
     #[test]
@@ -1147,7 +1173,26 @@ pub(super) async fn list(
 #[serde(deny_unknown_fields)]
 pub(super) struct AgentUpdate {
     /// `null` restores the built-in defaults.
-    settings: Option<AgentTools>,
+    settings: Option<serde_json::Value>,
+}
+
+impl AgentUpdate {
+    /// The submitted defaults. A Web bundle from before per-turn budgets
+    /// sends the retired `max_per_session` and, spreading the response it
+    /// loaded, also the `max_per_turn` it did not edit; which of the two a
+    /// person changed cannot be told, so such a save is refused and the page
+    /// must reload.
+    pub(super) fn tools(self) -> Result<Option<AgentTools>, ()> {
+        let Some(settings) = self.settings else {
+            return Ok(None);
+        };
+        if settings.pointer("/calls/max_per_session").is_some()
+            && settings.pointer("/calls/max_per_turn").is_some()
+        {
+            return Err(());
+        }
+        serde_json::from_value(settings).map(Some).map_err(|_| ())
+    }
 }
 
 pub(super) async fn configure_agent(
@@ -1160,9 +1205,11 @@ pub(super) async fn configure_agent(
     if authenticated.principal.role != crate::admin::AdminRole::Owner {
         return StatusCode::FORBIDDEN.into_response();
     }
+    let Ok(settings) = update.tools() else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
     if !valid_agent(&agent)
-        || update
-            .settings
+        || settings
             .as_ref()
             .is_some_and(|settings| !settings.validate())
     {
@@ -1171,7 +1218,7 @@ pub(super) async fn configure_agent(
     effort_store::store_agent(
         &state.hub,
         &agent,
-        update.settings.as_ref().map(|settings| json!(settings)),
+        settings.as_ref().map(|settings| json!(settings)),
     );
     let (settings, customized) = agent_defaults(&state, &agent);
     Json(json!({"schema": SCHEMA, "agent": agent, "settings": settings, "customized": customized}))

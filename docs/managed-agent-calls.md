@@ -304,25 +304,49 @@ the budget counts the calls that share the current turn, in every state: a
 failed or cancelled call, a dismissed call and a continuation round all spent
 budget. A replayed `request_id` returns the original call and keeps its turn.
 A call admitted before the column existed carries `NULL` and counts in no turn.
-Admission finds the turn in the Hub's hot log, else in durable history (200
-events per page, three seconds). When it cannot, it refuses with the retryable
-`capacity` code and a `reason` (`session_unavailable`, `owner_turn_scan_timeout`
-or `owner_turn_history_unavailable`) rather than guess; nothing is recorded.
+Admission finds the turn in the Hub's retained log (which also holds events
+the store has not written yet, whatever the client bootstrap window shows),
+else in durable history (200 events per page, three seconds). When it cannot,
+it refuses with the retryable `capacity` code and a `reason`
+(`session_unavailable`, `owner_turn_scan_timeout` or
+`owner_turn_history_unavailable`) rather than guess; nothing is recorded. A
+racing duplicate of the same `request_id` that was admitted meanwhile is
+answered with its receipt, not with the refusal.
+
+**What the budget cannot promise.** The owner's prompt is recognized by its
+client message id and the origin the Hub stamps on its echo, not by
+authenticated provenance at each entry point; every steered block carries the
+stamp of its own message id. It is a guard against runaway automation (the
+notice → call loop), not a security boundary. These still start a turn because
+their message ids look like the owner's: an agent's `sessions.context_send`
+(`context-<operation>`), `sessions.create` with `initial_prompt` (`initial:`),
+a peer's `sessions.retry` (`cowboy-retry:`), activating a draft (its own id),
+and a chunk an ACP client sends with neither id nor stamp. Clearing the
+transcript removes the anchor, and a call's first request can reach the
+Controller before the prompt echo is projected, in which case it counts against
+the previous turn. Closing these needs a trusted sender stamped at each ingress
+and the turn anchored when the Controller dispatches the prompt.
 
 **Migration and compatibility window.** Stored Tools defaults that carry
 `max_per_session` keep loading: the lifetime cap becomes `max_per_turn` 16
 (the new default) unless a person had lowered it below 16, which is kept
 (`legacy_turn_limit`; 64 → 16, 128 → 16, 8 → 8). Session overrides never
 carried the field. The same mapping reads a `PUT /api/agent-tools/{agent}` from
-a Web bundle that predates the change; every response carries only
+a Web bundle that predates the change (a save carrying both fields, which that
+bundle sends when it echoes the response it loaded, is refused with 400 so the
+page reloads instead of losing an edit); every response carries only
 `max_per_turn`. A Controller that predates the change parses the stored
 document with `deny_unknown_fields` and falls back to the built-in policy on any
 failure, which would re-enable calls a person had turned off. So the stored
 `agent_tools:<agent>` document keeps a `max_per_session` for as long as
 rollback to such a Controller is supported (the one it already had, else 64)
 and the limit is saved under `agent_turn_budget:<agent>`, the way review effort
-is. A rollback keeps every other setting and returns to its own lifetime cap;
-re-upgrading restores the saved per-turn limit. The ledger column is additive
+is, bound to the digest of the document it was saved with. Saves and reads of
+the two take turns, so a reader never pairs one save's document with another's
+limit. A rollback keeps every other setting and returns to its own lifetime
+cap; re-upgrading restores the saved per-turn limit only while the predecessor
+has not replaced the document: a reset or an edit made meanwhile orphans the
+limit, which then migrates from the document's own cap. The ledger column is additive
 (PostgreSQL 0087, SQLite 0061) and the call `Record` is unchanged, so a
 predecessor reads every row. The window ends when no predecessor remains a
 rollback target; then the legacy field, its fixed write and the input mapping

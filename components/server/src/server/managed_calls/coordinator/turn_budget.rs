@@ -28,32 +28,44 @@ const SCAN_DEADLINE: Duration = Duration::from_secs(3);
 #[cfg(test)]
 mod tests;
 
+/// Whether a timeline event is a prompt a person sent.
+fn is_owner_prompt(event: &Envelope) -> bool {
+    matches!(&event.event, Event::Update { update }
+        if crate::prompt_origin::is_owner_prompt_event(event.cmid.as_deref(), update))
+}
+
 /// The sequence of the newest owner prompt in `log`, in any order.
 fn newest_owner_prompt(log: &[Envelope]) -> Option<i64> {
     log.iter()
-        .filter(|event| {
-            matches!(&event.event, Event::Update { update }
-                if crate::prompt_origin::is_owner_prompt_event(event.cmid.as_deref(), update))
-        })
+        .filter(|event| is_owner_prompt(event))
         .filter_map(|event| i64::try_from(event.seq).ok())
         .max()
 }
 
 /// The owner turn a call admitted now counts against: the newest owner
-/// prompt of `parent`, from the hot log or else durable history, or
-/// [`OWNER_TURN_NONE`] when the whole history has none (a session only
-/// automation drives is one turn for its lifetime). `Err` names why the turn
-/// could not be established; the caller refuses rather than guess.
+/// prompt of `parent`, from the Hub's retained log (which holds events the
+/// store has not written yet, whatever a client bootstrap shows) or else from
+/// durable history, or [`OWNER_TURN_NONE`] when the whole history has none (a
+/// session only automation drives is one turn for its lifetime). `Err` names
+/// why the turn could not be established; the caller refuses rather than
+/// guess.
 async fn current_turn(hub: &Hub, store: &Store, parent: &str) -> Result<i64, &'static str> {
-    let (tail, whole) = hub.snapshot(parent).ok_or("session_unavailable")?;
-    if let Some(turn) = newest_owner_prompt(&tail) {
+    let scan = hub
+        .newest_in_retained_log(parent, is_owner_prompt)
+        .ok_or("session_unavailable")?;
+    if let Some(turn) = scan.newest_match.and_then(|seq| i64::try_from(seq).ok()) {
         return Ok(turn);
     }
-    if whole {
+    if scan.whole {
         return Ok(OWNER_TURN_NONE);
     }
+    durable_turn(store, parent, scan.first_seq.unwrap_or(i64::MAX as u64)).await
+}
+
+/// The newest owner prompt among the events before `before` in durable
+/// history, read newest first.
+async fn durable_turn(store: &Store, parent: &str, mut before: u64) -> Result<i64, &'static str> {
     let deadline = tokio::time::Instant::now() + SCAN_DEADLINE;
-    let mut before = tail.first().map_or(i64::MAX as u64, |event| event.seq);
     loop {
         let (page, next, done) =
             tokio::time::timeout_at(deadline, store.history_page(parent, before, PAGE))

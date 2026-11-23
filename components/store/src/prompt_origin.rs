@@ -155,6 +155,18 @@ pub fn apply_prompt_origin(update: &mut Value, origin: &PromptOrigin) {
     }
 }
 
+/// The timeline echo of one block steered into a running turn. Every block
+/// carries the origin its message id selects, like any other prompt echo, so
+/// a peer's or a notice's later blocks never read as the owner's.
+pub fn steering_echo(block: &Value, cmid: &str) -> Value {
+    let mut update = serde_json::json!({
+        "sessionUpdate": "user_message_chunk", "content": block,
+        "_meta": {"cowboyDelivery": "current_turn"},
+    });
+    apply_prompt_origin(&mut update, &origin_from_cmid(Some(cmid)));
+    update
+}
+
 pub fn annotate_inbound_user_prompt(update: &mut Value, provider_id: &str) {
     if update.get("sessionUpdate").and_then(Value::as_str) != Some("user_message_chunk") {
         return;
@@ -330,6 +342,24 @@ mod tests {
             Some("cmid-1"),
             &serde_json::json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi"}})
         ));
+    }
+
+    #[test]
+    fn every_steered_block_carries_the_origin_of_its_message_id() {
+        let peer = format!("agent-{}", "d".repeat(64));
+        for (cmid, owner) in [
+            (peer.as_str(), false),
+            ("call-notice:call-1", false),
+            ("cmid-1", true),
+        ] {
+            for text in ["first block", "second block"] {
+                let block = serde_json::json!({"type": "text", "text": text});
+                let update = steering_echo(&block, cmid);
+                assert_eq!(update["_meta"]["cowboyDelivery"], "current_turn");
+                // Only the first block carries the id; the echo must not need it.
+                assert_eq!(is_owner_prompt_event(None, &update), owner, "{cmid} {text}");
+            }
+        }
     }
 
     #[test]

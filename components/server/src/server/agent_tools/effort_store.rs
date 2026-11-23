@@ -82,7 +82,9 @@ fn merge(mut document: Value, effort: Option<Value>) -> Value {
 /// Remove the calls-per-turn limit from a Tools document; returns the document
 /// and the limit object (null when there is none). The document keeps what a
 /// predecessor requires: its lifetime `max_per_session`, `previous`'s when it
-/// had one.
+/// had one. The limit is bound to the digest of the document it was saved
+/// with, so a predecessor that replaces the document (a reset, an edit)
+/// orphans it instead of resurrecting a stale limit.
 fn split_budget(mut document: Value, previous: Option<&Value>) -> (Value, Value) {
     let Some(calls) = document.get_mut("calls").and_then(Value::as_object_mut) else {
         return (document, Value::Null);
@@ -99,15 +101,21 @@ fn split_budget(mut document: Value, previous: Option<&Value>) -> (Value, Value)
         .cloned()
         .unwrap_or_else(|| json!(RETIRED_SESSION_CAP));
     calls.insert("max_per_session".to_owned(), legacy);
-    (document, json!({ "max_per_turn": limit }))
+    let bound = crate::managed_calls::canonical_digest(&document);
+    (
+        document,
+        json!({ "max_per_turn": limit, "document": bound }),
+    )
 }
 
-/// Put a stored limit back into a Tools document read from its own key. The
+/// Put a stored limit back into a Tools document read from its own key, when
+/// the limit was saved with exactly that document (`stored`'s digest). The
 /// document's legacy `max_per_session` stays; the typed reader prefers the
 /// limit and migrates the cap only when there is none.
-fn merge_budget(mut document: Value, budget: Option<Value>) -> Value {
+fn merge_budget(mut document: Value, budget: Option<Value>, stored: &str) -> Value {
     let limit = budget
         .as_ref()
+        .filter(|budget| budget.get("document").and_then(Value::as_str) == Some(stored))
         .and_then(|budget| budget.get("max_per_turn"))
         .filter(|limit| limit.is_u64());
     if let (Some(limit), Some(calls)) = (
@@ -118,6 +126,11 @@ fn merge_budget(mut document: Value, budget: Option<Value>) -> Value {
     }
     document
 }
+
+/// Saves and reads of a Tools document and what sits beside it take turns, so
+/// a reader never pairs one save's document with another's limit and the
+/// store queue receives writes in the order the Hub committed them.
+static SAVES: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
 /// Commit a document and the settings kept beside it under one Hub lock so
 /// concurrent saves cannot pair one caller's policy with another's effort or
@@ -136,20 +149,22 @@ fn write_group(hub: &crate::core::Hub, key: String, document: Value, beside: Vec
 }
 
 pub(in crate::server) fn agent_document(hub: &crate::core::Hub, agent: &str) -> Option<Value> {
-    hub.setting(&format!("{AGENT_TOOLS_PREFIX}{agent}"))
-        .map(|document| {
-            let document = merge(
-                document,
-                hub.setting(&format!("{AGENT_REVIEW_EFFORT_PREFIX}{agent}")),
-            );
-            merge_budget(
-                document,
-                hub.setting(&format!("{AGENT_TURN_BUDGET_PREFIX}{agent}")),
-            )
-        })
+    let _turn = SAVES.lock();
+    let stored = hub.setting(&format!("{AGENT_TOOLS_PREFIX}{agent}"))?;
+    let digest = crate::managed_calls::canonical_digest(&stored);
+    let document = merge(
+        stored,
+        hub.setting(&format!("{AGENT_REVIEW_EFFORT_PREFIX}{agent}")),
+    );
+    Some(merge_budget(
+        document,
+        hub.setting(&format!("{AGENT_TURN_BUDGET_PREFIX}{agent}")),
+        &digest,
+    ))
 }
 
 pub(in crate::server) fn session_document(hub: &crate::core::Hub, session: &str) -> Option<Value> {
+    let _turn = SAVES.lock();
     let effort = hub.setting(&format!("{SESSION_REVIEW_EFFORT_PREFIX}{session}"));
     // An effort-only override has no Tools document of its own.
     match hub.setting(&format!("{SESSION_TOOLS_PREFIX}{session}")) {
@@ -161,6 +176,7 @@ pub(in crate::server) fn session_document(hub: &crate::core::Hub, session: &str)
 }
 
 pub(in crate::server) fn store_agent(hub: &crate::core::Hub, agent: &str, document: Option<Value>) {
+    let _turn = SAVES.lock();
     let key = format!("{AGENT_TOOLS_PREFIX}{agent}");
     let previous = hub.setting(&key);
     let (document, effort) = document.map_or((Value::Null, Value::Null), split);
@@ -181,6 +197,7 @@ pub(in crate::server) fn store_session(
     session: &str,
     document: Option<Value>,
 ) {
+    let _turn = SAVES.lock();
     let (document, effort) = document.map_or((Value::Null, Value::Null), split);
     // Keep the schema-one document absent when only effort was overridden.
     let document = if serde_json::from_value::<super::SessionTools>(document.clone())
@@ -258,9 +275,12 @@ mod tests {
         let predecessor: PredecessorTools = serde_json::from_value(stored.clone()).unwrap();
         assert_eq!(predecessor.calls.max_per_session, 64);
         assert!(stored["calls"].get("max_per_turn").is_none());
+        let beside = hub.setting("agent_turn_budget:codex").unwrap();
+        assert_eq!(beside["max_per_turn"], 8);
+        // The limit is bound to the exact document it was saved with.
         assert_eq!(
-            hub.setting("agent_turn_budget:codex").unwrap(),
-            json!({"max_per_turn": 8})
+            beside["document"],
+            crate::managed_calls::canonical_digest(&stored)
         );
         let (tools, customized) = super::super::hub_agent_defaults(&hub, "codex");
         assert!(customized);
@@ -282,6 +302,76 @@ mod tests {
                 .max_per_turn,
             32
         );
+    }
+
+    #[test]
+    fn a_predecessor_reset_does_not_resurrect_an_old_limit() {
+        let hub = crate::core::Hub::new();
+        saved(&hub, 64);
+        // Rolled back: the predecessor resets to built-in defaults (it cannot
+        // clear the limit kept beside the document), then saves a lifetime cap.
+        let mut legacy = hub.setting("agent_tools:codex").unwrap();
+        legacy["calls"]["max_per_session"] = json!(8);
+        hub.with_settings_mut(|settings| {
+            settings.insert("agent_tools:codex".into(), legacy);
+        });
+        let (tools, customized) = super::super::hub_agent_defaults(&hub, "codex");
+        assert!(customized);
+        assert_eq!(
+            tools.calls.max_per_turn, 8,
+            "the cap migrates, not the orphan"
+        );
+    }
+
+    #[test]
+    fn a_predecessor_edit_drops_the_limit_saved_with_the_document_it_replaced() {
+        let hub = crate::core::Hub::new();
+        saved(&hub, 4);
+        let mut edited = hub.setting("agent_tools:codex").unwrap();
+        edited["calls"]["enabled"] = json!(false);
+        hub.with_settings_mut(|settings| {
+            settings.insert("agent_tools:codex".into(), edited);
+        });
+        let (tools, _) = super::super::hub_agent_defaults(&hub, "codex");
+        assert!(!tools.calls.enabled, "the predecessor's edit is kept");
+        assert_eq!(tools.calls.max_per_turn, 16, "from its lifetime cap of 64");
+    }
+
+    #[test]
+    fn saves_and_reads_never_pair_one_save_with_anothers_limit() {
+        let hub = std::sync::Arc::new(crate::core::Hub::new());
+        let save = |hub: &crate::core::Hub, enabled: bool, limit: u16| {
+            let mut tools = super::super::AgentTools::builtin("codex");
+            tools.calls.enabled = enabled;
+            tools.calls.max_per_turn = limit;
+            store_agent(hub, "codex", Some(json!(tools)));
+        };
+        save(&hub, false, 4);
+        let write = |enabled: bool, limit: u16| {
+            let hub = std::sync::Arc::clone(&hub);
+            std::thread::spawn(move || {
+                for _ in 0..300 {
+                    save(&hub, enabled, limit);
+                }
+            })
+        };
+        let writers = [write(false, 4), write(true, 64)];
+        for _ in 0..600 {
+            let (tools, _) = super::super::hub_agent_defaults(&hub, "codex");
+            // A document paired with another save's limit would fail the
+            // digest and read as the lifetime cap's 16.
+            assert!(
+                matches!(
+                    (tools.calls.enabled, tools.calls.max_per_turn),
+                    (false, 4) | (true, 64)
+                ),
+                "{:?}",
+                (tools.calls.enabled, tools.calls.max_per_turn)
+            );
+        }
+        for writer in writers {
+            writer.join().unwrap();
+        }
     }
 
     #[test]

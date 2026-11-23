@@ -912,6 +912,23 @@ fn continued_agent(state: &AppState, conversation: &Conversation) -> Result<Opti
     }
 }
 
+/// The original call of a repeated request id, even if the Provider has since
+/// become unavailable or the policy changed; conflicting inputs are refused.
+async fn replay(
+    state: &Arc<AppState>,
+    ledger: &Ledger,
+    original: &Record,
+    (requested, preset): (&str, Option<&str>),
+    request: &Request,
+    deadline: tokio::time::Instant,
+) -> Value {
+    if original.request_digest != request.digest() || !same_request(original, requested, preset) {
+        return error("request_conflict", "not_submitted");
+    }
+    super::runner::ensure_runner(state, original);
+    envelope(&wait_started(state, ledger, original, deadline).await)
+}
+
 #[allow(clippy::too_many_arguments)] // The admission inputs plus the anchor's origin.
 async fn start(
     state: &Arc<AppState>,
@@ -931,13 +948,15 @@ async fn start(
     // are refused.
     match ledger.observe(&request.request_id).await {
         Ok(Some(original)) => {
-            if original.request_digest != request.digest()
-                || !same_request(&original, requested, preset)
-            {
-                return error("request_conflict", "not_submitted");
-            }
-            super::runner::ensure_runner(state, &original);
-            return envelope(&wait_started(state, ledger, &original, deadline).await);
+            return replay(
+                state,
+                ledger,
+                &original,
+                (requested, preset),
+                &request,
+                deadline,
+            )
+            .await;
         }
         Ok(None) => {}
         Err(_) => return error("capacity", "not_submitted"),
@@ -992,7 +1011,24 @@ async fn start(
     let owner_turn =
         match turn_budget::admit(&state.hub, state.store.as_ref(), &meta.id, &policy).await {
             Ok(turn) => turn,
-            Err(refusal) => return refusal,
+            Err(refusal) => {
+                // A racing duplicate of this request may have been admitted
+                // since the first look; its receipt, not a refusal, is the answer.
+                return match ledger.observe(&request.request_id).await {
+                    Ok(Some(original)) => {
+                        replay(
+                            state,
+                            ledger,
+                            &original,
+                            (requested, preset),
+                            &request,
+                            deadline,
+                        )
+                        .await
+                    }
+                    _ => refusal,
+                };
+            }
         };
     let (mut target, generation) = match first_ready(state, meta, ledger, targets, &request).await {
         Ok(ready) => ready,

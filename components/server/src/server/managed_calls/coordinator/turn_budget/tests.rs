@@ -254,15 +254,45 @@ async fn a_session_no_person_prompted_is_one_turn() {
 }
 
 #[tokio::test]
-async fn concurrency_is_still_checked_before_the_turn() {
-    let mut fixture = Fixture::new(16).await;
+async fn concurrency_is_checked_before_the_turn_budget() {
+    // Both limits are spent by one queued call: the refusal says which one a
+    // caller can wait out (a running call ends; a turn only ends with a prompt).
+    let mut fixture = Fixture::new(1).await;
     fixture.policy.max_concurrent = 1;
     fixture.prompt(Some("cmid-1"));
     fixture.spend(1).await;
-    // The first call is still queued, so it is the one allowed to run.
     assert_eq!(
         refused(fixture.call().await),
         ("concurrency_limit".into(), "not_submitted".into())
+    );
+}
+
+#[tokio::test]
+async fn the_budget_follows_a_prompt_the_client_bootstrap_window_no_longer_shows() {
+    let mut fixture = Fixture::new(2).await;
+    fixture.prompt(Some("cmid-1"));
+    let turn = fixture.spend(2).await;
+    // One large event pushes the prompt out of the 128 KiB bootstrap tail, as
+    // a long tool output does; the Hub still retains it, written or not.
+    fixture.hub.push(
+        PARENT,
+        Event::Update {
+            update: json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"x".repeat(140 * 1024)}}),
+        },
+    );
+    assert_eq!(
+        newest_owner_prompt(&fixture.hub.snapshot(PARENT).unwrap().0),
+        None,
+        "the bootstrap tail no longer holds the prompt"
+    );
+    assert_eq!(refused(fixture.call().await).0, "call_limit");
+    assert_eq!(
+        fixture
+            .store
+            .managed_call_turn_count(PARENT, turn)
+            .await
+            .unwrap(),
+        2
     );
 }
 
@@ -287,60 +317,54 @@ async fn an_unreadable_turn_refuses_instead_of_guessing() {
     assert_eq!(fixture.spend(0).await, OWNER_TURN_NONE);
 }
 
-/// A long turn pushes its owner prompt out of the hot log; the budget finds
-/// it in durable history rather than treating the session as unprompted.
+/// Durable history is read newest first, a page at a time, until the newest
+/// owner prompt: a notice or a peer message among newer rows never stops it.
 #[tokio::test]
-async fn the_owner_prompt_behind_a_long_turn_is_found_in_durable_history() {
+async fn durable_history_is_paged_until_the_newest_owner_prompt() {
     use crate::core::Envelope;
-    for owner_prompt in [true, false] {
-        let mut fixture = Fixture::new(2).await;
-        let progress = "progress".repeat(1024);
-        let mut rows = Vec::new();
-        for n in 0..450 {
-            let (event, cmid) = if n == 0 && owner_prompt {
-                let mut update = json!({"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"task"}});
-                apply_prompt_origin(&mut update, &origin_from_cmid(Some("cmid-1")));
-                (Event::Update { update }, Some("cmid-1".to_owned()))
-            } else if n == 1 {
-                // A notice early in the turn is not the owner's prompt.
-                let mut update = json!({"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"notice"}});
-                apply_prompt_origin(&mut update, &origin_from_cmid(Some("call-notice:call-1")));
-                (
-                    Event::Update { update },
-                    Some("call-notice:call-1".to_owned()),
-                )
-            } else {
-                (
-                    Event::Update {
-                        update: json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":&progress}}),
-                    },
-                    None,
-                )
-            };
-            fixture.hub.push_tagged(PARENT, event.clone(), cmid.clone());
-            rows.push(Envelope {
-                session_id: PARENT.into(),
-                seq: fixture.hub.last_event_seq(PARENT).unwrap(),
-                event,
-                cmid,
-            });
-        }
+    let peer = format!("agent-{}", "e".repeat(64));
+    for owner_at in [Some(5_u64), None] {
+        let fixture = Fixture::new(2).await;
+        let rows: Vec<Envelope> = (0..450_u64)
+            .map(|seq| {
+                let cmid = match seq {
+                    5 if owner_at.is_some() => Some("cmid-1"),
+                    6 => Some("call-notice:call-1"),
+                    400 => Some(peer.as_str()),
+                    _ => None,
+                };
+                let update = match cmid {
+                    Some(cmid) => {
+                        let mut update = json!({"sessionUpdate":"user_message_chunk","content":{"type":"text","text":format!("prompt {seq}")}});
+                        apply_prompt_origin(&mut update, &origin_from_cmid(Some(cmid)));
+                        update
+                    }
+                    None => json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":format!("progress {seq}")}}),
+                };
+                Envelope {
+                    session_id: PARENT.into(),
+                    seq,
+                    event: Event::Update { update },
+                    cmid: cmid.map(str::to_owned),
+                }
+            })
+            .collect();
         fixture
             .store
             .upsert_event_batch(&rows, &std::collections::HashMap::new())
             .await
             .unwrap();
+        let end = i64::MAX as u64;
+        let expected = owner_at.map_or(OWNER_TURN_NONE, |seq| i64::try_from(seq).unwrap());
+        // 450 events are three pages of 200: the prompt is on the last one.
         assert_eq!(
-            newest_owner_prompt(&fixture.hub.snapshot(PARENT).unwrap().0),
-            None,
-            "the hot tail no longer holds the prompt"
+            durable_turn(&fixture.store, PARENT, end).await,
+            Ok(expected)
         );
-        let turn = fixture.spend(2).await;
-        if owner_prompt {
-            assert_eq!(turn, i64::try_from(rows[0].seq).unwrap());
-        } else {
-            assert_eq!(turn, OWNER_TURN_NONE);
-        }
-        assert_eq!(refused(fixture.call().await).0, "call_limit");
+        // Reading only what precedes it finds an earlier owner prompt or none.
+        assert_eq!(
+            durable_turn(&fixture.store, PARENT, 5).await,
+            Ok(OWNER_TURN_NONE)
+        );
     }
 }

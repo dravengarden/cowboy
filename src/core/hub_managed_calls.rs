@@ -2,12 +2,39 @@
 
 use super::*;
 
+/// What [`Hub::newest_in_retained_log`] found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RetainedLogScan {
+    pub newest_match: Option<u64>,
+    pub first_seq: Option<u64>,
+    /// Nothing older exists: the retained log is the session's whole history.
+    pub whole: bool,
+}
+
 impl Hub {
     /// Submit a managed call's prompt to its child. Client entry points refuse
     /// managed children; only the Controller-owned call runner reaches here.
     pub fn submit_managed_prompt(&self, session_id: &str, call_id: &str, text: String) {
         let cmid = format!("{MANAGED_CALL_CMID_PREFIX}{call_id}");
         self.submit_inner(session_id, text, Vec::new(), Some(cmid), true, false);
+    }
+
+    /// The newest event of a session's retained log that `matches`, with the
+    /// log's first sequence and whether it is the whole history. The retained
+    /// log holds every event not yet trimmed, written to the store or not,
+    /// whatever a client bootstrap shows of it.
+    pub fn newest_in_retained_log(
+        &self,
+        session_id: &str,
+        matches: impl Fn(&Envelope) -> bool,
+    ) -> Option<RetainedLogScan> {
+        let sessions = self.inner.sessions.lock();
+        let s = sessions.get(session_id)?;
+        Some(RetainedLogScan {
+            newest_match: s.log.iter().rev().find(|e| matches(e)).map(|e| e.seq),
+            first_seq: s.log.first().map(|e| e.seq),
+            whole: s.reached_start,
+        })
     }
 
     /// Withdraw a call's still-queued prompt (cancelled, refused or finished).

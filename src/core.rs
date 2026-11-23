@@ -39,6 +39,7 @@ use hub_config::{ConfigPreviews, add_config_choices};
 mod hub_events;
 pub use hub_events::FanoutFrame;
 mod hub_managed_calls;
+pub use hub_managed_calls::RetainedLogScan;
 mod hub_peer_notice;
 pub use hub_peer_notice::PromptProgress;
 mod hub_provider_pins;
