@@ -1,6 +1,7 @@
 //! The authenticated Machine connection: handshake, writer and runtime tunnel
 //! tasks, per-frame handling, provider authentication sync and presence.
 
+pub(super) use super::random_machine_token;
 use super::*;
 
 mod frames;
@@ -404,19 +405,6 @@ pub(super) fn is_transient_machine_disconnect(error: &str) -> bool {
     error.contains("is not connected") || error.contains("disconnected")
 }
 
-/// Same rule as the metrics scrape: a direct same-host caller, never a request
-/// that crossed the public reverse proxy.
-pub(super) fn internal_machine_refresh(
-    method: &Method,
-    path: &str,
-    peer: SocketAddr,
-    headers: &HeaderMap,
-) -> bool {
-    method == Method::POST
-        && machine_refresh_path(path)
-        && crate::product_auth::metrics_scrape_allowed(peer, headers)
-}
-
 pub(super) async fn await_machine_command(
     state: &AppState,
     machine_id: &str,
@@ -798,15 +786,6 @@ where
         .context("writing Machine runtime frame")?;
     }
     Ok(())
-}
-
-pub(super) fn random_machine_token() -> anyhow::Result<String> {
-    let mut random = [0_u8; 32];
-    std::fs::File::open("/dev/urandom")
-        .context("opening OS randomness")?
-        .read_exact(&mut random)
-        .context("reading OS randomness")?;
-    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random))
 }
 
 pub(super) async fn handle_machine_ws(

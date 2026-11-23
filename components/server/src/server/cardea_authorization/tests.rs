@@ -1,4 +1,5 @@
 use super::*;
+use crate::machine_protocol::{DesiredPlugin, plugin_install::InstallTarget};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct Harness {

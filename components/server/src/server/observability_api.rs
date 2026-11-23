@@ -38,38 +38,6 @@ pub(super) async fn version(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-/// Current and lifetime-high resident set of THIS process (not its agent or
-/// usage-collector children). `/proc/self/status` reports KiB directly, avoiding
-/// the incorrect 4 KiB page-size assumption `statm` would make on some hosts.
-pub(super) fn daemon_memory() -> DaemonMemory {
-    std::fs::read_to_string("/proc/self/status")
-        .ok()
-        .map_or_else(DaemonMemory::default, |status| {
-            parse_proc_status_memory(&status)
-        })
-}
-
-pub(super) fn parse_proc_status_memory(status: &str) -> DaemonMemory {
-    fn kib_value(line: &str, key: &str) -> Option<u64> {
-        line.strip_prefix(key)?
-            .split_whitespace()
-            .next()?
-            .parse::<u64>()
-            .ok()
-            .map(|kib| kib.saturating_mul(1024))
-    }
-
-    let mut memory = DaemonMemory::default();
-    for line in status.lines() {
-        if let Some(bytes) = kib_value(line, "VmRSS:") {
-            memory.rss_bytes = bytes;
-        } else if let Some(bytes) = kib_value(line, "VmHWM:") {
-            memory.rss_peak_bytes = bytes;
-        }
-    }
-    memory
-}
-
 pub(super) async fn api_metrics(State(state): State<Arc<AppState>>) -> Response {
     let sessions_live = state.hub.session_list().len();
     let (db_bytes, events_rows, sessions_deleted) = match &state.store {

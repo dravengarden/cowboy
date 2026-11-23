@@ -22,7 +22,7 @@ mod state;
 use state::AppState;
 mod memory_reclaim;
 mod memory_relay;
-mod secure_transport;
+pub use cowboy_server_auth::server::secure_transport;
 mod send_delivery;
 mod session_configuration;
 mod session_context;
@@ -35,7 +35,6 @@ mod web_roots;
 mod workspace_preparation;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::io::Read as _;
 use std::net::SocketAddr;
 use std::path::{Component, Path as FsPath, PathBuf};
 use std::sync::Arc;
@@ -46,8 +45,10 @@ use axum::Router;
 use axum::body::Body;
 use axum::extract::DefaultBodyLimit;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{ConnectInfo, Extension, Form, Json, Path, Query, State};
-use axum::http::{HeaderMap, Method, StatusCode, Uri, header};
+use axum::extract::{ConnectInfo, Extension, Json, Path, Query, State};
+#[cfg(test)]
+use axum::http::Method;
+use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, delete, get, post, put};
@@ -79,7 +80,7 @@ use crate::remote_runtime::{RemoteBootstrap, RemoteRuntime};
 use crate::runtime::RuntimeHealth;
 use crate::runtime_router::RuntimeRouter;
 use crate::session_folders::{FolderActor, project_folders_value};
-use crate::store::{ActiveClientRelease, Store};
+use crate::store::Store;
 use crate::supervisor::Supervisor;
 use crate::usage::UsageService;
 use crate::web_push::WebPushService;
@@ -94,7 +95,7 @@ mod background_tasks;
 #[cfg(test)]
 mod background_tasks_tests;
 mod cardea_authorization;
-mod code_buffers;
+pub use cowboy_server_code_buffers::server::code_buffers;
 mod code_reads;
 mod draft_documents;
 mod execution;
@@ -104,7 +105,7 @@ mod machine_lanes;
 mod managed_calls;
 mod native_configuration;
 mod notifications;
-pub mod operator_approval;
+pub use cowboy_server_auth::server::operator_approval;
 mod peer_notices;
 #[cfg(test)]
 mod persistence_tests;
@@ -116,11 +117,11 @@ mod workspace_extensions;
 use plugin_install::api_machine_plugin_install;
 mod plugin_history;
 mod plugin_uninstall;
-mod product_continuation;
+pub use cowboy_server_auth::server::product_continuation;
 mod projects;
 pub mod provider_auth_sync;
 mod sync_dataset;
-pub mod telemetry_binding;
+pub use cowboy_server_telemetry::server::telemetry_binding;
 mod web_security;
 mod zed_session;
 use plugin_uninstall::{
@@ -144,19 +145,6 @@ struct PluginUninstallPlan {
     expires_at_ms: i64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PluginFenceState {
-    Installing,
-    Uninstalling,
-    Uninstalled,
-    NeedsReconcile,
-}
-
-pub type PluginLifecycleFences =
-    Arc<parking_lot::RwLock<HashMap<(String, String), PluginFenceState>>>;
-
-/// Reserve the lifecycle before reading the active release, including across
-/// awaits. Reuse the non-destructive installing fence; cancellation releases it.
 struct ProviderReloadFence {
     fences: PluginLifecycleFences,
     key: (String, String),
@@ -197,92 +185,6 @@ impl ProviderAuthReconciliation {
             .as_ref()
             .filter(|(request_id, _)| active_request_id == Some(request_id.as_str()))
             .cloned()
-    }
-}
-
-#[derive(Default)]
-struct ActiveCapacityRuntime {
-    channels: parking_lot::Mutex<HashMap<String, LocalActiveClient>>,
-    changed: tokio::sync::Notify,
-}
-
-#[derive(Debug, Default)]
-struct LocalActiveClient {
-    channels: u32,
-    fencing_token: Option<i64>,
-}
-
-impl ActiveCapacityRuntime {
-    fn open_channel(&self, client_id: &str, limit: u32, enforce: bool) -> Result<u32, u32> {
-        let mut clients = self.channels.lock();
-        let client = clients.entry(client_id.to_owned()).or_default();
-        let next = client.channels.saturating_add(1);
-        if enforce && next > limit {
-            return Err(client.channels);
-        }
-        client.channels = next;
-        Ok(next)
-    }
-
-    fn record_fence(&self, client_id: &str, fencing_token: i64) {
-        if let Some(client) = self.channels.lock().get_mut(client_id) {
-            client.fencing_token = Some(fencing_token);
-        }
-    }
-
-    fn close_channel(&self, client_id: &str) -> Option<i64> {
-        let mut clients = self.channels.lock();
-        let client = clients.get_mut(client_id)?;
-        client.channels = client.channels.saturating_sub(1);
-        if client.channels > 0 {
-            return None;
-        }
-        clients
-            .remove(client_id)
-            .and_then(|client| client.fencing_token)
-    }
-
-    fn notify_changed(&self) {
-        self.changed.notify_waiters();
-    }
-}
-
-struct ActiveCapacityChannel {
-    runtime: Arc<ActiveCapacityRuntime>,
-    store: Option<Store>,
-    client_id: String,
-    reservation_ms: i64,
-    per_user_limit: u32,
-}
-
-impl Drop for ActiveCapacityChannel {
-    fn drop(&mut self) {
-        let Some(fencing_token) = self.runtime.close_channel(&self.client_id) else {
-            return;
-        };
-        let Some(store) = self.store.clone() else {
-            return;
-        };
-        let runtime = self.runtime.clone();
-        let client_id = self.client_id.clone();
-        let reservation_ms = self.reservation_ms;
-        let per_user_limit = self.per_user_limit;
-        tokio::spawn(async move {
-            if let Err(error) = store
-                .release_active_client(&ActiveClientRelease {
-                    client_id: &client_id,
-                    fencing_token,
-                    reason: "channel_closed",
-                    now_ms: auth_now_ms(),
-                    reservation_ms,
-                    per_user_limit,
-                })
-                .await
-            {
-                tracing::warn!(%error, %client_id, "releasing active-client lease");
-            }
-            runtime.notify_changed();
-        });
     }
 }
 
@@ -859,260 +761,16 @@ const fn provider_fence_refusal(fence: PluginFenceState) -> Option<&'static str>
 #[cfg(test)]
 mod provider_fence_refusal_tests;
 
-#[derive(Clone)]
-struct ProductAuthState {
-    hub: Hub,
-    store: Option<Store>,
-    rate_limits: Arc<crate::product_auth::AuthRateLimiter>,
-    public_origins: Arc<Vec<String>>,
-    runtime_health: Option<Arc<RuntimeHealth>>,
-    persistence_health: Option<Arc<PersistenceHealth>>,
-    runtime_router: Option<Arc<RuntimeRouter>>,
-    plugin_catalog: Option<Arc<crate::plugin_catalog::PluginCatalog>>,
-    plugin_storage: Option<crate::plugin_storage::PluginStorage>,
-    provider_catalog: Option<Arc<crate::provider_catalog::ProviderCatalog>>,
-    passkeys: Arc<crate::passkey::PasskeyCeremonies>,
-    setup: Arc<crate::admin::AdminSetupState>,
-    setup_lock: Arc<tokio::sync::Mutex<()>>,
-    product_auth_enabled: bool,
-    product_authentication: Arc<crate::auth_plugins::ProductAuthentication>,
-    oidc_transactions: Arc<crate::oidc::OidcTransactions>,
-    oidc_native_handoffs: Arc<crate::oidc::NativeHandoffs>,
-    device_authorizations: Arc<crate::client_auth::DeviceAuthorizations>,
-    device_access: Arc<crate::client_auth::DeviceAccessSessions>,
-    capacity_runtime: Arc<ActiveCapacityRuntime>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RegisterRequest {
-    account: String,
-    password: String,
-    #[allow(dead_code)]
-    token: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct LoginRequest {
-    account: String,
-    password: String,
-}
-
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum LogoutScope {
-    #[default]
-    Current,
-    Provider,
-    All,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LogoutRequest {
-    #[serde(default)]
-    scope: LogoutScope,
-    #[serde(default)]
-    provider_logout: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OidcBackchannelLogoutRequest {
-    logout_token: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AutomationCredentialRequest {
-    name: String,
-    public_key: String,
-    ttl_seconds: Option<i64>,
-    #[serde(default)]
-    scopes: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ActiveClientReleaseQuery {
-    fencing_token: i64,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OidcCallbackQuery {
-    code: Option<String>,
-    state: Option<String>,
-    error: Option<String>,
-    error_description: Option<String>,
-    #[serde(default)]
-    user: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OidcStartQuery {
-    client: Option<String>,
-    code_challenge: Option<String>,
-    handoff_challenge: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OidcNativeExchangeRequest {
-    code: String,
-    code_verifier: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OidcNativePollRequest {
-    handoff_token: String,
-    code_verifier: String,
-}
-
-#[derive(Debug, Serialize)]
-struct OidcNativePollPending {
-    status: &'static str,
-}
-
-#[derive(Debug, Serialize)]
-struct OidcNativeEventStatus {
-    status: &'static str,
-}
-
-#[derive(Debug, Serialize)]
-struct PasskeyExternalEventStatus {
-    status: &'static str,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct AdminCreateUserRequest {
-    account: String,
-    password: String,
-    role: Option<crate::admin::AdminRole>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AdminSetPasswordRequest {
-    password: String,
-}
-
-#[derive(Debug, Serialize)]
-struct ProductMe {
-    account: String,
-    user_id: Option<String>,
-    role: crate::admin::AdminRole,
-    #[serde(default)]
-    primary_auth_method: Option<String>,
-    #[serde(default)]
-    passkey_count: u32,
-    #[serde(default)]
-    passkey_reauth_enabled: bool,
-    #[serde(default)]
-    passkey_reauth_required: bool,
-    #[serde(default)]
-    passkey_reauth_after_ms: i64,
-    #[serde(default)]
-    passkey_reauth_due_at_ms: Option<i64>,
-    #[serde(default)]
-    passkey_reauth_warn_at_ms: Option<i64>,
-    #[serde(default)]
-    primary_reauth_due_at_ms: Option<i64>,
-    #[serde(default)]
-    primary_reauth_warn_at_ms: Option<i64>,
-    #[serde(default)]
-    session_idle_due_at_ms: Option<i64>,
-    #[serde(default)]
-    session_expires_at_ms: Option<i64>,
-    #[serde(default)]
-    session_server_now_ms: Option<i64>,
-    #[serde(default)]
-    session_reauth_kind: Option<ProductSessionReauthKind>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum ProductSessionReauthKind {
-    Passkey,
-    Primary,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ProductSessionDeadlines {
-    idle_due_at_ms: Option<i64>,
-    passkey_due_at_ms: Option<i64>,
-    passkey_warn_at_ms: Option<i64>,
-    primary_due_at_ms: i64,
-    primary_warn_at_ms: i64,
-    required_kind: Option<ProductSessionReauthKind>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CreateApiTokenRequest {
-    name: String,
-    ttl_seconds: Option<i64>,
-}
-
-#[derive(Serialize)]
-struct AdminOverview {
-    healthy: bool,
-    persistence: &'static str,
-    backend: &'static str,
-    sessions_live: usize,
-    sessions_deleted: i64,
-    events_rows: i64,
-    daemon_rss_bytes: u64,
-    runtime_workers: usize,
-    runtime_busy_workers: usize,
-    registration: crate::admin::RegistrationPolicyView,
-}
-
-#[derive(Serialize)]
-struct AdminSessionRow {
-    id: String,
-    title: String,
-    provider: String,
-    machine_id: String,
-    status: Status,
-}
-
-fn durable_store(store: &Option<Store>) -> Option<&Store> {
-    store.as_ref()
-}
-
-fn missing_store() -> Response {
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        "product accounts require a durable store",
+async fn prepare_admin_setup(
+    state: &Arc<AppState>,
+    data_dir: PathBuf,
+) -> anyhow::Result<Arc<crate::admin::AdminSetupState>> {
+    cowboy_server_auth::server::admin_api::prepare_admin_setup_for(
+        state.store.as_ref(),
+        &state.hub,
+        data_dir,
     )
-        .into_response()
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RouteAuth {
-    Public,
-    Product,
-    ProductOperator,
-    ProductSessionSee,
-    ProductSessionMutate,
-    ProductOrAdminOperator,
-    AdminViewer,
-    AdminOperator,
-    AdminOwner,
-    MetricsScrape,
-}
-
-/// The same authentication context serves API middleware and the standalone
-/// authentication router. A verified request extension is reused by handlers:
-/// sender-constrained proof nonces must never be consumed twice.
-#[derive(Clone, Copy)] // Borrowed core services, not an approval or credential.
-pub struct ProductRequestAuth<'a> {
-    pub product_auth_enabled: bool,
-    pub store: Option<&'a Store>,
-    pub hub: &'a Hub,
-    pub device_access: &'a crate::client_auth::DeviceAccessSessions,
-    pub product_authentication: &'a crate::auth_plugins::ProductAuthentication,
+    .await
 }
 
 impl<'a> From<&'a AppState> for ProductRequestAuth<'a> {
@@ -1127,128 +785,39 @@ impl<'a> From<&'a AppState> for ProductRequestAuth<'a> {
     }
 }
 
-impl<'a> From<&'a ProductAuthState> for ProductRequestAuth<'a> {
-    fn from(state: &'a ProductAuthState) -> Self {
-        Self {
+async fn enforce_product_api(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    request: axum::extract::Request,
+    next: Next,
+) -> Response {
+    cowboy_server_auth::server::product_auth_api::enforce_product_api_with_state(
+        cowboy_server_auth::server::types::ProductApiEnforcement {
             product_auth_enabled: state.product_auth_enabled,
             store: state.store.as_ref(),
             hub: &state.hub,
             device_access: &state.device_access,
             product_authentication: &state.product_authentication,
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct AuthenticatedProductRequest {
-    pub principal: ProductPrincipal,
-    pub cookie_session: Option<crate::store::ProductUserSession>,
-    pub device_identity: Option<crate::client_auth::DeviceAccessIdentity>,
-    pub permissions: Option<crate::core::ProductPermissionObservation>,
-}
-
-impl AuthenticatedProductRequest {
-    /// Complete authentication by atomically observing current permissions.
-    /// Handlers may share this observation, but must never recapture it.
-    fn observe_permissions(mut self, hub: &Hub) -> Result<Self, ()> {
-        let permissions = hub
-            .observe_product_permissions(&self.principal.username)
-            .ok_or(())?;
-        self.principal.role = permissions.role();
-        self.permissions = Some(permissions);
-        Ok(self)
-    }
-}
-
-const OIDC_NATIVE_EVENTS_HANDSHAKE_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_secs(10);
-const OIDC_NATIVE_EVENTS_TTL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
-const OIDC_NATIVE_EVENTS_HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(25);
-
-/// Close the window Cowboy opened for an external sign-in, from inside it.
-///
-/// The opener cannot be relied on to do this. A Provider that serves
-/// `Cross-Origin-Opener-Policy: same-origin` — Cardea does — moves this window
-/// into a new browsing context group the moment the authorization request
-/// reaches it. That severs Cowboy's handle for the rest of the flow: `closed`
-/// reports `true` even while the window is on screen, and `close()` and any
-/// navigation through that handle are dropped without an error. Only this
-/// document can still end the window, so it closes itself and offers a link
-/// for an engine that refuses. The link stays hidden until the close has had
-/// its chance, both to avoid a flash in the ordinary case and because the iOS
-/// shell dismisses its own authentication sheet: loading Cowboy inside that
-/// sheet is a choice for the reader to make, never an automatic redirect.
-const NATIVE_COMPLETE_SCRIPT: &str = r#"
-try { window.close(); } catch (error) { /* Recovered by the link below. */ }
-setTimeout(function () { document.body.className = "stranded"; }, 700);
-"#;
-
-static NATIVE_COMPLETE_PAGE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    format!(
-        r#"<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Return to Cowboy</title>
-  <style>
-    :root {{ color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }}
-    body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; background: Canvas; color: CanvasText; }}
-    main {{ max-width: 30rem; padding: 2rem; text-align: center; }}
-    h1 {{ font-size: 1.5rem; }}
-    p {{ line-height: 1.5; opacity: .72; }}
-    a {{ display: none; }}
-    body.stranded a {{ display: inline-block; }}
-  </style>
-</head>
-<body><main><h1>Return to Cowboy</h1><p>Cowboy will show the authorization result and close this window, or you can close it now.</p><p><a href="/">Open Cowboy in this window</a></p></main><script>{NATIVE_COMPLETE_SCRIPT}</script></body>
-</html>"#
+            public_origins: state.public_origins.as_slice(),
+        },
+        peer,
+        request,
+        next,
     )
-});
+    .await
+}
 
-static NATIVE_COMPLETE_CSP: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    let digest = base64::engine::general_purpose::STANDARD
-        .encode(Sha256::digest(NATIVE_COMPLETE_SCRIPT.as_bytes()));
-    format!(
-        "default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-{digest}'; \
-         base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+async fn product_auth_session_message(
+    state: &AppState,
+    cookie_token: &str,
+) -> Option<ProductAuthSessionSnapshot> {
+    cowboy_server_auth::server::product_auth_api::product_auth_session_message_for(
+        state.store.as_ref(),
+        &state.hub,
+        &state.product_authentication,
+        cookie_token,
     )
-});
-
-const PASSKEY_MANAGEMENT_STEP_UP_MAX_AGE_MS: i64 = 5 * 60 * 1_000;
-
-struct ProductPasskeyAssertionResult {
-    me: ProductMe,
-    set_cookie: Option<String>,
-}
-
-const PASSKEY_EXTERNAL_EVENTS_HANDSHAKE_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_secs(10);
-const PASSKEY_EXTERNAL_EVENTS_TTL: std::time::Duration =
-    std::time::Duration::from_secs(crate::passkey::EXTERNAL_CEREMONY_TTL_SECS);
-const PASSKEY_EXTERNAL_EVENTS_HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(25);
-
-const DEVICE_AUTH_EVENTS_HANDSHAKE_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_secs(10);
-const DEVICE_AUTH_EVENTS_TTL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
-const DEVICE_AUTH_EVENTS_HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(25);
-
-fn no_store_json<T: Serialize>(status: StatusCode, value: T) -> Response {
-    let mut response = (status, Json(value)).into_response();
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        header::HeaderValue::from_static("no-store"),
-    );
-    response
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CardeaDeviceExchangeRequest {
-    name: String,
-    public_key: String,
-    access_token: String,
-    assertion: String,
+    .await
 }
 
 async fn serve_axum(
@@ -1301,7 +870,7 @@ async fn serve_axum(
     };
 
     let app = Router::new()
-        .merge(routes::platform_routes())
+        .merge(routes::platform_routes(&state))
         .merge(routes::provider_routes())
         .merge(routes::machine_routes())
         .merge(routes::session_routes(&state))
@@ -1463,12 +1032,6 @@ struct Metrics {
     hub_session_count: usize,
     hub_hot_log_bytes: usize,
     hub_broadcast_last_bytes: usize,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-struct DaemonMemory {
-    rss_bytes: u64,
-    rss_peak_bytes: u64,
 }
 
 #[cfg(test)]
@@ -1742,7 +1305,6 @@ const MACHINE_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from
 const MACHINE_HEARTBEAT_MS: u64 = 15_000;
 const MACHINE_HEARTBEAT_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(MACHINE_HEARTBEAT_MS * 3);
-const WEBSOCKET_FRAME_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 const MACHINE_RUNTIME_OUTBOUND_CAPACITY: usize = 16;
 
 #[derive(Default)]
@@ -2506,13 +2068,6 @@ fn active_capacity_message(
     }
 }
 
-struct ProductAuthSessionSnapshot {
-    message: Outbound,
-    valid: bool,
-    user_id: String,
-    next_due_at_ms: i64,
-}
-
 #[cfg(test)]
 mod code_file_policy_tests;
 
@@ -2543,14 +2098,8 @@ mod provider_auth_resume_tests;
 #[cfg(test)]
 mod auth_capacity_boundary_tests;
 
-#[cfg(test)]
-mod product_auth_api_tests;
-
-mod product_auth_api;
-use product_auth_api::*;
-
-mod admin_api;
-use admin_api::*;
+pub use cowboy_server_auth::server::product_auth_api;
+pub(super) use product_auth_api::*;
 
 mod usage_api;
 use usage_api::*;
@@ -2577,8 +2126,9 @@ mod routes;
 mod background_jobs;
 use background_jobs::*;
 
-pub mod http_policy;
-use http_policy::*;
+pub use cowboy_server_auth::server::http_policy;
+pub use cowboy_server_auth::server::types::*;
+pub(super) use http_policy::*;
 
 mod static_web;
 use static_web::*;

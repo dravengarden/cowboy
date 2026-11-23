@@ -940,14 +940,15 @@ dependencies = [
  "cowboy-codeact-runtime",
  "cowboy-plugin-sdk",
  "cowboy-provider-sdk",
+ "cowboy-server-auth",
+ "cowboy-server-code-buffers",
+ "cowboy-server-telemetry",
  "cowboy-wire",
- "ed25519-dalek",
  "fs2",
  "futures",
  "mime_guess",
  "p256",
  "parking_lot",
- "percent-encoding",
  "rand 0.8.8",
  "regex",
  "reqwest",
@@ -968,8 +969,78 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
- "webauthn-rs",
  "x25519-dalek",
+]
+
+[[package]]
+name = "cowboy-server-auth"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "cardea-authorization",
+ "cardea-core",
+ "chrono",
+ "cowboy",
+ "cowboy-wire",
+ "ed25519-dalek",
+ "futures",
+ "p256",
+ "parking_lot",
+ "percent-encoding",
+ "rand 0.8.8",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "url",
+ "webauthn-rs",
+]
+
+[[package]]
+name = "cowboy-server-code-buffers"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "cowboy",
+ "cowboy-server-auth",
+ "cowboy-wire",
+ "futures",
+ "parking_lot",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "cowboy-server-telemetry"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "cowboy",
+ "cowboy-server-auth",
+ "cowboy-wire",
+ "futures",
+ "parking_lot",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

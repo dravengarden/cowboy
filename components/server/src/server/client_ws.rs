@@ -1,31 +1,12 @@
 //! The product client WebSocket: upgrade and admission, the command
 //! dispatcher for Inbound messages, sync, and outbound projection.
 
+pub(super) use super::authorize_ws_upgrade;
 use super::*;
 use std::ops::ControlFlow;
 
 mod fanout;
 use fanout::*;
-
-pub(super) fn authorize_ws_upgrade(
-    headers: &HeaderMap,
-    peer: SocketAddr,
-    public_origins: &[String],
-    principal: Option<ProductPrincipal>,
-) -> Result<ProductPrincipal, StatusCode> {
-    let via_cookie = crate::product_auth::user_cookie_token(headers).is_some()
-        && crate::product_auth::bearer_token(headers).is_none();
-    if via_cookie && !crate::product_auth::origin_allowed(headers, peer, public_origins) {
-        return Err(StatusCode::FORBIDDEN);
-    }
-    match principal {
-        Some(principal) => Ok(principal),
-        None => {
-            tracing::info!(reason = "auth_required", "ws_rejected");
-            Err(StatusCode::UNAUTHORIZED)
-        }
-    }
-}
 
 pub(super) fn websocket_capacity_identity(
     product_auth_enabled: bool,
@@ -1228,14 +1209,6 @@ pub(super) fn apply_inbound_sync(
     Err(format!("unknown sync mutation {sync_state}/{name}"))
 }
 
-pub(super) async fn send_json<S, T>(sink: &mut S, msg: &T) -> Result<(), ()>
-where
-    S: SinkExt<Message> + Unpin,
-    T: Serialize,
-{
-    send_json_with_timeout(sink, msg, WEBSOCKET_FRAME_SEND_TIMEOUT).await
-}
-
 pub(super) async fn send_frame<S>(sink: &mut S, frame: &FanoutFrame) -> Result<(), ()>
 where
     S: SinkExt<Message> + Unpin,
@@ -1248,20 +1221,4 @@ where
     .await
     .map_err(|_| ())?
     .map_err(|_| ())
-}
-
-pub(super) async fn send_json_with_timeout<S, T>(
-    sink: &mut S,
-    msg: &T,
-    timeout: std::time::Duration,
-) -> Result<(), ()>
-where
-    S: SinkExt<Message> + Unpin,
-    T: Serialize,
-{
-    let text = serde_json::to_string(msg).map_err(|_| ())?;
-    tokio::time::timeout(timeout, sink.send(Message::Text(text.into())))
-        .await
-        .map_err(|_| ())?
-        .map_err(|_| ())
 }

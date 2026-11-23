@@ -4,13 +4,16 @@
 use super::*;
 
 /// Health, metrics, telemetry, diagnostics, preferences and notification routes.
-pub(super) fn platform_routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .merge(cardea_authorization::routes())
-        .merge(peer_notices::routes())
+pub(super) fn platform_routes(state: &AppState) -> Router<Arc<AppState>> {
+    let telemetry = Router::new()
         .merge(telemetry_binding::resolution::surface::routes())
         .merge(telemetry_binding::recovery::surface::routes())
         .merge(telemetry_binding::surface::routes())
+        .with_state(state.telemetry_api_state());
+    Router::new()
+        .merge(cardea_authorization::routes())
+        .merge(peer_notices::routes())
+        .merge(telemetry)
         .route("/healthz", get(healthz))
         .route("/version", get(version))
         .route("/api/metrics", get(api_metrics))
@@ -509,7 +512,18 @@ pub(super) fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
 /// Code browsing, intelligence, buffer and workspace routes.
 pub(super) fn code_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
-        .merge(code_buffers::routes(state))
+        .merge(code_buffers::routes(code_buffers::Context {
+            service_id: state.service_id.clone(),
+            hub: state.hub.clone(),
+            machine_control: Arc::clone(&state.machine_control),
+            code_buffers: Arc::clone(&state.code_buffers),
+            code_navigation_admission: state.code_navigation_admission,
+            shutdown: state.shutdown.clone(),
+            product_auth_enabled: state.product_auth_enabled,
+            store: state.store.clone(),
+            device_access: Arc::clone(&state.device_access),
+            product_authentication: Arc::clone(&state.product_authentication),
+        }))
         .route("/api/workspaces", get(api_workspaces))
         .route("/api/sessions/{id}/files", get(api_search_files))
         .route("/api/code/sessions/{id}/tree", get(api_file_tree))

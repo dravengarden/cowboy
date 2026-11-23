@@ -3,12 +3,6 @@
 
 use super::*;
 
-pub(super) fn machine_refresh_path(path: &str) -> bool {
-    path.strip_prefix("/api/machines/")
-        .and_then(|rest| rest.strip_suffix("/refresh"))
-        .is_some_and(|machine| !machine.is_empty() && !machine.contains('/'))
-}
-
 pub(super) async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
     match state.machine_snapshots.load().await {
         Ok(machines) => Json(machines).into_response(),
@@ -575,4 +569,32 @@ pub(super) async fn machine_ws_upgrade(
         );
     }
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deployment_workspace_fingerprint_is_order_independent_and_fail_closed() {
+        let first = serde_json::json!({"workspaces": [
+            {"id": "z", "path": "/private/one"}, {"id": "a", "path": "/private/two"}
+        ]});
+        let second = serde_json::json!({"workspaces": [{"id": "a"}, {"id": "z"}]});
+        let expected = crate::admin::hex_sha256(br#"["a","z"]"#);
+        assert_eq!(machine_workspace_ids_sha256(&first), Some(expected.clone()));
+        assert_eq!(machine_workspace_ids_sha256(&second), Some(expected));
+        for malformed in [
+            serde_json::json!({}),
+            serde_json::json!({"workspaces": null}),
+            serde_json::json!({"workspaces": [{"id": "a"}, {}]}),
+            serde_json::json!({"workspaces": [{"id": 1}]}),
+        ] {
+            assert_eq!(machine_workspace_ids_sha256(&malformed), None);
+        }
+        assert_eq!(
+            machine_workspace_ids_sha256(&serde_json::json!({"workspaces": []})),
+            Some(crate::admin::hex_sha256(b"[]"))
+        );
+    }
 }

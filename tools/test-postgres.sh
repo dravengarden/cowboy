@@ -31,7 +31,7 @@ export PGPASSFILE=/dev/null PGSERVICEFILE=/dev/null
 # `just test-postgres` passes the `just test` selection: the same package and
 # feature graph reuses those test executables instead of recompiling the
 # workspace under a different dependency feature unification.
-read -r -a fixture_cargo_args <<< "${COWBOY_RUST_TEST_ARGS:---all-features --locked -p cowboy -p cowboy-store -p cowboy-server --lib}"
+read -r -a fixture_cargo_args <<< "${COWBOY_RUST_TEST_ARGS:---all-features --locked -p cowboy -p cowboy-store -p cowboy-server-auth -p cowboy-server --lib}"
 if [[ -n "${COWBOY_TEST_GRAPH_ARTIFACTS:-}" && -r "$COWBOY_TEST_GRAPH_ARTIFACTS" ]]; then
   fixture_artifacts="$(cat "$COWBOY_TEST_GRAPH_ARTIFACTS")"
 else
@@ -45,7 +45,7 @@ fixture_binary_for() {
 }
 fixture_binaries=()
 fixture_tests=()
-for fixture_crate in cowboy:cowboy cowboy-store:cowboy_store cowboy-server:cowboy_server; do
+for fixture_crate in cowboy:cowboy cowboy-store:cowboy_store cowboy-server-auth:cowboy_server_auth cowboy-server:cowboy_server; do
   fixture_binary="$(fixture_binary_for "${fixture_crate#*:}")"
   if [[ ! -f "$fixture_binary" || ! -x "$fixture_binary" ]]; then
     echo "Cargo did not produce exactly one ${fixture_crate%%:*} library test executable" >&2

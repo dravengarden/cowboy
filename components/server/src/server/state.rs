@@ -88,3 +88,31 @@ impl AppState {
         &self.extensions.memory
     }
 }
+
+impl AppState {
+    pub(super) fn telemetry_api_state(&self) -> telemetry_binding::http::ApiState {
+        let state = self;
+        telemetry_binding::http::ApiState {
+            service: state.service_id.clone(),
+            store: state.store.clone(),
+            control: state.machine_control.clone(),
+            plans: state.telemetry_resolution_plans.clone(),
+            recovery_plans: state.telemetry_recovery_plans.clone(),
+            binding_plans: state.telemetry_binding_plans.clone(),
+            catalog: state.plugin_catalog.clone(),
+            fences: state.plugin_lifecycle_fences.clone(),
+            legacy_fence: state.telemetry_binding_fence.clone(),
+            admission: state.telemetry_writer_admission.clone(),
+            hub: state.hub.clone(),
+            product_auth_enabled: state.product_auth_enabled,
+            devices: state.device_access.clone(),
+            authentication: state.product_authentication.clone(),
+            #[cfg(any(test, feature = "test-support"))]
+            fixture_write_admission: false,
+            #[cfg(any(test, feature = "test-support"))]
+            fixture_recovery_admission: false,
+            #[cfg(any(test, feature = "test-support"))]
+            fixture_binding_admission: false,
+        }
+    }
+}

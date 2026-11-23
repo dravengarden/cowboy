@@ -622,29 +622,4 @@ pub(super) async fn api_review_fetch(
 /// projections. A remote Machine path does not exist on the Controller, so the
 /// Controller only applies the portable relative-path boundary and leaves the
 /// authoritative canonical/trusted-root check to that Machine's Zed adapter.
-pub(super) fn zed_language_target(
-    machine_id: &str,
-    cwd: &str,
-    relative: &str,
-) -> Option<(String, String)> {
-    if machine_id != "local" {
-        if relative.is_empty()
-            || relative.starts_with('/')
-            || relative.contains(['\\', '\0'])
-            || relative
-                .split('/')
-                .any(|component| matches!(component, "" | "." | ".."))
-        {
-            return None;
-        }
-        return Some((cwd.to_owned(), relative.to_owned()));
-    }
-    crate::code_review::LocalCodeProvider::new(std::path::Path::new(cwd))
-        .language_buffer_key(relative)
-        .map(|(worktree, path)| {
-            (
-                worktree.to_string_lossy().into_owned(),
-                path.to_string_lossy().replace('\\', "/"),
-            )
-        })
-}
+pub(super) use cowboy_server_code_buffers::server::zed_language_target;

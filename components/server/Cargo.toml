@@ -19,11 +19,14 @@ test = false
 [features]
 default = ["full"]
 full = []
-machine-host = ["cowboy/machine-host"]
-test-support = ["cowboy/test-support", "dep:tempfile"]
+machine-host = ["cowboy/machine-host", "cowboy-server-auth/machine-host", "cowboy-server-code-buffers/machine-host", "cowboy-server-telemetry/machine-host"]
+test-support = ["cowboy/test-support", "cowboy-server-auth/test-support", "cowboy-server-code-buffers/test-support", "cowboy-server-telemetry/test-support", "dep:tempfile"]
 
 [dependencies]
 cowboy-codeact-runtime = { path = "../codeact-runtime" }
+cowboy-server-auth = { version = "0.1.0", path = "../server-auth" }
+cowboy-server-code-buffers = { version = "0.1.0", path = "../server-code-buffers" }
+cowboy-server-telemetry = { version = "0.1.0", path = "../server-telemetry" }
 cowboy = { version = "0.1.0", path = "../.." }
 cardea-authorization = { git = "ssh://git@github.com/dravengarden/cardea.git", rev = "71f12d90bd1b3212f11530cbd0c20086317a5976", version = "=0.1.0" }
 cardea-core = { git = "ssh://git@github.com/dravengarden/cardea.git", rev = "71f12d90bd1b3212f11530cbd0c20086317a5976", version = "=0.1.0" }
@@ -58,9 +61,6 @@ base64 = "0.22"
 sha2 = "0.10"
 url = "2"
 uuid = { version = "1", default-features = false, features = ["std"] }
-webauthn-rs = { version = "0.5", default-features = false, features = [
-  "danger-allow-state-serialisation",
-] }
 # parking_lot Mutex: non-poisoning. A panic inside a critical section drops the
 # guard and frees the lock instead of poisoning it, which would otherwise make
 # every other task's lock-acquire panic too — a daemon-wide cascade. Hub holds
@@ -68,7 +68,6 @@ webauthn-rs = { version = "0.5", default-features = false, features = [
 # converts "no cascade as long as no critical section ever panics" (a hand-held
 # invariant) into "no cascade, structurally".
 parking_lot = "0.12"
-percent-encoding = "2"
 rusqlite = { version = "0.32.1", features = ["bundled", "hooks"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -79,7 +78,6 @@ rand = "0.8"
 cowboy-provider-sdk = { version = "=3.7.0", path = "../provider-sdk" }
 cowboy-plugin-sdk = { version = "=1.20.0", path = "../plugin-sdk" }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
-ed25519-dalek = "2"
 fs2 = "0.4"
 regex = "1"
 tempfile = { version = "3", optional = true }
@@ -91,6 +89,8 @@ tikv-jemallocator = "0.7"
 
 [dev-dependencies]
 cowboy = { version = "0.1.0", path = "../..", features = ["test-support"] }
+cowboy-server-auth = { version = "0.1.0", path = "../server-auth", features = ["test-support"] }
+cowboy-server-telemetry = { version = "0.1.0", path = "../server-telemetry", features = ["test-support"] }
 cowboy-wire = { version = "0.1.0", path = "../wire", features = ["test-fixtures"] }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }

@@ -102,6 +102,22 @@
       codeact-runtime-files = [
         ./components/codeact-runtime
       ];
+      server-subcrate-files = [
+        ./components/server-auth/Cargo.toml
+        ./components/server-auth/src
+        ./components/server-code-buffers/Cargo.toml
+        ./components/server-code-buffers/src
+        ./components/server-telemetry/Cargo.toml
+        ./components/server-telemetry/src
+      ];
+      server-subcrate-stub-files = [
+        ./components/server-auth/Cargo.toml
+        ./components/server-auth/src/lib.rs
+        ./components/server-code-buffers/Cargo.toml
+        ./components/server-code-buffers/src/lib.rs
+        ./components/server-telemetry/Cargo.toml
+        ./components/server-telemetry/src/lib.rs
+      ];
       server-files = [
         ./components/server/Cargo.toml
         ./components/server/src
@@ -109,14 +125,14 @@
         # Served by the Controller as the on-demand `models` help topic.
         ./models/summary.md
         ./models/routing.json
-      ] ++ codeact-runtime-files;
+      ] ++ codeact-runtime-files ++ server-subcrate-files;
       # Cargo loads every workspace member manifest and checks its targets, so
       # slices that never build the Controller server carry only its entry files.
       server-stub-files = [
         ./components/server/Cargo.toml
         ./components/server/src/lib.rs
         ./components/server/src/main.rs
-      ] ++ codeact-runtime-files;
+      ] ++ codeact-runtime-files ++ server-subcrate-stub-files;
       integration-tests-stub-files = [
         ./components/integration-tests/Cargo.toml
         ./components/integration-tests/src/lib.rs
@@ -656,7 +672,7 @@
         src = cowboy-src;
         cargoDeps = cowboy-cargo-deps;
         cargoBuildFlags = builtins.tail (pkgs.lib.splitString " " cowboy-controller-cargo-args);
-        cargoTestFlags = [ "-p" "cowboy" "-p" "cowboy-store" "-p" "cowboy-server" "-p" "cowboy-wire" ];
+        cargoTestFlags = [ "-p" "cowboy" "-p" "cowboy-store" "-p" "cowboy-server-auth" "-p" "cowboy-server-code-buffers" "-p" "cowboy-server-telemetry" "-p" "cowboy-server" "-p" "cowboy-wire" ];
         # cowboy-server dev-depends on cowboy-machine, which enables the
         # machine-host tests of the base crate in this build. This one runs a
         # real nested cargo build, which the sandbox (no writable toolchain

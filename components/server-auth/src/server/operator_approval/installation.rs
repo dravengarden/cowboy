@@ -1,0 +1,213 @@
+//! One process-local install/upgrade confirmation. Neither a serialized
+//! Catalog envelope nor a later login can mint or renew this authority.
+
+use super::*;
+use crate::machine_protocol::DesiredPlugin;
+use crate::machine_protocol::plugin_install::{InstallStep, InstallTarget};
+use crate::plugin_operation::installation::{InstallIntent, InstallOperation};
+use crate::plugin_operation::installation::{
+    InstallStagingResolutionIntent, InstallStagingResolutionPermit,
+};
+
+fn target_digest(machine: &str, desired: &DesiredPlugin) -> Result<String> {
+    Ok(hex_sha256(&serde_json::to_vec(&(machine, desired))?))
+}
+
+pub struct InstallationAuthority {
+    approval: OperatorApproval,
+    target_digest: String,
+    budget: OperationBudget,
+    intent: InstallIntent,
+    revoked: AtomicBool,
+}
+
+/// Fresh, closed authority to observe and commit the terminal receipt of one
+/// already-fenced installation. It cannot be converted into installation
+/// authority and carries no signed release envelope.
+pub struct InstallationReconciliationAuthority {
+    approval: OperatorApproval,
+    operation_digest: String,
+    budget: OperationBudget,
+    revoked: AtomicBool,
+}
+
+impl OperatorApproval {
+    pub fn bind_installation(
+        self,
+        machine: &str,
+        desired: &DesiredPlugin,
+        operation_id: String,
+        target: InstallTarget,
+    ) -> Result<InstallationAuthority> {
+        ensure!(
+            self.cardea_installation_matches(machine, desired, &operation_id, &target),
+            "reviewed installation target changed"
+        );
+        let expires_at_ms = self.installation_expiry();
+        let intent = InstallIntent {
+            schema: 2,
+            request_id: format!("plugin-install-{operation_id}"),
+            operation_id,
+            service_id: self.service.clone(),
+            actor: self.actor.clone(),
+            machine_id: machine.to_owned(),
+            plugin_id: desired.release.plugin_id.clone(),
+            plugin_kind: desired.release.plugin_kind,
+            plugin_version: desired.release.plugin_version.clone(),
+            generation_digest: desired.release.artifact_digest.clone(),
+            contract_fingerprint: desired.release.contract_fingerprint.clone(),
+            envelope_digest: format!("sha256:{}", hex_sha256(&serde_json::to_vec(desired)?)),
+            machine_target: Some(target),
+            expires_at_ms,
+        };
+        intent.validate()?;
+        Ok(InstallationAuthority {
+            target_digest: target_digest(machine, desired)?,
+            budget: OperationBudget::new(expires_at_ms, Duration::from_mins(5), self.received),
+            approval: self,
+            intent,
+            revoked: AtomicBool::new(false),
+        })
+    }
+
+    pub fn bind_installation_reconciliation(
+        self,
+        operation: &InstallOperation,
+    ) -> Result<InstallationReconciliationAuthority> {
+        self.require_general_purpose()?;
+        operation.validate()?;
+        let expires_at_ms = self.received.deadline_ms(Duration::from_mins(2));
+        let received = self.received;
+        Ok(InstallationReconciliationAuthority {
+            approval: self,
+            operation_digest: hex_sha256(&serde_json::to_vec(operation)?),
+            budget: OperationBudget::new(expires_at_ms, Duration::from_mins(2), received),
+            revoked: AtomicBool::new(false),
+        })
+    }
+}
+
+impl InstallationAuthority {
+    /// Authentication synchronization is also a write. Initial synchronization
+    /// must meet the original start deadline; post-install continuation retains
+    /// the original identity budget and current policy without renewing either.
+    pub fn matches_auth_sync(&self, before_install: bool) -> bool {
+        let valid = self.within_budget() && self.approval.cardea_auth_sync_current(before_install);
+        if !valid {
+            self.revoke();
+        }
+        valid
+    }
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn expire_cardea_start_for_test(&self) {
+        if let super::Credential::Cardea(grant) = &self.approval.credential {
+            grant.expire_start_for_test();
+        }
+    }
+    /// Final synchronous identity/budget check at dispatch; this does not
+    /// replace the continuous credential/connection checks in the coordinator.
+    pub fn matches_live_step(&self, step: &InstallStep) -> bool {
+        let valid = self.within_budget()
+            && self.approval.cardea_dispatch_current()
+            && self
+                .intent
+                .machine_step()
+                .is_ok_and(|expected| &expected == step);
+        if !valid {
+            self.revoke();
+        }
+        valid
+    }
+
+    pub fn intent(&self) -> &InstallIntent {
+        &self.intent
+    }
+
+    pub fn revoke(&self) {
+        self.revoked.store(true, Ordering::Release);
+    }
+
+    pub fn within_budget(&self) -> bool {
+        !self.revoked.load(Ordering::Acquire) && !self.budget.expired()
+    }
+
+    pub async fn check(
+        &self,
+        auth: ProductRequestAuth<'_>,
+        service: &str,
+        machine: &str,
+        desired: &DesiredPlugin,
+    ) -> bool {
+        let valid = self.within_budget()
+            && self.approval.service == service
+            && target_digest(machine, desired).is_ok_and(|digest| digest == self.target_digest)
+            && self.approval.current_operator(auth).await.as_ref() == Some(&self.approval.actor)
+            && self.within_budget();
+        if !valid {
+            self.revoke();
+        }
+        valid
+    }
+}
+
+impl InstallationReconciliationAuthority {
+    pub async fn check(
+        &self,
+        auth: ProductRequestAuth<'_>,
+        service: &str,
+        operation: &InstallOperation,
+    ) -> bool {
+        let valid = !self.revoked.load(Ordering::Acquire)
+            && !self.budget.expired()
+            && self.approval.service == service
+            && operation.intent.service_id == service
+            && serde_json::to_vec(operation)
+                .is_ok_and(|bytes| hex_sha256(&bytes) == self.operation_digest)
+            && self.approval.current_operator(auth).await.as_ref() == Some(&self.approval.actor)
+            && !self.budget.expired();
+        if !valid {
+            self.revoked.store(true, Ordering::Release);
+        }
+        valid
+    }
+
+    /// Consume this fresh reconciliation authority into one local durability
+    /// commit after the caller has observed the original Machine receipt and
+    /// exact unchanged installation target on the captured connection.
+    pub async fn authorize_staging_resolution(
+        self,
+        auth: ProductRequestAuth<'_>,
+        service: &str,
+        operation: &InstallOperation,
+        observed_target: InstallTarget,
+    ) -> Result<InstallStagingResolutionPermit> {
+        let operation_digest =
+            crate::machine_protocol::plugin_step::digest(&serde_json::to_vec(operation)?);
+        let intent = InstallStagingResolutionIntent {
+            schema: 1,
+            resolution_id: format!(
+                "install-staging-{}",
+                crate::product_auth::new_session_token()?
+            ),
+            operation_id: operation.intent.operation_id.clone(),
+            service_id: service.to_owned(),
+            actor: self.approval.actor.clone(),
+            machine_id: operation.intent.machine_id.clone(),
+            plugin_id: operation.intent.plugin_id.clone(),
+            operation_digest,
+            observed_target: observed_target.clone(),
+        };
+        ensure!(
+            intent.matches(operation, &observed_target)?
+                && hex_sha256(&serde_json::to_vec(operation)?) == self.operation_digest
+                && !self.revoked.load(Ordering::Acquire)
+                && !self.budget.expired()
+                && self.approval.service == service
+                && self.approval.current_operator(auth).await.as_ref()
+                    == Some(&self.approval.actor)
+                && !self.budget.expired(),
+            "install staging resolution is no longer authorized"
+        );
+        Ok(InstallStagingResolutionPermit::new(intent, self.budget))
+    }
+}

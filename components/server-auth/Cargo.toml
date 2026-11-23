@@ -1,0 +1,63 @@
+[package]
+name = "cowboy-server-auth"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Controller product authentication, HTTP policy, secure transport, and operator approval"
+license = "MIT"
+rust-version = "1.98.1"
+
+[lib]
+name = "cowboy_server_auth"
+path = "src/lib.rs"
+
+[features]
+default = ["full"]
+full = []
+machine-host = ["cowboy/machine-host"]
+test-support = ["cowboy/test-support", "dep:tempfile"]
+
+[dependencies]
+cowboy = { version = "0.1.0", path = "../.." }
+cardea-authorization = { git = "ssh://git@github.com/dravengarden/cardea.git", rev = "71f12d90bd1b3212f11530cbd0c20086317a5976", version = "=0.1.0" }
+cardea-core = { git = "ssh://git@github.com/dravengarden/cardea.git", rev = "71f12d90bd1b3212f11530cbd0c20086317a5976", version = "=0.1.0" }
+anyhow = "1"
+axum = { version = "0.8", features = ["ws"] }
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+futures = "0.3"
+p256 = { version = "0.13", features = ["ecdsa", "pem", "pkcs8"] }
+parking_lot = "0.12"
+percent-encoding = "2"
+rand = "0.8"
+reqwest = { version = "0.13", default-features = false, features = ["form", "json", "query", "rustls-no-provider", "stream"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tempfile = { version = "3", optional = true }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+url = "2"
+webauthn-rs = { version = "0.5", default-features = false, features = [
+  "danger-allow-state-serialisation",
+] }
+
+[dev-dependencies]
+cowboy = { version = "0.1.0", path = "../..", features = ["test-support"] }
+cowboy-wire = { version = "0.1.0", path = "../wire", features = ["test-fixtures"] }
+ed25519-dalek = "2"
+tempfile = "3"
+tokio = { version = "1", features = ["test-util"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
+
+[lints.rust]
+warnings = "deny"
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "allow", priority = -1 }
+
+[package.metadata.cargo-machete]
+ignored = ["cowboy-wire"]

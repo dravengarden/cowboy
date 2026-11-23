@@ -1,10 +1,6 @@
 //! SDK admission reuses the exact native installer, its checkpoints and journals.
 use super::*;
-use crate::machine_protocol::{
-    DesiredPlugin,
-    plugin_install::{InstallTarget, InstallTargetObservation, InstallTargetQuery},
-};
-use crate::operation_budget::{OperationBudget, TimeSample};
+use crate::machine_protocol::plugin_install::{InstallTargetObservation, InstallTargetQuery};
 use crate::plugin_operation::{Actor, installation::InstallPhase};
 use ::cardea_authorization::{
     Application, Cardea, DeviceCredential, Eligibility, Error, ExecutionContext,
@@ -14,11 +10,9 @@ use axum::http::header::CONTENT_TYPE;
 use cardea_core::authorization::{self as wire, Catalog, Command, Plan, Receipt, Status};
 use tokio::runtime::Handle;
 
-const ACTION: &str = "plugin.install";
-type AuthResult<T> = ::cardea_authorization::Result<T>;
-fn unavailable<T>(_: T) -> Error {
-    Error::Unavailable
-}
+pub(super) use cowboy_server_auth::server::cardea_grant::{
+    ACTION, AuthResult, Grant, Input, decode_input, revision, unavailable, version,
+};
 fn transport_error(error: anyhow::Error) -> Error {
     error
         .downcast_ref::<Error>()
@@ -30,33 +24,6 @@ fn clock() -> AuthResult<u64> {
 }
 fn enabled() -> bool {
     std::env::var("COWBOY_CARDEA_OPERATIONS_ENABLED").is_ok_and(|v| v == "true")
-}
-fn revision(
-    hub: &Hub,
-    user: &crate::store::ProductUser,
-    provider: &crate::oidc::OidcProvider,
-) -> AuthResult<String> {
-    Ok(version(
-        &serde_json::json!({"policy":permission_policy(hub),"user_id":user.id,"account":provider.account(),"provider":provider.cardea_device_configuration().map_err(unavailable)?}),
-    ))
-}
-fn version(value: &serde_json::Value) -> String {
-    crate::admin::hex_sha256(wire::mutation_digest(value).as_bytes())
-}
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Input {
-    machine: String,
-    plugin: String,
-    version: String,
-    digest: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    target: Option<InstallTarget>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    envelope_digest: Option<String>,
-}
-fn decode_input(p: &Plan) -> AuthResult<Input> {
-    serde_json::from_value(p.input.clone()).map_err(|_| Error::InvalidContract)
 }
 async fn operator(state: &AppState, subject: &str) -> AuthResult<crate::store::ProductUser> {
     if !state.product_auth_enabled {
@@ -108,185 +75,6 @@ async fn requester_operator(
         return Err(Error::PermissionDenied);
     }
     Ok(user)
-}
-
-/// Only an SDK-verified execution context can mint this process-local authority.
-/// It cannot authorize uninstall, recovery, telemetry or a different install.
-pub(super) struct Grant {
-    input: Input,
-    operation: String,
-    service_scope: String,
-    actor: Actor,
-    policy: String,
-    subject: String,
-    account: String,
-    device: String,
-    provider_config: serde_json::Value,
-    hub: Hub,
-    permissions: crate::core::ProductPermissionObservation,
-    expiry_ms: i64,
-    budget: OperationBudget,
-    start: OperationBudget,
-    freeze: Arc<crate::machine_convergence::ConvergenceFreeze>,
-}
-impl Grant {
-    fn capture(
-        auth: ProductRequestAuth<'_>,
-        freeze: Arc<crate::machine_convergence::ConvergenceFreeze>,
-        ctx: &ExecutionContext,
-        user: &crate::store::ProductUser,
-    ) -> AuthResult<Self> {
-        let p = ctx.plan();
-        let a = ctx.admission();
-        let provider = auth
-            .product_authentication
-            .provider("cardea")
-            .ok_or(Error::AuthenticationRequired)?;
-        if p.action != ACTION
-            || p.resources.len() != 1
-            || p.policy_revision != revision(auth.hub, user, provider)?
-            || a.approver_id != p.subject_id
-            || freeze.is_frozen()
-        {
-            return Err(Error::PermissionDenied);
-        }
-        let input = decode_input(p)?;
-        if input.target.is_none() || input.envelope_digest.is_none() {
-            return Err(Error::InvalidContract);
-        }
-        let expiry_ms = i64::try_from(
-            ctx.requester()
-                .expires_at()
-                .min(p.execute_until)
-                .saturating_mul(1000),
-        )
-        .map_err(|_| Error::Expired)?;
-        let start_ms =
-            i64::try_from(a.start_until.saturating_mul(1000)).map_err(|_| Error::Expired)?;
-        let received = TimeSample::now();
-        let permissions = auth
-            .hub
-            .observe_product_permissions(&user.username)
-            .ok_or(Error::Unavailable)?;
-        if !permissions
-            .role()
-            .at_least(crate::admin::AdminRole::Operator)
-        {
-            return Err(Error::PermissionDenied);
-        }
-        let grant = Self {
-            input,
-            operation: p.operation_id.clone(),
-            service_scope: p.resources[0].scope.clone(),
-            actor: Actor::Product {
-                user_id: user.id.clone(),
-            },
-            policy: p.policy_revision.clone(),
-            subject: p.subject_id.clone(),
-            account: user.username.clone(),
-            device: provider
-                .cardea_product_device_id(ctx.requester().grant_id())
-                .map_err(unavailable)?,
-            hub: auth.hub.clone(),
-            permissions,
-            provider_config: provider
-                .cardea_device_configuration()
-                .map_err(unavailable)?,
-            expiry_ms,
-            budget: OperationBudget::new(expiry_ms, std::time::Duration::from_mins(5), received),
-            start: OperationBudget::new(start_ms, std::time::Duration::from_secs(30), received),
-            freeze,
-        };
-        if !grant.dispatch_current() {
-            return Err(Error::Expired);
-        }
-        Ok(grant)
-    }
-    pub(super) fn actor(&self) -> Actor {
-        self.actor.clone()
-    }
-    pub(super) fn matches_service(&self, service: &str) -> bool {
-        self.service_scope == version(&serde_json::json!(service))
-    }
-    pub(super) fn expires_at_ms(&self) -> i64 {
-        self.expiry_ms
-    }
-    pub(super) fn dispatch_current(&self) -> bool {
-        !self.start.expired() && self.continuation_current()
-    }
-    #[cfg(test)]
-    pub(super) fn expire_start_for_test(&self) {
-        self.start.expire_for_test();
-    }
-    pub(super) fn continuation_current(&self) -> bool {
-        let Actor::Product { user_id } = &self.actor else {
-            return false;
-        };
-        !self.budget.expired()
-            && !self.freeze.is_frozen()
-            && self.permissions.current(&self.hub, &self.account)
-            && self.policy
-                == version(&serde_json::json!({
-                    "policy":permission_policy(&self.hub), "user_id":user_id,
-                    "account":self.account, "provider":self.provider_config,
-                }))
-    }
-    pub(super) fn matches(
-        &self,
-        machine: &str,
-        desired: &DesiredPlugin,
-        operation: &str,
-        target: &InstallTarget,
-    ) -> bool {
-        self.dispatch_current()
-            && operation == self.operation
-            && machine == self.input.machine
-            && desired.release.plugin_id == self.input.plugin
-            && desired.release.plugin_version == self.input.version
-            && desired.release.artifact_digest == self.input.digest
-            && self.input.target.as_ref() == Some(target)
-            && serde_json::to_vec(desired).is_ok_and(|b| {
-                self.input.envelope_digest.as_deref()
-                    == Some(&format!("sha256:{}", crate::admin::hex_sha256(&b)))
-            })
-    }
-    pub(super) async fn current(&self, auth: ProductRequestAuth<'_>) -> Option<Actor> {
-        if self.budget.expired() || self.freeze.is_frozen() {
-            return None;
-        }
-        if !auth.product_auth_enabled {
-            return None;
-        }
-        let provider = auth.product_authentication.provider("cardea")?;
-        if !provider.cardea_subject_matches(&self.subject)
-            || provider.account() != self.account
-            || provider.cardea_device_configuration().ok()? != self.provider_config
-        {
-            return None;
-        }
-        let Actor::Product { user_id } = &self.actor else {
-            return None;
-        };
-        let user = auth.store?.user_by_id(user_id).await.ok()??;
-        if !auth
-            .store?
-            .cardea_device_allowed(user_id, &self.device)
-            .await
-            .ok()?
-        {
-            return None;
-        }
-        (user.disabled_at_ms.is_none()
-            && self.permissions.current(auth.hub, &user.username)
-            && user.username == self.account
-            && product_principal(auth.hub, &user)
-                .role
-                .at_least(crate::admin::AdminRole::Operator)
-            && revision(auth.hub, &user, provider).ok()? == self.policy
-            && !self.budget.expired()
-            && !self.freeze.is_frozen())
-        .then(|| self.actor())
-    }
 }
 
 #[derive(Clone)]

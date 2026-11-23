@@ -3,26 +3,6 @@
 
 use super::*;
 
-pub(super) fn provider_auth_path(path: &str) -> bool {
-    ["/api/plugins/", "/api/providers/"].iter().any(|prefix| {
-        let Some(rest) = path.strip_prefix(prefix) else {
-            return false;
-        };
-        let mut segments = rest.split('/');
-        if !segments.next().is_some_and(|segment| !segment.is_empty()) {
-            return false;
-        }
-        if segments.next() != Some("auth") {
-            return false;
-        }
-        match (segments.next(), segments.next()) {
-            (None, None) => true,
-            (Some(segment), None) => !segment.is_empty(),
-            _ => false,
-        }
-    })
-}
-
 pub(super) async fn api_providers(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
