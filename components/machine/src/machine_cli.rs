@@ -518,7 +518,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         &device_config_path,
     )?);
     let _device_config_watch =
-        device_config.watch(crate::config::Scope::Device, device_config_path);
+        crate::machine_broker::liveness::watch(&device_config, device_config_path);
     let file_buffers_policy = crate::config::file_buffers::path(&args.state_dir);
     let _file_buffers_policy =
         crate::config::file_buffers::start(device_config.clone(), file_buffers_policy.clone())?;

@@ -103,6 +103,18 @@ commit, not ahead of it.
    incarnation floors, sudoers digest, host source and the Controller/Web receipts
    before and after. A pin advance will change worker PIDs by design; record which.
 
+## Open questions
+
+- **Claude file-helper mask (2026-11-23, pin `ae664807a`).** The acceptance
+  bar is the standard `execution-worker-conformance` input. No doc or tool
+  passes `require_file_helper`; it appears only in
+  `worker_execution_tests.rs`. With `require_file_helper: true` added, the
+  Claude 3.20.74 worker run accepted 90 checks, then asserted helper mask 2
+  (read-range only) where 3 was expected: its runtime calls the `snapshot`
+  helper only for sha256 hook transcripts. The standard input passed (96
+  checks). Not a blocker. It stays open until someone decides whether
+  snapshot coverage should be part of acceptance.
+
 ## Boundaries
 
 A Controller release restarts only `cowboy.service`; a Web release moves only

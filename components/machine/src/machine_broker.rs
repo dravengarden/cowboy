@@ -29,8 +29,11 @@ use crate::runtime_wire::{
 mod account_unit;
 mod account_worker;
 mod cleanups;
+mod core_overflow;
 pub mod deletions;
 mod incarnations;
+pub mod liveness;
+mod liveness_counters;
 mod mcp_launch;
 mod namespace;
 mod readmission;
@@ -305,6 +308,8 @@ struct WorkerPeer {
     /// Duplicate of the broker end of this connection, used only to measure
     /// frames the worker already delivered but the broker has not read.
     receive_probe: Option<Arc<OwnedFd>>,
+    /// Heartbeat-gap observation of this connection (`liveness.rs`).
+    liveness: Option<Arc<liveness::Connection>>,
 }
 
 /// Outcome of one heartbeat sweep.
@@ -451,6 +456,7 @@ struct Broker {
     #[cfg(test)]
     deleted_session_owner_collected: AtomicBool,
     next_connection: AtomicU64,
+    liveness: liveness::Hub,
     next_lease: AtomicU64,
 }
 
@@ -553,6 +559,7 @@ impl Broker {
             #[cfg(test)]
             deleted_session_owner_collected: AtomicBool::new(false),
             next_connection: AtomicU64::new(1),
+            liveness: liveness::Hub::default(),
             next_lease: AtomicU64::new(1),
         }
     }
@@ -978,18 +985,21 @@ impl Broker {
         session_id: &str,
         connection_id: u64,
         socket: std::os::fd::BorrowedFd<'_>,
+        observed: Option<Arc<liveness::Connection>>,
     ) {
-        let probe = match socket.try_clone_to_owned() {
-            Ok(probe) => Arc::new(probe),
-            Err(error) => {
+        let probe = socket
+            .try_clone_to_owned()
+            .inspect_err(|error| {
                 tracing::warn!(session = session_id, %error, "worker receive-queue probe unavailable");
-                return;
-            }
-        };
+            })
+            .ok();
         if let Some(worker) = self.workers.lock().get_mut(session_id)
             && worker.connection_id == connection_id
         {
-            worker.receive_probe = Some(probe);
+            if let Some(probe) = probe {
+                worker.receive_probe = Some(Arc::new(probe));
+            }
+            worker.liveness = observed;
         }
     }
 
@@ -1003,17 +1013,20 @@ impl Broker {
             if silent < timeout {
                 continue;
             }
-            let unread = worker
+            let measured = worker
                 .receive_probe
                 .as_deref()
-                .and_then(|probe| rustix::io::ioctl_fionread(probe).ok())
-                .unwrap_or(0);
+                .and_then(|probe| rustix::io::ioctl_fionread(probe).ok());
+            let unread = measured.unwrap_or(0);
             let detail = if unread == 0 {
                 format!(
                     "worker heartbeat timed out after {}s; Machine broker stopped the worker",
                     silent.as_secs()
                 )
             } else if silent < backlog_limit {
+                if let Some(observed) = &worker.liveness {
+                    observed.deferred(unread, silent);
+                }
                 sweep.lagging.push((session_id.clone(), unread, silent));
                 continue;
             } else {
@@ -1022,6 +1035,9 @@ impl Broker {
                     silent.as_secs()
                 )
             };
+            if let Some(observed) = &worker.liveness {
+                observed.isolated(&detail, measured);
+            }
             stale.push((session_id.clone(), detail));
         }
         for (session_id, detail) in stale {
@@ -1284,6 +1300,7 @@ impl Broker {
                 acked_runtime_seq: 0,
                 last_seen: Instant::now(),
                 receive_probe: None,
+                liveness: None,
             },
         );
         drop(workers);
@@ -3909,6 +3926,8 @@ async fn run_broker(
     // A cancelled server must not retain the durable namespace's owner lock
     // through an orphaned monitor task.
     let _monitor = BrokerMonitor(tokio::spawn(monitor_workers(Arc::clone(&broker))));
+    let sampler = Arc::clone(&broker);
+    let _liveness = BrokerMonitor(tokio::spawn(async move { sampler.liveness.run().await }));
     let _account_recovery = BrokerMonitor(tokio::spawn(recover_account_stops(
         Arc::clone(&broker),
         account_stops,
@@ -4214,7 +4233,23 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
                 let _ = writer_task.await;
                 return Ok(());
             }
-            broker.attach_worker_receive_probe(&session_id, connection_id, reader.as_ref().as_fd());
+            let peer_pid = reader.as_ref().peer_cred().ok().and_then(|peer| peer.pid());
+            let unit = (broker.args.spawn_mode == SpawnMode::SystemdUser)
+                .then(|| worker_unit_name(&broker.args.socket, &session_id));
+            let observed = broker.liveness.connect(
+                &session_id,
+                connection_id,
+                &epoch,
+                unit,
+                peer_pid.and_then(|pid| u32::try_from(pid).ok()),
+            );
+            let fd = reader.as_ref().as_fd();
+            broker.attach_worker_receive_probe(
+                &session_id,
+                connection_id,
+                fd,
+                Some(Arc::clone(&observed)),
+            );
             let lease = broker
                 .controller
                 .lock()
@@ -4240,8 +4275,10 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
                 &session_id,
                 &epoch,
                 &mut reader,
+                &observed,
             )
             .await;
+            observed.close();
             if let Some(peer) = broker.remove_worker(&session_id, connection_id) {
                 broker.worker_disconnected(session_id, peer, None).await;
             }
@@ -4251,79 +4288,6 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
     drop(tx);
     writer_task.abort();
     Ok(())
-}
-
-/// The acknowledgement that refuses `command` when the core queue is full.
-/// A deletion has none: the controller forgets a stopped session's declaration
-/// even on refusal, so it keeps the reconnect path and its full replay.
-fn overflow_refusal(command: &CoreCommand) -> Option<(String, String)> {
-    match command {
-        CoreCommand::RecoverExecutionSession {
-            session,
-            command_id,
-            ..
-        }
-        | CoreCommand::ReadmitAccountSession {
-            session,
-            command_id,
-            ..
-        } => Some((session.session_id.clone(), command_id.clone())),
-        CoreCommand::EnsureSession { session } => Some((
-            session.session_id.clone(),
-            format!("ensure:{}", session.session_id),
-        )),
-        CoreCommand::StopSession {
-            session_id,
-            command_id,
-        } if command_id.starts_with("reset-") => Some((session_id.clone(), command_id.clone())),
-        CoreCommand::CancelTurn {
-            session_id,
-            command_id,
-            ..
-        }
-        | CoreCommand::Steer {
-            session_id,
-            command_id,
-            ..
-        }
-        | CoreCommand::Prompt {
-            session_id,
-            command_id,
-            ..
-        }
-        | CoreCommand::Cancel {
-            session_id,
-            command_id,
-        }
-        | CoreCommand::CancelSubagent {
-            session_id,
-            command_id,
-            ..
-        }
-        | CoreCommand::Permission {
-            session_id,
-            command_id,
-            ..
-        }
-        | CoreCommand::SetConfigOption {
-            session_id,
-            command_id,
-            ..
-        }
-        | CoreCommand::HibernateSession {
-            session_id,
-            command_id,
-        }
-        | CoreCommand::QuiesceAccountSession {
-            session_id,
-            command_id,
-            ..
-        } => Some((session_id.clone(), command_id.clone())),
-        CoreCommand::StopSession { .. }
-        | CoreCommand::DrainSession { .. }
-        | CoreCommand::SetDesiredGeneration { .. }
-        | CoreCommand::RollProvider { .. } => None,
-    }
 }
 
 async fn handle_core(
@@ -4376,7 +4340,9 @@ async fn handle_core(
                     // every queued command at once; a rejected ack is
                     // requeued or surfaced by the controller.
                     Err(mpsc::error::TrySendError::Full(command)) => {
-                        let Some((session_id, command_id)) = overflow_refusal(&command) else {
+                        let Some((session_id, command_id)) =
+                            core_overflow::overflow_refusal(&command)
+                        else {
                             anyhow::bail!(
                                 "Machine core command queue saturated; reconnecting controller"
                             );
@@ -4844,8 +4810,9 @@ async fn handle_worker(
     session_id: &str,
     epoch: &str,
     reader: &mut tokio::net::unix::OwnedReadHalf,
+    observed: &Arc<liveness::Connection>,
 ) -> Result<()> {
-    while let Some(frame) = read_frame(reader).await? {
+    while let Some(frame) = liveness::read_frame(reader, observed).await? {
         broker.touch_worker(session_id, connection_id);
         if !broker.worker_matches(session_id, connection_id, epoch) {
             tracing::warn!(session = session_id, %epoch, "ignoring frame from fenced worker");
@@ -4959,7 +4926,7 @@ async fn handle_worker(
                 }
             }
             Frame::CommandAck { .. } => broker.send_controller(frame),
-            Frame::Heartbeat => {}
+            Frame::Heartbeat => observed.heartbeat(),
             other => tracing::debug!(?other, "ignoring non-worker runtime frame"),
         }
     }
@@ -6021,7 +5988,7 @@ mod tests {
                 },
             );
             let (broker_end, worker_end) = UnixStream::pair().expect("worker socket pair");
-            broker.attach_worker_receive_probe(session_id, connection_id, broker_end.as_fd());
+            broker.attach_worker_receive_probe(session_id, connection_id, broker_end.as_fd(), None);
             broker
                 .workers
                 .lock()
@@ -8380,7 +8347,18 @@ mod tests {
         let (mut reader, _writer) = peer.into_split();
         let handler_broker = Arc::clone(&broker);
         let handler = tokio::spawn(async move {
-            handle_worker(handler_broker, 1, "sess-1", "epoch-1", &mut reader).await
+            let observed = handler_broker
+                .liveness
+                .connect("sess-1", 1, "epoch-1", None, None);
+            handle_worker(
+                handler_broker,
+                1,
+                "sess-1",
+                "epoch-1",
+                &mut reader,
+                &observed,
+            )
+            .await
         });
         write_frame(
             &mut client,
@@ -9466,12 +9444,20 @@ mod tests {
         let (mut broker_reader, _broker_writer) = broker_stream.into_split();
         let task_broker = Arc::clone(&broker);
         let worker_task = tokio::spawn(async move {
+            let observed = task_broker.liveness.connect(
+                "sess-deleted-final-event",
+                11,
+                "epoch-deleted-final-event",
+                None,
+                None,
+            );
             handle_worker(
                 task_broker,
                 11,
                 "sess-deleted-final-event",
                 "epoch-deleted-final-event",
                 &mut broker_reader,
+                &observed,
             )
             .await
         });
