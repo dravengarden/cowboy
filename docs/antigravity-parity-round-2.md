@@ -518,13 +518,20 @@ no keeper change. The implementation records that with a diff check.
   (`components/provider-runtime/packages/antigravity-acp`, 1.0.22 in the Antigravity
   Plugin 0.2.27): `proxy.mjs`, `subagents.mjs`, `projection.mjs`, `hook.mjs` and
   their tests. The other private packages and the pinned agy are unchanged.
-- **Release:** through `.agents/skills/release-cowboy-plugin/`. By the pattern of the
-  last Antigravity releases that is a patch bump of the package and of the
-  Antigravity Plugin (expected 1.0.23 and 0.2.28), a components bump (expected
-  3.143.0) and, because the components lock is shared, a patch bump of the other
-  Plugins' manifests; the release skill fixes the numbers. Then
-  `cowboy operator converge` (canary Hawk, then OVH). Antigravity on OVH is installed
-  by exact release.
+- **Release:** through `.agents/skills/release-cowboy-plugin/`. The release commit
+  on this branch (`release(components): … (components 3.143.0)`) records it in the
+  repository, because the gate refuses changed provider-runtime sources without it:
+  `cowboy-antigravity-acp` 1.0.22 to 1.0.23 (with its integrity pin in the
+  Antigravity manifest), provider-runtime 1.3.26 to 1.3.27, the Antigravity Plugin
+  0.2.28 to 0.2.29 (origin/main already carries 0.2.28), a patch bump of the six other
+  Providers pinning provider-runtime, release 3.143.0 appended to
+  `components/registry.json` and the derived `components/worker-registry-input.json`
+  regenerated. If origin/main gains another Plugin or component change first, the
+  release commit conflicts in the Plugin manifests and registry: drop it and
+  regenerate it on the new tip (the code commits do not touch those files). Signing,
+  publication and `cowboy operator converge` (canary Hawk, then OVH; Antigravity on
+  OVH is installed by exact release) are the release owner's steps and are not done
+  here.
 - **agy pin:** unchanged.
 - **Existing sessions:** they keep their pinned Plugin generation, so a running agy
   session shows the new label and note only after it is restarted on the new
