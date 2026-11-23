@@ -8,11 +8,11 @@ set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 if [ -z "${VM_DIR:-}" ]; then
     VM_DIR=$(mktemp -d "${TMPDIR:-/tmp}/hbrepro-vm.XXXXXX")
+else
+    [ "$VM_DIR" != / ] || { echo "invalid VM_DIR" >&2; exit 1; }
+    # Created here, atomically and privately: an existing path is refused.
+    mkdir -m 0700 -- "$VM_DIR" || { echo "VM_DIR $VM_DIR must not exist" >&2; exit 1; }
 fi
-[ -n "$VM_DIR" ] && [ "$VM_DIR" != / ] || { echo "invalid VM_DIR" >&2; exit 1; }
-mkdir -p "$VM_DIR"
-[ -z "$(ls -A "$VM_DIR")" ] || { echo "VM_DIR $VM_DIR must be fresh and empty" >&2; exit 1; }
-chmod 700 "$VM_DIR"
 if [ -z "${FLAKE:-}" ]; then
     FLAKE=$(realpath /home/draven/columbus/machines)
 fi
@@ -36,7 +36,7 @@ finish() {
     local status=$?
     "$VM" down || status=1
     # Give qemu time to exit before comparing host state.
-    sleep 5
+    sleep 5 || status=1
     "$VM" isolation check || status=1
     exit "$status"
 }

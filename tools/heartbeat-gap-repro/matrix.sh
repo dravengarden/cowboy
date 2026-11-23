@@ -20,7 +20,8 @@ counter() { # file key -> value, or empty when unreadable or malformed
     some | full) value=$(awk -v k="$2" '$1 == k { for (i = 2; i <= NF; i++) if ($i ~ /^total=/) { sub("total=", "", $i); print $i } }' "$1" 2>/dev/null) || value= ;;
     *) value=$(awk -v k="$2" '$1 == k { print $2 }' "$1" 2>/dev/null) || value= ;;
     esac
-    [[ $value =~ ^[0-9]+$ ]] && echo "$value"
+    # Decimal, no leading zeros, below 10^18 so bash arithmetic is exact.
+    [[ $value =~ ^(0|[1-9][0-9]{0,17})$ ]] && echo "$value"
     return 0
 }
 
@@ -48,8 +49,6 @@ run_case() {
     systemctl set-property --runtime cowboy-agents.slice "MemoryHigh=$high"
     systemd-run --quiet --unit="hb-broker-$name" -p CPUWeight=1000 -p MemoryLow=256M \
         hbrepro broker "$sock" "$delay"
-    local start_ms
-    start_ms=$(date +%s%3N)
     systemd-run --quiet --unit="hb-worker-$name" --slice="$slice" -p MemoryAccounting=yes \
         hbrepro worker "$sock" 10000 "$bulk" "$every" 1048576
     local i=0
@@ -59,32 +58,52 @@ run_case() {
         systemd-run --quiet --unit="hb-load-$name-$i" --slice=cowboy-agents.slice $(load_command "$load")
     done
     sleep 2
-    local high0 mem0 cpu0 io0
+    # The loaded window starts after startup and the counter baseline, so
+    # receive and pressure metrics cover the same interval.
+    local start_ms high0 mem0 cpu0 io0
     high0=$(counter "$CG/cowboy-agents.slice/memory.events" high)
     mem0=$(counter "$wcg/memory.pressure" full)
     cpu0=$(counter "$wcg/cpu.pressure" some)
     io0=$(counter "$wcg/io.pressure" full)
+    start_ms=$(date +%s%3N)
     sleep "$DUR"
     local high1 mem1 cpu1 io1
     high1=$(counter "$CG/cowboy-agents.slice/memory.events" high)
     mem1=$(counter "$wcg/memory.pressure" full)
     cpu1=$(counter "$wcg/cpu.pressure" some)
     io1=$(counter "$wcg/io.pressure" full)
-    local end_ms result valid=true unit
+    local end_ms result=unknown valid=true unit state units
     end_ms=$(date +%s%3N)
-    # A unit that died early is a failed observation, not a quiet one.
-    result=$(systemctl show -p ActiveState --value "hb-worker-$name")
-    for unit in "hb-worker-$name" "hb-broker-$name" $(seq -f "hb-load-$name-%g" 1 "$i"); do
-        [ "$(systemctl show -p ActiveState --value "$unit")" = active ] || valid=false
+    units=("hb-worker-$name" "hb-broker-$name")
+    for ((n = 1; n <= i; n++)); do units+=("hb-load-$name-$n"); done
+    # A unit that died early, or a failed query, is a failed observation,
+    # not a quiet one.
+    for unit in "${units[@]}"; do
+        if ! state=$(systemctl show -p ActiveState --value "$unit"); then
+            state=unknown
+        fi
+        [ "$unit" = "hb-worker-$name" ] && result=$state
+        [ "$state" = active ] || valid=false
     done
     if ! unit_log "hb-broker-$name" >"$OUT/$name.broker.log" || ! unit_log "hb-worker-$name" >"$OUT/$name.worker.log"; then
         valid=false
     fi
-    systemctl stop "hb-worker-$name" "hb-broker-$name" 'hb-load-*' 2>/dev/null || true
+    systemctl stop "${units[@]}" 2>/dev/null || true
+    for unit in "${units[@]}"; do
+        if [ "$(systemctl show -p ActiveState --value "$unit" 2>/dev/null)" = active ]; then
+            echo "unit $unit survived its case; aborting so later cases are not contaminated" >&2
+            exit 1
+        fi
+    done
     systemctl reset-failed 2>/dev/null || true
-    # Keep only records inside the measurement window.
-    grep '^{' "$OUT/$name.broker.log" | jq -c --argjson end "$end_ms" 'select(.recv_ms <= $end)' >"$OUT/$name.broker.jsonl" || true
-    grep '^{' "$OUT/$name.worker.log" >"$OUT/$name.worker.jsonl" || true
+    # Keep only records inside the measurement window; a parse failure
+    # invalidates the case instead of leaving partial data.
+    { grep '^{' "$OUT/$name.broker.log" || true; } \
+        | jq -c --argjson start "$start_ms" --argjson end "$end_ms" 'select(.recv_ms >= $start and .recv_ms <= $end)' \
+            >"$OUT/$name.broker.jsonl" || valid=false
+    { grep '^{' "$OUT/$name.worker.log" || true; } \
+        | jq -c --argjson start "$start_ms" --argjson end "$end_ms" 'select(.done_ms >= $start and .done_ms <= $end)' \
+            >"$OUT/$name.worker.jsonl" || valid=false
     delta() { if [ -n "$1" ] && [ -n "$2" ]; then echo $(($2 - $1)); else echo null; fi; }
     jq -cs --arg name "$name" --arg slice "$slice" --arg loads "$loads" --arg high "$high" \
         --argjson bulk "$bulk" --argjson delay "$delay" \
@@ -108,7 +127,8 @@ run_case() {
            p95_gap_ms: ($gaps | sort | if length > 0 then .[((length * 95 / 100) | ceil) - 1] else null end),
            gaps_over_20s: ($gaps | map(select(. > 20000)) | length),
            gaps_over_45s: ($gaps | map(select(. > 45000)) | length),
-           max_wake_late_ms: (map(.frame.late_ms) | max // null),
+           max_wake_late_ms: (map(.frame.late_ms | select(. != null)) | max // null),
+           max_overdue_ms: (map(.frame.overdue_ms) | max // null),
            max_send_latency_ms: ($sent | map(.send_latency_ms) | max // null),
            max_alloc_ms: (map(.frame.alloc_ms) | max // null),
            max_lock_ms: (map(.frame.lock_ms) | max // null),

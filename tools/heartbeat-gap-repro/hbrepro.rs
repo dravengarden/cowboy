@@ -108,10 +108,22 @@ fn worker(args: &[String]) {
     let start = Instant::now();
     for seq in 1_u64.. {
         let due = start + interval * u32::try_from(seq).unwrap_or(u32::MAX);
-        if let Some(wait) = due.checked_duration_since(Instant::now()) {
-            std::thread::sleep(wait);
-        }
+        // Wake lateness only means something for a beat that slept; a beat
+        // already overdue (behind an earlier stall) reports how overdue.
+        let slept = match due.checked_duration_since(Instant::now()) {
+            Some(wait) => {
+                std::thread::sleep(wait);
+                true
+            }
+            None => false,
+        };
         let woke = Instant::now();
+        let lateness = woke.saturating_duration_since(due).as_millis();
+        let (late, overdue) = if slept {
+            (lateness.to_string(), "0".to_owned())
+        } else {
+            ("null".to_owned(), lateness.to_string())
+        };
         // A synthetic pre-send pressure probe, not a model of the worker:
         // the real worker serializes a small Heartbeat and sends it before
         // cloning pending outbox events (src/worker.rs:812-814). Touching
@@ -126,8 +138,7 @@ fn worker(args: &[String]) {
         let mut stream = writer.lock().unwrap();
         let locked = Instant::now();
         let frame = format!(
-            "{{\"type\":\"heartbeat\",\"seq\":{seq},\"late_ms\":{},\"alloc_ms\":{},\"lock_ms\":{}",
-            woke.saturating_duration_since(due).as_millis(),
+            "{{\"type\":\"heartbeat\",\"seq\":{seq},\"late_ms\":{late},\"overdue_ms\":{overdue},\"alloc_ms\":{},\"lock_ms\":{}",
             allocated.duration_since(woke).as_millis(),
             locked.duration_since(allocated).as_millis(),
         );
@@ -137,12 +148,15 @@ fn worker(args: &[String]) {
         if write_frame(&mut stream, payload.as_bytes()).is_err() {
             return;
         }
+        // One completion instant, taken before the lock is released.
+        let done = Instant::now();
+        let done_ms = wall_ms();
         drop(stream);
         // Deadline to write completion: what the broker actually waits for.
         eprintln!(
-            "{{\"event\":\"sent\",\"seq\":{seq},\"write_ms\":{},\"send_latency_ms\":{}}}",
-            began.elapsed().as_millis(),
-            Instant::now().saturating_duration_since(due).as_millis()
+            "{{\"event\":\"sent\",\"seq\":{seq},\"done_ms\":{done_ms},\"write_ms\":{},\"send_latency_ms\":{}}}",
+            done.duration_since(began).as_millis(),
+            done.saturating_duration_since(due).as_millis()
         );
     }
 }

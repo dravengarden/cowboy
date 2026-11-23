@@ -112,11 +112,13 @@ How to read the columns:
   deadline-to-write latency reached 2.0 s. The largest receive gap was
   12.0 s. At 4 GiB with these loads, the stall stayed in seconds and never
   approached 45 s.
-- **The split removes the stall.** In `split-memory` the same load drove the
+- **Split run (one observation).** In `split-memory` the same load drove the
   task slice over `MemoryHigh` 44,993 times. The worker in
   `cowboy-control.slice` recorded zero memory stall and zero send latency.
-- **The policy remedy almost removes it.** In `max-only`, with no shared
-  `MemoryHigh`, the stall dropped to 116 ms.
+- **Policy run (one observation).** In `max-only`, with no shared
+  `MemoryHigh`, the worker recorded 116 ms of stall.
+- Neither single run establishes how well a remedy works; that decision is
+  L0-7's, from Hawk's own records.
 - **CPU and I/O alone added at most 0.45 s** at these weights and sizes.
 - **Only frame blocking crosses 45 s between receipts.** In `frame-block`
   the heartbeat waited 46 s for the writer lock behind 32 MiB frames that the
