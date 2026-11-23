@@ -194,6 +194,20 @@ export class Connection {
     });
   }
 
+  /**
+   * Wait until no request awaits its reply, at most `ms`; `false` when the
+   * bound ended the wait. Requests given up locally (`abandoned`) do not
+   * count: nobody reads their reply.
+   */
+  async idle(ms) {
+    const deadline = Date.now() + ms;
+    while (this.pending.size > 0 && !this.closed) {
+      if (Date.now() >= deadline) return false;
+      await new Promise((done) => setTimeout(done, 20));
+    }
+    return true;
+  }
+
   close() {
     this.stopped = true;
     this.disconnect();

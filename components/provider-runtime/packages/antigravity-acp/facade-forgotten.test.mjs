@@ -299,3 +299,27 @@ test("a command whose start is still pending when the turn ends is stopped by th
   assert.equal(facade.session("s1").commands.size, 0, "registered, then stopped and forgotten");
   await running;
 });
+
+test("at exit the connection waits for in-flight requests, bounded, and the facade starts nothing new", async (t) => {
+  let hold = 0;
+  const { facade, call, endpoint } = await fixture(t, {
+    delay: (method) => (method === "process/read" && hold > 0 ? hold : 0),
+  });
+  const ran = await call("RunCommand", { command: "sleep 30", wait_seconds: 0 });
+  assert.match(ran.text, /^Still running/);
+  const connection = facade.connection;
+  assert.equal(await connection.idle(10), true, "idle: immediate");
+  hold = 600;
+  const process = [...facade.session("s1").commands.values()][0];
+  const read = facade.read(process, 0, { lostIsUncertain: false });
+  // Sent once its connection check settled.
+  await new Promise((done) => setTimeout(done, 50));
+  assert.equal(await connection.idle(50), false, "a held reply bounds the wait");
+  assert.equal(await connection.idle(5000), true, "then drains once answered");
+  await read;
+  // Quiesced: the command's expiry starts no stop or read.
+  facade.quiesce();
+  const before = endpoint.calls.length;
+  await facade.expire(facade.session("s1"), process);
+  assert.equal(endpoint.calls.length, before);
+});

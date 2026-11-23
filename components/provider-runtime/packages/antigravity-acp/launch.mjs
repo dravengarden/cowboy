@@ -31,6 +31,10 @@ import { callGuidance, openMemory } from "./memory.mjs";
 import { buildProjection, withUnavailableSkills } from "./projection.mjs";
 import { AcpProxy } from "./proxy.mjs";
 
+/** How long the proxy waits for in-flight execution requests before it
+ * closes the connection at exit (design L1c). */
+const DRAIN_MS = 10_000;
+
 export const AGY_ARGUMENTS = Object.freeze([
   "acp",
   "--disable-telemetry",
@@ -497,6 +501,12 @@ export async function runProxy({
   proxy.settleExit();
   const ready = await runtime.catch(() => undefined);
   ready?.server.close();
+  // Requests still in flight (a turn's command stops and their confirming
+  // reads) get their replies before the connection closes: a reply cut off
+  // here would leave its effect unknown to the worker (design L1c). No new
+  // facade work starts meanwhile.
+  ready?.facade.quiesce();
+  await ready?.connection.idle(DRAIN_MS);
   ready?.connection.close();
   return signal ? 1 : (code ?? 1);
 }

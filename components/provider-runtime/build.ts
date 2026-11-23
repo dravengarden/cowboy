@@ -144,9 +144,7 @@ if (!baseUrl.startsWith("https://") || baseUrl.includes("latest")) {
   throw new Error("Provider artifact base URL must be immutable HTTPS");
 }
 
-const source = await readJson<ProviderSource>(
-  join(pluginRoot, "provider.json"),
-);
+const source = await readJson<ProviderSource>(join(pluginRoot, "provider.json"));
 const providerId = source.id;
 if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(providerId)) {
   throw new Error("Provider id must use lowercase kebab-case");
@@ -164,9 +162,7 @@ await rm(outputRoot, { recursive: true }).catch((error) => {
   if (!((error as { code?: string }).code === "ENOENT")) throw error;
 });
 await mkdir(outputRoot, { recursive: true });
-const temporaryDirectory = await mkdtemp(
-  join(outputBase, ".provider-runtime-"),
-);
+const temporaryDirectory = await mkdtemp(join(outputBase, ".provider-runtime-"));
 const temporary = await realpath(temporaryDirectory);
 
 try {
@@ -179,17 +175,15 @@ try {
     const target = `${platform.os}-${platform.architecture}` as TargetKey;
     const components: ReleasedComponent[] = [];
     for (const requirement of platform.private_components) {
-      const dependency = source.runtime.dependencies.find((candidate) =>
-        candidate.id === requirement.dependency
+      const dependency = source.runtime.dependencies.find(
+        (candidate) => candidate.id === requirement.dependency,
       );
       if (!dependency) {
         throw new Error(`missing dependency ${requirement.dependency}`);
       }
       const recipe = runtimeLock.components[dependency.id];
       if (!recipe || recipe.version !== dependency.version) {
-        throw new Error(
-          `runtime lock does not match ${dependency.id}@${dependency.version}`,
-        );
+        throw new Error(`runtime lock does not match ${dependency.id}@${dependency.version}`);
       }
       const built = await buildComponent(
         recipe,
@@ -221,12 +215,7 @@ try {
       if (built.entrypoint) released.entrypoint = built.entrypoint;
       components.push(released);
       if (target === "linux-x86_64") {
-        await probeArtifact(
-          built.path,
-          built.format,
-          built.entrypoint,
-          recipe.probe,
-        );
+        await probeArtifact(built.path, built.format, built.entrypoint, recipe.probe);
       }
     }
     matrix.push({
@@ -236,16 +225,15 @@ try {
     });
   }
   const manifestPath = `${outputRoot}/runtime-artifacts.json`;
-  await writeFile(
-    manifestPath,
-    `${JSON.stringify(matrix, null, 2)}\n`,
+  await writeFile(manifestPath, `${JSON.stringify(matrix, null, 2)}\n`);
+  console.log(
+    JSON.stringify({
+      provider_id: providerId,
+      provider_version: source.version,
+      runtime_manifest: manifestPath,
+      targets: matrix.map((entry) => `${entry.os}-${entry.architecture}`),
+    }),
   );
-  console.log(JSON.stringify({
-    provider_id: providerId,
-    provider_version: source.version,
-    runtime_manifest: manifestPath,
-    targets: matrix.map((entry) => `${entry.os}-${entry.architecture}`),
-  }));
 } finally {
   await rm(temporary, { recursive: true }).catch(() => undefined);
 }
@@ -285,7 +273,7 @@ async function buildComponent(
         !/^packages\/[a-z0-9-]+$/.test(recipe.package_dir) ||
         dependency.source !== `cowboy:components/provider-runtime/${recipe.package_dir}` ||
         dependency.integrity !==
-          await ownedArchiveIntegrity(sourceDir, recipe.launcher, recipe.files)
+          (await ownedArchiveIntegrity(sourceDir, recipe.launcher, recipe.files))
       ) {
         throw new Error(`owned archive source mismatch for ${dependency.id}`);
       }
@@ -305,10 +293,7 @@ async function buildComponent(
     }
     case "vendor_archive": {
       const locked = requiredTarget(recipe.targets, target, dependency.id);
-      if (
-        !locked.url.startsWith(recipe.release) ||
-        dependency.source !== recipe.release
-      ) {
+      if (!locked.url.startsWith(recipe.release) || dependency.source !== recipe.release) {
         throw new Error(`vendor archive source mismatch for ${dependency.id}`);
       }
       const sha512 = required(locked.sha512, "vendor SHA-512");
@@ -326,20 +311,14 @@ async function buildComponent(
     }
     case "npm_archive": {
       const locked = requiredTarget(recipe.targets, target, dependency.id);
-      const archive = await downloadSRI(
-        locked.url,
-        required(locked.integrity, "npm integrity"),
-      );
+      const archive = await downloadSRI(locked.url, required(locked.integrity, "npm integrity"));
       const output = `${destination}/${command}.tar.gz`;
       await copyFile(archive, output);
       return { path: output, format: "tar_gz", entrypoint: locked.entrypoint };
     }
     case "npm_brotli": {
       const locked = requiredTarget(recipe.targets, target, dependency.id);
-      const archive = await downloadSRI(
-        locked.url,
-        required(locked.integrity, "npm integrity"),
-      );
+      const archive = await downloadSRI(locked.url, required(locked.integrity, "npm integrity"));
       const stage = await mkdtemp(join(temporary, `${command}-`));
       await run("tar", ["-xzf", archive, "-C", stage, locked.entrypoint]);
       await mkdir(`${stage}/bin`, { recursive: true });
@@ -350,22 +329,14 @@ async function buildComponent(
       ]);
       await chmod(`${stage}/bin/${command}`, 0o755);
       await rm(`${stage}/package`, { recursive: true });
-      await writeProvenance(
-        stage,
-        dependency,
-        target,
-        runtimeLock.node.version,
-      );
+      await writeProvenance(stage, dependency, target, runtimeLock.node.version);
       const output = `${destination}/${command}.tar.gz`;
       await deterministicTarGz(stage, output);
       return { path: output, format: "tar_gz", entrypoint: `bin/${command}` };
     }
     case "node_npm": {
       const node = requiredTarget(runtimeLock.node.targets, target, "Node.js");
-      const nodeArchive = await downloadSha256(
-        node.url,
-        required(node.sha256, "Node SHA-256"),
-      );
+      const nodeArchive = await downloadSha256(node.url, required(node.sha256, "Node SHA-256"));
       const stage = await mkdtemp(join(temporary, `${command}-`));
       await mkdir(`${stage}/runtime`, { recursive: true });
       await run("tar", [
@@ -385,24 +356,28 @@ async function buildComponent(
         join(runtimeRoot, recipe.package_dir, "package-lock.json"),
         `${stage}/app/package-lock.json`,
       );
-      const [npmOs, npmCpu] = target === "macos-aarch64"
-        ? ["darwin", "arm64"]
-        : target === "linux-aarch64"
-        ? ["linux", "arm64"]
-        : ["linux", "x64"];
-      await run("npm", [
-        "ci",
-        "--ignore-scripts",
-        ...(recipe.include_optional === true ? [] : ["--omit=optional"]),
-        "--no-audit",
-        "--no-fund",
-        `--os=${npmOs}`,
-        `--cpu=${npmCpu}`,
-      ], { cwd: `${stage}/app` });
-      await rm(`${stage}/app/node_modules/.bin`, { recursive: true })
-        .catch((error) => {
-          if (!((error as { code?: string }).code === "ENOENT")) throw error;
-        });
+      const [npmOs, npmCpu] =
+        target === "macos-aarch64"
+          ? ["darwin", "arm64"]
+          : target === "linux-aarch64"
+            ? ["linux", "arm64"]
+            : ["linux", "x64"];
+      await run(
+        "npm",
+        [
+          "ci",
+          "--ignore-scripts",
+          ...(recipe.include_optional === true ? [] : ["--omit=optional"]),
+          "--no-audit",
+          "--no-fund",
+          `--os=${npmOs}`,
+          `--cpu=${npmCpu}`,
+        ],
+        { cwd: `${stage}/app` },
+      );
+      await rm(`${stage}/app/node_modules/.bin`, { recursive: true }).catch((error) => {
+        if (!((error as { code?: string }).code === "ENOENT")) throw error;
+      });
       await mkdir(`${stage}/bin`, { recursive: true });
       if (recipe.launcher) {
         if (!/^packages\/[a-z0-9-]+\/launch\.mjs$/.test(recipe.launcher)) {
@@ -422,12 +397,7 @@ async function buildComponent(
         }" "$@"\n`,
         { mode: 0o755 },
       );
-      await writeProvenance(
-        stage,
-        dependency,
-        target,
-        runtimeLock.node.version,
-      );
+      await writeProvenance(stage, dependency, target, runtimeLock.node.version);
       await rejectLinks(stage);
       const output = `${destination}/${command}.tar.gz`;
       await deterministicTarGz(stage, output);
@@ -441,36 +411,39 @@ async function buildComponent(
       const goOperatingSystem = target.startsWith("linux-")
         ? "linux"
         : target.startsWith("macos-")
-        ? "darwin"
-        : undefined;
+          ? "darwin"
+          : undefined;
       if (!goOperatingSystem) {
         throw new Error(`${dependency.id} has no ${target} build contract`);
       }
       const files = recipe.files ?? [];
-      const stage2 = files.length > 0
-        ? await mkdtemp(join(temporary, `${command}-files-`))
-        : undefined;
+      const stage2 =
+        files.length > 0 ? await mkdtemp(join(temporary, `${command}-files-`)) : undefined;
       if (stage2) await mkdir(`${stage2}/bin`, { recursive: true });
       const output = stage2
         ? `${stage2}/bin/${command}`
         : `${await realpath(destination)}/${command}`;
-      await run("nix", [
-        "develop",
-        `path:${sourceRoot}`,
-        "-c",
-        "env",
-        "CGO_ENABLED=0",
-        `GOOS=${goOperatingSystem}`,
-        `GOARCH=${goArchitecture}`,
-        "go",
-        "build",
-        "-buildvcs=false",
-        "-trimpath",
-        "-ldflags=-s -w -buildid=",
-        "-o",
-        output,
-        `./cmd/${recipe.binary}`,
-      ], { cwd: sourceRoot });
+      await run(
+        "nix",
+        [
+          "develop",
+          `path:${sourceRoot}`,
+          "-c",
+          "env",
+          "CGO_ENABLED=0",
+          `GOOS=${goOperatingSystem}`,
+          `GOARCH=${goArchitecture}`,
+          "go",
+          "build",
+          "-buildvcs=false",
+          "-trimpath",
+          "-ldflags=-s -w -buildid=",
+          "-o",
+          output,
+          `./cmd/${recipe.binary}`,
+        ],
+        { cwd: sourceRoot },
+      );
       await chmod(output, 0o755);
       if (!stage2) return { path: output, format: "raw" };
       // Data the component reads at run time (e.g. a model catalog) ships
@@ -494,29 +467,18 @@ async function buildComponent(
   }
 }
 
-async function materializeGitSource(
-  recipe: GitGoRecipe,
-  stage: string,
-): Promise<string> {
+async function materializeGitSource(recipe: GitGoRecipe, stage: string): Promise<string> {
   const repository = `${stage}/repository`;
-  await run("git", [
-    "clone",
-    "--filter=blob:none",
-    "--no-checkout",
-    recipe.repository,
-    repository,
-  ]);
+  await run("git", ["clone", "--filter=blob:none", "--no-checkout", recipe.repository, repository]);
   await run("git", ["cat-file", "-e", `${recipe.revision}^{commit}`], {
     cwd: repository,
   });
   const archive = `${stage}/source.tar`;
-  await run("git", [
-    "archive",
-    "--format=tar",
-    `--output=${archive}`,
-    recipe.revision,
-    recipe.subdir,
-  ], { cwd: repository });
+  await run(
+    "git",
+    ["archive", "--format=tar", `--output=${archive}`, recipe.revision, recipe.subdir],
+    { cwd: repository },
+  );
   const digest = await sha256(archive);
   if (digest !== recipe.source_archive_sha256) {
     throw new Error(`Git source digest mismatch for ${recipe.binary}`);
@@ -527,20 +489,16 @@ async function materializeGitSource(
   return `${extracted}/${recipe.subdir}`;
 }
 
-function verifyGitDependency(
-  dependency: ExactDependency,
-  recipe: GitGoRecipe,
-): void {
-  const expected = `git+ssh://${
-    recipe.repository.replace(/^git@([^:]+):/, "git@$1/")
-  }#${recipe.revision}:${recipe.subdir}`;
+function verifyGitDependency(dependency: ExactDependency, recipe: GitGoRecipe): void {
+  const expected = `git+ssh://${recipe.repository.replace(
+    /^git@([^:]+):/,
+    "git@$1/",
+  )}#${recipe.revision}:${recipe.subdir}`;
   if (dependency.source !== expected) {
     throw new Error(`Git dependency source mismatch for ${dependency.id}`);
   }
   if (dependency.integrity !== `sha256:${recipe.source_archive_sha256}`) {
-    throw new Error(
-      `Git dependency source integrity mismatch for ${dependency.id}`,
-    );
+    throw new Error(`Git dependency source integrity mismatch for ${dependency.id}`);
   }
 }
 
@@ -552,19 +510,17 @@ async function writeProvenance(
 ): Promise<void> {
   await writeFile(
     `${stage}/cowboy-runtime.json`,
-    `${
-      JSON.stringify(
-        {
-          schema_version: 1,
-          dependency: dependency.id,
-          version: dependency.version,
-          target,
-          node_version: nodeVersion,
-        },
-        null,
-        2,
-      )
-    }\n`,
+    `${JSON.stringify(
+      {
+        schema_version: 1,
+        dependency: dependency.id,
+        version: dependency.version,
+        target,
+        node_version: nodeVersion,
+      },
+      null,
+      2,
+    )}\n`,
   );
 }
 
@@ -575,9 +531,8 @@ async function probeArtifact(
   args: string[],
 ): Promise<void> {
   const probeRoot = await mkdtemp(join(temporary, "probe-"));
-  const executablePath = format === "raw"
-    ? artifact
-    : `${probeRoot}/${required(entrypoint, "archive entrypoint")}`;
+  const executablePath =
+    format === "raw" ? artifact : `${probeRoot}/${required(entrypoint, "archive entrypoint")}`;
   if (format === "tar_gz") {
     await run("tar", ["-xzf", artifact, "-C", probeRoot]);
     await chmod(executablePath, 0o755);
@@ -604,10 +559,7 @@ async function probeArtifact(
   if (code !== 0) throw new Error(`runtime probe failed for ${artifact}`);
 }
 
-async function deterministicTarGz(
-  stage: string,
-  output: string,
-): Promise<void> {
+async function deterministicTarGz(stage: string, output: string): Promise<void> {
   const names = [];
   for (const entry of await readdir(stage, { withFileTypes: true })) {
     names.push(entry.name);
@@ -664,15 +616,7 @@ async function downloadVerified(
   const path = `${cacheRoot}/${algorithm}-${expected}`;
   if (!(await exists(path))) {
     const partial = `${path}.${process.pid}.partial`;
-    await run("curl", [
-      "--fail",
-      "--location",
-      "--retry",
-      "3",
-      "--output",
-      partial,
-      url,
-    ]);
+    await run("curl", ["--fail", "--location", "--retry", "3", "--output", partial, url]);
     const actual = await digestFile(partial, algorithm);
     if (actual !== expected) {
       await rm(partial).catch(() => undefined);
@@ -694,10 +638,7 @@ async function sha256(path: string): Promise<string> {
   return await digestFile(path, "sha256");
 }
 
-async function digestFile(
-  path: string,
-  algorithm: "sha256" | "sha512",
-): Promise<string> {
+async function digestFile(path: string, algorithm: "sha256" | "sha512"): Promise<string> {
   const child = Bun.spawn({
     cmd: [`${algorithm}sum`, path],
     stdin: "ignore",
@@ -705,27 +646,18 @@ async function digestFile(
     stderr: "ignore",
   });
   const output = await new Response(child.stdout).text();
-  if (await child.exited !== 0) {
+  if ((await child.exited) !== 0) {
     throw new Error(`${algorithm}sum failed for ${path}`);
   }
   return output.trim().split(/\s+/)[0].toLowerCase();
 }
 
 function base64Hex(value: string): string {
-  const bytes = Uint8Array.from(
-    atob(value),
-    (character) => character.charCodeAt(0),
-  );
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
-    "",
-  );
+  const bytes = Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-async function run(
-  command: string,
-  args: string[],
-  options: { cwd?: string } = {},
-): Promise<void> {
+async function run(command: string, args: string[], options: { cwd?: string } = {}): Promise<void> {
   const code = await Bun.spawn({
     cmd: [command, ...args],
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
@@ -764,8 +696,4 @@ function requiredTarget<T>(
 }
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  copyOwnedNode,
-  ownedArchiveIntegrity,
-  type OwnedNodeRecipe,
-} from "./owned-sources.ts";
+import { copyOwnedNode, ownedArchiveIntegrity, type OwnedNodeRecipe } from "./owned-sources.ts";

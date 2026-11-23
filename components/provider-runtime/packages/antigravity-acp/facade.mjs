@@ -244,13 +244,29 @@ export class Facade {
           command.cleaning -= 1;
         }
         if (closed) this.forget(session, command);
-        else if (command.cleaning === 0 && session.commands.get(command.processId) === command) {
+        else if (
+          !this.closing &&
+          command.cleaning === 0 &&
+          session.commands.get(command.processId) === command
+        ) {
           clearTimeout(command.timer);
           command.timer = setTimeout(() => this.expire(session, command), 5000);
           command.timer.unref?.();
         }
       }),
     );
+  }
+
+  /**
+   * The proxy is exiting: no new target work starts. Every command's expiry
+   * timer stops, so the connection's in-flight requests can drain before it
+   * closes (design L1c); a process left running is the keeper's to reap.
+   */
+  quiesce() {
+    this.closing = true;
+    for (const session of this.sessions.values()) {
+      for (const command of session.commands.values()) clearTimeout(command.timer);
+    }
   }
 
   /** Stop tracking a command whose process is gone. */
@@ -1279,6 +1295,7 @@ export class Facade {
     // The turn's cleanup owns the stop while it runs and re-arms the timer
     // itself when the close stays unconfirmed.
     if (
+      this.closing ||
       running.closed ||
       running.cleaning > 0 ||
       session.commands.get(running.processId) !== running
@@ -1293,7 +1310,7 @@ export class Facade {
     running.busy = true;
     try {
       if (await this.terminate(running).catch(() => false)) this.forget(session, running);
-      else if (!(running.cleaning > 0)) {
+      else if (!this.closing && !(running.cleaning > 0)) {
         // Not confirmed yet: try again; the handle stays until it is.
         running.timer = setTimeout(() => this.expire(session, running), 5000);
         running.timer.unref?.();
