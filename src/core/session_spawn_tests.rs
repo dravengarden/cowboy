@@ -376,6 +376,52 @@ fn a_trashed_or_deleted_creator_leaves_the_spawn_where_it_was_created() {
 }
 
 #[test]
+fn filing_never_lifts_a_language_server_ban_but_may_add_one() {
+    let hub = Hub::new();
+    session(&hub, "creator", "me", "cowboy");
+    session(&hub, "locked-spawn", "me", "garden");
+    session(&hub, "open-spawn", "me", "cowboy");
+    apply(
+        &hub,
+        "folders",
+        "create",
+        json!({"id":"open","name":"Open"}),
+    );
+    apply(
+        &hub,
+        "folders",
+        "create",
+        json!({"id":"garden","name":"Garden","project":"garden",
+            "defaults":{"language_servers":"off"}}),
+    );
+    apply(
+        &hub,
+        "folders",
+        "place",
+        json!({"session_ids":["creator"],"folder":"open"}),
+    );
+    // The garden folder claims this spawn and bans language servers: an agent's
+    // implicit placement beside a creator in an open folder must not lift that.
+    let before = (hub.sync_value("folders"), hub.sync_value("order"));
+    assert!(!hub.place_spawned("creator", "locked-spawn", &me()).unwrap());
+    assert_eq!((hub.sync_value("folders"), hub.sync_value("order")), before);
+    assert_eq!(hub.setting("session_spawned_from:locked-spawn"), None);
+    assert_eq!(placement(&hub, "locked-spawn"), None);
+
+    // The same folder as the creator's is no change; a ban the creator's folder
+    // carries is simply inherited by the spawn.
+    apply(
+        &hub,
+        "folders",
+        "place",
+        json!({"session_ids":["creator"],"folder":"garden"}),
+    );
+    assert!(hub.place_spawned("creator", "locked-spawn", &me()).unwrap());
+    assert!(hub.place_spawned("creator", "open-spawn", &me()).unwrap());
+    assert_eq!(placement(&hub, "open-spawn").as_deref(), Some("garden"));
+}
+
+#[test]
 fn another_owners_creator_changes_nothing() {
     let hub = Hub::new();
     filed_creator(&hub, "work");

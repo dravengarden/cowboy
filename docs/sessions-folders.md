@@ -392,6 +392,12 @@ the session whose agent made the call.
   workspace, Machine, runtime Machine, account or preset a spawn resolves to
   compared with omitting the folder before this behaviour existed. A spawn that
   wants its creator's folder defaults names that folder explicitly.
+- **Language servers.** Review reads a session's folder live to decide whether
+  project-configured language servers may run. The implicit placement never
+  lifts a `language_servers: off` policy: when the folder that files the spawn
+  now (for example through its project binding) bans them and the creator's
+  folder does not, the spawn stays where creation put it. Only its owner moves
+  it out. Filing into a folder that bans them is allowed.
 - **Creator in Trash or deleted.** Nothing moves and no error is returned: the
   session stays where creation put it, since a created session must never turn
   into a failure that invites a duplicate retry. The same holds for any other

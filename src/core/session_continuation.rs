@@ -1,6 +1,6 @@
 //! A continuation remains beside its source in both sidebar orderings.
 use super::{Hub, settings_keys};
-use crate::session_folders::FolderActor;
+use crate::session_folders::{FolderActor, defaults::DefaultKey};
 use serde_json::json;
 
 impl Hub {
@@ -119,6 +119,9 @@ impl Hub {
             return Ok(false);
         };
         if info.meta.trashed_at_ms.is_some() || info.meta.closing {
+            return Ok(false);
+        }
+        if self.lifts_language_server_ban(&info.meta, spawned) {
             return Ok(false);
         }
         self.place_beside_locked(creator, spawned, false, actor, Beside::Spawn)?;
@@ -274,6 +277,36 @@ impl Hub {
             );
         }
         Ok(source_meta.title)
+    }
+
+    /// Whether filing `spawned` in the creator's folder would lift a
+    /// `language_servers: off` policy that the folder it is filed in now applies
+    /// (Review reads the session's folder live). An agent's implicit placement
+    /// never widens that trust; only an explicit move by its owner does.
+    fn lifts_language_server_ban(&self, creator: &super::SessionMeta, spawned: &str) -> bool {
+        let Some(spawned) = self.session_info(spawned).map(|info| info.meta) else {
+            return false;
+        };
+        let actor = FolderActor {
+            user_id: spawned.owner_user_id.clone(),
+            sees_all: false,
+        };
+        let folders = self.inner.folders.lock();
+        let off = |meta: &super::SessionMeta| {
+            folders
+                .display_folder(&actor, &meta.id, sidebar_project(meta))
+                .is_some_and(|folder| {
+                    folders
+                        .resolve_defaults(&actor, &folder)
+                        .is_ok_and(|resolved| {
+                            matches!(
+                                resolved.values.get(&DefaultKey::LanguageServers),
+                                Some(Some(value)) if value == "off"
+                            )
+                        })
+                })
+        };
+        off(&spawned) && !off(creator)
     }
 
     /// Whether the sidebar shows no row for the session: it is deleted or in
