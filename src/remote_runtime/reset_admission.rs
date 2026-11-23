@@ -199,9 +199,11 @@ fn cancel(shared: &Shared, session_id: &str) -> bool {
     if let Some(worker) = &kept {
         // A cancelled Clear keeps this worker's context running; see
         // `Hub::readmit_runtime_epoch`.
-        shared
-            .hub
-            .readmit_runtime_epoch(session_id, &worker.worker_epoch);
+        shared.hub.readmit_runtime_epoch(
+            session_id,
+            &worker.worker_epoch,
+            worker.agent_session_id.as_deref(),
+        );
     }
     let status = kept.map_or(Status::Crashed, |worker| super::worker_status(worker.state));
     tracing::warn!(session = %session_id, ?status, "reset declaration denied; reset cancelled");

@@ -1440,6 +1440,7 @@ struct HubInner {
     /// writer still reduces compact deltas so streaming text coalesces without
     /// enqueueing the accumulated string on every token.
     history_reducer: Mutex<EventReducer>,
+    runtime_projection: parking_lot::RwLock<()>,
     /// Latest subagent observations per session (docs/background-tasks.md):
     /// the bootstrap `subagent_state` and lookups read it beside the store.
     /// Never held with `sessions`.
@@ -1695,6 +1696,7 @@ impl Hub {
                 automatic_update_failed_sessions: Mutex::new(HashMap::new()),
                 lost_execution: Mutex::new(HashMap::new()),
                 history_reducer: Mutex::new(EventReducer::default()),
+                runtime_projection: parking_lot::RwLock::new(()),
                 background: Mutex::new(HashMap::new()),
                 boot_epoch: {
                     let mut bytes = [0u8; 8];
@@ -3543,10 +3545,13 @@ impl Hub {
     pub fn prepare_context_reset(&self, session_id: &str) {
         // Clearing a fork, even before its first launch, discards the copy.
         self.discard_native_fork(session_id);
+        let fence = self.runtime_projection_exclusive();
+        let mut discarded = None;
         let usage_changed = {
             let mut sessions = self.inner.sessions.lock();
             sessions.get_mut(session_id).is_some_and(|s| {
-                s.runtime_epochs.advance(s.meta.agent_session_id.take());
+                discarded = s.meta.agent_session_id.take();
+                s.runtime_epochs.advance();
                 s.in_flight = s.dispatch_pending.is_some();
                 let changed = s.meta.context_used != 0
                     || s.meta.context_size != 0
@@ -3568,6 +3573,8 @@ impl Hub {
                 changed
             })
         };
+        self.record_cleared_native(session_id, discarded);
+        drop(fence);
         if usage_changed {
             self.broadcast_sessions();
         }

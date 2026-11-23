@@ -213,3 +213,75 @@ async fn a_restarted_controller_accepts_the_current_context_replay() {
     assert_eq!(meta.agent_session_id.as_deref(), Some("agent-2"));
     assert_eq!(meta.context_used, 3_000);
 }
+
+#[tokio::test]
+async fn a_fenced_worker_owns_nothing_but_still_retires_its_turn() {
+    let hub = Hub::new();
+    session(&hub);
+    let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+    merge_worker_snapshots(
+        &runtime.shared,
+        vec![worker("old", WorkerState::Running, Some("agent-1"))],
+    )
+    .await;
+    runtime.prompt_traced("s", Vec::new(), Some("c1".into()), None);
+    let turn = runtime
+        .pending_for_test()
+        .into_iter()
+        .find_map(|command| match command {
+            CoreCommand::Prompt { turn_id, .. } => Some(turn_id),
+            _ => None,
+        })
+        .expect("pending prompt");
+    clear(&hub);
+    merge_worker_snapshots(
+        &runtime.shared,
+        vec![worker("new", WorkerState::Running, None)],
+    )
+    .await;
+    // A late re-report of the old worker, and its placeholder restating the
+    // discarded launch, neither take the cache nor restore the native id.
+    let mut placeholder = worker("broker-s", WorkerState::Exited, Some("agent-1"));
+    placeholder.current_turn_id = None;
+    handle_frame(
+        &runtime.shared,
+        Frame::Snapshot {
+            worker: Box::new(worker("old", WorkerState::Running, Some("agent-1"))),
+        },
+        &mut tokio::io::sink(),
+    )
+    .await
+    .expect("snapshot");
+    merge_worker_snapshots(&runtime.shared, vec![placeholder]).await;
+    assert_eq!(
+        runtime
+            .shared
+            .workers
+            .lock()
+            .get("s")
+            .map(|worker| worker.worker_epoch.clone())
+            .as_deref(),
+        Some("new")
+    );
+    assert_eq!(hub.session_info("s").unwrap().meta.agent_session_id, None);
+    assert_eq!(hub.status("s"), Some(Status::Running));
+
+    deliver(
+        &runtime,
+        "old",
+        9,
+        vec![RuntimeEvent::TurnEnded {
+            turn_id: turn.clone(),
+            stop_reason: "EndTurn".to_owned(),
+            usage: None,
+        }],
+    )
+    .await;
+    assert!(
+        !runtime.pending_for_test().iter().any(|command| matches!(
+            command,
+            CoreCommand::Prompt { turn_id, .. } if *turn_id == turn
+        )),
+        "a fenced turn ending left its prompt pending"
+    );
+}

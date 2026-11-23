@@ -52,6 +52,9 @@ pub const SESSION_CONTINUED_FROM_PREFIX: &str = "session_continued_from:";
 pub const SESSION_HANDOFF_RESUMED_PREFIX: &str = "session_handoff_resumed:";
 /// A fork's source and pending native fork; the destination id follows.
 pub const SESSION_FORK_PREFIX: &str = "session_fork:";
+/// Native session ids that Clear conversation discarded (a bounded array);
+/// runtime frames still reporting one are fenced. The session id follows.
+pub const SESSION_CLEARED_NATIVE_PREFIX: &str = "session_cleared_native:";
 /// The session whose agent spawned this one through the Agent API and had it
 /// filed beside it; the spawned id follows. Orders later spawns after it.
 pub const SESSION_SPAWNED_FROM_PREFIX: &str = "session_spawned_from:";
@@ -95,6 +98,7 @@ pub const SESSION_STATE_PREFIXES: &[&str] = &[
     SESSION_CONTINUED_FROM_PREFIX,
     SESSION_HANDOFF_RESUMED_PREFIX,
     SESSION_FORK_PREFIX,
+    SESSION_CLEARED_NATIVE_PREFIX,
     SESSION_SPAWNED_FROM_PREFIX,
     SESSION_CONFIG_REVERT_PREFIX,
     SESSION_MCP_BINDINGS_PREFIX,
@@ -121,6 +125,7 @@ pub fn is_persisted_setting_key(key: &str) -> bool {
             SESSION_CONTINUED_FROM_PREFIX,
             SESSION_HANDOFF_RESUMED_PREFIX,
             SESSION_FORK_PREFIX,
+            SESSION_CLEARED_NATIVE_PREFIX,
             SESSION_SPAWNED_FROM_PREFIX,
             SESSION_PROVIDER_AUTO_UPDATE_PREFIX,
             SESSION_CONTEXT_ROLLOVER_PREFIX,
@@ -163,6 +168,7 @@ pub fn examples() -> Vec<String> {
         format!("{SESSION_CONTINUED_FROM_PREFIX}sess-1"),
         format!("{SESSION_HANDOFF_RESUMED_PREFIX}sess-1"),
         format!("{SESSION_FORK_PREFIX}sess-1"),
+        format!("{SESSION_CLEARED_NATIVE_PREFIX}sess-1"),
         format!("{SESSION_SPAWNED_FROM_PREFIX}sess-1"),
         format!("{SESSION_PROVIDER_AUTO_UPDATE_PREFIX}sess-1"),
         format!("{SESSION_CONTEXT_ROLLOVER_PREFIX}sess-1"),
