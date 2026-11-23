@@ -817,8 +817,14 @@ fn session_view(info: &SessionInfo) -> Value {
         "drafts": info.drafts_count,
         "events": info.event_count,
         "background_tasks": meta.background_tasks,
-        "context": (meta.context_size > 0)
-            .then(|| json!({"used": meta.context_used, "size": meta.context_size})),
+        "context": (meta.context_size > 0).then(|| {
+            let mut context = json!({"used": meta.context_used, "size": meta.context_size});
+            // A completed compaction made the reading history until the next report.
+            if meta.context_usage_stale() {
+                context["stale_after_compaction"] = json!(true);
+            }
+            context
+        }),
     })
 }
 

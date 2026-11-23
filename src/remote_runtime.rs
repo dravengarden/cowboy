@@ -2742,6 +2742,7 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
                 size,
                 raw,
                 observed_at_ms,
+                compacted_at_ms: None,
             },
         ),
         RuntimeEvent::PermissionRequest {

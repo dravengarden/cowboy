@@ -273,6 +273,13 @@ export class AcpProxy {
     this.root = undefined;
     /** `/compact` turns and the context restated after them. */
     this.compaction = new Compaction();
+    /**
+     * Sessions whose typed `/compact` turn is in flight. A `usage_update` agy
+     * sends then measures the history being summarized, not the compacted
+     * context; the worker's Controller marks the reading stale at the
+     * completion only while no report arrived during the compaction.
+     */
+    this.compacting = new Set();
     /** Whether the worker renders ACP `notice` updates (its `initialize`). */
     this.notices = false;
     /** Announced `cowboy` server calls awaiting the facade, per session. */
@@ -692,6 +699,7 @@ export class AcpProxy {
         }
       }
       record.compaction = this.compaction.begin(prompt);
+      this.compacting.delete(sessionId);
       const restated =
         record.compaction || !Array.isArray(prompt)
           ? undefined
@@ -735,7 +743,10 @@ export class AcpProxy {
       runtime.facade.beginTurn(sessionId);
       if (record.compaction) {
         const started = this.compaction.update(sessionId, record.compaction, "in_progress");
-        if (started) this.client(started);
+        if (started) {
+          this.compacting.add(sessionId);
+          this.client(started);
+        }
       }
     }
     this.pending.set(id, record);
@@ -979,6 +990,12 @@ export class AcpProxy {
           // agy echoes every prompt block as the owner's message; the blocks
           // Cowboy injected (recalled memory, restated context) are not.
           if (injectedEcho(update)) return;
+          if (
+            update?.sessionUpdate === "usage_update" &&
+            this.compacting.has(message.params?.sessionId)
+          ) {
+            return this.log("dropped a usage_update of the history a /compact turn summarizes");
+          }
           // A subagent's delegation prompt is shown as a linked message of
           // its parent, and the commands of the owner's session are not its.
           if (
@@ -1398,6 +1415,7 @@ export class AcpProxy {
     this.settling.delete(reply.id);
     const { sessionId } = record;
     if (record.compaction) {
+      this.compacting.delete(sessionId);
       const { status, error } = compactionStatus(reply);
       this.compaction.settled(sessionId, status);
       const settled = this.compaction.update(sessionId, record.compaction, status, error);

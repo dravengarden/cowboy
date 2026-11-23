@@ -11,6 +11,57 @@ pub(super) struct UsageEvidence {
     used: u64,
 }
 
+/// Whether the agent reported usage while the current compaction ran. A
+/// Provider that measures the compacted context (Codex recomputes it before
+/// the compaction's completion, Claude Code reports the retained tokens at
+/// its boundary) needs nothing more; one that reports nothing (`agy` runs
+/// `/compact` as an ordinary prompt) leaves its pre-compaction reading, which
+/// the completion then marks as history. Transient: a Controller restart
+/// mid-compaction only marks a reading stale that a later report replaces.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum CompactionUsage {
+    Idle,
+    Running {
+        reported: bool,
+    },
+    /// A compaction whose reports during it measure the history being
+    /// summarized: Antigravity's proxy synthesizes these (`agy-compact-`
+    /// IDs) around an ordinary prompt, and a proxy before
+    /// `cowboy-antigravity-acp` 1.0.25 still relays that prompt's usage.
+    /// Such a report is still the current reading (until the compaction
+    /// completes it measures the uncompacted context the session holds), so
+    /// it applies; it only never counts as a report of the compacted context.
+    Unmeasured,
+}
+
+/// The ID prefix of a compaction Antigravity's proxy synthesizes.
+const PROMPT_COMPACTION_PREFIX: &str = "agy-compact-";
+
+/// The lifecycle step a session event takes for [`CompactionUsage`].
+enum CompactionStep {
+    Started { unmeasured: bool },
+    Completed,
+    Ended,
+}
+
+fn compaction_step(event: &Event) -> Option<CompactionStep> {
+    match event {
+        Event::Update { update } if update["sessionUpdate"] == "compaction_update" => {
+            match update["status"].as_str()? {
+                "in_progress" => Some(CompactionStep::Started {
+                    unmeasured: update["compactionId"]
+                        .as_str()
+                        .is_some_and(|id| id.starts_with(PROMPT_COMPACTION_PREFIX)),
+                }),
+                "completed" => Some(CompactionStep::Completed),
+                _ => Some(CompactionStep::Ended),
+            }
+        }
+        Event::TurnEnd { .. } => Some(CompactionStep::Ended),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) enum HistoryBoundary {
     Unknown,
@@ -49,6 +100,60 @@ impl HistoryBoundary {
 }
 
 impl Hub {
+    /// Follow a compaction's lifecycle from the session's own events. A
+    /// completion with no usage reported since the compaction began marks the
+    /// reading stale (persisted, so a reload or restart shows the same): the
+    /// meter shows it as unknown and no renewal decision reads it, until the
+    /// agent's next real `usage_update` replaces it.
+    pub(super) fn observe_compaction(&self, session_id: &str, event: &Event) {
+        let Some(step) = compaction_step(event) else {
+            return;
+        };
+        {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            let previous = std::mem::replace(&mut s.compaction_usage, CompactionUsage::Idle);
+            match step {
+                CompactionStep::Started { unmeasured } => {
+                    s.compaction_usage = if unmeasured {
+                        CompactionUsage::Unmeasured
+                    } else {
+                        CompactionUsage::Running { reported: false }
+                    };
+                    return;
+                }
+                CompactionStep::Ended => return,
+                CompactionStep::Completed
+                    if previous == (CompactionUsage::Running { reported: true }) =>
+                {
+                    return;
+                }
+                CompactionStep::Completed => {}
+            }
+            let Some(usage) = s
+                .meta
+                .usage
+                .as_mut()
+                .filter(|usage| !usage.stale_after_compaction())
+            else {
+                return;
+            };
+            usage.compacted_at_ms = Some(crate::logs::now_ms());
+            s.usage_evidence = None;
+            // Queued under the session lock, so a concurrent Clear's reset
+            // cannot be overtaken in storage by this reading.
+            if let Some(tx) = self.inner.store_tx.as_ref() {
+                let _ = tx.send(StoreWrite::UpdateSessionUsage {
+                    session_id: session_id.to_owned(),
+                    usage: Some(usage.clone()),
+                });
+            }
+        }
+        self.broadcast_sessions();
+    }
+
     /// A committed boundary stays known when the hot tail rolls forward.
     /// A restored, truncated tail may need the newest durable marker.
     pub fn observes_rollover_boundary(&self, session_id: &str, boundary: u64) -> Option<bool> {
@@ -91,7 +196,7 @@ impl Hub {
     /// the resumed context's real size, so idle hibernation and context
     /// rollover would treat a large expired context as empty. Only Clear and
     /// renewal, which discard the native context, reset the reading.
-    pub fn set_session_usage(&self, session_id: &str, usage: crate::agent_model::SessionUsage) {
+    pub fn set_session_usage(&self, session_id: &str, mut usage: crate::agent_model::SessionUsage) {
         if usage.used == 0 && usage.size == 0 {
             return;
         }
@@ -99,7 +204,33 @@ impl Hub {
             let mut sessions = self.inner.sessions.lock();
             match sessions.get_mut(session_id) {
                 Some(s) => {
-                    if let Some(native_id) = s.meta.agent_session_id.as_ref()
+                    let stored = s.meta.usage.as_ref();
+                    // Per-model accounting republished onto the last reading
+                    // keeps that reading's observation time: it measures
+                    // nothing new, so it keeps a stale mark and proves no
+                    // report during a compaction.
+                    let republished = stored.is_some_and(|stored| {
+                        stored.observed_at_ms != 0
+                            && stored.observed_at_ms == usage.observed_at_ms
+                            && (stored.used, stored.size) == (usage.used, usage.size)
+                    });
+                    let stale_mark = stored.and_then(|stored| stored.compacted_at_ms);
+                    // A counter-only snapshot (a worker reconnecting) repeats
+                    // what the worker last saw, not a measurement of the
+                    // compacted context; only a live report replaces a stale one.
+                    let fresh = !usage.raw.is_null() && !republished;
+                    if fresh && let CompactionUsage::Running { reported } = &mut s.compaction_usage
+                    {
+                        *reported = true;
+                    }
+                    if !fresh && stale_mark.is_some() {
+                        if !republished {
+                            return;
+                        }
+                        usage.compacted_at_ms = stale_mark;
+                    }
+                    if !republished
+                        && let Some(native_id) = s.meta.agent_session_id.as_ref()
                         && !s.meta.provider_generation_digest.is_empty()
                         && usage.size > 0
                     {
@@ -125,18 +256,19 @@ impl Hub {
                     s.meta.context_used = usage.used;
                     s.meta.context_size = usage.size;
                     s.meta.usage = Some(usage.clone());
+                    // Queued under the session lock, ordered with Clear's reset.
+                    if let Some(tx) = self.inner.store_tx.as_ref() {
+                        let _ = tx.send(StoreWrite::UpdateSessionUsage {
+                            session_id: session_id.to_owned(),
+                            usage: Some(usage),
+                        });
+                    }
                     true
                 }
                 _ => false,
             }
         };
         if changed {
-            if let Some(tx) = self.inner.store_tx.as_ref() {
-                let _ = tx.send(StoreWrite::UpdateSessionUsage {
-                    session_id: session_id.to_owned(),
-                    usage: Some(usage),
-                });
-            }
             self.broadcast_sessions();
         }
     }

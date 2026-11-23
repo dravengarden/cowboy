@@ -121,6 +121,7 @@ export async function runDesktopComposerBrowserConformance(observe?: () => Promi
               compact: {
                 used: 51_000,
                 size: 100_000,
+                stale: false,
                 running: false,
                 title: "Compact conversation · context 51%",
                 open: () => calls.push("compact"),

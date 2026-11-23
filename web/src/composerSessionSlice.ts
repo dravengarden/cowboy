@@ -1,4 +1,4 @@
-import { recordedContextUsageAt } from "./contextUsageRecord";
+import { contextStaleAfterCompaction, recordedContextUsageAt } from "./contextUsageRecord";
 import type { SessionMeta } from "./protocol";
 
 export interface ComposerDestination {
@@ -17,6 +17,10 @@ export interface ComposerSessionSlice {
   paused: boolean;
   contextUsed: number;
   contextSize: number;
+  /** A completed compaction left the reading as history. */
+  contextStale: boolean;
+  /** When the agent measured the reading; 0 when unknown. */
+  contextObservedAtMs: number;
   /** Set while the reading is a persisted one from a stopped worker. */
   contextRecordedAtMs: number | undefined;
   destinations: ComposerDestination[];
@@ -44,6 +48,8 @@ export function composerSessionSlice(
     paused: active?.paused ?? false,
     contextUsed: active?.context_used ?? 0,
     contextSize: active?.context_size ?? 0,
+    contextStale: contextStaleAfterCompaction(active),
+    contextObservedAtMs: active?.usage?.observed_at_ms ?? 0,
     contextRecordedAtMs: recordedContextUsageAt(active),
     destinations: sessions
       .filter((session) => session.id !== sessionId)
@@ -51,6 +57,21 @@ export function composerSessionSlice(
   };
   bySession.set(sessionId, slice);
   return slice;
+}
+
+/** The broadcast reading `useCompactionContext` settles a refresh against. */
+export function composerServerReading(slice: ComposerSessionSlice): {
+  serverUsed: number;
+  serverSize: number;
+  serverObservedAt: number;
+  serverStale: boolean;
+} {
+  return {
+    serverUsed: slice.contextUsed,
+    serverSize: slice.contextSize,
+    serverObservedAt: slice.contextObservedAtMs,
+    serverStale: slice.contextStale,
+  };
 }
 
 export function sameComposerSessionSlice(
@@ -65,6 +86,8 @@ export function sameComposerSessionSlice(
       a.paused === b.paused &&
       a.contextUsed === b.contextUsed &&
       a.contextSize === b.contextSize &&
+      a.contextStale === b.contextStale &&
+      a.contextObservedAtMs === b.contextObservedAtMs &&
       a.contextRecordedAtMs === b.contextRecordedAtMs &&
       a.destinations.length === b.destinations.length &&
       a.destinations.every((destination, index) => {
@@ -79,8 +102,9 @@ export function sameComposerSessionSlice(
   );
 }
 
-/** Equality for the navbar's normally-closed session settings sheet. Usage,
- * scheduling and other row-only metadata do not appear there. */
+/** Equality for the navbar's normally-closed session settings sheet.
+ * Scheduling and other row-only metadata do not appear there; its Context
+ * row shows the reading and whether a compaction left it as history. */
 export function sameComposerSheetSession(
   a: SessionMeta | undefined,
   b: SessionMeta | undefined,
@@ -98,6 +122,9 @@ export function sameComposerSheetSession(
       a.status === b.status &&
       a.origin === b.origin &&
       a.paused === b.paused &&
+      a.context_used === b.context_used &&
+      a.context_size === b.context_size &&
+      contextStaleAfterCompaction(a) === contextStaleAfterCompaction(b) &&
       sameProviderUpdateOffer(a, b))
   );
 }

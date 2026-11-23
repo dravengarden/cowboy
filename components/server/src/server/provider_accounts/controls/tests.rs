@@ -734,6 +734,7 @@ async fn the_account_card_shows_the_newest_plan_its_sessions_reported() {
             size: 1_048_576,
             raw,
             observed_at_ms: observed,
+            compacted_at_ms: None,
         });
     };
     let reading = |id: &str, name: &str| {

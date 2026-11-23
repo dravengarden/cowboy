@@ -45,6 +45,10 @@ const byText = (selector: string, text: string) =>
 const dialogTitled = (text: string) =>
   [...document.querySelectorAll<HTMLElement>("[role=dialog]")].find((node) => node.textContent?.includes(text));
 
+/** The fixture sessions as the Controller broadcasts them; a test
+ *  republishes them with another context reading. */
+let fixtureSessions: SessionMeta[] = [];
+
 function installFakes(sent: { type: string; session_id?: string }[]): void {
   const now = Date.now();
   const session = {
@@ -64,6 +68,7 @@ function installFakes(sent: { type: string; session_id?: string }[]): void {
   } as SessionMeta;
   // A second session gives the move-draft picker a destination.
   const other = { ...session, id: OTHER, title: "Destination session", status: "exited", updated_at_ms: now - 30_000 } as SessionMeta;
+  fixtureSessions = [session, other];
   let queueVersion = 0;
   class FixtureSocket {
     static OPEN = 1;
@@ -416,6 +421,78 @@ export async function mountComposerSurfacesKeyboardAcceptance(): Promise<void> {
   await until(() => editorIn(desktop.container), "composer editor");
 }
 
+const reading = (used: number, compactedAtMs?: number): Partial<SessionMeta> => ({
+  context_used: used,
+  context_size: 200_000,
+  usage: {
+    used,
+    size: 200_000,
+    raw: null,
+    observed_at_ms: Date.now(),
+    ...(compactedAtMs === undefined ? {} : { compacted_at_ms: compactedAtMs }),
+  },
+});
+
+/** Republish the fixture sessions, the active one idle with this reading. */
+function publishReading(used: number, compactedAtMs?: number): void {
+  check(liveSocket, "the fixture socket");
+  liveSocket.publish({
+    type: "sessions",
+    sessions: fixtureSessions.map((session) =>
+      session.id === SESSION ? { ...session, status: "running", ...reading(used, compactedAtMs) } : session
+    ),
+  });
+}
+
+const desktopMeter = (container: HTMLElement) =>
+  container.querySelector<HTMLElement>("[data-composer-action=compact]");
+const mobileMeter = (container: HTMLElement) =>
+  container.querySelector<HTMLElement>("[aria-label='compact conversation']");
+
+/** The Composer's context meter before (`stale` false) or after a compaction
+ *  that left the reading as history, for a screenshot of either surface. */
+export async function mountCompactionMeterPreview(
+  surface: "desktop" | "touch",
+  stale: boolean,
+): Promise<void> {
+  installFakes([]);
+  resetProviderCatalog();
+  await loadProviderCatalog();
+  const { container } = mount(surface, surface === "desktop" ? "1280px" : "390px");
+  const meter = surface === "desktop" ? desktopMeter : mobileMeter;
+  await until(() => meter(container) && liveSocket, "the context meter");
+  publishReading(94_000, stale ? Date.now() : undefined);
+  await until(
+    () => meter(container)?.textContent?.includes(stale ? "—" : "47"),
+    "the published reading",
+  );
+}
+
+/** A compaction that no usage report followed shows the meter as unknown on
+ *  both surfaces; the next report shows the compacted context. */
+async function compactionMeter(surface: "desktop" | "touch"): Promise<string> {
+  const { root, container } = mount(surface, surface === "desktop" ? "1280px" : "390px");
+  const meter = () => (surface === "desktop" ? desktopMeter : mobileMeter)(container);
+  const hint = () =>
+    surface === "desktop"
+      ? meter()?.getAttribute("aria-label") ?? ""
+      : meter()?.closest("[aria-label^='Compact conversation']")?.getAttribute("aria-label") ?? "";
+  await until(() => meter() && liveSocket, `the ${surface} context meter`);
+  publishReading(94_000);
+  await until(() => meter()?.textContent?.includes("47"), `the ${surface} 47% reading`);
+  publishReading(94_000, Date.now());
+  await until(() => meter()?.textContent?.includes("—"), `the ${surface} unknown reading`);
+  check(!meter()?.textContent?.includes("47"), `the ${surface} meter drops the old percentage`);
+  check(hint().includes("Compacted · updates after the next reply"), `the ${surface} hint (${hint()})`);
+  publishReading(24_000);
+  await until(() => meter()?.textContent?.includes("12"), `the ${surface} fresh reading`);
+  check(!meter()?.textContent?.includes("—"), `the ${surface} meter is known again`);
+  liveSocket?.publish({ type: "sessions", sessions: fixtureSessions });
+  root.unmount();
+  container.remove();
+  return `${surface === "desktop" ? "Desktop" : "Mobile"} context meter shows unknown after a compaction until the next usage report`;
+}
+
 export async function runComposerSurfacesBrowserConformance(): Promise<string[]> {
   const sent: { type: string; session_id?: string }[] = [];
   installFakes(sent);
@@ -459,6 +536,9 @@ export async function runComposerSurfacesBrowserConformance(): Promise<string[]>
   passed.push("Delivery picker Stop replaces the picker with the stop confirmation, which cancels the turn");
   desktop.root.unmount();
   desktop.container.remove();
+
+  passed.push(await compactionMeter("desktop"));
+  passed.push(await compactionMeter("touch"));
 
   // Mobile: the clear-draft popper and the clear-conversation confirmation.
   const mobile = mount("touch", "390px");

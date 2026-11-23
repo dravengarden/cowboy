@@ -45,6 +45,7 @@ pub(super) fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
                 size,
                 raw: serde_json::Value::Null,
                 observed_at_ms: 0,
+                compacted_at_ms: None,
             },
         );
     }

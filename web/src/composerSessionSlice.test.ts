@@ -28,17 +28,24 @@ const other: SessionMeta = {
 };
 
 test("composer session slice ignores invisible session-list churn", () => {
-  const before = composerSessionSlice([active, other], active.id);
+  const reading = { used: 10, size: 100, raw: null, observed_at_ms: 2 };
+  const before = composerSessionSlice([{ ...active, usage: reading }, other], active.id);
   const after = composerSessionSlice([
     {
       ...active,
       status: "running",
-      usage: { used: 10, size: 100, raw: null, observed_at_ms: 2 },
+      usage: { ...reading, raw: { cost: { amount: 1 } } },
     },
     { ...other, status: "busy", context_used: 80, context_size: 100 },
   ], active.id);
 
   assert(sameComposerSessionSlice(before, after));
+  // A fresh report repeating the counters settles a compaction refresh.
+  const reported = composerSessionSlice([
+    { ...active, usage: { ...reading, observed_at_ms: 3 } },
+    other,
+  ], active.id);
+  assert(!sameComposerSessionSlice(before, reported));
   assertEquals(after.destinations, [{
     id: "other",
     title: "Other",
@@ -71,13 +78,14 @@ test("composer session slice reacts to every visible composer field", () => {
 });
 
 test("composer sheet session ignores metadata it does not render", () => {
-  assert(sameComposerSheetSession(active, {
-    ...active,
-    usage: { used: 10, size: 100, raw: null, observed_at_ms: 2 },
-    context_used: 40,
-    context_size: 200,
-    next_schedule_ms: 123,
-  }));
+  const usage = { used: 10, size: 100, raw: null, observed_at_ms: 2 };
+  assert(sameComposerSheetSession(active, { ...active, usage, next_schedule_ms: 123 }));
+  // Its Context row shows the reading and whether a compaction left it as history.
+  assert(!sameComposerSheetSession(active, { ...active, context_used: 40 }));
+  assert(!sameComposerSheetSession(
+    { ...active, usage },
+    { ...active, usage: { ...usage, compacted_at_ms: 3 } },
+  ));
   assert(!sameComposerSheetSession(active, { ...active, title: "Renamed" }));
   assert(!sameComposerSheetSession(active, { ...active, provider_version: "1.0.1" }));
   assert(!sameComposerSheetSession(active, { ...active, paused: true }));
@@ -101,4 +109,17 @@ test("session sheet rerenders for a new or scheduled Provider update", () => {
       { ...offered, provider_update_available: { ...offer, automatic_at_ms: 60_100 } },
     ),
   );
+});
+
+test("composer session slice follows the compaction mark on the reading", () => {
+  const usage = { used: 10, size: 100, raw: null, observed_at_ms: 2 };
+  const fresh = composerSessionSlice([{ ...active, usage }], active.id);
+  const stale = composerSessionSlice([
+    { ...active, usage: { ...usage, compacted_at_ms: 3 } },
+  ], active.id);
+  assertEquals(fresh.contextStale, false);
+  assertEquals(stale.contextStale, true);
+  // Same counters, different meaning: the meter must rerender.
+  assertEquals(stale.contextUsed, fresh.contextUsed);
+  assert(!sameComposerSessionSlice(fresh, stale));
 });

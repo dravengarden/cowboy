@@ -189,7 +189,10 @@ async fn hibernate_expired(state: &AppState) {
         let Some(policy) = policy(state, &meta).await else {
             continue;
         };
-        if !policy.due(idle, meta.context_used)
+        // A reading a compaction made history measures nothing current; the
+        // renewal it would lead to skips it too.
+        if meta.context_usage_stale()
+            || !policy.due(idle, meta.context_used)
             || state
                 .hub
                 .session_info(&meta.id)
@@ -342,9 +345,10 @@ pub(in crate::server) async fn before_dispatch(
     if !policy.due(idle, u64::MAX) {
         return skip("cache_warm");
     }
-    if meta.context_used == 0 && meta.agent_session_id.is_some() {
-        // No usage reading for a context that will be resumed: report it
-        // apart from a measured small context, since its resume may be large.
+    if (meta.context_used == 0 || meta.context_usage_stale()) && meta.agent_session_id.is_some() {
+        // No current usage reading for a context that will be resumed (none
+        // yet, or only the one a compaction made history): report it apart
+        // from a measured small context, since its resume may be large.
         return skip("usage_unknown");
     }
     if meta.context_used < policy.min_context_tokens {
@@ -422,8 +426,9 @@ fn observe_decision(
     idle_ms: Option<u64>,
 ) {
     let min = policy.map(|p| p.min_context_tokens);
-    let current =
-        (meta.context_used != 0 || meta.agent_session_id.is_none()).then_some(meta.context_used);
+    let current = ((meta.context_used != 0 || meta.agent_session_id.is_none())
+        && !meta.context_usage_stale())
+    .then_some(meta.context_used);
     let shadow = current.or(verified);
     wait_cache::record(
         wait_cache::DECISION,
@@ -549,8 +554,10 @@ async fn view(state: &AppState, id: &str) -> Response {
     Json(serde_json::json!({
         "policy": policy,
         "context_used": meta.context_used,
+        // A compaction left the reading as history: renewal treats it as unknown.
+        "context_stale": meta.context_usage_stale(),
         "idle_ms": idle_ms,
-        "due": idle_ms.is_some_and(|idle| policy.due(std::time::Duration::from_millis(idle), meta.context_used))
+        "due": !meta.context_usage_stale() && idle_ms.is_some_and(|idle| policy.due(std::time::Duration::from_millis(idle), meta.context_used))
             && ordinary(state, &meta),
     }))
     .into_response()

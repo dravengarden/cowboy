@@ -260,6 +260,17 @@ typed stable variants where behavior depends on them. `usage_update` is mapped
 directly to ephemeral session usage; it is not detected by serialized field
 names or appended repeatedly to durable history.
 
+A completed `compaction_update` that no `usage_update` accompanied since the
+compaction began (its `in_progress`) leaves the last reading as history: the
+Hub stamps it with `compacted_at_ms` (persisted in `sessions.last_usage`), the
+Composer meter shows unknown ("Compacted · updates after the next reply") and
+neither idle hibernation nor context renewal reads it, until the agent's next
+live `usage_update` replaces the reading. A worker's counter-only reconnect
+snapshot does not. Codex reports the recomputed context before the completion
+and Claude Code the retained tokens at its boundary, so only a Provider that
+reports nothing (Antigravity's `/compact`) shows the unknown state. No usage
+probe runs for it: every way to ask `agy` would be another prompt.
+
 SDK 2's JSON-RPC request cancellation is enabled for permission waits and the
 stdio bridge's long-running prompts. Experimental session fork, ACP protocol
 v2, and native MCP-over-ACP remain off the production path until their schemas

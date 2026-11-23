@@ -160,6 +160,7 @@ mod tests {
             size: 200_000,
             raw: json!({ "sessionUpdate": "usage_update", "used": used, "size": 200_000 }),
             observed_at_ms: 7,
+            compacted_at_ms: None,
         }
     }
 

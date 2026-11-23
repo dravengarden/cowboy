@@ -230,6 +230,7 @@ mod tests {
             used: 30,
             size: 100,
             observed_at_ms: 900,
+            compacted_at_ms: None,
             raw: json!({"limits": {"utilization": 90}}),
         };
         for limits in [json!({"remaining": 50}), json!({"rateLimitsByLimitId": {}})] {
@@ -274,6 +275,7 @@ mod tests {
             used: 30,
             size: 100,
             observed_at_ms: 900,
+            compacted_at_ms: None,
             raw: json!({}),
         };
         let mut failed = unavailable("future", "Account", "Sign in again.");
@@ -332,6 +334,7 @@ mod tests {
             used: 1,
             size: 100,
             observed_at_ms: 10,
+            compacted_at_ms: None,
             raw: json!({"limits":{"utilization":20}}),
         });
         let mut named = default.clone();

@@ -306,7 +306,8 @@ pub struct SessionMeta {
     /// per turn — see acp.rs. The latest reading is persisted
     /// (`sessions.last_usage`) and restored, so a dormant session keeps showing
     /// it until a live worker reports again; `usage.observed_at_ms` says when it
-    /// was recorded. Clear resets it.
+    /// was recorded. Clear resets it. After a completed compaction with no
+    /// fresh report it is only history ([`Self::context_usage_stale`]).
     #[serde(default)]
     pub context_used: u64,
     #[serde(default)]
@@ -511,6 +512,16 @@ pub fn local_machine_id() -> String {
 }
 
 impl SessionMeta {
+    /// Whether the context reading predates a completed compaction: the
+    /// compacted context's size is unknown until the agent reports again, so
+    /// nothing may act on `context_used` as a current measurement.
+    #[must_use]
+    pub fn context_usage_stale(&self) -> bool {
+        self.usage
+            .as_ref()
+            .is_some_and(crate::agent_model::SessionUsage::stale_after_compaction)
+    }
+
     /// Web creation registers a remote session against the stable source root
     /// and only later publishes the Machine-prepared session worktree as its
     /// `cwd`. A non-Git root legitimately stays shared, so this structural

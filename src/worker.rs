@@ -1996,6 +1996,7 @@ mod tests {
                 size: 1_048_576,
                 raw: serde_json::json!({"providerSize": 1_048_576}),
                 observed_at_ms: 42,
+                compacted_at_ms: None,
             },
         );
 

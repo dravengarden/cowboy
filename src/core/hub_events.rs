@@ -240,6 +240,7 @@ impl Hub {
         attention_changed: bool,
         native_wait_started: bool,
     ) {
+        self.observe_compaction(session_id, &envelope.event);
         if is_user_message_chunk(&envelope)
             && let Some(cmid) = envelope
                 .cmid

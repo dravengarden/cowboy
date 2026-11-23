@@ -21,6 +21,29 @@ export function recordedContextUsageAt(
   return usage.observed_at_ms > 0 ? usage.observed_at_ms : undefined;
 }
 
+/** The meter's note while a completed compaction left the reading as history. */
+export const COMPACTED_CONTEXT_HINT = "Compacted · updates after the next reply";
+
+/** Whether a completed compaction made the session's context reading history:
+ *  the compacted context's size is unknown until the agent reports again. */
+export function contextStaleAfterCompaction(
+  session: Pick<SessionMeta, "usage"> | undefined,
+): boolean {
+  return typeof session?.usage?.compacted_at_ms === "number";
+}
+
+/** The broadcast reading `useCompactionContext` settles a refresh against. */
+export function serverContextReading(
+  session: Pick<SessionMeta, "context_used" | "context_size" | "usage"> | undefined,
+): { serverUsed: number; serverSize: number; serverObservedAt: number; serverStale: boolean } {
+  return {
+    serverUsed: session?.context_used ?? 0,
+    serverSize: session?.context_size ?? 0,
+    serverObservedAt: session?.usage?.observed_at_ms ?? 0,
+    serverStale: contextStaleAfterCompaction(session),
+  };
+}
+
 /** Suffix for a context tooltip naming a persisted reading's age. */
 export function recordedContextNote(
   recordedAtMs: number | undefined,
@@ -42,9 +65,10 @@ function fmtTokens(n: number): string {
  *  fullness it acts on ("Compact conversation · context 79% · 780K / 1M
  *  tokens"), plus the reading's age when no live worker reported it. */
 export function compactTooltip(
-  { used, size }: { used: number; size: number },
+  { used, size, stale = false }: { used: number; size: number; stale?: boolean },
   recordedAtMs?: number,
 ): string {
+  if (stale) return `Compact conversation · ${COMPACTED_CONTEXT_HINT}`;
   if (!(size > 0)) return "Compact conversation";
   const pct = used > 0 ? Math.max(1, Math.round(Math.min(100, (used / size) * 100))) : 0;
   return `Compact conversation · context ${pct}% · ${fmtTokens(used)} / ${fmtTokens(

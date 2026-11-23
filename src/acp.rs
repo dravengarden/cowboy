@@ -539,6 +539,7 @@ fn grok_session_usage(
         size: info.context.total,
         raw: serde_json::to_value(response).unwrap_or(serde_json::Value::Null),
         observed_at_ms,
+        compacted_at_ms: None,
     })
 }
 
@@ -3691,6 +3692,7 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
             size: usage.size,
             raw,
             observed_at_ms: observed_at_ms(),
+            compacted_at_ms: None,
         });
         state.sink.set_session_usage(&state.session_id, usage);
         return;
