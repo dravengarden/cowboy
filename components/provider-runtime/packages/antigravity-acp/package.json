@@ -1,6 +1,6 @@
 {
   "name": "cowboy-runtime-antigravity-acp",
-  "version": "1.0.25",
+  "version": "1.0.26",
   "private": true,
   "type": "module",
   "dependencies": {
