@@ -1,7 +1,7 @@
 # Uncertain effect recovery across Controller restarts
 
-Status: design (2026-11-23, revised after design review rounds 1 and 2). L1
-and L3 are implemented. L1w, L2 and L4 are designed here and implemented later.
+Status: L1 and L3 are implemented and accepted (2026-11-23). L1w is in design
+review. L2 and L4 are designed here and implemented later.
 
 ## Problem
 
@@ -211,37 +211,125 @@ Tests:
 
 ## L1w: a stop whose reply was lost is settled by the worker (worker release)
 
-Owner of the decision: the worker ledger, the trusted recorder. Applies to
-`process/terminate` only: a stop has no effect beyond ending the process, so
-proof that the process ended settles it. Other result-carrying requests are
-unchanged.
+Status: design, for design review. The worker ledger
+(`src/worker_execution/ledger.rs`) is the trusted recorder, so the decision
+stays there. The confined proxy can still only add uncertainty.
 
-- When a `process/terminate` reply is undelivered, or its own invocation is
-  lost, the ledger does not publish an uncertain effect at once. It writes a
-  durable pending record (process id, sequence) in a sibling file next to the
-  schema-1 ledger, which an older worker ignores. It then observes the process
-  itself: idempotent `process/terminate`, and `process/read` until exited,
-  closed, or `unknown process id` (E1). The process id was admitted by this
-  session's ledger, so it names this executor's process.
-- Confirmed ended within 60 s: the pending record is removed and nothing is
-  published.
-- Still running after 60 s, unreadable, or the worker shuts down first (its
-  teardown waits for pending observations only within its existing settle
-  bound): the effect is published as today, as uncertain `process/terminate`.
-  The snapshot gains the process id for the L4 banner ("still running", with
-  its command id).
-- A worker that starts and finds a pending record (its predecessor crashed or
-  was replaced) observes the process the same way before publishing. It fails
-  closed (publishes) if the record is unreadable. A rollback to an older worker
-  ignores the sibling file. It loses only a pending stop whose observation
-  never finished, and that window is bounded by 60 s.
-- Escalation: the executor protocol offers no kill signal (only `terminate`
-  and an interrupt). A SIGKILL of the process group needs keeper support and
-  belongs to L2. The 60 s observation covers trees that exit after their
-  signal.
-- Release: worker code, so `.#cowboy-machine-release` with a worker pin
-  advance. It needs its own design review (it adds a durable worker file)
-  before implementation.
+### Scope
+
+Only `process/terminate`. A stop has no effect beyond ending its process, so
+proof that the process ended settles it completely. Every other
+result-carrying request and every mutation keeps today's immediate park.
+
+Two ledger paths record a lost stop today. Both change:
+
+- `undelivered`: the worker's relay finished and holds the keeper's reply,
+  but the native socket closed first. This is the observed case: the endpoint
+  closed at worker teardown. The worker invoked the stop under one keeper
+  operation id, which the keeper journal admits once, so the reply is the
+  stop's real outcome.
+- the relay's lost invocation: the worker's own call lost its reply after
+  possible admission (`invoke_classified` → `Err(true)`, the 180 s bound).
+  Whether the stop reached the executor is unknown.
+
+### Rule
+
+1. Reply known (`undelivered`) and `running: false`: the process had already
+   ended, so the stop is settled. Nothing is recorded.
+2. Otherwise (`running: true`, or the reply is unknown), a pending stop is
+   recorded durably before the relay task ends: process id, the turn it
+   belongs to, and a deadline 60 s from now (wall clock, Unix ms). If that
+   write fails, the stop is published as uncertain at once (fail closed,
+   today's behaviour).
+3. The worker observes the process with read-only `process/read`
+   (`afterSeq: null`, `maxBytes: 1`, `waitMs: 1000`), invoked like
+   `Client::terminate` under fresh keeper operation ids. It never sends
+   another `process/terminate`: a delivered stop must not be repeated, and an
+   undelivered one is not replayed. The process ended when a read reports
+   `exited`, or when the executor answers exactly `unknown process id <id>`
+   (E1; the ledger's looser `unknown_process` substring match is not
+   evidence here). A ledger refusal, a transport loss or any other error is
+   not evidence and the observation continues.
+4. Ended before the deadline: the pending stop is removed durably. Nothing is
+   published, so nothing parks.
+5. Deadline reached, still running or unreadable: the pending stop is removed
+   and the stop is published exactly as today (`mark_uncertain`, sequence
+   allocated then), in one ledger write.
+
+Sequences are allocated only at publication (step 5), never for a pending
+stop. A settled stop therefore never consumes, reverts or reuses a sequence
+the Controller may have seen or acknowledged.
+
+### Ordering with turns, teardown and successors
+
+- Turn end: `finish_turn`'s settlement also waits for the turn's pending
+  stops, bounded by their deadlines, so `TurnEnded` (and with it the
+  Controller's next dispatch) follows the stop's resolution. A stop is
+  published before its turn's completion, as an uncertain effect is today.
+  A pending stop recorded after its turn's completion was already emitted
+  (the stop raced the turn end) belongs to no open turn. The worker keeps
+  observing it, and a publication then parks the session before its next
+  dispatch.
+- Teardown: `settle_all` waits for pending stops inside the existing 60 s
+  `TEARDOWN_SETTLE`. Whatever is still pending stays in the durable record.
+- Successor worker (replacement or crash): `Ledger::open` loads pending stops.
+  Before the worker reports its session ready, it observes each one until
+  its deadline, with at least one read. Then it settles or publishes each, as
+  above. No prompt can reach the session before that. A deadline already
+  past gets one read: ended settles it, anything else publishes it.
+- New losses while stops are pending are recorded and published as today.
+  Pending stops are independent entries and are never merged into them.
+
+### Durability and rollback
+
+- The pending stops live in the existing schema-1 record as
+  `pending_stops: [{process, turn, deadline_ms}]`, with `serde(default)` and
+  `skip_serializing_if = "Vec::is_empty"`. `Record` does not deny unknown
+  fields, so an older worker reads the file. The file stays bounded by the
+  existing 256 KiB limit, and pending stops are capped at 64 (beyond that, a
+  lost stop is published at once).
+- Rollback limitation: an older worker drops the field when it next rewrites
+  the record. A pending stop recorded by a newer worker and still unresolved
+  when an older worker takes over is lost, a fail-open case bounded to that
+  60 s window. Worker generation rollbacks are explicit maintenance, and its
+  runbook must first check the session ledgers for `pending_stops` (or let
+  them drain for 60 s). A stronger alternative, publishing under a provisional
+  sequence that an older worker would report, is rejected: settling would then
+  have to revert a sequence the Controller may already have stored as
+  observed.
+
+### Not changed
+
+The Controller, the wire, the Machine broker and the facade are unchanged.
+The keeper's per-operation journal stays as it is; L1w only adds read-only
+observation on top of it. L4's banner target (`process:<id>`, "still
+running") needs the optional wire field described under L4 and is not part of
+L1w.
+
+### Tests
+
+Ledger unit tests with a scripted client:
+
+- an undelivered stop with `running: false`: nothing pending, nothing
+  published;
+- `running: true` then `exited`: settled, no sequence used;
+- E1 settles; a ledger refusal or a similar message does not;
+- still running at the deadline: published once with a fresh sequence;
+- a failed pending write publishes at once;
+- turn end waits for a pending stop;
+- teardown leaves an unresolved stop durable, and a reopened ledger
+  observes and settles it before ready;
+- an older record without the field reads unchanged;
+- no second `process/terminate` is ever sent.
+
+An execution-host conformance case runs the observed incident: a worker
+replaced while a turn-end stop of a slow-exiting process tree is in flight
+ends with no uncertain effect.
+
+### Release
+
+Worker code: `.#cowboy-machine-release` with a worker pin advance, through the
+Machine maintenance runbook. It can ride with the next scheduled pin advance.
 
 ## L3: shorter Controller outages (Machine host release)
 
@@ -366,6 +454,14 @@ findings are folded in. L2 is implemented later, after its own design review.
 - Auto-clear: an outcome proven by L1 never parks, and a stop proven by L1w is
   never published. One proven later by the
   worker clears through L2 without owner action.
+
+## Open items
+
+- L3 follow-up: bound every Controller dial, also outside the rapid window,
+  with staggered attempts across the resolved addresses (Happy Eyeballs), so
+  a blackholed first address cannot starve a reachable fallback. Today a dial
+  outside the window is unbounded, as it always was.
+- F7 worker fix (with L2).
 
 ## Release artifacts
 
