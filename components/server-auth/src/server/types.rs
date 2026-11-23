@@ -396,6 +396,7 @@ pub struct AuthenticatedProductRequest {
 impl AuthenticatedProductRequest {
     /// Complete authentication by atomically observing current permissions.
     /// Handlers may share this observation, but must never recapture it.
+    #[allow(clippy::result_unit_err)]
     pub fn observe_permissions(mut self, hub: &Hub) -> Result<Self, ()> {
         let permissions = hub
             .observe_product_permissions(&self.principal.username)
@@ -543,6 +544,7 @@ pub struct AdminSessionRow {
 
 pub const WEBSOCKET_FRAME_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
+#[allow(clippy::result_unit_err)]
 pub async fn send_json<S, T>(sink: &mut S, msg: &T) -> Result<(), ()>
 where
     S: futures::SinkExt<Message> + Unpin,
@@ -551,6 +553,7 @@ where
     send_json_with_timeout(sink, msg, WEBSOCKET_FRAME_SEND_TIMEOUT).await
 }
 
+#[allow(clippy::result_unit_err)]
 pub async fn send_json_with_timeout<S, T>(
     sink: &mut S,
     msg: &T,

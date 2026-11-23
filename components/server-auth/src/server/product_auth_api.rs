@@ -434,6 +434,7 @@ pub async fn resolve_product_request_principal(
     Some((product_principal(hub, &user), Some(session)))
 }
 
+#[allow(clippy::result_unit_err)]
 pub async fn resolve_product_api_request_principal(
     state: ProductRequestAuth<'_>,
     method: &Method,
