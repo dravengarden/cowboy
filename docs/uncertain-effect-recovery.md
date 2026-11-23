@@ -394,6 +394,23 @@ three review rounds (`call-8a6c5e81`, `call-b856f2db`, `call-878a5459`):
   admitted". A batch entry never written is not a send. Retries after
   `Unavailable`/`Capacity` count, because the Controller can report
   `Unavailable` after the Machine received the request.
+- Resends below the worker. When a bulk lane fails, the Machine resends
+  unanswered requests itself (`machine_cli`), and the worker never sees those
+  resends. So a keeper refusal of an effectful request (a mutation,
+  `process/write`, `process/signal` or `process/terminate`) counts as possible
+  admission whatever the send count. The exception is `Capacity`: the keeper
+  raises it only after its operation table showed the operation absent. A
+  refused read stays a plain refusal. This was chosen over a "resent by the
+  Machine" flag on `RuntimeReply`. That type denies unknown fields, so the
+  flag would need protocol gating in both the broker and `machine_cli`, where
+  this needs a worker change only. Cost: a mutation refused on its only send
+  (for example after the workspace changed) now parks. That is rare, and
+  such a session needs attention anyway.
+- Worker-owned starts and writes. An extension server's start uses
+  `invoke_classified`. On possible admission, the start is recorded as
+  uncertain, and the process stays recorded so teardown ends it. Each new
+  `process/write` from the extension broker checks the unwritable latch
+  first, while retries of a write already sent continue.
 - Time-based sequence. Uncertain-effect sequences are
   `max(previous + 1, now in Unix ms)`. The Controller only compares them
   (`observed`, `acknowledged`, `merge_uncertain_effect`), so no reader changes.
@@ -409,11 +426,13 @@ three review rounds (`call-8a6c5e81`, `call-b856f2db`, `call-878a5459`):
 Stop handling is unchanged from before L2a: no stop claims and no ownership
 table. Stop ownership moved to L2 as a redesign item (below).
 
-Tests: a resend followed by `WorkspaceChanged` is uncertain, while a refusal
-of the only send is not. A batch entry never written is not a send. An
-unwritable ledger publishes, then refuses mutations, extension calls,
-`process/write` and `process/signal`, but not reads and stops. The sequence
-assertions are time-based.
+Tests: a resend followed by `WorkspaceChanged` is uncertain. A refused
+effect is possibly admitted, while a refused read is not. A batch entry never
+written is not a send. An unwritable ledger, made unwritable by a directory
+occupying its path so the rename fails whatever the privileges, publishes
+the effect to its observer with its sequence. It then refuses mutations,
+extension calls, server starts, `process/write` and `process/signal`, but not
+reads and stops. The sequence assertions are time-based.
 
 Release: worker code, so `.#cowboy-machine-release` with a worker pin advance.
 

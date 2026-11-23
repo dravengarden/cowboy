@@ -462,7 +462,16 @@ async fn start(
     params: Value,
 ) -> Result<(), String> {
     ledger.record_server(process)?;
-    let started = client.invoke("process/start".into(), params).await;
+    let started = client
+        .invoke_classified("process/start".into(), params)
+        .await;
+    if matches!(started, Err(true)) {
+        // Possibly admitted: the process may run. It stays recorded, so the
+        // teardown ends it, and its unknown start is recorded.
+        ledger.server_started(process, true);
+        ledger.mark_uncertain("process/start");
+        return Err("the server's start has an unknown outcome".into());
+    }
     let ok = started.as_ref().is_ok_and(|reply| {
         reply.pointer("/result/processId").and_then(Value::as_str) == Some(process)
     });
@@ -530,6 +539,13 @@ impl Server {
         line.push(b'\n');
         let chunk = base64::engine::general_purpose::STANDARD.encode(line);
         let write_id = format!("{:032x}", rand::random::<u128>());
+        // A new write is an effect: refused while effects cannot be recorded
+        // durably (retries of one already sent keep going).
+        if client.ledger().is_some_and(|ledger| ledger.unwritable()) {
+            return Err(Failure::NotSent(
+                "the execution ledger cannot be written".into(),
+            ));
+        }
         for _ in 0..50 {
             let reply = client
                 .invoke_classified(

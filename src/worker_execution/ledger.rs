@@ -107,6 +107,16 @@ const TERMINATE_BOUND: Duration = Duration::from_secs(5);
 /// Requests that change the target: admitted only inside an active turn,
 /// drained before the turn's completion, and uncertain when their reply is
 /// lost.
+/// Requests whose refusal cannot prove they had no effect: a resend below
+/// the worker (a Machine bulk-lane retry) may be what was refused.
+pub(super) fn effectful(method: &str) -> bool {
+    MUTATIONS.contains(&method)
+        || matches!(
+            method,
+            "process/write" | "process/signal" | "process/terminate"
+        )
+}
+
 const MUTATIONS: &[&str] = &[
     "fs/writeFile",
     "fs/remove",
@@ -447,6 +457,11 @@ impl Ledger {
     /// was observed. Unknown processes count too (fail closed).
     fn result_process(&self, process: &str) -> bool {
         !self.state.lock().probes.contains(process)
+    }
+
+    /// Whether the ledger refuses new effects (its durable write failed).
+    pub(super) fn unwritable(&self) -> bool {
+        self.state.lock().unwritable
     }
 
     pub(super) fn mark_uncertain(&self, method: &str) {

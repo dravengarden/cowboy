@@ -1048,69 +1048,6 @@ async fn a_refusal_after_a_resend_does_not_hide_a_possible_admission() {
 }
 
 #[tokio::test]
-async fn a_refusal_of_the_only_send_is_not_an_admission() {
-    let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
-        "fs/writeFile" => Reply::Answer(Response::Refused {
-            reason: wire::Refusal::WorkspaceChanged,
-        }),
-        _ => completed(json!({"result": {}})),
-    }));
-    let ledger = ledger(&target.client, None);
-    ledger.begin_turn("turn-1");
-    let reply = target
-        .client
-        .relay(
-            "fs/writeFile".into(),
-            json!({"path": "file:///target/a", "dataBase64": ""}),
-        )
-        .await;
-    assert!(reply.get("error").is_some());
-    assert!(reply.pointer("/error/data").is_none());
-    assert!(ledger.uncertain_effect().is_none());
-}
-
-#[tokio::test]
-async fn an_unwritable_ledger_refuses_further_effects() {
-    use std::os::unix::fs::PermissionsExt as _;
-    let root = tempfile::tempdir().unwrap();
-    let directory = root.path().join("ledger");
-    std::fs::create_dir(&directory).unwrap();
-    let path = directory.join("session.json");
-    let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
-        "fs/writeFile" => Reply::Answer(Response::Operation {
-            outcome: Outcome::Unknown,
-        }),
-        _ => completed(json!({"result": {}})),
-    }));
-    let ledger = ledger(&target.client, Some(path));
-    ledger.begin_turn("turn-1");
-    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o500)).unwrap();
-    target
-        .client
-        .relay(
-            "fs/writeFile".into(),
-            json!({"path": "file:///target/a", "dataBase64": ""}),
-        )
-        .await;
-    // Published although not durable, then no effect is admitted.
-    assert_eq!(ledger.uncertain_effect().as_deref(), Some("fs/writeFile"));
-    let refused = target
-        .client
-        .relay(
-            "fs/createDirectory".into(),
-            json!({"path": "file:///target/b"}),
-        )
-        .await;
-    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
-    assert!(
-        refused["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("cannot be written")
-    );
-}
-
-#[tokio::test]
 async fn a_relay_counts_in_flight_until_its_reply_is_handled() {
     // Design L1c: a unit's stop waits for this count.
     let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
@@ -1305,7 +1242,7 @@ async fn a_batch_entry_never_written_is_not_a_send() {
     // The second entry of a batch whose first write failed was never sent:
     // its later refusal on its first actual send is not an admission.
     let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
-        "fs/writeFile" => Reply::Hold,
+        "fs/readFile" => Reply::Hold,
         _ => completed(json!({"result": {}})),
     }));
     let ledger = ledger(&target.client, None);
@@ -1313,10 +1250,7 @@ async fn a_batch_entry_never_written_is_not_a_send() {
     let client = Arc::clone(&target.client);
     let relay = tokio::spawn(async move {
         client
-            .relay(
-                "fs/writeFile".into(),
-                json!({"path": "file:///target/a", "dataBase64": ""}),
-            )
+            .relay("fs/readFile".into(), json!({"path": "file:///target/a"}))
             .await
     });
     eventually(|| !target.held.lock().is_empty()).await;
@@ -1335,21 +1269,34 @@ async fn a_batch_entry_never_written_is_not_a_send() {
     assert!(ledger.uncertain_effect().is_none());
 }
 
+/// A ledger whose next durable write fails: a directory now occupies its
+/// path, so the atomic rename cannot replace it (whatever the privileges).
+fn unwritable_ledger(
+    target: &Target,
+    root: &std::path::Path,
+) -> (Arc<Ledger>, Arc<Mutex<Vec<(String, u64)>>>) {
+    let path = root.join("session.json");
+    let ledger = ledger(&target.client, Some(path.clone()));
+    std::fs::create_dir(&path).unwrap();
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&observed);
+    ledger.set_observer(Box::new(move |method, sequence| {
+        seen.lock().push((method.to_owned(), sequence));
+    }));
+    (ledger, observed)
+}
+
 #[tokio::test]
-async fn an_unwritable_ledger_refuses_extension_calls_and_process_signals_but_not_cleanup() {
-    use std::os::unix::fs::PermissionsExt as _;
+async fn an_unwritable_ledger_publishes_then_refuses_every_effect_but_cleanup() {
     let root = tempfile::tempdir().unwrap();
-    let directory = root.path().join("ledger");
-    std::fs::create_dir(&directory).unwrap();
     let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
         "fs/writeFile" => Reply::Answer(Response::Operation {
             outcome: Outcome::Unknown,
         }),
         _ => completed(json!({"result": {}})),
     }));
-    let ledger = ledger(&target.client, Some(directory.join("session.json")));
+    let (ledger, observed) = unwritable_ledger(&target, root.path());
     ledger.begin_turn("turn-1");
-    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o500)).unwrap();
     target
         .client
         .relay(
@@ -1357,15 +1304,30 @@ async fn an_unwritable_ledger_refuses_extension_calls_and_process_signals_but_no
             json!({"path": "file:///target/a", "dataBase64": ""}),
         )
         .await;
-    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
-    assert!(ledger.admit_call().is_err());
-    for method in ["process/write", "process/signal"] {
-        let refused = target
-            .client
-            .relay(method.into(), json!({"processId": "p1"}))
-            .await;
-        assert!(refused.get("error").is_some(), "{method}");
+    // Published although its write failed.
+    {
+        let seen = observed.lock();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0, "fs/writeFile");
+        assert_eq!(seen[0].1, ledger.uncertain_sequence());
     }
+    assert!(ledger.unwritable());
+    for (method, params) in [
+        ("fs/createDirectory", json!({"path": "file:///target/b"})),
+        ("process/write", json!({"processId": "p1"})),
+        ("process/signal", json!({"processId": "p1"})),
+    ] {
+        let refused = target.client.relay(method.into(), params).await;
+        assert!(
+            refused["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("cannot be written"),
+            "{method}"
+        );
+    }
+    assert!(ledger.admit_call().is_err());
+    assert!(ledger.record_server("cowboy-worker-mcp-x").is_err());
     // Observation and stopping remain.
     for method in ["process/read", "process/terminate"] {
         let reply = target
@@ -1374,4 +1336,36 @@ async fn an_unwritable_ledger_refuses_extension_calls_and_process_signals_but_no
             .await;
         assert!(reply.get("result").is_some(), "{method}");
     }
+}
+
+#[tokio::test]
+async fn a_refused_effect_is_possibly_admitted_but_a_refused_read_is_not() {
+    // The Machine may resend below the worker (a bulk-lane retry), so a
+    // refusal of an effectful request cannot prove it had no effect.
+    let target = Target::new(Arc::new(|_| {
+        Reply::Answer(Response::Refused {
+            reason: wire::Refusal::WorkspaceChanged,
+        })
+    }));
+    let ledger = ledger(&target.client, None);
+    ledger.begin_turn("turn-1");
+    let read = target
+        .client
+        .relay("fs/readFile".into(), json!({"path": "file:///target/a"}))
+        .await;
+    assert!(read.get("error").is_some());
+    assert!(read.pointer("/error/data").is_none());
+    assert!(ledger.uncertain_effect().is_none());
+    let write = target
+        .client
+        .relay(
+            "fs/writeFile".into(),
+            json!({"path": "file:///target/a", "dataBase64": ""}),
+        )
+        .await;
+    assert_eq!(
+        write.pointer("/error/data/outcome"),
+        Some(&json!("unknown"))
+    );
+    assert_eq!(ledger.uncertain_effect().as_deref(), Some("fs/writeFile"));
 }
