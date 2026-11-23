@@ -14,6 +14,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "cowboy-controller"
 path = "src/main.rs"
+test = false
 
 [features]
 default = ["full"]

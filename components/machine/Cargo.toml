@@ -20,16 +20,19 @@ path = "src/lib.rs"
 name = "cowboy-machine"
 path = "src/bin/cowboy-machine.rs"
 required-features = ["machine-host"]
+test = false
 
 [[bin]]
 name = "cowboy-machine-install"
 path = "src/bin/cowboy-machine-install.rs"
 required-features = ["machine-host"]
+test = false
 
 [[bin]]
 name = "cowboy-execution-host"
 path = "src/bin/cowboy-execution-host.rs"
 required-features = ["machine-host"]
+test = false
 
 [dependencies]
 cowboy = { version = "0.1.0", path = "../..", default-features = false }

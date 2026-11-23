@@ -854,7 +854,7 @@ composition-check:
     bun test ./tools/generate-composition-contract_test.ts
     bun tools/generate-composition-contract.ts
     bun test ./contracts/composition.test.ts ./contracts/composition-check.test.ts ./contracts/widget-v1.test.ts
-    {{rust_test_env}} cargo test {{rust_test_args}} composition::
+    if [ "${COWBOY_CHECK_DEDUPE:-0}" != "1" ]; then {{rust_test_env}} cargo test {{rust_test_args}} composition::; fi
     cowboy="$(just test-graph-bin cowboy)" && bun tools/composition-link-conformance.ts "$cowboy"
 
 fmt:
@@ -964,11 +964,12 @@ release-sources-check:
     target="$PWD/target/release-sources"
     # A stable tree path keeps Cargo fingerprints valid between runs.
     scratch="$target/trees"
+    # Evaluate and materialize both source closures in one Nix invocation.
+    readarray -t built_sources < <(nix build --no-link --print-out-paths .#cowboy-machine-src .#cowboy-code-adapter-src)
     check() {
-      local output="$1"; shift
-      local source tree
-      source="$(readlink -f "$(nix build --no-link --print-out-paths ".#$output")")"
-      tree="$scratch/$output"
+      local output="$1" source="$2"; shift 2
+      local tree="$scratch/$output"
+      source="$(readlink -f "$source")"
       # The source is content-addressed: an unchanged store path means an
       # unchanged tree, and keeping its mtimes keeps Cargo's fingerprints.
       if test "$(cat "$tree.source" 2>/dev/null)" != "$source"; then
@@ -984,10 +985,10 @@ release-sources-check:
       # dependencies then hit the cache.
       (cd "$tree" && cargo check --target-dir "$target" --config "build.build-dir=\"$target\"" --locked "$@")
     }
-    check cowboy-machine-src --no-default-features --features machine-host \
+    check cowboy-machine-src "${built_sources[0]}" --no-default-features --features machine-host \
       -p cowboy --bin cowboy -p cowboy-machine \
       --bin cowboy-machine --bin cowboy-machine-install --bin cowboy-execution-host
-    check cowboy-code-adapter-src --no-default-features --features code-adapter \
+    check cowboy-code-adapter-src "${built_sources[1]}" --no-default-features --features code-adapter \
       --bin cowboy-code-adapter
 
 test: test-rust zed-test test-web
@@ -1156,11 +1157,15 @@ check: toolchain-check
     reap
     just idb-conformance-check site-check native-shell-check lint-plugins plugin-check
     reap
+    # provider-build-check only needs cowboy-plugin-pack from test-rust-slices-build,
+    # so start it in the background as soon as the slices finish while test-graph-build
+    # is still compiling.
+    collect_named test-rust-slices-build
+    background provider-build-check "COWBOY_PLUGIN_PACK_BIN=$PWD/target/{{rust_slice_profile}}/cowboy-plugin-pack"
     collect_named test-graph-build
     export COWBOY_TEST_GRAPH_ARTIFACTS="$PWD/target/test-graph/artifacts.json"
     just composition-check
     reap
-    just provider-build-check
     while ((${#pending[@]})); do
       job="${pending[0]}"
       pending=("${pending[@]:1}")
