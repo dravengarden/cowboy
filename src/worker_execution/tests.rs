@@ -1423,6 +1423,10 @@ async fn an_overlapping_stop_joins_the_first_and_learns_its_outcome() {
     }));
     let ledger = ledger(&target.client, None);
     ledger.begin_turn("turn-1");
+    target
+        .client
+        .relay("process/start".into(), start("p1"))
+        .await;
     let first = {
         let client = Arc::clone(&target.client);
         tokio::spawn(async move {
@@ -1450,14 +1454,13 @@ async fn an_overlapping_stop_joins_the_first_and_learns_its_outcome() {
             reason: wire::Refusal::WorkspaceChanged,
         },
     );
-    assert!(first.await.unwrap().get("error").is_some());
-    let joined = second.await.unwrap();
-    assert!(
-        joined["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("send it again")
-    );
+    // Both learn the typed outcome: never sent, send it again.
+    for reply in [first.await.unwrap(), second.await.unwrap()] {
+        assert_eq!(
+            reply.pointer("/error/data/outcome"),
+            Some(&json!("not_sent"))
+        );
+    }
     // The next stop is sent.
     let again = target
         .client
@@ -1493,4 +1496,93 @@ async fn a_stop_retires_with_its_process_and_never_reaches_a_reused_id() {
         .filter(|entry| entry.starts_with("process/terminate"))
         .count();
     assert_eq!(stops, 2);
+}
+
+#[tokio::test]
+async fn a_refused_duplicate_start_keeps_the_live_processs_stop() {
+    let target = Target::new(processes());
+    let ledger = ledger(&target.client, None);
+    ledger.begin_turn("turn-1");
+    target
+        .client
+        .relay("process/start".into(), start("p1"))
+        .await;
+    target
+        .client
+        .relay("process/terminate".into(), json!({"processId": "p1"}))
+        .await;
+    // Still running: a duplicate start is refused and changes nothing.
+    let duplicate = target
+        .client
+        .relay("process/start".into(), start("p1"))
+        .await;
+    assert!(duplicate.get("error").is_some());
+    target.client.cancel_turn();
+    eventually(|| ledger.live().is_empty()).await;
+    let stops = target
+        .log()
+        .iter()
+        .filter(|entry| entry.starts_with("process/terminate"))
+        .count();
+    assert_eq!(stops, 1, "never a second signal");
+}
+
+#[tokio::test]
+async fn a_stop_with_an_unknown_outcome_keeps_its_id_unavailable_and_joiners_uncertain() {
+    let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
+        "process/terminate" => Reply::Answer(Response::Operation {
+            outcome: Outcome::Unknown,
+        }),
+        "process/start" => completed(json!({"result": {"processId": "p1"}})),
+        _ => completed(json!({"result": {}})),
+    }));
+    let ledger = ledger(&target.client, None);
+    ledger.begin_turn("turn-1");
+    target
+        .client
+        .relay("process/start".into(), start("p1"))
+        .await;
+    let lost = target
+        .client
+        .relay("process/terminate".into(), json!({"processId": "p1"}))
+        .await;
+    assert_eq!(lost.pointer("/error/data/outcome"), Some(&json!("unknown")));
+    // A joiner gets the same typed uncertainty, not a success.
+    let joined = target
+        .client
+        .relay("process/terminate".into(), json!({"processId": "p1"}))
+        .await;
+    assert_eq!(
+        joined.pointer("/error/data/outcome"),
+        Some(&json!("unknown"))
+    );
+    // The id is never reused while that stop may still arrive.
+    ledger.exited("p1");
+    let reused = target
+        .client
+        .relay("process/start".into(), start("p1"))
+        .await;
+    assert!(
+        reused["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("has not finished")
+    );
+}
+
+#[tokio::test]
+async fn a_stop_of_an_untracked_process_is_relayed_unclaimed() {
+    let target = Target::new(processes());
+    let ledger = ledger(&target.client, None);
+    ledger.begin_turn("turn-1");
+    for _ in 0..3 {
+        let reply = target
+            .client
+            .relay("process/terminate".into(), json!({"processId": "absent"}))
+            .await;
+        assert!(reply.get("result").is_some());
+    }
+    // Nothing is retained for it: each one is forwarded.
+    assert!(ledger.stop_state("absent").is_none());
+    assert_eq!(target.log().len(), 3);
 }

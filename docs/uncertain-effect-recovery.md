@@ -420,28 +420,31 @@ Code review round 1 (`call-8a6c5e81`, high) and its fixes:
   `process/write`, `process/signal`, and extension calls (`admit_call`).
   Observation (`process/read`) and stopping (`process/terminate`) remain for
   cleanup.
-- A process's one stop has an owner and a state (`Pending`, `Sent`,
-  `NotSent`). An overlapping caller, whether the unit or a worker path, joins
-  it and learns its real outcome: a stop certainly never sent gets a
-  retryable refusal and the next caller sends it. Stops are retired when the
-  process's end is observed or when a new start reuses the id. A start is
-  refused while a stop of that id is still in flight. The worker's own stop
-  runs on its own task, so the bounded exit wait never drops a stop that may
-  still be queued. An executor error releases the stop like a refusal before
-  sending.
-- Residual (high 1): a sequence the Controller acknowledged after the
-  worker's ledger write failed can be reused only if a successor also sees a
-  wall clock set back past that sequence. Closing it needs a Controller-side
-  floor (below). It is not in this worker-only slice.
-
-Proposed floor, the narrowest form. `StartSession` gains an optional
-`uncertain_floor: Option<u64>`. The Controller fills it from its durable
-per-session record, as `max(observed, acknowledged)`. `StartSession` does not
-deny unknown fields, so an older Machine ignores it. The broker passes it to
-the worker as launch wiring, which an older worker ignores. The worker seeds
-the ledger with `max(record, floor)` at `Ledger::open`, before it admits any
-effect. Each side degrades to today's behaviour when the other is older. It
-needs a Controller release and a Machine release with a worker pin advance.
+- Stop claims, redesigned after round 2 (`call-b856f2db`):
+  - Each claim belongs to a tracked process lifetime, and a claim exists only
+    for a process this ledger recorded. A stop for any other id is relayed
+    unclaimed, as before L2a.
+  - The owner sends the stop. Any other caller, unit or worker path, joins it
+    and receives the same typed outcome: `Confirmed` (`{result}`), `NotSent`
+    (`data.outcome: "not_sent"`, which the facade's `notSent` treats as never
+    sent, and the next caller sends it), or `Unknown` (`data.outcome:
+    "unknown"`).
+  - A claim retires with a terminal outcome once the process's end is
+    observed, or when a new start of the id is admitted, only after every
+    admission check passed. A refused duplicate start changes nothing.
+  - While a stop of an id is `Pending` or `Unknown`, that id is unavailable
+    for a new start.
+  - The worker's own stop runs on its own task. Teardown (`settle_all`) waits
+    for every pending stop. If the bounded exit wait ends with the stop
+    `Unknown` and the process's end unproven, the stop is recorded as
+    uncertain.
+- The worker's server starts (`record_server`) also respect the unwritable
+  latch.
+- Moved to L2, not in L2a: a Controller-provided sequence floor (high 1 of
+  round 1). Round 2 showed that a Machine-owned relaunch (generation cutover,
+  fallback) reuses a cached `StartSession`. So every launch path must obtain
+  a fresh authoritative floor, or hold effect admission until it can. A floor
+  in `StartSession` alone is not enough.
 
 Tests: a resend followed by `WorkspaceChanged` is uncertain, while a refusal
 of the only send is not. The unit's stop and the worker's cancellation send

@@ -293,12 +293,16 @@ export const unknownOutcome = (error) => lost(error) || error?.remote?.data?.out
 export const unreachable = (error) =>
   !error?.remote &&
   /^Execution (unavailable|connection (refused|closed))/.test(error?.message ?? "");
-/** The connection refused a request before sending it: no connection could
- * be opened, or every request slot was taken. Never a lost reply. */
+/** A request certainly never sent: the connection refused it (no connection,
+ * no request slot), or the worker answered that it never reached the target.
+ * Never a lost reply. */
 export const notSent = (error) =>
-  !error?.remote &&
-  !unknownOutcome(error) &&
-  (unreachable(error) || /^Too many execution requests$/.test(error?.message ?? ""));
+  // The worker's typed answer: the request certainly never reached the target
+  // (a stop of a process whose stop another path failed to send).
+  error?.remote?.data?.outcome === "not_sent" ||
+  (!error?.remote &&
+    !unknownOutcome(error) &&
+    (unreachable(error) || /^Too many execution requests$/.test(error?.message ?? "")));
 /**
  * Evidence rule E1 (docs/uncertain-effect-recovery.md): the executor itself
  * answered that it no longer knows `processId`. The pinned executor forgets a
