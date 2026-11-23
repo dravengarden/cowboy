@@ -17,27 +17,21 @@ export async function readExecutionDescriptor(path) {
     throw new Error("Execution descriptor must be absolute");
   }
   const stat = await lstat(path);
-  if (!stat.isFile() || stat.size > 32768 || stat.mode & 0o077) {
+  if (!stat.isFile() || stat.size > 32768 || (stat.mode & 0o077)) {
     throw new Error("Execution descriptor must be a private regular file");
   }
   const descriptor = JSON.parse(await readFile(path, "utf8"));
   const url = new URL(descriptor.endpoint);
   if (
-    descriptor.schema !== 1 ||
-    descriptor.binding?.schema !== 1 ||
+    descriptor.schema !== 1 || descriptor.binding?.schema !== 1 ||
     descriptor.binding.environment?.protocol !== 1 ||
-    url.protocol !== "ws:" ||
-    url.hostname !== "127.0.0.1" ||
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash ||
+    url.protocol !== "ws:" || url.hostname !== "127.0.0.1" ||
+    url.username || url.password || url.search || url.hash ||
     url.pathname !== "/" ||
     !/^[a-f0-9]{64}$/.test(descriptor.bearer_token) ||
     !/^[a-zA-Z0-9_-]{1,128}$/.test(descriptor.binding.environment?.id) ||
     !isAbsolute(descriptor.binding.workspace?.cwd ?? "")
-  )
-    throw new Error("Unsupported execution descriptor");
+  ) throw new Error("Unsupported execution descriptor");
   return descriptor;
 }
 
@@ -49,13 +43,11 @@ export function bindExecutionRequest(message, descriptor) {
     bound.params.capabilities.experimentalApi = true;
   }
   if (bound.method === "thread/start" || bound.method === "turn/start") {
-    const selection = [
-      {
-        environmentId: descriptor.binding.environment.id,
-        cwd: descriptor.binding.workspace.cwd,
-        runtimeWorkspaceRoots: [descriptor.binding.workspace.cwd],
-      },
-    ];
+    const selection = [{
+      environmentId: descriptor.binding.environment.id,
+      cwd: descriptor.binding.workspace.cwd,
+      runtimeWorkspaceRoots: [descriptor.binding.workspace.cwd],
+    }];
     bound.params ??= {};
     if (
       bound.params.environments &&
@@ -92,16 +84,12 @@ async function sendFrame(stream, message) {
   }
 }
 
-export async function bridgeExecution(
-  child,
-  descriptor,
-  {
-    input = process.stdin,
-    output = process.stdout,
-    recoveryTimeoutMs = 180000,
-    retryDelayMs = 1000,
-  } = {},
-) {
+export async function bridgeExecution(child, descriptor, {
+  input = process.stdin,
+  output = process.stdout,
+  recoveryTimeoutMs = 180000,
+  retryDelayMs = 1000,
+} = {}) {
   const privatePrefix = "cowboy-execution-" + randomUUID() + "-";
   const pending = new Map();
   let sequence = 0;
@@ -116,12 +104,11 @@ export async function bridgeExecution(
       pending.set(id, { resolve, reject });
     });
     reply.catch(() => {});
-    const timer = setTimeout(
-      () => {
-        pending.get(id)?.reject(new Error("Execution readiness request timed out"));
-      },
-      Math.min(recoveryTimeoutMs, timeoutMs),
-    );
+    const timer = setTimeout(() => {
+      pending.get(id)?.reject(
+        new Error("Execution readiness request timed out"),
+      );
+    }, Math.min(recoveryTimeoutMs, timeoutMs));
     try {
       await sendFrame(child.stdin, { id, method, params });
       return await reply;
@@ -166,7 +153,9 @@ export async function bridgeExecution(
   let initialization;
   const receive = (async () => {
     for await (const message of frames(child.stdout)) {
-      if (typeof message.id === "string" && message.id.startsWith(privatePrefix)) {
+      if (
+        typeof message.id === "string" && message.id.startsWith(privatePrefix)
+      ) {
         const waiter = pending.get(message.id);
         if (message.error) {
           waiter?.reject(new Error("Execution readiness refused"));
@@ -213,7 +202,10 @@ export async function bridgeExecution(
         receivedInitialized = true;
         continue;
       }
-      if (typeof message.method === "string" && message.method.startsWith("environment/")) {
+      if (
+        typeof message.method === "string" &&
+        message.method.startsWith("environment/")
+      ) {
         if (message.id !== undefined) {
           await sendFrame(output, {
             id: message.id,
@@ -225,7 +217,11 @@ export async function bridgeExecution(
         }
         continue;
       }
-      if (["thread/start", "thread/resume", "thread/fork", "turn/start"].includes(message.method)) {
+      if (
+        ["thread/start", "thread/resume", "thread/fork", "turn/start"].includes(
+          message.method,
+        )
+      ) {
         if (initializeId === undefined) {
           throw new Error("Execution endpoint has not been registered");
         }
@@ -275,7 +271,9 @@ export async function main(args) {
   if (args[0] === "--cowboy-private-cli") {
     const executable = process.env[cliKey];
     const configuration = JSON.parse(process.env[argsKey] ?? "[]");
-    if (!executable || !isAbsolute(executable) || !Array.isArray(configuration)) {
+    if (
+      !executable || !isAbsolute(executable) || !Array.isArray(configuration)
+    ) {
       throw new Error("Missing exact private Codex binding");
     }
     const parsed = splitConfigurationArguments(configuration);
@@ -286,23 +284,28 @@ export async function main(args) {
     delete environment[cliKey];
     delete environment[argsKey];
     delete environment.COWBOY_PRIVATE_CODEX_BRIDGE;
-    const descriptor =
-      environment[executionKey] && args.includes("app-server")
-        ? await readExecutionDescriptor(environment[executionKey])
-        : undefined;
+    const descriptor = environment[executionKey] && args.includes("app-server")
+      ? await readExecutionDescriptor(environment[executionKey])
+      : undefined;
     delete environment[executionKey];
     if (descriptor) environment.CODEX_EXEC_SERVER_URL = "none";
-    const child = spawn(executable, [...parsed.configuration, ...args.slice(1)], {
-      env: environment,
-      stdio: descriptor ? ["pipe", "pipe", "inherit"] : "inherit",
-    });
+    const child = spawn(
+      executable,
+      [...parsed.configuration, ...args.slice(1)],
+      {
+        env: environment,
+        stdio: descriptor ? ["pipe", "pipe", "inherit"] : "inherit",
+      },
+    );
     for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
       process.on(signal, () => child.kill(signal));
     }
     if (descriptor) {
       child.once("exit", () => process.stdin.destroy());
       bridgeExecution(child, descriptor).catch(() => {
-        process.stderr.write("Cowboy execution binding failed; local fallback is disabled\n");
+        process.stderr.write(
+          "Cowboy execution binding failed; local fallback is disabled\n",
+        );
         child.kill("SIGTERM");
       });
     }
@@ -313,7 +316,9 @@ export async function main(args) {
     process.exitCode = code;
     return;
   }
-  const { configuration, arguments: forwarded } = splitConfigurationArguments(args);
+  const { configuration, arguments: forwarded } = splitConfigurationArguments(
+    args,
+  );
   if (configuration.length || process.env[executionKey]) {
     const executable = process.env.CODEX_PATH;
     if (!executable || !isAbsolute(executable)) {
@@ -326,12 +331,18 @@ export async function main(args) {
     );
   }
   const upstream = fileURLToPath(
-    new URL("./node_modules/@agentclientprotocol/codex-acp/dist/index.js", import.meta.url),
+    new URL(
+      "./node_modules/@agentclientprotocol/codex-acp/dist/index.js",
+      import.meta.url,
+    ),
   );
   process.argv = [process.execPath, upstream, ...forwarded];
   await import(upstream);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   await main(process.argv.slice(2));
 }

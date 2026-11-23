@@ -101,15 +101,12 @@ interface NpmPackage {
 
 interface NpmLock {
   lockfileVersion: number;
-  packages: Record<
-    string,
-    {
-      version?: string;
-      resolved?: string;
-      integrity?: string;
-      dependencies?: Record<string, string>;
-    }
-  >;
+  packages: Record<string, {
+    version?: string;
+    resolved?: string;
+    integrity?: string;
+    dependencies?: Record<string, string>;
+  }>;
 }
 
 const runtimeRoot = dirname(fileURLToPath(import.meta.url));
@@ -132,7 +129,9 @@ assert(pluginRoots.length > 0, "no Provider manifests found");
 const validatedNpmRecipes = new Set<string>();
 const providerIds: string[] = [];
 for (const pluginRoot of pluginRoots) {
-  const source = await readJson<ProviderSource>(join(pluginRoot, "provider.json"));
+  const source = await readJson<ProviderSource>(
+    join(pluginRoot, "provider.json"),
+  );
   const providerId = source.id;
   assert(/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(providerId), "invalid Provider id");
   providerIds.push(providerId);
@@ -140,7 +139,10 @@ for (const pluginRoot of pluginRoots) {
 
   const dependencies = new Map<string, ExactDependency>();
   for (const dependency of source.runtime.dependencies) {
-    assert(dependency.private, `${providerId}: ${dependency.id} must be private`);
+    assert(
+      dependency.private,
+      `${providerId}: ${dependency.id} must be private`,
+    );
     assert(
       !dependencies.has(dependency.id),
       `${providerId}: duplicate dependency ${dependency.id}`,
@@ -163,7 +165,8 @@ for (const pluginRoot of pluginRoots) {
         dependencies.has(component.dependency),
         `${providerId}: ${target} references unknown dependency ${component.dependency}`,
       );
-      const usedTargets = dependencyTargets.get(component.dependency) ?? new Set<TargetKey>();
+      const usedTargets = dependencyTargets.get(component.dependency) ??
+        new Set<TargetKey>();
       usedTargets.add(target);
       dependencyTargets.set(component.dependency, usedTargets);
     }
@@ -171,7 +174,10 @@ for (const pluginRoot of pluginRoots) {
 
   for (const [dependencyId, dependency] of dependencies) {
     const usedTargets = dependencyTargets.get(dependencyId);
-    assert(usedTargets?.size, `${providerId}: unused dependency ${dependencyId}`);
+    assert(
+      usedTargets?.size,
+      `${providerId}: unused dependency ${dependencyId}`,
+    );
     const recipe = runtimeLock.components[dependencyId];
     assert(recipe, `${providerId}: missing runtime recipe for ${dependencyId}`);
     assert(
@@ -193,7 +199,10 @@ for (const pluginRoot of pluginRoots) {
         case "node_npm":
           validateDownloadTarget(
             `${providerId}: Node.js ${target}`,
-            required(runtimeLock.node.targets[target], "missing Node.js archive"),
+            required(
+              runtimeLock.node.targets[target],
+              "missing Node.js archive",
+            ),
             "sha256",
           );
           if (!validatedNpmRecipes.has(dependencyId)) {
@@ -208,9 +217,14 @@ for (const pluginRoot of pluginRoots) {
             recipe.targets[target],
             `${providerId}: ${dependencyId} has no vendor archive for ${target}`,
           );
-          validateDownloadTarget(`${providerId}: ${dependencyId} ${target}`, locked, "sha256");
+          validateDownloadTarget(
+            `${providerId}: ${dependencyId} ${target}`,
+            locked,
+            "sha256",
+          );
           assert(
-            locked.url.startsWith(recipe.release) && /^[a-f0-9]{128}$/.test(locked.sha512 ?? ""),
+            locked.url.startsWith(recipe.release) &&
+              /^[a-f0-9]{128}$/.test(locked.sha512 ?? ""),
             `${providerId}: ${dependencyId} ${target} vendor archive is not pinned below its release`,
           );
           break;
@@ -221,7 +235,9 @@ for (const pluginRoot of pluginRoots) {
             `${providerId}: ${dependencyId} cannot build for ${target}`,
           );
           assert(
-            (recipe.files ?? []).every((file) => /^[a-z0-9][a-z0-9._-]*$/.test(file)) &&
+            (recipe.files ?? []).every((file) =>
+              /^[a-z0-9][a-z0-9._-]*$/.test(file)
+            ) &&
               new Set(recipe.files ?? []).size === (recipe.files ?? []).length,
             `${providerId}: ${dependencyId} component files must be distinct plain names`,
           );
@@ -245,8 +261,12 @@ async function validateDependencySource(
   recipe: ComponentRecipe,
 ): Promise<void> {
   if (recipe.kind === "git_go_static") {
-    const repository = recipe.repository.replace(/^git@([^:]+):/, "git@$1/");
-    const expectedSource = `git+ssh://${repository}#${recipe.revision}:${recipe.subdir}`;
+    const repository = recipe.repository.replace(
+      /^git@([^:]+):/,
+      "git@$1/",
+    );
+    const expectedSource =
+      `git+ssh://${repository}#${recipe.revision}:${recipe.subdir}`;
     assert(
       dependency.source === expectedSource,
       `${providerId}: Git source mismatch for ${dependency.id}`,
@@ -255,7 +275,10 @@ async function validateDependencySource(
       dependency.integrity === `sha256:${recipe.source_archive_sha256}`,
       `${providerId}: Git source digest mismatch for ${dependency.id}`,
     );
-    assert(/^[a-f0-9]{40}$/.test(recipe.revision), `${providerId}: Git revision is not a commit`);
+    assert(
+      /^[a-f0-9]{40}$/.test(recipe.revision),
+      `${providerId}: Git revision is not a commit`,
+    );
     assert(
       /^[a-f0-9]{64}$/.test(recipe.source_archive_sha256),
       `${providerId}: Git archive digest is invalid`,
@@ -266,16 +289,17 @@ async function validateDependencySource(
   if (recipe.kind === "owned_archive") {
     assert(
       /^packages\/[a-z0-9-]+$/.test(recipe.package_dir) &&
-        dependency.source === `cowboy:components/provider-runtime/${recipe.package_dir}`,
+        dependency.source ===
+          `cowboy:components/provider-runtime/${recipe.package_dir}`,
       `${providerId}: owned archive source mismatch for ${dependency.id}`,
     );
     assert(
       dependency.integrity ===
-        (await ownedArchiveIntegrity(
+        await ownedArchiveIntegrity(
           join(runtimeRoot, recipe.package_dir),
           recipe.launcher,
           recipe.files,
-        )),
+        ),
       `${providerId}: owned archive integrity mismatch for ${dependency.id}`,
     );
     return;
@@ -302,7 +326,7 @@ async function validateDependencySource(
   if (recipe.kind === "node_npm" && dependency.source.startsWith("cowboy:")) {
     assert(
       dependency.source === ownedNodeSource(recipe) &&
-        dependency.integrity === (await ownedNodeIntegrity(runtimeRoot, recipe)),
+        dependency.integrity === await ownedNodeIntegrity(runtimeRoot, recipe),
       `${providerId}: owned node package integrity mismatch for ${dependency.id}`,
     );
     return;
@@ -327,14 +351,20 @@ function validateDownloadTarget(
     target.url.startsWith("https://") && !target.url.includes("latest"),
     `${label}: URL is not immutable HTTPS`,
   );
-  assert(safeEntrypoint(target.entrypoint), `${label}: archive entrypoint is unsafe`);
+  assert(
+    safeEntrypoint(target.entrypoint),
+    `${label}: archive entrypoint is unsafe`,
+  );
   if (integrityKind === "sri") {
     assert(
       /^sha512-[A-Za-z0-9+/]+={0,2}$/.test(target.integrity ?? ""),
       `${label}: npm SRI is invalid`,
     );
   } else {
-    assert(/^[a-f0-9]{64}$/.test(target.sha256 ?? ""), `${label}: SHA-256 is invalid`);
+    assert(
+      /^[a-f0-9]{64}$/.test(target.sha256 ?? ""),
+      `${label}: SHA-256 is invalid`,
+    );
   }
 }
 
@@ -354,12 +384,20 @@ async function validateNpmRecipe(
       `${providerId}: ${dependency.id} launcher is not an owned regular source`,
     );
   }
-  assert(safeEntrypoint(recipe.script), `${providerId}: ${dependency.id} script is unsafe`);
+  assert(
+    safeEntrypoint(recipe.script),
+    `${providerId}: ${dependency.id} script is unsafe`,
+  );
   const packageJson = await readJson<NpmPackage>(
     join(runtimeRoot, recipe.package_dir, "package.json"),
   );
-  const lock = await readJson<NpmLock>(join(runtimeRoot, recipe.package_dir, "package-lock.json"));
-  assert(packageJson.private, `${providerId}: runtime npm package must be private`);
+  const lock = await readJson<NpmLock>(
+    join(runtimeRoot, recipe.package_dir, "package-lock.json"),
+  );
+  assert(
+    packageJson.private,
+    `${providerId}: runtime npm package must be private`,
+  );
   assert(
     packageJson.version === recipe.version,
     `${providerId}: runtime npm package version mismatch for ${dependency.id}`,
@@ -369,13 +407,10 @@ async function validateNpmRecipe(
   // A Cowboy-owned program has no primary registry package; its owned
   // inputs are bound by the dependency integrity instead.
   const owned = dependency.source === ownedNodeSource(recipe);
-  const primary = owned
-    ? []
-    : directDependencies.filter(
-        ([name, version]) =>
-          version === dependency.version &&
-          lock.packages[`node_modules/${name}`]?.resolved === dependency.source,
-      );
+  const primary = owned ? [] : directDependencies.filter(([name, version]) =>
+    version === dependency.version &&
+    lock.packages[`node_modules/${name}`]?.resolved === dependency.source
+  );
   assert(
     owned || primary.length === 1,
     `${providerId}: ${dependency.id} runtime package must have one exact primary dependency`,
@@ -403,7 +438,10 @@ async function validateNpmRecipe(
     ownedNodeInputs(recipe);
     return;
   }
-  const [packageName, packageVersion] = required(primary[0], "missing npm dependency");
+  const [packageName, packageVersion] = required(
+    primary[0],
+    "missing npm dependency",
+  );
   assert(
     packageVersion === dependency.version,
     `${providerId}: package.json does not pin ${dependency.id}`,
@@ -425,20 +463,16 @@ async function validateNpmRecipe(
 function vendorIntegrity(recipe: VendorArchiveRecipe): string {
   const lines = Object.entries(recipe.targets)
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(
-      ([target, locked]) =>
-        `${target} ${locked?.url} ${locked?.sha512} ${locked?.sha256} ${locked?.entrypoint}\n`,
+    .map(([target, locked]) =>
+      `${target} ${locked?.url} ${locked?.sha512} ${locked?.sha256} ${locked?.entrypoint}\n`
     )
     .join("");
   return `sha256:${createHash("sha256").update(lines).digest("hex")}`;
 }
 
 function safeEntrypoint(value: string): boolean {
-  return (
-    value.length > 0 &&
-    !value.startsWith("/") &&
-    !value.split("/").some((segment) => segment === "" || segment === "..")
-  );
+  return value.length > 0 && !value.startsWith("/") &&
+    !value.split("/").some((segment) => segment === "" || segment === "..");
 }
 
 function exactVersion(value: string): boolean {
