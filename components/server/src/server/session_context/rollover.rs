@@ -554,8 +554,10 @@ async fn view(state: &AppState, id: &str) -> Response {
     Json(serde_json::json!({
         "policy": policy,
         "context_used": meta.context_used,
+        // A compaction left the reading as history: renewal treats it as unknown.
+        "context_stale": meta.context_usage_stale(),
         "idle_ms": idle_ms,
-        "due": idle_ms.is_some_and(|idle| policy.due(std::time::Duration::from_millis(idle), meta.context_used))
+        "due": !meta.context_usage_stale() && idle_ms.is_some_and(|idle| policy.due(std::time::Duration::from_millis(idle), meta.context_used))
             && ordinary(state, &meta),
     }))
     .into_response()

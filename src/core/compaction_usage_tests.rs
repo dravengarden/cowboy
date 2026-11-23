@@ -30,12 +30,16 @@ fn live(used: u64) -> SessionUsage {
 }
 
 fn compaction(hub: &Hub, id: &str, status: &str) {
+    compaction_with(hub, id, "c-1", status);
+}
+
+fn compaction_with(hub: &Hub, id: &str, compaction_id: &str, status: &str) {
     hub.push(
         id,
         Event::Update {
             update: serde_json::json!({
                 "sessionUpdate": "compaction_update",
-                "compactionId": "c-1",
+                "compactionId": compaction_id,
                 "status": status,
             }),
         },
@@ -101,6 +105,20 @@ fn a_compaction_without_a_usage_report_leaves_the_reading_as_history() {
         },
     );
     assert!(meta(&hub, "agy").context_usage_stale());
+    assert!(persisted(&mut rx).is_empty());
+    // Nor does one with other counters: only a live report measures the
+    // compacted context.
+    hub.set_session_usage(
+        "agy",
+        SessionUsage {
+            raw: serde_json::Value::Null,
+            observed_at_ms: 0,
+            ..live(300_000)
+        },
+    );
+    let kept = meta(&hub, "agy");
+    assert!(kept.context_usage_stale());
+    assert_eq!(kept.context_used, 492_536);
     assert!(persisted(&mut rx).is_empty());
 
     // The next real report replaces the reading and clears the mark, even
@@ -209,4 +227,32 @@ fn the_mark_survives_serialization_and_older_readings_have_none() {
             .get("compacted_at_ms")
             .is_none()
     );
+}
+
+#[test]
+fn usage_an_older_antigravity_proxy_relays_during_compact_stays_history() {
+    // Before cowboy-antigravity-acp 1.0.24 the proxy relayed the usage of the
+    // `/compact` prompt itself, which measures the summarized history.
+    let (hub, mut rx) = hub_with("agy-old");
+    hub.set_session_usage("agy-old", live(480_000));
+    compaction_with(&hub, "agy-old", "agy-compact-1", "in_progress");
+    hub.set_session_usage("agy-old", live(488_059));
+    compaction_with(&hub, "agy-old", "agy-compact-1", "completed");
+    turn_end(&hub, "agy-old");
+    let stale = meta(&hub, "agy-old");
+    assert!(stale.context_usage_stale());
+    assert_eq!(stale.context_used, 488_059);
+    persisted(&mut rx);
+    hub.set_session_usage("agy-old", live(61_000));
+    assert!(!meta(&hub, "agy-old").context_usage_stale());
+}
+
+#[test]
+fn clear_and_compaction_writes_reach_storage_in_their_hub_order() {
+    let (hub, mut rx) = hub_with("ordered");
+    hub.set_session_usage("ordered", live(400_000));
+    compaction(&hub, "ordered", "completed");
+    hub.prepare_context_reset("ordered");
+    let writes = persisted(&mut rx);
+    assert_eq!(writes.last(), Some(&None), "Clear's reset is the last word");
 }

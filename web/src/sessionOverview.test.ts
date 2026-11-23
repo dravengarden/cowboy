@@ -202,3 +202,13 @@ test("a session on several models lists each model's usage; one model adds nothi
   assertEquals(one["claude-opus-4-5"], undefined);
   assertEquals(one.Context, "50,000 / 200,000 · 25%");
 });
+
+test("the overview shows a reading a compaction left as history as unknown", () => {
+  const usage = { used: 94_000, size: 200_000, raw: null, observed_at_ms: 1 };
+  const reading = { context_used: 94_000, context_size: 200_000 };
+  assertEquals(rowMap(info({ ...reading, usage })).Context, "94,000 / 200,000 · 47%");
+  assertEquals(
+    rowMap(info({ ...reading, usage: { ...usage, compacted_at_ms: 2 } })).Context,
+    "Unknown · Compacted · updates after the next reply",
+  );
+});

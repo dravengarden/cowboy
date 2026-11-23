@@ -66,9 +66,10 @@ export function useCompactionContext({
     });
   }, [completionSeq, serverSize, serverUsed]);
 
-  // The canonical mark settles a refresh: nothing newer exists to poll for.
+  // The canonical mark settles a refresh either way: set, nothing newer
+  // exists to poll for; cleared, the server holds the fresh reading, even
+  // one that repeats the old counters.
   useEffect(() => {
-    if (!serverStale) return;
     setRequest(null);
     setOverride(null);
   }, [serverStale]);

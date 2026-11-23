@@ -83,8 +83,9 @@ export function sameComposerSessionSlice(
   );
 }
 
-/** Equality for the navbar's normally-closed session settings sheet. Usage,
- * scheduling and other row-only metadata do not appear there. */
+/** Equality for the navbar's normally-closed session settings sheet.
+ * Scheduling and other row-only metadata do not appear there; its Context
+ * row shows the reading and whether a compaction left it as history. */
 export function sameComposerSheetSession(
   a: SessionMeta | undefined,
   b: SessionMeta | undefined,
@@ -102,6 +103,9 @@ export function sameComposerSheetSession(
       a.status === b.status &&
       a.origin === b.origin &&
       a.paused === b.paused &&
+      a.context_used === b.context_used &&
+      a.context_size === b.context_size &&
+      contextStaleAfterCompaction(a) === contextStaleAfterCompaction(b) &&
       sameProviderUpdateOffer(a, b))
   );
 }

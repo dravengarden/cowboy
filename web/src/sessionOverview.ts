@@ -3,6 +3,7 @@ import { providerName } from "./providerPresentation";
 import { contextModel, modelUsageSummary, sessionModelUsage } from "./modelUsage";
 import { fireLabel, fireRel } from "./scheduleTime";
 import { sessionProjectLabel } from "./sessionProject";
+import { COMPACTED_CONTEXT_HINT, contextStaleAfterCompaction } from "./contextUsageRecord";
 import {
   sessionExecution,
   sessionMachinePresentation,
@@ -156,6 +157,7 @@ function sessionOverviewContext(info: SessionMeta): string {
   const used = info.context_used ?? 0;
   const size = info.context_size ?? 0;
   if (!(size > 0)) return "Not reported";
+  if (contextStaleAfterCompaction(info)) return `Unknown · ${COMPACTED_CONTEXT_HINT}`;
   const percent = Math.min(100, Math.max(0, Math.round((used / size) * 100)));
   return `${used.toLocaleString("en-US")} / ${
     size.toLocaleString("en-US")

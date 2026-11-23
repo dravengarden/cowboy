@@ -71,13 +71,14 @@ test("composer session slice reacts to every visible composer field", () => {
 });
 
 test("composer sheet session ignores metadata it does not render", () => {
-  assert(sameComposerSheetSession(active, {
-    ...active,
-    usage: { used: 10, size: 100, raw: null, observed_at_ms: 2 },
-    context_used: 40,
-    context_size: 200,
-    next_schedule_ms: 123,
-  }));
+  const usage = { used: 10, size: 100, raw: null, observed_at_ms: 2 };
+  assert(sameComposerSheetSession(active, { ...active, usage, next_schedule_ms: 123 }));
+  // Its Context row shows the reading and whether a compaction left it as history.
+  assert(!sameComposerSheetSession(active, { ...active, context_used: 40 }));
+  assert(!sameComposerSheetSession(
+    { ...active, usage },
+    { ...active, usage: { ...usage, compacted_at_ms: 3 } },
+  ));
   assert(!sameComposerSheetSession(active, { ...active, title: "Renamed" }));
   assert(!sameComposerSheetSession(active, { ...active, provider_version: "1.0.1" }));
   assert(!sameComposerSheetSession(active, { ...active, paused: true }));

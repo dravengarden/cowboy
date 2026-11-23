@@ -3554,16 +3554,17 @@ impl Hub {
                 s.usage_evidence = None;
                 s.compaction_usage = context_rollover::CompactionUsage::Idle;
                 s.meta.background_tasks = 0;
+                // Queued under the session lock, ordered with usage writes.
+                if changed && let Some(tx) = self.inner.store_tx.as_ref() {
+                    let _ = tx.send(StoreWrite::UpdateSessionUsage {
+                        session_id: session_id.to_owned(),
+                        usage: None,
+                    });
+                }
                 changed
             })
         };
         if usage_changed {
-            if let Some(tx) = self.inner.store_tx.as_ref() {
-                let _ = tx.send(StoreWrite::UpdateSessionUsage {
-                    session_id: session_id.to_owned(),
-                    usage: None,
-                });
-            }
             self.broadcast_sessions();
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {

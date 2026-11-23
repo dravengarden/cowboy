@@ -21,12 +21,22 @@ pub(super) struct UsageEvidence {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum CompactionUsage {
     Idle,
-    Running { reported: bool },
+    Running {
+        reported: bool,
+    },
+    /// A compaction whose reports during it measure the history being
+    /// summarized: Antigravity's proxy synthesizes these (`agy-compact-`
+    /// IDs) around an ordinary prompt, and a proxy before
+    /// `cowboy-antigravity-acp` 1.0.24 still relays that prompt's usage.
+    Unmeasured,
 }
+
+/// The ID prefix of a compaction Antigravity's proxy synthesizes.
+const PROMPT_COMPACTION_PREFIX: &str = "agy-compact-";
 
 /// The lifecycle step a session event takes for [`CompactionUsage`].
 enum CompactionStep {
-    Started,
+    Started { unmeasured: bool },
     Completed,
     Ended,
 }
@@ -35,7 +45,11 @@ fn compaction_step(event: &Event) -> Option<CompactionStep> {
     match event {
         Event::Update { update } if update["sessionUpdate"] == "compaction_update" => {
             match update["status"].as_str()? {
-                "in_progress" => Some(CompactionStep::Started),
+                "in_progress" => Some(CompactionStep::Started {
+                    unmeasured: update["compactionId"]
+                        .as_str()
+                        .is_some_and(|id| id.starts_with(PROMPT_COMPACTION_PREFIX)),
+                }),
                 "completed" => Some(CompactionStep::Completed),
                 _ => Some(CompactionStep::Ended),
             }
@@ -92,15 +106,19 @@ impl Hub {
         let Some(step) = compaction_step(event) else {
             return;
         };
-        let stale = {
+        {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
             let previous = std::mem::replace(&mut s.compaction_usage, CompactionUsage::Idle);
             match step {
-                CompactionStep::Started => {
-                    s.compaction_usage = CompactionUsage::Running { reported: false };
+                CompactionStep::Started { unmeasured } => {
+                    s.compaction_usage = if unmeasured {
+                        CompactionUsage::Unmeasured
+                    } else {
+                        CompactionUsage::Running { reported: false }
+                    };
                     return;
                 }
                 CompactionStep::Ended => return,
@@ -121,13 +139,14 @@ impl Hub {
             };
             usage.compacted_at_ms = Some(crate::logs::now_ms());
             s.usage_evidence = None;
-            usage.clone()
-        };
-        if let Some(tx) = self.inner.store_tx.as_ref() {
-            let _ = tx.send(StoreWrite::UpdateSessionUsage {
-                session_id: session_id.to_owned(),
-                usage: Some(stale),
-            });
+            // Queued under the session lock, so a concurrent Clear's reset
+            // cannot be overtaken in storage by this reading.
+            if let Some(tx) = self.inner.store_tx.as_ref() {
+                let _ = tx.send(StoreWrite::UpdateSessionUsage {
+                    session_id: session_id.to_owned(),
+                    usage: Some(usage.clone()),
+                });
+            }
         }
         self.broadcast_sessions();
     }
@@ -190,10 +209,10 @@ impl Hub {
                         *reported = true;
                     }
                     if !live
-                        && s.meta.usage.as_ref().is_some_and(|stored| {
-                            stored.stale_after_compaction()
-                                && (stored.used, stored.size) == (usage.used, usage.size)
-                        })
+                        && s.meta
+                            .usage
+                            .as_ref()
+                            .is_some_and(crate::agent_model::SessionUsage::stale_after_compaction)
                     {
                         return;
                     }
@@ -223,18 +242,19 @@ impl Hub {
                     s.meta.context_used = usage.used;
                     s.meta.context_size = usage.size;
                     s.meta.usage = Some(usage.clone());
+                    // Queued under the session lock, ordered with Clear's reset.
+                    if let Some(tx) = self.inner.store_tx.as_ref() {
+                        let _ = tx.send(StoreWrite::UpdateSessionUsage {
+                            session_id: session_id.to_owned(),
+                            usage: Some(usage),
+                        });
+                    }
                     true
                 }
                 _ => false,
             }
         };
         if changed {
-            if let Some(tx) = self.inner.store_tx.as_ref() {
-                let _ = tx.send(StoreWrite::UpdateSessionUsage {
-                    session_id: session_id.to_owned(),
-                    usage: Some(usage),
-                });
-            }
             self.broadcast_sessions();
         }
     }
