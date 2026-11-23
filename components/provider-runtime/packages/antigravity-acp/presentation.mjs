@@ -339,6 +339,20 @@ export const UNAVAILABLE_COMMANDS = Object.freeze([
   "learn",
 ]);
 
+/** `names` as prose: "a, b and c". */
+const proseList = (names) =>
+  names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+
+/**
+ * What every session's routing says about those commands and the skills of the
+ * same names (the hook denies their tools). It names no alternative: which
+ * substitute exists depends on the tools the recipient has.
+ */
+export const UNAVAILABLE_SKILLS_NOTE = [
+  `The Antigravity skills and slash commands ${proseList(UNAVAILABLE_COMMANDS)} are`,
+  "unavailable in this session: do not invoke them.",
+].join(" ");
+
 /** An `available_commands_update` without the commands that cannot run. */
 export function availableCommands(update) {
   if (update?.sessionUpdate !== "available_commands_update") return update;

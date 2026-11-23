@@ -110,13 +110,21 @@ tells the worker only what is confirmed, from an authoritative final snapshot:
   replay).
 - If a replay's answer lists no `model` option with a current value, the model is
   **unknown**: the proxy forwards no label, and an earlier snapshot is not reused.
-- Once any setting was replayed onto a child, agy's own `config_option_update`
-  frames for it are withheld for the child's life, for the same ordering reason.
-  A child nothing was replayed onto keeps agy's own updates, which describe its
-  unchanged default.
+- agy's own `config_option_update` frames for a session this host opened are
+  **fenced by default** (`Subagents.configFence`, filled in `adopt`, 1024 ids, oldest
+  evicted). Only a child that started with nothing replayed onto it is let through,
+  and then its updates describe its unchanged default. A child with replayed
+  settings stays fenced for good, for the ordering reason above. A session whose
+  start was abandoned, or that agy answered after its request timed out, is fenced
+  too: the worker has no row for it, and an update for a session the worker does not
+  know would be read as the parent's configuration. The fence is separate from
+  `children`, which the proxy prunes (64 settled) while the worker keeps the row.
 - When the child is announced the proxy sends exactly one `config_option_update`
-  under the child's session id, carrying only the `model` option (its choice list
-  only when it fits 32 KiB). The worker's existing labelling then applies.
+  under the child's session id, carrying only the `model` option as a complete ACP
+  select option (`id`, `name`, `category`, `type`, `currentValue`, `options`). A choice
+  list over 32 KiB (measured in bytes) is sent as `[]`, so the worker still decodes
+  the update and labels the child by its current value. The worker's existing
+  labelling then applies.
 - While the model is unknown the child has no label and no model attribution. A
   one-model usage breakdown still names a child in the worker as it does today,
   but the proxy adds none and the pinned agy is not known to report any.
@@ -136,8 +144,9 @@ labelled from the last replay's full configuration, with agy's default-model
 opening update and a later update both withheld; answers that list no
 configuration, no model option or no model value leave no label while the child is
 still announced; a child with no replays still shows agy's own updates; an
-oversized choice list is dropped and the current value kept; a refused replay still
-fails the start.
+oversized choice list is sent empty as a complete select option; an abandoned child's
+late update and a replayed child's after the proxy pruned it never reach the worker; a
+refused replay still fails the start.
 
 ### Acceptance
 
@@ -151,7 +160,11 @@ dedicated free-tier account and are outside this round.
   `UNAVAILABLE_COMMANDS`), and the hook denies their tools (`hook.mjs`).
 - The routing projection (`projection.mjs`) names `swarm`, `run-workflow`,
   `schedule`, `browser` and `learn` as unavailable in every session, built from
-  `UNAVAILABLE_COMMANDS` so the two cannot drift. Whether the pinned agy's own
+  `UNAVAILABLE_COMMANDS` so the two cannot drift (`UNAVAILABLE_SKILLS_NOTE` in
+  `presentation.mjs`). A managed call's routing replaces the default one, so
+  `withUnavailableSkills` adds the same note to it at its one call site
+  (`launch.mjs`); `managed.mjs` stays free of imports because the packaged hook
+  loads it alone. Whether the pinned agy's own
   prompt still offers them is a live probe; the note is harmless if it does not and
   needed if it does, so it ships unconditionally.
 - The alternative is stated **only for a recipient that has the tool**. The owner's
@@ -163,8 +176,8 @@ dedicated free-tier account and are outside this round.
   This also removes the earlier contradiction, where a child was told both to use
   `Subagent` and that it could not.
 - Tests: the projection carries the note once and the delegation paragraph once;
-  a child's session prompt has the note and not the delegation paragraph; the
-  denial text. The live check ("use swarm to …" leads to `Subagent` in an ordinary
+  a child's session prompt has the note and not the delegation paragraph; a managed
+  projection keeps its own routing and carries the note once; the denial text. The live check ("use swarm to …" leads to `Subagent` in an ordinary
   root session, with no denied call) waits for a dedicated free-tier account.
 
 ## A4. Web labels (P2)
@@ -172,18 +185,22 @@ dedicated free-tier account and are outside this round.
 - `web/src/managedCalls.ts` `providerLabel` showed the raw "antigravity", and
   `web/src/agentTools.ts` `agentLabel` title-cased any other id.
 - Both name a Provider by the signed Plugin's `manifest.display.name` when the
-  loaded Catalog carries it (`web/src/providerDisplayName.ts`, newest compatible
-  manifest), and otherwise keep today's text. Claude and Codex keep their short
+  loaded Catalog carries a published (`ready`, artifact-bound) release of it
+  (`web/src/providerDisplayName.ts`, newest compatible manifest), and otherwise keep
+  today's text. An unbound entry is an unpublished manifest and never renames a
+  signed Provider. Claude and Codex keep their short
   names, so `claude-code` stays "Claude" and `codex` "Codex".
-- The managed-call data hooks (`useManagedCalls`, `useManagedCall`) and the
-  agent-tools components subscribe to the Catalog cache without starting a read
-  (`useProviderLabels`), so a label updates when the Catalog loads even inside the
-  memoized dock. The dock and approval overlay files are structure-ratchet
+- The managed-call data hooks (`useManagedCalls`, `useManagedCall`), the
+  background-tasks hook (whose memoized summaries depend on the returned Catalog
+  snapshot) and the agent-tools components subscribe to the Catalog cache without
+  starting a read (`useProviderLabels`), so a label updates when the Catalog loads
+  even inside the memoized dock. The dock and approval overlay files are structure-ratchet
   offenders and are not edited; the approval overlay reads the cache when it
   renders.
-- Tests: the display name of a Provider from entries (newest release wins), labels
-  before and after the Catalog loads, the two short names unchanged, an unknown id
-  falling back.
+- Tests: the display name of a Provider from entries (newest release wins, an
+  unbound entry never overrides), labels before and after the Catalog loads, the two
+  short names unchanged, an unknown id falling back. The hook subscription is not
+  unit-tested: the Web unit tests have no React renderer.
 - `web/src/sessionFork.ts:4` is justified: it mirrors W1. The account, quota and
   browser specifics are justified Provider facts.
 

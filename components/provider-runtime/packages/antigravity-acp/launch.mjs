@@ -28,7 +28,7 @@ import {
   managedMode,
 } from "./managed.mjs";
 import { callGuidance, openMemory } from "./memory.mjs";
-import { buildProjection } from "./projection.mjs";
+import { buildProjection, withUnavailableSkills } from "./projection.mjs";
 import { AcpProxy } from "./proxy.mjs";
 
 export const AGY_ARGUMENTS = Object.freeze([
@@ -290,7 +290,9 @@ async function connectedRuntime({
   extensions.catch(() => {});
   // A managed call gets its own routing, no skills and no home guidance (it
   // runs no slash command and reads only what its request names).
-  const projecting = managed ? { routing: MANAGED_ROUTING, skills: false, home: false } : {};
+  const projecting = managed
+    ? { routing: withUnavailableSkills(MANAGED_ROUTING), skills: false, home: false }
+    : {};
   // Readiness only (OS, workspace, Git probe): the session projection is
   // built at session open, so initialize reads no skills and no home.
   await buildProjection(facade, facade.root, { ...projecting, skills: false, home: false });

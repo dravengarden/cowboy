@@ -9,7 +9,7 @@ import { posix } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { inside } from "./facade.mjs";
 import { HomeReads, mapBounded } from "./facade-tools.mjs";
-import { UNAVAILABLE_COMMANDS } from "./presentation.mjs";
+import { UNAVAILABLE_SKILLS_NOTE } from "./presentation.mjs";
 import { discoverSkills, skillsSection } from "./skills.mjs";
 
 export const PROJECTION_LIMITS = Object.freeze({
@@ -64,21 +64,6 @@ const ROUTING_HEAD = [
   "For a multi-step task, keep the owner's checklist current with mcp_cowboy_UpdatePlan.",
 ];
 
-/** `names` as prose: "a, b and c". */
-const proseList = (names) =>
-  names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
-
-/**
- * Antigravity's own skills and slash commands that need a tool Cowboy denies
- * (`UNAVAILABLE_COMMANDS`, which the command list already drops). Said to every
- * session, with no alternative: which substitute exists depends on the tools
- * the recipient has.
- */
-export const UNAVAILABLE_SKILLS_NOTE = [
-  `The Antigravity skills and slash commands ${proseList(UNAVAILABLE_COMMANDS)} are`,
-  "unavailable in this session: do not invoke them.",
-].join(" ");
-
 /**
  * What only a session that can start subagents is told. A subagent has the
  * `Subagent` tool in its list but cannot start one, so its projection never
@@ -96,12 +81,23 @@ const ROUTING_TAIL = [
   "finishes. Wait inside the turn only when you need the result right away.",
 ];
 
+export { UNAVAILABLE_SKILLS_NOTE };
+
 export const ROUTING = [
   ...ROUTING_HEAD,
   UNAVAILABLE_SKILLS_NOTE,
   ROOT_DELEGATION,
   ...ROUTING_TAIL,
 ].join("\n");
+
+/**
+ * A managed call's own routing plus the note every session gets (its routing
+ * replaces `ROUTING`; `managed.mjs` stays free of imports so the packaged hook,
+ * which loads it alone, keeps working).
+ */
+export function withUnavailableSkills(routing) {
+  return `${routing}\n${UNAVAILABLE_SKILLS_NOTE}`;
+}
 
 /**
  * The projection a subagent gets: its parent's without the delegation

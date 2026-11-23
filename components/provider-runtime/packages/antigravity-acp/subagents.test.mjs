@@ -1138,16 +1138,64 @@ test("a replayed child whose model is not confirmed gets no label", async () => 
   }
 });
 
-test("a model name list too large to forward is dropped, the current value stays", async () => {
+test("a model choice list too large to forward is sent empty, as a complete select option", async () => {
   const made = await parent();
   const big = configOptions("m-new");
-  big.configOptions[0].options = [{ value: "x", name: "y".repeat(40 * 1024) }];
+  // Multi-byte text: the cap is on bytes, not characters.
+  big.configOptions[0].options = [{ value: "x", name: "é".repeat(20 * 1024) }];
   made.control.newResult = () => big;
   const id = await startChild(made);
   await flush();
   const [update] = configUpdates(made.client, id);
   assert.deepEqual(labelled(update), ["m-new"]);
-  assert.equal(update.params.update.configOptions[0].options, undefined);
+  // What the worker's typed decoder needs: id, name, type, currentValue and options.
+  assert.deepEqual(update.params.update.configOptions[0], {
+    id: "model",
+    name: "Model",
+    category: "model",
+    type: "select",
+    currentValue: "m-new",
+    options: [],
+  });
+});
+
+test("an abandoned child's late configuration update never reaches the worker", async () => {
+  const made = await parent();
+  const { proxy, client, control } = made;
+  // The child opens, then cannot start: agy's log is unavailable.
+  control.mark = undefined;
+  control.newResult = () => configOptions("m-new");
+  await assert.rejects(startChild(made), /log is unavailable/);
+  await flush();
+  client.length = 0;
+  // A late update for that session would be read as the parent's configuration.
+  await proxy.fromAgent(
+    childUpdate("child-1", { sessionUpdate: "config_option_update", ...configOptions("m-late") }),
+  );
+  await flush();
+  assert.deepEqual(configUpdates(client, "child-1"), []);
+  assert.deepEqual(
+    client.filter((message) => message.params?.update?.sessionUpdate === "config_option_update"),
+    [],
+  );
+});
+
+test("a replayed child stays fenced after the proxy prunes it", async () => {
+  const made = await parent();
+  const { proxy, client, control } = made;
+  await proxy.fromClient(request(20, "session/set_model", { sessionId: "s", modelId: "m-set" }));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 20, result: {} });
+  control.replyResult = () => configOptions("m-set");
+  const id = await startChild(made);
+  await flush();
+  // The worker keeps the child's row while the proxy's own cache is bounded.
+  proxy.subagents.children.delete(id);
+  client.length = 0;
+  await proxy.fromAgent(
+    childUpdate(id, { sessionUpdate: "config_option_update", ...configOptions("default-model") }),
+  );
+  await flush();
+  assert.deepEqual(configUpdates(client, id), []);
 });
 
 test("a refused model setting fails the start and leaves nothing behind", async () => {

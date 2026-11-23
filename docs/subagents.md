@@ -40,12 +40,14 @@ for a probe of what the pinned agy reports on a child's prompt result.
 The label comes from the child's configuration as agy confirmed it: the new
 session's `configOptions`, then the full set the last replayed parent setting
 (`session/set_model`, `session/set_config_option`) answered with. The proxy sends
-the worker exactly one `config_option_update` with that `model` option. Once
-settings were replayed onto a child, agy's own `config_option_update` frames for
-it are withheld, since none can be ordered against the replays; and a replay
+the worker exactly one `config_option_update` with that `model` option (a complete
+select option; a choice list over 32 KiB is sent empty). agy's own
+`config_option_update` frames for a session the proxy opened are withheld by
+default: only a child that started with nothing replayed onto it hears them. Once
+settings were replayed onto a child, none can be ordered against the replays, and
+an abandoned or late session has no worker row, so those stay withheld. A replay
 whose answer lists no model leaves the model unknown, so the child has no label
-(and no model attribution) rather than the default's. A child nothing was
-replayed onto keeps agy's own updates.
+(and no model attribution) rather than the default's.
 
 ## Routing (worker)
 

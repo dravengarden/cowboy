@@ -9,7 +9,12 @@ import {
 import { providerDisplayName } from "./providerDisplayName.ts";
 import { providerUiManifestFixture } from "./providerUiContract.fixture.ts";
 
-function entry(id: string, name: string, version = "1.0.0") {
+function entry(
+  id: string,
+  name: string,
+  version = "1.0.0",
+  unbound = false,
+) {
   const manifest = providerUiManifestFixture();
   manifest.id = id;
   manifest.version = version;
@@ -19,9 +24,9 @@ function entry(id: string, name: string, version = "1.0.0") {
     provider_id: id,
     provider_version: version,
     package_digest: artifact,
-    artifact_digest: artifact,
+    artifact_digest: unbound ? null : artifact,
     authentication_scope: "none-v1",
-    release_state: "ready",
+    release_state: unbound ? "unbound" : "ready",
     publisher: manifest.publisher,
     contract_fingerprint: artifact,
     supported_platforms: [{ os: "linux", architecture: "x86_64" }],
@@ -40,6 +45,17 @@ test("a Provider is named by its signed Plugin when the Catalog carries it", () 
   assertEquals(providerDisplayName("grok", entries), "Grok Build");
   assertEquals(providerDisplayName("unknown", entries), undefined);
   assertEquals(providerDisplayName("antigravity", []), undefined);
+});
+
+test("an unpublished manifest never renames a signed Provider", () => {
+  const entries = [
+    entry("antigravity", "Antigravity"),
+    entry("antigravity", "Antigravity Preview", "1.1.0", true),
+    entry("draft", "Draft only", "0.1.0", true),
+  ];
+  assertEquals(providerDisplayName("antigravity", entries), "Antigravity");
+  // Nothing published: today's text, not the unpublished name.
+  assertEquals(providerDisplayName("draft", entries), undefined);
 });
 
 test("labels use the Plugin display name, keep Claude and Codex short and fall back to the id", async () => {
