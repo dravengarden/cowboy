@@ -780,8 +780,6 @@ async fn compensation_is_bound_to_the_observed_connection_epoch() {
 }
 
 fn encryption_key() -> String {
-    use base64::Engine as _;
-    let secret = x25519_dalek::StaticSecret::from([0x24_u8; 32]);
-    base64::engine::general_purpose::STANDARD
-        .encode(x25519_dalek::PublicKey::from(&secret).as_bytes())
+    // A fixture enrollment key: any 32 bytes, base64.
+    "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=".to_owned()
 }
