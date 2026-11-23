@@ -60,6 +60,7 @@ impl PendingCommands {
         self.entries.contains_key(key)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(in crate::remote_runtime) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
