@@ -33,6 +33,7 @@ mod core_overflow;
 pub mod deletions;
 mod incarnations;
 pub mod liveness;
+mod liveness_counters;
 mod mcp_launch;
 mod namespace;
 mod readmission;
@@ -307,6 +308,8 @@ struct WorkerPeer {
     /// Duplicate of the broker end of this connection, used only to measure
     /// frames the worker already delivered but the broker has not read.
     receive_probe: Option<Arc<OwnedFd>>,
+    /// Heartbeat-gap observation of this connection (`liveness.rs`).
+    liveness: Option<Arc<liveness::Connection>>,
 }
 
 /// Outcome of one heartbeat sweep.
@@ -982,18 +985,21 @@ impl Broker {
         session_id: &str,
         connection_id: u64,
         socket: std::os::fd::BorrowedFd<'_>,
+        observed: Option<Arc<liveness::Connection>>,
     ) {
-        let probe = match socket.try_clone_to_owned() {
-            Ok(probe) => Arc::new(probe),
-            Err(error) => {
+        let probe = socket
+            .try_clone_to_owned()
+            .inspect_err(|error| {
                 tracing::warn!(session = session_id, %error, "worker receive-queue probe unavailable");
-                return;
-            }
-        };
+            })
+            .ok();
         if let Some(worker) = self.workers.lock().get_mut(session_id)
             && worker.connection_id == connection_id
         {
-            worker.receive_probe = Some(probe);
+            if let Some(probe) = probe {
+                worker.receive_probe = Some(Arc::new(probe));
+            }
+            worker.liveness = observed;
         }
     }
 
@@ -1018,6 +1024,9 @@ impl Broker {
                     silent.as_secs()
                 )
             } else if silent < backlog_limit {
+                if let Some(observed) = &worker.liveness {
+                    observed.deferred(unread, silent);
+                }
                 sweep.lagging.push((session_id.clone(), unread, silent));
                 continue;
             } else {
@@ -1026,6 +1035,9 @@ impl Broker {
                     silent.as_secs()
                 )
             };
+            if let Some(observed) = &worker.liveness {
+                observed.isolated(&detail, unread);
+            }
             stale.push((session_id.clone(), detail));
         }
         for (session_id, detail) in stale {
@@ -1288,6 +1300,7 @@ impl Broker {
                 acked_runtime_seq: 0,
                 last_seen: Instant::now(),
                 receive_probe: None,
+                liveness: None,
             },
         );
         drop(workers);
@@ -4069,7 +4082,6 @@ async fn monitor_workers(broker: Arc<Broker>) {
         let sweep =
             broker.take_stale_workers(WORKER_HEARTBEAT_TIMEOUT, WORKER_BACKLOG_ISOLATION_LIMIT);
         for (session_id, unread_bytes, silent) in sweep.lagging {
-            broker.liveness.deferred(&session_id, unread_bytes, silent);
             tracing::warn!(
                 session = %session_id,
                 unread_bytes,
@@ -4078,9 +4090,6 @@ async fn monitor_workers(broker: Arc<Broker>) {
             );
         }
         for (session_id, peer, detail) in sweep.isolated {
-            broker
-                .liveness
-                .isolated(&session_id, peer.connection_id, &detail);
             tracing::error!(
                 session = %session_id,
                 generation = %peer.snapshot.generation,
@@ -4224,7 +4233,23 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
                 let _ = writer_task.await;
                 return Ok(());
             }
-            broker.attach_worker_receive_probe(&session_id, connection_id, reader.as_ref().as_fd());
+            let peer_pid = reader.as_ref().peer_cred().ok().and_then(|peer| peer.pid());
+            let unit = (broker.args.spawn_mode == SpawnMode::SystemdUser)
+                .then(|| worker_unit_name(&broker.args.socket, &session_id));
+            let observed = broker.liveness.connect(
+                &session_id,
+                connection_id,
+                &epoch,
+                unit,
+                peer_pid.and_then(|pid| u32::try_from(pid).ok()),
+            );
+            let fd = reader.as_ref().as_fd();
+            broker.attach_worker_receive_probe(
+                &session_id,
+                connection_id,
+                fd,
+                Some(Arc::clone(&observed)),
+            );
             let lease = broker
                 .controller
                 .lock()
@@ -4250,6 +4275,7 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
                 &session_id,
                 &epoch,
                 &mut reader,
+                &observed,
             )
             .await;
             if let Some(peer) = broker.remove_worker(&session_id, connection_id) {
@@ -4783,18 +4809,9 @@ async fn handle_worker(
     session_id: &str,
     epoch: &str,
     reader: &mut tokio::net::unix::OwnedReadHalf,
+    observed: &Arc<liveness::Connection>,
 ) -> Result<()> {
-    let unit = (broker.args.spawn_mode == SpawnMode::SystemdUser)
-        .then(|| worker_unit_name(&broker.args.socket, session_id));
-    let peer = reader.as_ref().peer_cred().ok().and_then(|peer| peer.pid());
-    let observed = broker.liveness.connect(
-        session_id,
-        connection_id,
-        epoch,
-        unit,
-        peer.and_then(|pid| u32::try_from(pid).ok()),
-    );
-    while let Some(frame) = liveness::read_frame(reader, &observed).await? {
+    while let Some(frame) = liveness::read_frame(reader, observed).await? {
         broker.touch_worker(session_id, connection_id);
         if !broker.worker_matches(session_id, connection_id, epoch) {
             tracing::warn!(session = session_id, %epoch, "ignoring frame from fenced worker");
@@ -5970,7 +5987,7 @@ mod tests {
                 },
             );
             let (broker_end, worker_end) = UnixStream::pair().expect("worker socket pair");
-            broker.attach_worker_receive_probe(session_id, connection_id, broker_end.as_fd());
+            broker.attach_worker_receive_probe(session_id, connection_id, broker_end.as_fd(), None);
             broker
                 .workers
                 .lock()
@@ -8329,7 +8346,18 @@ mod tests {
         let (mut reader, _writer) = peer.into_split();
         let handler_broker = Arc::clone(&broker);
         let handler = tokio::spawn(async move {
-            handle_worker(handler_broker, 1, "sess-1", "epoch-1", &mut reader).await
+            let observed = handler_broker
+                .liveness
+                .connect("sess-1", 1, "epoch-1", None, None);
+            handle_worker(
+                handler_broker,
+                1,
+                "sess-1",
+                "epoch-1",
+                &mut reader,
+                &observed,
+            )
+            .await
         });
         write_frame(
             &mut client,
@@ -9415,12 +9443,20 @@ mod tests {
         let (mut broker_reader, _broker_writer) = broker_stream.into_split();
         let task_broker = Arc::clone(&broker);
         let worker_task = tokio::spawn(async move {
+            let observed = task_broker.liveness.connect(
+                "sess-deleted-final-event",
+                11,
+                "epoch-deleted-final-event",
+                None,
+                None,
+            );
             handle_worker(
                 task_broker,
                 11,
                 "sess-deleted-final-event",
                 "epoch-deleted-final-event",
                 &mut broker_reader,
+                &observed,
             )
             .await
         });

@@ -851,6 +851,18 @@ fn field_name(name: &str) -> Option<&'static str> {
         "gap_memory_current" => "cowboy.heartbeat_gap.scope.memory_current",
         "gap_memory_high_limit" => "cowboy.heartbeat_gap.scope.memory_high_limit",
         "gap_memory_max_limit" => "cowboy.heartbeat_gap.scope.memory_max_limit",
+        "gap_instance" => "cowboy.heartbeat_gap.instance",
+        "gap_frame_current_ms" => "cowboy.heartbeat_gap.frame_current_ms",
+        "gap_frame_waiting_ms" => "cowboy.heartbeat_gap.frame_waiting_ms",
+        "gap_slowest_frame_ms" => "cowboy.heartbeat_gap.slowest_frame_ms",
+        "gap_slowest_frame_bytes" => "cowboy.heartbeat_gap.slowest_frame_bytes",
+        "gap_longest_idle_ms" => "cowboy.heartbeat_gap.longest_idle_ms",
+        "gap_frames" => "cowboy.heartbeat_gap.frames",
+        "gap_broker_lag_ms" => "cowboy.heartbeat_gap.broker_lag_ms",
+        "gap_unit" => "cowboy.heartbeat_gap.unit",
+        "gap_cgroup_truncated" => "cowboy.heartbeat_gap.scope.cgroup_truncated",
+        "gap_baseline_lead_ms" => "cowboy.heartbeat_gap.scope.baseline_lead_ms",
+        "gap_end_lag_ms" => "cowboy.heartbeat_gap.scope.end_lag_ms",
         _ => return None,
     })
 }

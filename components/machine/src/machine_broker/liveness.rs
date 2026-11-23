@@ -3,14 +3,19 @@
 //! WHY: workers have been isolated after 48-58 s without a heartbeat while the
 //! host ran at load above 400, and the mechanism is not established. Shared
 //! `MemoryHigh` throttling, CPU, I/O, one large frame and a broker stall each
-//! call for a different remedy. This module records what the broker saw, and
+//! call for a different remedy. This module records what the broker saw and
 //! the cgroup pressure around each gap, without changing any decision.
 //!
-//! The connection reader and the heartbeat monitor only update atomics and
-//! `try_send` a small notice. Every cgroup read, user-manager query and log
-//! record happens in one sampler task with a bounded queue, deduplicated scopes
-//! and blocking reads moved off the runtime threads.
+//! The connection reader, the heartbeat arm and the heartbeat sweep only update
+//! atomics on their own connection and `try_send` a small notice; no lock, scan
+//! or await is added to them. Everything else runs in one sampler task: unit
+//! queries in a two-lane bounded bind pool, counter reads on a blocking thread
+//! every 10 s with deduplicated scopes, and records built from those periodic
+//! samples.
 
+use super::liveness_counters::{
+    self as counters, CgroupDir, PeerHandle, Sample, UNAVAILABLE, saturate,
+};
 use crate::runtime_wire::{Frame, MAX_FRAME_BYTES};
 use parking_lot::Mutex;
 use std::{
@@ -26,25 +31,29 @@ use std::{
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt as _, ReadBuf},
-    sync::mpsc,
+    sync::{Semaphore, mpsc},
 };
 
-/// A heartbeat later than this after the previous one is recorded. Workers
-/// beat every 10 s; the broker isolates after 45 s of frame silence.
+/// A heartbeat absent for longer than this is recorded. Workers beat every
+/// 10 s; the broker isolates after 45 s of frame silence.
 pub(super) const GAP_THRESHOLD: Duration = Duration::from_secs(20);
 const NOTICE_CAPACITY: usize = 64;
 const SAMPLE_PERIOD: Duration = Duration::from_secs(10);
-/// Samples kept per scope: 100 s covers the 45-60 s isolation window with the
-/// baseline sample before it.
-const SAMPLE_HISTORY: usize = 10;
+/// Samples kept per scope: 120 s covers the 45-60 s isolation window plus the
+/// baseline before it.
+const SAMPLE_HISTORY: usize = 12;
 const MAX_WORKER_SCOPES: usize = 256;
 const MAX_SHARED_SCOPES: usize = 64;
+const MAX_PENDING_GAPS: usize = 64;
+const BIND_LANES: usize = 2;
+const BIND_QUEUE: usize = 64;
 const BIND_TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_COUNTER_FILE: usize = 4096;
-const CGROUP2_SUPER_MAGIC: i64 = 0x6367_7270;
-const PROC_SUPER_MAGIC: i64 = 0x9fa0;
-/// Logged in place of a value that could not be read.
-const UNAVAILABLE: i64 = -1;
+const MAX_UNIT_SHOW: u64 = 4096;
+const MAX_IDENTIFIER: usize = 128;
+const MAX_TEXT: usize = 240;
+const LAG_TICK: Duration = Duration::from_millis(250);
+/// Lag observations kept: 180 s at [`LAG_TICK`].
+const LAG_HISTORY: usize = 720;
 
 static DEVICE_CONFIG: OnceLock<crate::config::Handle> = OnceLock::new();
 
@@ -63,6 +72,18 @@ fn sampler_enabled() -> bool {
     DEVICE_CONFIG
         .get()
         .is_none_or(|config| config.get(&crate::config::schema::DEVICE_HEARTBEAT_GAP_SAMPLER))
+}
+
+/// `text` cut to `limit` bytes on a character boundary, and whether it was.
+fn bounded(text: &str, limit: usize) -> (String, bool) {
+    if text.len() <= limit {
+        return (text.to_owned(), false);
+    }
+    let mut end = limit;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    (text[..end].to_owned(), true)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,25 +106,55 @@ impl Phase {
     }
 }
 
+/// What the broker had seen on a connection when a decision was taken. Frozen
+/// into the notice, so later frames cannot overwrite it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Evidence {
+    heartbeat_age_ms: Option<u64>,
+    frame_age_ms: Option<u64>,
+    progress_age_ms: Option<u64>,
+    phase: u8,
+    declared: u32,
+    read: u64,
+    /// Time since the first byte of a frame still being read.
+    current_frame_ms: Option<u64>,
+    /// Time waited for the first byte of the next frame.
+    waiting_ms: Option<u64>,
+    /// Since the previous heartbeat: the slowest completed frame (first byte
+    /// to decoded), its size, the longest wait for a first byte, and frames.
+    slowest_frame_ms: u64,
+    slowest_frame_bytes: u64,
+    longest_idle_ms: u64,
+    frames: u64,
+}
+
 /// Clocks and frame progress of one worker connection. Written only by its
-/// reader task (and the heartbeat arm), read by the sampler.
+/// reader task, the heartbeat arm and the sweep; read by the sampler.
 pub(super) struct Connection {
     session: String,
     connection: u64,
     epoch: String,
     unit: Option<String>,
-    peer_pid: Option<u32>,
+    peer: Option<PeerHandle>,
     origin: Instant,
     opened_ms: u64,
-    /// Milliseconds since `origin`, plus one; zero means never.
+    /// Milliseconds since `origin` plus one; zero means never.
     last_heartbeat: AtomicU64,
     last_frame: AtomicU64,
     last_progress: AtomicU64,
-    /// Frame-clock value already covered by a deferred-isolation record.
-    deferred_reported: AtomicU64,
+    frame_waiting_since: AtomicU64,
+    frame_first_byte: AtomicU64,
     phase: AtomicU8,
     declared: AtomicU32,
     read: AtomicU64,
+    slowest_frame_ms: AtomicU64,
+    slowest_frame_bytes: AtomicU64,
+    longest_idle_ms: AtomicU64,
+    frames: AtomicU64,
+    /// Heartbeat stamp (plus one) whose silence was already reported.
+    threshold_reported: AtomicU64,
+    /// Frame-clock stamp already covered by a backlog-extension record.
+    deferred_reported: AtomicU64,
     notices: mpsc::Sender<Notice>,
     dropped: Arc<AtomicU64>,
 }
@@ -113,70 +164,224 @@ impl Connection {
         u64::try_from(self.origin.elapsed().as_millis()).unwrap_or(u64::MAX - 1)
     }
 
+    fn at(&self, ms: u64) -> Instant {
+        self.origin + Duration::from_millis(ms)
+    }
+
     fn stamp(clock: &AtomicU64, now: u64) -> u64 {
         clock.swap(now.saturating_add(1), Ordering::Relaxed)
     }
 
-    fn set_phase(&self, phase: Phase, declared: usize) {
+    fn age(clock: &AtomicU64, now: u64) -> Option<u64> {
+        match clock.load(Ordering::Relaxed) {
+            0 => None,
+            stamp => Some(now.saturating_sub(stamp - 1)),
+        }
+    }
+
+    fn begin_frame(&self) {
+        let now = self.now_ms();
+        self.frame_first_byte.store(0, Ordering::Relaxed);
+        self.frame_waiting_since
+            .store(now.saturating_add(1), Ordering::Relaxed);
+        self.declared.store(0, Ordering::Relaxed);
+        self.read.store(0, Ordering::Relaxed);
+        self.phase.store(Phase::Header as u8, Ordering::Relaxed);
+    }
+
+    fn begin_payload(&self, declared: usize) {
         self.declared.store(
             u32::try_from(declared).unwrap_or(u32::MAX),
             Ordering::Relaxed,
         );
         self.read.store(0, Ordering::Relaxed);
-        self.phase.store(phase as u8, Ordering::Relaxed);
+        self.phase.store(Phase::Payload as u8, Ordering::Relaxed);
     }
 
     fn progressed(&self, bytes: usize) {
+        let now = self.now_ms();
+        if self.frame_first_byte.load(Ordering::Relaxed) == 0 {
+            self.frame_first_byte
+                .store(now.saturating_add(1), Ordering::Relaxed);
+            if let Some(idle) = Self::age(&self.frame_waiting_since, now) {
+                self.longest_idle_ms.fetch_max(idle, Ordering::Relaxed);
+            }
+        }
         self.read.fetch_add(bytes as u64, Ordering::Relaxed);
-        Self::stamp(&self.last_progress, self.now_ms());
+        Self::stamp(&self.last_progress, now);
     }
 
     fn frame_done(&self) {
-        self.phase.store(Phase::Handling as u8, Ordering::Relaxed);
-        Self::stamp(&self.last_frame, self.now_ms());
-    }
-
-    /// Records a received heartbeat. A heartbeat that closes a gap above
-    /// [`GAP_THRESHOLD`] produces one notice; nothing else leaves this call.
-    pub(super) fn heartbeat(self: &Arc<Self>) {
         let now = self.now_ms();
-        let previous = Self::stamp(&self.last_heartbeat, now);
-        let since = if previous == 0 {
-            self.opened_ms
-        } else {
-            previous - 1
-        };
-        if let Some(gap) = gap_ms(since, now) {
-            self.notify(Notice::Gap(GapNotice {
-                connection: Arc::clone(self),
-                kind: GapKind::Heartbeat,
-                gap_ms: gap,
-                since_ms: since,
-                at_ms: now,
-                unread_bytes: None,
-                detail: None,
-            }));
+        self.phase.store(Phase::Handling as u8, Ordering::Relaxed);
+        Self::stamp(&self.last_frame, now);
+        self.frames.fetch_add(1, Ordering::Relaxed);
+        let took = Self::age(&self.frame_first_byte, now).unwrap_or(0);
+        if took >= self.slowest_frame_ms.load(Ordering::Relaxed) {
+            self.slowest_frame_ms.store(took, Ordering::Relaxed);
+            self.slowest_frame_bytes.store(
+                u64::from(self.declared.load(Ordering::Relaxed)),
+                Ordering::Relaxed,
+            );
         }
     }
 
-    fn notify(&self, notice: Notice) {
-        if self.notices.try_send(notice).is_err() {
-            self.dropped.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
-    fn snapshot(&self, now: u64) -> FrameState {
-        let age = |clock: &AtomicU64| match clock.load(Ordering::Relaxed) {
-            0 => None,
-            stamp => Some(now.saturating_sub(stamp - 1)),
-        };
-        FrameState {
-            heartbeat_age_ms: age(&self.last_heartbeat),
-            frame_age_ms: age(&self.last_frame),
-            progress_age_ms: age(&self.last_progress),
-            phase: Phase::name(self.phase.load(Ordering::Relaxed)),
+    fn evidence(&self, now: u64) -> Evidence {
+        let phase = self.phase.load(Ordering::Relaxed);
+        let first_byte = Self::age(&self.frame_first_byte, now);
+        let reading = phase != Phase::Handling as u8;
+        Evidence {
+            heartbeat_age_ms: Self::age(&self.last_heartbeat, now),
+            frame_age_ms: Self::age(&self.last_frame, now),
+            progress_age_ms: Self::age(&self.last_progress, now),
+            phase,
             declared: self.declared.load(Ordering::Relaxed),
             read: self.read.load(Ordering::Relaxed),
+            current_frame_ms: first_byte.filter(|_| reading),
+            waiting_ms: (reading && first_byte.is_none())
+                .then(|| Self::age(&self.frame_waiting_since, now))
+                .flatten(),
+            slowest_frame_ms: self.slowest_frame_ms.load(Ordering::Relaxed),
+            slowest_frame_bytes: self.slowest_frame_bytes.load(Ordering::Relaxed),
+            longest_idle_ms: self.longest_idle_ms.load(Ordering::Relaxed),
+            frames: self.frames.load(Ordering::Relaxed),
+        }
+    }
+
+    fn reset_interval(&self) {
+        self.slowest_frame_ms.store(0, Ordering::Relaxed);
+        self.slowest_frame_bytes.store(0, Ordering::Relaxed);
+        self.longest_idle_ms.store(0, Ordering::Relaxed);
+        self.frames.store(0, Ordering::Relaxed);
+    }
+
+    /// When the current heartbeat silence began: the last heartbeat, or the
+    /// connection's admission.
+    fn silence_since(&self) -> u64 {
+        match self.last_heartbeat.load(Ordering::Relaxed) {
+            0 => self.opened_ms,
+            stamp => stamp - 1,
+        }
+    }
+
+    /// Records a received heartbeat. One that closes a gap above
+    /// [`GAP_THRESHOLD`] produces a notice carrying the interval's evidence.
+    pub(super) fn heartbeat(self: &Arc<Self>) {
+        let now = self.now_ms();
+        let since = self.silence_since();
+        let evidence = self.evidence(now);
+        let reported = self.threshold_reported.load(Ordering::Relaxed)
+            == self
+                .last_heartbeat
+                .load(Ordering::Relaxed)
+                .saturating_add(1);
+        Self::stamp(&self.last_heartbeat, now);
+        self.reset_interval();
+        if let Some(gap) = gap_ms(since, now) {
+            let detail = reported.then(|| "closes a reported threshold crossing".to_owned());
+            self.notify(GapKind::Heartbeat, since, now, gap, evidence, None, detail);
+        }
+    }
+
+    /// The sweep kept this silent worker because its output is still queued.
+    /// Recorded once per frame-silence episode.
+    pub(super) fn deferred(self: &Arc<Self>, unread_bytes: u64, silent: Duration) {
+        let frame = self.last_frame.load(Ordering::Relaxed);
+        if self.deferred_reported.swap(frame, Ordering::Relaxed) == frame && frame != 0 {
+            return;
+        }
+        let now = self.now_ms();
+        let silent = u64::try_from(silent.as_millis()).unwrap_or(u64::MAX);
+        let evidence = self.evidence(now);
+        let since = now.saturating_sub(silent);
+        let unread = Some(unread_bytes);
+        self.notify(
+            GapKind::Deferred,
+            since,
+            now,
+            silent,
+            evidence,
+            unread,
+            None,
+        );
+    }
+
+    /// The sweep isolated this worker. The decision's own measurement is
+    /// carried, since the connection may close before the record is written.
+    pub(super) fn isolated(self: &Arc<Self>, detail: &str, unread_bytes: u64) {
+        let now = self.now_ms();
+        let since = self.silence_since();
+        let evidence = self.evidence(now);
+        let detail = Some(bounded(detail, MAX_TEXT).0);
+        let gap = now.saturating_sub(since);
+        let unread = Some(unread_bytes);
+        self.notify(GapKind::Isolated, since, now, gap, evidence, unread, detail);
+    }
+
+    /// A heartbeat silence crossed the threshold with no heartbeat or
+    /// isolation yet; reported once per silence.
+    fn check_threshold(self: &Arc<Self>) -> Option<GapNotice> {
+        let heartbeat = self.last_heartbeat.load(Ordering::Relaxed);
+        let now = self.now_ms();
+        let since = self.silence_since();
+        let gap = gap_ms(since, now)?;
+        let marker = heartbeat.saturating_add(1);
+        if self.threshold_reported.swap(marker, Ordering::Relaxed) == marker {
+            return None;
+        }
+        let evidence = self.evidence(now);
+        Some(self.notice(GapKind::Threshold, since, now, gap, evidence, None, None))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn notice(
+        self: &Arc<Self>,
+        kind: GapKind,
+        since_ms: u64,
+        at_ms: u64,
+        gap_ms: u64,
+        evidence: Evidence,
+        unread_bytes: Option<u64>,
+        detail: Option<String>,
+    ) -> GapNotice {
+        GapNotice {
+            connection: Arc::clone(self),
+            kind,
+            gap_ms,
+            since: self.at(since_ms),
+            at: self.at(at_ms),
+            evidence,
+            unread_bytes,
+            detail,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn notify(
+        self: &Arc<Self>,
+        kind: GapKind,
+        since_ms: u64,
+        at_ms: u64,
+        gap_ms: u64,
+        evidence: Evidence,
+        unread_bytes: Option<u64>,
+        detail: Option<String>,
+    ) {
+        let notice = self.notice(
+            kind,
+            since_ms,
+            at_ms,
+            gap_ms,
+            evidence,
+            unread_bytes,
+            detail,
+        );
+        self.send(Notice::Gap(notice));
+    }
+
+    fn send(&self, notice: Notice) {
+        if self.notices.try_send(notice).is_err() {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
@@ -187,22 +392,15 @@ pub(super) fn gap_ms(since_ms: u64, now_ms: u64) -> Option<u64> {
     (u128::from(gap) > GAP_THRESHOLD.as_millis()).then_some(gap)
 }
 
-struct FrameState {
-    heartbeat_age_ms: Option<u64>,
-    frame_age_ms: Option<u64>,
-    progress_age_ms: Option<u64>,
-    phase: &'static str,
-    declared: u32,
-    read: u64,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GapKind {
     /// A heartbeat arrived after a gap.
     Heartbeat,
+    /// The silence crossed the threshold; no heartbeat has closed it yet.
+    Threshold,
     /// The sweep extended isolation because worker output was still queued.
     Deferred,
-    /// The sweep isolated the worker; no closing heartbeat arrived.
+    /// The sweep isolated the worker.
     Isolated,
 }
 
@@ -210,6 +408,7 @@ impl GapKind {
     fn name(self) -> &'static str {
         match self {
             Self::Heartbeat => "heartbeat",
+            Self::Threshold => "threshold",
             Self::Deferred => "backlog_extension",
             Self::Isolated => "isolated",
         }
@@ -220,8 +419,9 @@ struct GapNotice {
     connection: Arc<Connection>,
     kind: GapKind,
     gap_ms: u64,
-    since_ms: u64,
-    at_ms: u64,
+    since: Instant,
+    at: Instant,
+    evidence: Evidence,
     unread_bytes: Option<u64>,
     detail: Option<String>,
 }
@@ -231,32 +431,36 @@ enum Notice {
     Gap(GapNotice),
 }
 
-/// Broker-owned entry point: registers connections and forwards sweep
-/// decisions. Nothing here blocks or allocates per byte.
+/// Broker-owned entry point. `connect` runs once per admitted worker
+/// connection; nothing it starts can block that connection.
 pub(super) struct Hub {
     origin: Instant,
+    instance: u64,
     tx: mpsc::Sender<Notice>,
     rx: Mutex<Option<mpsc::Receiver<Notice>>>,
     dropped: Arc<AtomicU64>,
-    connections: Mutex<HashMap<String, Weak<Connection>>>,
 }
 
 impl Default for Hub {
     fn default() -> Self {
         let (tx, rx) = mpsc::channel(NOTICE_CAPACITY);
+        let clock = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |time| time.as_nanos() as u64);
         Self {
             origin: Instant::now(),
+            instance: clock ^ (u64::from(std::process::id()) << 32),
             tx,
             rx: Mutex::new(Some(rx)),
             dropped: Arc::new(AtomicU64::new(0)),
-            connections: Mutex::new(HashMap::new()),
         }
     }
 }
 
 impl Hub {
-    /// Registers an admitted worker connection. `unit` is its systemd user
-    /// unit (absent in Direct mode); `peer_pid` comes from `SO_PEERCRED`.
+    /// Registers an admitted worker connection. `peer_pid` is the
+    /// `SO_PEERCRED` PID; its `/proc` entry is pinned here, before any await,
+    /// so a later PID reuse cannot be mistaken for the peer.
     pub(super) fn connect(
         &self,
         session: &str,
@@ -267,81 +471,32 @@ impl Hub {
     ) -> Arc<Connection> {
         let opened_ms = u64::try_from(self.origin.elapsed().as_millis()).unwrap_or(0);
         let observed = Arc::new(Connection {
-            session: session.to_owned(),
+            session: bounded(session, MAX_IDENTIFIER).0,
             connection,
-            epoch: epoch.to_owned(),
-            unit,
-            peer_pid,
+            epoch: bounded(epoch, MAX_IDENTIFIER).0,
+            unit: unit.map(|unit| bounded(&unit, MAX_TEXT).0),
+            peer: peer_pid.and_then(counters::open_peer),
             origin: self.origin,
             opened_ms,
             last_heartbeat: AtomicU64::new(0),
             last_frame: AtomicU64::new(0),
             last_progress: AtomicU64::new(0),
-            deferred_reported: AtomicU64::new(0),
+            frame_waiting_since: AtomicU64::new(0),
+            frame_first_byte: AtomicU64::new(0),
             phase: AtomicU8::new(Phase::Handling as u8),
             declared: AtomicU32::new(0),
             read: AtomicU64::new(0),
+            slowest_frame_ms: AtomicU64::new(0),
+            slowest_frame_bytes: AtomicU64::new(0),
+            longest_idle_ms: AtomicU64::new(0),
+            frames: AtomicU64::new(0),
+            threshold_reported: AtomicU64::new(0),
+            deferred_reported: AtomicU64::new(0),
             notices: self.tx.clone(),
             dropped: Arc::clone(&self.dropped),
         });
-        let mut connections = self.connections.lock();
-        connections.retain(|_, connection| connection.strong_count() > 0);
-        connections.insert(session.to_owned(), Arc::downgrade(&observed));
-        drop(connections);
-        observed.notify(Notice::Bind(Arc::clone(&observed)));
+        observed.send(Notice::Bind(Arc::clone(&observed)));
         observed
-    }
-
-    fn current(&self, session: &str, connection: Option<u64>) -> Option<Arc<Connection>> {
-        self.connections
-            .lock()
-            .get(session)
-            .and_then(Weak::upgrade)
-            .filter(|observed| connection.is_none_or(|id| observed.connection == id))
-    }
-
-    /// The sweep kept a silent worker because its output is still queued.
-    /// Recorded once per frame-silence episode.
-    pub(super) fn deferred(&self, session: &str, unread_bytes: u64, silent: Duration) {
-        let Some(observed) = self.current(session, None) else {
-            return;
-        };
-        let frame = observed.last_frame.load(Ordering::Relaxed);
-        if observed.deferred_reported.swap(frame, Ordering::Relaxed) == frame && frame != 0 {
-            return;
-        }
-        let now = observed.now_ms();
-        let silent = u64::try_from(silent.as_millis()).unwrap_or(u64::MAX);
-        observed.notify(Notice::Gap(GapNotice {
-            connection: Arc::clone(&observed),
-            kind: GapKind::Deferred,
-            gap_ms: silent,
-            since_ms: now.saturating_sub(silent),
-            at_ms: now,
-            unread_bytes: Some(unread_bytes),
-            detail: None,
-        }));
-    }
-
-    /// The sweep isolated this connection's worker.
-    pub(super) fn isolated(&self, session: &str, connection: u64, detail: &str) {
-        let Some(observed) = self.current(session, Some(connection)) else {
-            return;
-        };
-        let now = observed.now_ms();
-        let since = match observed.last_heartbeat.load(Ordering::Relaxed) {
-            0 => observed.opened_ms,
-            stamp => stamp - 1,
-        };
-        observed.notify(Notice::Gap(GapNotice {
-            connection: Arc::clone(&observed),
-            kind: GapKind::Isolated,
-            gap_ms: now.saturating_sub(since),
-            since_ms: since,
-            at_ms: now,
-            unread_bytes: None,
-            detail: Some(detail.chars().take(240).collect()),
-        }));
     }
 
     /// Runs the sampler until the broker stops. A second call returns at once.
@@ -349,7 +504,22 @@ impl Hub {
         let Some(rx) = self.rx.lock().take() else {
             return;
         };
-        Sampler::new(Arc::clone(&self.dropped)).run(rx).await;
+        let lag = Arc::new(Lag::default());
+        let _probe = AbortOnDrop(tokio::spawn(probe_lag(Arc::clone(&lag))));
+        let (jobs, jobs_rx) = mpsc::channel(BIND_QUEUE);
+        let (results, results_rx) = mpsc::channel(BIND_QUEUE);
+        let _lane = AbortOnDrop(tokio::spawn(bind_lane(jobs_rx, results)));
+        Sampler::new(self.instance, Arc::clone(&self.dropped), lag, jobs)
+            .run(rx, results_rx)
+            .await;
+    }
+}
+
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
@@ -384,7 +554,7 @@ pub(super) async fn read_frame<R: AsyncRead + Unpin>(
     reader: &mut R,
     connection: &Connection,
 ) -> io::Result<Option<Frame>> {
-    connection.set_phase(Phase::Header, 0);
+    connection.begin_frame();
     let mut header = [0_u8; 4];
     let mut progress = Progress {
         inner: reader,
@@ -402,7 +572,7 @@ pub(super) async fn read_frame<R: AsyncRead + Unpin>(
             format!("runtime frame too large: {len} bytes"),
         ));
     }
-    connection.set_phase(Phase::Payload, len);
+    connection.begin_payload(len);
     let mut payload = vec![0; len];
     progress.read_exact(&mut payload).await?;
     connection
@@ -415,23 +585,61 @@ pub(super) async fn read_frame<R: AsyncRead + Unpin>(
     frame
 }
 
-/// The verified cgroup identity of one worker connection.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Binding {
-    control_group: String,
-    invocation: String,
+/// Scheduling lateness of the broker's own runtime, one entry per tick.
+#[derive(Default)]
+struct Lag(Mutex<VecDeque<(Instant, u64)>>);
+
+impl Lag {
+    fn record(&self, at: Instant, late_ms: u64) {
+        let mut ticks = self.0.lock();
+        ticks.push_back((at, late_ms));
+        while ticks.len() > LAG_HISTORY {
+            ticks.pop_front();
+        }
+    }
+
+    /// The largest lateness observed between `since` and one tick after `at`,
+    /// or `None` when the history does not reach back to `since`.
+    fn max_between(&self, since: Instant, at: Instant) -> Option<u64> {
+        let ticks = self.0.lock();
+        let covered = ticks.front().is_some_and(|(first, _)| *first <= since);
+        let max = ticks
+            .iter()
+            .filter(|(tick, _)| *tick >= since && *tick <= at + LAG_TICK)
+            .map(|(_, late)| *late)
+            .max();
+        max.filter(|_| covered)
+    }
 }
 
-#[derive(Clone, Debug)]
+async fn probe_lag(lag: Arc<Lag>) {
+    let mut interval = tokio::time::interval(LAG_TICK);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        let scheduled = interval.tick().await.into_std();
+        let now = Instant::now();
+        let late =
+            u64::try_from(now.saturating_duration_since(scheduled).as_millis()).unwrap_or(u64::MAX);
+        lag.record(now, late);
+    }
+}
+
+#[derive(Clone)]
 enum BindingState {
-    Verified(Binding),
+    Pending,
+    Verified {
+        control_group: String,
+        invocation: String,
+        directory: Arc<CgroupDir>,
+    },
     Unavailable(&'static str),
 }
 
 impl BindingState {
     fn label(&self) -> &'static str {
         match self {
-            Self::Verified(_) => "verified",
+            Self::Pending => "pending",
+            Self::Verified { .. } => "verified",
             Self::Unavailable(reason) => reason,
         }
     }
@@ -439,159 +647,352 @@ impl BindingState {
 
 struct Bound {
     connection: Weak<Connection>,
+    generation: u64,
     state: BindingState,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct Psi {
-    some_us: u64,
-    full_us: Option<u64>,
+struct BindJob {
+    connection: Arc<Connection>,
+    generation: u64,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct Events {
-    high: u64,
-    max: u64,
-    oom: u64,
-    oom_kill: u64,
+struct BindResult {
+    connection: u64,
+    generation: u64,
+    state: BindingState,
 }
 
-/// One read of a scope's counters. `None` is a field that could not be read.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct Sample {
-    cpu: Option<Psi>,
-    memory: Option<Psi>,
-    io: Option<Psi>,
-    events: Option<Events>,
-    events_local: Option<Events>,
-    current: Option<u64>,
-    /// `u64::MAX` is `max` (no limit).
-    high: Option<u64>,
-    limit: Option<u64>,
+/// Resolves bindings with at most [`BIND_LANES`] user-manager queries at
+/// once. A full result queue drops the result; the binding then stays pending
+/// and its gaps are recorded without scopes.
+async fn bind_lane(mut jobs: mpsc::Receiver<BindJob>, results: mpsc::Sender<BindResult>) {
+    let lanes = Arc::new(Semaphore::new(BIND_LANES));
+    while let Some(job) = jobs.recv().await {
+        let Ok(permit) = Arc::clone(&lanes).acquire_owned().await else {
+            return;
+        };
+        let results = results.clone();
+        tokio::spawn(async move {
+            let state = resolve_binding(&job.connection).await;
+            let _ = results.try_send(BindResult {
+                connection: job.connection.connection,
+                generation: job.generation,
+                state,
+            });
+            drop(permit);
+        });
+    }
+}
+
+/// Resolves and verifies a systemd worker unit's cgroup: the unit's
+/// `ControlGroup` directory is pinned, then the pinned peer process must be a
+/// member of it.
+async fn resolve_binding(connection: &Arc<Connection>) -> BindingState {
+    let Some(unit) = connection.unit.as_deref() else {
+        return BindingState::Unavailable("direct_mode");
+    };
+    if connection.peer.is_none() {
+        return BindingState::Unavailable("peer_unknown");
+    }
+    let shown = match tokio::time::timeout(BIND_TIMEOUT, show_unit(unit)).await {
+        Ok(Ok(text)) => text,
+        Ok(Err(_)) => return BindingState::Unavailable("unit_query_failed"),
+        Err(_) => return BindingState::Unavailable("unit_query_timeout"),
+    };
+    let Some((control_group, invocation)) = parse_unit_show(&shown) else {
+        return BindingState::Unavailable("unit_unresolved");
+    };
+    let connection = Arc::clone(connection);
+    let verified = tokio::task::spawn_blocking(move || {
+        let directory = counters::open_cgroup(&control_group).map_err(|_| "cgroup_unavailable")?;
+        let peer = connection.peer.as_ref().ok_or("peer_unknown")?;
+        counters::peer_member(peer, &control_group)?;
+        Ok::<_, &'static str>((control_group, directory))
+    })
+    .await
+    .unwrap_or(Err("peer_check_failed"));
+    match verified {
+        Ok((control_group, directory)) => BindingState::Verified {
+            control_group,
+            invocation,
+            directory: Arc::new(directory),
+        },
+        Err(reason) => BindingState::Unavailable(reason),
+    }
+}
+
+async fn show_unit(unit: &str) -> io::Result<String> {
+    let mut child = tokio::process::Command::new("systemctl")
+        .args([
+            "--user",
+            "show",
+            unit,
+            "--property=ControlGroup",
+            "--property=InvocationID",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()?;
+    let mut text = Vec::new();
+    if let Some(stdout) = child.stdout.take() {
+        stdout.take(MAX_UNIT_SHOW).read_to_end(&mut text).await?;
+    }
+    if !child.wait().await?.success() {
+        return Err(io::Error::other("systemctl show failed"));
+    }
+    Ok(String::from_utf8_lossy(&text).into_owned())
+}
+
+fn parse_unit_show(text: &str) -> Option<(String, String)> {
+    let mut control_group = None;
+    let mut invocation = None;
+    for line in text.lines() {
+        if let Some(value) = line.strip_prefix("ControlGroup=") {
+            control_group = Some(value.trim().to_owned());
+        } else if let Some(value) = line.strip_prefix("InvocationID=") {
+            invocation = Some(value.trim().to_owned());
+        }
+    }
+    let control_group = control_group.filter(|path| counters::relative_cgroup(path).is_some())?;
+    let invocation = invocation
+        .filter(|id| id.len() == 32 && id.bytes().all(|byte| byte.is_ascii_hexdigit()))?;
+    Some((control_group, invocation))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum Scope {
-    /// A cgroup v2 path relative to the mount, without a leading slash.
-    Cgroup(String),
+enum Key {
+    Worker(u64),
+    Ancestor(String),
+    Broker,
     Host,
 }
 
+enum Target {
+    Worker(u64, Arc<CgroupDir>),
+    Path(Key, String),
+    Host,
+}
+
+type History = VecDeque<(Instant, Sample)>;
+
 struct Sampler {
+    instance: u64,
     dropped: Arc<AtomicU64>,
     reported_dropped: u64,
+    lag: Arc<Lag>,
+    jobs: mpsc::Sender<BindJob>,
+    enabled: bool,
+    generation: u64,
     bound: HashMap<u64, Bound>,
-    history: HashMap<Scope, VecDeque<(Instant, Sample)>>,
+    history: HashMap<Key, History>,
     broker_cgroup: Option<String>,
+    pending: VecDeque<GapNotice>,
     gap_ids: u64,
 }
 
 impl Sampler {
-    fn new(dropped: Arc<AtomicU64>) -> Self {
+    fn new(
+        instance: u64,
+        dropped: Arc<AtomicU64>,
+        lag: Arc<Lag>,
+        jobs: mpsc::Sender<BindJob>,
+    ) -> Self {
         Self {
+            instance,
             dropped,
             reported_dropped: 0,
+            lag,
+            jobs,
+            enabled: sampler_enabled(),
+            generation: 0,
             bound: HashMap::new(),
             history: HashMap::new(),
-            broker_cgroup: own_cgroup(),
+            broker_cgroup: None,
+            pending: VecDeque::new(),
             gap_ids: 0,
         }
     }
 
-    async fn run(mut self, mut rx: mpsc::Receiver<Notice>) {
-        let mut interval = tokio::time::interval(SAMPLE_PERIOD);
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    async fn run(
+        mut self,
+        mut rx: mpsc::Receiver<Notice>,
+        mut results: mpsc::Receiver<BindResult>,
+    ) {
+        self.broker_cgroup = tokio::task::spawn_blocking(counters::broker_cgroup)
+            .await
+            .ok()
+            .flatten();
+        let mut tick = tokio::time::interval(SAMPLE_PERIOD);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
                 notice = rx.recv() => match notice {
-                    Some(Notice::Bind(connection)) => self.bind(connection).await,
-                    Some(Notice::Gap(gap)) => self.record(gap).await,
+                    Some(Notice::Bind(connection)) => self.bind(&connection),
+                    Some(Notice::Gap(gap)) => self.queue(gap),
                     None => return,
                 },
-                _ = interval.tick() => self.sample_all().await,
+                Some(result) = results.recv() => self.bound(result),
+                _ = tick.tick() => self.tick().await,
             }
         }
     }
 
-    async fn bind(&mut self, connection: Arc<Connection>) {
+    fn submit(&self, connection: &Arc<Connection>) -> BindingState {
+        let job = BindJob {
+            connection: Arc::clone(connection),
+            generation: self.generation,
+        };
+        match self.jobs.try_send(job) {
+            Ok(()) => BindingState::Pending,
+            Err(_) => BindingState::Unavailable("bind_queue_full"),
+        }
+    }
+
+    fn bind(&mut self, connection: &Arc<Connection>) {
         self.bound
             .retain(|_, bound| bound.connection.strong_count() > 0);
-        let state = if sampler_enabled() {
-            resolve_binding(connection.unit.as_deref(), connection.peer_pid).await
+        let state = if self.enabled {
+            self.submit(connection)
         } else {
             BindingState::Unavailable("sampler_disabled")
         };
-        if let BindingState::Verified(binding) = &state
-            && let Some(path) = relative_cgroup(&binding.control_group)
-        {
-            // A unit name, and so its cgroup path, is reused across launches:
-            // samples of an earlier invocation must not become this one's
-            // baseline.
-            self.history.remove(&Scope::Cgroup(path));
-        }
         self.bound.insert(
             connection.connection,
             Bound {
-                connection: Arc::downgrade(&connection),
+                connection: Arc::downgrade(connection),
+                generation: self.generation,
                 state,
             },
         );
     }
 
-    /// Scopes of all live verified bindings, worker scopes first, shared
-    /// ancestors deduplicated, both capped.
-    fn scopes(&self) -> Vec<Scope> {
-        let mut workers = Vec::new();
-        let mut shared = Vec::new();
-        let mut seen = HashSet::new();
-        for bound in self.bound.values() {
-            if bound.connection.strong_count() == 0 {
-                continue;
-            }
-            let BindingState::Verified(binding) = &bound.state else {
-                continue;
-            };
-            let chain = ancestry(&binding.control_group);
-            for (depth, scope) in chain.into_iter().enumerate() {
-                if !seen.insert(scope.clone()) {
-                    continue;
-                }
-                if depth == 0 && workers.len() < MAX_WORKER_SCOPES {
-                    workers.push(scope);
-                } else if depth > 0 && shared.len() < MAX_SHARED_SCOPES {
-                    shared.push(scope);
-                }
-            }
-        }
-        if let Some(own) = &self.broker_cgroup {
-            let own = Scope::Cgroup(own.clone());
-            if seen.insert(own.clone()) {
-                shared.push(own);
-            }
-        }
-        shared.push(Scope::Host);
-        workers.extend(shared);
-        workers
-    }
-
-    async fn sample_all(&mut self) {
-        self.report_drops();
-        if !sampler_enabled() {
-            self.history.clear();
+    fn bound(&mut self, result: BindResult) {
+        let Some(bound) = self.bound.get_mut(&result.connection) else {
+            return;
+        };
+        // A query started before a kill-switch transition is discarded.
+        if bound.generation != result.generation || result.generation != self.generation {
             return;
         }
-        let scopes = self.scopes();
-        let samples = read_scopes(scopes.clone()).await;
-        let now = Instant::now();
-        let live: HashSet<_> = scopes.into_iter().collect();
-        self.history.retain(|scope, _| live.contains(scope));
-        for (scope, sample) in samples {
-            let ring = self.history.entry(scope).or_default();
-            ring.push_back((now, sample));
-            while ring.len() > SAMPLE_HISTORY {
-                ring.pop_front();
+        bound.state = result.state;
+        self.history.remove(&Key::Worker(result.connection));
+    }
+
+    fn queue(&mut self, gap: GapNotice) {
+        if self.pending.len() >= MAX_PENDING_GAPS {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        self.pending.push_back(gap);
+        if !self.enabled {
+            self.flush();
+        }
+    }
+
+    fn live(&self) -> Vec<Arc<Connection>> {
+        self.bound
+            .values()
+            .filter_map(|bound| bound.connection.upgrade())
+            .collect()
+    }
+
+    /// Applies a kill-switch edit: enabling rebinds every live connection,
+    /// disabling drops all samples and records pending gaps without scopes.
+    fn reconcile(&mut self) {
+        let enabled = sampler_enabled();
+        if enabled == self.enabled {
+            return;
+        }
+        self.enabled = enabled;
+        self.generation += 1;
+        self.history.clear();
+        let generation = self.generation;
+        for connection in self.live() {
+            let state = if enabled {
+                self.submit(&connection)
+            } else {
+                BindingState::Unavailable("sampler_disabled")
+            };
+            if let Some(bound) = self.bound.get_mut(&connection.connection) {
+                bound.generation = generation;
+                bound.state = state;
             }
         }
+        if !enabled {
+            self.flush();
+        }
+    }
+
+    async fn tick(&mut self) {
+        self.report_drops();
+        self.bound
+            .retain(|_, bound| bound.connection.strong_count() > 0);
+        self.reconcile();
+        for connection in self.live() {
+            if let Some(gap) = connection.check_threshold() {
+                self.queue(gap);
+            }
+        }
+        if self.enabled {
+            let plan = self.plan();
+            let keys: HashSet<Key> = plan.iter().map(target_key).collect();
+            let samples = read_plan(plan).await;
+            let now = Instant::now();
+            self.history.retain(|key, _| keys.contains(key));
+            for (key, sample) in samples {
+                let ring = self.history.entry(key).or_default();
+                ring.push_back((now, sample));
+                while ring.len() > SAMPLE_HISTORY {
+                    ring.pop_front();
+                }
+            }
+        }
+        self.flush();
+    }
+
+    /// Scopes of all verified live bindings: worker cgroups first, then their
+    /// shared ancestors once each, both capped; the broker and host are
+    /// always included.
+    fn plan(&self) -> Vec<Target> {
+        let mut verified: Vec<_> = self
+            .bound
+            .iter()
+            .filter(|(_, bound)| bound.connection.strong_count() > 0)
+            .filter_map(|(id, bound)| match &bound.state {
+                BindingState::Verified {
+                    control_group,
+                    directory,
+                    ..
+                } => Some((*id, control_group.clone(), Arc::clone(directory))),
+                _ => None,
+            })
+            .collect();
+        verified.sort_by_key(|(id, _, _)| *id);
+        verified.truncate(MAX_WORKER_SCOPES);
+        let mut seen = HashSet::new();
+        let mut shared = Vec::new();
+        for (_, control_group, _) in &verified {
+            let Some(relative) = counters::relative_cgroup(control_group) else {
+                continue;
+            };
+            for ancestor in counters::ancestors(&relative) {
+                if shared.len() < MAX_SHARED_SCOPES && seen.insert(ancestor.clone()) {
+                    shared.push(Target::Path(Key::Ancestor(ancestor.clone()), ancestor));
+                }
+            }
+        }
+        let mut plan: Vec<Target> = verified
+            .into_iter()
+            .map(|(id, _, directory)| Target::Worker(id, directory))
+            .collect();
+        plan.extend(shared);
+        if let Some(own) = &self.broker_cgroup {
+            plan.push(Target::Path(Key::Broker, own.clone()));
+        }
+        plan.push(Target::Host);
+        plan
     }
 
     fn report_drops(&mut self) {
@@ -600,6 +1001,7 @@ impl Sampler {
             tracing::warn!(
                 target: "cowboy_machine::heartbeat_gap",
                 event_name = "cowboy.machine.heartbeat_gap.dropped",
+                gap_instance = self.instance,
                 count = dropped - self.reported_dropped,
                 "heartbeat gap notices dropped; this observation window is incomplete"
             );
@@ -607,181 +1009,166 @@ impl Sampler {
         }
     }
 
-    async fn record(&mut self, gap: GapNotice) {
+    fn flush(&mut self) {
+        while let Some(gap) = self.pending.pop_front() {
+            self.record(&gap);
+        }
+    }
+
+    fn record(&mut self, gap: &GapNotice) {
         self.gap_ids += 1;
         let gap_id = self.gap_ids;
         let observed = &gap.connection;
-        let state = observed.snapshot(observed.now_ms());
         let binding = self
             .bound
             .get(&observed.connection)
             .map_or(BindingState::Unavailable("unbound"), |bound| {
                 bound.state.clone()
             });
+        let evidence = &gap.evidence;
         let opt = |value: Option<u64>| value.map_or(UNAVAILABLE, saturate);
+        let lag = self.lag.max_between(gap.since, gap.at);
+        let invocation = match &binding {
+            BindingState::Verified { invocation, .. } => invocation.as_str(),
+            _ => "",
+        };
         tracing::warn!(
             target: "cowboy_machine::heartbeat_gap",
             event_name = "cowboy.machine.heartbeat_gap",
             session = %observed.session,
             gap_worker_epoch = %observed.epoch,
             gap_connection_id = observed.connection,
+            gap_instance = self.instance,
             gap_id,
             gap_kind = gap.kind.name(),
             gap_ms = gap.gap_ms,
             gap_unread_bytes = opt(gap.unread_bytes),
-            gap_heartbeat_age_ms = opt(state.heartbeat_age_ms),
-            gap_frame_age_ms = opt(state.frame_age_ms),
-            gap_progress_age_ms = opt(state.progress_age_ms),
-            gap_frame_phase = state.phase,
-            gap_frame_declared_bytes = state.declared,
-            gap_frame_read_bytes = state.read,
+            gap_heartbeat_age_ms = opt(evidence.heartbeat_age_ms),
+            gap_frame_age_ms = opt(evidence.frame_age_ms),
+            gap_progress_age_ms = opt(evidence.progress_age_ms),
+            gap_frame_phase = Phase::name(evidence.phase),
+            gap_frame_declared_bytes = evidence.declared,
+            gap_frame_read_bytes = evidence.read,
+            gap_frame_current_ms = opt(evidence.current_frame_ms),
+            gap_frame_waiting_ms = opt(evidence.waiting_ms),
+            gap_slowest_frame_ms = evidence.slowest_frame_ms,
+            gap_slowest_frame_bytes = evidence.slowest_frame_bytes,
+            gap_longest_idle_ms = evidence.longest_idle_ms,
+            gap_frames = evidence.frames,
+            gap_broker_lag_ms = opt(lag),
             gap_binding = binding.label(),
-            gap_invocation = match &binding {
-                BindingState::Verified(binding) => binding.invocation.as_str(),
-                BindingState::Unavailable(_) => "",
-            },
+            gap_invocation = invocation,
+            gap_unit = observed.unit.as_deref().unwrap_or(""),
             gap_dropped_notices = self.dropped.load(Ordering::Relaxed),
-            gap_sampler_enabled = sampler_enabled(),
+            gap_sampler_enabled = self.enabled,
             gap_detail = gap.detail.as_deref().unwrap_or(""),
             "worker heartbeat gap"
         );
-        let BindingState::Verified(binding) = binding else {
+        let BindingState::Verified { control_group, .. } = binding else {
             return;
         };
-        if !sampler_enabled() {
+        if !self.enabled {
             return;
         }
-        let mut scopes = ancestry(&binding.control_group);
+        let mut scopes = vec![(
+            Key::Worker(observed.connection),
+            "worker",
+            control_group.clone(),
+        )];
+        if let Some(relative) = counters::relative_cgroup(&control_group) {
+            for ancestor in counters::ancestors(&relative) {
+                scopes.push((Key::Ancestor(ancestor.clone()), "ancestor", ancestor));
+            }
+        }
         if let Some(own) = &self.broker_cgroup {
-            scopes.push(Scope::Cgroup(own.clone()));
+            scopes.push((Key::Broker, "broker", own.clone()));
         }
-        scopes.push(Scope::Host);
-        let fresh = read_scopes(scopes.clone()).await;
-        let now = Instant::now();
-        let since = now
-            .checked_sub(Duration::from_millis(
-                gap.at_ms.saturating_sub(gap.since_ms),
-            ))
-            .unwrap_or(now);
-        for (depth, (scope, sample)) in fresh.into_iter().enumerate() {
-            let baseline = self
-                .history
-                .get(&scope)
-                .and_then(|ring| baseline(ring, since));
-            log_scope(
+        scopes.push((Key::Host, "host", String::new()));
+        for (depth, (key, kind, path)) in scopes.into_iter().enumerate() {
+            let Some(ring) = self.history.get(&key) else {
+                continue;
+            };
+            let scope = Scope {
+                instance: self.instance,
                 gap_id,
-                &observed.session,
                 depth,
-                &scope,
-                &self.broker_cgroup,
-                baseline,
-                (now, sample),
-            );
+                kind,
+                path: &path,
+            };
+            log_scope(&scope, &observed.session, ring, gap);
         }
     }
 }
 
-fn saturate(value: u64) -> i64 {
-    i64::try_from(value).unwrap_or(i64::MAX)
-}
-
-/// The latest sample at or before `since`, else the oldest retained one (a
-/// partial coverage that the record states).
-fn baseline(ring: &VecDeque<(Instant, Sample)>, since: Instant) -> Option<(Instant, Sample)> {
-    ring.iter()
-        .rev()
-        .find(|(at, _)| *at <= since)
-        .or_else(|| ring.front())
-        .copied()
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct Delta {
-    coverage_ms: i64,
-    cpu: (i64, i64),
-    memory: (i64, i64),
-    io: (i64, i64),
-    events: (i64, i64, i64, i64),
-    events_local: (i64, i64),
-}
-
-fn delta(baseline: Option<(Instant, Sample)>, current: (Instant, Sample)) -> Delta {
-    let Some((at, before)) = baseline else {
-        return Delta {
-            coverage_ms: UNAVAILABLE,
-            cpu: (UNAVAILABLE, UNAVAILABLE),
-            memory: (UNAVAILABLE, UNAVAILABLE),
-            io: (UNAVAILABLE, UNAVAILABLE),
-            events: (UNAVAILABLE, UNAVAILABLE, UNAVAILABLE, UNAVAILABLE),
-            events_local: (UNAVAILABLE, UNAVAILABLE),
-        };
-    };
-    let (now, after) = current;
-    let diff = |before: Option<u64>, after: Option<u64>| match (before, after) {
-        (Some(before), Some(after)) => saturate(after.saturating_sub(before)),
-        _ => UNAVAILABLE,
-    };
-    let psi = |before: Option<Psi>, after: Option<Psi>| {
-        (
-            diff(before.map(|p| p.some_us), after.map(|p| p.some_us)),
-            diff(
-                before.and_then(|p| p.full_us),
-                after.and_then(|p| p.full_us),
-            ),
-        )
-    };
-    let event = |before: Option<Events>, after: Option<Events>, pick: fn(&Events) -> u64| {
-        diff(before.as_ref().map(pick), after.as_ref().map(pick))
-    };
-    Delta {
-        coverage_ms: saturate(
-            u64::try_from(now.saturating_duration_since(at).as_millis()).unwrap_or(u64::MAX),
-        ),
-        cpu: psi(before.cpu, after.cpu),
-        memory: psi(before.memory, after.memory),
-        io: psi(before.io, after.io),
-        events: (
-            event(before.events, after.events, |e| e.high),
-            event(before.events, after.events, |e| e.max),
-            event(before.events, after.events, |e| e.oom),
-            event(before.events, after.events, |e| e.oom_kill),
-        ),
-        events_local: (
-            event(before.events_local, after.events_local, |e| e.high),
-            event(before.events_local, after.events_local, |e| e.max),
-        ),
+fn target_key(target: &Target) -> Key {
+    match target {
+        Target::Worker(id, _) => Key::Worker(*id),
+        Target::Path(key, _) => key.clone(),
+        Target::Host => Key::Host,
     }
 }
 
-fn log_scope(
+/// Reads every planned scope on one blocking thread; one unreadable field
+/// never hides the others.
+async fn read_plan(plan: Vec<Target>) -> Vec<(Key, Sample)> {
+    tokio::task::spawn_blocking(move || {
+        plan.into_iter()
+            .map(|target| {
+                let key = target_key(&target);
+                let sample = match &target {
+                    Target::Worker(_, directory) => counters::read_cgroup(directory),
+                    Target::Path(_, path) => counters::read_path(path),
+                    Target::Host => counters::read_host(),
+                };
+                (key, sample)
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
+}
+
+struct Scope<'a> {
+    instance: u64,
     gap_id: u64,
-    session: &str,
     depth: usize,
-    scope: &Scope,
-    broker: &Option<String>,
-    baseline: Option<(Instant, Sample)>,
-    current: (Instant, Sample),
-) {
-    let (kind, path) = match scope {
-        Scope::Host => ("host", ""),
-        Scope::Cgroup(path) if broker.as_deref() == Some(path.as_str()) => {
-            ("broker", path.as_str())
+    kind: &'static str,
+    path: &'a str,
+}
+
+/// Milliseconds from `earlier` to `later`, negative when `later` is earlier.
+fn signed_ms(later: Instant, earlier: Instant) -> i64 {
+    match later.checked_duration_since(earlier) {
+        Some(ahead) => saturate(u64::try_from(ahead.as_millis()).unwrap_or(u64::MAX)),
+        None => {
+            -saturate(u64::try_from(earlier.duration_since(later).as_millis()).unwrap_or(u64::MAX))
         }
-        Scope::Cgroup(path) if depth == 0 => ("worker", path.as_str()),
-        Scope::Cgroup(path) => ("ancestor", path.as_str()),
+    }
+}
+
+fn log_scope(scope: &Scope<'_>, session: &str, ring: &History, gap: &GapNotice) {
+    let Some((end_at, end)) = ring.back() else {
+        return;
     };
-    let change = delta(baseline, current);
-    let sample = current.1;
+    let Some((start_at, start)) = counters::baseline(ring, gap.since) else {
+        return;
+    };
+    let change = counters::delta(start, end);
+    let (cgroup, truncated) = bounded(scope.path, MAX_TEXT);
     let opt = |value: Option<u64>| value.map_or(UNAVAILABLE, saturate);
     tracing::warn!(
         target: "cowboy_machine::heartbeat_gap",
         event_name = "cowboy.machine.heartbeat_gap.scope",
         session = %session,
-        gap_id,
-        gap_scope_kind = kind,
-        gap_scope_depth = depth as u64,
-        gap_cgroup = path,
-        gap_coverage_ms = change.coverage_ms,
+        gap_instance = scope.instance,
+        gap_id = scope.gap_id,
+        gap_scope_kind = scope.kind,
+        gap_scope_depth = scope.depth as u64,
+        gap_cgroup = cgroup.as_str(),
+        gap_cgroup_truncated = truncated,
+        gap_baseline_lead_ms = signed_ms(gap.since, *start_at),
+        gap_end_lag_ms = signed_ms(*end_at, gap.at),
+        gap_coverage_ms = signed_ms(*end_at, *start_at),
         gap_cpu_some_us = change.cpu.0,
         gap_cpu_full_us = change.cpu.1,
         gap_memory_some_us = change.memory.0,
@@ -794,277 +1181,11 @@ fn log_scope(
         gap_oom_kill_events = change.events.3,
         gap_local_high_events = change.events_local.0,
         gap_local_max_events = change.events_local.1,
-        gap_memory_current = opt(sample.current),
-        gap_memory_high_limit = opt(sample.high),
-        gap_memory_max_limit = opt(sample.limit),
+        gap_memory_current = opt(end.current),
+        gap_memory_high_limit = opt(end.high),
+        gap_memory_max_limit = opt(end.limit),
         "worker heartbeat gap scope"
     );
-}
-
-/// `path` and every ancestor below the root, nearest first.
-fn ancestry(control_group: &str) -> Vec<Scope> {
-    let Some(mut path) = relative_cgroup(control_group) else {
-        return Vec::new();
-    };
-    let mut chain = Vec::new();
-    loop {
-        chain.push(Scope::Cgroup(path.clone()));
-        match path.rsplit_once('/') {
-            Some((parent, _)) => path = parent.to_owned(),
-            None => break,
-        }
-    }
-    chain
-}
-
-/// A cgroup v2 path as the kernel reports it (`/a/b.slice/c.service`),
-/// relative to the mount. Refuses the root, empty segments, `.` and `..`.
-fn relative_cgroup(control_group: &str) -> Option<String> {
-    let relative = control_group.strip_prefix('/')?;
-    if relative.is_empty()
-        || relative.len() > 4096
-        || relative
-            .split('/')
-            .any(|segment| segment.is_empty() || segment == "." || segment == "..")
-    {
-        return None;
-    }
-    Some(relative.to_owned())
-}
-
-fn own_cgroup() -> Option<String> {
-    let text = std::fs::read_to_string("/proc/self/cgroup").ok()?;
-    let path = unified_cgroup(&text)?;
-    relative_cgroup(&path)
-}
-
-/// The cgroup v2 entry (`0::/path`) of a `/proc/<pid>/cgroup` file.
-fn unified_cgroup(text: &str) -> Option<String> {
-    text.lines()
-        .find_map(|line| line.strip_prefix("0::"))
-        .map(str::to_owned)
-}
-
-/// Resolves and verifies a systemd worker unit's cgroup. The query runs once
-/// per connection; the peer process must be a member of the unit's cgroup.
-async fn resolve_binding(unit: Option<&str>, peer_pid: Option<u32>) -> BindingState {
-    let Some(unit) = unit else {
-        return BindingState::Unavailable("direct_mode");
-    };
-    let Some(peer_pid) = peer_pid else {
-        return BindingState::Unavailable("peer_unknown");
-    };
-    let mut command = tokio::process::Command::new("systemctl");
-    command
-        .args([
-            "--user",
-            "show",
-            unit,
-            "--property=ControlGroup",
-            "--property=InvocationID",
-        ])
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true);
-    let output = match tokio::time::timeout(BIND_TIMEOUT, command.output()).await {
-        Ok(Ok(output)) if output.status.success() => output,
-        Ok(_) => return BindingState::Unavailable("unit_query_failed"),
-        Err(_) => return BindingState::Unavailable("unit_query_timeout"),
-    };
-    let Some(binding) = parse_unit_show(&String::from_utf8_lossy(&output.stdout)) else {
-        return BindingState::Unavailable("unit_unresolved");
-    };
-    let control_group = binding.control_group.clone();
-    let member = tokio::task::spawn_blocking(move || peer_member(peer_pid, &control_group))
-        .await
-        .unwrap_or(Err("peer_check_failed"));
-    match member {
-        Ok(()) => BindingState::Verified(binding),
-        Err(reason) => BindingState::Unavailable(reason),
-    }
-}
-
-fn parse_unit_show(text: &str) -> Option<Binding> {
-    let mut control_group = None;
-    let mut invocation = None;
-    for line in text.lines() {
-        if let Some(value) = line.strip_prefix("ControlGroup=") {
-            control_group = Some(value.trim().to_owned());
-        } else if let Some(value) = line.strip_prefix("InvocationID=") {
-            invocation = Some(value.trim().to_owned());
-        }
-    }
-    let control_group = control_group.filter(|path| relative_cgroup(path).is_some())?;
-    let invocation = invocation
-        .filter(|id| id.len() == 32 && id.bytes().all(|byte| byte.is_ascii_hexdigit()))?;
-    Some(Binding {
-        control_group,
-        invocation,
-    })
-}
-
-/// Reads the peer's cgroup through a `/proc/<pid>` directory handle. If the
-/// process exits (and its PID is reused) after the handle opens, reads through
-/// it fail instead of describing another process.
-fn peer_member(pid: u32, control_group: &str) -> Result<(), &'static str> {
-    use rustix::fs::{Mode, OFlags, openat};
-    let proc_root = Root::open("/proc", Some(PROC_SUPER_MAGIC)).map_err(|_| "proc_unavailable")?;
-    let directory = openat(
-        &proc_root.fd,
-        pid.to_string(),
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .map_err(|_| "peer_exited")?;
-    let text = read_bounded_at(&directory, "cgroup").map_err(|_| "peer_exited")?;
-    let path = unified_cgroup(&text).ok_or("peer_cgroup_unknown")?;
-    if path == control_group || path.starts_with(&format!("{control_group}/")) {
-        Ok(())
-    } else {
-        Err("peer_outside_unit")
-    }
-}
-
-/// A directory handle on a validated filesystem.
-struct Root {
-    fd: rustix::fd::OwnedFd,
-}
-
-impl Root {
-    fn open(path: &str, magic: Option<i64>) -> io::Result<Self> {
-        use rustix::fs::{Mode, OFlags, fstatfs, open};
-        let fd = open(
-            path,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        )?;
-        if let Some(magic) = magic {
-            #[allow(clippy::unnecessary_cast)]
-            let found = fstatfs(&fd)?.f_type as i64;
-            if found != magic {
-                return Err(io::Error::other("unexpected filesystem"));
-            }
-        }
-        Ok(Self { fd })
-    }
-
-    fn read(&self, relative: &str) -> io::Result<String> {
-        read_bounded_at(&self.fd, relative)
-    }
-}
-
-fn read_bounded_at<Fd: rustix::fd::AsFd>(directory: Fd, relative: &str) -> io::Result<String> {
-    use rustix::fs::{Mode, OFlags, ResolveFlags, openat2};
-    use std::io::Read as _;
-    let fd = openat2(
-        directory,
-        relative,
-        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
-        Mode::empty(),
-        ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_MAGICLINKS,
-    )?;
-    let mut text = String::new();
-    std::fs::File::from(fd)
-        .take(MAX_COUNTER_FILE as u64)
-        .read_to_string(&mut text)?;
-    Ok(text)
-}
-
-/// Reads every scope on a blocking thread; one unreadable field never hides
-/// the others.
-async fn read_scopes(scopes: Vec<Scope>) -> Vec<(Scope, Sample)> {
-    tokio::task::spawn_blocking(move || {
-        let cgroups = Root::open("/sys/fs/cgroup", Some(CGROUP2_SUPER_MAGIC)).ok();
-        let proc = Root::open("/proc", Some(PROC_SUPER_MAGIC)).ok();
-        scopes
-            .into_iter()
-            .map(|scope| {
-                let sample = match &scope {
-                    Scope::Cgroup(path) => cgroups
-                        .as_ref()
-                        .map(|root| read_cgroup(root, path))
-                        .unwrap_or_default(),
-                    Scope::Host => proc.as_ref().map(read_host).unwrap_or_default(),
-                };
-                (scope, sample)
-            })
-            .collect()
-    })
-    .await
-    .unwrap_or_default()
-}
-
-fn read_cgroup(root: &Root, path: &str) -> Sample {
-    let file = |name: &str| root.read(&format!("{path}/{name}")).ok();
-    Sample {
-        cpu: file("cpu.pressure").as_deref().and_then(parse_psi),
-        memory: file("memory.pressure").as_deref().and_then(parse_psi),
-        io: file("io.pressure").as_deref().and_then(parse_psi),
-        events: file("memory.events").as_deref().and_then(parse_events),
-        events_local: file("memory.events.local")
-            .as_deref()
-            .and_then(parse_events),
-        current: file("memory.current").as_deref().and_then(parse_limit),
-        high: file("memory.high").as_deref().and_then(parse_limit),
-        limit: file("memory.max").as_deref().and_then(parse_limit),
-    }
-}
-
-fn read_host(proc: &Root) -> Sample {
-    let file = |name: &str| proc.read(&format!("pressure/{name}")).ok();
-    Sample {
-        cpu: file("cpu").as_deref().and_then(parse_psi),
-        memory: file("memory").as_deref().and_then(parse_psi),
-        io: file("io").as_deref().and_then(parse_psi),
-        ..Sample::default()
-    }
-}
-
-/// `some ... total=N` and optional `full ... total=N` lines.
-fn parse_psi(text: &str) -> Option<Psi> {
-    let total = |prefix: &str| {
-        text.lines()
-            .find(|line| line.starts_with(prefix))
-            .and_then(|line| {
-                line.split_whitespace()
-                    .find_map(|field| field.strip_prefix("total="))
-            })
-            .and_then(|value| value.parse().ok())
-    };
-    Some(Psi {
-        some_us: total("some ")?,
-        full_us: total("full "),
-    })
-}
-
-fn parse_events(text: &str) -> Option<Events> {
-    let mut events = Events::default();
-    let mut any = false;
-    for line in text.lines() {
-        let Some((key, value)) = line.split_once(' ') else {
-            continue;
-        };
-        let Ok(value) = value.trim().parse() else {
-            continue;
-        };
-        let slot = match key {
-            "high" => &mut events.high,
-            "max" => &mut events.max,
-            "oom" => &mut events.oom,
-            "oom_kill" => &mut events.oom_kill,
-            _ => continue,
-        };
-        *slot = value;
-        any = true;
-    }
-    any.then_some(events)
-}
-
-fn parse_limit(text: &str) -> Option<u64> {
-    match text.trim() {
-        "max" => Some(u64::MAX),
-        value => value.parse().ok(),
-    }
 }
 
 #[cfg(test)]

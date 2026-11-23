@@ -209,55 +209,69 @@ are used up, so these amendments are **unreviewed**.
 
 ### L0 implementation
 
-The code is in `components/machine/src/machine_broker/liveness.rs`. It is
-implemented on its branch and **not deployed**.
+The code is in `components/machine/src/machine_broker/liveness.rs` and
+`liveness_counters.rs`. It is implemented on its branch and **not deployed**.
 
-**Hooks in the broker.**
-- `handle_worker` reads frames through `liveness::read_frame`. That is
+**Hot paths.** These touch only their own connection's atomics and `try_send`
+into a 64-slot queue; a full queue counts drops:
+
+- `handle_worker` reads through `liveness::read_frame`, which is
   `runtime_wire::read_frame` plus phase and progress stamps, with the same
   framing.
-- The `Heartbeat` arm stamps the heartbeat clock.
-- `monitor_workers` forwards each backlog extension and isolation.
+- The `Heartbeat` arm, and the sweep inside `take_stale_workers` (with the
+  exact peer, its decision and its measured `FIONREAD`), add no lock, scan or
+  await.
 
-All of these update atomics and `try_send` into a 64-slot queue. A full queue
-counts drops and does not block.
+**Evidence.**
 
-**One sampler task.**
-- **Binding.** For each new connection it runs a bounded
-  `systemctl --user show` (5 s timeout) for `ControlGroup` and
-  `InvocationID`. It then verifies that the `SO_PEERCRED` peer is in that
-  cgroup, through a `/proc/<pid>` directory handle.
-- **Sampling.** Every 10 s it reads the counters of each bound worker scope.
-  Ancestors, the broker's unit and the host are deduplicated across workers
-  and read once each. It runs on one blocking thread with
-  `openat2(BENEATH|NO_SYMLINKS|NO_MAGICLINKS)` on validated cgroup2 and proc
-  roots, and keeps 10 samples per scope.
+- A closing heartbeat freezes the interval's evidence into its notice before
+  resetting it: slowest frame and size, longest first-byte wait, frames, and
+  the in-flight frame's phase and bytes.
+- A threshold crossing is detected on each 10 s tick, even if no heartbeat
+  or isolation follows.
+- A probe records the broker runtime's own scheduling lag every 250 ms.
 
-**Records.** For each gap the sampler logs:
-- one `cowboy.machine.heartbeat_gap` record;
-- one `cowboy.machine.heartbeat_gap.scope` record per scope, with deltas
-  against the sample before the gap and a `gap_coverage_ms`.
+**Binding.** At admission the broker pins the `SO_PEERCRED` peer's
+`/proc/<pid>` directory before any await. A two-lane bind pool then:
 
-All fields are `gap_*`, and an unreadable value is `-1`.
+1. runs a bounded `systemctl --user show` (5 s, 4 KiB of output);
+2. pins the unit's `ControlGroup` directory;
+3. verifies that the pinned peer is a member.
 
-**Telemetry.** Machine telemetry keeps every `gap_*` field: a test asserts the
-allowlist covers each one. Drops are logged as
-`cowboy.machine.heartbeat_gap.dropped`.
+A recreated unit cannot be sampled under the old invocation. Results from
+before a kill-switch transition are discarded, and enabling the sampler
+rebinds live connections.
 
-**Kill switch.**
-- The Device setting `diagnostics.heartbeat_gap_sampler` (default `true`,
-  applies live) controls it.
-- `false` stops the unit queries and the sampling; gap records stay.
-- Agents discover it through Cowboy MCP `configuration.schema("device")`.
-  Writing Device configuration stays an operator action.
+**Residual.** The window between `accept` and the `/proc` open is not
+covered. Closing it needs `SO_PEERPIDFD`, which rustix 1.1.6 does not expose;
+the crate forbids `unsafe`.
+
+**Sampling.** Every 10 s the sampler reads worker scopes through their pinned
+directories. It reads ancestors once each (capped) and always the broker unit
+and the host. Reads run on a blocking thread with
+`openat2(BENEATH|NO_SYMLINKS|NO_MAGICLINKS|NO_XDEV)` on validated roots.
+Gap records are built from those periodic samples:
+
+- `gap_baseline_lead_ms` and `gap_end_lag_ms` state the real coverage
+  against the gap's own start and end.
+- A gap waits at most one tick.
+
+Off Linux, gap records stay and scopes are unavailable.
+
+**Kill switch.** The Device setting `diagnostics.heartbeat_gap_sampler`
+(default `true`, applies live) stops unit queries and sampling. Gap records
+stay. Agents discover it through Cowboy MCP `configuration.schema("device")`;
+writing Device configuration stays an operator action.
 
 **Query** (VictoriaLogs on Hawk):
 
 ```text
-event_name:"cowboy.machine.heartbeat_gap" OR event_name:"cowboy.machine.heartbeat_gap.scope"
+event_name:"cowboy.machine.heartbeat_gap" OR event_name:"cowboy.machine.heartbeat_gap.scope" OR event_name:"cowboy.machine.heartbeat_gap.dropped"
 ```
 
-Join the two record types on `cowboy.heartbeat_gap.id`, within one session.
+- Join records on host, `cowboy.heartbeat_gap.instance` (one per broker
+  start), session and `cowboy.heartbeat_gap.id`.
+- A window containing a `.dropped` record is incomplete.
 
 ### L0 rollout
 
@@ -265,7 +279,7 @@ Join the two record types on `cowboy.heartbeat_gap.id`, within one session.
 |---|---|---|---|---|
 | L0-0 | **Pin compatibility preflight.** On the exact integrated commit, `retained-worker-interface-compatible` must hold. As of `789e64c24`, `Cargo.toml` and `Cargo.lock` already differ from the pinned worker source `1da02869a`, so no host release builds from `main` | Build check only | n/a | If incompatible, L0 waits for, or rides on, a **separately approved worker pin advance** (`docs/machine-worker-pin-advance-runbook.md`). That replaces every live Hawk worker generation |
 | L0-a | The broker gap record and the sampler | `.#cowboy-machine-writer-host-release` on Hawk (active deletion writer). OVH and Falcon use the resident-fix output their runbooks select. **Never `.#cowboy-machine-release` on Hawk while the writer is active** | See the next row | Machine component activation: restarts only the resident Machine and retains workers |
-| L0-a′ | Rollback | The previous admitted resident release that keeps both writers and the accepted worker generation | 1. Remove the kill-switch key from the Device configuration, or restore a configuration the rollback binary accepts (older Machines reject unknown keys: `docs/configuration.md:45-69`, `machine_cli.rs:513-521`). 2. Validate with that binary's `cowboy config check`. 3. Activate, then verify worker and keeper identities are retained | Machine component activation |
+| L0-a′ | Rollback | The previous admitted resident release that keeps both writers and the accepted worker generation | 1. Remove the whole `[diagnostics]` section (an empty table is still an unknown section to an older Machine) from the Device configuration, or restore a configuration the rollback binary accepts (older Machines reject unknown keys: `docs/configuration.md:45-69`, `machine_cli.rs:513-521`). 2. Validate with that binary's `cowboy config check`. 3. Activate, then verify worker and keeper identities are retained | Machine component activation |
 | L0-b | VM reproduction | No host | n/a | None |
 
 L0 needs no Columbus change and no network change. It needs a worker pin

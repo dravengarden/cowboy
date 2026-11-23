@@ -54,8 +54,8 @@ schema = 1
 # Attribute worker heartbeat gaps: the Machine broker samples cgroup pressure
 # of live workers and their ancestors every 10 s and logs it with each gap.
 # false stops the sampling and unit queries; gap records stay, without scopes.
-# Remove the key, rather than setting it, before rolling back to a release
-# that does not know it.
+# Before rolling back to a release that does not know it, remove the whole
+# [diagnostics] section: older Machines reject it even when empty.
 # boolean (true or false); applies live.
 # heartbeat_gap_sampler = true
 

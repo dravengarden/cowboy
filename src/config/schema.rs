@@ -454,7 +454,7 @@ pub static DEVICE_FIELDS: &[Field] = &[
         kind: Kind::Bool,
         default: Value::Bool(true),
         reload: Reload::Live,
-        doc: "Attribute worker heartbeat gaps: the Machine broker samples cgroup pressure\nof live workers and their ancestors every 10 s and logs it with each gap.\nfalse stops the sampling and unit queries; gap records stay, without scopes.\nRemove the key, rather than setting it, before rolling back to a release\nthat does not know it.",
+        doc: "Attribute worker heartbeat gaps: the Machine broker samples cgroup pressure\nof live workers and their ancestors every 10 s and logs it with each gap.\nfalse stops the sampling and unit queries; gap records stay, without scopes.\nBefore rolling back to a release that does not know it, remove the whole\n[diagnostics] section: older Machines reject it even when empty.",
     },
     Field {
         key: "file_buffers.enabled",
