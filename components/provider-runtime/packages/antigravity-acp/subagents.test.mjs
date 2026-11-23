@@ -1053,6 +1053,22 @@ test("a child's model label is the new session's confirmed configuration", async
   assert.equal(made.proxy.subagents.configUpdateIgnored(id), false);
 });
 
+test("an update from before agy's answer never overwrites what that answer confirmed", async () => {
+  const made = await parent();
+  const { client, control } = made;
+  // agy names model A, then answers the open confirming B, then names C.
+  control.beforeNew = (sessionId) => [
+    childUpdate(sessionId, { sessionUpdate: "config_option_update", ...configOptions("m-a") }),
+  ];
+  control.newResult = () => configOptions("m-b");
+  control.afterNew = (sessionId) => [
+    childUpdate(sessionId, { sessionUpdate: "config_option_update", ...configOptions("m-c") }),
+  ];
+  const id = await startChild(made);
+  await flush();
+  assert.deepEqual(configUpdates(client, id).map(labelled), [["m-a"], ["m-b"], ["m-c"]]);
+});
+
 test("a child that got no replays still shows agy's own updates", async () => {
   const made = await parent();
   made.control.afterNew = (sessionId) => [

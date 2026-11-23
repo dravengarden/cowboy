@@ -343,6 +343,9 @@ export class Subagents {
       held.push(frame);
       return false;
     });
+    // What arrived before agy's answer is older than that answer's own
+    // configuration; the rest is newer (`release` keeps that order).
+    held.beforeReply = held.length;
     this.opening.set(sessionId, held);
   }
 
@@ -380,12 +383,18 @@ export class Subagents {
   }
 
   /** The child is announced: its held frames now take the ordinary path. */
-  release(sessionId) {
+  release(sessionId, publish = () => {}) {
     const frames = this.opening.get(sessionId) ?? [];
     this.opening.delete(sessionId);
-    frames
-      .reduce((done, frame) => done.then(() => this.proxy.fromAgent(frame)), Promise.resolve())
-      .catch(() => {});
+    const before = frames.beforeReply ?? 0;
+    const drain = (done, list) =>
+      list.reduce((chain, frame) => chain.then(() => this.proxy.fromAgent(frame)), done);
+    // In the order agy spoke: what it sent before its answer, then what that
+    // answer confirmed (`publish`), then what it sent after.
+    drain(
+      drain(Promise.resolve(), frames.slice(0, before)).then(publish),
+      frames.slice(before),
+    ).catch(() => {});
   }
 
   /**
@@ -547,8 +556,9 @@ export class Subagents {
       runtime.facade.beginTurn(nativeId);
       // The one model label the worker gets for a replayed child, and only
       // when it is confirmed. A child nothing was replayed onto also gets
-      // agy's own updates (below), which describe the unchanged default.
-      if (confirmed !== undefined) {
+      // agy's own updates, which describe the unchanged default.
+      const publish = () => {
+        if (confirmed === undefined) return;
         proxy.client({
           jsonrpc: "2.0",
           method: "session/update",
@@ -557,11 +567,11 @@ export class Subagents {
             update: { sessionUpdate: "config_option_update", configOptions: [confirmed] },
           },
         });
-      }
+      };
       // A child nothing was replayed onto hears agy's own updates from here.
       if (!child.replayed) this.configFence.delete(nativeId);
       // The worker knows the child now: what `agy` sent while it opened.
-      this.release(nativeId);
+      this.release(nativeId, publish);
       // A prompt has no timeout of its own: it ends when the turn does.
       this.request(
         "session/prompt",

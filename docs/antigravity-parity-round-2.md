@@ -125,6 +125,9 @@ tells the worker only what is confirmed, from an authoritative final snapshot:
   is dropped when the quarantine is released, since it would be read as the
   parent's; the root session's own configuration also arrives in its `session/new`
   answer.
+- Order follows what agy said: frames it sent before answering the open are drained
+  first, then the proxy's confirmed `config_option_update`, then frames sent after
+  the answer, so an older opening update never overwrites what the answer confirmed.
 - When the child is announced the proxy sends exactly one `config_option_update`
   under the child's session id, carrying only the `model` option as a complete ACP
   select option (`id`, `name`, `category`, `type`, `currentValue`, `options`). A choice
@@ -153,8 +156,9 @@ still announced; a child with no replays still shows agy's own updates; an
 oversized choice list is sent empty as a complete select option; an abandoned child's
 late update, a replayed child's after the proxy pruned it, and an unclaimed
 session's quarantined update after a refused open never reach the worker; the fence
-survives thousands of later adoptions and ends at a confirmed close; a refused replay
-still fails the start.
+survives thousands of later adoptions and ends at a confirmed close; an update from
+before agy's answer is drained before the confirmed model; a refused replay still fails
+the start.
 
 ### Acceptance
 
