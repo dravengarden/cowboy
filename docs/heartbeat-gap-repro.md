@@ -72,41 +72,61 @@ the Columbus `machines` flake. `run.sh` does this by default.
 
 Run conditions:
 
-- Guest: 4 vCPU and 4 GiB.
-- Hawk load average was 124 at the start and 12 at the end. Worker-pin
-  acceptance builds were running at the same time.
-- The `vm.sh isolation check` reported the host network unchanged.
+- Guest: 4 vCPU and 4 GiB, using the hardened harness (every case valid: all
+  units stayed active through the window).
+- Hawk load average was 9 at the start and 109 at the end. Other sessions'
+  gates and builds were running at the same time.
+- The isolation check reported a host change. That change was a Hawk machine
+  transaction run by another session at 06:25-06:39 (revision `7b52c632`),
+  which loaded the `nixos-fw` nftables tables. A user-network guest cannot
+  create host nftables tables.
 
-| Case | Heartbeats | Max gap (ms) | > 45 s | Worker memory `full` stall (ms) | Alloc stall (ms) | Lock wait (ms) | Slice `memory.high` events |
-|---|---|---|---|---|---|---|---|
-| baseline | 18 | 10,001 | 0 | 0 | 1 | 0 | 0 |
-| cpu | 18 | 10,008 | 0 | 0 | 0 | 0 | 0 |
-| memory-high | 18 | 10,191 | 0 | **2,001** | 779 | 0 | 29,575 |
-| io | 18 | 10,000 | 0 | 0 | 0 | 0 | 0 |
-| combined | 18 | **12,455** | 0 | **6,236** | 1,271 | 0 | 361,187 |
-| frame-block | 15 | **51,606** | **2** | 0 | 0 | **46,142** | 0 |
-| split-memory | 18 | 10,000 | 0 | **0** | 0 | 0 | 22,469 |
-| max-only | 18 | 10,033 | 0 | 56 | 33 | 5 | 0 |
+Each row is a single run of 180 s, so the remedy comparisons are single
+observations.
+
+| Case | Heartbeats | Max receive gap (ms) | Max silence (ms) | > 45 s | Max send latency (ms) | Alloc stall (ms) | Lock wait (ms) | Worker memory `full` stall (ms) | Slice `memory.high` events |
+|---|---|---|---|---|---|---|---|---|---|
+| baseline | 18 | 10,001 | 10,027 | 0 | 2 | 0 | 0 | 0 | 0 |
+| cpu | 18 | 10,419 | 10,419 | 0 | 450 | 367 | 0 | 0 | 0 |
+| memory-high | 18 | 11,352 | 11,352 | 0 | 1,394 | 1,391 | 0 | **1,443** | 22,852 |
+| io | 18 | 10,004 | 10,059 | 0 | 4 | 1 | 0 | 0 | 0 |
+| combined | 18 | 12,043 | 12,043 | 0 | **2,043** | 1,091 | 0 | **8,050** | 352,819 |
+| frame-block | 15 | **51,620** | **52,529** | **2** | **46,126** | 0 | **46,126** | 0 | 0 |
+| split-memory | 18 | 10,000 | 10,025 | 0 | 0 | 0 | 0 | **0** | 44,993 |
+| max-only | 18 | 10,054 | 10,054 | 0 | 86 | 86 | 0 | 116 | 0 |
+
+How to read the columns:
+
+- **Max silence** includes the time before the first heartbeat and after the
+  last one.
+- **Send latency** is measured from a beat's deadline to its write
+  completion.
+- An earlier run of the first harness (no validity checks or silence fields)
+  showed the same pattern, with a 51.6 s frame-block gap.
 
 ### What the results show
 
 - **Shared `MemoryHigh` throttling stalls the heartbeat sender.** In
   `memory-high` and `combined`, the worker shares the throttled slice. It
-  spent 2-6 s of the 180 s fully stalled on memory, and its per-beat
-  allocation stalled for up to 1.3 s. At 4 GiB with these loads, the stalls
-  delayed a heartbeat by 2.5 s at most. They never approached 45 s.
+  spent 1.4-8.0 s of the 180 s fully stalled on memory, and a beat's
+  deadline-to-write latency reached 2.0 s. The largest receive gap was
+  12.0 s. At 4 GiB with these loads, the stall stayed in seconds and never
+  approached 45 s.
 - **The split removes the stall.** In `split-memory` the same load drove the
-  task slice over `MemoryHigh` 22,469 times. The worker in
-  `cowboy-control.slice` recorded zero memory stall.
+  task slice over `MemoryHigh` 44,993 times. The worker in
+  `cowboy-control.slice` recorded zero memory stall and zero send latency.
 - **The policy remedy almost removes it.** In `max-only`, with no shared
-  `MemoryHigh`, the stall dropped to 56 ms.
-- **CPU and I/O alone did not delay the heartbeat** at these weights and
-  sizes.
-- **Only frame blocking crosses 45 s.** In `frame-block` the heartbeat waited
-  46 s for the writer lock behind a 32 MiB frame that the broker was reading
-  slowly. That produced two gaps of 51.6 s, close to the 48-58 s seen on Hawk.
-  The broker's read delay was set on purpose, so this shows that the
-  mechanism can reach that size. It does not show that it happened on Hawk.
+  `MemoryHigh`, the stall dropped to 116 ms.
+- **CPU and I/O alone added at most 0.45 s** at these weights and sizes.
+- **Only frame blocking crosses 45 s between receipts.** In `frame-block`
+  the heartbeat waited 46 s for the writer lock behind 32 MiB frames that the
+  broker read deliberately slowly. That produced two closed gaps above 45 s,
+  with a 51.6 s maximum. This is a receive-gap measurement, not an isolation:
+  - the real broker refreshes liveness on any decoded frame;
+  - it defers isolation while bytes are queued;
+  - it checks only every 15 s.
+
+  Isolation conclusions belong to L0's sweep records on Hawk.
 
 ### Limits
 
@@ -121,13 +141,8 @@ Run conditions:
   that memory throttling alone reaches 45 s on Hawk. It only shows that the
   mechanism stalls the sender, and that the split or the policy remedy
   removes it.
-- **Silence fields came later.** Later runs also report:
-  - silence before the first heartbeat and after the last one
-    (`leading_silence_ms`, `trailing_silence_ms`, `max_silence_ms`);
-  - the worker unit's state (`worker_state`).
-
-  The run above predates those fields. Every case except `frame-block` saw
-  all 18 expected heartbeats.
+- **Single runs under a busy host.** One 180 s run per case, while other
+  sessions loaded Hawk, so small differences are not significant.
 
 These results inform the L0-7 decision. They do not replace it:
 
