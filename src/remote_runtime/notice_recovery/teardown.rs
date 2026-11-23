@@ -221,6 +221,29 @@ pub(in crate::remote_runtime) fn requeue_unsent_notices_on_disconnect(shared: &A
     }
 }
 
+fn requeue_rejected_without_cid(
+    shared: &Shared,
+    session_id: &str,
+    command: Option<CoreCommand>,
+    reason: Option<String>,
+) {
+    let provenance = match &command {
+        Some(CoreCommand::Prompt { command_id, .. }) => Some(
+            super::super::prompt_tracking::provenance_for_controller_command(
+                shared, session_id, command_id, None,
+            ),
+        ),
+        _ => None,
+    };
+    super::super::handle_rejected_command_with_provenance(
+        &shared.hub,
+        session_id,
+        command,
+        reason,
+        provenance,
+    );
+}
+
 fn requeue_rejected_ordinary_prompt(
     shared: &Shared,
     session_id: &str,
@@ -271,7 +294,7 @@ pub(in crate::remote_runtime) fn requeue_rejected_command(
         ..
     }) = command
     else {
-        super::super::handle_rejected_command(&shared.hub, session_id, command, reason);
+        requeue_rejected_without_cid(shared, session_id, command, reason);
         return;
     };
     if !cid.starts_with(CALL_NOTICE_PREFIX) {

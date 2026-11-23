@@ -190,6 +190,7 @@ pub(super) fn handle_rejected_ack(
         shared.hub.note_provider_generation_missing(session_id);
     }
     requeue_rejected_command(shared, session_id, command, reason);
+    shared.in_flight_prompts.lock().retire_command(command_id);
 }
 
 /// Settle a `call-notice:` `UndeliveredPrompt` returned either from an admitted

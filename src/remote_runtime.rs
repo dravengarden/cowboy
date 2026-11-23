@@ -3000,6 +3000,7 @@ fn typed_compaction_failure(update: &serde_json::Value) -> Option<String> {
     ))
 }
 
+#[cfg(test)]
 fn handle_rejected_command(
     hub: &Hub,
     session_id: &str,
@@ -6210,6 +6211,64 @@ mod tests {
             queue[0].origin,
             Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call"))
         );
+    }
+
+    #[tokio::test]
+    async fn rejected_cmidless_prompt_retires_in_flight_tracking_after_turn_started() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::model::SessionOrigin::Web,
+            false,
+        );
+        hub.set_paused("s", true);
+        hub.set_status("s", Status::Running, None);
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+
+        let rejected_cmd_id = runtime
+            .try_prompt_traced_with_command_id(
+                "s",
+                vec![serde_json::json!({"type": "text", "text": "cmidless rejected"})],
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        let rejected_cmd = runtime.shared.pending.lock().remove(&rejected_cmd_id);
+        prompt_tracking::observe_worker_event(
+            &runtime.shared,
+            "s",
+            &RuntimeEvent::TurnStarted {
+                turn_id: "turn-rejected".to_owned(),
+                command_id: rejected_cmd_id.clone(),
+            },
+        );
+        notice_recovery::handle_rejected_ack(
+            &runtime.shared,
+            "s",
+            &rejected_cmd_id,
+            rejected_cmd,
+            false,
+            Some("forward failed".to_owned()),
+        );
+        prompt_tracking::handle_undelivered_prompt(
+            &runtime.shared,
+            "s",
+            &rejected_cmd_id,
+            None,
+            vec![serde_json::json!({"type": "text", "text": "duplicate forged"})],
+            "busy".to_owned(),
+        );
+        let (queue, _) = hub.queue_and_drafts("s", |_| true).expect("queue");
+        assert_eq!(
+            queue.len(),
+            1,
+            "rejected cmid-less prompt must be retired so later UndeliveredPrompt cannot duplicate it"
+        );
+        assert_eq!(queue[0].text, "cmidless rejected");
     }
 
     #[tokio::test]
