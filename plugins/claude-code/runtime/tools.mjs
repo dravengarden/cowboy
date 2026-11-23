@@ -49,6 +49,14 @@ const BULK_READ = 1024 * 1024;
 // notification ends the wait. A lost notification costs at most this bound.
 const QUIET_READS = 3;
 const QUIET_WAIT_MS = 15000;
+// Wait briefly after a hook finishes before issuing standalone fs/remove RPCs:
+// during an active turn the next hook's transcript snapshot command removes
+// finished temporary files on the target in zero extra round trips, while idle
+// turns still delete them promptly when the timer expires.
+const HOOK_CLEANUP_DEFER_MS = 2000;
+const REMOVAL_RETRY_BASE_MS = 2000;
+const REMOVAL_RETRY_MAX_MS = 60000;
+const MAX_PIGGYBACK_REMOVALS = 32;
 // Output that keeps arriving is read once per settle interval, not at every
 // round trip: the collector hands output over only when the command ends, so
 // a trickle costs one call per interval while a full page is drained at once.
@@ -398,7 +406,8 @@ export function hookInlineText(bytes, limit = HOOK_INLINE_INPUT) {
 // every exit the snapshot defines, so no separate removal follows it. An
 // inherited errexit must not skip that removal; a failed removal adds 100 to
 // the snapshot's status so the caller removes the files itself.
-export function hookSnapshotScript(snapshot, delta, copy, inline) {
+export function hookSnapshotScript(snapshot, delta, copy, inline, stale = []) {
+  const removals = [delta, copy + ".cache", ...stale].map(shellLiteral).join(" ");
   return [
     "set +e",
     ...(inline === undefined
@@ -408,7 +417,7 @@ export function hookSnapshotScript(snapshot, delta, copy, inline) {
         ]),
     snapshot.map(shellLiteral).join(" "),
     "s=$?",
-    `rm -f -- ${shellLiteral(delta)} ${shellLiteral(copy + ".cache")} || s=$((s + 100))`,
+    `unset -f rm 2>/dev/null; command rm -f -- ${removals} || s=$((s + 100))`,
     'exit "$s"',
   ].join("\n");
 }
@@ -845,6 +854,38 @@ export function endedCommand(shell, script, end, cwdFile) {
   ];
 }
 
+// Target launcher for one hook invocation. Runs under POSIX `sh` so inherited
+// `BASH_ENV` traps, monitor mode, or `SHELLOPTS=pipefail` cannot alter the
+// hook's exit status, and execs directly into the hook without adding a
+// post-hook supervisor process. For file-backed inputs, an unlink failure on
+// the input file never skips the hook; the caller still tracks the path for
+// confirmed removal after executor EOF.
+export function hookCommand(shell, { command, argv, cwd, inline, input, file }) {
+  if (argv) {
+    const resolved = argv.map((value) => value.replaceAll("${CLAUDE_PROJECT_DIR}", cwd));
+    return [
+      "sh",
+      "-c",
+      inline
+        ? 'set +e +m; (set +o pipefail) 2>/dev/null && set +o pipefail; i=$1; shift; printf "%s" "$i" | exec "$@"'
+        : 'set +e +m; i=$1; shift; exec 0<"$i" && { command rm -f -- "$i" 2>/dev/null || true; } && exec "$@"',
+      shell,
+      inline ? input : file,
+      ...resolved,
+    ];
+  }
+  return [
+    "sh",
+    "-c",
+    inline
+      ? 'set +e +m; (set +o pipefail) 2>/dev/null && set +o pipefail; printf "%s" "$1" | exec "$0" -c "$2"'
+      : 'set +e +m; exec 0<"$1" && { command rm -f -- "$1" 2>/dev/null || true; } && exec "$0" -c "$2"',
+    shell,
+    inline ? input : file,
+    command,
+  ];
+}
+
 // Extensions native's Read refuses as binary (2.1.302); images and PDFs
 // among them have readers of their own.
 const BINARY_EXTENSIONS = new Set(
@@ -1226,49 +1267,56 @@ export class WorkspaceTools {
       // (resolved on PATH), with the project placeholder as a plain string.
       started = true;
       await this.startForeground(
-        argv
-          ? [
-              this.shell,
-              "-c",
-              inline
-                ? 'i=$1 && shift && printf "%s" "$i" | exec "$@"'
-                : 'exec 0<"$1" && rm -f -- "$1" && shift && exec "$@"',
-              this.shell,
-              inline ? input : file,
-              ...argv.map((value) => value.replaceAll("${CLAUDE_PROJECT_DIR}", this.cwd)),
-            ]
-          : [
-              this.shell,
-              "-c",
-              inline
-                ? 'printf "%s" "$1" | exec "$0" -c "$2"'
-                : 'exec 0<"$1" && rm -f -- "$1" && exec "$0" -c "$2"',
-              this.shell,
-              inline ? input : file,
-              command,
-            ],
+        hookCommand(this.shell, {
+          command,
+          argv,
+          cwd: this.cwd,
+          inline,
+          input,
+          file,
+        }),
         call,
         { CLAUDE_PROJECT_DIR: this.cwd, CLAUDE_ENV_FILE: this.envFile() },
         id,
       );
       const streams = { stdout: [], stderr: [] };
       const limits = { stdout: 0, stderr: 0 };
+      const overflowed = { stdout: false, stderr: false };
+      const append = (stream, bytes) => {
+        if (!bytes.length || overflowed[stream]) return;
+        const room = MAX_FILE - limits[stream];
+        if (bytes.length > room) {
+          if (room > 0) streams[stream].push(bytes.subarray(0, room));
+          limits[stream] = MAX_FILE;
+          overflowed[stream] = true;
+          return;
+        }
+        limits[stream] += bytes.length;
+        streams[stream].push(bytes);
+      };
       let afterSeq = null;
       let result;
+      let quiet = 0;
       const deadline = Date.now() + timeoutMs;
       do {
-        result = await this.connection.call("process/read", {
-          processId: id,
-          afterSeq,
-          maxBytes: 65536,
-          waitMs: Math.max(1, Math.min(1000, deadline - Date.now())),
-        });
+        const read = (waitMs) =>
+          this.connection.call("process/read", {
+            processId: id,
+            afterSeq,
+            maxBytes: 65536,
+            waitMs,
+          });
+        const remaining = deadline - Date.now();
+        result =
+          quiet >= QUIET_READS && this.connection.listeners && remaining > 1000
+            ? await this.notifiedRead(id, Math.min(QUIET_WAIT_MS, remaining), () => read(0))
+            : await read(Math.max(1, Math.min(1000, remaining)));
+        quiet = result.chunks.length ? 0 : quiet + 1;
         for (const chunk of result.chunks) {
           afterSeq = chunk.seq;
-          const bytes = Buffer.from(chunk.chunk, "base64");
-          if (limits[chunk.stream] + bytes.length > MAX_FILE) continue;
-          limits[chunk.stream] += bytes.length;
-          streams[chunk.stream].push(bytes);
+          const stream = chunk.stream;
+          if (stream !== "stdout" && stream !== "stderr") continue;
+          append(stream, Buffer.from(chunk.chunk, "base64"));
         }
         // A closed process can hold more output than one read returns.
       } while (result.closed ? result.chunks.length > 0 : Date.now() < deadline);
@@ -1293,15 +1341,11 @@ export class WorkspaceTools {
       if (started && !settled) await this.cancelTasks([id]).catch(() => {});
       this.foreground.delete(id);
       if (call?.id) this.calls.delete(call.id);
-      // The hook has ended and its result is final: its files leave the
-      // target in the background instead of delaying the tool call it guards
-      // by one more round trip each.
-      // One removal at a time, so a burst of hooks never takes more than one
-      // of the connection's request slots.
-      for (const path of [inline ? undefined : file, copy, agentCopy]) {
-        if (path)
-          this.cleanup = (this.cleanup ?? Promise.resolve()).then(() => this.removeTarget(path));
-      }
+      // Only after executor EOF (or cancellation) do hook files become eligible
+      // for removal, so inherited-pipe children never observe ENOENT. Active
+      // turns piggyback these removals onto the next hook's snapshot command;
+      // idle sessions still flush them via fs/remove with per-path retry.
+      this.queueRemovals([inline ? undefined : file, copy, agentCopy]);
     }
   }
 
@@ -1404,21 +1448,53 @@ export class WorkspaceTools {
               inline = undefined;
               script = hookSnapshotScript(snapshot, delta, copy, inline);
             }
-            if (inline === undefined) await this.hookInputFile(delta, bytes, call);
-            const end = randomUUID().replaceAll("-", "");
-            const result = await this.command(endedCommand(this.shell, script, end), 10000, call, {
-              cancelOnError: true,
-              end,
-            });
-            // Every exit the snapshot defines ran the command's own removal,
-            // unless that removal failed (its status plus 100).
-            const removalFailed = [100, 103, 175].includes(result.exitCode);
-            const exitCode = removalFailed ? result.exitCode - 100 : result.exitCode;
-            if (removalFailed) {
-              for (const path of [delta, copy + ".cache"]) await this.removeTarget(path);
+            // Piggyback previously finished hook temp files onto the snapshot's
+            // own rm invocation whenever they fit without forcing inline deltas
+            // into a separate fs/writeFile round trip.
+            const protectedPaths = new Set([cache, delta, copy, copy + ".cache"]);
+            const stale = [];
+            for (const candidate of this.pendingRemovals?.keys() ?? []) {
+              if (stale.length >= MAX_PIGGYBACK_REMOVALS || protectedPaths.has(candidate)) continue;
+              const trial = hookSnapshotScript(snapshot, delta, copy, inline, [
+                ...stale,
+                candidate,
+              ]);
+              if (Buffer.byteLength(trial) <= HOOK_SCRIPT_LIMIT) {
+                stale.push(candidate);
+                script = trial;
+              }
             }
-            uncertain = ![0, 3, 75].includes(exitCode);
-            return { ...result, exitCode };
+            let staleRemoved = false;
+            if (stale.length) this.deferPendingRemovals(stale, 10000);
+            try {
+              if (inline === undefined) await this.hookInputFile(delta, bytes, call);
+              const end = randomUUID().replaceAll("-", "");
+              const result = await this.command(
+                endedCommand(this.shell, script, end),
+                10000,
+                call,
+                {
+                  cancelOnError: true,
+                  end,
+                },
+              );
+              // Every exit the snapshot defines ran the command's own removal,
+              // unless that removal failed (its status plus 100).
+              const removalFailed = [100, 103, 175].includes(result.exitCode);
+              const exitCode = removalFailed ? result.exitCode - 100 : result.exitCode;
+              uncertain = ![0, 3, 75].includes(exitCode);
+              if (!removalFailed && !uncertain && stale.length) {
+                staleRemoved = true;
+                for (const path of stale) this.pendingRemovals?.delete(path);
+                this.scheduleRemovals();
+              }
+              if (removalFailed) {
+                for (const path of [delta, copy + ".cache"]) await this.removeTarget(path);
+              }
+              return { ...result, exitCode };
+            } finally {
+              if (!staleRemoved && stale.length) this.deferPendingRemovals(stale, 0);
+            }
           };
           let result = await prepare(
             append ? transcript.subarray(previous.length) : transcript,
@@ -4372,6 +4448,90 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         force: true,
       })
       .catch(() => {});
+  }
+
+  queueRemovals(paths, deferMs = this.hookCleanupDeferMs ?? HOOK_CLEANUP_DEFER_MS) {
+    const nextAt = Date.now() + Math.max(0, deferMs);
+    let added = false;
+    for (const path of paths) {
+      if (!path) continue;
+      this.pendingRemovals ??= new Map();
+      if (!this.pendingRemovals.has(path)) {
+        this.pendingRemovals.set(path, { attempts: 0, nextAt });
+        added = true;
+      }
+    }
+    if (added) this.scheduleRemovals();
+  }
+
+  deferPendingRemovals(paths, deferMs) {
+    const nextAt = Date.now() + Math.max(0, deferMs);
+    for (const path of paths) {
+      const entry = this.pendingRemovals?.get(path);
+      if (entry) entry.nextAt = nextAt;
+    }
+    this.scheduleRemovals();
+  }
+
+  scheduleRemovals() {
+    if (this.removalTimer) {
+      clearTimeout(this.removalTimer);
+      this.removalTimer = undefined;
+    }
+    if (!this.pendingRemovals?.size) return;
+    let earliest = Infinity;
+    for (const entry of this.pendingRemovals.values()) {
+      if (entry.nextAt < earliest) earliest = entry.nextAt;
+    }
+    const delay = Math.max(0, earliest - Date.now());
+    if (delay === 0) {
+      this.flushRemovals();
+      return;
+    }
+    this.removalTimer = setTimeout(() => {
+      this.removalTimer = undefined;
+      this.flushRemovals();
+    }, delay);
+    this.removalTimer.unref?.();
+  }
+
+  // Serialized, independent per-path fallback removal for private hook files.
+  // One fs/remove in flight at a time avoids taking more than one request slot;
+  // a path-specific error backs off only that path without starving others, and
+  // schedules a retry timer even when the session is idle.
+  flushRemovals({ immediate = false } = {}) {
+    if (this.removalTimer) {
+      clearTimeout(this.removalTimer);
+      this.removalTimer = undefined;
+    }
+    this.cleanup = (this.cleanup ?? Promise.resolve()).then(async () => {
+      const retryBase = this.removalRetryBaseMs ?? REMOVAL_RETRY_BASE_MS;
+      const now = Date.now();
+      for (const [path, entry] of [...(this.pendingRemovals?.entries() ?? [])]) {
+        if (!this.pendingRemovals.has(path)) continue;
+        if (!immediate && entry.nextAt > now) continue;
+        try {
+          await this.connection.call("fs/remove", {
+            path: pathToFileURL(path).href,
+            force: true,
+          });
+          this.pendingRemovals.delete(path);
+        } catch (error) {
+          if (missing(error)) {
+            this.pendingRemovals.delete(path);
+          } else {
+            entry.attempts += 1;
+            const backoff = Math.max(
+              1,
+              Math.min(REMOVAL_RETRY_MAX_MS, retryBase * 2 ** Math.min(entry.attempts - 1, 5)),
+            );
+            entry.nextAt = Date.now() + backoff;
+          }
+        }
+      }
+      this.scheduleRemovals();
+    });
+    return this.cleanup;
   }
 
   // A command that outlived its Bash call leaves its directory file behind.

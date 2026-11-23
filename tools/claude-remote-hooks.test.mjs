@@ -9,7 +9,11 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { DESCRIPTIONS, WorkspaceTools } from "../plugins/claude-code/runtime/tools.mjs";
+import {
+  DESCRIPTIONS,
+  WorkspaceTools,
+  hookCommand,
+} from "../plugins/claude-code/runtime/tools.mjs";
 import { startModBridge } from "../plugins/claude-code/runtime/mod-bridge.mjs";
 import { projectHookSettings } from "../plugins/claude-code/runtime/launch.mjs";
 import {
@@ -483,6 +487,7 @@ test("a target hook gets its input on stdin, the project directory and separate 
     },
   };
   const tools = await fixture(t, connection);
+  tools.hookCleanupDeferMs = 0;
   live = false;
   const result = await tools.runHook({
     command: "guard.sh",
@@ -501,14 +506,15 @@ test("a target hook gets its input on stdin, the project directory and separate 
   assert.ok(!calls.some(({ method }) => method === "fs/writeFile"));
   assert.ok(!calls.some(({ method }) => method === "fs/remove"));
   const start = calls.findLast(({ method }) => method === "process/start").params;
-  assert.deepEqual(start.argv, [
-    "/bin/bash",
-    "-c",
-    'printf "%s" "$1" | exec "$0" -c "$2"',
-    "/bin/bash",
-    '{"tool_name":"Bash"}',
-    "guard.sh",
-  ]);
+  assert.deepEqual(
+    start.argv,
+    hookCommand("/bin/bash", {
+      command: "guard.sh",
+      cwd: "/target",
+      inline: true,
+      input: '{"tool_name":"Bash"}',
+    }),
+  );
   // Larger input travels in a private file that the shell opens as stdin.
   calls.length = 0;
   const large = JSON.stringify({
@@ -525,14 +531,16 @@ test("a target hook gets its input on stdin, the project directory and separate 
   const file = fileURLToPath(written.path);
   assert.ok(file.startsWith("/home/target/.cache/cowboy/hook-input/"));
   assert.equal(Buffer.from(written.dataBase64, "base64").toString(), large);
-  assert.deepEqual(calls.findLast(({ method }) => method === "process/start").params.argv, [
-    "/bin/bash",
-    "-c",
-    'exec 0<"$1" && rm -f -- "$1" && exec "$0" -c "$2"',
-    "/bin/bash",
-    file,
-    "guard.sh",
-  ]);
+  assert.deepEqual(
+    calls.findLast(({ method }) => method === "process/start").params.argv,
+    hookCommand("/bin/bash", {
+      command: "guard.sh",
+      cwd: "/target",
+      inline: false,
+      file,
+    }),
+  );
+  await tools.cleanup;
   assert.deepEqual(
     calls.filter(({ method }) => method === "fs/remove").map(({ params }) => params.path),
     [written.path],
@@ -567,6 +575,7 @@ test("a target hook gets its input on stdin, the project directory and separate 
   assert.ok(snapshot.includes(`printf '%s' 'line\n' > '${copy}.delta'`));
   assert.ok(snapshot.includes(`rm -f -- '${copy}.delta' '${copy}.cache'`));
   const href = (path) => pathToFileURL(path).href;
+  await tools.cleanup;
   assert.deepEqual(
     calls.filter(({ method }) => method === "fs/remove").map(({ params }) => params.path),
     [href(copy)],
@@ -581,11 +590,15 @@ test("a target hook gets its input on stdin, the project directory and separate 
     call: { id: "hook-e" },
   });
   const execStart = calls.find(({ method }) => method === "process/start").params.argv;
-  assert.deepEqual(execStart.slice(2, 5), [
-    'i=$1 && shift && printf "%s" "$i" | exec "$@"',
-    "/bin/bash",
-    "{}",
-  ]);
+  assert.deepEqual(
+    execStart,
+    hookCommand("/bin/bash", {
+      argv: ["node", "${CLAUDE_PROJECT_DIR}/hook.js"],
+      cwd: "/target",
+      inline: true,
+      input: "{}",
+    }),
+  );
   assert.deepEqual(execStart.slice(5), ["node", "/target/hook.js"]);
   // A lost output observation cancels the started command.
   calls.length = 0;
@@ -650,6 +663,407 @@ test("a target hook gets its input on stdin, the project directory and separate 
     call: { id: "hook-2" },
   });
   assert.deepEqual(timed, { timedOut: true });
+  assert.ok(calls.some(({ method }) => method === "process/terminate"));
+});
+
+test("deferred post-EOF cleanup preserves inherited-pipe transcript reads and piggybacks onto next snapshot", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "cowboy-hook-piggyback-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const targetHome = join(root, "home");
+  const targetCwd = join(root, "repo");
+  await mkdir(targetHome, { recursive: true });
+  await mkdir(targetCwd, { recursive: true });
+  const execFileAsync = promisify(execFile);
+
+  let extraEnv = {};
+  const calls = [];
+  const outputs = new Map();
+  const connection = {
+    async call(method, params) {
+      calls.push({ method, params });
+      if (method === "fs/writeFile") {
+        await writeFile(fileURLToPath(params.path), Buffer.from(params.dataBase64, "base64"));
+        return {};
+      }
+      if (method === "fs/remove") {
+        await rm(fileURLToPath(params.path), { force: true });
+        return {};
+      }
+      if (method === "process/start") {
+        const [bin, ...args] = params.argv;
+        let stdout = Buffer.alloc(0);
+        let stderr = Buffer.alloc(0);
+        let exitCode = 0;
+        try {
+          const ran = await execFileAsync(bin, args, {
+            cwd: params.cwd ? fileURLToPath(params.cwd) : targetCwd,
+            env: { ...process.env, ...extraEnv, ...(params.envPolicy?.set ?? {}) },
+            encoding: "buffer",
+            maxBuffer: 2 * 1024 * 1024,
+          });
+          stdout = ran.stdout;
+          stderr = ran.stderr;
+        } catch (error) {
+          stdout = error.stdout ?? Buffer.alloc(0);
+          stderr = error.stderr ?? Buffer.alloc(0);
+          exitCode = typeof error.code === "number" ? error.code : 1;
+        }
+        const chunks = [];
+        let seq = 1;
+        if (stdout.length) {
+          chunks.push({ seq: seq++, stream: "stdout", chunk: stdout.toString("base64") });
+        }
+        if (stderr.length) {
+          chunks.push({ seq: seq++, stream: "stderr", chunk: stderr.toString("base64") });
+        }
+        outputs.set(params.processId, { chunks, exitCode });
+        return { processId: params.processId };
+      }
+      if (method === "process/read") {
+        const entry = outputs.get(params.processId);
+        const fresh = entry.chunks.filter(
+          (chunk) => params.afterSeq === null || chunk.seq > params.afterSeq,
+        );
+        return { chunks: fresh, exited: true, closed: true, exitCode: entry.exitCode };
+      }
+      return {};
+    },
+  };
+
+  connection.info = { userHomeDir: pathToFileURL(targetHome).href };
+  const tools = new WorkspaceTools(
+    connection,
+    { workspace: { cwd: targetCwd }, environment: { id: "hooks-piggyback" } },
+    join(root, "state"),
+  );
+  await tools.load();
+  tools.shell = "bash";
+  tools.hookCleanupDeferMs = 5000;
+
+  // 1. Hook 1 exits while a background child holding stdout still reads transcript_path
+  //    after a short delay. Transcript copy must remain readable until executor EOF.
+  calls.length = 0;
+  const hook1 = await tools.runHook({
+    command:
+      'in=$(cat); tp=$(printf "%s" "$in" | sed -n \'s/.*"transcript_path":"\\([^"]*\\)".*/\\1/p\'); (sleep 0.1; body=$(cat "$tp"); printf \'{"decision":"block","seen":"%s"}\' "$body") & exit 0',
+    input: "{}",
+    timeoutMs: 5000,
+    call: { id: "hook-delayed-read" },
+    transcript: Buffer.from("secret-line"),
+    agentTranscript: Buffer.from("agent-line"),
+  });
+  assert.equal(hook1.exitCode, 0);
+  assert.equal(hook1.stdout, '{"decision":"block","seen":"secret-line"}');
+  const start1 = calls.findLast(({ method }) => method === "process/start").params.argv;
+  const payload1 = JSON.parse(start1[4]);
+  const copy1 = payload1.transcript_path;
+  const agentCopy1 = payload1.agent_transcript_path;
+  assert.equal(calls.filter(({ method }) => method === "fs/remove").length, 0);
+  assert.equal(tools.pendingRemovals.size, 2);
+
+  // 2. Hook 2 arrives within the defer window: its snapshot command piggybacks
+  //    removal of Hook 1's transcript copies with zero fs/remove RPCs.
+  calls.length = 0;
+  tools.hookCleanupDeferMs = 40;
+  const hook2 = await tools.runHook({
+    command: "printf ok",
+    input: "{}",
+    timeoutMs: 5000,
+    call: { id: "hook-piggyback-2" },
+    transcript: Buffer.from("secret-line\nline-2"),
+  });
+  assert.equal(hook2.exitCode, 0);
+  assert.equal(hook2.stdout, "ok");
+  const start2 = calls.findLast(({ method }) => method === "process/start").params.argv;
+  const copy2 = JSON.parse(start2[4]).transcript_path;
+  // Hook 1's files were removed on the target by Hook 2's snapshot with 0 fs/remove RPCs.
+  assert.equal(calls.filter(({ method }) => method === "fs/remove").length, 0);
+  assert.equal(tools.pendingRemovals.has(copy1), false);
+  assert.equal(tools.pendingRemovals.has(agentCopy1), false);
+  await assert.rejects(readFile(copy1), { code: "ENOENT" });
+  await assert.rejects(readFile(agentCopy1), { code: "ENOENT" });
+
+  // 3. When idle past hookCleanupDeferMs, Hook 2's own copy2 is cleaned up automatically.
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  await tools.cleanup;
+  assert.equal(tools.pendingRemovals.size, 0);
+  assert.deepEqual(
+    calls.filter(({ method }) => method === "fs/remove").map(({ params }) => params.path),
+    [pathToFileURL(copy2).href],
+  );
+  await assert.rejects(readFile(copy2), { code: "ENOENT" });
+
+  // 4. SHELLOPTS=pipefail:errexit cannot turn an inline hook's exit 0 (ignoring stdin) into 141,
+  //    and a failing rm on a file-backed hook never skips the PreToolUse exit-2 guard.
+  const fakeBin = join(root, "fake-bin");
+  await mkdir(fakeBin, { recursive: true });
+  await writeFile(join(fakeBin, "rm"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  const hostileEnv = join(root, "bash-env.sh");
+  await writeFile(hostileEnv, 'trap "exit 1" ERR\nset -e\nset -m\n');
+  tools.hookCleanupDeferMs = 0;
+
+  extraEnv = { SHELLOPTS: "pipefail:errexit", BASH_ENV: hostileEnv };
+  try {
+    const piped = await tools.runHook({
+      command: 'printf \'{"decision":"block"}\'; exit 0',
+      input: JSON.stringify({ data: "x".repeat(40000) }),
+      timeoutMs: 5000,
+      call: { id: "hook-pipefail" },
+    });
+    assert.equal(piped.exitCode, 0);
+    assert.equal(piped.stdout, '{"decision":"block"}');
+  } finally {
+    extraEnv = {};
+  }
+
+  // File-backed guard with rm failing on PATH: guard STILL runs and exits 2,
+  // and fallback fs/remove deletes the input file afterward.
+  extraEnv = { PATH: `${fakeBin}:${process.env.PATH}` };
+  try {
+    calls.length = 0;
+    const large = JSON.stringify({ content: "y".repeat(70000) });
+    const guarded = await tools.runHook({
+      command: "exit 2",
+      input: large,
+      timeoutMs: 5000,
+      call: { id: "hook-rm-fail-guard" },
+    });
+    await tools.cleanup;
+    assert.equal(guarded.exitCode, 2);
+    const written = calls.find(({ method }) => method === "fs/writeFile").params;
+    assert.deepEqual(
+      calls.filter(({ method }) => method === "fs/remove").map(({ params }) => params.path),
+      [written.path],
+    );
+    await assert.rejects(readFile(fileURLToPath(written.path)), { code: "ENOENT" });
+  } finally {
+    extraEnv = {};
+  }
+});
+
+test("fallback removals retry independently without head-of-line starvation and keep contiguous MAX_FILE output", async (t) => {
+  const removed = [];
+  let transientLeft = 1;
+  let permanentFails = true;
+  let chunksToSend = [];
+  let hookId = "";
+  const connection = {
+    async call(method, params) {
+      if (method === "process/start") {
+        if (!params.argv[2].startsWith("umask 077")) {
+          hookId = params.processId;
+        }
+        return { processId: params.processId };
+      }
+      if (method === "process/read") {
+        if (params.processId !== hookId) {
+          return { chunks: [], exited: true, closed: true, exitCode: 0 };
+        }
+        const fresh = chunksToSend.filter(
+          (chunk) => params.afterSeq === null || chunk.seq > params.afterSeq,
+        );
+        return { chunks: fresh, exited: true, closed: true, exitCode: 0 };
+      }
+      if (method === "fs/remove") {
+        const path = fileURLToPath(params.path);
+        if (path.endsWith("/p1-eacces")) {
+          if (permanentFails) throw new Error("EACCES: permission denied");
+          const err = new Error("No such file or directory");
+          err.remote = { code: -32000, message: "No such file or directory" };
+          throw err;
+        }
+        if (path.endsWith("/p2-transient") && transientLeft > 0) {
+          transientLeft -= 1;
+          throw new Error("transport reset");
+        }
+        removed.push(path);
+        return {};
+      }
+      return {};
+    },
+  };
+  const tools = await fixture(t, connection);
+  tools.hookCleanupDeferMs = 0;
+  tools.removalRetryBaseMs = 25;
+
+  // 1. p1 always fails with EACCES, p2 fails once transiently, p3 succeeds immediately.
+  //    p3 must NOT be starved by p1, and p2 must automatically recover on the idle timer.
+  tools.queueRemovals(["/tmp/p1-eacces", "/tmp/p2-transient", "/tmp/p3-ok"], 0);
+  await tools.cleanup;
+  assert.deepEqual(removed, ["/tmp/p3-ok"]);
+  assert.equal(tools.pendingRemovals.has("/tmp/p1-eacces"), true);
+  assert.equal(tools.pendingRemovals.has("/tmp/p2-transient"), true);
+
+  // Idle retry timer recovers p2 without needing another hook.
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  await tools.cleanup;
+  assert.deepEqual(removed, ["/tmp/p3-ok", "/tmp/p2-transient"]);
+  assert.equal(tools.pendingRemovals.has("/tmp/p1-eacces"), true);
+
+  // Once p1 is gone (ENOENT), it retires cleanly on retry.
+  permanentFails = false;
+  await tools.flushRemovals({ immediate: true });
+  assert.equal(tools.pendingRemovals.size, 0);
+
+  // 2. Contiguous MAX_FILE truncation: a chunk overflowing MAX_FILE keeps its exact
+  //    fitting prefix and subsequent smaller chunks are never spliced across the gap.
+  const maxFile = 4 * 1024 * 1024;
+  chunksToSend = [
+    { seq: 1, stream: "stdout", chunk: Buffer.alloc(maxFile - 5, "A").toString("base64") },
+    { seq: 2, stream: "stdout", chunk: Buffer.from("B".repeat(100)).toString("base64") },
+    { seq: 3, stream: "stdout", chunk: Buffer.from("XYZ").toString("base64") },
+  ];
+  const truncated = await tools.runHook({
+    command: "big.sh",
+    input: "{}",
+    timeoutMs: 5000,
+    call: { id: "hook-trunc" },
+  });
+  assert.equal(truncated.exitCode, 0);
+  assert.equal(Buffer.byteLength(truncated.stdout), maxFile);
+  assert.equal(truncated.stdout.slice(-8), "AAABBBBB");
+});
+
+test("runHook quiet notifiedRead covers wake, early-notification race, reread timeout, and listener cleanup", async (t) => {
+  const calls = [];
+  const listeners = new Set();
+  let hookId = "";
+  let reads = 0;
+  let scenario = "wake";
+  const connection = {
+    listeners,
+    async call(method, params) {
+      calls.push({ method, params });
+      if (method === "process/start") {
+        if (!params.argv[2].startsWith("umask 077")) {
+          hookId = params.processId;
+          reads = 0;
+        }
+        return { processId: params.processId };
+      }
+      if (method === "process/read") {
+        if (params.processId !== hookId) {
+          return { chunks: [], exited: true, closed: true, exitCode: 0 };
+        }
+        reads += 1;
+        if (reads <= 3) {
+          return { chunks: [], exited: false, closed: false, exitCode: null };
+        }
+        if (scenario === "wake") {
+          if (reads === 4) {
+            setImmediate(() => {
+              for (const listener of listeners) {
+                listener({ method: "process/output", params: { processId: hookId } });
+              }
+            });
+            return { chunks: [], exited: false, closed: false, exitCode: null };
+          }
+          return {
+            chunks:
+              params.afterSeq === null
+                ? [{ seq: 1, stream: "stdout", chunk: Buffer.from("woke").toString("base64") }]
+                : [],
+            exited: true,
+            closed: true,
+            exitCode: 0,
+          };
+        }
+        if (scenario === "race") {
+          if (reads === 4) {
+            for (const listener of listeners) {
+              listener({ method: "process/output", params: { processId: hookId } });
+            }
+            return { chunks: [], exited: false, closed: false, exitCode: null };
+          }
+          return {
+            chunks:
+              params.afterSeq === null
+                ? [{ seq: 1, stream: "stdout", chunk: Buffer.from("raced").toString("base64") }]
+                : [],
+            exited: true,
+            closed: true,
+            exitCode: 0,
+          };
+        }
+        if (scenario === "timeout-reread") {
+          if (reads === 4) {
+            return { chunks: [], exited: false, closed: false, exitCode: null };
+          }
+          return {
+            chunks:
+              params.afterSeq === null
+                ? [{ seq: 1, stream: "stdout", chunk: Buffer.from("reread").toString("base64") }]
+                : [],
+            exited: true,
+            closed: true,
+            exitCode: 0,
+          };
+        }
+        if (scenario === "transport-closed") {
+          if (reads === 4) {
+            setImmediate(() => {
+              for (const listener of listeners) {
+                listener({ method: "closed" });
+              }
+            });
+            return { chunks: [], exited: false, closed: false, exitCode: null };
+          }
+          throw new Error("transport closed during quiet hook");
+        }
+      }
+      return {};
+    },
+  };
+  const tools = await fixture(t, connection);
+  const baselineListeners = listeners.size;
+
+  scenario = "wake";
+  calls.length = 0;
+  const woke = await tools.runHook({
+    command: "slow.sh",
+    input: "{}",
+    timeoutMs: 30000,
+    call: { id: "hook-q1" },
+  });
+  assert.deepEqual(woke, { exitCode: 0, stdout: "woke", stderr: "" });
+  assert.equal(listeners.size, baselineListeners);
+  const waits = calls
+    .filter(({ method, params }) => method === "process/read" && params.processId === hookId)
+    .map(({ params }) => params.waitMs);
+  assert.deepEqual(waits.slice(0, 5), [1000, 1000, 1000, 0, 0]);
+
+  scenario = "race";
+  const raced = await tools.runHook({
+    command: "slow.sh",
+    input: "{}",
+    timeoutMs: 30000,
+    call: { id: "hook-q2" },
+  });
+  assert.deepEqual(raced, { exitCode: 0, stdout: "raced", stderr: "" });
+  assert.equal(listeners.size, baselineListeners);
+
+  scenario = "timeout-reread";
+  const reread = await tools.runHook({
+    command: "slow.sh",
+    input: "{}",
+    timeoutMs: 1100,
+    call: { id: "hook-q3" },
+  });
+  assert.deepEqual(reread, { exitCode: 0, stdout: "reread", stderr: "" });
+  assert.equal(listeners.size, baselineListeners);
+
+  scenario = "transport-closed";
+  calls.length = 0;
+  await assert.rejects(
+    tools.runHook({
+      command: "slow.sh",
+      input: "{}",
+      timeoutMs: 30000,
+      call: { id: "hook-q4" },
+    }),
+    /transport closed during quiet hook/,
+  );
+  assert.equal(listeners.size, baselineListeners);
   assert.ok(calls.some(({ method }) => method === "process/terminate"));
 });
 
