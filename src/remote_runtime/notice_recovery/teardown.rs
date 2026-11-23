@@ -377,6 +377,13 @@ pub(in crate::remote_runtime) fn revive_and_try_prompt(
     }
     let session_id = session.session_id.clone();
     let echo_artifacts = shared.hub.store_prompt_images(&content);
+    let tracked = super::super::prompt_tracking::prepare_sent_prompt(
+        &shared.hub,
+        &session_id,
+        &turn_id,
+        cmid.as_deref(),
+        &content,
+    );
     {
         let fenced = shared.projection_fence.lock();
         if *fenced || shared.shutdown.load(Ordering::Acquire) {
@@ -405,8 +412,10 @@ pub(in crate::remote_runtime) fn revive_and_try_prompt(
             sent.remove(&ensure_key);
             pending.insert(ensure_key, CoreCommand::EnsureSession { session });
         }
-        let tracked_content = content.clone();
-        let tracked_cmid = cmid.clone();
+        shared
+            .in_flight_prompts
+            .lock()
+            .record(command_id.clone(), tracked);
         sent.remove(&command_id);
         pending.insert(
             command_id.clone(),
@@ -420,13 +429,6 @@ pub(in crate::remote_runtime) fn revive_and_try_prompt(
                 echo_artifacts,
                 observe_subagents: true,
             },
-        );
-        super::super::prompt_tracking::record_sent_prompt(
-            shared,
-            &session_id,
-            &command_id,
-            tracked_cmid.as_deref(),
-            &tracked_content,
         );
         drop(sent);
         drop(pending);

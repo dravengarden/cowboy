@@ -1,11 +1,16 @@
 //! Controller-held in-flight prompt registry for [`super::RemoteRuntime`].
 //!
-//! Tracks exact `(command_id, session_id, cmid, content, origin, initiator)`
-//! handed off by this Controller so worker `UndeliveredPrompt` receipts can
-//! restore Owner provenance ONLY when matching an un-echoed command this
-//! Controller actually sent, using the Controller's own `content` rather than
-//! worker-supplied text. Unmatched or post-restart receipts fail closed so an
-//! untrusted worker can never forge Owner turns or tamper with requeued text.
+//! Tracks exact `(command_id, turn_id, session_id, cmid, content, origin,
+//! initiator)` handed off by this Controller BEFORE enqueueing into `pending`,
+//! so worker `UndeliveredPrompt` receipts can restore Owner provenance ONLY
+//! when matching an un-echoed, unfinished command this Controller actually
+//! sent, using the Controller's own `content` rather than worker-supplied text.
+//!
+//! Entries stay live across `TurnStarted` (because the worker emits
+//! `TurnStarted` before forwarding the prompt to the ACP thread, where
+//! cold-start salvage emits `UndeliveredPrompt`) and retire on the matching
+//! `user_message_chunk` echo, the matching `TurnEnded { turn_id }`, a
+//! `CommandAck` rejection, `UndeliveredPrompt` consumption, or shutdown.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -19,6 +24,7 @@ const MAX_IN_FLIGHT_PROMPTS: usize = 2048;
 #[derive(Clone, Debug)]
 pub(super) struct InFlightPrompt {
     pub(super) session_id: String,
+    pub(super) turn_id: String,
     pub(super) cmid: Option<String>,
     pub(super) content: Vec<serde_json::Value>,
     pub(super) origin: Option<DeliveryOrigin>,
@@ -86,6 +92,19 @@ impl InFlightPrompts {
         }
     }
 
+    pub(super) fn retire_turn(&mut self, session_id: &str, turn_id: &str) {
+        let matching_keys: Vec<String> = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| entry.session_id == session_id && entry.turn_id == turn_id)
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in matching_keys {
+            self.entries.remove(&key);
+            self.order.retain(|id| id != &key);
+        }
+    }
+
     pub(super) fn clear(&mut self) {
         self.entries.clear();
         self.order.clear();
@@ -93,8 +112,9 @@ impl InFlightPrompts {
 }
 
 /// Non-owner provenance implied by a Controller-reserved `cmid` prefix, used
-/// only as a fallback when a Controller-owned command's dispatch row was
-/// evicted from the bounded in-memory Hub cache.
+/// when a Controller-owned command's dispatch row was evicted from the bounded
+/// in-memory Hub cache or when handling a post-restart fallback for a reserved
+/// non-owner dispatch.
 pub(super) fn reserved_origin_for_cmid(cmid: &str) -> Option<DeliveryOrigin> {
     if crate::agent_model::is_reserved_call_notice_cmid(cmid)
         || cmid.starts_with(crate::core::MANAGED_CALL_CMID_PREFIX)
@@ -109,34 +129,40 @@ pub(super) fn reserved_origin_for_cmid(cmid: &str) -> Option<DeliveryOrigin> {
     }
 }
 
-/// Record a prompt handed to the Machine runtime so later rejections or
-/// `UndeliveredPrompt` events authenticate against Controller-owned state.
-pub(super) fn record_sent_prompt(
-    shared: &Shared,
+/// Build an [`InFlightPrompt`] from Hub provenance outside runtime locks so
+/// callers can insert it into `shared.in_flight_prompts` (a leaf mutex) right
+/// before inserting into `shared.pending`.
+pub(super) fn prepare_sent_prompt(
+    hub: &crate::core::Hub,
     session_id: &str,
-    command_id: &str,
+    turn_id: &str,
     cmid: Option<&str>,
     content: &[serde_json::Value],
-) {
-    let (origin, initiator) = provenance_from_hub_or_reserved(&shared.hub, session_id, cmid);
-    shared.in_flight_prompts.lock().record(
-        command_id.to_owned(),
-        InFlightPrompt {
-            session_id: session_id.to_owned(),
-            cmid: cmid.map(str::to_owned),
-            content: content.to_vec(),
-            origin,
-            initiator,
-        },
-    );
+) -> InFlightPrompt {
+    let (origin, initiator) = provenance_from_hub_or_reserved(hub, session_id, cmid);
+    InFlightPrompt {
+        session_id: session_id.to_owned(),
+        turn_id: turn_id.to_owned(),
+        cmid: cmid.map(str::to_owned),
+        content: content.to_vec(),
+        origin,
+        initiator,
+    }
 }
 
-/// Retire tracked in-flight prompts once the worker confirms delivery via
-/// `TurnStarted` or a matching `user_message_chunk` echo.
+/// Retire tracked in-flight prompts once the worker confirms delivery via a
+/// matching `user_message_chunk` echo or finishes the turn via `TurnEnded`.
+///
+/// Intentionally does NOT retire on `TurnStarted`: the worker emits
+/// `TurnStarted` before forwarding the prompt to the ACP thread, and cold-start
+/// salvage emits `UndeliveredPrompt` after `TurnStarted`.
 pub(super) fn observe_worker_event(shared: &Shared, session_id: &str, event: &RuntimeEvent) {
     match event {
-        RuntimeEvent::TurnStarted { command_id, .. } => {
-            shared.in_flight_prompts.lock().retire_command(command_id);
+        RuntimeEvent::TurnEnded { turn_id, .. } => {
+            shared
+                .in_flight_prompts
+                .lock()
+                .retire_turn(session_id, turn_id);
         }
         RuntimeEvent::Update {
             update,
@@ -199,9 +225,15 @@ fn join_content_text(content: &[serde_json::Value]) -> String {
 ///   Controller actually sent, consume that entry and requeue the Controller's
 ///   OWN `content` and recorded `(origin, initiator)` — ignoring worker text.
 /// - Otherwise, if `cmid` is an un-echoed hydrated pending echo (e.g. across a
-///   Controller restart), consume it once and requeue as non-owner
-///   `Cowboy("worker_requeue")` with `cmid = None` so worker-supplied text can
-///   never mint Owner provenance or collide with immutable records.
+///   Controller restart), consume it once and:
+///   - for `cowboy-superagent:`, abandon without requeue (matching
+///     `Hub::requeue_prompt`'s no-replay supervision contract);
+///   - for `call-notice:`, drop (call notices use durable `notice_recovery`);
+///   - for other reserved prefixes (`managed-call:`, `session-notice:`), keep
+///     the reserved `cmid` with its non-owner `reserved_origin_for_cmid`;
+///   - for unreserved `cmid`s, downgrade to `Cowboy("worker_requeue")` and
+///     strip `cmid = None` so worker-supplied text can never mint Owner
+///     provenance or collide with immutable records.
 /// - Otherwise (already echoed, forged, or replayed), drop without requeuing.
 pub(super) fn handle_undelivered_prompt(
     shared: &Shared,
@@ -275,15 +307,43 @@ pub(super) fn handle_unverified_undelivered_prompt(
         );
         return;
     }
-    let downgraded = DeliveryOrigin::cowboy("worker_requeue");
+    if id.starts_with("cowboy-superagent:") {
+        hub.record_session_error(
+            session_id,
+            &format!("Super-agent delivery returned without replay: {id}"),
+        );
+        hub.abandon_superagent_prompt(session_id, id);
+        hub.broadcast_error(Some(session_id.to_owned()), error);
+        return;
+    }
+    if crate::agent_model::is_reserved_call_notice_cmid(id) {
+        tracing::warn!(
+            session = %session_id,
+            cmid = %id,
+            "dropping unverified call-notice UndeliveredPrompt outside notice_recovery"
+        );
+        return;
+    }
     let text = join_content_text(&content);
-    hub.requeue_prompt(
-        session_id,
-        text,
-        content,
-        None,
-        Some(downgraded.clone()),
-        Some(downgraded),
-    );
+    if let Some(reserved_origin) = reserved_origin_for_cmid(id) {
+        hub.requeue_prompt(
+            session_id,
+            text,
+            content,
+            Some(id.to_owned()),
+            Some(reserved_origin.clone()),
+            Some(reserved_origin),
+        );
+    } else {
+        let downgraded = DeliveryOrigin::cowboy("worker_requeue");
+        hub.requeue_prompt(
+            session_id,
+            text,
+            content,
+            None,
+            Some(downgraded.clone()),
+            Some(downgraded),
+        );
+    }
     hub.broadcast_error(Some(session_id.to_owned()), error);
 }

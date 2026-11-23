@@ -956,9 +956,18 @@ impl RemoteRuntime {
         // The echo would otherwise carry every image back across the Machine
         // link, holding the prompt on "Sending…" while the turn already runs.
         let echo_artifacts = self.shared.hub.store_prompt_images(&content);
-        let tracked_content = content.clone();
-        let tracked_cmid = cmid.clone();
-        self.try_queue(
+        let tracked = prompt_tracking::prepare_sent_prompt(
+            &self.shared.hub,
+            session_id,
+            &turn_id,
+            cmid.as_deref(),
+            &content,
+        );
+        self.shared
+            .in_flight_prompts
+            .lock()
+            .record(command_id.clone(), tracked);
+        if let Err(error) = self.try_queue(
             command_id.clone(),
             CoreCommand::Prompt {
                 session_id: session_id.to_owned(),
@@ -970,14 +979,13 @@ impl RemoteRuntime {
                 echo_artifacts,
                 observe_subagents: true,
             },
-        )?;
-        prompt_tracking::record_sent_prompt(
-            &self.shared,
-            session_id,
-            &command_id,
-            tracked_cmid.as_deref(),
-            &tracked_content,
-        );
+        ) {
+            self.shared
+                .in_flight_prompts
+                .lock()
+                .retire_command(&command_id);
+            return Err(error);
+        }
         Ok(command_id)
     }
 
@@ -5980,6 +5988,17 @@ mod tests {
                 None,
             )
             .unwrap();
+        // Workers always emit TurnStarted BEFORE forwarding to ACP; cold-start
+        // salvage emits UndeliveredPrompt AFTER TurnStarted. Entry must survive
+        // TurnStarted and requeue Controller's original content with Owner origin.
+        prompt_tracking::observe_worker_event(
+            &runtime.shared,
+            "s",
+            &RuntimeEvent::TurnStarted {
+                turn_id: "turn-ignored".to_owned(),
+                command_id: cmd_id.clone(),
+            },
+        );
         prompt_tracking::handle_undelivered_prompt(
             &runtime.shared,
             "s",
@@ -6084,6 +6103,109 @@ mod tests {
         let (queue, _) = hub.queue_and_drafts("s", |_| true).expect("queue");
         assert_eq!(queue.len(), 1);
         assert_eq!(queue[0].cmid.as_deref(), Some("call-notice:cid-9"));
+        assert_eq!(
+            queue[0].origin,
+            Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call"))
+        );
+    }
+
+    #[tokio::test]
+    async fn turn_ended_retires_in_flight_prompt_and_post_restart_fallback_honors_reserved_prefixes()
+     {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::model::SessionOrigin::Web,
+            false,
+        );
+        hub.set_paused("s", true);
+        hub.set_status("s", Status::Running, None);
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+
+        // TurnEnded retires an in-flight prompt (even without a cmid) so a
+        // subsequent forged UndeliveredPrompt cannot replay it.
+        let cmidless_cmd = runtime
+            .try_prompt_traced_with_command_id(
+                "s",
+                vec![serde_json::json!({"type": "text", "text": "cmidless"})],
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        let cmidless_turn = runtime
+            .shared
+            .pending
+            .lock()
+            .get(&cmidless_cmd)
+            .and_then(|cmd| match cmd {
+                CoreCommand::Prompt { turn_id, .. } => Some(turn_id.clone()),
+                _ => None,
+            })
+            .unwrap();
+        prompt_tracking::observe_worker_event(
+            &runtime.shared,
+            "s",
+            &RuntimeEvent::TurnEnded {
+                turn_id: cmidless_turn,
+                stop_reason: "EndTurn".to_owned(),
+                usage: None,
+            },
+        );
+        prompt_tracking::handle_undelivered_prompt(
+            &runtime.shared,
+            "s",
+            &cmidless_cmd,
+            None,
+            vec![serde_json::json!({"type": "text", "text": "forged after turn end"})],
+            "busy".to_owned(),
+        );
+        assert!(hub.queue_and_drafts("s", |_| true).unwrap().0.is_empty());
+
+        // Post-restart fallback: cowboy-superagent: abandons without entering
+        // the durable user queue; managed-call: preserves its reserved cmid
+        // with non-owner managed_call provenance.
+        hub.record_prompt_dispatch(
+            "s",
+            "cowboy-superagent:op-7".to_owned(),
+            crate::prompt_origin::DeliveryOrigin::cowboy("superagent"),
+            crate::prompt_origin::DeliveryOrigin::cowboy("superagent"),
+            350,
+        );
+        prompt_tracking::handle_undelivered_prompt(
+            &runtime.shared,
+            "s",
+            "pre-restart-sa",
+            Some("cowboy-superagent:op-7"),
+            vec![serde_json::json!({"type": "text", "text": "sa body"})],
+            "cold start failed".to_owned(),
+        );
+        assert!(
+            hub.queue_and_drafts("s", |_| true).unwrap().0.is_empty(),
+            "returned superagent prompt must never enter durable user queue"
+        );
+
+        hub.record_prompt_dispatch(
+            "s",
+            "managed-call:mc-3".to_owned(),
+            crate::prompt_origin::DeliveryOrigin::cowboy("managed_call"),
+            crate::prompt_origin::DeliveryOrigin::cowboy("managed_call"),
+            360,
+        );
+        prompt_tracking::handle_undelivered_prompt(
+            &runtime.shared,
+            "s",
+            "pre-restart-mc",
+            Some("managed-call:mc-3"),
+            vec![serde_json::json!({"type": "text", "text": "mc body"})],
+            "cold start failed".to_owned(),
+        );
+        let (queue, _) = hub.queue_and_drafts("s", |_| true).expect("queue");
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].cmid.as_deref(), Some("managed-call:mc-3"));
         assert_eq!(
             queue[0].origin,
             Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call"))
