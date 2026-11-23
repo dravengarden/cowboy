@@ -59,12 +59,25 @@ fn fixture(root: &Path) -> UninstallStep {
 }
 
 fn call(root: &Path, step: &UninstallStep, apply: bool) -> Result<serde_json::Value> {
+    confirm(root, step, apply, None)
+}
+
+/// Apply (or preview) with an explicit active-link removal confirmation.
+fn confirm(
+    root: &Path,
+    step: &UninstallStep,
+    apply: bool,
+    remove_active: Option<&str>,
+) -> Result<serde_json::Value> {
     complete_absent_uninstall(
         root,
         &step.service_id,
         &step.machine_id,
         &step.operation_id,
-        apply.then(|| step.request_digest().unwrap()).as_deref(),
+        (
+            apply.then(|| step.request_digest().unwrap()).as_deref(),
+            remove_active,
+        ),
     )
 }
 
@@ -113,7 +126,7 @@ fn live_owner_wrong_digest_and_reactivated_slot_are_refused() {
             &step.service_id,
             &step.machine_id,
             &step.operation_id,
-            Some(&digest(b"different"))
+            (Some(&digest(b"different")), None)
         )
         .is_err()
     );
@@ -232,8 +245,18 @@ fn offline_completion_rolls_a_present_active_link_forward() {
     }
     let preview = call(root.path(), &step, false).unwrap();
     assert_eq!(preview["removes_active_link"], true);
+    assert_eq!(preview["active_generation"], step.generation_digest);
+    // The request digest alone never deactivates; nor does another value.
+    assert!(call(root.path(), &step, true).is_err());
+    let other = digest(b"other release");
+    assert!(confirm(root.path(), &step, true, Some(&other)).is_err());
     assert!(plugin.join("active").is_symlink());
-    assert_eq!(call(root.path(), &step, true).unwrap()["applied"], true);
+    assert!(!root.path().join("plugin-maintenance").exists());
+    let active = step.generation_digest.clone();
+    assert_eq!(
+        confirm(root.path(), &step, true, Some(&active)).unwrap()["applied"],
+        true
+    );
     assert!(plugin.join("active").symlink_metadata().is_err());
     assert!(plugin.join("generations").join(&generation).is_dir());
     assert!(
@@ -319,5 +342,35 @@ fn offline_completion_refuses_an_undecodable_account_directory() {
     assert!(call(root.path(), &step, true).is_err());
     assert!(odd.join("providers/victoria/runtime").is_dir());
     fs::remove_dir_all(&odd).unwrap();
+    assert_eq!(call(root.path(), &step, true).unwrap()["applied"], true);
+}
+
+/// A removal confirmation is only accepted for an active link that is present
+/// with a pending removal: never when the link is absent, and a stable
+/// tombstone contradicts a present link.
+#[test]
+fn active_removal_requires_a_present_link_and_a_pending_removal() {
+    let root = tempfile::tempdir().unwrap();
+    let step = fixture(root.path());
+    let active = step.generation_digest.clone();
+    assert_eq!(
+        call(root.path(), &step, false).unwrap()["active_generation"],
+        serde_json::Value::Null
+    );
+    assert!(confirm(root.path(), &step, true, Some(&active)).is_err());
+    let journal = Journal::open(root.path()).unwrap();
+    journal
+        .installations
+        .maintenance_removal(&step, true)
+        .unwrap();
+    drop(journal);
+    let generation = digest_generation_name(&step.generation_digest).unwrap();
+    let plugin = root.path().join("plugins/victoria");
+    fs::create_dir_all(plugin.join("generations").join(&generation)).unwrap();
+    symlink(format!("generations/{generation}"), plugin.join("active")).unwrap();
+    assert!(call(root.path(), &step, false).is_err());
+    assert!(confirm(root.path(), &step, true, Some(&active)).is_err());
+    assert!(plugin.join("active").is_symlink());
+    fs::remove_file(plugin.join("active")).unwrap();
     assert_eq!(call(root.path(), &step, true).unwrap()["applied"], true);
 }

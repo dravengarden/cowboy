@@ -88,7 +88,7 @@ pub fn complete_absent_uninstall(
     service: &str,
     machine: &str,
     operation: &str,
-    confirmation: Option<&str>,
+    (confirmation, remove_active): (Option<&str>, Option<&str>),
 ) -> Result<serde_json::Value> {
     let started = Instant::now();
     let checkpoint = || -> Result<()> {
@@ -122,7 +122,7 @@ pub fn complete_absent_uninstall(
     let step = &original.step;
     let request_digest = step.request_digest()?;
     journal.install_attempts.ensure_unfenced(&step.plugin_id)?;
-    journal.installations.maintenance_removal(step, false)?;
+    let pending = journal.installations.maintenance_removal(step, false)?;
     let plugins = state_dir.join("plugins");
     let plugin = plugins.join(&step.plugin_id);
     let auth = state_dir.join("provider-auth");
@@ -138,6 +138,13 @@ pub fn complete_absent_uninstall(
     let projection = present(&projection)?.then_some(projection);
     package_directory(&plugin, uid)?;
     let active = active_is_original(&plugin, step)?;
+    // A stable tombstone is written only after the unlink was flushed: a
+    // present link contradicts it. Only a pending removal may unlink.
+    ensure!(
+        !active || pending,
+        "the active link contradicts the completed removal tombstone; maintenance refused"
+    );
+    let active_generation = active.then(|| step.generation_digest.clone());
     // The live uninstall's own refusal check: named account credentials are
     // account revocation's to remove, never this maintenance's.
     super::super::uninstall::named_credential_refusal(&auth, &step.plugin_id)?;
@@ -145,7 +152,7 @@ pub fn complete_absent_uninstall(
         "schema": 1, "operation_id": operation, "service_id": service,
         "machine_id": machine, "plugin_id": step.plugin_id,
         "request_digest": request_digest, "applied": false,
-        "removes_active_link": active,
+        "removes_active_link": active, "active_generation": active_generation,
         "requires_controller_reconciliation": true,
     });
     let Some(confirmation) = confirmation else {
@@ -154,6 +161,12 @@ pub fn complete_absent_uninstall(
     ensure!(
         confirmation == request_digest,
         "uninstall confirmation digest changed"
+    );
+    // Deactivating is confirmed separately and only for the exact generation
+    // this run observed as the active link.
+    ensure!(
+        remove_active == active_generation.as_deref(),
+        "active link removal must be confirmed separately with exactly the reported active_generation, and only when one is reported"
     );
     checkpoint()?;
     let audit_root = state_dir.join("plugin-maintenance");
@@ -172,7 +185,8 @@ pub fn complete_absent_uninstall(
     });
     atomic_write(&audit_path, &serde_json::to_vec(&audit)?, 0o600)?;
     fs::File::open(&audit_root)?.sync_all()?;
-    roll_forward(&plugin, projection.as_deref(), &auth, step, &checkpoint)?;
+    let removal = (plugin.as_path(), active);
+    roll_forward(removal, projection.as_deref(), &auth, step, &checkpoint)?;
     checkpoint()?;
     // A failure after either write remains recoverable with a new explicit
     // host invocation. The original step is never re-executed.
@@ -195,7 +209,7 @@ pub fn complete_absent_uninstall(
 /// cleanup), the default scope's projections and empty named private-copy
 /// directories, then the refusal check and flushed absence again.
 fn roll_forward(
-    plugin: &Path,
+    (plugin, remove_active): (&Path, bool),
     projection: Option<&Path>,
     auth: &Path,
     step: &UninstallStep,
@@ -204,6 +218,10 @@ fn roll_forward(
     checkpoint()?;
     super::super::uninstall::named_credential_refusal(auth, &step.plugin_id)?;
     if active_is_original(plugin, step)? {
+        ensure!(
+            remove_active,
+            "the active link appeared after it was confirmed absent"
+        );
         // After both validations: never start removal past the budget.
         checkpoint()?;
         fs::remove_file(plugin.join("active"))?;

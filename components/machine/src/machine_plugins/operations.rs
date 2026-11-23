@@ -322,6 +322,54 @@ fn active_digest(root: &Path) -> Result<Option<String>> {
     Ok(Some(digest))
 }
 
+impl Journal {
+    /// Record a definite `rejected/target_changed` for a step refused by a
+    /// read-only check before anything else is written: no uncertain receipt
+    /// precedes it, so a crash leaves either no receipt or this one. The same
+    /// identity, owner, capacity and slot-fence checks as [`Self::execute`].
+    fn reject_before_intent(
+        &self,
+        step: &UninstallStep,
+        lease: &UninstallExecutionLease,
+    ) -> StepLookup {
+        if !lease.matches(step) {
+            return unavailable(StepUnavailable::InvalidRequest);
+        }
+        let mut state = self.state.lock();
+        match Self::lookup(&state, step) {
+            StepLookup::NotFound {} => {}
+            found => return found,
+        }
+        if !lease.connected() {
+            return unavailable(StepUnavailable::WrongOwner);
+        }
+        if state.receipts.len() >= MAX_RECORDS {
+            return unavailable(StepUnavailable::Capacity);
+        }
+        if state.receipts.values().any(|r| {
+            r.step.plugin_id == step.plugin_id && matches!(r.outcome, StepOutcome::Unknown { .. })
+        }) {
+            return unavailable(StepUnavailable::SlotFenced);
+        }
+        let key = step.key().expect("validated by lookup");
+        let receipt = StepReceipt {
+            step: step.clone(),
+            request_digest: step.request_digest().expect("validated by lookup"),
+            outcome: StepOutcome::Rejected {
+                reason: StepRejection::TargetChanged,
+            },
+        };
+        if self.persist(&key, &receipt).is_err() {
+            state.poisoned = true;
+            return unavailable(StepUnavailable::Storage);
+        }
+        state.receipts.insert(key, receipt.clone());
+        StepLookup::Found {
+            receipt: Box::new(receipt),
+        }
+    }
+}
+
 fn unavailable(reason: StepUnavailable) -> StepLookup {
     StepLookup::Unavailable { reason }
 }
@@ -536,12 +584,16 @@ impl MachinePluginStore {
                 found => found,
             };
         }
+        // The read-only credential scan runs before any uncertain receipt is
+        // written: a refusal is persisted directly as a definite rejection
+        // with no installation intent, so nothing is fenced.
+        if !self.credentials_admit(step) {
+            return self.operations.reject_before_intent(step, lease);
+        }
         self.operations.execute(
             step,
             lease,
-            // A refusal here is a definite rejection: no installation intent
-            // has begun and nothing changed, so the slot stays unfenced.
-            || self.step_admissible(step),
+            || self.step_target_matches(step).unwrap_or(false),
             || {
                 let pending = self.operations.installations.begin(
                     &step.plugin_id,
@@ -570,9 +622,11 @@ impl MachinePluginStore {
     /// The exact target is current and the uninstall would not have to
     /// refuse once it began (credentials it cannot re-derive). Reads only.
     fn step_admissible(&self, step: &UninstallStep) -> bool {
-        if !self.step_target_matches(step).unwrap_or(false) {
-            return false;
-        }
+        self.step_target_matches(step).unwrap_or(false) && self.credentials_admit(step)
+    }
+
+    /// The uninstall's credential refusal check would pass. Reads only.
+    fn credentials_admit(&self, step: &UninstallStep) -> bool {
         match self.ensure_no_named_auth_materializations(&step.plugin_id) {
             Ok(()) => true,
             Err(error) => {

@@ -102,7 +102,9 @@ If the later Service commit needs compensation, the durable path does **not**
 fall back to unjournaled `ReactivatePlugin`: a verified, separately authorized
 Machine recovery step with installation CAS is still required. A rejection at
 execution time therefore keeps the fence too; the definite pre-effect refusal
-normally happens at preflight, before any operation is recorded.
+normally happens at preflight, before any operation is recorded; at execution
+the credential refusal is checked before any uncertain receipt and is recorded
+directly as `rejected/target_changed`.
 
 An Operator may make the read-only request:
 

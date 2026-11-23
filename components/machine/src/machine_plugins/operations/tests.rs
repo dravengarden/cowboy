@@ -678,3 +678,41 @@ async fn browser_drain_requires_the_authority_execution_would_check() {
     drop(other);
     assert!(!store.uninstall_drain_authorized(&fresh, true, &orphaned));
 }
+
+/// A refusal decided before any intent is recorded only as a definite
+/// rejection: no uncertain receipt exists at any point, nothing is fenced,
+/// a replay returns it, and another step's uncertainty still fences the slot.
+#[test]
+fn rejection_before_intent_writes_only_a_definite_receipt() {
+    let root = tempfile::tempdir().unwrap();
+    let request = step();
+    let journal = Journal::open(root.path()).unwrap();
+    let scope = lease::PluginExecutionScope::new(Some(&request.service_id), &request.machine_id);
+    let lease = scope.uninstall(&request).unwrap();
+    let rejected = StepOutcome::Rejected {
+        reason: StepRejection::TargetChanged,
+    };
+    assert_eq!(
+        receipt(journal.reject_before_intent(&request, &lease)).outcome,
+        rejected
+    );
+    journal.ensure_unfenced(&request.plugin_id).unwrap();
+    assert_eq!(
+        receipt(journal.reject_before_intent(&request, &lease)).outcome,
+        rejected,
+        "a replay returns the saved receipt"
+    );
+    drop(journal);
+    let reopened = Journal::open(root.path()).unwrap();
+    assert_eq!(receipt(reopened.query(&request)).outcome, rejected);
+    let mut other = request.clone();
+    other.operation_id.push('2');
+    reopened.fixture_execute(&other, || true, || bail!("fixture failure"));
+    let mut third = request.clone();
+    third.operation_id.push('3');
+    let lease = scope.uninstall(&third).unwrap();
+    assert_eq!(
+        reopened.reject_before_intent(&third, &lease),
+        unavailable(StepUnavailable::SlotFenced)
+    );
+}

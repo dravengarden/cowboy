@@ -33,7 +33,12 @@ cowboy-machine --state-dir /path/to/machine-state \
 ```
 
 Repeat with `--confirm-uninstall-digest` set to the exact reported request
-digest to apply. The command acquires the resident Machine's exclusive journal
+digest to apply. When the preview reports an `active_generation` (the original
+generation is still the active link and the removal is still pending), also
+pass `--confirm-remove-active` with exactly that value; the request digest
+alone never deactivates an installation, and a removal confirmation without a
+reported active link is refused. A present link beside a completed (stable)
+removal tombstone is contradictory and refused. The command acquires the resident Machine's exclusive journal
 owner lock. It verifies the uncertain receipt, the slot's pending removal for the exact
 predecessor and request digest, an active link that is absent or still the
 original generation, private state/auth directories, and absence of an

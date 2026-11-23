@@ -67,8 +67,9 @@ pub(in crate::machine_plugins) struct Installations {
 impl Installations {
     /// Only the offline maintenance owner calls this after preserving the
     /// original receipt and verifying the exact absent installation. No link
-    /// is used to reconstruct installation authority.
-    pub(super) fn maintenance_removal(&self, step: &UninstallStep, complete: bool) -> Result<()> {
+    /// is used to reconstruct installation authority. Returns whether the
+    /// removal is still pending (not yet a stable tombstone).
+    pub(super) fn maintenance_removal(&self, step: &UninstallStep, complete: bool) -> Result<bool> {
         let mut state = self.state.lock();
         ensure!(
             !state.poisoned && state.present,
@@ -86,12 +87,13 @@ impl Installations {
                 && transition.operation_digest.as_ref() == Some(&step.request_digest()?),
             "pending uninstall installation changed"
         );
+        let pending = transition.outcome == (Outcome::Unknown {});
         if complete {
             let mut transition = transition.clone();
             transition.outcome = Outcome::Stable {};
             self.persist(&mut state, &transition)?;
         }
-        Ok(())
+        Ok(pending)
     }
 
     pub(super) fn open(root: PathBuf) -> Result<Self> {

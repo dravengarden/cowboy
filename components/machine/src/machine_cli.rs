@@ -336,6 +336,9 @@ pub struct Args {
     /// Exact request digest reported by the offline maintenance preview.
     #[arg(long, requires = "complete_absent_uninstall")]
     confirm_uninstall_digest: Option<String>,
+    /// Also unlink the still-active installation: its exact reported active_generation.
+    #[arg(long, requires = "confirm_uninstall_digest")]
+    confirm_remove_active: Option<String>,
     /// Print the durable provider-usage outbox status as JSON and exit. This
     /// opens the SQLite spool read-only and does not contact the controller.
     #[arg(long, default_value_t = false)]
@@ -474,7 +477,10 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
                 .context("Service identity required")?,
             &args.machine_id,
             operation,
-            args.confirm_uninstall_digest.as_deref(),
+            (
+                args.confirm_uninstall_digest.as_deref(),
+                args.confirm_remove_active.as_deref(),
+            ),
         )?;
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());
