@@ -854,11 +854,13 @@ async fn clear_context(store: &Store, write: &StoreWrite) -> anyhow::Result<()> 
             session_id,
             calls_before_ms,
             fence,
+            turn_lost,
             ..
         } => {
             let fence = fence.as_ref().map(|(key, value)| (key.as_str(), value));
+            let turn_lost = turn_lost.as_ref().map(|(key, value)| (key.as_str(), value));
             store
-                .clear_conversation(session_id, *calls_before_ms, fence)
+                .clear_conversation(session_id, *calls_before_ms, fence, turn_lost)
                 .await
         }
         _ => anyhow::bail!("not a Clear store write"),

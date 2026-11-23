@@ -99,7 +99,7 @@ impl SqliteStorage {
         calls_before_ms: i64,
         fence: Option<crate::store::session_metadata::ClearFence<'_>>,
     ) -> Result<()> {
-        self.clear_conversation_inner(session_id, Some(calls_before_ms), fence)
+        self.clear_conversation_inner(session_id, Some(calls_before_ms), fence, None)
             .await
     }
 
@@ -109,8 +109,10 @@ impl SqliteStorage {
         session_id: &str,
         transcript: Option<i64>,
         fence: Option<crate::store::session_metadata::ClearFence<'_>>,
+        turn_lost: Option<crate::store::session_metadata::ClearFence<'_>>,
     ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
+        let now = now_ms();
         if let Some(calls_before_ms) = transcript {
             sqlx::query("DELETE FROM events WHERE session_id = ?1")
                 .bind(session_id)
@@ -126,8 +128,7 @@ impl SqliteStorage {
             )
             .await?;
         }
-        if let Some((fence_key, fence)) = fence {
-            let now = now_ms();
+        if fence.is_some() {
             sqlx::query(
                 "UPDATE sessions SET agent_session_id = NULL, updated_at_ms = ?1 WHERE id = ?2",
             )
@@ -136,17 +137,19 @@ impl SqliteStorage {
             .execute(&mut *tx)
             .await
             .with_context(|| format!("UPDATE SQLite session agent_session_id {session_id}"))?;
+        }
+        for (key, value) in fence.into_iter().chain(turn_lost) {
             sqlx::query(
                 "INSERT INTO settings(key, value, updated_at_ms) VALUES (?1, ?2, ?3) \
                  ON CONFLICT (key) DO UPDATE SET value = excluded.value, \
                  updated_at_ms = excluded.updated_at_ms",
             )
-            .bind(fence_key)
-            .bind(fence)
+            .bind(key)
+            .bind(value)
             .bind(now)
             .execute(&mut *tx)
             .await
-            .with_context(|| format!("UPSERT SQLite Hub setting {fence_key}"))?;
+            .with_context(|| format!("UPSERT SQLite Hub setting {key}"))?;
         }
         tx.commit().await?;
         Ok(())

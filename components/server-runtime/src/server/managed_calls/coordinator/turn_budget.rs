@@ -6,13 +6,17 @@
 //! start a turn: otherwise a notice that wakes the agent into one more call
 //! would hand it a fresh budget each time. The turn is named by the event
 //! sequence of that prompt; each admitted call is stamped with it
-//! (`Choice::owner_turn`) and the budget counts the calls sharing it.
+//! (`Choice::owner_turn`) and the budget counts the calls sharing it. A
+//! session another session created through the Agent API may also get a turn
+//! from its creator, at most once per turn of the creator
+//! ([`creator_grants`]).
 
 use std::time::Duration;
 
 use serde_json::{Value, json};
 
 use super::error;
+use crate::core::settings_keys::SESSION_OWNER_TURN_LOST_PREFIX;
 use crate::core::{Envelope, Hub};
 use crate::managed_calls::service::OWNER_TURN_NONE;
 use crate::store::Store;
@@ -25,49 +29,120 @@ const PAGE: usize = 200;
 /// admission longer than this.
 const SCAN_DEADLINE: Duration = Duration::from_secs(3);
 
+pub mod creator_grants;
 #[cfg(test)]
 mod tests;
 
 /// The sequence of the newest owner turn in `log`, as a ledger stamp.
+#[cfg(test)]
 fn newest_owner_prompt(log: &[Envelope]) -> Option<i64> {
     crate::prompt_origin::newest_owner_turn(log).and_then(|seq| i64::try_from(seq).ok())
 }
 
-/// The owner turn a call admitted now counts against: the newest owner
-/// prompt of `parent`, from the Hub's retained log (which holds events the
-/// store has not written yet, whatever a client bootstrap shows) or else from
-/// durable history, or [`OWNER_TURN_NONE`] when the whole history has none (a
-/// session only automation drives is one turn for its lifetime). `Err` names
-/// why the turn could not be established; the caller refuses rather than
-/// guess.
-async fn current_turn(hub: &Hub, store: &Store, parent: &str) -> Result<i64, &'static str> {
+/// The turn a call admitted now in `session` counts against: the newer of
+/// its owner turn and the turn its creator last granted it
+/// ([`creator_grants`]). Without a grant this is the owner turn alone.
+pub(in crate::server) async fn current_turn(
+    hub: &Hub,
+    store: &Store,
+    session: &str,
+) -> Result<i64, &'static str> {
+    let granted = creator_grants::granted_turn(hub, session);
+    let owner = owner_turn(hub, store, session, granted).await?;
+    // A transcript cleared before its owner turn was found: no owner prompt
+    // or grant since then means the turn is unknown, never an older one.
+    let lost = hub
+        .setting(&format!("{SESSION_OWNER_TURN_LOST_PREFIX}{session}"))
+        .and_then(|seq| seq.as_i64());
+    if owner == OWNER_TURN_NONE && lost.is_some_and(|cleared| granted < cleared) {
+        return Err(TURN_CLEARED);
+    }
+    Ok(owner.max(granted))
+}
+
+/// Why a session whose history was cleared before its owner turn was known
+/// refuses calls until a person or its creator sends it a new message.
+const TURN_CLEARED: &str = "owner_turn_history_cleared";
+
+/// The newest owner prompt of `session`, from the Hub's retained log (which
+/// holds events the store has not written yet, whatever a client bootstrap
+/// shows) or else from durable history, or [`OWNER_TURN_NONE`] when the whole
+/// history has none (a session only automation drives is one turn for its
+/// lifetime). Durable history is read only down to `newer` (a granted turn):
+/// an owner prompt that old loses to it anyway. `Err` names why the turn could
+/// not be established; the caller refuses rather than guess.
+async fn owner_turn(
+    hub: &Hub,
+    store: &Store,
+    session: &str,
+    newer: i64,
+) -> Result<i64, &'static str> {
     let scan = hub
-        .newest_in_retained_log(parent, crate::prompt_origin::newest_owner_turn)
+        .newest_in_retained_log(session, crate::prompt_origin::newest_owner_turn)
         .ok_or("session_unavailable")?;
-    if let Some(turn) = scan.newest_match.and_then(|seq| i64::try_from(seq).ok()) {
-        return Ok(turn);
+    if let Some(turn) = scan.newest_match {
+        return Ok(stamp(turn));
     }
     if scan.whole {
         return Ok(OWNER_TURN_NONE);
     }
-    durable_turn(store, parent, scan.first_seq.unwrap_or(i64::MAX as u64)).await
+    // From the retained log's first event on, so a send it cut is found whole.
+    let before = scan.first_seq.map_or(i64::MAX as u64, |first| first + 1);
+    let floor = u64::try_from(newer).ok();
+    let turn = durable_turn(store, session, before, floor).await?;
+    // A Clear while the history was read removed what was read: its result,
+    // a fragment of a cleared send or an absence, means nothing now.
+    let after = hub
+        .newest_in_retained_log(session, crate::prompt_origin::newest_owner_turn)
+        .ok_or("session_unavailable")?;
+    if after.whole {
+        return Ok(after.newest_match.map_or(OWNER_TURN_NONE, stamp));
+    }
+    match u64::try_from(turn) {
+        Ok(seq) => hub.remember_owner_turn(session, seq),
+        // Read to its start: a later Clear loses no owner turn.
+        Err(_) if floor.is_none() => hub.confirm_no_owner_turn(session),
+        Err(_) => {}
+    }
+    Ok(turn)
 }
 
-/// The newest owner prompt among the events before `before` in durable
-/// history, read newest first.
-async fn durable_turn(store: &Store, parent: &str, mut before: u64) -> Result<i64, &'static str> {
+fn stamp(seq: u64) -> i64 {
+    i64::try_from(seq).unwrap_or(i64::MAX)
+}
+
+/// The newest owner prompt among the events before `before` and after
+/// `floor` in durable history, read newest first. A send whose first chunks
+/// are on an older page is anchored at its real first chunk, however the
+/// pages fall; one that began at or before `floor` counts as none.
+async fn durable_turn(
+    store: &Store,
+    parent: &str,
+    mut before: u64,
+    floor: Option<u64>,
+) -> Result<i64, &'static str> {
     let deadline = tokio::time::Instant::now() + SCAN_DEADLINE;
+    let mut run: Vec<Envelope> = Vec::new();
     loop {
-        let (page, next, done) =
+        // A send still open from a newer page needs its older page read.
+        if run.is_empty() && floor.is_some_and(|floor| before <= floor.saturating_add(1)) {
+            return Ok(OWNER_TURN_NONE);
+        }
+        let (mut page, next, done) =
             tokio::time::timeout_at(deadline, store.history_page(parent, before, PAGE))
                 .await
                 .map_err(|_| "owner_turn_scan_timeout")?
                 .map_err(|_| "owner_turn_history_unavailable")?;
-        if let Some(turn) = newest_owner_prompt(&page) {
-            return Ok(turn);
-        }
-        if done {
-            return Ok(OWNER_TURN_NONE);
+        page.append(&mut run);
+        let found = crate::prompt_origin::newest_owner_turn(&page)
+            .filter(|seq| floor.is_none_or(|floor| *seq > floor));
+        // A run that begins the page may have begun on the page before it.
+        let open = found.is_some_and(|seq| page.first().is_some_and(|first| first.seq == seq));
+        match found {
+            Some(turn) if !open || done => return Ok(stamp(turn)),
+            Some(_) => run = page,
+            None if done => return Ok(OWNER_TURN_NONE),
+            None => {}
         }
         before = next
             .filter(|next| *next < before)
@@ -96,7 +171,7 @@ pub async fn admit(
     let turn = current_turn(hub, store, parent).await.map_err(|reason| {
         let mut refusal = unavailable();
         refusal["error"]["reason"] = json!(reason);
-        refusal["error"]["retryable"] = json!(true);
+        refusal["error"]["retryable"] = json!(reason != TURN_CLEARED);
         refusal
     })?;
     let used = store

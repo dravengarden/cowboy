@@ -3,6 +3,7 @@
 //! title and its place in the Sessions list are applied afterwards, the way a
 //! fork or copy is filed beside its source.
 use super::*;
+use crate::server::managed_calls::creator_grants;
 use crate::session_folders::FolderActor;
 
 /// What a `sessions.create` call asked for beyond the product handler's body.
@@ -13,6 +14,13 @@ pub(super) struct Spawn {
 }
 
 impl Spawn {
+    /// [`Self::prepare`] for a `sessions.create`; nothing for another call.
+    pub(super) fn prepare_for(name: &str, input: &mut Value) -> Result<Option<Self>, &'static str> {
+        (name == "sessions.create")
+            .then(|| Self::prepare(input))
+            .transpose()
+    }
+
     /// Refuse a malformed body before the call is admitted, so the caller gets a
     /// definite rejection instead of a receipt of unknown effect. The body must
     /// also be one the product handler accepts.
@@ -55,37 +63,104 @@ impl Spawn {
         })
     }
 
-    /// Apply the title and the placement to the session the handler created.
+    /// [`Self::place`], with the creator link written to the store before
+    /// the creation's receipt is, so no grant ever waits for it.
+    pub(super) async fn finish(
+        self,
+        state: &AppState,
+        creator: &str,
+        actor: &FolderActor,
+        result: &Value,
+    ) {
+        if let Some(session) = self.place(&state.hub, creator, actor, result) {
+            creator_grants::persist_creator(state.store.as_ref(), creator, &session).await;
+        }
+    }
+
+    /// Apply the title and the placement to the session the handler created,
+    /// and record its creator; returns the created session.
     ///
     /// `result` is the write receipt of the creation. Neither step may turn a
     /// created session into an error, which would invite a retry that creates
     /// a duplicate: a creator in Trash or gone, or any refusal, leaves the
     /// session where the handler put it.
-    pub(super) fn finish(
+    pub(super) fn place(
         self,
         hub: &crate::core::Hub,
         creator: &str,
         actor: &FolderActor,
         result: &Value,
-    ) {
+    ) -> Option<String> {
         let created = result["http_status"]
             .as_u64()
             .is_some_and(|status| (200..300).contains(&status))
             .then(|| result["result"]["session_id"].as_str())
             .flatten();
-        let Some(session) = created else {
-            return;
-        };
+        let session = created?;
+        creator_grants::record_creator(hub, creator, session);
         if let Some(title) = self.title {
             // As `sessions.rename`, fork and copy set a title.
             hub.rename_session(session, title);
         }
-        if !self.beside_creator {
-            return;
-        }
-        if let Err(error) = hub.place_spawned(creator, session, actor) {
+        if self.beside_creator
+            && let Err(error) = hub.place_spawned(creator, session, actor)
+        {
             tracing::warn!(%session, %creator, %error, "spawned session stays where it was created");
         }
+        Some(session.to_owned())
+    }
+}
+
+/// A `queue.submit` from the session that created its target may start a
+/// call-budget turn there (docs/managed-agent-calls.md#call-budgets): read
+/// before the message is sent, granted once it was taken.
+pub(super) async fn turn_grant(
+    state: &AppState,
+    sender: &str,
+    name: &str,
+    input: &Value,
+) -> Option<creator_grants::Pending> {
+    if name != "queue.submit" || !deliverable(input) {
+        return None;
+    }
+    let child = input["session_id"].as_str()?;
+    creator_grants::prepare(&state.hub, state.store.as_ref(), sender, child).await
+}
+
+/// Whether a `queue.submit` has something dispatch would prompt: text that
+/// is not blank, or content blocks of which at least one decodes and is not
+/// blank text, read with
+/// dispatch's own precedence (content first). Anything else is dropped
+/// before it is prompted and grants nothing.
+fn deliverable(input: &Value) -> bool {
+    let text = input["text"].as_str().unwrap_or_default();
+    let content = input["content"].as_array().map_or(&[][..], Vec::as_slice);
+    if content.is_empty() && text.trim().is_empty() {
+        return false;
+    }
+    // Blank text blocks are not a message either.
+    crate::server::client_commands::build_prompt_blocks(text, content).is_some_and(|blocks| {
+        blocks.iter().any(|block| {
+            serde_json::to_value(block).is_ok_and(|block| {
+                block["type"] != "text"
+                    || block["text"]
+                        .as_str()
+                        .is_some_and(|text| !text.trim().is_empty())
+            })
+        })
+    })
+}
+
+/// Grant a [`turn_grant`] once its message's receipt says it was taken.
+pub(super) async fn commit_turn_grant(
+    state: &AppState,
+    grant: Option<creator_grants::Pending>,
+    receipt: &Value,
+) {
+    if let Some(grant) = grant {
+        grant
+            .commit(&state.hub, state.store.as_ref(), receipt)
+            .await;
     }
 }
 

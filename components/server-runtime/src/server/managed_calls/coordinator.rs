@@ -52,6 +52,7 @@ pub use observation::touch as touch_code_observation;
 pub use observation::{changes as code_changes, head as code_observation_head};
 pub(super) use readiness::{child_runtime, child_runtime_pinned, runtime_readiness};
 use replay::replay;
+pub use turn_budget::creator_grants;
 
 impl GrantEntry {
     fn accepts_installation(

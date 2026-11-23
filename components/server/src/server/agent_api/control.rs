@@ -1177,11 +1177,7 @@ async fn dispatch(
             state, notify, call, op, receipt,
         ));
     }
-    let spawn = if name == "sessions.create" {
-        Some(spawn::Spawn::prepare(&mut input)?)
-    } else {
-        None
-    };
+    let spawn = spawn::Spawn::prepare_for(name, &mut input)?;
     if name == "projects.placements" {
         only_keys(&input, &["machine"])?;
         input = json!({"query":{"machine_id":arg_str(&input,"machine")?}});
@@ -1216,7 +1212,7 @@ async fn dispatch(
     let result = response_value(response, spec.write).await?;
     if let Some(spawn) = spawn {
         let actor = web::folder_actor(state, &auth.principal);
-        spawn.finish(&state.hub, &parent.id, &actor, &result);
+        spawn.finish(state, &parent.id, &actor, &result).await;
     }
     Ok(result)
 }
@@ -1392,6 +1388,7 @@ pub(super) async fn apply(
     // A caller disconnect must not cancel an admitted effect or its receipt.
     let task = tokio::spawn(async move {
         let _slot = slot;
+        let grant = spawn::turn_grant(&state, &parent.id, &input.name, &input.input).await;
         let mut result = match dispatch(
             &state,
             &parent,
@@ -1405,6 +1402,7 @@ pub(super) async fn apply(
             Ok(value) => value,
             Err(code) => json!({"status":"unknown","error":code}),
         };
+        spawn::commit_turn_grant(&state, grant, &result).await;
         result["domain_operation"] = json!(domain_operation);
         store
             .finish_agent_operation(&owner, &parent.id, &operation, &result)

@@ -24,13 +24,15 @@ impl Hub {
         &self,
         session_id: &str,
     ) -> Result<Option<(StoreAckRx, ClearCommit)>, String> {
-        let native = {
+        let (native, turn_lost) = {
             let mut sessions = self.inner.sessions.lock();
             let session = sessions
                 .get_mut(session_id)
                 .ok_or("session no longer exists")?;
             session.clear_pending = true;
-            session.meta.agent_session_id.clone()
+            // Decided with the latch: owner prompts wait from here on.
+            let turn_lost = Self::owner_turn_lost_of(session_id, session);
+            (session.meta.agent_session_id.clone(), turn_lost)
         };
         let Some(tx) = self.inner.store_tx.as_ref() else {
             return Ok(None);
@@ -42,13 +44,14 @@ impl Hub {
             calls_before_ms: chrono::Utc::now().timestamp_millis(),
             fence: Some(fence.clone()),
             ack_id: Some(ack_id),
+            turn_lost: turn_lost.clone(),
         });
         if !sent {
             self.inner.store_acks.cancel(ack_id);
             self.end_clear_conversation(session_id);
             return Err("Clear was not saved: the durable store queue is unavailable".into());
         }
-        Ok(Some((rx, ClearCommit { fence })))
+        Ok(Some((rx, ClearCommit { fence, turn_lost })))
     }
 
     /// Apply a committed Clear (or a memory-only one) to the Hub: advance the
@@ -56,6 +59,12 @@ impl Hub {
     /// the divider. A native id reported after the commit is fenced and
     /// persisted with its own transaction.
     pub fn finish_clear_conversation(&self, session_id: &str, commit: Option<ClearCommit>) {
+        // Before the transcript goes, so no admission sees one without it.
+        let turn_lost = match &commit {
+            Some(commit) => commit.turn_lost.clone(),
+            None => self.owner_turn_lost(session_id),
+        };
+        self.apply_owner_turn_lost(turn_lost);
         let (fence_key, fence) = self.reset_context(session_id, commit.is_none());
         if let Some(commit) = commit
             && commit.fence != (fence_key.clone(), fence.clone())
@@ -96,6 +105,7 @@ impl Hub {
 /// The fence a durable Clear committed.
 pub struct ClearCommit {
     fence: (String, serde_json::Value),
+    turn_lost: super::owner_turn_loss::TurnLost,
 }
 
 #[cfg(test)]
@@ -165,6 +175,52 @@ mod tests {
                 "the committed Clear was written again"
             );
         }
+    }
+
+    /// A Clear of history the Hub never read for the owner's turn records
+    /// that in its own transaction, and in memory before the transcript goes;
+    /// one whose absence of an owner turn was confirmed records nothing.
+    #[tokio::test]
+    async fn a_clear_of_unread_history_records_the_lost_owner_turn() {
+        let (hub, mut rx) = hub_with_writes();
+        hub.inner
+            .sessions
+            .lock()
+            .get_mut("s")
+            .unwrap()
+            .reached_start = false;
+        let (_ack, commit) = hub.begin_clear_conversation("s").unwrap().unwrap();
+        let key = format!(
+            "{}s",
+            super::super::settings_keys::SESSION_OWNER_TURN_LOST_PREFIX
+        );
+        let last = hub.last_event_seq("s").unwrap();
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(StoreWrite::ClearEvents { turn_lost: Some((written, seq)), .. })
+                if written == key && seq == serde_json::json!(last)
+        ));
+        assert_eq!(hub.setting(&key), None, "nothing changes before the commit");
+        hub.finish_clear_conversation("s", Some(commit));
+        assert_eq!(hub.setting(&key), Some(serde_json::json!(last)));
+        hub.end_clear_conversation("s");
+
+        let (hub, mut rx) = hub_with_writes();
+        hub.inner
+            .sessions
+            .lock()
+            .get_mut("s")
+            .unwrap()
+            .reached_start = false;
+        hub.confirm_no_owner_turn("s");
+        let _ = hub.begin_clear_conversation("s").unwrap().unwrap();
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(StoreWrite::ClearEvents {
+                turn_lost: None,
+                ..
+            })
+        ));
     }
 
     fn submit_during_clear(hub: &Hub) -> tokio::sync::mpsc::Receiver<super::super::DispatchReq> {

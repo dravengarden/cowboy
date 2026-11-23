@@ -296,10 +296,50 @@ scheduled wakeups and scheduled drafts (`__wake__`, `__sched__`), legacy
 auto-continuations, superagent and code-intelligence prompts, and runtime
 markup injected by the agent. A session no person ever prompted (only peers or
 automation drive it) is one turn for its whole life, so its budget is a
-lifetime cap of `max_per_turn`.
+lifetime cap of `max_per_turn`, unless its creator grants it turns.
+
+**Turns a creator grants.** A session another session's agent created with the
+Agent API `sessions.create` (its creator, recorded as
+`session_created_by:<session>` wherever it was filed; one created before that
+record existed has it only as the `session_spawned_from:` of a spawn filed
+beside its creator) usually never gets a person's prompt: its creator drives it
+with `queue.submit`. A message the creator sends it starts a turn there, but
+only the first one in each turn of the creator. Each of the owner's prompts to
+the creator therefore gives every child at most one fresh budget, and a creator
+and child messaging each other cannot mint more. A creator grants under its own
+current turn: its owner's prompt, or the turn its own creator granted it. A
+grandchild's budget therefore also traces back to an owner's prompt, and a
+creator with neither grants nothing. The sender is the Agent API caller session
+the Controller authenticated, never the message text; a message from any other
+session grants nothing.
+
+The grant is taken once the message was accepted (queued or injected, or for
+an interrupt, submitted); a refused, pending or unknown send, and one with
+nothing dispatch would prompt (blank text, or no content block that decodes),
+grants nothing, and the creator's next message in that turn
+may. The child keeps one record, `session_turn_grants:<session>`:
+the creator's turn it was granted in and the granted turn, named by the child's
+newest event sequence then. Only a creator turn newer than the recorded one
+grants again, so a delayed send from an older turn never does. The record, and the
+creator link it relies on (written to the store when the session is created,
+before the creation's receipt), are written to the store before it counts, so a
+restart never forgets a grant a call was admitted under; a failed write grants
+nothing. The turn takes effect
+at once and does not depend on finding the message in the transcript again: it
+survives trimming, a cleared transcript and a restart. A child that acts on the
+message before the grant is written (it is written right after the message is
+queued or injected) counts that call in its previous turn. The child's turn is
+the newer of the granted turn and its own owner turn; a later owner prompt has
+a larger sequence and wins, and a grant that shares a sequence with an earlier
+turn joins that turn. Durable history is read for an owner prompt only down to
+the granted turn. Anything that cannot be established (no creator link, the
+creator's turn unreadable, a record this Controller cannot read, which is then
+left as it is) grants nothing, and the budget counts as it would without
+grants.
 
 Each admitted call is stamped with its turn, the event sequence of the owner
-prompt (`managed_agent_calls.owner_turn`, `-1` for a session without one), and
+prompt or of the granted turn (`managed_agent_calls.owner_turn`, `-1` for a
+session with neither), and
 the budget counts the calls that share the current turn, in every state: a
 failed or cancelled call, a dismissed call and a continuation round all spent
 budget. A replayed `request_id` returns the original call and keeps its turn.
@@ -315,7 +355,10 @@ ACP client's unmatched text, a steered block of an older worker) and rows from
 before the stamp never do, whatever their text. The Hub remembers the latest
 such sequence per session (`owner_turn_seq`), restored from the retained log
 at start, so the turn survives the transcript trimming it out of memory and a
-cleared transcript. Admission reads that, else the Hub's retained log (which
+cleared transcript; a send whose first blocks were trimmed, fell before the
+tail a restart restored, or lie on an older history page is still anchored at
+its first block, and an owner turn found in durable history is remembered
+like one the Hub saw begin. Admission reads that, else the Hub's retained log (which
 also holds events the store has not written yet, whatever the client bootstrap
 window shows), else durable history (200 events per page, three seconds). When
 it cannot, it refuses with the retryable `capacity` code and a `reason`
@@ -345,6 +388,58 @@ case it counts against the previous turn. Undecodable durable rows can make a
 history page look empty. Closing these needs a trusted sender stamped at each
 ingress and the turn anchored when the Controller dispatches the prompt.
 
+A creator's grant follows its own agent's choices: the owner's prompt
+authorizes the creator, not each message it then sends, so the creator's agent
+can send its child a message that starts the child's turn without the owner
+asking for it, once per owner turn and child. Creating another session gives
+the creator a session with a fresh budget too, as it did before grants. The
+budget bounds the automation loops; it does not limit how much work an agent
+the owner prompted delegates.
+
+Further limits of grants:
+
+- An interrupt whose delivery is still pending when its 500 ms reply is due
+  grants nothing, even if it is submitted later (fewer budgets).
+- A grant names the child's event sequence before the Hub's write-behind
+  queue has stored the sequence counter. After a crash the child may reuse
+  lower sequences: until they pass the granted turn, a new owner prompt there
+  does not start a turn, and a grant taken then names a lower turn than the
+  one before the crash, which moves the child's turn back to it (counting the
+  calls stamped with it, if any). The child's own grants to its children then
+  carry that lower turn, which is not newer than the one they recorded before
+  the crash, so its children get no grant from it until its turn passes that.
+- The creator link is written to the store when the session is created, with
+  a few retries; if every write fails the creation still succeeds (a retry
+  would create a duplicate), the link waits in the write-behind queue, and the
+  next grant writes it again first. A restart before either write leaves the
+  session without a creator: it gets no grants (the budget as before grants).
+- A grant or creator link written while its target is being deleted is
+  removed again from the Hub, but a direct store write that lands after the
+  deletion's tombstone can leave a stale row for the deleted session; nothing
+  reads it.
+
+Clearing a transcript whose owner turn the Hub had not established (a restored
+tail that began inside an owner's send, or a long history no admission has
+read to its start) records the clear (`session_owner_turn_lost:<session>`, the
+newest event sequence then). Until a new owner prompt or a grant at least that
+new names a turn, calls are refused with `capacity` and the non-retryable
+reason `owner_turn_history_cleared` rather than counted against an older turn.
+A user Clear decides the record under the lock that holds its pending latch
+and writes it in the Clear's own transaction (`StoreWrite::ClearEvents`, with
+the transcript's deletion and the native-id fence), so a failed write keeps
+the transcript and records nothing. The Hub sets the record in memory before it
+clears the transcript, so no admission sees the cleared log without it; the
+Supervisor's Clear (`Hub::clear_transcript`) does the same with its own
+`ClearEvents`. A session whose durable history an admission already read to
+its start without finding an owner turn is not marked: automation that drives
+it alone keeps going after a Clear. A durable read that a Clear overtook is
+discarded rather than anchored at a fragment of a cleared send.
+
+The remaining limits: the confirmation that a session has no owner turn is
+kept in memory only, so after a restart a Clear before the next full read marks
+the session again. A creator-link write retried after the created session's
+deletion can land after the deletion's tombstone and leave a stale, unread row.
+
 **Migration and compatibility window.** Stored Tools defaults that carry
 `max_per_session` keep loading: the lifetime cap becomes `max_per_turn` 16
 (the new default) unless a person had lowered it below 16, which is kept
@@ -370,7 +465,11 @@ acknowledged when committed in memory and persisted by the store queue, one key
 at a time: a crash between the two keys reads as the previous document with the
 default limit, the same loss a crash before either write has. The ledger column is additive
 (PostgreSQL 0087, SQLite 0061) and the call `Record` is unchanged, so a
-predecessor reads every row. The window ends when no predecessor remains a
+predecessor reads every row. A predecessor does not load the
+`session_created_by:` and `session_turn_grants:` settings and counts only calls
+stamped with its own owner turn, so after a rollback a created session that
+spent a granted turn's budget returns to whatever its turn before the grant
+had left. The window ends when no predecessor remains a
 rollback target; then the legacy field, its fixed write and the input mapping
 can be removed together.
 

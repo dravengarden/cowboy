@@ -9,9 +9,9 @@ mod selection;
 mod wait_observation;
 
 pub use coordinator::{
-    Coordinator, authorize, code_changes, code_observation_head, delete_child, dispatch_calls,
-    dispatch_calls_from, handle, image_capabilities, mcp_parent, mcp_ready, parent_deleted,
-    touch_code_observation,
+    Coordinator, authorize, code_changes, code_observation_head, creator_grants, delete_child,
+    dispatch_calls, dispatch_calls_from, handle, image_capabilities, mcp_parent, mcp_ready,
+    parent_deleted, touch_code_observation,
 };
 pub use history::pin_bounds;
 pub use notice_delivery::{
