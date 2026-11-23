@@ -21,7 +21,10 @@ import { DesktopShortcut } from "./DesktopKeycap";
 import {
   filterPaletteCommands,
   firstSelectablePaletteIndex,
+  loadRecentPaletteCommands,
   type PaletteCommandEntry,
+  recordRecentPaletteCommand,
+  saveRecentPaletteCommands,
   stepPaletteSelection,
 } from "./commandPaletteModel";
 import { desktopImeOwnsKey } from "./imeShortcut";
@@ -51,21 +54,29 @@ export function DesktopCommandPalette({
   const registry = useDesktopCommands();
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
+  const [recentIds, setRecentIds] = useState<string[]>(() =>
+    loadRecentPaletteCommands()
+  );
   const paletteInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const frame = requestAnimationFrame(() => paletteInputRef.current?.focus());
     return () => cancelAnimationFrame(frame);
   }, []);
   const entries = useMemo(
-    () => filterPaletteCommands(registry.commands, query),
-    [registry.commands, query],
+    () => filterPaletteCommands(registry.commands, query, recentIds),
+    [registry.commands, query, recentIds],
   );
   // An explicit pick runs only the exact registered command instance this row
   // presented: if an approval prompt changed before activation, reject it.
   const runCommand = (command: DesktopCommand): void => {
     const live = registry.list().find((entry) => entry.id === command.id);
     if (live !== command) return;
-    if (registry.execute(command.id, { anyScope: true })) onClose();
+    if (registry.execute(command.id, { anyScope: true })) {
+      const nextRecent = recordRecentPaletteCommand(recentIds, command.id);
+      setRecentIds(nextRecent);
+      saveRecentPaletteCommands(nextRecent);
+      onClose();
+    }
   };
   useEffect(() => {
     setSelected(firstSelectablePaletteIndex(entries));
@@ -199,6 +210,12 @@ function DesktopCommandPaletteList({
     )?.scrollIntoView({ block: "nearest" });
   }, [selected, entries.length]);
 
+  const showRecentHeaders = query.trim().length === 0 &&
+    entries.some((entry) => entry.available && entry.recent);
+  const firstNonRecentIndex = showRecentHeaders
+    ? entries.findIndex((entry) => !entry.available || !entry.recent)
+    : -1;
+
   return (
     <List
       ref={listRef}
@@ -217,39 +234,61 @@ function DesktopCommandPaletteList({
             : "No commands available."}
         </Typography>
       )}
-      {entries.map(({ command, available }, index) => (
-        <ListItemButton
-          key={command.id}
-          data-palette-index={index}
-          selected={available && index === selected}
-          disabled={!available}
-          onMouseMove={(event): void => {
-            if (!available) return;
-            const prev = lastPointer.current;
-            if (prev && prev.x === event.clientX && prev.y === event.clientY) {
-              return;
-            }
-            lastPointer.current = { x: event.clientX, y: event.clientY };
-            onHover(index);
-          }}
-          onClick={(): void => onRun(command)}
-          sx={{ borderRadius: 1.5 }}
-        >
-          <ListItemText
-            primary={command.title}
-            secondary={!available
-              ? (typeof command.disabledReason === "function"
-                ? command.disabledReason()
-                : command.disabledReason ?? "Unavailable")
-              : command.description ?? command.id}
-          />
-          {(command.shortcut || command.sequence) && (
-            <DesktopShortcut
-              shortcut={command.shortcut ?? command.sequence?.join(" → ") ?? ""}
-              availability={!available ? "inactive" : "available"}
-            />
+      {entries.map(({ command, available, recent }, index) => (
+        <Box key={command.id}>
+          {showRecentHeaders && index === 0 && (
+            <Typography
+              variant="overline"
+              color="primary.main"
+              data-palette-section="recent"
+              sx={{ display: "block", px: 1.5, pt: 0.25, pb: 0.25, lineHeight: 1.4, fontWeight: 700 }}
+            >
+              Recent
+            </Typography>
           )}
-        </ListItemButton>
+          {showRecentHeaders && index === firstNonRecentIndex && (
+            <Typography
+              variant="overline"
+              color="text.secondary"
+              data-palette-section="all"
+              sx={{ display: "block", px: 1.5, pt: 0.75, pb: 0.25, lineHeight: 1.4, fontWeight: 700 }}
+            >
+              All commands
+            </Typography>
+          )}
+          <ListItemButton
+            data-palette-index={index}
+            data-palette-recent={recent ? "true" : undefined}
+            selected={available && index === selected}
+            disabled={!available}
+            onMouseMove={(event): void => {
+              if (!available) return;
+              const prev = lastPointer.current;
+              if (prev && prev.x === event.clientX && prev.y === event.clientY) {
+                return;
+              }
+              lastPointer.current = { x: event.clientX, y: event.clientY };
+              onHover(index);
+            }}
+            onClick={(): void => onRun(command)}
+            sx={{ borderRadius: 1.5 }}
+          >
+            <ListItemText
+              primary={command.title}
+              secondary={!available
+                ? (typeof command.disabledReason === "function"
+                  ? command.disabledReason()
+                  : command.disabledReason ?? "Unavailable")
+                : command.description ?? command.id}
+            />
+            {(command.shortcut || command.sequence) && (
+              <DesktopShortcut
+                shortcut={command.shortcut ?? command.sequence?.join(" → ") ?? ""}
+                availability={!available ? "inactive" : "available"}
+              />
+            )}
+          </ListItemButton>
+        </Box>
       ))}
     <ScrollEdges /></List>
   );

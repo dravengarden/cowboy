@@ -3,6 +3,51 @@ import type { DesktopCommand } from "./DesktopCommandProvider";
 export interface PaletteCommandEntry {
   readonly command: DesktopCommand;
   readonly available: boolean;
+  readonly recent: boolean;
+}
+
+export const PALETTE_RECENT_LIMIT = 5;
+const PALETTE_RECENT_STORAGE_KEY = "cowboy:desktop-palette-recent-v1";
+
+/** Return an updated MRU list with `id` moved to the front, capped at `limit`. */
+export function recordRecentPaletteCommand(
+  recentIds: readonly string[],
+  id: string,
+  limit = PALETTE_RECENT_LIMIT,
+): string[] {
+  if (!id || id === "commandPalette.open") return [...recentIds].slice(0, limit);
+  const next = [id, ...recentIds.filter((item) => item !== id)];
+  return next.slice(0, Math.max(0, limit));
+}
+
+export function loadRecentPaletteCommands(
+  storage: Pick<Storage, "getItem"> | null | undefined = globalThis.localStorage,
+): string[] {
+  try {
+    const raw = storage?.getItem(PALETTE_RECENT_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item): item is string => typeof item === "string" && item.length > 0)
+      .slice(0, PALETTE_RECENT_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+export function saveRecentPaletteCommands(
+  recentIds: readonly string[],
+  storage: Pick<Storage, "setItem"> | null | undefined = globalThis.localStorage,
+): void {
+  try {
+    storage?.setItem(
+      PALETTE_RECENT_STORAGE_KEY,
+      JSON.stringify(recentIds.slice(0, PALETTE_RECENT_LIMIT)),
+    );
+  } catch {
+    // Storage quota or private-mode restriction must never block command execution.
+  }
 }
 
 function tokenMatchScore(haystack: string, title: string, token: string): number {
@@ -45,28 +90,46 @@ function scoreCommand(command: DesktopCommand, tokens: readonly string[]): numbe
  * Filter and rank Command Palette entries:
  * - Excludes `commandPalette.open`.
  * - Multi-token substring + title subsequence matching.
- * - Available commands always sort before unavailable ones while preserving
- *   registration order on ties.
+ * - Available commands always sort before unavailable ones.
+ * - Recently executed commands (`recentIds`) float to the top when browsing
+ *   and break match-score ties while searching.
  */
 export function filterPaletteCommands(
   commands: readonly DesktopCommand[],
   query: string,
+  recentIds: readonly string[] = [],
 ): PaletteCommandEntry[] {
   const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  const scored: { entry: PaletteCommandEntry; score: number; order: number }[] = [];
+  const recentRank = new Map<string, number>();
+  recentIds.forEach((id, idx) => {
+    if (!recentRank.has(id)) recentRank.set(id, idx);
+  });
+  const scored: {
+    entry: PaletteCommandEntry;
+    score: number;
+    recentOrder: number;
+    order: number;
+  }[] = [];
   for (let i = 0; i < commands.length; i++) {
     const command = commands[i]!;
     if (command.id === "commandPalette.open") continue;
     const score = scoreCommand(command, tokens);
     if (score < 0) continue;
     const available = command.when?.() !== false;
-    scored.push({ entry: { command, available }, score, order: i });
+    const rank = recentRank.get(command.id);
+    scored.push({
+      entry: { command, available, recent: rank !== undefined },
+      score,
+      recentOrder: rank ?? Number.POSITIVE_INFINITY,
+      order: i,
+    });
   }
   scored.sort((a, b) => {
     if (a.entry.available !== b.entry.available) {
       return a.entry.available ? -1 : 1;
     }
     if (b.score !== a.score) return b.score - a.score;
+    if (a.recentOrder !== b.recentOrder) return a.recentOrder - b.recentOrder;
     return a.order - b.order;
   });
   return scored.map((item) => item.entry);

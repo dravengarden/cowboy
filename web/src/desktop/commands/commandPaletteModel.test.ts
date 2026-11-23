@@ -4,6 +4,10 @@ import type { DesktopCommand } from "./DesktopCommandProvider.tsx";
 import {
   filterPaletteCommands,
   firstSelectablePaletteIndex,
+  loadRecentPaletteCommands,
+  PALETTE_RECENT_LIMIT,
+  recordRecentPaletteCommand,
+  saveRecentPaletteCommands,
   stepPaletteSelection,
 } from "./commandPaletteModel.ts";
 
@@ -75,10 +79,10 @@ test("filterPaletteCommands matches multi-token queries and title subsequences",
 
 test("stepPaletteSelection skips unavailable commands and clamps cleanly", () => {
   const entries = [
-    { command: cmd("a", "A"), available: true },
-    { command: cmd("b", "B"), available: false },
-    { command: cmd("c", "C"), available: true },
-    { command: cmd("d", "D"), available: false },
+    { command: cmd("a", "A"), available: true, recent: false },
+    { command: cmd("b", "B"), available: false, recent: false },
+    { command: cmd("c", "C"), available: true, recent: false },
+    { command: cmd("d", "D"), available: false, recent: false },
   ];
 
   assertEquals(firstSelectablePaletteIndex(entries), 0);
@@ -88,11 +92,52 @@ test("stepPaletteSelection skips unavailable commands and clamps cleanly", () =>
   assertEquals(stepPaletteSelection(entries, 0, -1), 0);
 
   const allDisabled = [
-    { command: cmd("a", "A"), available: false },
-    { command: cmd("b", "B"), available: false },
+    { command: cmd("a", "A"), available: false, recent: false },
+    { command: cmd("b", "B"), available: false, recent: false },
   ];
   assertEquals(firstSelectablePaletteIndex(allDisabled), 0);
   assertEquals(stepPaletteSelection(allDisabled, 0, 1), 1);
   assertEquals(stepPaletteSelection(allDisabled, 1, 1), 1);
   assertEquals(stepPaletteSelection([], 0, 1), 0);
+});
+
+test("filterPaletteCommands floats MRU recent commands to the top and persists them safely", () => {
+  const commands = [
+    cmd("a.first", "Alpha Action"),
+    cmd("b.second", "Beta Action"),
+    cmd("c.third", "Gamma Action"),
+    cmd("d.disabled", "Delta Action", { when: () => false }),
+  ];
+  const recent = ["c.third", "d.disabled", "b.second"];
+  const browsing = filterPaletteCommands(commands, "", recent);
+  assertEquals(
+    browsing.map((entry) => `${entry.command.id}:${entry.recent ? "recent" : "plain"}`),
+    [
+      "c.third:recent",
+      "b.second:recent",
+      "a.first:plain",
+      "d.disabled:recent",
+    ],
+  );
+  // Tie-break equal-score search results by recency.
+  const search = filterPaletteCommands(commands, "action", ["b.second"]);
+  assertEquals(search[0]?.command.id, "b.second");
+
+  let mru: string[] = [];
+  for (const id of ["c1", "c2", "c3", "c4", "c5", "c6", "c2", "commandPalette.open"]) {
+    mru = recordRecentPaletteCommand(mru, id);
+  }
+  assertEquals(mru.length, PALETTE_RECENT_LIMIT);
+  assertEquals(mru, ["c2", "c6", "c5", "c4", "c3"]);
+
+  const store = new Map<string, string>();
+  const mockStorage = {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      store.set(key, value);
+    },
+  };
+  saveRecentPaletteCommands(mru, mockStorage);
+  assertEquals(loadRecentPaletteCommands(mockStorage), mru);
+  assertEquals(loadRecentPaletteCommands({ getItem: () => "{broken" }), []);
 });

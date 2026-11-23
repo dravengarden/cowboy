@@ -23,6 +23,7 @@ import {
   parseVimConfig,
 } from "./vimConfig";
 import { workspaceCommandKey } from "../commands/workspaceCommandKey";
+import { readVimRegister, writeVimRegister } from "./vimRegister";
 import {
   findChar,
   firstNonBlank,
@@ -89,7 +90,6 @@ function typedCharacter(event: KeyboardEvent): string | null {
   if (event.ctrlKey || event.metaKey || event.altKey) return null;
   return event.key.length === 1 ? event.key : null;
 }
-let register: { text: string; linewise: boolean } = { text: "", linewise: false };
 
 function state(field: Field): FieldState {
   let current = states.get(field);
@@ -188,8 +188,27 @@ function edit(field: Field, value: string, cursor: number): void {
 }
 
 function yank(text: string, linewise = false): void {
-  register = { text, linewise };
+  writeVimRegister(text, linewise);
   void globalThis.navigator?.clipboard?.writeText(text).catch(() => {});
+}
+
+function pasteRegister(
+  field: Field,
+  key: "p" | "P",
+  value: string,
+  pos: number,
+  multiline: boolean,
+): void {
+  const reg = readVimRegister();
+  if (!reg.text) return;
+  if (reg.linewise && multiline) {
+    const at = key === "p" ? lineEnd(value, pos) : lineStart(value, pos);
+    const text = key === "p" ? `\n${reg.text}` : `${reg.text}\n`;
+    edit(field, value.slice(0, at) + text + value.slice(at), key === "p" ? at + 1 : at);
+    return;
+  }
+  const at = key === "p" && value.length > 0 ? pos + 1 : pos;
+  edit(field, value.slice(0, at) + reg.text + value.slice(at), at + reg.text.length - 1);
 }
 
 function motionTarget(
@@ -408,18 +427,9 @@ export function handleInputVimKey(event: KeyboardEvent): boolean {
       return consume();
     }
     case "p":
-    case "P": {
-      if (!register.text) return consume();
-      if (register.linewise && multiline) {
-        const at = key === "p" ? lineEnd(value, pos) : lineStart(value, pos);
-        const text = key === "p" ? `\n${register.text}` : `${register.text}\n`;
-        edit(field, value.slice(0, at) + text + value.slice(at), key === "p" ? at + 1 : at);
-        return consume();
-      }
-      const at = key === "p" && value.length > 0 ? pos + 1 : pos;
-      edit(field, value.slice(0, at) + register.text + value.slice(at), at + register.text.length - 1);
+    case "P":
+      pasteRegister(field, key, value, pos, multiline);
       return consume();
-    }
     case "u": {
       const previous = current.undo.pop();
       if (!previous) return consume();
@@ -479,6 +489,24 @@ function applyOperator(
   if (operator === "c") enterInputInsert(field, range.from);
 }
 
+function syncCopiedSelectionToVimRegister(event: ClipboardEvent): void {
+  if (!getVimSetting()) return;
+  const active = document.activeElement;
+  if (active instanceof Element && active.closest(".cm-editor")) return;
+  let text = "";
+  if (
+    active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement
+  ) {
+    const start = active.selectionStart ?? 0;
+    const end = active.selectionEnd ?? 0;
+    if (end > start) text = active.value.slice(start, end);
+  } else {
+    text = globalThis.getSelection?.()?.toString() ?? "";
+  }
+  if (!text) text = event.clipboardData?.getData("text/plain") ?? "";
+  if (text.length > 0) writeVimRegister(text, false);
+}
+
 /**
  * Keep the mode honest across focus: a field focused by a click or Tab
  * types (Insert); leaving it drops this layer's read-only flag. A click in
@@ -521,10 +549,12 @@ export function installInputVim(): () => void {
   document.addEventListener("focusin", onFocusIn, true);
   document.addEventListener("focusout", onFocusOut, true);
   document.addEventListener("mouseup", onMouseUp, true);
+  document.addEventListener("copy", syncCopiedSelectionToVimRegister, true);
   return () => {
     document.removeEventListener("focusin", onFocusIn, true);
     document.removeEventListener("focusout", onFocusOut, true);
     document.removeEventListener("mouseup", onMouseUp, true);
+    document.removeEventListener("copy", syncCopiedSelectionToVimRegister, true);
   };
 }
 

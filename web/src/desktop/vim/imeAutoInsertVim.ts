@@ -19,6 +19,7 @@ import {
 } from "./macroStatusStore";
 import { vimCommandKey } from "./vimCommandKey";
 import { syncVimCursorOwnership } from "./vimCursorOwnership";
+import { connectVimRegisterController } from "./vimRegister";
 import { getVimConfigSource, subscribeVimConfigSource } from "../../vimSetting";
 import { parseVimConfig } from "./vimConfig";
 import { DESKTOP_EDITOR_INSERT_EVENT } from "../editorInsert";
@@ -62,6 +63,19 @@ function applyUserVimConfig(): void {
 }
 applyUserVimConfig();
 subscribeVimConfigSource(applyUserVimConfig);
+
+// Bridge `@replit/codemirror-vim`'s unnamed register with native text fields
+// (`inputVim.ts`) so `y`/`d`/`p` flow seamlessly across Prompt, Draft, Review,
+// and native inputs without requiring browser clipboard-read permission.
+connectVimRegisterController({
+  read: () => {
+    const reg = Vim.getRegisterController().unnamedRegister;
+    return { text: reg.toString(), linewise: reg.linewise };
+  },
+  write: (text, linewise) => {
+    Vim.getRegisterController().pushText(null, "yank", text, linewise);
+  },
+});
 
 const DIRECT_INSERT_KEYS = new Set(["i", "I", "a", "A", "o", "O", "s", "S", "C", "R"]);
 // These commands can replace/create an empty line whose DOM is not available
