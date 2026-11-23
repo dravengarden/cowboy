@@ -3,7 +3,7 @@ import WarningAmberRounded from "@mui/icons-material/WarningAmberRounded";
 import { useEffect, useState } from "react";
 import {
   type AcknowledgementTarget, acknowledgementTarget, acknowledgeUncertainEffect, type AccountControl, accountControl,
-  accountStateBadge, type ParkedReason, sessionParkedReason, signInObservation, type UncertainEffect,
+  accountStateBadge, type ParkedReason, sessionParkedReason, signInObservation, type UncertainEffect, uncertainEffectGuidance,
 } from "./accountControls";
 import { glyphSize, desktopSize } from "./surface/desktopSize";
 import { mobileComposerPanelHeaderMinHeight } from "./mobileComposerPrimitives";
@@ -64,7 +64,7 @@ export function UncertainEffectAcknowledge({ session, effect, onDone, size = "sm
           The reply to a <Box component="code">{shown?.method ?? effect.method}</Box> request was lost, so Cowboy cannot tell whether it changed its target.
         </Typography>
         <Typography variant="body2">
-          Check the target in the workspace first (the file or the command's effect). Acknowledging releases this session's queue; Cowboy never resends the request.
+          {uncertainEffectGuidance(shown?.method ?? effect.method).check} Acknowledging releases this session's queue; Cowboy never resends the request.
         </Typography>
         {stale && <Alert severity="warning" data-uncertain-effect-changed>The uncertain effect changed. Close this and review it again.</Alert>}
         {error && <Alert severity="warning">{error}</Alert>}

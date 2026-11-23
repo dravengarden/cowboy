@@ -397,6 +397,15 @@ findings are folded in. L2 is implemented later, after its own design review.
 
 ## L4: recovery UX for what stays unknown (Controller + Web, later Plugin)
 
+L4a (Web only, implemented): the banner and the acknowledgement sheet name
+what the uncertain method was and how to check it, from the method the
+Controller already publishes. A stop says to check whether the command still
+runs. A file write or `file publish` says to read the file. A start says to
+check whether the command ran before starting it again. A file system
+change, a tool call or an unknown method each get a matching line. No wire,
+Controller or Plugin change is needed. The target name, the
+post-reconnect check and Check-and-resume follow L2 as designed below.
+
 - Park scope: verified per session, not per account.
   `provider_accounts::controls::gate` reads `uncertain(&meta.id)`, and the
   account read model only lists each session's effect. Nothing to narrow.

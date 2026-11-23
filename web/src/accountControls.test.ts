@@ -141,6 +141,11 @@ test("a parked session says why: uncertain effect or account state, never anothe
   const uncertain = sessionParkedReason(control({ uncertain_effects: [effect] }), "s1", undefined);
   assertEquals(uncertain?.uncertain, effect);
   assertStringIncludes(uncertain!.text, "fs/write_text_file");
+  // A known method names what it was and how to check it.
+  const stop = sessionParkedReason(control({ uncertain_effects: [{ ...effect, method: "process/terminate" }] }), "s1", undefined);
+  assertStringIncludes(stop!.text, "a command's stop");
+  assertStringIncludes(stop!.text, "still running");
+  assertStringIncludes(sessionParkedReason(control({ uncertain_effects: [{ ...effect, method: "file publish" }] }), "s1", undefined)!.text, "Read the file");
   const until = Date.UTC(2026, 10, 18, 15, 0);
   assertStringIncludes(sessionParkedReason(control({ state: "rate_limited", until_ms: until }), "s1", "x", until - 1)!.text, "Rate limited until");
   assertEquals(sessionParkedReason(control({ admitted: false }), "s1", "x")!.text, "This account is not admitted for sessions.");

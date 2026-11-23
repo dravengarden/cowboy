@@ -231,12 +231,30 @@ export interface ParkedReason {
 
 const WAIT_PREFIX = "Waiting for resources: ";
 
+/** What an uncertain effect's method was and how the owner checks it
+ * (docs/uncertain-effect-recovery.md, L4). The method is shown as reported. */
+export function uncertainEffectGuidance(method: string): { what: string; check: string } {
+  switch (method) {
+    case "process/terminate": return { what: "a command's stop", check: "Check whether the command is still running before continuing." };
+    case "process/read": return { what: "a command's output", check: "Check the command's result (the files it writes, or run it again if it is read-only)." };
+    case "process/start": return { what: "a command's start", check: "Check whether the command ran or still runs before starting it again." };
+    case "file publish":
+    case "fs/writeFile": return { what: "a file write", check: "Read the file to see whether the change applied." };
+    case "fs/remove":
+    case "fs/copy":
+    case "fs/createDirectory": return { what: "a file system change", check: "Check the path to see whether the change applied." };
+    case "tools/call": return { what: "a tool call", check: "Check what the tool was asked to change." };
+    default: return { what: `a ${method} request`, check: "Check the target in the workspace." };
+  }
+}
+
 /** Why a session of a governed account cannot send now. `wait` is the
  * session's server-reported resource wait (the parked queue's reason). */
 export function sessionParkedReason(control: AccountControl | undefined, session: string, wait: string | undefined, now = Date.now()): ParkedReason | undefined {
   const uncertain = control?.uncertain_effects.find((effect) => effect.session_id === session);
   if (uncertain) {
-    return { text: `The outcome of a target ${uncertain.method} is unknown. Check the target, then acknowledge it to resume.`, uncertain };
+    const { what, check } = uncertainEffectGuidance(uncertain.method);
+    return { text: `The outcome of ${what} (${uncertain.method}) is unknown. ${check} Then acknowledge it to resume.`, uncertain };
   }
   if (control && !control.admitted) return { text: "This account is not admitted for sessions." };
   if (control && control.state !== "ok") {
