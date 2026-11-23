@@ -67,6 +67,18 @@ fn active_is_original(plugin: &Path, step: &UninstallStep) -> Result<bool> {
     }
 }
 
+/// The original generation when it is still the active link, which only a
+/// pending removal may unlink: a stable tombstone is written only after the
+/// unlink was flushed, so a present link beside one is contradictory.
+fn observed_active(plugin: &Path, step: &UninstallStep, pending: bool) -> Result<Option<String>> {
+    let active = active_is_original(plugin, step)?;
+    ensure!(
+        !active || pending,
+        "the active link contradicts the completed removal tombstone; maintenance refused"
+    );
+    Ok(active.then(|| step.generation_digest.clone()))
+}
+
 /// Whether `path` is present (a symlink counts); errors other than absence
 /// propagate.
 fn present(path: &Path) -> Result<bool> {
@@ -88,7 +100,7 @@ pub fn complete_absent_uninstall(
     service: &str,
     machine: &str,
     operation: &str,
-    (confirmation, remove_active): (Option<&str>, Option<&str>),
+    confirmation: Option<(&str, Option<&str>)>,
 ) -> Result<serde_json::Value> {
     let started = Instant::now();
     let checkpoint = || -> Result<()> {
@@ -137,14 +149,8 @@ pub fn complete_absent_uninstall(
     }
     let projection = present(&projection)?.then_some(projection);
     package_directory(&plugin, uid)?;
-    let active = active_is_original(&plugin, step)?;
-    // A stable tombstone is written only after the unlink was flushed: a
-    // present link contradicts it. Only a pending removal may unlink.
-    ensure!(
-        !active || pending,
-        "the active link contradicts the completed removal tombstone; maintenance refused"
-    );
-    let active_generation = active.then(|| step.generation_digest.clone());
+    let active_generation = observed_active(&plugin, step, pending)?;
+    let active = active_generation.is_some();
     // The live uninstall's own refusal check: named account credentials are
     // account revocation's to remove, never this maintenance's.
     super::super::uninstall::named_credential_refusal(&auth, &step.plugin_id)?;
@@ -155,7 +161,7 @@ pub fn complete_absent_uninstall(
         "removes_active_link": active, "active_generation": active_generation,
         "requires_controller_reconciliation": true,
     });
-    let Some(confirmation) = confirmation else {
+    let Some((confirmation, remove_active)) = confirmation else {
         return Ok(report);
     };
     ensure!(

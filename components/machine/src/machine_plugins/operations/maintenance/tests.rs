@@ -74,10 +74,10 @@ fn confirm(
         &step.service_id,
         &step.machine_id,
         &step.operation_id,
-        (
-            apply.then(|| step.request_digest().unwrap()).as_deref(),
-            remove_active,
-        ),
+        apply
+            .then(|| step.request_digest().unwrap())
+            .as_deref()
+            .map(|digest| (digest, remove_active)),
     )
 }
 
@@ -126,7 +126,7 @@ fn live_owner_wrong_digest_and_reactivated_slot_are_refused() {
             &step.service_id,
             &step.machine_id,
             &step.operation_id,
-            (Some(&digest(b"different")), None)
+            Some((&digest(b"different"), None))
         )
         .is_err()
     );

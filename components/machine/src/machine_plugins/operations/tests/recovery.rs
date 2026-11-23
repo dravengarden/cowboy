@@ -490,10 +490,10 @@ async fn offline_completion_yields_the_controller_completion_evidence() {
         &request.service_id,
         &request.machine_id,
         &request.operation_id,
-        (
-            Some(&request.request_digest().unwrap()),
+        Some((
+            &request.request_digest().unwrap(),
             Some(&request.generation_digest),
-        ),
+        )),
     )
     .unwrap();
     assert_eq!(applied["applied"], true);

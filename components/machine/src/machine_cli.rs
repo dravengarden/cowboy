@@ -328,15 +328,12 @@ pub struct Args {
         value_delimiter = ','
     )]
     execution_env: Vec<String>,
-    /// Offline host maintenance: roll one uncertain uninstall forward to its
-    /// intended removal. Requires stopping the resident Machine first.
-    /// Without --confirm-uninstall-digest this only validates and reports.
+    /// Offline maintenance (stop the resident Machine first): roll one uncertain uninstall forward.
     #[arg(long, requires = "service_id", conflicts_with_all = ["controller_url", "provider_usage_status", "check_telemetry_writer_policy", "cache_runtime_artifact"])]
     complete_absent_uninstall: Option<String>,
-    /// Exact request digest reported by the offline maintenance preview.
+    /// Apply: the preview's request digest (and --confirm-remove-active its active_generation).
     #[arg(long, requires = "complete_absent_uninstall")]
     confirm_uninstall_digest: Option<String>,
-    /// Also unlink the still-active installation: its exact reported active_generation.
     #[arg(long, requires = "confirm_uninstall_digest")]
     confirm_remove_active: Option<String>,
     /// Print the durable provider-usage outbox status as JSON and exit. This
@@ -472,15 +469,12 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
     if let Some(operation) = &args.complete_absent_uninstall {
         let result = crate::machine_plugins::complete_absent_uninstall(
             &args.state_dir,
-            args.service_id
-                .as_deref()
-                .context("Service identity required")?,
+            args.service_id.as_deref().context("Service id required")?,
             &args.machine_id,
             operation,
-            (
-                args.confirm_uninstall_digest.as_deref(),
-                args.confirm_remove_active.as_deref(),
-            ),
+            args.confirm_uninstall_digest
+                .as_deref()
+                .map(|digest| (digest, args.confirm_remove_active.as_deref())),
         )?;
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());
