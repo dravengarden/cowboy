@@ -13,13 +13,29 @@ path = "src/lib.rs"
 
 [features]
 default = ["full"]
-full = ["dep:cardea-core", "dep:cowboy-wire", "cowboy-wire/full"]
-machine-host = ["dep:cowboy-wire", "cowboy-wire/machine-host"]
+full = [
+  "dep:agent-client-protocol",
+  "dep:argon2",
+  "dep:axum",
+  "dep:cardea-core",
+  "dep:chacha20poly1305",
+  "dep:cowboy-wire",
+  "dep:ed25519-dalek",
+  "dep:password-hash",
+  "dep:png",
+  "dep:rusqlite",
+  "dep:sqlx",
+  "dep:uuid",
+  "dep:webauthn-rs",
+  "dep:x25519-dalek",
+  "cowboy-wire/full",
+]
+machine-host = ["dep:cowboy-wire", "dep:png", "cowboy-wire/machine-host"]
 test-support = ["cowboy-wire/test-fixtures"]
 
 [dependencies]
 cardea-core = { git = "ssh://git@github.com/dravengarden/cardea.git", rev = "71f12d90bd1b3212f11530cbd0c20086317a5976", version = "=0.1.0", optional = true }
-agent-client-protocol = { version = "3.6", features = ["stdio", "unstable_end_turn_token_usage", "unstable_session_fork", "unstable_subagents"] }
+agent-client-protocol = { version = "3.6", features = ["stdio", "unstable_end_turn_token_usage", "unstable_session_fork", "unstable_subagents"], optional = true }
 clap = { version = "4", features = ["derive", "env"] }
 futures = "0.3"
 tokio = { version = "1", features = ["full"] }
@@ -32,24 +48,24 @@ sqlx = { version = "0.8", default-features = false, features = [
   "json",
   "migrate",
   "tls-rustls",
-] }
+], optional = true }
 chrono = { version = "0.4", features = ["serde"] }
-axum = { version = "0.8", features = ["ws"] }
+axum = { version = "0.8", features = ["ws"], optional = true }
 tracing = "0.1"
 anyhow = "1"
 base64 = "0.22"
-png = "0.18"
+png = { version = "0.18", optional = true }
 sha2 = "0.10"
-argon2 = { version = "0.5", default-features = false, features = ["alloc", "password-hash"] }
-password-hash = { version = "0.5", default-features = false, features = ["alloc"] }
+argon2 = { version = "0.5", default-features = false, features = ["alloc", "password-hash"], optional = true }
+password-hash = { version = "0.5", default-features = false, features = ["alloc"], optional = true }
 url = "2"
-uuid = { version = "1", default-features = false, features = ["std"] }
+uuid = { version = "1", default-features = false, features = ["std"], optional = true }
 webauthn-rs = { version = "0.5", default-features = false, features = [
   "danger-allow-state-serialisation",
-] }
+], optional = true }
 # Non-poisoning locks; the base crate's manifest records why.
 parking_lot = "0.12"
-rusqlite = { version = "0.32.1", features = ["bundled", "hooks"] }
+rusqlite = { version = "0.32.1", features = ["bundled", "hooks"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 semver = "1"
@@ -58,9 +74,9 @@ cowboy-provider-sdk = { version = "=3.7.0", path = "../provider-sdk" }
 cowboy-wire = { version = "0.1.0", path = "../wire", optional = true }
 tempfile = "3"
 cowboy-plugin-sdk = { version = "=1.20.0", path = "../plugin-sdk" }
-chacha20poly1305 = "0.10"
-x25519-dalek = { version = "2", features = ["static_secrets"] }
-ed25519-dalek = "2"
+chacha20poly1305 = { version = "0.10", optional = true }
+x25519-dalek = { version = "2", features = ["static_secrets"], optional = true }
+ed25519-dalek = { version = "2", optional = true }
 fs2 = "0.4"
 libc = "0.2"
 rustix = { version = "1", features = ["process", "fs", "net"] }

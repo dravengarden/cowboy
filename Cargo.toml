@@ -15,31 +15,111 @@ exclude = ["plugins/zed/adapter"]
 [features]
 default = ["full"]
 # The control plane and Machine host are separate compile-time boundaries.
-full = ["dep:cardea-authorization", "dep:cardea-core", "dep:cowboy-wire", "cowboy-wire/full", "cowboy-store/full"]
-machine-host = ["dep:cowboy-wire", "cowboy-wire/machine-host", "cowboy-store/machine-host"]
+full = [
+  "dep:agent-client-protocol",
+  "dep:axum",
+  "dep:cardea-authorization",
+  "dep:cardea-core",
+  "dep:cowboy-plugin-sdk",
+  "dep:cowboy-provider-sdk",
+  "dep:cowboy-store",
+  "dep:cowboy-wire",
+  "dep:ed25519-dalek",
+  "dep:flate2",
+  "dep:futures",
+  "dep:ignore",
+  "dep:notify",
+  "dep:nucleo-matcher",
+  "dep:p256",
+  "dep:png",
+  "dep:reqwest",
+  "dep:ring",
+  "dep:rpassword",
+  "dep:rustls",
+  "dep:semver",
+  "dep:shell-words",
+  "dep:sqlx",
+  "dep:tar",
+  "dep:tokio-util",
+  "dep:toml",
+  "dep:tree-sitter",
+  "dep:tree-sitter-go",
+  "dep:tree-sitter-javascript",
+  "dep:tree-sitter-python",
+  "dep:tree-sitter-rust",
+  "dep:tree-sitter-tags",
+  "dep:tree-sitter-typescript",
+  "dep:url",
+  "dep:web-push-native",
+  "dep:x25519-dalek",
+  "cowboy-wire/full",
+  "cowboy-store/full",
+]
+machine-host = [
+  "dep:axum",
+  "dep:cowboy-plugin-sdk",
+  "dep:cowboy-provider-sdk",
+  "dep:cowboy-store",
+  "dep:cowboy-wire",
+  "dep:flate2",
+  "dep:futures",
+  "dep:notify",
+  "dep:reqwest",
+  "dep:ring",
+  "dep:rpassword",
+  "dep:rustls",
+  "dep:semver",
+  "dep:shell-words",
+  "dep:tar",
+  "dep:toml",
+  "dep:url",
+  "cowboy-wire/machine-host",
+  "cowboy-store/machine-host",
+]
 # Test helpers that downstream crates (cowboy-server) also need.
-test-support = ["cowboy-wire/test-fixtures", "cowboy-store/test-support"]
-code-adapter = []
+test-support = ["cowboy-wire?/test-fixtures", "cowboy-store?/test-support"]
+code-adapter = [
+  "dep:ignore",
+  "dep:nucleo-matcher",
+  "dep:tree-sitter",
+  "dep:tree-sitter-go",
+  "dep:tree-sitter-javascript",
+  "dep:tree-sitter-python",
+  "dep:tree-sitter-rust",
+  "dep:tree-sitter-tags",
+  "dep:tree-sitter-typescript",
+]
+
+[[bin]]
+name = "cowboy"
+path = "src/main.rs"
+test = false
+
+[[bin]]
+name = "cowboy-acp-worker"
+path = "src/bin/cowboy-acp-worker.rs"
+test = false
 
 [[bin]]
 name = "cowboy-code-adapter"
 path = "src/bin/cowboy-code-adapter.rs"
 required-features = ["code-adapter"]
+test = false
 
 [dependencies]
 cardea-authorization = { git = "ssh://git@github.com/dravengarden/cardea.git", rev = "71f12d90bd1b3212f11530cbd0c20086317a5976", version = "=0.1.0", optional = true }
 cardea-core = { git = "ssh://git@github.com/dravengarden/cardea.git", rev = "71f12d90bd1b3212f11530cbd0c20086317a5976", version = "=0.1.0", optional = true }
-agent-client-protocol = { version = "3.6", features = ["stdio", "unstable_end_turn_token_usage", "unstable_session_fork", "unstable_subagents"] }
+agent-client-protocol = { version = "3.6", features = ["stdio", "unstable_end_turn_token_usage", "unstable_session_fork", "unstable_subagents"], optional = true }
 clap = { version = "4", features = ["derive", "env"] }
-futures = "0.3"
+futures = { version = "0.3", optional = true }
 tokio = { version = "1", features = ["full"] }
-tokio-util = { version = "0.7", features = ["compat", "io"] }
+tokio-util = { version = "0.7", features = ["compat", "io"], optional = true }
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
 # SQLx already selects rustls' ring provider. Keep Reqwest provider-neutral so
 # the build does not compile AWS-LC alongside ring for the same TLS stack.
-reqwest = { version = "0.13", default-features = false, features = ["form", "json", "query", "rustls-no-provider", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["form", "json", "query", "rustls-no-provider", "stream"], optional = true }
 # GHSA-2mjx-qc3c-rqvc: older 0.23 handshakes can cross encryption boundaries.
-rustls = { version = "0.23.45", default-features = false, features = ["ring"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring"], optional = true }
 sqlx = { version = "0.8", default-features = false, features = [
   "runtime-tokio",
   "postgres",
@@ -49,21 +129,21 @@ sqlx = { version = "0.8", default-features = false, features = [
   "json",
   "migrate",
   "tls-rustls",
-] }
+], optional = true }
 chrono = { version = "0.4", features = ["serde"] }
-axum = { version = "0.8", features = ["ws"] }
+axum = { version = "0.8", features = ["ws"], optional = true }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 opentelemetry-proto = { version = "=0.32.0", default-features = false, features = ["gen-tonic-messages", "with-serde", "trace", "metrics", "logs"] }
 prost = "0.14"
 anyhow = "1"
 base64 = "0.22"
-png = "0.18"
+png = { version = "0.18", optional = true }
 sha2 = "0.10"
-url = "2"
-uuid = { version = "1", default-features = false, features = ["std"] }
-flate2 = "1"
-tar = "0.4"
+url = { version = "2", optional = true }
+uuid = { version = "1", default-features = false, features = ["std", "v4"] }
+flate2 = { version = "1", optional = true }
+tar = { version = "0.4", optional = true }
 # parking_lot Mutex: non-poisoning. A panic inside a critical section drops the
 # guard and frees the lock instead of poisoning it, which would otherwise make
 # every other task's lock-acquire panic too — a daemon-wide cascade. Hub holds
@@ -74,40 +154,40 @@ parking_lot = "0.12"
 rusqlite = { version = "0.32.1", features = ["bundled", "hooks"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-semver = "1"
-shell-words = "1"
-notify = "8"
-web-push-native = { version = "0.5", default-features = false }
-p256 = { version = "0.13", features = ["ecdsa", "pem", "pkcs8"] }
-ring = "0.17"
+semver = { version = "1", optional = true }
+shell-words = { version = "1", optional = true }
+notify = { version = "8", optional = true }
+web-push-native = { version = "0.5", default-features = false, optional = true }
+p256 = { version = "0.13", features = ["ecdsa", "pem", "pkcs8"], optional = true }
+ring = { version = "0.17", optional = true }
 rand = "0.8"
-rpassword = "=7.5.4"
-cowboy-provider-sdk = { version = "=3.7.0", path = "components/provider-sdk" }
+rpassword = { version = "=7.5.4", optional = true }
+cowboy-provider-sdk = { version = "=3.7.0", path = "components/provider-sdk", optional = true }
 cowboy-wire = { version = "0.1.0", path = "components/wire", optional = true }
-cowboy-store = { version = "0.1.0", path = "components/store", default-features = false }
+cowboy-store = { version = "0.1.0", path = "components/store", default-features = false, optional = true }
 tempfile = "3"
-cowboy-plugin-sdk = { version = "=1.20.0", path = "components/plugin-sdk" }
-x25519-dalek = { version = "2", features = ["static_secrets"] }
-ed25519-dalek = "2"
+cowboy-plugin-sdk = { version = "=1.20.0", path = "components/plugin-sdk", optional = true }
+x25519-dalek = { version = "2", features = ["static_secrets"], optional = true }
+ed25519-dalek = { version = "2", optional = true }
 fs2 = "0.4"
 libc = "0.2"
 rustix = { version = "1", features = ["process", "fs", "net"] }
 regex = "1"
 # `@`-picker file search: gitignore-aware walk + fuzzy ranking (the matcher
 # Helix / Zed use). See src/files.rs.
-ignore = "0.4"
-nucleo-matcher = "0.3"
+ignore = { version = "0.4", optional = true }
+nucleo-matcher = { version = "0.3", optional = true }
 # Review structure (outline/symbols) without a language server: static,
 # MIT-licensed grammars and their upstream tag queries. See
 # src/code_review/structure.rs.
-tree-sitter = "0.27"
-tree-sitter-tags = "0.27"
-tree-sitter-rust = "0.24"
-tree-sitter-typescript = "0.23"
-tree-sitter-javascript = "0.25"
-tree-sitter-python = "0.25"
-tree-sitter-go = "0.25"
-toml = { version = "1", default-features = false, features = ["parse", "display", "serde", "std"] }
+tree-sitter = { version = "0.27", optional = true }
+tree-sitter-tags = { version = "0.27", optional = true }
+tree-sitter-rust = { version = "0.24", optional = true }
+tree-sitter-typescript = { version = "0.23", optional = true }
+tree-sitter-javascript = { version = "0.25", optional = true }
+tree-sitter-python = { version = "0.25", optional = true }
+tree-sitter-go = { version = "0.25", optional = true }
+toml = { version = "1", default-features = false, features = ["parse", "display", "serde", "std"], optional = true }
 
 # The long-lived control plane handles bursty restore/transcript allocations.
 # jemalloc returns those pages to the OS more predictably than glibc malloc;
