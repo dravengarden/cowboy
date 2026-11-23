@@ -12,6 +12,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import type { RoutingTable } from "./score.ts";
 
 export type Call = {
   provider: string;
@@ -19,6 +20,7 @@ export type Call = {
   model: string;
   effort: string;
   risk: string;
+  selection?: string | null;
   tokens: number | null;
   uncached: number | null;
   minutes: number | null;
@@ -39,6 +41,22 @@ export type Group = {
   mean_findings: number | null;
   verdicts: Record<string, number>;
   risk: Record<string, number>;
+};
+
+export type CostDrift = {
+  target: string;
+  recorded_median_tokens: number;
+  live_median_tokens: number;
+  delta_ratio: number;
+  n: number;
+};
+
+export type TelemetrySummary = {
+  review_groups: Group[];
+  analysis_groups: Group[];
+  review_selection: Record<string, number>;
+  review_risk: Record<string, number>;
+  cost_drifts: CostDrift[];
 };
 
 const quantile = (values: number[], q: number): number | null => {
@@ -75,10 +93,22 @@ export function aggregate(calls: Call[]): Group[] {
         n: members.length,
         with_usage: numbers((call) => call.tokens).length,
         // Token statistics count only calls that reported usage (`with_usage`).
-        median_tokens: quantile(numbers((call) => call.tokens), 0.5),
-        p75_tokens: quantile(numbers((call) => call.tokens), 0.75),
-        median_uncached_tokens: quantile(numbers((call) => call.uncached), 0.5),
-        median_minutes: quantile(numbers((call) => call.minutes), 0.5),
+        median_tokens: quantile(
+          numbers((call) => call.tokens),
+          0.5,
+        ),
+        p75_tokens: quantile(
+          numbers((call) => call.tokens),
+          0.75,
+        ),
+        median_uncached_tokens: quantile(
+          numbers((call) => call.uncached),
+          0.5,
+        ),
+        median_minutes: quantile(
+          numbers((call) => call.minutes),
+          0.5,
+        ),
         mean_findings: findings.length
           ? Math.round((findings.reduce((a, b) => a + b, 0) / findings.length) * 10) / 10
           : null,
@@ -89,17 +119,70 @@ export function aggregate(calls: Call[]): Group[] {
     .sort((a, b) => b.n - a.n);
 }
 
-function read(database: string, since: number): Call[] {
+export function detectCostDrifts(
+  groups: Group[],
+  routing: RoutingTable | undefined,
+  options: { minSamples?: number; threshold?: number } = {},
+): CostDrift[] {
+  if (!routing) return [];
+  const minSamples = options.minSamples ?? 5;
+  const threshold = options.threshold ?? 0.3;
+  const drifts: CostDrift[] = [];
+  for (const group of groups) {
+    if (group.purpose !== "review") continue;
+    if (group.with_usage < minSamples || group.median_tokens === null) continue;
+    const recorded = routing.costs[group.target]?.field?.median_tokens;
+    if (typeof recorded !== "number" || recorded <= 0) continue;
+    const ratio = (group.median_tokens - recorded) / recorded;
+    if (Math.abs(ratio) >= threshold) {
+      drifts.push({
+        target: group.target,
+        recorded_median_tokens: recorded,
+        live_median_tokens: group.median_tokens,
+        delta_ratio: Math.round(ratio * 1000) / 1000,
+        n: group.with_usage,
+      });
+    }
+  }
+  return drifts.sort((a, b) => Math.abs(b.delta_ratio) - Math.abs(a.delta_ratio));
+}
+
+export function summarizeTelemetry(
+  calls: Call[],
+  routing?: RoutingTable,
+  options?: { minSamples?: number; threshold?: number },
+): TelemetrySummary {
+  const reviews = calls.filter((c) => c.purpose === "review" || c.purpose === "design_review");
+  const analyses = calls.filter((c) => c.purpose === "analysis");
+  const review_groups = aggregate(reviews);
+  const analysis_groups = aggregate(analyses);
+  return {
+    review_groups,
+    analysis_groups,
+    review_selection: count(reviews.map((c) => c.selection ?? "unknown")),
+    review_risk: count(reviews.map((c) => c.risk)),
+    cost_drifts: detectCostDrifts(review_groups, routing, options),
+  };
+}
+
+export function readLedgerCalls(
+  database: string,
+  since: number,
+  purposes: string[] = ["review", "design_review"],
+): Call[] {
   const db = new Database(database, { readonly: true });
   try {
+    const placeholders = purposes.map(() => "?").join(",");
     const rows = db
       .query(
         `SELECT json_extract(document,'$.provider') AS provider,
                 json_extract(document,'$.purpose') AS purpose,
                 json_extract(document,'$.configuration.model') AS model,
                 COALESCE(json_extract(document,'$.configuration.reasoning_effort'),
-                         json_extract(document,'$.configuration.effort'), 'default') AS effort,
+                         json_extract(document,'$.configuration.effort'),
+                         json_extract(document,'$.configuration.thought_level'), 'default') AS effort,
                 COALESCE(json_extract(request_document,'$.labels.review_risk'), 'undeclared') AS risk,
+                json_extract(document,'$.selection') AS selection,
                 json_extract(document,'$.result.usage.total_tokens') AS tokens,
                 json_extract(document,'$.result.usage.uncached_input_tokens') AS uncached,
                 (json_extract(document,'$.finished_at_ms') - json_extract(document,'$.started_at_ms')) / 60000.0 AS minutes,
@@ -113,13 +196,13 @@ function read(database: string, since: number): Call[] {
                   THEN json_array_length(document,'$.result.structured.findings') END AS findings
          FROM managed_agent_calls
          WHERE state = 'completed'
-           AND json_extract(document,'$.purpose') IN ('review','design_review')
+           AND json_extract(document,'$.purpose') IN (${placeholders})
            AND json_extract(document,'$.configuration.model') IS NOT NULL
            -- A reused receipt copies another run's outcome without running.
            AND json_extract(document,'$.result.reused_from') IS NULL
            AND json_extract(document,'$.created_at_ms') >= ?`,
       )
-      .all(since) as Call[];
+      .all(...purposes, since) as Call[];
     return rows.map((row) => ({
       ...row,
       minutes: row.minutes === null ? null : Math.round(row.minutes * 10) / 10,
@@ -127,6 +210,29 @@ function read(database: string, since: number): Call[] {
   } finally {
     db.close();
   }
+}
+
+export function writeFileGuarded(targetPath: string, text: string, protectedDatabase?: string) {
+  const target = resolve(targetPath);
+  mkdirSync(dirname(target), { recursive: true });
+  if (protectedDatabase) {
+    // Never overwrite the ledger (or its WAL/SHM files) through a typo or link.
+    const ledger = realpathSync(protectedDatabase);
+    const real = (() => {
+      try {
+        return realpathSync(target);
+      } catch {
+        return join(realpathSync(dirname(target)), basename(target));
+      }
+    })();
+    if ([ledger, `${ledger}-wal`, `${ledger}-shm`, `${ledger}-journal`].includes(real)) {
+      throw new Error("--out must not name the ledger database");
+    }
+  }
+  const staged = `${target}.tmp-${process.pid}-${Date.now()}`;
+  // Exclusive creation: a pre-existing (possibly linked) staging path fails.
+  writeFileSync(staged, text, { flag: "wx" });
+  renameSync(staged, target);
 }
 
 if (import.meta.main) {
@@ -145,29 +251,13 @@ if (import.meta.main) {
     measured_at: new Date(now).toISOString().slice(0, 10),
     window_days: days,
     source: "Hawk Controller managed_agent_calls (read-only), completed reviews and design reviews",
-    caveat: "Observational mixed workload: inputs differ between groups, so this compares cost, not quality.",
-    groups: aggregate(read(database, now - days * 86_400_000)),
+    caveat:
+      "Observational mixed workload: inputs differ between groups, so this compares cost, not quality.",
+    groups: aggregate(readLedgerCalls(database, now - days * 86_400_000)),
   };
   const text = `${JSON.stringify(report, null, 2)}\n`;
   if (out) {
-    const target = resolve(out);
-    mkdirSync(dirname(target), { recursive: true });
-    // Never overwrite the ledger (or its WAL/SHM files) through a typo or link.
-    const ledger = realpathSync(database);
-    const real = (() => {
-      try {
-        return realpathSync(target);
-      } catch {
-        return join(realpathSync(dirname(target)), basename(target));
-      }
-    })();
-    if ([ledger, `${ledger}-wal`, `${ledger}-shm`, `${ledger}-journal`].includes(real)) {
-      throw new Error("--out must not name the ledger database");
-    }
-    const staged = `${target}.tmp-${process.pid}`;
-    // Exclusive creation: a pre-existing (possibly linked) staging path fails.
-    writeFileSync(staged, text, { flag: "wx" });
-    renameSync(staged, target);
+    writeFileGuarded(out, text, database);
   } else {
     process.stdout.write(text);
   }

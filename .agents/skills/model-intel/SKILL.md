@@ -28,11 +28,16 @@ both input sets so a later audit can tell whether its inputs are complete. Read
 
 ## Workflow
 
-1. **Decide the scope.** Run `scripts/score.ts --audit` first (from the
-   repository root, in the dev shell). A full refresh is warranted when it
-   reports drift, the catalog is older than 30 days, a Provider release adds,
-   retires or retargets a model, or a source publishes a material new run.
-   Otherwise answer from `models/summary.md`.
+1. **Decide the scope.** Run `scripts/score.ts --audit` (or the unified
+   read-only `scripts/periodic-audit.ts --check-upstream`) first from the
+   repository root in the dev shell. On Hawk, `cowboy-model-intel-audit.timer`
+   runs `periodic-audit.ts` daily and writes the latest digest to
+   `/var/lib/cowboy/model-intel/latest.{json,md}` (and logs
+   `cowboy.model_intel.audit` to VictoriaLogs). A full refresh is warranted
+   when the audit reports catalog/routing drift, field cost drift, a matured
+   provisional window, a catalog older than 30 days, a Provider release that
+   adds/retires/retargets a model, or a material new run. Otherwise answer
+   from `models/summary.md`.
 2. **Inventory executable targets.** Read `cowboy call capabilities` and the
    signed `configuration_presets`. Every executable target in
    `models/targets.toml` must carry the exact preset `values`; the audit

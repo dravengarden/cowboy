@@ -60,6 +60,12 @@
     "tools/third-party_test.ts",
     "tools/lib/third-party.ts",
     ".agents/skills/model-intel/scripts/score.ts",
-    ".agents/skills/model-intel/scripts/score_test.ts"
+    ".agents/skills/model-intel/scripts/score_test.ts",
+    ".agents/skills/model-intel/scripts/field.ts",
+    ".agents/skills/model-intel/scripts/field_test.ts",
+    ".agents/skills/model-intel/scripts/periodic-audit.ts",
+    ".agents/skills/model-intel/scripts/periodic-audit_test.ts",
+    ".agents/skills/release-cowboy-plugin/scripts/audit-dependencies.ts",
+    ".agents/skills/release-cowboy-plugin/scripts/audit-dependencies_test.ts"
   ]
 }

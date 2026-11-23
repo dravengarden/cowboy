@@ -2,14 +2,14 @@
 //
 // Reads models/methodology.toml, models/targets.toml and observation JSONL
 // files, then writes models/catalog.json and models/summary.md. `--audit`
-// checks the committed catalog and current targets against the signed
-// Provider presets without writing. Judgment (which sources to trust, what a
-// disagreement means) belongs to the skill; every number here is a pure
-// function of the versioned inputs.
+// checks the committed catalog, routing table, field snapshots and current
+// targets against the signed Provider presets without writing. Judgment (which
+// sources to trust, what a disagreement means) belongs to the skill; every
+// number here is a pure function of the versioned inputs.
 
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 export type Provenance = "independent" | "third_party" | "vendor" | "internal";
 export type Rights = "redistributable" | "reference_only";
@@ -90,10 +90,52 @@ export type Tiers = {
   compared_tasks: string[];
   notes: string[];
 };
+export type ProviderPreset = { id: string; is_default?: boolean; values: Record<string, string> };
+export type Manifest = {
+  id?: string;
+  version?: string;
+  configuration_presets?: ProviderPreset[];
+};
+export type RoutingRow = {
+  family: string;
+  model?: string;
+  efforts?: string[];
+};
+export type RoutingTier = {
+  auto: RoutingRow[];
+  allow?: RoutingRow[];
+};
+export type RoutingCostEntry = {
+  median_tokens?: number | null;
+  n?: number;
+  serious_recall?: string;
+  source?: string;
+  field?: {
+    purpose?: string;
+    median_tokens?: number | null;
+    median_minutes?: number | null;
+    n?: number;
+    source?: string;
+  };
+};
+export type RoutingTable = {
+  schema: number;
+  evidence: string;
+  note?: string;
+  providers: Record<
+    string,
+    {
+      high: RoutingTier;
+      routine: RoutingTier;
+      economy?: RoutingTier;
+    }
+  >;
+  costs: Record<string, RoutingCostEntry>;
+};
 
 const DAY_MS = 86_400_000;
 const round = (x: number) => Math.round(x * 1000) / 1000;
-const days = (from: string, to: string) => (Date.parse(to) - Date.parse(from)) / DAY_MS;
+export const days = (from: string, to: string) => (Date.parse(to) - Date.parse(from)) / DAY_MS;
 
 // Rows measured under one protocol share a group; unit, bound and direction
 // are part of the identity so incompatible scales never mix.
@@ -221,6 +263,18 @@ export function scoreCell(
   };
 }
 
+function scoreOnTasks(candidates: Candidate[], tasks: string[], wl: Workload): Ranked[] {
+  const covered = tasks.reduce((s, t) => s + wl.weights[t], 0);
+  return candidates.map((c) => {
+    const mean = tasks.reduce((s, t) => s + wl.weights[t] * (c.cells[t].mean as number), 0);
+    const variance = tasks.reduce(
+      (s, t) => s + wl.weights[t] ** 2 * (c.cells[t].uncertainty as number) ** 2,
+      0,
+    );
+    return { c, mean: mean / covered, uncertainty: Math.sqrt(variance) / covered };
+  });
+}
+
 // Score every candidate on the same task set: the weighted tasks all of them
 // scored. Different task mixes are never ranked against each other.
 export function commonScores(candidates: Candidate[], wl: Workload, minCoverage: number) {
@@ -230,15 +284,41 @@ export function commonScores(candidates: Candidate[], wl: Workload, minCoverage:
     .sort();
   const covered = tasks.reduce((s, t) => s + wl.weights[t], 0);
   if (candidates.length === 0 || covered < minCoverage) return { tasks, scores: null };
-  const scores = candidates.map((c) => {
-    const mean = tasks.reduce((s, t) => s + wl.weights[t] * (c.cells[t].mean as number), 0);
-    const variance = tasks.reduce(
-      (s, t) => s + wl.weights[t] ** 2 * (c.cells[t].uncertainty as number) ** 2,
-      0,
-    );
-    return { c, mean: mean / covered, uncertainty: Math.sqrt(variance) / covered };
-  });
-  return { tasks, scores };
+  return { tasks, scores: scoreOnTasks(candidates, tasks, wl) };
+}
+
+// Choose the best common task subset achieving at least `minCoverage` across
+// two or more candidates so a single unmeasured preset (for example an alias
+// with zero observations) never vetoes every measured preset of that Provider.
+// Every ranked candidate is still evaluated on the exact same task set.
+function bestComparableCohort(candidates: Candidate[], wl: Workload, minCoverage: number) {
+  const weighted = Object.keys(wl.weights)
+    .filter((t) => wl.weights[t] > 0)
+    .sort();
+  let best: { tasks: string[]; covered: number; eligible: Candidate[] } | null = null;
+  const totalMasks = 1 << weighted.length;
+  for (let mask = 1; mask < totalMasks; mask++) {
+    const tasks: string[] = [];
+    let covered = 0;
+    for (let i = 0; i < weighted.length; i++) {
+      if ((mask & (1 << i)) !== 0) {
+        tasks.push(weighted[i]);
+        covered += wl.weights[weighted[i]];
+      }
+    }
+    if (covered + 1e-9 < minCoverage) continue;
+    const eligible = candidates.filter((c) => tasks.every((t) => c.cells[t]?.status === "scored"));
+    if (eligible.length < 2) continue;
+    const better =
+      !best ||
+      covered > best.covered + 1e-9 ||
+      (Math.abs(covered - best.covered) <= 1e-9 && eligible.length > best.eligible.length) ||
+      (Math.abs(covered - best.covered) <= 1e-9 &&
+        eligible.length === best.eligible.length &&
+        tasks.join(",") < best.tasks.join(","));
+    if (better) best = { tasks, covered, eligible };
+  }
+  return best;
 }
 
 // Geometric mean of a/b over the cost groups both were measured in, or null.
@@ -268,19 +348,44 @@ function cheapest(pool: Ranked[]): Ranked | undefined {
 }
 
 export function tiers(candidates: Candidate[], wl: Workload, minCoverage: number): Tiers {
-  const { tasks, scores } = commonScores(candidates, wl, minCoverage);
-  const base: Tiers = { tied_with_flagship: [], compared_tasks: tasks, notes: [] };
-  if (candidates.length === 0) return { ...base, notes: ["no admissible executable targets"] };
-  if (!scores) {
-    return { ...base, notes: ["candidates do not share enough scored tasks to be ranked"] };
-  }
-  // An uncontested candidate is not evidence of being the best choice.
-  if (scores.length < 2) {
+  if (candidates.length === 0) {
     return {
-      ...base,
-      notes: [`only ${scores[0].c.preset} is rankable; tiers need two candidates`],
+      tied_with_flagship: [],
+      compared_tasks: [],
+      notes: ["no admissible executable targets"],
     };
   }
+  const cohort = bestComparableCohort(candidates, wl, minCoverage);
+  if (!cohort) {
+    const solo = candidates.filter((c) => {
+      const covered = Object.entries(wl.weights)
+        .filter(([t, w]) => w > 0 && c.cells[t]?.status === "scored")
+        .reduce((s, [, w]) => s + w, 0);
+      return covered + 1e-9 >= minCoverage;
+    });
+    if (solo.length === 1) {
+      const tasks = Object.keys(wl.weights)
+        .filter((t) => wl.weights[t] > 0 && solo[0].cells[t]?.status === "scored")
+        .sort();
+      return {
+        tied_with_flagship: [],
+        compared_tasks: tasks,
+        notes: [`only ${solo[0].preset} is rankable; tiers need two candidates`],
+      };
+    }
+    const { tasks } = commonScores(candidates, wl, minCoverage);
+    return {
+      tied_with_flagship: [],
+      compared_tasks: tasks,
+      notes: ["candidates do not share enough scored tasks to be ranked"],
+    };
+  }
+  const scores = scoreOnTasks(cohort.eligible, cohort.tasks, wl);
+  const excluded = candidates
+    .filter((c) => !cohort.eligible.includes(c))
+    .map((c) => c.preset)
+    .sort();
+  const base: Tiers = { tied_with_flagship: [], compared_tasks: cohort.tasks, notes: [] };
   const conservative = (s: Ranked) => s.mean - s.uncertainty;
   const ranked = [...scores].sort(
     (a, b) => conservative(b) - conservative(a) || a.c.preset.localeCompare(b.c.preset),
@@ -301,6 +406,7 @@ export function tiers(candidates: Candidate[], wl: Workload, minCoverage: number
   if (!workhorse) notes.push(`no comparable ${wl.cost_metric} evidence among non-inferior targets`);
   if (!value)
     notes.push(`no comparable ${wl.cost_metric} evidence among targets above the value floor`);
+  if (excluded.length) notes.push(`insufficient task coverage, not ranked: ${excluded.join(", ")}`);
   return {
     ...base,
     flagship: flagship.c.preset,
@@ -461,9 +567,9 @@ export function buildCatalog(
 
 export type Catalog = ReturnType<typeof buildCatalog>;
 
-// Served verbatim by Cowboy MCP help("models"): keep it small and decisive.
-// Only determined tiers are listed; per-preset evidence follows so a caller
-// can still compare presets when no tier is determined.
+// Agent-facing summary read on demand through Cowboy MCP (`help:"models"`).
+// Keep it compact (a few kilobytes): determined tiers plus per-preset evidence
+// so callers can weigh presets even while tiers are undetermined.
 export function summary(c: Catalog): string {
   const lines = [
     `# Model routing summary (${c.as_of})`,
@@ -498,8 +604,123 @@ export function summary(c: Catalog): string {
   return `${lines.join("\n").trimEnd()}\n`;
 }
 
-type ProviderPreset = { id: string; is_default?: boolean; values: Record<string, string> };
-type Manifest = { configuration_presets?: ProviderPreset[] };
+// Mirror `selection.rs::family` and `routing.rs::model`/`effort` so the audit
+// checks routing rows with the exact matching rules the Controller enforces.
+function reviewerFamily(model: string): string | null {
+  const base = model.includes("[") ? model.slice(0, model.indexOf("[")) : model;
+  if (base === "opus" || base.startsWith("claude-opus-")) return "opus";
+  if (base === "fable" || base.startsWith("claude-fable-")) return "fable";
+  if (base.startsWith("gpt-") && base.endsWith("-astra")) return "astra";
+  if (base.startsWith("gpt-") && base.endsWith("-sol")) return "sol";
+  return null;
+}
+
+function presetModel(preset: ProviderPreset): string | null {
+  const raw = preset.values.model;
+  if (!raw) return null;
+  return raw.includes("[") ? raw.slice(0, raw.indexOf("[")) : raw;
+}
+
+function presetEffort(preset: ProviderPreset): string {
+  return preset.values.reasoning_effort ?? preset.values.effort ?? "default";
+}
+
+function routingRowMatches(row: RoutingRow, preset: ProviderPreset): boolean {
+  const model = presetModel(preset);
+  if (!model) return false;
+  if (reviewerFamily(model) !== row.family) return false;
+  if (row.model && row.model !== model) return false;
+  if (row.efforts?.length && !row.efforts.includes(presetEffort(preset))) return false;
+  return true;
+}
+
+export function auditRouting(
+  routing: RoutingTable,
+  manifests: Record<string, Manifest>,
+  asOf: string,
+  fieldSnapshots: string[] = [],
+  options: { maxEvidenceAgeDays?: number; maxFieldAgeDays?: number } = {},
+): string[] {
+  const findings: string[] = [];
+  const maxEvidenceAge = options.maxEvidenceAgeDays ?? 30;
+  const maxFieldAge = options.maxFieldAgeDays ?? 14;
+  if (routing.schema !== 1) {
+    findings.push(`routing.json: unsupported schema ${routing.schema}`);
+    return findings;
+  }
+  const age = Math.round(days(routing.evidence, asOf));
+  if (!Number.isFinite(age)) {
+    findings.push(`routing.json: invalid evidence date ${routing.evidence}`);
+  } else if (age > maxEvidenceAge) {
+    findings.push(`routing.json evidence is ${age} days old (${routing.evidence})`);
+  }
+  for (const [provider, tiersByLevel] of Object.entries(routing.providers).sort(([a], [b]) =>
+    a.localeCompare(b),
+  )) {
+    const presets = manifests[provider]?.configuration_presets ?? [];
+    if (presets.length === 0) {
+      findings.push(`routing.json/${provider}: provider has no signed presets`);
+      continue;
+    }
+    const levels: Array<[string, RoutingTier | undefined]> = [
+      ["high", tiersByLevel.high],
+      ["routine", tiersByLevel.routine],
+      ["economy", tiersByLevel.economy],
+    ];
+    for (const [level, tier] of levels) {
+      if (!tier) continue;
+      for (const [kind, rows] of [
+        ["auto", tier.auto ?? []],
+        ["allow", tier.allow ?? []],
+      ] as const) {
+        for (const row of rows) {
+          if (!presets.some((preset) => routingRowMatches(row, preset))) {
+            const label = [
+              row.family,
+              row.model ? `model=${row.model}` : null,
+              row.efforts?.length ? `efforts=${row.efforts.join("|")}` : null,
+            ]
+              .filter(Boolean)
+              .join(" ");
+            findings.push(
+              `routing.json/${provider}.${level}.${kind}: row (${label}) matches no signed preset`,
+            );
+          }
+        }
+      }
+    }
+  }
+  const dates = fieldSnapshots
+    .map((name) => /^(\d{4}-\d{2}-\d{2})\.json$/.exec(basename(name))?.[1])
+    .filter((d): d is string => !!d)
+    .sort();
+  const latestField = dates.at(-1);
+  if (latestField) {
+    const fieldAge = Math.round(days(latestField, asOf));
+    if (fieldAge > maxFieldAge) {
+      findings.push(
+        `models/field: latest cost snapshot (${latestField}) is ${fieldAge} days old; refresh with field.ts`,
+      );
+    }
+    if (Number.isFinite(Date.parse(routing.evidence)) && latestField > routing.evidence) {
+      findings.push(
+        `routing.json evidence (${routing.evidence}) is older than latest field snapshot (${latestField})`,
+      );
+    }
+  }
+  const snapshotSet = new Set(fieldSnapshots.map((name) => basename(name)));
+  for (const [target, entry] of Object.entries(routing.costs).sort(([a], [b]) =>
+    a.localeCompare(b),
+  )) {
+    const source = entry.field?.source;
+    if (!source) continue;
+    const ref = /models\/field\/([^\s)]+\.json)/.exec(source)?.[1];
+    if (ref && snapshotSet.size > 0 && !snapshotSet.has(ref)) {
+      findings.push(`routing.json/costs/${target}: referenced field snapshot ${ref} is missing`);
+    }
+  }
+  return findings;
+}
 
 export function audit(
   c: Catalog,
@@ -508,6 +729,7 @@ export function audit(
   current: { repository: string; local: string | null } & Partial<ConfigDigests>,
   asOf: string,
   provisionalDays = 14,
+  routingCheck?: { routing: RoutingTable; fieldSnapshots?: string[] },
 ): string[] {
   const findings: string[] = [];
   const age = Math.round(days(c.as_of, asOf));
@@ -566,6 +788,11 @@ export function audit(
       );
     }
   }
+  if (routingCheck) {
+    findings.push(
+      ...auditRouting(routingCheck.routing, manifests, asOf, routingCheck.fieldSnapshots ?? []),
+    );
+  }
   return findings;
 }
 
@@ -576,15 +803,24 @@ export function digest(text: string): string {
   return `sha256:${createHash("sha256").update(text).digest("hex")}`;
 }
 
-function agentManifests(): Record<string, Manifest> {
+export function agentManifests(pluginsDir = "plugins"): Record<string, Manifest> {
   const out: Record<string, Manifest> = {};
-  for (const id of readdirSync("plugins").sort()) {
-    const path = join("plugins", id, "provider.json");
+  if (!existsSync(pluginsDir)) return out;
+  for (const id of readdirSync(pluginsDir).sort()) {
+    const path = join(pluginsDir, id, "provider.json");
     if (!existsSync(path)) continue;
     const manifest = JSON.parse(readFileSync(path, "utf8")) as Manifest;
     if (manifest.configuration_presets?.length) out[id] = manifest;
   }
   return out;
+}
+
+export function fieldSnapshotFiles(modelsRoot = "models"): string[] {
+  const dir = join(modelsRoot, "field");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((name) => name.endsWith(".json"))
+    .sort();
 }
 
 function main(argv: string[]) {
@@ -593,6 +829,7 @@ function main(argv: string[]) {
     return i >= 0 ? argv[i + 1] : undefined;
   };
   const root = arg("--models") ?? "models";
+  const pluginsDir = arg("--plugins") ?? "plugins";
   const asOf = arg("--as-of") ?? new Date().toISOString().slice(0, 10);
   const state = process.env.XDG_STATE_HOME ?? join(process.env.HOME ?? "", ".local/state");
   const localDir = arg("--local-observations") ?? join(state, "cowboy/model-intel/observations");
@@ -608,14 +845,22 @@ function main(argv: string[]) {
     repositoryOnly && !argv.includes("--audit") ? empty : readObservations(localDir, true);
   if (argv.includes("--audit")) {
     const committed = join(root, "catalog.json");
+    const routingPath = join(root, "routing.json");
+    const routingCheck = existsSync(routingPath)
+      ? {
+          routing: JSON.parse(readFileSync(routingPath, "utf8")) as RoutingTable,
+          fieldSnapshots: fieldSnapshotFiles(root),
+        }
+      : undefined;
     const findings = existsSync(committed)
       ? audit(
           JSON.parse(readFileSync(committed, "utf8")) as Catalog,
           targets,
-          agentManifests(),
+          agentManifests(pluginsDir),
           { repository: repo.digest, local: local.present ? local.digest : null, ...config },
           asOf,
           m.freshness.provisional_days,
+          routingCheck,
         )
       : ["no committed models/catalog.json"];
     console.log(JSON.stringify({ as_of: asOf, findings }, null, 2));

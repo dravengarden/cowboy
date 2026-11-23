@@ -247,3 +247,63 @@ test("audit covers untargeted Providers, TOML drift and the leading card order",
     "p: evidence order a > b differs from signed leading cards x > a",
   ]);
 });
+
+import { auditRouting, type RoutingTable } from "./score.ts";
+
+test("an unmeasured preset does not veto measured presets of the same Provider", () => {
+  const w = { ...wl, weights: { code_review: 0.7, agentic_coding: 0.3 } };
+  const a: Candidate = {
+    preset: "a",
+    cells: { code_review: cell(0.9) },
+    costs: new Map([["g", 10]]),
+  };
+  const b: Candidate = {
+    preset: "b",
+    cells: { code_review: cell(0.7) },
+    costs: new Map([["g", 3]]),
+  };
+  const unmeasured: Candidate = { preset: "opus-default", cells: {}, costs: new Map() };
+  const t = tiers([a, b, unmeasured], w, 0.7);
+  assertEquals(t.compared_tasks, ["code_review"]);
+  assertEquals([t.flagship, t.strong, t.value], ["a", "b", "b"]);
+  assertEquals(t.notes.includes("insufficient task coverage, not ranked: opus-default"), true);
+});
+
+test("auditRouting catches stale evidence, unmatched rows and outdated field snapshots", () => {
+  const routing: RoutingTable = {
+    schema: 1,
+    evidence: "2026-10-01",
+    providers: {
+      codex: {
+        high: { auto: [{ family: "sol", model: "gpt-6.2-sol", efforts: ["max"] }] },
+        routine: {
+          auto: [{ family: "sol", model: "gpt-6.1-sol", efforts: ["max"] }],
+          allow: [{ family: "sol" }],
+        },
+      },
+    },
+    costs: {
+      "gpt-6.2-sol:max": {
+        field: {
+          median_tokens: 3000000,
+          source: "models/field/2026-10-01.json (14-day ledger)",
+        },
+      },
+    },
+  };
+  const manifests = {
+    codex: {
+      configuration_presets: [
+        { id: "sol-6-2-max", values: { model: "gpt-6.2-sol", reasoning_effort: "max" } },
+      ],
+    },
+  };
+  const findings = auditRouting(routing, manifests, "2026-11-23", ["2026-11-01.json"]);
+  assertEquals(findings, [
+    "routing.json evidence is 53 days old (2026-10-01)",
+    "routing.json/codex.routine.auto: row (sol model=gpt-6.1-sol efforts=max) matches no signed preset",
+    "models/field: latest cost snapshot (2026-11-01) is 22 days old; refresh with field.ts",
+    "routing.json evidence (2026-10-01) is older than latest field snapshot (2026-11-01)",
+    "routing.json/costs/gpt-6.2-sol:max: referenced field snapshot 2026-10-01.json is missing",
+  ]);
+});

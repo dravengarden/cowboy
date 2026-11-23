@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "evidence": "2026-11-21",
+  "evidence": "2026-11-23",
   "note": "Review and design review tiers (docs/review-routing.md). `auto` rows choose the automatic preset in order; `allow` rows bound the explicit presets a routine review may name (a high-risk review may name any reviewer preset; Astra Max and Fable are never chosen automatically). A row matches a runnable preset by reviewer family, optional exact model and optional efforts. Costs: top-level fields are paired-pilot medians on identical inputs (null when not measured); `field` holds code-review ledger medians on mixed inputs (cost only, not quality). Tokens are not billing or subscription quota.",
   "providers": {
     "codex": {
@@ -105,10 +105,10 @@
       "source": "models/pilots/2026-11-18-review-pilot.json",
       "field": {
         "purpose": "review",
-        "median_tokens": 6677901,
-        "median_minutes": 20,
-        "n": 101,
-        "source": "models/field/2026-11-21.json (14-day ledger, mixed inputs, reuse excluded)"
+        "median_tokens": 6424274,
+        "median_minutes": 19,
+        "n": 129,
+        "source": "models/field/2026-11-23.json (14-day ledger, mixed inputs, reuse excluded)"
       }
     },
     "gpt-6.2-sol:max": {
@@ -118,10 +118,10 @@
       "source": "models/pilots/2026-11-21-sol-max-arm.json",
       "field": {
         "purpose": "review",
-        "median_tokens": 3870987,
+        "median_tokens": 3679806,
         "median_minutes": 9,
-        "n": 9,
-        "source": "models/field/2026-11-21.json (14-day ledger, mixed inputs, reuse excluded)"
+        "n": 92,
+        "source": "models/field/2026-11-23.json (14-day ledger, mixed inputs, reuse excluded)"
       }
     },
     "gpt-6.2-astra:medium": {
@@ -131,10 +131,10 @@
       "source": "models/pilots/2026-11-18-review-pilot.json",
       "field": {
         "purpose": "review",
-        "median_tokens": 266810,
-        "median_minutes": 3,
-        "n": 10,
-        "source": "models/field/2026-11-21.json (14-day ledger, mixed inputs, reuse excluded)"
+        "median_tokens": 303547,
+        "median_minutes": 2,
+        "n": 15,
+        "source": "models/field/2026-11-23.json (14-day ledger, mixed inputs, reuse excluded)"
       }
     },
     "gpt-6.2-sol:medium": {
@@ -144,14 +144,21 @@
       "source": "models/pilots/2026-11-18-review-pilot.json",
       "field": {
         "purpose": "review",
-        "median_tokens": 799259,
+        "median_tokens": 640495,
         "median_minutes": 3,
-        "n": 5,
-        "source": "models/field/2026-11-21.json (14-day ledger, mixed inputs, reuse excluded)"
+        "n": 6,
+        "source": "models/field/2026-11-23.json (14-day ledger, mixed inputs, reuse excluded)"
       }
     },
     "opus:high": {
-      "median_tokens": null
+      "median_tokens": null,
+      "field": {
+        "purpose": "review",
+        "median_tokens": 2421737,
+        "median_minutes": 5,
+        "n": 3,
+        "source": "models/field/2026-11-23.json (14-day ledger, mixed inputs, reuse excluded)"
+      }
     },
     "claude-fable-5-1:max": {
       "median_tokens": null,

@@ -10,6 +10,12 @@ verified review pilot) and 164 reference-only observations kept in local state
 forbid redistribution are not reproduced here; statements derived from them
 are marked *(local inputs)* and can be checked only against that digest.
 
+## Update 2026-11-23: Fable 5.2 maturity, post-cutover field costs and periodic audit
+
+- **Provisional maturity:** `claude-fable-5-2:max` and `claude-fable-5-2:high` (released 2026-11-09) cleared the 14-day provisional window on 2026-11-23; `models/catalog.json` and `models/summary.md` were regenerated with `--as-of 2026-11-23`. Tiers remain undetermined until candidates share >= 70% weighted task coverage (GPT-6.2 exits provisional on 2026-12-01; below-max `agentic_coding` and `code_review` coverage remain single-lineage or absent).
+- **Post-cutover field costs (`models/field/2026-11-23.json`, 14-day ledger, reuse excluded):** GPT-6.2 Sol Max grew from n=9 to n=92 (median 3.68M tokens, 9 min) versus GPT-6.2 Astra Max (n=129, median 6.42M tokens, 19 min); Claude Opus High now has initial field cost evidence (n=3, median 2.42M tokens, 5 min). `models/routing.json` field costs were refreshed from this snapshot.
+- **Audit loop:** `score.ts` no longer lets a single unmeasured preset veto measured presets of the same Provider and now audits `models/routing.json` and `models/field/` freshness. `scripts/periodic-audit.ts` unifies catalog/routing audit, live ledger telemetry (reviews, analyses and >=30% cost-drift detection), harness inventory and upstream dependency checks (npm, Antigravity CLI GitHub releases, workspace-local drift and git pins).
+
 ## Update 2026-11-21: Sol Max arm, field costs and routing
 
 **Sol Max arm.** GPT-6.2 Sol Max re-ran the four pilot inputs (same clean

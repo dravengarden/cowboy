@@ -273,16 +273,15 @@ pub const ACTION_SDK: &str = r#"// cowboy_execute({action,arguments,operation});
 //   purpose?:"review"|"design_review"|"analysis",capability?:"image.generate"|"image.edit",
 //   files?:string[],root?:string,sessions?:{session_id:string,after?:number,before?:number}[],
 //   child_session_id?:string,preset?:string,title?:string,reason?:string,notify?:boolean}
-// Context ask: calls.start({instruction:<one specific question>,sessions:[{session_id,after?,before?}],
-//   provider:"codex",preset:"luna-6-max"}) has a cheap model search those sessions' exported history
-//   (no worktree, no tools beyond reading it) and answer with [session#seq] "quote" citations;
-//   calls.result adds citations:{checked,verified,unverified}. Worth it for large, cache-cold history;
-//   for a small one read sessions.search/history yourself. Verify paths, commands and numbers in source.
-//   "antigravity" (named only, fresh): these asks, analyses, reviews; it can read host files.
+// Context ask: calls.start({instruction:<one question>,sessions:[{session_id,after?,before?}],
+//   provider:<cheap>,preset:<light/medium>,notify:true}) searches exported history (no worktree/tools)
+//   and returns checked [session#seq] "quote" citations (calls.result.citations). Pick a cheap preset
+//   from calls.capabilities/help:"models" (not a max reviewer). For small history read sessions.* directly.
+//   "antigravity" (named only, fresh): asks, analyses, reviews; can read host files.
 // Images: discover calls.capabilities({capability:"image.generate"}); send only task + input paths.
 // calls.result returns verified artifact paths on the execution machine, never image bytes.
 // review.start: {focus?:string,design?:boolean,provider?:"auto"|"codex"|"claude-code"|"antigravity",files?:string[],root?:string,preset?:string,title?:string,reason?:string,task?:string,base?:string,fresh?:boolean,notify?:boolean,risk?:"routine"|"high"}
-// risk:"high" (needs reason) gets the strongest reviewer; routine refuses a stronger preset. Omit preset.
+// risk:"high" (needs reason) routes by review_routing (Astra Max/Fable explicit-only); omit preset.
 // notify:true queues one Cowboy notice into this session when the call ends (idle: new turn;
 // busy: next turn). End your turn instead of polling calls.wait; then read calls.result.
 // task (stable id: letters, digits, -_. up to 128, e.g. "f01-awaiting-merge"; prose goes in focus)

@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "as_of": "2026-11-21",
+  "as_of": "2026-11-23",
   "inputs": {
     "repository": {
       "count": 101,
@@ -224,7 +224,7 @@
           "mean": 0.637,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "medium"
         },
         "code_review": {
@@ -232,7 +232,7 @@
           "mean": 1,
           "uncertainty": 0.05,
           "lineages": 3,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "high"
         },
         "reasoning": {
@@ -240,7 +240,7 @@
           "mean": 0.95,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "medium"
         },
         "long_context": {
@@ -286,7 +286,7 @@
           "mean": 0.65,
           "uncertainty": 0.103,
           "lineages": 3,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "high"
         },
         "reasoning": {
@@ -294,7 +294,7 @@
           "mean": 0.875,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "medium"
         },
         "long_context": {
@@ -336,7 +336,7 @@
           "mean": 0.604,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "medium"
         },
         "code_review": {
@@ -348,7 +348,7 @@
           "mean": 0.841,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "medium"
         },
         "long_context": {
@@ -393,7 +393,7 @@
           "mean": 0.633,
           "uncertainty": 0.072,
           "lineages": 3,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "high"
         },
         "reasoning": {
@@ -401,7 +401,7 @@
           "mean": 0.771,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "medium"
         },
         "long_context": {
@@ -442,7 +442,7 @@
           "mean": 0.129,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "medium"
         },
         "code_review": {
@@ -454,7 +454,7 @@
           "mean": 0.321,
           "uncertainty": 0.106,
           "lineages": 3,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "high"
         },
         "long_context": {
@@ -488,14 +488,14 @@
         "effort": "max"
       },
       "executable": true,
-      "provisional": true,
+      "provisional": false,
       "tasks": {
         "agentic_coding": {
           "status": "scored",
           "mean": 0.657,
           "uncertainty": 0.069,
           "lineages": 3,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "high"
         },
         "code_review": {
@@ -507,7 +507,7 @@
           "mean": 0.888,
           "uncertainty": 0.063,
           "lineages": 3,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "high"
         },
         "long_context": {
@@ -541,7 +541,7 @@
         "effort": "high"
       },
       "executable": true,
-      "provisional": true,
+      "provisional": false,
       "tasks": {
         "agentic_coding": {
           "status": "insufficient",
@@ -556,7 +556,7 @@
           "mean": 0.831,
           "uncertainty": 0.071,
           "lineages": 3,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "high"
         },
         "long_context": {
@@ -604,7 +604,7 @@
           "mean": 0.688,
           "uncertainty": 0.08,
           "lineages": 3,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "high"
         },
         "long_context": {
@@ -694,7 +694,7 @@
           "mean": 0.597,
           "uncertainty": 0.066,
           "lineages": 4,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "high"
         },
         "long_context": {
@@ -742,7 +742,7 @@
           "mean": 0.3,
           "uncertainty": 0.055,
           "lineages": 3,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "high"
         },
         "long_context": {
@@ -1147,7 +1147,7 @@
           "mean": 0.633,
           "uncertainty": 0.053,
           "lineages": 3,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "high"
         },
         "code_review": {
@@ -1159,7 +1159,7 @@
           "mean": 0.777,
           "uncertainty": 0.077,
           "lineages": 3,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "high"
         },
         "long_context": {
@@ -1202,7 +1202,7 @@
           "mean": 0.748,
           "uncertainty": 0.083,
           "lineages": 3,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "high"
         },
         "long_context": {
@@ -1271,7 +1271,7 @@
           "mean": 0.637,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "medium"
         },
         "code_review": {
@@ -1283,7 +1283,7 @@
           "mean": 0.654,
           "uncertainty": 0.074,
           "lineages": 2,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "medium"
         },
         "long_context": {
@@ -1317,7 +1317,7 @@
           "mean": 0.651,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "medium"
         },
         "code_review": {
@@ -1329,7 +1329,7 @@
           "mean": 0.905,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "medium"
         },
         "long_context": {
@@ -1363,7 +1363,7 @@
           "mean": 0.569,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "medium"
         },
         "code_review": {
@@ -1375,7 +1375,7 @@
           "mean": 0.689,
           "uncertainty": 0.077,
           "lineages": 3,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "high"
         },
         "long_context": {
@@ -1444,7 +1444,7 @@
           "mean": 0.545,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "medium"
         },
         "code_review": {
@@ -1523,7 +1523,7 @@
           "mean": 0.272,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "medium"
         },
         "code_review": {
@@ -1535,7 +1535,7 @@
           "mean": 0.416,
           "uncertainty": 0.067,
           "lineages": 3,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "high"
         },
         "long_context": {
@@ -1569,7 +1569,7 @@
           "mean": 0.354,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "medium"
         },
         "code_review": {
@@ -1581,7 +1581,7 @@
           "mean": 0.447,
           "uncertainty": 0.124,
           "lineages": 3,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "high"
         },
         "long_context": {
@@ -1615,7 +1615,7 @@
           "mean": 0.128,
           "uncertainty": 0.05,
           "lineages": 2,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "medium"
         },
         "code_review": {
@@ -1627,7 +1627,7 @@
           "mean": 0.262,
           "uncertainty": 0.137,
           "lineages": 3,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "high"
         },
         "long_context": {
@@ -1715,7 +1715,7 @@
           "mean": 0.592,
           "uncertainty": 0.16,
           "lineages": 2,
-          "max_age_days": 120,
+          "max_age_days": 122,
           "confidence": "medium"
         },
         "writing": {
@@ -1745,7 +1745,7 @@
           "mean": 0.583,
           "uncertainty": 0.083,
           "lineages": 3,
-          "max_age_days": 3,
+          "max_age_days": 5,
           "confidence": "high"
         },
         "reasoning": {
@@ -1807,32 +1807,31 @@
         "tied_with_flagship": [],
         "compared_tasks": [],
         "notes": [
-          "candidates do not share enough scored tasks to be ranked",
-          "provisional, not ranked: fable-max, fable-high"
+          "candidates do not share enough scored tasks to be ranked"
         ]
       },
       "review": {
         "tied_with_flagship": [],
         "compared_tasks": [],
         "notes": [
-          "candidates do not share enough scored tasks to be ranked",
-          "provisional, not ranked: fable-max, fable-high"
+          "candidates do not share enough scored tasks to be ranked"
         ]
       },
       "design_review": {
         "tied_with_flagship": [],
         "compared_tasks": [],
         "notes": [
-          "candidates do not share enough scored tasks to be ranked",
-          "provisional, not ranked: fable-max, fable-high"
+          "candidates do not share enough scored tasks to be ranked"
         ]
       },
       "analysis": {
         "tied_with_flagship": [],
-        "compared_tasks": [],
+        "compared_tasks": [
+          "agentic_coding",
+          "reasoning"
+        ],
         "notes": [
-          "candidates do not share enough scored tasks to be ranked",
-          "provisional, not ranked: fable-max, fable-high"
+          "only fable-max is rankable; tiers need two candidates"
         ]
       }
     },

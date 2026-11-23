@@ -793,6 +793,7 @@ provider-runtime-scripts: claude-source-deps
     bun test ./.agents/skills/release-cowboy-plugin/scripts/converge-machine_test.ts
     bun test ./.agents/skills/model-intel/scripts/score_test.ts
     bun test ./.agents/skills/model-intel/scripts/field_test.ts
+    bun test ./.agents/skills/model-intel/scripts/periodic-audit_test.ts
     bun test ./tools/plugin-publication-receipt_test.ts
     bun test ./tools/immutable-publication_test.ts
     python3 -m unittest discover -s tools -p plugin_runtime_conformance_test.py

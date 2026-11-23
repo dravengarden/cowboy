@@ -187,9 +187,16 @@ fn preamble_names_the_boundary_and_on_demand_reads() {
         "cowboy.sessions.search('sess-1', {query, before:42})",
         "Never reload the whole history",
         "sessions:[{session_id:'sess-1', before:42}]",
+        "calls.capabilities",
+        "notify:true",
+        "not code analysis",
     ] {
         assert!(text.contains(expected), "{expected}\n{text}");
     }
+    assert!(
+        !text.contains("luna-6-max"),
+        "must not hardcode a max-effort preset\n{text}"
+    );
 }
 
 #[test]
