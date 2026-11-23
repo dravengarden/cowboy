@@ -71,6 +71,7 @@ import {
   sameComposerTimelineSlice,
 } from "./composerTimelineSlice";
 import {
+  composerServerReading,
   composerSessionSlice,
   sameComposerSessionSlice,
   sameComposerSheetSession,
@@ -830,10 +831,7 @@ export function ComposerWorkspace({
   const compactContext = useCompactionContext({
     sessionId,
     status,
-    serverUsed: sessionState.contextUsed,
-    serverSize: sessionState.contextSize,
-    serverObservedAt: sessionState.contextObservedAtMs,
-    serverStale: sessionState.contextStale,
+    ...composerServerReading(sessionState),
     completionSeq: timelineState.completionSeq,
   });
   function runSessionAction(a: SessionAction): Promise<void> {

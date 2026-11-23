@@ -32,6 +32,18 @@ export function contextStaleAfterCompaction(
   return typeof session?.usage?.compacted_at_ms === "number";
 }
 
+/** The broadcast reading `useCompactionContext` settles a refresh against. */
+export function serverContextReading(
+  session: Pick<SessionMeta, "context_used" | "context_size" | "usage"> | undefined,
+): { serverUsed: number; serverSize: number; serverObservedAt: number; serverStale: boolean } {
+  return {
+    serverUsed: session?.context_used ?? 0,
+    serverSize: session?.context_size ?? 0,
+    serverObservedAt: session?.usage?.observed_at_ms ?? 0,
+    serverStale: contextStaleAfterCompaction(session),
+  };
+}
+
 /** Suffix for a context tooltip naming a persisted reading's age. */
 export function recordedContextNote(
   recordedAtMs: number | undefined,

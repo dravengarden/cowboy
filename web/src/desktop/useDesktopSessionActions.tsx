@@ -12,8 +12,8 @@ import { resolveSessionAction, type SessionAction } from "../agentCommands";
 import { StopConfirmDialog } from "../Composer";
 import {
   compactTooltip,
-  contextStaleAfterCompaction,
   recordedContextUsageAt,
+  serverContextReading,
 } from "../contextUsageRecord";
 import { ConfirmConsequence } from "../ConfirmConsequence";
 import { importantHaptic } from "../haptic";
@@ -102,10 +102,7 @@ export function useDesktopSessionActions(sessionId: string, status: Status): Des
   const context = useCompactionContext({
     sessionId,
     status,
-    serverUsed: session?.context_used ?? 0,
-    serverSize: session?.context_size ?? 0,
-    serverObservedAt: session?.usage?.observed_at_ms ?? 0,
-    serverStale: contextStaleAfterCompaction(session),
+    ...serverContextReading(session),
     completionSeq: timeline.completionSeq,
   });
   const queuedAfterTurn = status === "busy" || status === "starting";

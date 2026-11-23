@@ -59,6 +59,21 @@ export function composerSessionSlice(
   return slice;
 }
 
+/** The broadcast reading `useCompactionContext` settles a refresh against. */
+export function composerServerReading(slice: ComposerSessionSlice): {
+  serverUsed: number;
+  serverSize: number;
+  serverObservedAt: number;
+  serverStale: boolean;
+} {
+  return {
+    serverUsed: slice.contextUsed,
+    serverSize: slice.contextSize,
+    serverObservedAt: slice.contextObservedAtMs,
+    serverStale: slice.contextStale,
+  };
+}
+
 export function sameComposerSessionSlice(
   a: ComposerSessionSlice,
   b: ComposerSessionSlice,
