@@ -183,10 +183,16 @@ mod tests {
         assert_eq!(retry.disconnected(now), Duration::from_secs(1));
         let lost = now;
         // The Controller restarts: every failed dial in the window waits 1 s.
-        while now + RAPID_DELAY < lost + RAPID_WINDOW {
+        let mut rapid = 0;
+        loop {
             now += RAPID_DELAY;
+            if now + RAPID_DELAY >= lost + RAPID_WINDOW {
+                break;
+            }
             assert_eq!(retry.unreachable(now), RAPID_DELAY);
+            rapid += 1;
         }
+        assert_eq!(rapid, 58);
         // A failure in the window's last second does not retry past its end,
         // and the window does not extend: the backoff resumes.
         now = lost + RAPID_WINDOW - Duration::from_millis(500);
