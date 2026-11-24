@@ -68,17 +68,19 @@ impl BrowserManager {
         if let Some(since) = grace_expired
             && instance.live.lock().phase == Phase::Detached
         {
-            // Supervision never blocks on a snapshot copy: while one runs
-            // the grace stop is put off to a later tick (the cap above
-            // still ends it). It waits only for the lifecycle lock; a viewer
-            // attaching meanwhile renews the instance, so the detached
-            // interval that expired is re-checked atomically with the
-            // transition to `Stopping`. The deadline is not idleness and
-            // stops unconditionally.
+            // Supervision never blocks on a snapshot copy or on the
+            // account lifecycle lock (a publication, a reset, another
+            // stop): while a copy runs or the lock is held, the grace stop
+            // is put off to a later tick (the cap above still ends it). A
+            // viewer attaching meanwhile renews the instance, so the
+            // detached interval that expired is re-checked atomically with
+            // the transition to `Stopping`. The deadline is not idleness
+            // and stops unconditionally.
             let stopped = self
                 .stop_between_copies(
                     instance,
                     Reason::Grace,
+                    LifecycleWait::Never,
                     || Ok(()),
                     |live| {
                         if still_idle(live, instance.settings.hibernate_after, since) {
@@ -118,6 +120,7 @@ impl BrowserManager {
                 .stop_between_copies(
                     instance,
                     Reason::Deadline,
+                    LifecycleWait::Never,
                     || Ok::<(), std::convert::Infallible>(()),
                     |_| Ok(()),
                 )
@@ -153,8 +156,9 @@ impl BrowserManager {
                 }
             }
         }
-        // No periodic copy begins once the graceful stop ahead of the cap is
-        // due: that stop makes its own, and a copy would put it off.
+        // None once the graceful stop ahead of the cap is due, which makes
+        // its own copy (the admission of a periodic copy refuses it too, on
+        // the time it has under the lifecycle lock).
         if snapshot_due && !instance.copy_running() && now < instance.graceful_deadline() {
             // The copy runs as its own job; a failure waits a full interval.
             instance.live.lock().last_periodic = now;

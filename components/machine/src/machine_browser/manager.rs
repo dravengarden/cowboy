@@ -53,7 +53,7 @@ use capacity::{CapacityGuard, CapacityLedger};
 use drain::StartGate;
 use generations::GenerationPins;
 use launch::{VersionOrder, admitted_limits, compare_versions, launch_arguments};
-use lifecycle::complete_fenced;
+use lifecycle::{LifecycleWait, complete_fenced};
 use snapshots::CopyJob;
 use termination::{Leftover, Retained, StopOutcome, Unconfirmed};
 use units::{Systemd, UnitControl};

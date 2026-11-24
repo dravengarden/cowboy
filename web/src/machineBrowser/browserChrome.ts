@@ -152,11 +152,13 @@ export function chromeState(
 const RETRYABLE = new Set(["memory", "capacity", "busy"]);
 
 /** A refused open that frees up by itself (memory, capacity, another
- * operation) offers Retry, unless the owner must first choose a Machine. */
+ * operation) offers Retry for as long as its banner shows, unless the owner
+ * must first choose a Machine. The refusal is the open's own answer
+ * (`model.refusal`), not the latest observation: a state read replaces
+ * that with why the browser last stopped. */
 export function retryOffered(model: BrowserModel, pinned: boolean): boolean {
-  const state = model.read?.state;
-  if (!model.error || model.busy || model.viewer || !state?.reason) return false;
-  if (!RETRYABLE.has(state.reason) || browserRunning(state.state)) return false;
+  if (!model.error || model.busy || model.viewer || !model.refusal) return false;
+  if (!RETRYABLE.has(model.refusal) || browserRunning(model.read?.state?.state)) return false;
   return pinned || !needsMachineChoice(model.read);
 }
 

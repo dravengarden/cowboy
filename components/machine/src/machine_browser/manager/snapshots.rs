@@ -160,7 +160,7 @@ impl BrowserManager {
         let manager = Arc::clone(self);
         let instance = Arc::clone(instance);
         tokio::spawn(async move {
-            if let Err(error) = manager.snapshot_job(&instance).await {
+            if let Err(error) = manager.copy_job(&instance, true).await {
                 tracing::warn!(%error, instance = %instance.instance_id, "periodic browser snapshot failed");
             }
         });
@@ -172,6 +172,12 @@ impl BrowserManager {
     /// thawed on every path, and a staging generation a copier may still
     /// write stays reserved until the unit's exit is confirmed.
     pub(super) async fn snapshot_job(&self, instance: &Arc<Instance>) -> Result<()> {
+        self.copy_job(instance, false).await
+    }
+
+    /// [`Self::snapshot_job`]; a `periodic` copy is refused once the
+    /// graceful stop ahead of the runtime cap is due.
+    pub(super) async fn copy_job(&self, instance: &Arc<Instance>, periodic: bool) -> Result<()> {
         let slot = self.slot(&instance.account_id);
         let AdmittedCopy {
             account_dir,
@@ -181,7 +187,7 @@ impl BrowserManager {
             registration,
         } = {
             let _lifecycle = slot.lifecycle.lock().await;
-            self.admit_copy(instance)?
+            self.admit_copy(instance, periodic)?
         };
         let copied = tokio::select! {
             biased;
@@ -225,13 +231,25 @@ impl BrowserManager {
 
     /// Under the account lifecycle lock: allocate and reserve a staging
     /// generation and register the job.
-    fn admit_copy<'a>(&self, instance: &'a Arc<Instance>) -> Result<AdmittedCopy<'a>> {
+    fn admit_copy<'a>(
+        &self,
+        instance: &'a Arc<Instance>,
+        periodic: bool,
+    ) -> Result<AdmittedCopy<'a>> {
         ensure!(
             matches!(
                 instance.live.lock().phase,
                 Phase::Detached | Phase::Attached
             ),
             "browser is not running"
+        );
+        // Decided here, under the lifecycle lock and on the current time: a
+        // periodic copy admitted now would put the graceful stop ahead of
+        // the cap off, which makes its own copy, towards the cap, where
+        // nothing is saved. The owner's own snapshot is still taken.
+        ensure!(
+            !periodic || Instant::now() < instance.graceful_deadline(),
+            "the graceful stop ahead of the runtime cap is due"
         );
         ensure!(
             !instance.copy_running(),

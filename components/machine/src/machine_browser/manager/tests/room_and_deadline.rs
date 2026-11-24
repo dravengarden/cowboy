@@ -619,3 +619,32 @@ async fn the_grace_stop_is_put_off_while_a_copy_runs() {
         "{reported:?}"
     );
 }
+
+#[tokio::test]
+async fn no_periodic_copy_is_admitted_once_the_graceful_stop_is_due() {
+    // Ten seconds of runtime left: the stop ahead of the cap is due.
+    let mut fixture = fixture_with(None, Duration::from_secs(10)).await;
+    view(&fixture, "a1");
+    let refused = fixture.manager.copy_job(&fixture.instance, true).await;
+    assert!(refused.is_err());
+    assert!(!fixture.instance.copy_running());
+    assert_eq!(fixture.manager.staging.reserved_bytes(), 0);
+    assert!(launcher_idle(&mut fixture.launcher).await);
+    // The owner's own snapshot is still taken.
+    let mut job = {
+        let manager = Arc::clone(&fixture.manager);
+        let instance = Arc::clone(&fixture.instance);
+        tokio::spawn(async move { manager.snapshot_job(&instance).await })
+    };
+    let copy = read_command(&mut fixture.launcher, &mut job).await;
+    assert_eq!(copy["command"], "snapshot");
+    // With time to spare, a periodic copy is admitted as before.
+    let mut early = fixture_on(None).await;
+    let mut job = {
+        let manager = Arc::clone(&early.manager);
+        let instance = Arc::clone(&early.instance);
+        tokio::spawn(async move { manager.copy_job(&instance, true).await })
+    };
+    let copy = read_command(&mut early.launcher, &mut job).await;
+    assert_eq!(copy["command"], "snapshot");
+}

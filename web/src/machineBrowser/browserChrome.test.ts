@@ -95,25 +95,57 @@ test("a running browser enables navigation only with a connected viewer", () => 
   assertEquals(during.hibernate || during.snapshot || during.address || during.refresh, false);
 });
 
+/** An open the Machine refused with `reason`, as the panel holds it. */
+function refusedOpen(reason: string): BrowserModel {
+  const opening = reduceBrowser(shown("hibernated"), { type: "busy", action: "open" });
+  return reduceBrowser(opening, {
+    type: "result",
+    action: "open",
+    result: { machine_id: "ovh", state: state("hibernated", { reason }) },
+    now: 2,
+  });
+}
+
 test("a refused open for lack of memory offers Retry unless a Machine must be chosen", () => {
-  const refused: BrowserModel = {
-    ...shown("hibernated", { reason: "memory" }),
-    error: "The Machine has no memory headroom for a browser right now.",
-  };
+  const refused = refusedOpen("memory");
+  assertEquals(refused.refusal, "memory");
   assertEquals(retryOffered(refused, false), true);
   assertEquals(retryOffered({ ...refused, error: "" }, false), false);
   assertEquals(retryOffered({ ...refused, busy: "open" }, false), false);
-  const failed = {
-    ...refused,
-    read: { ...refused.read!, state: state("hibernated", { reason: "failed" }) },
-  };
-  assertEquals(retryOffered(failed, false), false);
+  // A failure that does not free up by itself offers none.
+  assertEquals(retryOffered(refusedOpen("failed"), false), false);
   const choose: BrowserModel = {
     ...refused,
     read: { ...refused.read!, choose_machine: true, capable_machines: [{ machine_id: "ovh" }] },
   };
   assertEquals(retryOffered(choose, false), false);
   assertEquals(retryOffered(choose, true), true);
+});
+
+test("Retry stays with the refusal while state reads report the last stop", () => {
+  const refused = refusedOpen("capacity");
+  assertEquals(retryOffered(refused, false), true);
+  // The next poll says why the browser last stopped, not why the open was
+  // refused: the banner and its Retry stay.
+  const polled = reduceBrowser(refused, {
+    type: "read",
+    read: {
+      machine_id: "ovh",
+      state: state("hibernated", { reason: "grace" }),
+      placements: [],
+      admission: null,
+    },
+    now: 3,
+    issued: refused.epoch,
+  });
+  assertEquals(polled.read?.state?.reason, "grace");
+  assertEquals(polled.refusal, "capacity");
+  assertEquals(polled.error.length > 0, true);
+  assertEquals(retryOffered(polled, false), true);
+  // Dismissing the banner, or retrying, lets the refusal go with it.
+  assertEquals(reduceBrowser(polled, { type: "dismiss" }).refusal, undefined);
+  assertEquals(retryOffered(reduceBrowser(polled, { type: "dismiss" }), false), false);
+  assertEquals(reduceBrowser(polled, { type: "busy", action: "open" }).refusal, undefined);
 });
 
 test("a detached browser's summary counts down to the end of its grace", () => {

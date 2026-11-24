@@ -362,6 +362,7 @@ impl BrowserManager {
                 Ok(instance)
             }
             Err(failure) => {
+                self.record_failed_start(account_id, record, failure.reason);
                 // Never retry with weaker isolation: the unit ends (a
                 // verification failure included), and its slot and memory
                 // budget are released only once that is confirmed.
@@ -391,6 +392,24 @@ impl BrowserManager {
                 Err(failure)
             }
         }
+    }
+
+    /// How the account's browser last ended is this failed start from now
+    /// on, not the stop of an earlier run a query would otherwise still
+    /// report. Nothing of the owner's is lost with a start nobody viewed.
+    fn record_failed_start(
+        &self,
+        account_id: &ProviderAccountId,
+        record: &ControlRecord,
+        reason: Reason,
+    ) {
+        let slot = self.slot(account_id);
+        let _instance = slot.instance.lock();
+        *slot.last_stop.lock() = Some(LastStop {
+            profile_revision: record.profile_revision,
+            reason,
+            unsaved: false,
+        });
     }
 
     /// Full confinement verification of a freshly started instance.
@@ -498,17 +517,25 @@ impl BrowserManager {
     /// scans and the runtime cap meanwhile, and an open making room, whose
     /// caller is waiting. Under the account lifecycle lock, where a copy is
     /// admitted, a running copy defers the stop (`Ok(None)`: the caller
-    /// decides again later). `authorized` and `still` are then evaluated as
-    /// in [`Self::stop_instance_when`]; a refusal stops nothing.
+    /// decides again later); with [`LifecycleWait::Never`] so does that
+    /// lock being held. `authorized` and `still` are then evaluated as in
+    /// [`Self::stop_instance_when`]; a refusal stops nothing.
     pub(super) async fn stop_between_copies<E>(
         &self,
         instance: &Arc<Instance>,
         reason: Reason,
+        wait: LifecycleWait,
         authorized: impl FnOnce() -> Result<(), E>,
         still: impl FnOnce(&Live) -> Result<(), E>,
     ) -> Result<Option<StateEvent>, E> {
         let slot = self.slot(&instance.account_id);
-        let _lifecycle = slot.lifecycle.lock().await;
+        let _lifecycle = match wait {
+            LifecycleWait::Until => slot.lifecycle.lock().await,
+            LifecycleWait::Never => match slot.lifecycle.try_lock() {
+                Ok(lifecycle) => lifecycle,
+                Err(_) => return Ok(None),
+            },
+        };
         if instance.copy_running() {
             return Ok(None);
         }
@@ -744,6 +771,12 @@ impl BrowserManager {
             plain_stop(instance).await;
             return Err(error);
         }
+        // The preparation above is synchronous file work: once it crossed
+        // the cap, nothing more is asked of the launcher.
+        if Instant::now() >= cap {
+            self.retire_staging(&account_dir, generation, reservation);
+            return Ok(None);
+        }
         let stopped = tokio::time::timeout_at(cap, async {
             instance
                 .control
@@ -926,6 +959,16 @@ impl BrowserManager {
             observed_at_ms: unix_ms(),
         }
     }
+}
+
+/// Whether a stop waits for the account lifecycle lock or is put off when
+/// it is held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LifecycleWait {
+    /// Wait for it: the caller bounds its own wait.
+    Until,
+    /// Never: the caller comes back by itself (supervision, every tick).
+    Never,
 }
 
 /// Whether `record` admits a start with `plan`'s browser, and how the two

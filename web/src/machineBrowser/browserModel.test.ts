@@ -748,8 +748,53 @@ test("a takeover refused against a stale state reopens the browser", () => {
   assertEquals(model.viewer?.takeover, true);
   model = dropped(model);
   assertEquals(resumeStep(model, 1_000), "wait");
-  model = observed(model, null);
+  model = observed(
+    model,
+    event("hibernated", { instance: { account_id: account, instance_id: "", incarnation: 0 } }),
+  );
   assertEquals(resumeStep(model, 2_000), "open");
+});
+
+test("a reconnect never reopens on a Machine's silence or another Machine's answer", () => {
+  let model = dropped(viewing());
+  // Reads stay on the Machine of the browser that was lost.
+  assertEquals(pinnedMachine(model), "ovh");
+  // No answer from it (its query timed out behind a stop still under way,
+  // the Machine is reconnecting): not a ground for reopening.
+  model = observed(model, null);
+  assertEquals(resumeStep(model, 2_000), "wait");
+  assertEquals(model.resume?.attempts, 1);
+  // Nor is what another Machine says about the account.
+  model = reduceBrowser(model, {
+    type: "read",
+    read: {
+      machine_id: "alpha",
+      state: event("hibernated", {
+        instance: { account_id: account, instance_id: "", incarnation: 0 },
+      }),
+      placements: [],
+      admission: null,
+    },
+    now: 3_000,
+    issued: model.epoch,
+  });
+  assertEquals(resumeStep(model, 3_000), "wait");
+  assertEquals(model.resume?.attempts, 2);
+  // Its own word that the browser hibernated for being left reopens it.
+  const answered = observed(
+    model,
+    event("hibernated", {
+      instance: { account_id: account, instance_id: "", incarnation: 0 },
+      reason: "grace",
+    }),
+    4_000,
+  );
+  assertEquals(answered.resume?.attempts, 2);
+  assertEquals(resumeStep(answered, 4_000), "open");
+  // Silence throughout ends the reconnect instead of spinning for minutes.
+  const silent = observed(model, null, 4_000);
+  assertEquals(silent.resume?.attempts, RESUME_ATTEMPTS);
+  assertEquals(resumeStep(silent, 4_000), "give_up");
 });
 
 test("a reconnect is bounded in attempts and time, and final ends never resume", () => {
