@@ -246,36 +246,6 @@ pub(super) fn handle_undelivered_prompt(
     if !shared.hub.accepts_runtime_projection(session_id) {
         return;
     }
-    if shared.fenced_commands.lock().contains(command_id)
-        || cmid.is_some_and(|id| shared.hub.is_cmid_parked_or_fenced(session_id, id))
-    {
-        if let Some(tracked) = shared
-            .in_flight_prompts
-            .lock()
-            .take_matching(command_id, session_id, cmid)
-            && !tracked
-                .cmid
-                .as_deref()
-                .is_some_and(|id| shared.hub.is_cmid_already_echoed(session_id, id))
-        {
-            let text = join_content_text(&tracked.content);
-            let tracked_cmid = tracked.cmid.clone();
-            let _ = shared.hub.attach_verified_undelivered_to_park(
-                session_id,
-                command_id,
-                tracked_cmid.as_deref(),
-                crate::core::VerifiedUndeliveredPayload {
-                    text,
-                    content: tracked.content,
-                    cmid: tracked.cmid,
-                    origin: tracked.origin,
-                    initiator: tracked.initiator,
-                    error,
-                },
-            );
-        }
-        return;
-    }
     if let Some(tracked) = shared
         .in_flight_prompts
         .lock()

@@ -66,79 +66,6 @@ impl Hub {
         ))
     }
 
-    /// Stage parking a single ambiguous ordinary prompt as a `recovery-*` draft
-    /// in an acknowledged FIFO `StoreWrite::UpdatePending` transaction without
-    /// mutating Hub or confirming the client's `cmid` until SQL commits (Finding 1).
-    pub fn preview_park_recovery_prompt(
-        &self,
-        session_id: &str,
-        text: String,
-        content: Vec<serde_json::Value>,
-        cmid: Option<String>,
-    ) -> RecoveryParkPreview {
-        let draft_id = format!("recovery-{}", self.next_qid());
-        self.preview_park_recovery_prompt_with_id(session_id, draft_id, text, content, cmid)
-    }
-
-    pub(super) fn preview_park_recovery_prompt_with_id(
-        &self,
-        session_id: &str,
-        draft_id: String,
-        text: String,
-        content: Vec<serde_json::Value>,
-        cmid: Option<String>,
-    ) -> RecoveryParkPreview {
-        let sessions = self.inner.sessions.lock();
-        let Some(s) = sessions.get(session_id) else {
-            return RecoveryParkPreview::Rejected;
-        };
-        if let Some(c) = cmid.as_deref()
-            && s.drafts.iter().any(|m| m.cmid.as_deref() == Some(c))
-        {
-            let dup = c.to_owned();
-            drop(sessions);
-            self.confirm_delivered(session_id, &dup);
-            return RecoveryParkPreview::Duplicate;
-        }
-        let queue = s.queue.clone();
-        let mut drafts = s.drafts.clone();
-        let draft = QueuedMessage {
-            id: draft_id,
-            text,
-            content,
-            cmid,
-            schedule: None,
-            origin: None,
-            initiator: None,
-        };
-        drafts.push(draft.clone());
-        let Some(rx) = self.send_acked_update_pending(
-            session_id,
-            queue,
-            drafts,
-            Vec::new(),
-            Vec::new(),
-            false,
-        ) else {
-            return RecoveryParkPreview::Rejected;
-        };
-        self.inner
-            .notice_claims
-            .lock()
-            .in_flight_pending_commits
-            .insert(session_id.to_owned(), DeferredPendingFlush::default());
-        RecoveryParkPreview::Pending(
-            Box::new(PendingRecoveryPark {
-                hub: Arc::downgrade(&self.inner),
-                active: true,
-                session_id: session_id.to_owned(),
-                added_drafts: vec![draft],
-                settled_notices: Vec::new(),
-            }),
-            rx,
-        )
-    }
-
     /// Apply an already-committed durable recovery park to `Hub`.
     pub fn commit_park_recovery_notices(&self, preview: &mut PendingRecoveryPark) {
         if !preview.active {
@@ -157,14 +84,8 @@ impl Hub {
                 claims.in_flight_pending_commits.remove(&preview.session_id);
                 return;
             };
-            let mut claims = self.inner.notice_claims.lock();
-            for draft in &preview.added_drafts {
-                if let Some(cid) = draft.cmid.as_deref() {
-                    hub_dispatch_origin::remove_pending_echo(s, cid);
-                    Self::record_retired_undelivered_cmid(&mut claims, &preview.session_id, cid);
-                }
-            }
             s.drafts.extend(preview.added_drafts.iter().cloned());
+            let mut claims = self.inner.notice_claims.lock();
             let queue = s.queue.clone();
             let drafts = s.drafts.clone();
             for (cid, _) in &preview.settled_notices {
@@ -179,22 +100,23 @@ impl Hub {
         self.broadcast_pending_snapshot(&preview.session_id, &queue, &drafts);
     }
 
-    pub(in crate::core) fn record_retired_undelivered_cmid(
+    pub(in crate::core) fn record_parked_recovery_cmid(
         claims: &mut NoticeClaims,
         session_id: &str,
         cmid: &str,
-    ) {
+    ) -> bool {
         let entry = claims
-            .retired_undelivered_cmids
+            .parked_recovery_cmids
             .entry(session_id.to_owned())
             .or_default();
         if entry.iter().any(|c| c == cmid) {
-            return;
+            return false;
         }
         while entry.len() >= 64 {
             entry.pop_front();
         }
         entry.push_back(cmid.to_owned());
+        true
     }
 
     /// Abort a durable recovery park without mutating `Hub.drafts`, lifting its
@@ -579,39 +501,51 @@ impl Hub {
             .filter(|id| id.starts_with(crate::agent_model::CALL_NOTICE_PREFIX))
             .map(str::to_owned)
         else {
-            let duplicate = {
+            let retired_ts = {
                 let mut sessions = self.inner.sessions.lock();
                 let Some(s) = sessions.get_mut(session_id) else {
                     return;
                 };
-                let dup = cmid
-                    .as_deref()
-                    .filter(|c| s.drafts.iter().any(|m| m.cmid.as_deref() == Some(*c)))
-                    .map(str::to_owned);
-                if dup.is_none() {
-                    if let Some(cid) = cmid.as_deref() {
-                        hub_dispatch_origin::remove_pending_echo(s, cid);
-                        let mut claims = self.inner.notice_claims.lock();
-                        Self::record_retired_undelivered_cmid(&mut claims, session_id, cid);
+                let mut retired_ts = None;
+                if let Some(cid) = cmid.as_deref() {
+                    let mut claims = self.inner.notice_claims.lock();
+                    if !Self::record_parked_recovery_cmid(&mut claims, session_id, cid) {
+                        return;
                     }
-                    let id = format!("recovery-{}", self.next_qid());
-                    s.drafts.push(QueuedMessage {
-                        id,
-                        text,
-                        content,
-                        cmid,
-                        schedule: None,
-                        origin: None,
-                        initiator: None,
-                    });
+                    drop(claims);
+                    Self::note_dispatched(s, Some(cid));
+                    hub_dispatch_origin::remove_pending_echo(s, cid);
+                    retired_ts = Some(s.dispatched_origins.get(cid).map_or_else(
+                        || chrono::Utc::now().timestamp_millis(),
+                        |r| r.dispatched_at_ms,
+                    ));
                 }
-                dup
+                // Keep `cmid: None` on recovery drafts so `emit_pending` never
+                // prematurely confirms the original client operation before SQL
+                // commits, and resending always requires a fresh operation ID.
+                let id = format!("recovery-{}", self.next_qid());
+                s.drafts.push(QueuedMessage {
+                    id,
+                    text,
+                    content,
+                    cmid: None,
+                    schedule: None,
+                    origin: None,
+                    initiator: None,
+                });
+                retired_ts
             };
-            if let Some(c) = duplicate {
-                self.confirm_delivered(session_id, &c);
-            } else {
-                self.emit_pending(session_id);
+            if let Some(ts) = retired_ts {
+                let key = format!(
+                    "{}{session_id}",
+                    crate::model::settings_keys::SESSION_UNDELIVERED_RETIRED_AT_PREFIX
+                );
+                let prev = self.setting(&key).and_then(|v| v.as_i64()).unwrap_or(0);
+                if ts > prev {
+                    self.set_setting(key, serde_json::json!(ts));
+                }
             }
+            self.emit_pending(session_id);
             return;
         };
         {

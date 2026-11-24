@@ -3,15 +3,14 @@
 use super::*;
 use crate::store::NoticeClaimRelease;
 
-mod recovery_parks;
 mod types;
 mod withdrawals;
 use types::DeferredPendingFlush;
 pub(in crate::core) use types::NoticeClaims;
 pub use types::{
     NoticeClaimGuard, NoticeRequeueRequest, OwnerNoticeWithdrawalOp, OwnerQueueMutation,
-    PendingNoticeWithdrawal, PendingRecoveryPark, PendingUndeliveredRequeue, RecoveryParkPreview,
-    RecoveryParkSettlement, StoreAckSink, UndeliveredRequeue, VerifiedUndeliveredPayload,
+    PendingNoticeWithdrawal, PendingRecoveryPark, PendingUndeliveredRequeue, StoreAckSink,
+    UndeliveredRequeue,
 };
 
 /// Acknowledged FIFO `StoreWrite::UpdatePending` result (`Ok(true)` = applied,
@@ -51,7 +50,6 @@ impl Hub {
     /// alive until the bounded retries in each admitted task finish (matching
     /// `dispatcher_task` shutdown behavior).
     pub async fn drain_teardown_requeues(&self, warn_after: std::time::Duration) {
-        self.retry_pending_recovery_parks(None);
         let mut warned = false;
         let warn_at = tokio::time::Instant::now() + warn_after;
         loop {
@@ -714,13 +712,6 @@ impl Hub {
     /// creates a shutdown reference cycle.
     #[must_use]
     pub fn store_ack_sink(&self) -> StoreAckSink {
-        let weak = Arc::downgrade(&self.inner);
-        self.inner.store_acks.set_recovery_hook(Arc::new(move || {
-            if let Some(inner) = weak.upgrade() {
-                let hub = Hub { inner };
-                hub.retry_pending_recovery_parks(None);
-            }
-        }));
         self.inner.store_acks.clone()
     }
 

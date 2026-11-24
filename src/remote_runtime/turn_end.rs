@@ -49,29 +49,15 @@ pub(super) fn signal(shared: &Shared, session: &str, event: &RuntimeEvent) {
 fn acknowledge_prompt_finish(shared: &Shared, session: &str, turn: &str) {
     let admitted = {
         let mut pending = shared.pending.lock();
-        let found =
-            pending
-                .iter_with_versions()
-                .find_map(|(key, version, command)| match command {
-                    CoreCommand::Prompt {
-                        session_id,
-                        turn_id,
-                        ..
-                    } if session_id == session && turn_id == turn => Some((key.clone(), version)),
-                    _ => None,
-                });
-        if let Some((key, _version)) = found {
-            if shared.hub.record_recovery_park_settlement(
-                session,
-                &key,
-                crate::core::RecoveryParkSettlement::Admitted,
-            ) {
-                return;
-            }
-            pending.remove(&key).map(|command| (key, command))
-        } else {
-            None
-        }
+        let key = pending.iter().find_map(|(key, command)| match command {
+            CoreCommand::Prompt {
+                session_id,
+                turn_id,
+                ..
+            } if session_id == session && turn_id == turn => Some(key.clone()),
+            _ => None,
+        });
+        key.and_then(|key| pending.remove(&key).map(|command| (key, command)))
     };
     if let Some((key, command)) = admitted {
         shared.sent.lock().remove(&key);

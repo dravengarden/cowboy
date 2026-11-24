@@ -450,14 +450,6 @@ impl Hub {
             return;
         }
         let requested_cmid = cmid.clone();
-        if id.starts_with("recovery-")
-            && self.has_store_writer()
-            && tokio::runtime::Handle::try_current().is_ok()
-        {
-            let fresh_cmid = cmid.unwrap_or_default();
-            self.activate_recovery_draft_durable(session_id, id, fresh_cmid, caller.clone());
-            return;
-        }
         let trigger = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
         let wired = self.inner.dispatch_tx.lock().is_some();
         let mut dispatch = None;
@@ -487,8 +479,7 @@ impl Hub {
                 error_msg = Some("Resending a parked recovery draft requires a new operation id");
                 false
             } else if let Some(op) = effective_cmid.as_deref()
-                && (Self::prompt_already_accepted_excluding_draft(s, op, Some(pos))
-                    || self.has_pending_recovery_park_cmid(session_id, op))
+                && Self::prompt_already_accepted_excluding_draft(s, op, Some(pos))
             {
                 error_msg = Some("Activation operation id is already in use; draft retained");
                 false

@@ -76,14 +76,14 @@ pub(super) fn clear_acked_command(shared: &Shared, command_id: &str) {
 /// replacement worker epoch superseded the prompt's bound epoch.
 /// Returns `None` when `command_id` belongs to a different session.
 pub(super) fn take_acked_command(
-    shared: &Arc<Shared>,
+    shared: &Shared,
     session_id: &str,
     command_id: &str,
     accepted: bool,
     reason: Option<&str>,
 ) -> Option<(Option<CoreCommand>, bool)> {
     let was_retransmitted = shared.retransmitted_sends.lock().contains(command_id);
-    let (fenced_entry, ambiguous_entry) = {
+    let ambiguous_entry = {
         let pending = shared.pending.lock();
         if pending.get(command_id).is_some_and(|command| {
             command
@@ -95,41 +95,12 @@ pub(super) fn take_acked_command(
         }
         let cmd = pending.get(command_id);
         let version = pending.version(command_id);
-        if let (Some(ver), Some(c)) = (version, cmd)
-            && shared.fenced_commands.lock().contains(command_id)
-        {
-            (Some((ver, c.clone())), None)
-        } else if !accepted && is_ambiguous_prompt_rejection(cmd, was_retransmitted, reason) {
-            (None, version.and_then(|v| cmd.cloned().map(|c| (v, c))))
+        if !accepted && is_ambiguous_prompt_rejection(cmd, was_retransmitted, reason) {
+            version.and_then(|v| cmd.cloned().map(|c| (v, c)))
         } else {
-            (None, None)
+            None
         }
     };
-    if let Some((_version, cmd)) = fenced_entry {
-        if accepted {
-            shared.hub.record_recovery_park_settlement(
-                session_id,
-                command_id,
-                crate::core::RecoveryParkSettlement::Admitted,
-            );
-        } else if !is_ambiguous_prompt_rejection(Some(&cmd), was_retransmitted, reason) {
-            shared.hub.record_recovery_park_settlement(
-                session_id,
-                command_id,
-                crate::core::RecoveryParkSettlement::Unhanded(reason.map(str::to_owned)),
-            );
-        }
-        return Some((Some(cmd), true));
-    }
-    if accepted
-        && shared.hub.record_recovery_park_settlement(
-            session_id,
-            command_id,
-            crate::core::RecoveryParkSettlement::Admitted,
-        )
-    {
-        return Some((None, true));
-    }
     if let Some((version, cmd)) = ambiguous_entry {
         let message = reason
             .unwrap_or("prompt delivery across worker change is unresolved; retained as draft");
@@ -142,7 +113,6 @@ pub(super) fn take_acked_command(
             cmd.clone(),
             message,
             replacement.as_ref(),
-            false,
         );
         return Some((Some(cmd), true));
     }

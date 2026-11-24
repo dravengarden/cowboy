@@ -561,112 +561,18 @@ pub(in crate::remote_runtime) fn park_ambiguous_prompt_command(
     }
 }
 
-fn retire_pending_prompt_version(
-    shared: &Shared,
-    key: &str,
-    version: u64,
-    command_id: &str,
-) -> bool {
-    let mut pending = shared.pending.lock();
-    let removed = pending.remove_if_version(key, version).is_some();
-    if removed {
-        shared.sent.lock().remove(key);
-        shared.attempted_sends.lock().remove(key);
-        shared.retransmitted_sends.lock().remove(key);
-        shared.fenced_commands.lock().remove(key);
-        shared.in_flight_prompts.lock().retire_command(command_id);
-    }
-    removed
-}
-
-/// Park and retire a pending cross-epoch or disconnected prompt. Registers a
-/// Controller-owned park record on `Hub` (surviving runtime replacement and
-/// storage outages), serializes late ACK/`TurnEnded`/verified `UndeliveredPrompt`
-/// settlements atomically on `Hub`, and reconciles idle guards against the
-/// CURRENT admitted worker on completion (Findings 2, 3, 4, 5, 9).
-#[allow(clippy::too_many_arguments)]
+/// Park and retire a pending cross-epoch or disconnected prompt synchronously
+/// via `Hub::park_recovery_draft`, then reconcile the idle guard against the
+/// current admitted worker when a replacement epoch superseded the prompt.
 pub(in crate::remote_runtime) fn park_and_retire_ambiguous_pending(
-    shared: &Arc<Shared>,
+    shared: &Shared,
     session_id: &str,
     key: &str,
     version: u64,
     command: CoreCommand,
     reason: &str,
     replacement_worker: Option<&WorkerSnapshot>,
-    cancellable: bool,
 ) {
-    let is_call_notice = matches!(
-        &command,
-        CoreCommand::Prompt { cmid: Some(cid), .. } if cid.starts_with(CALL_NOTICE_PREFIX)
-    );
-    if !is_call_notice
-        && shared.hub.has_store_writer()
-        && tokio::runtime::Handle::try_current().is_ok()
-        && let CoreCommand::Prompt {
-            ref command_id,
-            ref content,
-            ref cmid,
-            ..
-        } = command
-    {
-        {
-            let pending = shared.pending.lock();
-            if pending.version(key) != Some(version) {
-                return;
-            }
-            if !shared.fenced_commands.lock().insert(key.to_owned()) {
-                return;
-            }
-        }
-        let command_id = command_id.clone();
-        let cmid = cmid.clone();
-        let (text, cleaned) = strip_prompt_preamble_and_text(
-            &shared.hub,
-            session_id,
-            cmid.as_deref(),
-            content.clone(),
-        );
-        let shared_weak = Arc::downgrade(shared);
-        let key_cb = key.to_owned();
-        let cid_cb = command_id.clone();
-        let sid_cb = session_id.to_owned();
-        let reconcile_idle = replacement_worker.is_some();
-        let on_retired: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
-            if let Some(shared) = shared_weak.upgrade() {
-                let retired = retire_pending_prompt_version(&shared, &key_cb, version, &cid_cb);
-                if retired && reconcile_idle {
-                    let current = shared.workers.lock().get(&sid_cb).cloned();
-                    if let Some(ref worker) = current {
-                        reconcile_idle_guard_for_snapshot(&shared, &sid_cb, worker);
-                    }
-                }
-            }
-        });
-        let shared_req = Arc::downgrade(shared);
-        let sid_req = session_id.to_owned();
-        let cmd_req = command.clone();
-        let on_requeue: Arc<dyn Fn(Option<String>) + Send + Sync> = Arc::new(move |reason| {
-            if let Some(shared) = shared_req.upgrade() {
-                requeue_rejected_command(&shared, &sid_req, Some(cmd_req.clone()), reason);
-            }
-        });
-        if shared.hub.register_pending_recovery_park(
-            session_id,
-            &command_id,
-            cmid,
-            text,
-            cleaned,
-            reason.to_owned(),
-            cancellable,
-            Some(on_retired),
-            Some(on_requeue),
-        ) {
-            shared
-                .hub
-                .spawn_recovery_park_driver(session_id.to_owned(), command_id);
-        }
-        return;
-    }
     let removed = {
         let mut pending = shared.pending.lock();
         let removed = pending.remove_if_version(key, version);
@@ -682,18 +588,19 @@ pub(in crate::remote_runtime) fn park_and_retire_ambiguous_pending(
         return;
     }
     park_ambiguous_prompt_command(shared, session_id, command, reason);
-    if replacement_worker.is_some()
-        && let Some(current) = shared.workers.lock().get(session_id).cloned()
-    {
-        reconcile_idle_guard_for_snapshot(shared, session_id, &current);
+    if replacement_worker.is_some() {
+        let current = shared.workers.lock().get(session_id).cloned();
+        if let Some(current) = current {
+            reconcile_idle_guard_for_snapshot(shared, session_id, &current);
+        }
     }
 }
 
 /// Park and retire any still-pending (including already-`sent`) prompt whose
 /// bound `expected_worker_epoch` was superseded by a live replacement worker
-/// snapshot while the Machine tunnel stayed connected (Finding 3).
+/// snapshot while the Machine tunnel stayed connected.
 pub(in crate::remote_runtime) fn retire_superseded_prompts_for_snapshot(
-    shared: &Arc<Shared>,
+    shared: &Shared,
     worker: &WorkerSnapshot,
 ) {
     if !worker.has_connected_owner()
@@ -733,16 +640,14 @@ pub(in crate::remote_runtime) fn retire_superseded_prompts_for_snapshot(
             cmd,
             "prompt delivery across worker change is unresolved; retained as draft",
             Some(worker),
-            true,
         );
     }
 }
 
 /// Preserve unresolved ordinary (non-`call-notice:`) prompts when a
 /// `RemoteRuntime` disconnects: unattempted prompts roll back optimistic
-/// revivals and return to the queue; already-attempted prompts fence and park
-/// durably before retiring (Finding 1).
-pub(in crate::remote_runtime) fn recover_pending_prompts_on_disconnect(shared: &Arc<Shared>) {
+/// revivals and return to the queue; already-attempted prompts park as drafts.
+pub(in crate::remote_runtime) fn recover_pending_prompts_on_disconnect(shared: &Shared) {
     let entries: Vec<(String, u64, CoreCommand, bool)> = {
         let pending = shared.pending.lock();
         let attempted = shared.attempted_sends.lock();
@@ -781,7 +686,6 @@ pub(in crate::remote_runtime) fn recover_pending_prompts_on_disconnect(shared: &
                 cmd,
                 disconnect_reason,
                 None,
-                false,
             );
         } else {
             let removed = {

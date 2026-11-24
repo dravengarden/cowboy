@@ -466,11 +466,7 @@ impl Store {
         settled_notices: &[(String, String)],
         released_claims: &[NoticeClaimRelease],
     ) -> Result<()> {
-        let has_finalized_recovery_cmid = drafts
-            .iter()
-            .any(|d| d.id.starts_with("recovery-") && d.cmid.is_some());
-        if settled_notices.is_empty() && released_claims.is_empty() && !has_finalized_recovery_cmid
-        {
+        if settled_notices.is_empty() && released_claims.is_empty() {
             return self.update_pending(session_id, queue, drafts).await;
         }
         let now = chrono::Utc::now().timestamp_millis();
@@ -1129,69 +1125,6 @@ macro_rules! notice_impl {
                 })
             }
 
-            async fn persist_retired_undelivered_cmids(
-                tx: &mut sqlx::Transaction<'_, $db>,
-                session_id: &str,
-                drafts: &[QueuedMessage],
-                now_ms: i64,
-            ) -> Result<()> {
-                let retired_cmids: Vec<&str> = drafts
-                    .iter()
-                    .filter(|d| d.id.starts_with("recovery-"))
-                    .filter_map(|d| d.cmid.as_deref())
-                    .collect();
-                if retired_cmids.is_empty() {
-                    return Ok(());
-                }
-                let key = format!(
-                    "{}{session_id}",
-                    crate::model::settings_keys::SESSION_RETIRED_UNDELIVERED_PREFIX
-                );
-                let existing: Option<(serde_json::Value,)> =
-                    sqlx::query_as("SELECT value FROM settings WHERE key = $1")
-                        .bind(&key)
-                        .fetch_optional(&mut **tx)
-                        .await?;
-                let mut list: Vec<String> = existing
-                    .and_then(|(v,)| serde_json::from_value::<Vec<String>>(v).ok())
-                    .unwrap_or_default();
-                let mut changed = false;
-                for cid in retired_cmids {
-                    if !list.iter().any(|old| old == cid) {
-                        list.push(cid.to_owned());
-                        changed = true;
-                    }
-                }
-                if list.len() > 64 {
-                    list.drain(..list.len() - 64);
-                    changed = true;
-                }
-                if !changed {
-                    return Ok(());
-                }
-                let val = serde_json::to_value(&list)
-                    .context("serialize retired undelivered cmids")?;
-                if $is_pg {
-                    sqlx::query(
-                        "INSERT INTO settings(key, value, updated_at) VALUES ($1, $2, now())                          ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = now()",
-                    )
-                    .bind(&key)
-                    .bind(&val)
-                    .execute(&mut **tx)
-                    .await?;
-                } else {
-                    sqlx::query(
-                        "INSERT INTO settings(key, value, updated_at_ms) VALUES ($1, $2, $3)                          ON CONFLICT (key) DO UPDATE SET value = excluded.value,                          updated_at_ms = excluded.updated_at_ms",
-                    )
-                    .bind(&key)
-                    .bind(&val)
-                    .bind(now_ms)
-                    .execute(&mut **tx)
-                    .await?;
-                }
-                Ok(())
-            }
-
             #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
             async fn update_pending_with_notice_ops(
                 &self,
@@ -1315,7 +1248,6 @@ macro_rules! notice_impl {
                         .execute(&mut *tx)
                         .await?;
                 }
-                Self::persist_retired_undelivered_cmids(&mut tx, session_id, drafts, now_ms).await?;
                 tx.commit().await?;
                 Ok(true)
             }

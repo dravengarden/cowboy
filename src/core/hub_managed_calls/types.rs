@@ -245,20 +245,9 @@ pub struct StoreAckSink {
 struct StoreAckInner {
     next_id: AtomicU64,
     waiters: Mutex<HashMap<u64, tokio::sync::oneshot::Sender<Result<bool, String>>>>,
-    recovery_hook: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 impl StoreAckSink {
-    pub(in crate::core) fn set_recovery_hook(&self, hook: Arc<dyn Fn() + Send + Sync>) {
-        *self.inner.recovery_hook.lock() = Some(hook);
-    }
-
-    pub fn notify_storage_recovered(&self) {
-        if let Some(hook) = self.inner.recovery_hook.lock().clone() {
-            hook();
-        }
-    }
-
     pub fn allocate(&self) -> (u64, StoreAckRx) {
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -286,12 +275,6 @@ impl StoreAckSink {
 
 /// Result of attempting to durably requeue an authoritative worker
 /// `UndeliveredPrompt` or provably unsent teardown notice through the FIFO store writer.
-pub enum RecoveryParkPreview {
-    Duplicate,
-    Pending(Box<PendingRecoveryPark>, StoreAckRx),
-    Rejected,
-}
-
 pub enum UndeliveredRequeue {
     /// No store writer is attached (in-memory test mode); Hub already updated.
     NoStore,
@@ -310,38 +293,6 @@ pub(super) struct DeferredPendingFlush {
     pub(super) released_claims: Vec<NoticeClaimRelease>,
 }
 
-#[derive(Clone, Debug)]
-pub enum RecoveryParkSettlement {
-    Admitted,
-    Unhanded(Option<String>),
-}
-
-#[derive(Clone, Debug)]
-pub struct VerifiedUndeliveredPayload {
-    pub text: String,
-    pub content: Vec<serde_json::Value>,
-    pub cmid: Option<String>,
-    pub origin: Option<crate::prompt_origin::DeliveryOrigin>,
-    pub initiator: Option<crate::prompt_origin::DeliveryOrigin>,
-    pub error: String,
-}
-
-pub(in crate::core) struct PendingRecoveryDraftRecord {
-    pub(in crate::core) cmid: Option<String>,
-    pub(in crate::core) text: String,
-    pub(in crate::core) content: Vec<serde_json::Value>,
-    pub(in crate::core) reason: String,
-    pub(in crate::core) cancellable: bool,
-    pub(in crate::core) finalizing: bool,
-    pub(in crate::core) cancelling: bool,
-    pub(in crate::core) provisional_draft_id: Option<String>,
-    pub(in crate::core) in_progress: bool,
-    pub(in crate::core) settlement: Option<RecoveryParkSettlement>,
-    pub(in crate::core) verified_undelivered: Option<VerifiedUndeliveredPayload>,
-    pub(in crate::core) on_retired: Option<Arc<dyn Fn() + Send + Sync>>,
-    pub(in crate::core) on_requeue: Option<Arc<dyn Fn(Option<String>) + Send + Sync>>,
-}
-
 #[derive(Default)]
 pub(in crate::core) struct NoticeClaims {
     pub(super) active: HashMap<(String, String), (i64, String)>,
@@ -357,12 +308,8 @@ pub(in crate::core) struct NoticeClaims {
     pub(super) in_flight_pending_commits: HashMap<String, DeferredPendingFlush>,
     pub(super) commit_locks: HashMap<String, Arc<tokio::sync::Mutex<()>>>,
     pub(super) teardown_tasks: Vec<tokio::task::JoinHandle<()>>,
-    /// Controller-owned durable recovery-park records that survive runtime disconnect/replacement.
-    pub(in crate::core) recovery_parks: HashMap<(String, String), PendingRecoveryDraftRecord>,
-    /// In-flight durable recovery-draft activations `(session_id, draft_id)`.
-    pub(in crate::core) activating_drafts: HashSet<(String, String)>,
-    /// Bounded per-session retired non-delivery cmids (survives draft activation/deletion).
-    pub(in crate::core) retired_undelivered_cmids: HashMap<String, VecDeque<String>>,
+    /// Bounded per-session parked recovery cmids (in-lifetime idempotency & non-delivery suppression).
+    pub(in crate::core) parked_recovery_cmids: HashMap<String, VecDeque<String>>,
     /// Bounded per-session dispatch-time generated preambles keyed by cmid.
     pub(in crate::core) generated_preambles: HashMap<String, VecDeque<(String, Vec<String>)>>,
 }
