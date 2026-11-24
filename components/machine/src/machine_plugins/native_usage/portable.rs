@@ -801,12 +801,18 @@ mod tests {
         let later = super::super::unix_ms() + 60_000;
         for (request, code) in [
             (renewal("grok", 1), "portable_usage_busy"),
-            (renewal("claude-code", later), "portable_usage_account_required"),
+            (
+                renewal("claude-code", later),
+                "portable_usage_account_required",
+            ),
             (renewal("grok", later), "portable_usage_replica_pending"),
         ] {
             let invocation =
                 PortableRenewalInvocation::new(request, Arc::new(AtomicBool::new(true)));
-            let failure = store.renew_portable_credential(invocation).await.unwrap_err();
+            let failure = store
+                .renew_portable_credential(invocation)
+                .await
+                .unwrap_err();
             assert!(!failure.started, "{code}");
             assert_eq!(failure.error.to_string(), code);
         }

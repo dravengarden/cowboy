@@ -154,12 +154,18 @@ mod tests {
             .unwrap();
         let owner = "renewal-spacing-owner";
         assert!(reserve(owner, &id, 1_000));
-        assert!(!reserve(owner, &id, 2_000), "an attempt in flight is spaced");
+        assert!(
+            !reserve(owner, &id, 2_000),
+            "an attempt in flight is spaced"
+        );
         assert!(
             !reserve(owner, &id, 1_000 + AFTER_FAILED_MS - 1),
             "a failed renewal waits for the owner"
         );
         assert!(reserve(owner, &id, 1_000 + AFTER_FAILED_MS));
-        assert!(reserve("another-owner", &id, 2_000), "per owner and account");
+        assert!(
+            reserve("another-owner", &id, 2_000),
+            "per owner and account"
+        );
     }
 }

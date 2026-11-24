@@ -7018,7 +7018,10 @@ mod tests {
         };
         let (renewal, held) = tokio::join!(renewal, serialized);
         assert_eq!(renewal.unwrap()["operation"], "renew");
-        assert!(held, "journaled idle renewal must retain lifecycle authority");
+        assert!(
+            held,
+            "journaled idle renewal must retain lifecycle authority"
+        );
         let next_envelope =
             seal_auth_for_test(&store, &package, &service_signer, 3, &refreshed_bundle);
         let slow = store.invoke_host_for_test(

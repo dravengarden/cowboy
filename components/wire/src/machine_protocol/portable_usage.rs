@@ -96,7 +96,8 @@ impl RefreshFree {
             usage,
             reset: usage && field("reset_token_refresh").as_deref() == Some("request"),
             renewal: usage
-                && field("idle_renewal").is_some_and(|mode| IDLE_RENEWAL_MODES.contains(&mode.as_str())),
+                && field("idle_renewal")
+                    .is_some_and(|mode| IDLE_RENEWAL_MODES.contains(&mode.as_str())),
         }
     }
 }
@@ -585,7 +586,10 @@ mod tests {
                 "expires_at_ms": 1},
         }))
         .unwrap();
-        assert_eq!(command.minimum_protocol(), PORTABLE_RENEWAL_PROTOCOL_VERSION);
+        assert_eq!(
+            command.minimum_protocol(),
+            PORTABLE_RENEWAL_PROTOCOL_VERSION
+        );
         const { assert!(PORTABLE_RENEWAL_PROTOCOL_VERSION <= super::super::MACHINE_PROTOCOL_VERSION) };
         let mut extra = serde_json::json!({"account_id": "11111111-1111-4111-8111-111111111111",
             "plugin_id": "grok", "plugin_version": "3.2.22", "generation_digest": "sha256:x",

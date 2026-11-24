@@ -370,18 +370,26 @@ pub async fn refresh(
 
 /// Read the renewed account's usage once its budget allows the next read,
 /// without waiting for an owner surface to ask.
-fn follow_up(state: &Arc<AppState>, owner: &str, id: &ProviderAccountId, provider: &str, key: &str) {
+fn follow_up(
+    state: &Arc<AppState>,
+    owner: &str,
+    id: &ProviderAccountId,
+    provider: &str,
+    key: &str,
+) {
     let now = now_ms();
-    let retry_at = state.usage.limiter.view(provider, key, now).retry_at_ms(now);
+    let retry_at = state
+        .usage
+        .limiter
+        .view(provider, key, now)
+        .retry_at_ms(now);
     let wait = u64::try_from(retry_at.saturating_sub(now))
         .unwrap_or(0)
         .clamp(0, 3_600_000);
     let (state, owner, id) = (Arc::clone(state), owner.to_owned(), id.clone());
     tokio::spawn(async move {
-        tokio::time::sleep(
-            std::time::Duration::from_millis(wait) + renewal::FOLLOW_UP_MARGIN,
-        )
-        .await;
+        tokio::time::sleep(std::time::Duration::from_millis(wait) + renewal::FOLLOW_UP_MARGIN)
+            .await;
         let _ = super::refresh_one(&state, &owner, &id).await;
     });
 }
