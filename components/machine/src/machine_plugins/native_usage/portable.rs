@@ -584,6 +584,11 @@ impl MachinePluginStore {
                     error,
                 })?;
         match ran {
+            // The rotation and a throttled billing read are reported apart, so
+            // the Controller still paces the Provider.
+            Err(failure) if renewed && failure.error.to_string() == "portable_usage_throttled" => {
+                Ok(serde_json::json!({"outcome": "renewed", "billing": "portable_usage_throttled"}))
+            }
             _ if renewed => Ok(serde_json::json!({"outcome": "renewed"})),
             // A home the CLI may have rewritten cannot be read: indeterminate.
             _ if unreadable => Err(PluginHostInvocationFailure {
@@ -611,15 +616,23 @@ impl MachinePluginStore {
     ) -> Result<(bool, bool)> {
         let observer = self.clone();
         tokio::task::spawn_blocking(move || {
+            // The observer is best effort (an unreadable directory reads as
+            // empty); this check is strict: the account's credential root and
+            // the Provider's session homes must enumerate, and one must exist.
+            let enumerable = fs::read_dir(observer.auth_watch_root()).is_ok()
+                && observer
+                    .runtime_projection_generations(&plugin)
+                    .is_ok_and(|homes| !homes.is_empty());
             let observations = observer.auth_refresh_observations();
             (
                 observations.candidates.iter().any(|candidate| {
                     candidate.account_id == account && candidate.provider_id == plugin
                 }),
-                observations
-                    .failed_provider_ids
-                    .iter()
-                    .any(|(failed, provider)| *failed == account && *provider == plugin),
+                !enumerable
+                    || observations
+                        .failed_provider_ids
+                        .iter()
+                        .any(|(failed, provider)| *failed == account && *provider == plugin),
             )
         })
         .await

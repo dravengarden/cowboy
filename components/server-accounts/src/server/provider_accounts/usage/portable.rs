@@ -338,7 +338,7 @@ pub async fn refresh(
     let result = collect(state, owner, id, target, placed).await;
     // An expired sign-in no session renews: schedule one idle renewal.
     if result == Err("portable_usage_authentication_required") {
-        renewal::schedule(state, owner, id);
+        renewal::schedule(state, owner, id, target);
     }
     let outcome = collection_outcome(result.as_ref().err().copied());
     let succeeded = result.is_ok();

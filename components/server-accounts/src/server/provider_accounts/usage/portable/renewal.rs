@@ -78,8 +78,11 @@ struct Ledger {
     path: Option<std::path::PathBuf>,
     entries: std::collections::BTreeMap<String, Entry>,
     loaded: bool,
-    /// The journal exists but cannot be read: no renewal until it can.
+    /// The journal exists but cannot be read: no renewal until it can, and
+    /// every named launch waits out a renewal it may have hidden.
     unreadable: bool,
+    /// When the journal was first read by this Controller.
+    loaded_at_ms: i64,
     /// Accounts with a scheduled renewal task.
     scheduled: std::collections::BTreeSet<String>,
 }
@@ -97,6 +100,7 @@ impl Ledger {
             return;
         }
         self.loaded = true;
+        self.loaded_at_ms = now_ms();
         self.path = state.usage.state_file("usage-renewals.json");
         let Some(path) = self.path.as_ref() else {
             return;
@@ -147,12 +151,23 @@ impl Ledger {
             .is_ok()
     }
 
+    /// Stage the change and publish it only once it is durable. A rename
+    /// whose directory sync failed may still surface after a crash; that
+    /// errs toward an affinity and hold that were never needed.
     fn update(&mut self, key: &str, change: impl FnOnce(&mut Entry)) -> bool {
         if self.unreadable {
             return false;
         }
+        let previous = self.entries.get(key).cloned();
         change(self.entries.entry(key.to_owned()).or_default());
-        self.save()
+        if self.save() {
+            return true;
+        }
+        match previous {
+            Some(previous) => self.entries.insert(key.to_owned(), previous),
+            None => self.entries.remove(key),
+        };
+        false
     }
 }
 
@@ -235,22 +250,29 @@ pub fn launch_hold(state: &AppState, meta: &crate::core::SessionMeta) -> Option<
     let owner = meta.owner_user_id.as_deref()?;
     let mut ledger = LEDGER.lock();
     ledger.load(state);
+    let wait = || {
+        format!(
+            "{}this account's sign-in is being renewed",
+            crate::server::WAIT_PREFIX
+        )
+    };
+    // An unreadable journal may hide a renewal dispatched before a restart:
+    // hold named launches for one dispatch window and settle period.
+    if ledger.unreadable && now_ms() < ledger.loaded_at_ms + DISPATCH_WINDOW_MS + SETTLE_MS {
+        return Some(wait());
+    }
     let entry = ledger.entries.get(&key(owner, &meta.provider_account_id))?;
     let settled = entry.affinity.as_ref().is_some_and(|(_, generation)| {
         vault_generation(state, &meta.provider_account_id, &meta.provider)
             .is_some_and(|current| current > *generation)
     });
-    (entry.hold_until_ms > now_ms() && !settled).then(|| {
-        format!(
-            "{}this account's sign-in is being renewed",
-            crate::server::WAIT_PREFIX
-        )
-    })
+    (entry.hold_until_ms > now_ms() && !settled).then(wait)
 }
 
-/// Schedule one renewal of the account after a read reported authentication
-/// required. Nothing is scheduled while one is.
-pub fn schedule(state: &Arc<AppState>, owner: &str, id: &ProviderAccountId) {
+/// Schedule one renewal of the account after a read of `failed` reported
+/// authentication required. Nothing is scheduled while one is, and the
+/// renewal only ever acts on that same binding and vault generation.
+pub fn schedule(state: &Arc<AppState>, owner: &str, id: &ProviderAccountId, failed: &Target) {
     {
         let mut ledger = LEDGER.lock();
         ledger.load(state);
@@ -259,8 +281,9 @@ pub fn schedule(state: &Arc<AppState>, owner: &str, id: &ProviderAccountId) {
         }
     }
     let (state, owner, id) = (Arc::clone(state), owner.to_owned(), id.clone());
+    let failed = failed.clone();
     tokio::spawn(async move {
-        let renewed = run(&state, &owner, &id).await;
+        let renewed = run(&state, &owner, &id, &failed).await;
         LEDGER.lock().scheduled.remove(&key(&owner, &id));
         if let Some(generation) = renewed {
             follow_up(&state, &owner, &id, generation).await;
@@ -270,19 +293,27 @@ pub fn schedule(state: &Arc<AppState>, owner: &str, id: &ProviderAccountId) {
 
 /// Wait for a budget start, then renew once if the account still qualifies.
 /// Returns the renewal's input vault generation when it renewed.
-async fn run(state: &Arc<AppState>, owner: &str, id: &ProviderAccountId) -> Option<u64> {
+async fn run(
+    state: &Arc<AppState>,
+    owner: &str,
+    id: &ProviderAccountId,
+    failed: &Target,
+) -> Option<u64> {
     let budget_key = format!("{}#renewal", key(owner, id));
+    let provider = failed.binding.account.clone();
     for _ in 0..ATTEMPTS {
-        let Ok(Resolved::Portable(target)) = super::super::target(state, owner, id).await else {
-            return None;
-        };
-        let provider = target.binding.account.clone();
+        // Its own Provider pacing, and never sooner than the account's
+        // collection interval after the read that failed.
         let now = now_ms();
-        let wait = state
-            .usage
-            .limiter
+        let limiter = &state.usage.limiter;
+        let interval_end = limiter
+            .view(&provider, &key(owner, id), now)
+            .last_attempt_ms
+            .saturating_add(limiter.account_interval_ms());
+        let wait = limiter
             .view(&provider, &budget_key, now)
             .retry_at_ms(now)
+            .max(interval_end)
             .saturating_sub(now)
             .clamp(0, MAX_WAIT_MS);
         tokio::time::sleep(std::time::Duration::from_millis(
@@ -292,9 +323,17 @@ async fn run(state: &Arc<AppState>, owner: &str, id: &ProviderAccountId) -> Opti
         // One collection of the account at a time, reads included.
         let cache = state.usage.native.entry(owner, id.as_str());
         let _collection = Arc::clone(&cache.collection).lock_owned().await;
+        // Only the binding and generation whose read failed: a new sign-in
+        // or a session's refresh since then needs no renewal.
         let Ok(Resolved::Portable(target)) = super::super::target(state, owner, id).await else {
             return None;
         };
+        if target.scope != failed.scope
+            || target.plugin_id != failed.plugin_id
+            || target.auth_generation != failed.auth_generation
+        {
+            return None;
+        }
         let Ok(placed) = placement(state, owner, id, &target) else {
             return None;
         };
@@ -371,12 +410,16 @@ async fn renew(
     tracing::info!(account_id = id.as_str(), %machine, outcome = ?result, "portable account renewal settled");
     let mut ledger = LEDGER.lock();
     match result {
-        Ok("renewed") => {
+        Ok(("renewed", billing)) => {
             ledger.update(&account, |entry| {
                 entry.next_allowed_ms = now_ms().saturating_add(AFTER_RENEWED_MS);
                 entry.hold_until_ms = now_ms().saturating_add(SETTLE_MS);
             });
-            (Outcome::Success, true)
+            // A throttled billing read after the rotation still paces.
+            let outcome = billing.map_or(Outcome::Success, |code| {
+                super::super::collection_outcome(Some(code))
+            });
+            (outcome, true)
         }
         Ok(_) => {
             // No home changed: nothing was rotated by this run.
@@ -432,10 +475,26 @@ async fn follow_up(state: &Arc<AppState>, owner: &str, id: &ProviderAccountId, g
         .await;
         let before = cache.data.lock().last_attempt_at_ms;
         let _ = super::super::refresh_one(state, owner, id).await;
-        if cache.data.lock().last_attempt_at_ms != before {
+        let after = cache.data.lock().clone();
+        // Done once a collector ran; a refusal before dispatch retries.
+        if after.last_attempt_at_ms != before && !after.error.is_some_and(not_started) {
             return;
         }
     }
+}
+
+/// Codes of a read that never started its collector.
+fn not_started(code: &str) -> bool {
+    placement_refusal(code)
+        || matches!(
+            code,
+            "machine_usage_busy"
+                | "machine_connection_changed"
+                | "portable_usage_dispatch_failed"
+                | "portable_usage_replica_pending"
+                | "portable_usage_busy"
+                | "account_binding_changed"
+        )
 }
 
 #[cfg(test)]
@@ -455,6 +514,33 @@ mod tests {
             serde_json::from_str::<Entry>("{}").unwrap(),
             Entry::default()
         );
+    }
+
+    #[test]
+    fn a_journal_write_that_fails_publishes_nothing() {
+        let mut ledger = Ledger {
+            path: Some("/nonexistent-cowboy-renewal-dir/usage-renewals.json".into()),
+            ..Ledger::default()
+        };
+        ledger.entries.insert("kept".into(), Entry::default());
+        assert!(!ledger.update("kept", |entry| entry.hold_until_ms = 9));
+        assert!(!ledger.update("new", |entry| entry.hold_until_ms = 9));
+        assert_eq!(ledger.entries.get("kept"), Some(&Entry::default()));
+        assert!(!ledger.entries.contains_key("new"));
+        let dir = tempfile::tempdir().unwrap();
+        ledger.path = Some(dir.path().join("usage-renewals.json"));
+        assert!(ledger.update("new", |entry| entry.hold_until_ms = 9));
+        let saved: std::collections::BTreeMap<String, Entry> =
+            serde_json::from_slice(&std::fs::read(ledger.path.unwrap()).unwrap()).unwrap();
+        assert_eq!(saved["new"].hold_until_ms, 9);
+    }
+
+    #[test]
+    fn only_refusals_before_dispatch_retry_the_follow_up() {
+        assert!(not_started("machine_usage_busy"));
+        assert!(not_started("portable_usage_machine_unavailable"));
+        assert!(!not_started("portable_usage_authentication_required"));
+        assert!(!not_started("portable_usage_throttled"));
     }
 
     #[test]

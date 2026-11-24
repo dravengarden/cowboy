@@ -263,12 +263,16 @@ pub type RenewalFailure = (bool, &'static str);
 /// Enqueue an idle renewal (synchronously, like [`begin_collect`]); the
 /// future awaits its closed outcome (`renewed` or `unchanged`). A refusal is
 /// unsent only with the Machine's explicit `started: false`.
+/// A renewal's closed outcome, and the closed code of a billing read that
+/// failed after the CLI rotated the credential (only a throttle is kept).
+pub type RenewalOutcome = (&'static str, Option<&'static str>);
+
 pub fn begin_renewal<'a>(
     machine_control: &'a MachineControl,
     machine_id: &str,
     plugin: &PluginInventory,
     request: PortableRenewalRequest,
-) -> Result<impl Future<Output = Result<&'static str, RenewalFailure>> + 'a, &'static str> {
+) -> Result<impl Future<Output = Result<RenewalOutcome, RenewalFailure>> + 'a, &'static str> {
     let binding = machine_control
         .bind_plugin_host(machine_id, plugin, PluginHostOperation::RenewCredential)
         .map_err(|_| "portable_usage_machine_unavailable")?;
@@ -295,6 +299,10 @@ pub fn begin_renewal<'a>(
             })) => RENEWAL_OUTCOMES
                 .into_iter()
                 .find(|outcome| value["outcome"].as_str() == Some(outcome))
+                .map(|outcome| {
+                    let throttled = value["billing"] == "portable_usage_throttled";
+                    (outcome, throttled.then_some("portable_usage_throttled"))
+                })
                 .ok_or((true, "portable_usage_collector_failed")),
             Ok(Ok(Reply::PluginHost {
                 accepted: false,

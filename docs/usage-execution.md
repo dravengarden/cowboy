@@ -71,9 +71,12 @@ negotiation is needed. An entered DeepSeek key is never refreshed.
 leaves an account whose sessions all ended with an access token that expires
 a few hours later (about four for Grok), after which every read reports
 authentication required although the sign-in is intact. Such a read schedules
-one idle renewal (`renewal.rs` in the Controller's portable usage). It takes
-its own paced start from the Provider's usage budget and, at dispatch and
-again under the account lock that worker sends also take, requires:
+one idle renewal (`renewal.rs` in the Controller's portable usage) bound to
+that read's account binding and vault generation (a new sign-in or a
+session's refresh since then cancels it). It takes its own paced start from
+the Provider's usage budget, never sooner than the account's collection
+interval after the failed read, and, at dispatch and again under the account
+lock that worker sends also take, requires:
 
 - a **quiet account**: every session of the account, trashed ones included,
   stopped (exited, crashed or interrupted, not closing, no live worker) on a
@@ -95,7 +98,8 @@ again under the account lock that worker sends also take, requires:
 From the durable record until the vault advances (at most 60 seconds after
 the dispatch deadline or a renewal, and kept when the outcome is uncertain),
 the Controller's launch gate holds new workers of the account as a resource
-wait, so no worker starts from another generation's home with the token being
+wait (and, while the journal is unreadable, every named launch for one
+dispatch window and settle period after it was first read), so no worker starts from another generation's home with the token being
 rotated and a queued prompt resumes on its own. `RenewPortableCredential` is the only route: the generic
 `InvokePluginHost` never carries `renew_credential` (its minimum protocol is
 unreachable and the Machine refuses it). The Machine admits the renewal like
@@ -111,7 +115,11 @@ credential leaves only through the Machine's ordinary refresh observation and
 the Service compare-and-swap (which validates its identity); the reply is
 only `renewed` (a home now holds a credential the vault does not, which no
 home did before the run) or `unchanged`, decided from the homes even if the
-billing read failed after the CLI refreshed. A renewal is followed by usage
+billing read failed after the CLI refreshed; a throttled billing read after a
+rotation is reported beside `renewed` so the Provider is still paced. The
+Machine's check of the homes is strict: an account credential root or session
+home that cannot be enumerated refuses before start and is indeterminate
+after it. A renewal is followed by usage
 reads, each once the account's budget allows, until one reads past the
 pending distribution. Codex declares no idle renewal: its CLI does not
 serialize concurrent refreshes even in one home.
