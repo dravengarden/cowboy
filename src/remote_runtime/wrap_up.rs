@@ -140,6 +140,10 @@ impl WrapUpState {
             workers
                 .iter_mut()
                 .map(|(session_id, worker)| {
+                    if !shared.hub.matches_runtime_snapshot_binding(worker) {
+                        worker.wrap_up_steering = false;
+                        return worker.clone();
+                    }
                     let raw = raw_map
                         .get(&(session_id.clone(), worker.worker_epoch.clone()))
                         .copied()
@@ -171,6 +175,7 @@ impl WrapUpState {
             if still_current
                 && !super::foreign_session(shared, &worker.session_id)
                 && super::snapshot::admits_worker(shared, worker)
+                && shared.hub.matches_runtime_snapshot_binding(worker)
             {
                 shared
                     .hub
@@ -200,7 +205,8 @@ impl WrapUpState {
         let eligible = {
             let workers = shared.workers.lock();
             workers.get(session_id).is_some_and(|worker| {
-                worker.wrap_up_steering
+                shared.hub.matches_runtime_snapshot_binding(worker)
+                    && worker.wrap_up_steering
                     && worker.worker_epoch == target.worker_epoch
                     && worker.current_turn_id.as_deref() == Some(target.turn_id.as_str())
                     && !worker.drain_requested
@@ -1872,5 +1878,112 @@ mod tests {
             Some("agent-hijacked"),
             "rejected binding-mismatched worker epoch must never project Ready/TurnStarted events"
         );
+    }
+
+    #[tokio::test]
+    async fn surviving_pre_recovery_worker_is_visible_without_wrap_up_or_hub_projection() {
+        let seed = Hub::new();
+        seed.create_local_session(
+            "s-rec".into(),
+            "antigravity".into(),
+            "/tmp".into(),
+            "s-rec".into(),
+            SessionOrigin::Web,
+            false,
+        );
+        let mut meta = seed.session_info("s-rec").unwrap().meta;
+        meta.execution_binding = Some(crate::execution_environment::ExecutionBinding::from_record(
+            serde_json::json!({
+                "schema": 1,
+                "kind": "remote",
+                "target": "hawk",
+                "revision": 2
+            }),
+        ));
+        let hub = Hub::new();
+        hub.project_persisted_session(meta.clone());
+        let rt = super::super::RemoteRuntime::for_test(hub.clone(), Vec::new());
+        rt.shared
+            .protocol
+            .store(WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION, Ordering::Release);
+        let (hint_tx, mut hint_rx) = mpsc::channel(8);
+        rt.attach_wrap_up_hint_tx(hint_tx);
+
+        // Surviving detached pre-recovery worker reports old binding revision 1.
+        let mut old_worker = busy_snapshot("s-rec", "epoch-pre-recovery", true);
+        old_worker.state = WorkerState::Running;
+        old_worker.current_turn_id = None;
+        old_worker.launch = Some(crate::runtime_wire::StartSession {
+            session_id: "s-rec".into(),
+            provider: "antigravity".into(),
+            provider_version: String::new(),
+            provider_generation_digest: String::new(),
+            provider_account_id: meta.provider_account_id.clone(),
+            provider_auth_generation: None,
+            provider_behavior: None,
+            cwd: "/tmp".into(),
+            agent_session_id: Some("agent-old".into()),
+            system: false,
+            context_window: None,
+            auto_compact_token_limit: None,
+            cache_protection: None,
+            generation: "g1".into(),
+            fallback_for: None,
+            adopt_only: true,
+            execution_binding: Some(crate::execution_environment::ExecutionBinding::from_record(
+                serde_json::json!({
+                    "schema": 1,
+                    "kind": "remote",
+                    "target": "hawk",
+                    "revision": 1
+                }),
+            )),
+            extensions: None,
+            mcp_plan: None,
+            native_fork: None,
+        });
+
+        rt.project_trace_fixture(Frame::Snapshot {
+            worker: Box::new(old_worker.clone()),
+        })
+        .await;
+
+        let diag = rt.delivery_diagnostics("s-rec");
+        assert_eq!(
+            diag["worker"]["epoch"].as_str(),
+            Some("epoch-pre-recovery"),
+            "surviving pre-recovery worker must be visible to execution-sessions/replaceable_worker"
+        );
+        assert!(
+            !rt.shared
+                .workers
+                .lock()
+                .get("s-rec")
+                .unwrap()
+                .wrap_up_steering,
+            "mismatched pre-recovery worker must clamp wrap_up_steering to false"
+        );
+        assert!(
+            !rt.shared
+                .wrap_up
+                .raw_wrap_up
+                .lock()
+                .contains_key(&("s-rec".into(), "epoch-pre-recovery".into())),
+            "mismatched pre-recovery worker must not populate raw_wrap_up"
+        );
+        assert!(
+            !hub.session_info("s-rec").unwrap().meta.wrap_up_steering,
+            "mismatched pre-recovery worker must not project wrap_up_steering into Hub"
+        );
+        rt.refresh_wrap_up_steering();
+        assert!(!hub.session_info("s-rec").unwrap().meta.wrap_up_steering);
+        let sent = rt.send_wrap_up_hint(
+            "s-rec",
+            &crate::send_delivery::DeliveryTarget {
+                worker_epoch: "epoch-pre-recovery".into(),
+                turn_id: "turn-1".into(),
+            },
+        );
+        assert!(!sent && hint_rx.try_recv().is_err());
     }
 }

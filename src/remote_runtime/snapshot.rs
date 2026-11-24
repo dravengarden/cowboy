@@ -254,6 +254,25 @@ pub(super) fn project_snapshot_with_protocol(
     if !shared.hub.matches_runtime_snapshot_binding(&worker)
         || shared.hub.is_reconciling_runtime_placeholder(&worker)
     {
+        // A surviving pre-recovery worker (stale execution binding after a
+        // committed recovery + Controller restart) must still be visible in
+        // `shared.workers` for operator inspection (`execution-sessions` /
+        // `delivery_diagnostics`) and idle-worker replacement
+        // (`replaceable_worker`), unless a binding-matched worker is already
+        // cached for this session (which a mismatched snapshot must never
+        // overwrite). Never project it into Hub, cache `raw_wrap_up`, advertise
+        // `wrap_up_steering`, acknowledge `EnsureSession`, or retire pending
+        // prompts.
+        if !shared.hub.is_reconciling_runtime_placeholder(&worker) {
+            worker.wrap_up_steering = false;
+            let mut workers = shared.workers.lock();
+            let preserve_matched_worker = workers
+                .get(&worker.session_id)
+                .is_some_and(|existing| shared.hub.matches_runtime_snapshot_binding(existing));
+            if !preserve_matched_worker {
+                workers.insert(worker.session_id.clone(), worker);
+            }
+        }
         return false;
     }
     let applied = apply_snapshot(shared, &worker);
