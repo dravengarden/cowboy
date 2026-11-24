@@ -29,6 +29,7 @@ test("a successful multi-step turn is ok only with its barrier", () => {
     class: "ok",
     successes: 5,
     barrier: true,
+    dispatches: 1,
     transient: 0,
     refusals: [],
   });
@@ -177,6 +178,7 @@ test("a 1.5.14 turn, whose stream outlives it, settles on its request barrier al
     class: "ok",
     successes: 5,
     barrier: true,
+    dispatches: 1,
     transient: 0,
     refusals: [],
   });
@@ -258,4 +260,31 @@ test("the log reader sends one barrier request per settle and waits for its line
     (await broken.settle(await broken.mark(), OK_SESSION, "end_turn")).class,
     "unknown_refusal",
   );
+});
+
+test("a prompt handed to the agent loop is a dispatch record", () => {
+  const glog = "I1124 23:17:44.130546  176836 ";
+  const lines = [
+    `${glog}server.go:213] ACP Request received: session/prompt`,
+    `${glog}server.go:1883] Sending user message to conversation 21e17488-d900-4ac3-954e-31c2cec5f86b (items=2, media=3)`,
+    `${glog}prompt.go:358] Responding to pending ask_question for session 21e17488-d900-4ac3-954e-31c2cec5f86b step 896: "yes"`,
+    `${glog}server.go:213] ACP Request received: ${BARRIER_METHOD}/n-9`,
+  ];
+  const records = parseRecords(lines.join("\n"), undefined, "n-9");
+  assert.deepEqual(
+    records.map((record) => record.kind),
+    ["dispatch", "dispatch", "barrier"],
+  );
+  assert.equal(classify(records).dispatches, 2);
+  // sess-1795490077099: `agy` refused the prompt before its agent loop saw
+  // it; the window holds the barrier and nothing else of the turn.
+  const refused = parseRecords([lines[0], lines[3]].join("\n"), undefined, "n-9");
+  assert.deepEqual(classify(refused), {
+    class: "unknown_refusal",
+    successes: 0,
+    barrier: true,
+    dispatches: 0,
+    transient: 0,
+    refusals: [],
+  });
 });

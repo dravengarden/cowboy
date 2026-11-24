@@ -861,7 +861,11 @@ query and force release of "Controller account controls (step 5a)" and the
   (`policy_violation:<tool>`), any other error ending or unknown stop reason
   to `unknown_refusal`; normal endings change nothing. The proxy classifies
   vendor error endings itself, so an error without a refusal record already
-  arrives as `unknown_refusal`. The raise is one transaction compared with
+  arrives as `unknown_refusal`. The one exception is a proven local
+  rejection: a listed `agy` error whose log window holds the turn's barrier
+  and no dispatch or backend record arrives as
+  `antigravity_prompt_rejected:<code>` with `not_dispatched` evidence and
+  changes nothing (package README, "Backend evidence"). The raise is one transaction compared with
   the stored state: it never lowers a more severe state and never replaces
   `blocked`. `suspended`, `blocked` and `needs_attention` write stop fences.
   A rate limit holds until its quota group resets (default one hour; see

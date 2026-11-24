@@ -486,3 +486,52 @@ fn logout_state_summarizes_its_machine_targets() {
     );
     assert_eq!(logout_state(&[Cancelled]), "cancelled");
 }
+
+#[test]
+fn a_prompt_agy_rejected_before_dispatch_leaves_the_account_alone() {
+    // sess-1795490077099: images sent while an `ask_question` was pending;
+    // `agy` refused the prompt locally and no backend request was made.
+    let rejected = |cowboy: serde_json::Value| {
+        classify_stop_reason(&displayed_proxy_error(
+            "antigravity_prompt_rejected:image_answer",
+            "Antigravity is waiting for your answer to its question.",
+            &cowboy,
+        ))
+    };
+    let evidence = serde_json::json!({
+        "class": "not_dispatched", "successes": 0, "barrier": true,
+        "dispatches": 0, "transient": 0, "refusals": [],
+    });
+    let proven = rejected(serde_json::json!({
+        "antigravity_backend": evidence,
+        "prompt_rejected": "image_answer",
+    }));
+    assert_eq!(proven, Signal::None);
+    assert_eq!(signal_transition(&proven), None);
+    // Only the complete structured result counts.
+    for cowboy in [
+        serde_json::json!({"antigravity_backend": evidence, "prompt_rejected": "other"}),
+        serde_json::json!({"antigravity_backend": evidence}),
+        serde_json::json!({
+            "antigravity_backend": {"class": "unknown_refusal"},
+            "prompt_rejected": "image_answer",
+        }),
+        serde_json::json!({
+            "antigravity_backend": evidence,
+            "prompt_rejected": "image_answer",
+            "policy_violation": "search_web",
+        }),
+        serde_json::json!({
+            "antigravity_backend": evidence,
+            "prompt_rejected": "image_answer",
+            "uncertain_effect": {"method": "cowboy/WriteFile"},
+        }),
+    ] {
+        assert_eq!(rejected(cowboy), Signal::Unclassified);
+    }
+    // Vendor text that merely names the prefix is not the proxy's result.
+    assert_eq!(
+        classify_stop_reason("error: antigravity_prompt_rejected:image_answer"),
+        Signal::Unclassified
+    );
+}

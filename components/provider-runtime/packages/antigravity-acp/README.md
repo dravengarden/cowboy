@@ -185,6 +185,23 @@ JSON-RPC error `-32603` whose message is
 only the data), so the Controller could not read the closed code and settled
 `unknown_refusal` (sess-1795107755038).
 
+One error ending is not a backend outcome: a prompt `agy` refused before its
+agent loop saw it. It is recognised only when both hold: the error text is
+one `agy` answers locally (`LOCAL_REJECTIONS` in `proxy.mjs`, exact text as
+the error's `message`, a string `data`, or `data.message`/`error`/`details`,
+alone or as the last `: `-separated part), and the turn's window holds its
+barrier and no dispatch, success, retry or refusal record; a turn with a
+violation, a possible effect, a subagent or an earlier structured attempt
+never qualifies. The proxy then answers `-32603`
+`antigravity_prompt_rejected:<code>` with the owner-facing sentence as
+`data.message` and `data.cowboy` `{prompt_rejected: <code>,
+antigravity_backend: {class: "not_dispatched", ...}}`; the Controller accepts
+exactly that structure and leaves the account's state unchanged. The only
+code so far is `image_answer`: `agy` 1.5.14 refuses a prompt with images while
+an `ask_question` is pending ("Images can't answer the agent's pending
+question; reply in text"), which had parked the account as
+`unknown_refusal` (sess-1795490077099).
+
 Detection behind the gate: an ACP `tool_call`/`tool_call_update` whose tool
 (its `name`, remembered per `toolCallId` within the turn) is outside the
 allow-list and is reported running (an `in_progress` `tool_call_update`) or
@@ -207,13 +224,14 @@ byte offset at the turn's start (window ≤ 4 MiB). Lines matched, observed with
 `agy` 1.5.9 and the dedicated test account (`testdata/`); the barrier with
 1.5.9 and 1.5.14 (`just agy-barrier-probe`):
 
-| Record                         | Line (glog prefix `I1117 05:11:38.187128     363 ` omitted)                                                                                           |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| success (one per backend step) | `http_helpers.go:709] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x… ResponseID: …`               |
-| barrier (turn end)             | `server.go:213] ACP Request received: _cowboy/evidence_barrier/<nonce>` (1.5.9: `server.go:988]`)                                                     |
-| step failure                   | `errorreport.go:307] agent executor error: generating and executing: PERMISSION_DENIED (code 403): …` (and the same without `agent executor error: `) |
-| retried attempt                | `run.go:316] Run: attempt 1 failed (UNAVAILABLE (code 503): …), retrying in 4s`                                                                       |
-| request failure                | `http_helpers.go:876] Failed to make code assist backend request (<url>): {` followed by the `google.rpc` JSON error ending in a line `}`             |
+| Record                         | Line (glog prefix `I1117 05:11:38.187128     363 ` omitted)                                                                                              |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| success (one per backend step) | `http_helpers.go:709] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x… ResponseID: …`                  |
+| barrier (turn end)             | `server.go:213] ACP Request received: _cowboy/evidence_barrier/<nonce>` (1.5.9: `server.go:988]`)                                                        |
+| step failure                   | `errorreport.go:307] agent executor error: generating and executing: PERMISSION_DENIED (code 403): …` (and the same without `agent executor error: `)    |
+| retried attempt                | `run.go:316] Run: attempt 1 failed (UNAVAILABLE (code 503): …), retrying in 4s`                                                                          |
+| request failure                | `http_helpers.go:876] Failed to make code assist backend request (<url>): {` followed by the `google.rpc` JSON error ending in a line `}`                |
+| dispatch (prompt reached loop) | `server.go:1883] Sending user message to conversation <id> (items=…, media=…)` or `prompt.go:358] Responding to pending ask_question for session <id> …` |
 
 The barrier is a request only the proxy sends, once the turn's reply has
 arrived: `_cowboy/evidence_barrier/<nonce>` with a fresh random nonce, which

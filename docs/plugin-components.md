@@ -88,6 +88,17 @@ adapter's lock moves `url` to 2.5.9 for RUSTSEC-2026-0592 (unbounded
 recursion in `Url::origin()` on nested `blob:` URLs). Native pins and its
 component release are unchanged.
 
+Component release 3.149.0 records provider-runtime 1.3.32, whose
+`cowboy-antigravity-acp` 1.0.27 no longer parks an account for a prompt `agy`
+refused before dispatching it: a listed local error (so far `agy` 1.5.14
+refusing images as the answer to a pending `ask_question`) whose log window
+holds the turn's barrier and no dispatch or backend record ends as
+`antigravity_prompt_rejected:<code>` with the reason shown to the owner, and
+the Controller leaves the account unchanged
+([evidence contract](../components/provider-runtime/packages/antigravity-acp/README.md#backend-evidence)).
+Antigravity 0.2.35 pins it and adds the matching error rule. The other six
+Providers pinning provider-runtime advance one patch version.
+
 Component release 3.148.0 records provider-runtime 1.3.31, whose
 `cowboy-antigravity-acp` 1.0.26 carries the uncertain-effect L1c proxy half
 ([design](uncertain-effect-recovery.md)): before the proxy exits on a graceful

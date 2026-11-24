@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "antigravity",
-  "version": "0.2.34",
+  "version": "0.2.35",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.7.0",
   "display": {
@@ -211,6 +211,15 @@
         {
           "when": {
             "op": "contains",
+            "value": "antigravity_prompt_rejected:image_answer"
+          },
+          "user_detail": "Antigravity is waiting for your answer to its question, and images can't answer it. Nothing was sent to Google. Reply in text first, then send the images.",
+          "classification": "antigravity-prompt-rejected",
+          "keep_worker_alive": true
+        },
+        {
+          "when": {
+            "op": "contains",
             "value": "antigravity_policy_violation:"
           },
           "user_detail": "A built-in Antigravity tool ran despite Cowboy's gate. The turn was ended and the account's units are being stopped; review the account before continuing.",
@@ -262,9 +271,9 @@
       },
       {
         "id": "cowboy-antigravity-acp",
-        "version": "1.0.26",
+        "version": "1.0.27",
         "source": "cowboy:components/provider-runtime/packages/antigravity-acp",
-        "integrity": "sha256:4cd4e22b79a58c87b848233af494dd752fff055e6a39443460c57ae5e6f7a243",
+        "integrity": "sha256:68c720e9f22246be4fdebd260193839c98003bf41f40a8092a53e9357c9c78c4",
         "private": true
       },
       {

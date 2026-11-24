@@ -16,6 +16,11 @@ use serde::{Deserialize, Serialize};
 pub const REFUSAL_PREFIX: &str = "antigravity_backend_refusal:";
 /// The proxy's JSON-RPC error prefix of a built-in tool that executed.
 pub const VIOLATION_PREFIX: &str = "antigravity_policy_violation:";
+/// The proxy's JSON-RPC error prefix of a prompt `agy` refused before
+/// dispatching it: its log proves nothing reached the backend.
+pub const PROMPT_REJECTED_PREFIX: &str = "antigravity_prompt_rejected:";
+/// The backend class the proxy reports beside a prompt rejection.
+const NOT_DISPATCHED: &str = "not_dispatched";
 /// How long a rate limit holds when the backend gave no reset time.
 pub const DEFAULT_RATE_LIMIT_MS: i64 = 60 * 60 * 1000;
 /// The reason prefix of a rate limit that holds for one model quota group
@@ -468,7 +473,8 @@ pub fn revival_allowed(
 /// result, `docs/antigravity-real-accounts-design.md`, "Revision 5").
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Signal {
-    /// A normal ending, or the proxy settled the backend evidence `ok`.
+    /// A normal ending, the proxy settled the backend evidence `ok`, or it
+    /// proved `agy` refused the prompt before dispatching it.
     None,
     /// The proxy settled a refusal class.
     Refused(AccountState),
@@ -525,6 +531,17 @@ fn proxy_result(error: &str) -> Option<Signal> {
     if let Some(tool) = message.strip_prefix(VIOLATION_PREFIX) {
         let tool = closed_code(tool)?;
         return (violation?.as_str()? == tool).then(|| Signal::PolicyViolation(tool.into()));
+    }
+    if let Some(code) = message.strip_prefix(PROMPT_REJECTED_PREFIX) {
+        // Only the complete structured result counts: the same code in
+        // `cowboy`, the not-dispatched evidence, and no violation or
+        // possible effect beside it. Anything else stays unclassified.
+        let code = closed_code(code)?;
+        let consistent = violation.is_none()
+            && cowboy.get("uncertain_effect").is_none()
+            && cowboy.get("prompt_rejected")?.as_str()? == code
+            && cowboy.get("antigravity_backend")?.get("class")?.as_str()? == NOT_DISPATCHED;
+        return consistent.then_some(Signal::None);
     }
     let class = closed_code(message.strip_prefix(REFUSAL_PREFIX)?)?;
     if violation.is_some() || cowboy.get("antigravity_backend")?.get("class")?.as_str()? != class {

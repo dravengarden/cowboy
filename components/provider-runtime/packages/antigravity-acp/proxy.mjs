@@ -73,6 +73,25 @@ export const AGENT_NOTIFICATIONS = Object.freeze(["session/update"]);
 export const REFUSAL_PREFIX = "antigravity_backend_refusal:";
 /** A built-in tool executed despite the gate: the turn ends with this error. */
 export const VIOLATION_PREFIX = "antigravity_policy_violation:";
+/**
+ * A prompt `agy` refused before its agent loop saw it: nothing reached
+ * Google, so the account's state does not change (`localRejection`).
+ */
+export const PROMPT_REJECTED_PREFIX = "antigravity_prompt_rejected:";
+/**
+ * The prompt errors `agy` answers locally, by exact text (`agy` 1.5.14), each
+ * with its closed code and the owner-facing sentence. Only listed texts
+ * qualify: any other error stays an unproven outcome.
+ */
+export const LOCAL_REJECTIONS = Object.freeze([
+  Object.freeze({
+    code: "image_answer",
+    text: "Images can't answer the agent's pending question; reply in text",
+    owner:
+      "Antigravity is waiting for your answer to its question, and images can't answer it. " +
+      "Nothing was sent to Google. Reply in text first, then send the images.",
+  }),
+]);
 /** Tool call states that mean the tool ran (or is running). */
 const EXECUTED = new Set(["in_progress", "completed"]);
 /**
@@ -1165,7 +1184,8 @@ export class AcpProxy {
     await fenced;
     // Every ending is classified, a vendor error too: its log window may
     // hold a refusal; an error without one is `unknown_refusal`, never a
-    // vendor message the Controller cannot attribute.
+    // vendor message the Controller cannot attribute, unless the window
+    // proves a listed local rejection (`localRejection`).
     const settled = await runtime.evidence.settle(
       record.cursor,
       record.sessionId,
@@ -1181,6 +1201,36 @@ export class AcpProxy {
     await this.settleMemory(turn);
     const violation = turn?.violation;
     const uncertain = turn?.uncertain;
+    // A prompt `agy` refused before dispatching it reached no backend: the
+    // owner reads why, and the Controller leaves the account as it is. A
+    // turn with a violation, a possible effect, a subagent or an earlier
+    // attempt is never one.
+    const rejection =
+      message.result === undefined &&
+      message.error !== undefined &&
+      violation === undefined &&
+      uncertain === undefined &&
+      !turn?.childBackends?.length &&
+      !turn?.structured?.backends?.length
+        ? localRejection(message.error, backend)
+        : undefined;
+    if (rejection) {
+      return this.endPrompt(record, {
+        jsonrpc: "2.0",
+        id: replyId,
+        error: {
+          code: TURN_ERROR_CODE,
+          message: `${PROMPT_REJECTED_PREFIX}${rejection.code}`,
+          data: {
+            message: rejection.owner,
+            cowboy: {
+              antigravity_backend: { ...backend, class: "not_dispatched" },
+              prompt_rejected: rejection.code,
+            },
+          },
+        },
+      });
+    }
     const cowboy = {};
     cowboy.antigravity_backend =
       message.result || backend.class !== "ok" ? backend : { ...backend, class: "unknown_refusal" };
@@ -1444,6 +1494,48 @@ function attempts(turn, settled) {
     refusals: all.flatMap((item) => (Array.isArray(item.refusals) ? item.refusals : [])),
     attempts: all.length,
   };
+}
+
+/** The strings a JSON-RPC error carries: its message and string data fields. */
+function errorTexts(error) {
+  const texts = [];
+  const add = (value) => {
+    if (typeof value === "string") texts.push(value.trim());
+  };
+  add(error?.message);
+  const data = error?.data;
+  add(data);
+  if (data !== null && typeof data === "object") {
+    add(data.message);
+    add(data.error);
+    add(data.details);
+  }
+  return texts;
+}
+
+/**
+ * The local rejection an `agy` prompt error proves, else `undefined`. Proof
+ * needs both: the error is one of `LOCAL_REJECTIONS` (alone, or as the last
+ * `: `-separated part of a wrapped message), and the turn's log window holds
+ * its barrier and nothing else of the turn: no dispatch to the agent loop, no
+ * backend success, retry or refusal. An error after a dispatch, or one whose
+ * window could not be read, is never a local rejection.
+ */
+export function localRejection(error, backend) {
+  if (
+    backend?.barrier !== true ||
+    backend.successes !== 0 ||
+    backend.transient !== 0 ||
+    backend.dispatches !== 0 ||
+    !Array.isArray(backend.refusals) ||
+    backend.refusals.length
+  ) {
+    return undefined;
+  }
+  const texts = errorTexts(error);
+  return LOCAL_REJECTIONS.find(({ text }) =>
+    texts.some((candidate) => candidate === text || candidate.endsWith(`: ${text}`)),
+  );
 }
 
 /**
