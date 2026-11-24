@@ -392,6 +392,11 @@ pub struct QueuedMessage {
     /// `None` on parked drafts and legacy rows persisted before C-auth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initiator: Option<crate::delivery_origin::DeliveryOrigin>,
+    /// Persists explicit owner send/activation intent (e.g. an activated
+    /// recovery draft) across deferred drains and Controller restarts so the
+    /// row still revives a dormant session when it reaches queue head.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub explicit: bool,
 }
 
 /// A draft's future auto-send instruction. Server-controlled (fires even with

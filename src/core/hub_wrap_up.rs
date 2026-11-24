@@ -182,6 +182,7 @@ impl Hub {
                         schedule: None,
                         origin: content_origin,
                         initiator: Some(initiator),
+                        explicit: false,
                     },
                 );
             }

@@ -280,6 +280,7 @@ fn pending_attachments_and_private_settings_are_not_counted_as_tiny_metadata() {
             origin: None,
             initiator: None,
             content: vec![serde_json::json!({"type":"resource", "data":content})],
+            explicit: false,
         }],
         settled_notices: Vec::new(),
         released_claims: Vec::new(),

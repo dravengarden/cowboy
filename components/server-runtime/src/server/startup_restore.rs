@@ -174,6 +174,9 @@ pub async fn open_persistence(
             .await;
             writer_health.set_store_writer(false);
         });
+        hub.attach_and_reconcile_recovery_journal(
+            args.data_dir.join("recovery-parks.journal.json"),
+        );
         // Observed subagent transcripts have their own bounded writer, so
         // they can never delay the session timeline's persistence.
         crate::subagent_transcripts::spawn_writer(store.clone());

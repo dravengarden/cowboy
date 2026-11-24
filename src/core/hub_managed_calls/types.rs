@@ -333,4 +333,5 @@ pub(in crate::core) struct NoticeClaims {
     pub(super) teardown_tasks: Vec<tokio::task::JoinHandle<()>>,
     pub(super) pending_recovery_parks: HashMap<String, Vec<PendingRecoveryPromptItem>>,
     pub(super) active_recovery_park_workers: HashSet<String>,
+    pub(super) recovery_journal_path: Option<std::path::PathBuf>,
 }

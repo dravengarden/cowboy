@@ -75,7 +75,10 @@ impl Hub {
             };
             duplicate = cmid
                 .as_deref()
-                .filter(|c| s.drafts.iter().any(|m| m.cmid.as_deref() == Some(*c)))
+                .filter(|c| {
+                    s.committed_recovery_cmids.contains(*c)
+                        || s.drafts.iter().any(|m| m.cmid.as_deref() == Some(*c))
+                })
                 .map(str::to_owned);
             if duplicate.is_none() {
                 let id = format!("recovery-{}", self.next_qid());
@@ -87,6 +90,7 @@ impl Hub {
                     schedule: None,
                     origin: None,
                     initiator: None,
+                    explicit: false,
                 });
             }
         }
@@ -129,6 +133,7 @@ impl Hub {
                     schedule: None,
                     origin,
                     initiator: None,
+                    explicit: false,
                 });
             }
         }
@@ -180,6 +185,9 @@ impl Hub {
             });
             match pos {
                 Some(p) => {
+                    if self.is_row_withdrawing(session_id, &s.drafts[p].id) {
+                        return;
+                    }
                     let m = &mut s.drafts[p];
                     if !text.trim().is_empty() || !content.is_empty() {
                         m.text = text;
@@ -200,6 +208,7 @@ impl Hub {
                         schedule,
                         origin: Some(author),
                         initiator: None,
+                        explicit: false,
                     });
                     did
                 }
@@ -218,6 +227,9 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            if self.is_row_withdrawing(session_id, id) {
+                return;
+            }
             match s.drafts.iter_mut().find(|m| m.id == id) {
                 Some(m) if m.schedule.is_some() => {
                     m.schedule = None;
@@ -249,8 +261,29 @@ impl Hub {
             };
             // A trashed session keeps its scheduled Drafts unsent; they stay
             // visible (overdue) if the session is restored. Checked under the
-            // lock that removes the Draft, so a concurrent Trash cannot slip in.
-            if s.meta.trashed_at_ms.is_some() {
+            // lock that removes the Draft, so a concurrent Trash or conversion
+            // fence cannot slip in.
+            if s.meta.trashed_at_ms.is_some() || self.is_row_withdrawing(session_id, draft_id) {
+                return;
+            }
+            if draft_id.starts_with("recovery-") {
+                let Some(pos) = s.drafts.iter().position(|m| m.id == draft_id) else {
+                    return;
+                };
+                let front = s.drafts[pos]
+                    .schedule
+                    .as_ref()
+                    .is_some_and(|sc| sc.delivery == Delivery::Front);
+                drop(sessions);
+                let cmid = Some(format!("{SCHED_PREFIX}{session_id}-{draft_id}"));
+                self.activate_recovery_draft_durable_opts(
+                    session_id,
+                    draft_id,
+                    cmid,
+                    crate::prompt_origin::DeliveryOrigin::cowboy("schedule"),
+                    front,
+                    false,
+                );
                 return;
             }
             s.drafts
@@ -296,6 +329,7 @@ impl Hub {
                 && !s.meta.paused
                 && Self::ready(s, true)
                 && s.queue.is_empty()
+                && !self.has_in_flight_pending_commit(session_id)
                 && self.context_allows_dispatch(session_id, cmid.as_deref())
             {
                 let dispatch_cmid = hub_dispatch_origin::ensure_dispatch_cmid(cmid);
@@ -324,6 +358,7 @@ impl Hub {
                     schedule: None,
                     origin: m.origin,
                     initiator: Some(trigger),
+                    explicit: false,
                 };
                 if front {
                     s.queue.insert(0, msg);
@@ -349,15 +384,15 @@ impl Hub {
         content: Vec<serde_json::Value>,
         caller: &crate::prompt_origin::RequestCaller,
     ) -> bool {
-        if self.is_row_withdrawing(session_id, id) {
-            return false;
-        }
         let editor = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
         let (found, unscheduled) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
             };
+            if self.is_row_withdrawing(session_id, id) {
+                return false;
+            }
             if text.trim().is_empty() && content.is_empty() {
                 let had = s.drafts.iter().any(|m| m.id == id && m.schedule.is_some());
                 let before = s.drafts.len();
@@ -421,14 +456,14 @@ impl Hub {
 
     /// Drop one draft. Returns whether the draft still existed.
     pub fn remove_draft(&self, session_id: &str, id: &str) -> bool {
-        if self.is_row_withdrawing(session_id, id) {
-            return false;
-        }
         let (removed, unscheduled) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
             };
+            if self.is_row_withdrawing(session_id, id) {
+                return false;
+            }
             let had = s.drafts.iter().any(|m| m.id == id && m.schedule.is_some());
             let before = s.drafts.len();
             s.drafts.retain(|m| m.id != id);
@@ -454,12 +489,15 @@ impl Hub {
         to: &str,
         caller: &crate::prompt_origin::RequestCaller,
     ) {
-        if from == to || self.is_managed_child(to) || self.is_row_withdrawing(from, id) {
+        if from == to || self.is_managed_child(to) {
             return;
         }
         let mover = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
         let scheduled = {
             let mut sessions = self.inner.sessions.lock();
+            if self.is_row_withdrawing(from, id) {
+                return;
+            }
             let Some(mut msg) = (if sessions.contains_key(to) {
                 sessions.get_mut(from).and_then(|s| {
                     s.drafts
@@ -540,9 +578,6 @@ impl Hub {
             return;
         }
         let trigger = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
-        if self.is_row_withdrawing(session_id, id) {
-            return;
-        }
         if id.starts_with("recovery-") {
             self.activate_recovery_draft_durable(session_id, id, cmid, trigger);
             return;
@@ -552,6 +587,9 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            if self.is_row_withdrawing(session_id, id) {
+                return;
+            }
             s.drafts
                 .iter()
                 .position(|m| m.id == id)
@@ -632,5 +670,292 @@ impl Hub {
         if had_scheduled {
             self.broadcast_sessions();
         }
+    }
+}
+
+#[cfg(test)]
+mod r10_recovery_tests {
+    use super::*;
+    use crate::core::{PersistenceHealth, StoreSink, StoreWrite};
+    use std::sync::Arc;
+    use tokio::sync::mpsc;
+
+    fn owner_caller() -> crate::prompt_origin::RequestCaller {
+        crate::prompt_origin::RequestCaller::Person
+    }
+
+    fn pending_of(hub: &Hub, id: &str) -> (Vec<QueuedMessage>, Vec<QueuedMessage>) {
+        hub.queue_and_drafts(id, |_| true).unwrap()
+    }
+
+    fn seed_session(hub: &Hub, id: &str, status: Status) {
+        hub.create_local_session(
+            id.to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "r10".to_owned(),
+            crate::model::SessionOrigin::Web,
+            false,
+        );
+        hub.set_status(id, status, None);
+    }
+
+    #[tokio::test]
+    async fn scheduled_recovery_draft_blocked_during_activation_and_rearms_on_sql_abort() {
+        let health = Arc::new(PersistenceHealth::default());
+        let (sink, mut store_rx) = StoreSink::channel(16, health);
+        let hub = Hub::with_store(Some(sink));
+        let acks = hub.store_ack_sink();
+        let (sched_tx, mut sched_rx) = mpsc::channel(16);
+        let (disp_tx, mut disp_rx) = mpsc::channel(16);
+        hub.set_scheduler_tx(sched_tx);
+        hub.set_dispatch_tx(disp_tx);
+        seed_session(&hub, "s-f1", Status::Running);
+
+        // Seed recovery draft + schedule it.
+        hub.add_recovery_draft("s-f1", "recovered".into(), vec![], Some("orig-1".into()));
+        let draft_id = pending_of(&hub, "s-f1").1[0].id.clone();
+        hub.schedule_draft(
+            "s-f1",
+            Some(draft_id.clone()),
+            None,
+            String::new(),
+            vec![],
+            1_900_000_000_000,
+            Delivery::Back,
+            &owner_caller(),
+        );
+        while sched_rx.try_recv().is_ok() {}
+        while let Ok(w) = store_rx.try_recv() {
+            if let StoreWrite::UpdatePending {
+                ack_id: Some(id), ..
+            } = w
+            {
+                acks.complete(id, Ok(true));
+            }
+        }
+
+        // Start durable activation (holds withdrawing_row_ids + in_flight_pending_commits).
+        hub.activate_draft("s-f1", &draft_id, Some("resend-1".into()), &owner_caller());
+        let ack_id = loop {
+            if let StoreWrite::UpdatePending {
+                ack_id: Some(id), ..
+            } = tokio::time::timeout(std::time::Duration::from_secs(2), store_rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                break id;
+            }
+        };
+
+        // While activation commit is in flight, scheduled fire + all draft mutators MUST be fenced.
+        hub.fire_scheduled_draft("s-f1", &draft_id);
+        assert!(!hub.edit_draft("s-f1", &draft_id, "hack".into(), vec![], &owner_caller()));
+        assert!(!hub.remove_draft("s-f1", &draft_id));
+        hub.unschedule_draft("s-f1", &draft_id);
+        assert!(
+            disp_rx.try_recv().is_err(),
+            "must not dispatch while activation is uncommitted"
+        );
+
+        // Abort the SQL write -> draft stays, schedule timer is re-armed.
+        acks.complete(ack_id, Err("db down".into()));
+        let mut rearmed = false;
+        for _ in 0..10 {
+            match tokio::time::timeout(std::time::Duration::from_millis(200), sched_rx.recv()).await
+            {
+                Ok(Some(crate::scheduler::ScheduleCmd::ArmDraft {
+                    session_id,
+                    draft_id: did,
+                    fire_at_ms,
+                })) if session_id == "s-f1"
+                    && did == draft_id
+                    && fire_at_ms == 1_900_000_000_000 =>
+                {
+                    rearmed = true;
+                    break;
+                }
+                Ok(Some(_)) => {}
+                _ => break,
+            }
+        }
+        assert!(
+            rearmed,
+            "aborted scheduled recovery activation must re-arm draft timer"
+        );
+        assert_eq!(pending_of(&hub, "s-f1").1.len(), 1);
+        assert!(pending_of(&hub, "s-f1").0.is_empty());
+    }
+
+    #[tokio::test]
+    async fn in_flight_commit_blocks_drain_and_explicit_recovery_row_survives_pause() {
+        let health = Arc::new(PersistenceHealth::default());
+        let (sink, mut store_rx) = StoreSink::channel(32, health);
+        let hub = Hub::with_store(Some(sink));
+        let acks = hub.store_ack_sink();
+        let (disp_tx, mut disp_rx) = mpsc::channel(16);
+        hub.set_dispatch_tx(disp_tx);
+        seed_session(&hub, "s-f3", Status::Exited);
+
+        // Park a recovery draft and pause the session before activating.
+        hub.add_recovery_draft(
+            "s-f3",
+            "explicit-revive".into(),
+            vec![],
+            Some("orig-3".into()),
+        );
+        let draft_id = pending_of(&hub, "s-f3").1[0].id.clone();
+        hub.set_paused("s-f3", true);
+        while store_rx.try_recv().is_ok() {}
+
+        // Start durable activation while paused -> holds in_flight_pending_commits.
+        hub.activate_draft("s-f3", &draft_id, Some("resend-3".into()), &owner_caller());
+        let ack_id = loop {
+            if let StoreWrite::UpdatePending {
+                ack_id: Some(id), ..
+            } = tokio::time::timeout(std::time::Duration::from_secs(2), store_rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                break id;
+            }
+        };
+
+        // Even if drain is attempted during in_flight_pending_commits, nothing dispatches yet.
+        hub.try_drain("s-f3");
+        assert!(disp_rx.try_recv().is_err());
+
+        // Commit activation -> row lands in queue with `explicit: true`, still held by pause.
+        acks.complete(ack_id, Ok(true));
+        for _ in 0..40 {
+            if !pending_of(&hub, "s-f3").0.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let (queue, drafts) = pending_of(&hub, "s-f3");
+        assert!(drafts.is_empty());
+        assert_eq!(queue.len(), 1);
+        assert!(
+            queue[0].explicit,
+            "activated recovery row must persist explicit intent"
+        );
+        let roundtrip: QueuedMessage =
+            serde_json::from_value(serde_json::to_value(&queue[0]).unwrap()).unwrap();
+        assert!(roundtrip.explicit);
+        assert!(disp_rx.try_recv().is_err(), "paused queue must hold row");
+
+        // Unpause -> try_drain revives the Exited session with `DispatchReq.explicit == true`.
+        hub.set_paused("s-f3", false);
+        let req = tokio::time::timeout(std::time::Duration::from_secs(1), disp_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            req.explicit,
+            "deferred recovery row must keep explicit=true after unpause"
+        );
+        assert_eq!(req.cmid.as_deref(), Some("resend-3"));
+    }
+
+    #[tokio::test]
+    async fn recovery_journal_survives_stalled_shutdown_and_reconciles_on_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let journal_path = dir.path().join("recovery-parks.journal.json");
+
+        // Controller #1: store writer NEVER acks (simulated Postgres hang).
+        let health1 = Arc::new(PersistenceHealth::default());
+        let (sink1, _hung_rx1) = StoreSink::channel(16, health1);
+        let hub1 = Hub::with_store(Some(sink1));
+        seed_session(&hub1, "s-f4", Status::Running);
+        hub1.attach_and_reconcile_recovery_journal(journal_path.clone());
+
+        hub1.enqueue_durable_recovery_park(
+            "s-f4".into(),
+            "unresolved payload".into(),
+            vec![serde_json::json!({"type": "text", "text": "unresolved payload"})],
+            Some("cmid-f4".into()),
+            "disconnect during outage".into(),
+            None,
+        );
+        assert!(journal_path.exists());
+
+        // Graceful shutdown must complete within bounded grace despite hung store ack.
+        let started = std::time::Instant::now();
+        hub1.drain_teardown_requeues(std::time::Duration::from_millis(50))
+            .await;
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(4),
+            "shutdown must not hang on stalled recovery park ack"
+        );
+        assert!(journal_path.exists());
+
+        // Controller #2: healthy store writer reconciles journal on startup and prunes file.
+        let health2 = Arc::new(PersistenceHealth::default());
+        let (sink2, mut store_rx2) = StoreSink::channel(16, health2);
+        let hub2 = Hub::with_store(Some(sink2));
+        let acks2 = hub2.store_ack_sink();
+        seed_session(&hub2, "s-f4", Status::Interrupted);
+        let ack_task = tokio::spawn(async move {
+            while let Some(write) = store_rx2.recv().await {
+                if let StoreWrite::UpdatePending {
+                    ack_id: Some(id), ..
+                } = write
+                {
+                    acks2.complete(id, Ok(true));
+                }
+            }
+        });
+        hub2.attach_and_reconcile_recovery_journal(journal_path.clone());
+        for _ in 0..50 {
+            if !pending_of(&hub2, "s-f4").1.is_empty() && !journal_path.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let (_, drafts) = pending_of(&hub2, "s-f4");
+        assert_eq!(drafts.len(), 1);
+        assert_eq!(drafts[0].cmid.as_deref(), Some("cmid-f4"));
+        assert!(!journal_path.exists(), "journal should prune after commit");
+        ack_task.abort();
+    }
+
+    #[test]
+    fn settled_recovery_cmid_not_recreated_in_memory_and_confirmed_in_resync_and_outbox() {
+        let hub = Hub::new();
+        seed_session(&hub, "s-f10", Status::Running);
+        hub.add_recovery_draft("s-f10", "once".into(), vec![], Some("cmid-settled".into()));
+        let draft_id = pending_of(&hub, "s-f10").1[0].id.clone();
+        assert!(hub.remove_draft("s-f10", &draft_id));
+        assert!(pending_of(&hub, "s-f10").1.is_empty());
+
+        // Finding 10: calling add_recovery_draft again for a settled cmid must NOT recreate it.
+        let mut rx = hub.subscribe();
+        hub.add_recovery_draft("s-f10", "once".into(), vec![], Some("cmid-settled".into()));
+        assert!(pending_of(&hub, "s-f10").1.is_empty());
+
+        // Finding 11: confirm_delivered broadcast AND queue_resync must both confirm "cmid-settled".
+        let mut saw_confirm = false;
+        while let Ok(frame) = rx.try_recv() {
+            if let Outbound::SyncPatch { confirmed, .. } = &**frame
+                && confirmed.iter().any(|c| c == "cmid-settled")
+            {
+                saw_confirm = true;
+            }
+        }
+        assert!(
+            saw_confirm,
+            "confirm_delivered must confirm settled recovery cmid"
+        );
+
+        let Some(Outbound::SyncPatch { confirmed, .. }) = hub.queue_resync("s-f10") else {
+            panic!("expected SyncPatch from queue_resync");
+        };
+        assert!(
+            confirmed.iter().any(|c| c == "cmid-settled"),
+            "queue_resync must confirm settled recovery cmid"
+        );
     }
 }

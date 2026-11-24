@@ -257,11 +257,27 @@ impl Hub {
         self.drain_head_with_explicit_row(session_id, allow_revive, manual, None, trigger);
     }
 
-    /// Drain after an explicit recovery-draft activation: preserves `explicit`
-    /// intent when `activated_row_id` is at the head of the queue without
-    /// bypassing pause or changing queue order (Finding 10).
-    pub(super) fn drain_activated_recovery_row(&self, session_id: &str, activated_row_id: &str) {
-        self.drain_head_with_explicit_row(session_id, false, false, Some(activated_row_id), None);
+    /// Collect all confirmed `cmid`s for a session's pending snapshot: queue +
+    /// drafts + committed recovery tombstones so browser outboxes retire
+    /// settled recovery prompts instead of replaying them (Finding 11).
+    pub(super) fn confirmed_cmids(
+        &self,
+        session_id: &str,
+        queue: &[QueuedMessage],
+        drafts: &[QueuedMessage],
+    ) -> Vec<String> {
+        let mut confirmed = Self::cmids_of(queue, drafts);
+        let sessions = self.inner.sessions.lock();
+        if let Some(s) = sessions.get(session_id) {
+            let mut extra: Vec<&String> = s.committed_recovery_cmids.iter().collect();
+            extra.sort();
+            for cmid in extra {
+                if !confirmed.iter().any(|seen| seen == cmid) {
+                    confirmed.push(cmid.clone());
+                }
+            }
+        }
+        confirmed
     }
 
     fn drain_head_with_explicit_row(
@@ -280,8 +296,15 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            let head_is_explicit = explicit_head_id
-                .is_some_and(|id| s.queue.first().is_some_and(|head| head.id == id));
+            // Never pop/dispatch while an acknowledged pending commit is in flight
+            // for this session: the in-flight SQL UpdatePending still carries this
+            // queue snapshot, so popping now could resurrect a dispatched row on crash.
+            if self.has_in_flight_pending_commit(session_id) {
+                return;
+            }
+            let head_is_explicit = s.queue.first().is_some_and(|head| {
+                head.explicit || explicit_head_id.is_some_and(|id| head.id == id)
+            });
             let effective_revive = allow_revive || head_is_explicit;
             let decision = Self::drain_decision(s, effective_revive, manual, |cmid| {
                 self.context_allows_dispatch(session_id, cmid)
@@ -550,6 +573,7 @@ impl Hub {
                         schedule: None,
                         origin,
                         initiator,
+                        explicit: false,
                     },
                 );
                 true
@@ -716,6 +740,7 @@ impl Hub {
                         schedule: None,
                         origin: content_origin,
                         initiator: Some(initiator),
+                        explicit: false,
                     },
                 );
                 interrupt = interrupt_on_busy && context_allows;
@@ -794,6 +819,7 @@ impl Hub {
                     .dispatched_cmids
                     .iter()
                     .any(|seen| seen.cmid == cmid && seen.echoed)
+                && !s.committed_recovery_cmids.contains(cmid)
                 && !s.log.iter().any(|entry| {
                     entry.cmid.as_deref() == Some(cmid) && is_user_message_chunk(entry)
                 })

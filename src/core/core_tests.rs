@@ -5084,6 +5084,7 @@ fn recovery_draft_cmid_survives_delete_rejects_reused_op_and_seeds_restored_qids
             schedule: None,
             origin: None,
             initiator: None,
+            explicit: false,
         }],
         config_options: None,
         config_preferences: serde_json::Value::Null,

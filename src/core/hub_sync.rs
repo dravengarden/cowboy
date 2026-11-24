@@ -687,14 +687,21 @@ impl Hub {
     /// away is dropped from its pending. `None` for an unknown session.
     #[must_use]
     pub fn queue_resync(&self, session_id: &str) -> Option<Outbound> {
-        let (queue, drafts) = {
+        let (queue, drafts, committed_recovery) = {
             let sessions = self.inner.sessions.lock();
             let s = sessions.get(session_id)?;
-            (s.queue.clone(), s.drafts.clone())
+            let mut committed: Vec<String> = s.committed_recovery_cmids.iter().cloned().collect();
+            committed.sort();
+            (s.queue.clone(), s.drafts.clone(), committed)
         };
         let state = format!("queue:{session_id}");
         let version = self.inner.sync.lock().get(&state).map_or(0, |e| e.version);
-        let confirmed = Self::cmids_of(&queue, &drafts);
+        let mut confirmed = Self::cmids_of(&queue, &drafts);
+        for cmid in committed_recovery {
+            if !confirmed.iter().any(|seen| seen == &cmid) {
+                confirmed.push(cmid);
+            }
+        }
         let value = serde_json::json!({ "queue": queue, "drafts": drafts });
         Some(Outbound::SyncPatch {
             state,

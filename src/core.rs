@@ -3217,6 +3217,7 @@ impl Hub {
                 sync.remove(&format!("queue:{session_id}"));
                 sync.remove(&format!("mobile-review:{session_id}"));
             }
+            self.prune_recovery_journal_for_session(session_id);
             if persist && let Some(tx) = self.inner.store_tx.as_ref() {
                 let _ = tx.send(StoreWrite::DeleteSession(session_id.to_owned()));
             }
@@ -3231,9 +3232,6 @@ impl Hub {
         removed
     }
 
-    /// Rename a session. Updates the in-memory `title`, persists, and
-    /// re-broadcasts the session list so every connected surface sees the
-    /// new label. Unknown ids are silently ignored (matches `set_status`).
     /// Mark `session_id` as continuing `source` (or restore that mark).
     pub fn set_continued_from(&self, session_id: &str, source: Option<String>) {
         {

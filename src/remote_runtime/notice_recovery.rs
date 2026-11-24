@@ -73,8 +73,20 @@ pub(super) async fn take_acked_command(
     reason: Option<&str>,
 ) -> Option<(Option<CoreCommand>, bool)> {
     let was_retransmitted = shared.retransmitted_sends.lock().contains(command_id);
-    let peeked = {
+    let (peeked, pending_version) = {
         let pending = shared.pending.lock();
+        let version = pending.version(command_id);
+        if let Some(v) = version
+            && shared
+                .recovery_parking_keys
+                .lock()
+                .get(command_id)
+                .is_some_and(|(owned_v, _)| *owned_v == v)
+        {
+            // Explicit execution recovery exclusively owns settlement of this
+            // exact `(command_id, version)` until its durable batch park settles.
+            return None;
+        }
         if pending.get(command_id).is_some_and(|command| {
             command
                 .session_id()
@@ -83,7 +95,7 @@ pub(super) async fn take_acked_command(
             tracing::warn!(%command_id, "ignoring mismatched Machine command acknowledgement");
             return None;
         }
-        pending.get(command_id).cloned()
+        (pending.get(command_id).cloned(), version)
     };
     let is_ambiguous =
         !accepted && is_ambiguous_prompt_rejection(peeked.as_ref(), was_retransmitted, reason);
@@ -92,15 +104,31 @@ pub(super) async fn take_acked_command(
         let message = reason.unwrap_or(
             "prompt delivery across worker change or retry is unresolved; retained as draft",
         );
-        if !park_ambiguous_prompt_durable(shared, session_id, cmd, message).await {
-            shared.fenced_commands.lock().insert(command_id.to_owned());
+        if !park_ambiguous_prompt_durable(shared, session_id, cmd, pending_version, message).await {
+            if let Some(v) = pending_version {
+                shared
+                    .fenced_commands
+                    .lock()
+                    .insert(command_id.to_owned(), v);
+            }
             return None;
         }
-        let command = shared.pending.lock().remove(command_id);
-        clear_acked_command(shared, command_id);
-        shared.in_flight_prompts.lock().retire_command(command_id);
-        if let Some(replacement) = replacement_worker_superseded_epoch(shared, session_id, cmd) {
-            reconcile_idle_guard_for_snapshot(shared, session_id, &replacement);
+        let command = match pending_version {
+            Some(v) => shared.pending.lock().remove_if_version(command_id, v),
+            None => None,
+        };
+        if command.is_some() {
+            clear_acked_command(shared, command_id);
+            shared.in_flight_prompts.lock().retire_command(command_id);
+            let projection_guard = shared.projection_fence.lock();
+            if !*projection_guard
+                && shared.connected.load(Ordering::Acquire)
+                && !shared.shutdown.load(Ordering::Acquire)
+                && let Some(replacement) =
+                    replacement_worker_superseded_epoch(shared, session_id, cmd)
+            {
+                reconcile_idle_guard_for_snapshot(shared, session_id, &replacement);
+            }
         }
         return Some((command, true));
     }
@@ -837,6 +865,12 @@ pub(super) fn recover_execution_durable(
             },
         );
         shared.config_sync_epochs.lock().remove(&id);
+        {
+            let mut owned = shared.recovery_parking_keys.lock();
+            for (key, version) in &pre_recovery_keys {
+                owned.insert(key.clone(), (*version, fence_id));
+            }
+        }
         let shared = Arc::clone(shared);
         handle.spawn(async move {
             let commit_guard = shared.hub.pending_commit_lock(&id).await;
@@ -848,6 +882,12 @@ pub(super) fn recover_execution_durable(
                 .get(&id)
                 .is_none_or(|f| f.id != fence_id)
             {
+                let mut owned = shared.recovery_parking_keys.lock();
+                for (key, version) in &pre_recovery_keys {
+                    if owned.get(key) == Some(&(*version, fence_id)) {
+                        owned.remove(key);
+                    }
+                }
                 return;
             }
             let Some((mut preview, rx)) = shared.hub.preview_park_recovery_batch(
@@ -929,7 +969,11 @@ fn retire_parked_recovery_and_launch(
         let mut sent = shared.sent.lock();
         let mut attempted = shared.attempted_sends.lock();
         let mut fenced = shared.fenced_commands.lock();
+        let mut owned = shared.recovery_parking_keys.lock();
         for (key, expected_version) in pre_recovery_keys {
+            if owned.get(key) == Some(&(*expected_version, fence_id)) {
+                owned.remove(key);
+            }
             if pending.version(key) == Some(*expected_version) {
                 pending.remove(key);
                 sent.remove(key);
@@ -980,6 +1024,12 @@ async fn abort_failed_execution_recovery(
         let mut sent = shared.sent.lock();
         let mut attempted = shared.attempted_sends.lock();
         let mut fenced = shared.fenced_commands.lock();
+        let mut owned = shared.recovery_parking_keys.lock();
+        for (key, expected_version) in pre_recovery_keys {
+            if owned.get(key) == Some(&(*expected_version, fence_id)) {
+                owned.remove(key);
+            }
+        }
         // Round 2 #8: if a newer recovery or reload already superseded this
         // fence, return immediately without touching the newer recovery's
         // pending prompts, fenced commands, or session status.
@@ -997,17 +1047,34 @@ async fn abort_failed_execution_recovery(
                 owners.remove(session_id);
             }
         }
+        let disconnected =
+            !shared.connected.load(Ordering::Acquire) || shared.shutdown.load(Ordering::Acquire);
         let mut to_remove = Vec::new();
+        let mut disconnected_parks = Vec::new();
         for (key, version, cmd) in pending.iter_with_versions() {
             if cmd.session_id() != Some(session_id) {
                 continue;
             }
             if pre_recovery_keys.get(key).is_some_and(|v| *v == version) {
-                fenced.insert(key.clone());
+                if disconnected {
+                    disconnected_parks.push((key.clone(), version, cmd.clone()));
+                } else {
+                    fenced.insert(key.clone(), version);
+                }
             } else if matches!(cmd, CoreCommand::Prompt { .. }) {
                 to_remove.push(key.clone());
             }
         }
+        teardown::park_aborted_disconnected_prompts(
+            shared,
+            session_id,
+            disconnected_parks,
+            message,
+            &mut pending,
+            &mut sent,
+            &mut attempted,
+            &mut fenced,
+        );
         let mut prompts = Vec::new();
         for key in to_remove {
             sent.remove(&key);

@@ -22,10 +22,13 @@ fn extract_unsent_notices_on_disconnect(shared: &Shared) -> Vec<UnsentDisconnect
         let attempted = shared.attempted_sends.lock();
         let mut sent = shared.sent.lock();
         let mut fenced = shared.fenced_commands.lock();
+        let recovery_owned = shared.recovery_parking_keys.lock();
         let keys: Vec<String> = pending
-            .iter()
-            .filter_map(|(key, cmd)| {
-                if attempted.contains(key) {
+            .iter_with_versions()
+            .filter_map(|(key, version, cmd)| {
+                if attempted.contains(key)
+                    || recovery_owned.get(key).is_some_and(|(v, _)| *v == version)
+                {
                     return None;
                 }
                 match cmd {
@@ -524,6 +527,7 @@ pub(in crate::remote_runtime) async fn park_ambiguous_prompt_durable(
     shared: &Arc<Shared>,
     session_id: &str,
     command: &CoreCommand,
+    expected_version: Option<u64>,
     reason: &str,
 ) -> bool {
     let CoreCommand::Prompt {
@@ -578,25 +582,27 @@ pub(in crate::remote_runtime) async fn park_ambiguous_prompt_durable(
             let weak_shared = Arc::downgrade(shared);
             let retry_sid = session_id.to_owned();
             let retry_cmd_id = command_id.clone();
-            let retry_version = shared.pending.lock().version(&retry_cmd_id);
             let retry_cmd = command.clone();
             let on_committed: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
                 let Some(shared) = weak_shared.upgrade() else {
                     return;
                 };
-                let removed = {
-                    let mut pending = shared.pending.lock();
-                    let removed = match retry_version {
-                        Some(v) => pending.remove_if_version(&retry_cmd_id, v).is_some(),
-                        None => pending.remove(&retry_cmd_id).is_some(),
-                    };
-                    if removed {
-                        shared.sent.lock().remove(&retry_cmd_id);
-                        shared.attempted_sends.lock().remove(&retry_cmd_id);
-                        shared.retransmitted_sends.lock().remove(&retry_cmd_id);
-                        shared.fenced_commands.lock().remove(&retry_cmd_id);
+                let removed = match expected_version {
+                    Some(v) => {
+                        let mut pending = shared.pending.lock();
+                        let removed = pending.remove_if_version(&retry_cmd_id, v).is_some();
+                        if removed {
+                            shared.sent.lock().remove(&retry_cmd_id);
+                            shared.attempted_sends.lock().remove(&retry_cmd_id);
+                            shared.retransmitted_sends.lock().remove(&retry_cmd_id);
+                            let mut fenced = shared.fenced_commands.lock();
+                            if fenced.get(&retry_cmd_id) == Some(&v) {
+                                fenced.remove(&retry_cmd_id);
+                            }
+                        }
+                        removed
                     }
-                    removed
+                    None => false,
                 };
                 if !removed {
                     return;
@@ -605,8 +611,12 @@ pub(in crate::remote_runtime) async fn park_ambiguous_prompt_durable(
                     .in_flight_prompts
                     .lock()
                     .retire_command(&retry_cmd_id);
-                if let Some(replacement) =
-                    replacement_worker_superseded_epoch(&shared, &retry_sid, &retry_cmd)
+                let projection_guard = shared.projection_fence.lock();
+                if !*projection_guard
+                    && shared.connected.load(Ordering::Acquire)
+                    && !shared.shutdown.load(Ordering::Acquire)
+                    && let Some(replacement) =
+                        replacement_worker_superseded_epoch(&shared, &retry_sid, &retry_cmd)
                 {
                     reconcile_idle_guard_for_snapshot(&shared, &retry_sid, &replacement);
                 }
@@ -645,20 +655,35 @@ pub(in crate::remote_runtime) async fn park_and_retire_ambiguous_pending(
     reason: &str,
     replacement_worker: Option<&WorkerSnapshot>,
 ) {
-    if park_ambiguous_prompt_durable(shared, session_id, &command, reason).await {
-        let mut pending = shared.pending.lock();
-        if pending.remove_if_version(key, version).is_some() {
-            shared.sent.lock().remove(key);
-            shared.attempted_sends.lock().remove(key);
-            shared.retransmitted_sends.lock().remove(key);
-            shared.fenced_commands.lock().remove(key);
-        }
-        drop(pending);
-        if let Some(worker) = replacement_worker {
-            reconcile_idle_guard_for_snapshot(shared, session_id, worker);
+    if park_ambiguous_prompt_durable(shared, session_id, &command, Some(version), reason).await {
+        let removed = {
+            let mut pending = shared.pending.lock();
+            let removed = pending.remove_if_version(key, version).is_some();
+            if removed {
+                shared.sent.lock().remove(key);
+                shared.attempted_sends.lock().remove(key);
+                shared.retransmitted_sends.lock().remove(key);
+                let mut fenced = shared.fenced_commands.lock();
+                if fenced.get(key) == Some(&version) {
+                    fenced.remove(key);
+                }
+            }
+            removed
+        };
+        if removed && let Some(worker) = replacement_worker {
+            let projection_guard = shared.projection_fence.lock();
+            if !*projection_guard
+                && shared.connected.load(Ordering::Acquire)
+                && !shared.shutdown.load(Ordering::Acquire)
+            {
+                reconcile_idle_guard_for_snapshot(shared, session_id, worker);
+            }
         }
     } else {
-        shared.fenced_commands.lock().insert(key.to_owned());
+        shared
+            .fenced_commands
+            .lock()
+            .insert(key.to_owned(), version);
     }
 }
 
@@ -679,12 +704,13 @@ pub(in crate::remote_runtime) fn reconcile_idle_guard_for_snapshot(
 /// Hub; already-attempted prompts commit durable recovery drafts BEFORE
 /// retirement without reconciling idle guards from stale snapshots.
 pub(in crate::remote_runtime) fn recover_pending_prompts_on_disconnect(shared: &Arc<Shared>) {
-    let entries: Vec<(String, CoreCommand, bool)> = {
+    let entries: Vec<(String, u64, CoreCommand, bool)> = {
         let pending = shared.pending.lock();
         let attempted = shared.attempted_sends.lock();
+        let recovery_owned = shared.recovery_parking_keys.lock();
         pending
-            .iter()
-            .filter_map(|(key, cmd)| {
+            .iter_with_versions()
+            .filter_map(|(key, version, cmd)| {
                 let CoreCommand::Prompt { cmid, .. } = cmd else {
                     return None;
                 };
@@ -694,13 +720,16 @@ pub(in crate::remote_runtime) fn recover_pending_prompts_on_disconnect(shared: &
                 {
                     return None;
                 }
-                Some((key.clone(), cmd.clone(), attempted.contains(key)))
+                if recovery_owned.get(key).is_some_and(|(v, _)| *v == version) {
+                    return None;
+                }
+                Some((key.clone(), version, cmd.clone(), attempted.contains(key)))
             })
             .collect()
     };
     let disconnect_reason =
         "Machine connection dropped while prompt delivery was unresolved; retained as draft";
-    for (key, cmd, was_attempted) in entries {
+    for (key, version, cmd, was_attempted) in entries {
         let Some(session_id) = cmd.session_id().map(str::to_owned) else {
             continue;
         };
@@ -728,17 +757,26 @@ pub(in crate::remote_runtime) fn recover_pending_prompts_on_disconnect(shared: &
                 shared.in_flight_prompts.lock().retire_command(&command_id);
             }
             let mut pending = shared.pending.lock();
-            pending.remove(&key);
-            shared.sent.lock().remove(&key);
-            shared.attempted_sends.lock().remove(&key);
-            shared.retransmitted_sends.lock().remove(&key);
-            shared.fenced_commands.lock().remove(&key);
+            if pending.remove_if_version(&key, version).is_some() {
+                shared.sent.lock().remove(&key);
+                shared.attempted_sends.lock().remove(&key);
+                shared.retransmitted_sends.lock().remove(&key);
+                let mut fenced = shared.fenced_commands.lock();
+                if fenced.get(&key) == Some(&version) {
+                    fenced.remove(&key);
+                }
+            }
         } else {
             let removed = {
                 let mut pending = shared.pending.lock();
-                let removed = pending.remove(&key);
-                shared.sent.lock().remove(&key);
-                shared.fenced_commands.lock().remove(&key);
+                let removed = pending.remove_if_version(&key, version);
+                if removed.is_some() {
+                    shared.sent.lock().remove(&key);
+                    let mut fenced = shared.fenced_commands.lock();
+                    if fenced.get(&key) == Some(&version) {
+                        fenced.remove(&key);
+                    }
+                }
                 removed
             };
             if let Some(removed_cmd) = removed {
@@ -800,5 +838,290 @@ pub(in crate::remote_runtime) fn park_ambiguous_prompt_command(
         shared
             .hub
             .broadcast_error(Some(session_id.to_owned()), reason.to_owned());
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn park_aborted_disconnected_prompts(
+    shared: &Shared,
+    session_id: &str,
+    disconnected_parks: Vec<(String, u64, CoreCommand)>,
+    message: &str,
+    pending: &mut super::super::PendingCommands,
+    sent: &mut std::collections::HashSet<String>,
+    attempted: &mut std::collections::HashSet<String>,
+    fenced: &mut std::collections::HashMap<String, u64>,
+) {
+    for (key, version, cmd) in disconnected_parks {
+        if let CoreCommand::Prompt {
+            command_id,
+            content,
+            cmid,
+            ..
+        } = cmd
+            && !cmid
+                .as_deref()
+                .is_some_and(|c| c.starts_with(CALL_NOTICE_PREFIX))
+        {
+            let text = content
+                .iter()
+                .filter_map(|p| p.get("text").and_then(serde_json::Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n");
+            shared.hub.enqueue_durable_recovery_park(
+                session_id.to_owned(),
+                text,
+                content,
+                cmid,
+                message.to_owned(),
+                None,
+            );
+            shared.in_flight_prompts.lock().retire_command(&command_id);
+            if pending.remove_if_version(&key, version).is_some() {
+                sent.remove(&key);
+                attempted.remove(&key);
+                fenced.remove(&key);
+            }
+        } else {
+            fenced.insert(key, version);
+        }
+    }
+}
+
+#[cfg(test)]
+mod r10_notice_recovery_tests {
+    use super::*;
+    use crate::core::{PersistenceHealth, StoreSink, StoreWrite};
+    use std::sync::Arc;
+    use tokio::sync::mpsc;
+
+    fn prompt_cmd(session_id: &str, command_id: &str, cmid: &str, text: &str) -> CoreCommand {
+        CoreCommand::Prompt {
+            session_id: session_id.to_owned(),
+            command_id: command_id.to_owned(),
+            turn_id: format!("turn-{command_id}"),
+            content: vec![serde_json::json!({"type": "text", "text": text})],
+            cmid: Some(cmid.to_owned()),
+            trace: None,
+            echo_artifacts: false,
+            observe_subagents: false,
+            expected_worker_epoch: Some("epoch-old".to_owned()),
+            acknowledged_uncertain_sequence: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn explicit_recovery_exclusively_owns_pending_key_against_late_ack_and_disconnect() {
+        let health = Arc::new(PersistenceHealth::default());
+        let (sink, mut store_rx) = StoreSink::channel(16, health);
+        let hub = crate::core::Hub::with_store(Some(sink));
+        let acks = hub.store_ack_sink();
+        hub.create_local_session(
+            "sess-f2".into(),
+            "codex".into(),
+            "/tmp".into(),
+            "f2".into(),
+            crate::model::SessionOrigin::Web,
+            false,
+        );
+        hub.set_status("sess-f2", Status::Running, None);
+        let worker = super::super::super::tests::snapshot("sess-f2");
+        let rt = super::super::super::RemoteRuntime::for_test(hub.clone(), vec![worker]);
+
+        let cmd = prompt_cmd("sess-f2", "cmd-f2", "cmid-f2", "hello f2");
+        let v1 = rt.shared.pending.lock().insert("cmd-f2".into(), cmd);
+        rt.shared.attempted_sends.lock().insert("cmd-f2".into());
+
+        // Trigger explicit durable recovery -> holds UpdatePending ack.
+        let start: StartSession = serde_json::from_value(serde_json::json!({
+            "session_id": "sess-f2",
+            "provider": "codex",
+            "cwd": "/tmp",
+            "generation": ""
+        }))
+        .unwrap();
+        super::super::recover_execution_durable(&rt.shared, start, None).unwrap();
+        assert_eq!(
+            rt.shared
+                .recovery_parking_keys
+                .lock()
+                .get("cmd-f2")
+                .map(|(v, _)| *v),
+            Some(v1)
+        );
+        let ack_id = loop {
+            if let StoreWrite::UpdatePending {
+                ack_id: Some(id), ..
+            } = tokio::time::timeout(std::time::Duration::from_secs(2), store_rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                break id;
+            }
+        };
+
+        // Late negative CommandAck MUST be ignored while explicit recovery owns `(cmd-f2, v1)`.
+        assert!(
+            super::super::take_acked_command(
+                &rt.shared,
+                "sess-f2",
+                "cmd-f2",
+                false,
+                Some("worker_changed"),
+            )
+            .await
+            .is_none()
+        );
+        assert_eq!(rt.shared.pending.lock().version("cmd-f2"), Some(v1));
+
+        // Disconnect recovery MUST also skip `(cmd-f2, v1)` while explicit recovery owns it.
+        recover_pending_prompts_on_disconnect(&rt.shared);
+        assert_eq!(rt.shared.pending.lock().version("cmd-f2"), Some(v1));
+
+        // Complete the explicit recovery batch park -> single draft committed, key retired.
+        acks.complete(ack_id, Ok(true));
+        for _ in 0..50 {
+            if rt.shared.pending.lock().version("cmd-f2").is_none()
+                && !rt
+                    .shared
+                    .recovery_parking_keys
+                    .lock()
+                    .contains_key("cmd-f2")
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(rt.shared.pending.lock().version("cmd-f2").is_none());
+        assert!(
+            !rt.shared
+                .recovery_parking_keys
+                .lock()
+                .contains_key("cmd-f2")
+        );
+        assert_eq!(
+            hub.queue_and_drafts("sess-f2", |_| true).unwrap().1.len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn retry_park_uses_pre_await_version_and_skips_idle_reconcile_when_disconnected() {
+        let health = Arc::new(PersistenceHealth::default());
+        let (sink, mut store_rx) = StoreSink::channel(32, health);
+        let hub = crate::core::Hub::with_store(Some(sink));
+        let acks = hub.store_ack_sink();
+        let (disp_tx, mut disp_rx) = mpsc::channel(8);
+        hub.set_dispatch_tx(disp_tx);
+        hub.create_local_session(
+            "sess-f7".into(),
+            "codex".into(),
+            "/tmp".into(),
+            "f7".into(),
+            crate::model::SessionOrigin::Web,
+            false,
+        );
+        hub.set_status("sess-f7", Status::Running, None);
+        let mut replacement = super::super::super::tests::snapshot("sess-f7");
+        replacement.worker_epoch = "epoch-new".into();
+        replacement.state = WorkerState::Running;
+        let rt = super::super::super::RemoteRuntime::for_test(hub.clone(), vec![replacement]);
+
+        // 1. Finding 7: command_id reused with v2 while retry for v1 is queued -> v2 must NOT be removed.
+        let cmd1 = prompt_cmd("sess-f7", "cmd-reuse", "cmid-f7-a", "first");
+        let v1 = rt
+            .shared
+            .pending
+            .lock()
+            .insert("cmd-reuse".into(), cmd1.clone());
+        let fail_once = tokio::spawn({
+            let acks = acks.clone();
+            async move {
+                while let Some(write) = store_rx.recv().await {
+                    if let StoreWrite::UpdatePending {
+                        ack_id: Some(id), ..
+                    } = write
+                    {
+                        acks.complete(id, Err("transient".into()));
+                        break;
+                    }
+                }
+                store_rx
+            }
+        });
+        assert!(
+            !park_ambiguous_prompt_durable(&rt.shared, "sess-f7", &cmd1, Some(v1), "stale").await
+        );
+        let mut store_rx = fail_once.await.unwrap();
+        let cmd2 = prompt_cmd("sess-f7", "cmd-reuse", "cmid-f7-b", "second");
+        let v2 = rt.shared.pending.lock().insert("cmd-reuse".into(), cmd2);
+        assert!(v2 > v1);
+        let ack_all = tokio::spawn({
+            let acks = acks.clone();
+            async move {
+                while let Some(write) = store_rx.recv().await {
+                    if let StoreWrite::UpdatePending {
+                        ack_id: Some(id), ..
+                    } = write
+                    {
+                        acks.complete(id, Ok(true));
+                    }
+                }
+            }
+        });
+        for _ in 0..60 {
+            if !hub
+                .queue_and_drafts("sess-f7", |_| true)
+                .unwrap()
+                .1
+                .is_empty()
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+        }
+        assert_eq!(
+            rt.shared.pending.lock().version("cmd-reuse"),
+            Some(v2),
+            "retry callback for v1 must NEVER remove newer v2 entry"
+        );
+
+        // 2. Finding 8: disconnected runtime retry completion must NOT drain Hub from stale snapshot.
+        hub.set_status("sess-f7", Status::Busy, None);
+        hub.submit(
+            "sess-f7",
+            "wait-for-live-worker".into(),
+            vec![],
+            Some("cmid-q8".into()),
+            &crate::prompt_origin::RequestCaller::Person,
+        );
+        assert_eq!(
+            hub.queue_and_drafts("sess-f7", |_| true).unwrap().0.len(),
+            1
+        );
+        rt.shared.connected.store(false, Ordering::Release);
+        let cmd3 = prompt_cmd("sess-f7", "cmd-f8", "cmid-f8", "third");
+        let v3 = rt
+            .shared
+            .pending
+            .lock()
+            .insert("cmd-f8".into(), cmd3.clone());
+        let _ = super::super::take_acked_command(
+            &rt.shared,
+            "sess-f7",
+            "cmd-f8",
+            false,
+            Some("worker_changed"),
+        )
+        .await;
+        assert!(rt.shared.pending.lock().version("cmd-f8").is_none());
+        let _ = v3;
+        assert!(
+            disp_rx.try_recv().is_err(),
+            "disconnected runtime must not trigger drain from stale worker snapshot"
+        );
+        ack_all.abort();
     }
 }

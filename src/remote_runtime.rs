@@ -130,9 +130,13 @@ pub struct Shared {
     attempted_sends: Mutex<HashSet<String>>,
     /// Commands written to the transport more than once (retries after lost ACK).
     retransmitted_sends: Mutex<HashSet<String>>,
-    /// Uncertain pre-recovery commands fenced from replay after a failed
-    /// execution recovery (skipped by `send_pending` even across reconnects).
-    fenced_commands: Mutex<HashSet<String>>,
+    /// Exact `(command_id -> pending version)` entries fenced from replay
+    /// while retained in `pending` for durability/retry.
+    fenced_commands: Mutex<HashMap<String, u64>>,
+    /// Exact `(command_id -> (pending version, fence_id))` entries whose
+    /// settlement is exclusively owned by an in-flight `recover_execution_durable`
+    /// batch park so late `CommandAck`s or disconnects cannot race or double-park.
+    recovery_parking_keys: Mutex<HashMap<String, (u64, u64)>>,
     in_flight_prompts: Mutex<prompt_tracking::InFlightPrompts>,
     /// Launch metadata re-declared after every broker reconnect. These are
     /// registry claims, not pending commands: absence never authorizes Machine broker
@@ -287,7 +291,8 @@ impl RemoteRuntime {
                 sent: Mutex::new(HashSet::new()),
                 attempted_sends: Mutex::new(HashSet::new()),
                 retransmitted_sends: Mutex::new(HashSet::new()),
-                fenced_commands: Mutex::new(HashSet::new()),
+                fenced_commands: Mutex::new(HashMap::new()),
+                recovery_parking_keys: Mutex::new(HashMap::new()),
                 in_flight_prompts: Mutex::new(prompt_tracking::InFlightPrompts::default()),
                 declarations: Mutex::new(HashMap::new()),
                 workers: Mutex::new(HashMap::new()),
@@ -353,7 +358,8 @@ impl RemoteRuntime {
                 sent: Mutex::new(HashSet::new()),
                 attempted_sends: Mutex::new(HashSet::new()),
                 retransmitted_sends: Mutex::new(HashSet::new()),
-                fenced_commands: Mutex::new(HashSet::new()),
+                fenced_commands: Mutex::new(HashMap::new()),
+                recovery_parking_keys: Mutex::new(HashMap::new()),
                 in_flight_prompts: Mutex::new(prompt_tracking::InFlightPrompts::default()),
                 declarations: Mutex::new(declarations),
                 workers: Mutex::new(
@@ -1836,7 +1842,9 @@ async fn send_pending<W: tokio::io::AsyncWrite + Unpin + Send>(
     let mut deferred = HashSet::new();
     for (key, version, command) in commands {
         // Already carried by this connection or fenced after failed recovery.
-        if shared.sent.lock().contains(&key) || shared.fenced_commands.lock().contains(&key) {
+        if shared.sent.lock().contains(&key)
+            || shared.fenced_commands.lock().get(&key) == Some(&version)
+        {
             continue;
         }
         if !command_supported(shared, &command) {

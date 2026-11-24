@@ -89,6 +89,7 @@ impl Hub {
                     schedule: None,
                     origin: content_origin,
                     initiator: Some(initiator),
+                    explicit: false,
                 };
                 if front {
                     s.queue.insert(0, message);
@@ -138,6 +139,7 @@ impl Hub {
                 || s.meta.paused
                 || s.meta.closing
                 || s.meta.trashed_at_ms.is_some()
+                || self.has_in_flight_pending_commit(session_id)
                 || s.in_flight
                 || s.dispatch_pending.is_some()
                 || s.delivery_hold.is_some()
