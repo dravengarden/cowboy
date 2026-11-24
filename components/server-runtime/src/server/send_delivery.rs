@@ -92,6 +92,9 @@ pub(crate) async fn record_steer_dispatch_in(
     cmid: &str,
     caller: &crate::prompt_origin::RequestCaller,
 ) -> Result<(), String> {
+    let Some(_op_guard) = hub.reserve_in_flight_dispatch_cmid(session, cmid) else {
+        return Err("operation id is reserved by an active recovery draft activation".to_owned());
+    };
     let origin = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
     let dispatched_at_ms = chrono::Utc::now().timestamp_millis();
     if hub
@@ -108,6 +111,7 @@ pub(crate) async fn record_steer_dispatch_in(
             trigger: origin.clone(),
             dispatched_at_ms,
             undelivered_retired: false,
+            dispatch_seq: 0,
         };
         let compatible = store
             .record_prompt_dispatch_if_compatible(&record)
@@ -168,6 +172,9 @@ pub fn begin(
     target: Option<&crate::send_delivery::DeliveryTarget>,
     next_checkpoint: bool,
 ) -> Result<crate::remote_runtime::SteeringDelivery, String> {
+    if state.hub.is_cmid_reserved_for_recovery(session, &cmid) {
+        return Err("operation id is reserved by an active recovery draft activation".into());
+    }
     let origin = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
     if state
         .hub

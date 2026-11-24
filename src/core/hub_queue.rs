@@ -3,6 +3,10 @@
 use super::*;
 
 mod drafts;
+pub use drafts::{
+    InFlightDispatchCmidGuard, PendingRecoveryActivationCommit, RecoveryActivationCommitStep,
+    RecoveryActivationReservation, RecoveryReserveErr,
+};
 mod retry;
 mod submit;
 
@@ -206,9 +210,6 @@ impl Hub {
         let Some(head) = s.queue.first() else {
             return DrainDecision::Empty;
         };
-        if s.pending_durable_queue_ids.contains(&head.id) {
-            return DrainDecision::NotReady;
-        }
         if !context_allows(head.cmid.as_deref()) {
             return DrainDecision::ContextHold;
         }
@@ -359,6 +360,30 @@ impl Hub {
         }
         self.emit_pending(session_id);
         self.send_dispatch(req);
+    }
+
+    /// Dispatch `target_row_id` ONLY when it is currently at the queue head and
+    /// ordinary non-manual drain rules (`!paused`, `editing.is_none()`, ready,
+    /// context allows) permit dispatch. Used by committed recovery-draft
+    /// activations so they never bypass Pause/Edit or drain an unrelated older
+    /// queued prompt under the activating caller's trigger.
+    pub(super) fn drain_specific_head(
+        &self,
+        session_id: &str,
+        target_row_id: &str,
+        allow_revive: bool,
+        trigger: Option<&crate::prompt_origin::RequestCaller>,
+    ) {
+        let is_target_head = self
+            .inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .is_some_and(|s| s.queue.first().is_some_and(|head| head.id == target_row_id));
+        if !is_target_head {
+            return;
+        }
+        self.drain_head(session_id, allow_revive, false, trigger);
     }
 
     pub(super) fn try_drain(&self, session_id: &str) {
@@ -839,13 +864,60 @@ impl Hub {
         {
             return true;
         }
-        Self::tracks_delivery(cmid)
-            && (s.dispatched_cmids.iter().any(|seen| seen.cmid == cmid)
-                || s.dispatched_origins.contains_key(cmid)
-                || s.log
-                    .iter()
-                    .rev()
-                    .any(|entry| entry.cmid.as_deref() == Some(cmid)))
+        s.reserved_recovery_cmids.contains(cmid)
+            || s.in_flight_dispatch_cmids.contains(cmid)
+            || (Self::tracks_delivery(cmid)
+                && (s.dispatched_cmids.iter().any(|seen| seen.cmid == cmid)
+                    || s.dispatched_origins.contains_key(cmid)
+                    || s.committed_parked_cmids.iter().any(|c| c == cmid)
+                    || s.log
+                        .iter()
+                        .rev()
+                        .any(|entry| entry.cmid.as_deref() == Some(cmid))))
+    }
+
+    /// True when `cmid` is currently reserved by an in-flight durable recovery
+    /// draft activation so competing steer/submit/dispatch paths cannot claim
+    /// the same operation ID in SQL before the activation commits.
+    pub fn is_cmid_reserved_for_recovery(&self, session_id: &str, cmid: &str) -> bool {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .is_some_and(|s| s.reserved_recovery_cmids.contains(cmid))
+    }
+
+    /// True when `cmid` is already known in Hub's in-memory session state
+    /// (queued, drafted, reserved, dispatched, parked, or in hot log).
+    pub fn is_cmid_known_in_hub(&self, session_id: &str, cmid: &str) -> bool {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .is_some_and(|s| Self::prompt_already_accepted(s, cmid))
+    }
+
+    /// Fold a durably retired `cmid` discovered on a Hub cache miss back into
+    /// memory and send an addressed confirmation so the replaying browser drops
+    /// its outbox entry without re-executing the retired prompt.
+    pub fn confirm_durably_retired_cmid(&self, session_id: &str, cmid: &str) {
+        {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            Self::note_dispatched(s, Some(cmid));
+            if !s.committed_parked_cmids.iter().any(|c| c == cmid) {
+                while s.committed_parked_cmids.len() >= 512 {
+                    s.committed_parked_cmids.pop_front();
+                }
+                s.committed_parked_cmids.push_back(cmid.to_owned());
+            }
+            if let Some(rec) = s.dispatched_origins.get_mut(cmid) {
+                rec.undelivered_retired = true;
+            }
+        }
+        self.confirm_delivered(session_id, cmid);
     }
 
     /// Tell every client that `cmid` is already folded into this session, without
@@ -869,7 +941,6 @@ impl Hub {
                 && !s
                     .queue
                     .iter()
-                    .filter(|m| !s.pending_durable_queue_ids.contains(&m.id))
                     .chain(&s.drafts)
                     .any(|m| m.cmid.as_deref() == Some(cmid))
                 && !s
@@ -882,13 +953,7 @@ impl Hub {
             {
                 return;
             }
-            let visible_queue: Vec<QueuedMessage> = s
-                .queue
-                .iter()
-                .filter(|m| !s.pending_durable_queue_ids.contains(&m.id))
-                .cloned()
-                .collect();
-            (visible_queue, s.drafts.clone())
+            (s.queue.clone(), s.drafts.clone())
         };
         let mut confirmed = Self::cmids_of(&queue, &drafts);
         if !confirmed.iter().any(|seen| seen == cmid) {
@@ -905,9 +970,6 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
             };
-            if s.pending_durable_queue_ids.contains(id) {
-                return false;
-            }
             let settled = submit::extract_notice_settlements(s.queue.iter().filter(|m| m.id == id));
             let before = s.queue.len();
             s.queue.retain(|m| m.id != id);
@@ -935,9 +997,7 @@ impl Hub {
                 return false;
             };
             let before = s.queue.len();
-            s.queue.retain(|m| {
-                s.pending_durable_queue_ids.contains(&m.id) || m.cmid.as_deref() != Some(cmid)
-            });
+            s.queue.retain(|m| m.cmid.as_deref() != Some(cmid));
             before != s.queue.len()
         };
         if removed {
@@ -963,9 +1023,6 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
             };
-            if s.pending_durable_queue_ids.contains(id) {
-                return false;
-            }
             if text.trim().is_empty() && content.is_empty() {
                 let settled =
                     submit::extract_notice_settlements(s.queue.iter().filter(|m| m.id == id));
@@ -1003,13 +1060,8 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            let settled = submit::extract_notice_settlements(
-                s.queue
-                    .iter()
-                    .filter(|m| !s.pending_durable_queue_ids.contains(&m.id)),
-            );
-            s.queue
-                .retain(|m| s.pending_durable_queue_ids.contains(&m.id));
+            let settled = submit::extract_notice_settlements(s.queue.iter());
+            s.queue.clear();
             s.editing = None;
             settled
         };
@@ -1074,9 +1126,6 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
             };
-            if s.pending_durable_queue_ids.contains(id) {
-                return false;
-            }
             let Some(pos) = s.queue.iter().position(|m| m.id == id) else {
                 return false;
             };
@@ -1105,9 +1154,7 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            if !s.pending_durable_queue_ids.contains(id)
-                && let Some(pos) = s.queue.iter().position(|m| m.id == id)
-            {
+            if let Some(pos) = s.queue.iter().position(|m| m.id == id) {
                 let mut m = s.queue.remove(pos);
                 let settled = submit::extract_notice_settlements(std::iter::once(&m));
                 if !settled.is_empty() {

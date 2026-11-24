@@ -137,10 +137,28 @@ pub(super) async fn event(
             .as_ref()
             .and_then(|worker| worker.launch.as_ref())
             .is_some_and(|launch| !launch.provider_account_id.is_default());
+    let execution_bound = shared
+        .hub
+        .session_info(session_id)
+        .is_some_and(|info| info.meta.execution_binding.is_some());
     if !named {
         let fenced = shared.projection_fence.lock();
         if *fenced || shared.shutdown.load(Ordering::Acquire) {
             return false;
+        }
+        if execution_bound {
+            // Finding 5: an execution-bound default-account session must only
+            // project events from the exact binding-matched cached worker epoch
+            // so a rejected mismatched worker cannot persist native IDs or turn
+            // state onto the session.
+            let Some(current) = shared.workers.lock().get(session_id).cloned() else {
+                return false;
+            };
+            if current.worker_epoch != worker_epoch
+                || !shared.hub.matches_runtime_snapshot_binding(&current)
+            {
+                return false;
+            }
         }
         project();
         return true;

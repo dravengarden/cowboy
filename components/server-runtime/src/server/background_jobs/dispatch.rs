@@ -228,6 +228,18 @@ async fn dispatch_admitted(state: Arc<AppState>, req: DispatchReq) {
         match record_dispatch_provenance(&state, &session_id, cmid, dispatch_origin, trigger).await
         {
             Ok((dispatch_cmid, _)) => dispatch_cmid,
+            Err((retired_cmid, "prompt operation id was durably retired")) => {
+                managed_calls::after_notice_dispatch_error(
+                    &state,
+                    &session_id,
+                    Some(retired_cmid.as_str()),
+                    claim_token.as_ref(),
+                )
+                .await;
+                hub.confirm_durably_retired_cmid(&session_id, &retired_cmid);
+                hub.clear_in_flight(&session_id);
+                return;
+            }
             Err((failed_cmid, reason)) => {
                 managed_calls::after_notice_dispatch_error(
                     &state,
@@ -337,10 +349,27 @@ pub(crate) async fn record_dispatch_provenance_in(
             trigger: trigger.clone(),
             dispatched_at_ms,
             undelivered_retired: false,
+            dispatch_seq: 0,
+        };
+        let Some(_op_guard) = hub.reserve_in_flight_dispatch_cmid(session_id, &dispatch_cmid)
+        else {
+            return Err((
+                dispatch_cmid,
+                "operation id is reserved by an active recovery draft activation",
+            ));
         };
         match store.record_prompt_dispatch_if_compatible(&record).await {
             Ok(true) => {}
             Ok(false) => {
+                if store
+                    .prompt_dispatch(session_id, &dispatch_cmid)
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some_and(|row| row.undelivered_retired)
+                {
+                    return Err((dispatch_cmid, "prompt operation id was durably retired"));
+                }
                 if is_reserved_cmid(&dispatch_cmid) {
                     return Err((
                         dispatch_cmid,

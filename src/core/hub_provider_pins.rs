@@ -484,6 +484,35 @@ impl Hub {
     /// the running release. Never use this to migrate native identity or home.
     /// Runs before the snapshot acceptance fence, so it applies its own
     /// placement check: a different execution binding is never adopted.
+    /// Returns false when a known session with an execution binding or named
+    /// provider account receives a snapshot whose launch spec does not match
+    /// the session's bound execution/provider tuple.
+    pub fn matches_runtime_snapshot_binding(&self, worker: &WorkerSnapshot) -> bool {
+        !self.session_info(&worker.session_id).is_some_and(|info| {
+            (info.meta.execution_binding.is_some() || !info.meta.provider_account_id.is_default())
+                && !worker.launch.as_ref().is_some_and(|launch| {
+                    launch.execution_binding == info.meta.execution_binding
+                        && launch.provider == info.meta.provider
+                        && launch.provider_account_id == info.meta.provider_account_id
+                        && launch.provider_version == info.meta.provider_version
+                        && launch.provider_generation_digest == info.meta.provider_generation_digest
+                        && launch.provider_auth_generation == info.meta.provider_auth_generation
+                        && launch.cwd == info.meta.cwd
+                })
+        })
+    }
+
+    /// True when `worker` is a broker-only placeholder for a session still
+    /// awaiting its real connected owner during startup reconciliation.
+    pub fn is_reconciling_runtime_placeholder(&self, worker: &WorkerSnapshot) -> bool {
+        !worker.has_connected_owner()
+            && self
+                .inner
+                .runtime_reconciliation
+                .lock()
+                .contains(&worker.session_id)
+    }
+
     pub fn reconcile_provider_release(&self, worker: &WorkerSnapshot) {
         // Only a worker that still runs defines the release. An exited worker's
         // stale launch would undo a dormant re-pin, which the next open then

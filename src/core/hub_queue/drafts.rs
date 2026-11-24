@@ -1,6 +1,135 @@
 //! Session drafts: staging, editing, scheduling, moving, and activation.
 
+use std::sync::Weak;
+
 use super::*;
+use crate::core::hub_managed_calls::StoreAckRx;
+
+/// Result of reserving an operation ID + draft slot for a durable recovery-draft activation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryReserveErr {
+    NotFound,
+    InvalidOperationId(&'static str),
+    OperationInUse(&'static str),
+    AlreadyActivating(&'static str),
+}
+
+/// RAII reservation holding `op` in `reserved_recovery_cmids` and `draft_id` in
+/// `activating_recovery_drafts` across async SQL history lookup and commit so no
+/// competing submit, steer, or draft mutation can claim the ID or delete the draft.
+pub struct RecoveryActivationReservation {
+    hub: Weak<HubInner>,
+    session_id: String,
+    draft_id: String,
+    op: String,
+    active: bool,
+}
+
+impl RecoveryActivationReservation {
+    #[must_use]
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    #[must_use]
+    pub fn draft_id(&self) -> &str {
+        &self.draft_id
+    }
+
+    #[must_use]
+    pub fn op(&self) -> &str {
+        &self.op
+    }
+
+    fn release_in_session(&mut self, s: &mut Session) {
+        if self.active {
+            self.active = false;
+            s.reserved_recovery_cmids.remove(&self.op);
+            s.activating_recovery_drafts.remove(&self.draft_id);
+        }
+    }
+}
+
+impl Drop for RecoveryActivationReservation {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        self.active = false;
+        if let Some(inner) = self.hub.upgrade() {
+            let mut sessions = inner.sessions.lock();
+            if let Some(s) = sessions.get_mut(&self.session_id) {
+                s.reserved_recovery_cmids.remove(&self.op);
+                s.activating_recovery_drafts.remove(&self.draft_id);
+            }
+        }
+    }
+}
+
+/// Non-mutating preview of a durable `recovery-*` draft activation awaiting SQL
+/// commit. While in flight, `s.queue` and `s.drafts` retain their committed view
+/// and `in_flight_pending_commits` serializes all concurrent pending flushes.
+pub struct PendingRecoveryActivationCommit {
+    hub: Weak<HubInner>,
+    active: bool,
+    new_row: QueuedMessage,
+    had_scheduled: bool,
+    reservation: RecoveryActivationReservation,
+}
+
+impl PendingRecoveryActivationCommit {
+    #[must_use]
+    pub fn op(&self) -> &str {
+        self.reservation.op()
+    }
+}
+
+impl Drop for PendingRecoveryActivationCommit {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        self.active = false;
+        if let Some(inner) = self.hub.upgrade() {
+            let hub = Hub { inner };
+            let sid = self.reservation.session_id.clone();
+            let mut sessions = hub.inner.sessions.lock();
+            let mut claims = hub.inner.notice_claims.lock();
+            if let Some(s) = sessions.get_mut(&sid) {
+                self.reservation.release_in_session(s);
+                hub.finish_in_flight_pending_commit(&sid, &s.queue, &s.drafts, &mut claims);
+            } else {
+                claims.in_flight_pending_commits.remove(&sid);
+            }
+        }
+    }
+}
+
+/// RAII reservation held by competing dispatch/steer paths across their async
+/// `prompt_dispatches` SQL write until `Hub::record_prompt_dispatch` completes,
+/// closing the symmetric TOCTOU race with recovery-draft activation.
+pub struct InFlightDispatchCmidGuard {
+    hub: Weak<HubInner>,
+    session_id: String,
+    cmid: String,
+}
+
+impl Drop for InFlightDispatchCmidGuard {
+    fn drop(&mut self) {
+        if let Some(inner) = self.hub.upgrade() {
+            let mut sessions = inner.sessions.lock();
+            if let Some(s) = sessions.get_mut(&self.session_id) {
+                s.in_flight_dispatch_cmids.remove(&self.cmid);
+            }
+        }
+    }
+}
+
+/// Outcome of staging a durable recovery-draft activation.
+pub enum RecoveryActivationCommitStep {
+    CommittedSync,
+    Pending(Box<PendingRecoveryActivationCommit>, StoreAckRx),
+}
 
 impl Hub {
     /// Park a new draft.
@@ -84,6 +213,14 @@ impl Hub {
         if self.reject_reserved_notice_cmid(session_id, cmid.as_deref()) {
             return;
         }
+        if id.as_deref().is_some_and(|i| i.starts_with("recovery-")) {
+            let msg = "Parked recovery drafts cannot be scheduled; resend explicitly";
+            if let Some(op) = cmid.as_deref().filter(|c| !c.is_empty()) {
+                self.command_result(session_id, op, CommandOutcome::Rejected, msg);
+            }
+            self.broadcast_error(Some(session_id.to_owned()), msg.to_owned());
+            return;
+        }
         let author = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
         let draft_id = {
             let mut sessions = self.inner.sessions.lock();
@@ -97,6 +234,12 @@ impl Hub {
                     cmid.as_deref()
                         .and_then(|c| s.drafts.iter().position(|m| m.cmid.as_deref() == Some(c)))
                 });
+            if let Some(p) = pos
+                && (s.drafts[p].id.starts_with("recovery-")
+                    || s.activating_recovery_drafts.contains(&s.drafts[p].id))
+            {
+                return;
+            }
             let schedule = Some(DraftSchedule {
                 fire_at_ms,
                 delivery,
@@ -141,6 +284,9 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            if s.activating_recovery_drafts.contains(id) {
+                return;
+            }
             match s.drafts.iter_mut().find(|m| m.id == id) {
                 Some(m) if m.schedule.is_some() => {
                     m.schedule = None;
@@ -162,7 +308,7 @@ impl Hub {
     /// (the user removed/activated it before it fired — the timer was cancelled,
     /// but a fire already in-flight is harmless here).
     pub fn fire_scheduled_draft(&self, session_id: &str, draft_id: &str) {
-        if self.is_managed_child(session_id) {
+        if self.is_managed_child(session_id) || draft_id.starts_with("recovery-") {
             return;
         }
         let fired = {
@@ -278,6 +424,9 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
             };
+            if s.activating_recovery_drafts.contains(id) {
+                return false;
+            }
             if text.trim().is_empty() && content.is_empty() {
                 let had = s.drafts.iter().any(|m| m.id == id && m.schedule.is_some());
                 let before = s.drafts.len();
@@ -326,7 +475,11 @@ impl Hub {
                 return false;
             };
             let row = &session.drafts[index];
-            if row.schedule.is_some() || row.text != text || row.content != content {
+            if session.activating_recovery_drafts.contains(&row.id)
+                || row.schedule.is_some()
+                || row.text != text
+                || row.content != content
+            {
                 return false;
             }
             session.drafts.remove(index);
@@ -342,6 +495,9 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
             };
+            if s.activating_recovery_drafts.contains(id) {
+                return false;
+            }
             let had = s.drafts.iter().any(|m| m.id == id && m.schedule.is_some());
             let before = s.drafts.len();
             s.drafts.retain(|m| m.id != id);
@@ -375,6 +531,9 @@ impl Hub {
             let mut sessions = self.inner.sessions.lock();
             let Some(mut msg) = (if sessions.contains_key(to) {
                 sessions.get_mut(from).and_then(|s| {
+                    if s.activating_recovery_drafts.contains(id) {
+                        return None;
+                    }
                     s.drafts
                         .iter()
                         .position(|m| m.id == id)
@@ -419,10 +578,11 @@ impl Hub {
             let ids = s
                 .drafts
                 .iter()
-                .filter(|m| m.schedule.is_some())
+                .filter(|m| m.schedule.is_some() && !s.activating_recovery_drafts.contains(&m.id))
                 .map(|m| m.id.clone())
                 .collect();
-            s.drafts.clear();
+            s.drafts
+                .retain(|m| s.activating_recovery_drafts.contains(&m.id));
             ids
         };
         self.emit_pending(session_id);
@@ -434,9 +594,229 @@ impl Hub {
         }
     }
 
+    /// Reserve `cmid` for an in-flight async `prompt_dispatches` SQL write.
+    /// Returns `None` if an active recovery-draft activation has already
+    /// reserved `cmid` (or if the same `cmid` is already mid-write).
+    pub fn reserve_in_flight_dispatch_cmid(
+        &self,
+        session_id: &str,
+        cmid: &str,
+    ) -> Option<InFlightDispatchCmidGuard> {
+        let mut sessions = self.inner.sessions.lock();
+        let Some(s) = sessions.get_mut(session_id) else {
+            // Unknown/unregistered session: return inert guard so callers keep
+            // their existing unknown-session behavior.
+            return Some(InFlightDispatchCmidGuard {
+                hub: Weak::new(),
+                session_id: session_id.to_owned(),
+                cmid: cmid.to_owned(),
+            });
+        };
+        if s.reserved_recovery_cmids.contains(cmid) || s.in_flight_dispatch_cmids.contains(cmid) {
+            return None;
+        }
+        s.in_flight_dispatch_cmids.insert(cmid.to_owned());
+        Some(InFlightDispatchCmidGuard {
+            hub: Arc::downgrade(&self.inner),
+            session_id: session_id.to_owned(),
+            cmid: cmid.to_owned(),
+        })
+    }
+
+    /// Atomically reserve a fresh authored operation ID and draft slot for a
+    /// `recovery-*` draft activation BEFORE running the async SQL history check.
+    pub fn reserve_recovery_draft_activation(
+        &self,
+        session_id: &str,
+        draft_id: &str,
+        op: &str,
+    ) -> Result<RecoveryActivationReservation, RecoveryReserveErr> {
+        if !draft_id.starts_with("recovery-") {
+            return Err(RecoveryReserveErr::NotFound);
+        }
+        if !Self::is_authored_cmid(op) {
+            return Err(RecoveryReserveErr::InvalidOperationId(
+                "Resending a parked recovery draft requires a new client operation id",
+            ));
+        }
+        let mut sessions = self.inner.sessions.lock();
+        let Some(s) = sessions.get_mut(session_id) else {
+            return Err(RecoveryReserveErr::NotFound);
+        };
+        let Some(pos) = s.drafts.iter().position(|m| m.id == draft_id) else {
+            return Err(RecoveryReserveErr::NotFound);
+        };
+        if s.activating_recovery_drafts.contains(draft_id) {
+            return Err(RecoveryReserveErr::AlreadyActivating(
+                "Recovery draft activation is already in progress; draft retained",
+            ));
+        }
+        if Some(op) == s.drafts[pos].cmid.as_deref() {
+            return Err(RecoveryReserveErr::InvalidOperationId(
+                "Resending a parked recovery draft requires a new client operation id",
+            ));
+        }
+        if Self::prompt_already_accepted_excluding_draft(s, op, Some(pos)) {
+            return Err(RecoveryReserveErr::OperationInUse(
+                "Activation operation id is already in use; draft retained",
+            ));
+        }
+        s.reserved_recovery_cmids.insert(op.to_owned());
+        s.activating_recovery_drafts.insert(draft_id.to_owned());
+        Ok(RecoveryActivationReservation {
+            hub: Arc::downgrade(&self.inner),
+            session_id: session_id.to_owned(),
+            draft_id: draft_id.to_owned(),
+            op: op.to_owned(),
+            active: true,
+        })
+    }
+
+    /// Preview a reserved recovery-draft activation without mutating `s.queue`
+    /// or `s.drafts`, install the per-session `in_flight_pending_commits` fence,
+    /// and enqueue an acknowledged `StoreWrite::UpdatePending`.
+    pub fn begin_durable_recovery_draft_activation(
+        &self,
+        mut reservation: RecoveryActivationReservation,
+        caller: &crate::prompt_origin::RequestCaller,
+    ) -> Result<RecoveryActivationCommitStep, &'static str> {
+        let sid = reservation.session_id.clone();
+        let draft_id = reservation.draft_id.clone();
+        let op = reservation.op.clone();
+        let trigger = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
+        let (sync_row, sync_had_scheduled, step) = {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(&sid) else {
+                return Err("Session no longer exists; recovery draft was not activated");
+            };
+            let Some(pos) = s.drafts.iter().position(|m| m.id == draft_id) else {
+                return Err("Recovery draft no longer exists");
+            };
+            let original = &s.drafts[pos];
+            let had_scheduled = original.schedule.is_some();
+            let new_row = QueuedMessage {
+                id: self.next_qid(),
+                text: original.text.clone(),
+                content: original.content.clone(),
+                cmid: Some(op),
+                schedule: None,
+                origin: original.origin.clone(),
+                initiator: Some(trigger),
+            };
+            if !self.has_store_writer() {
+                s.drafts.remove(pos);
+                let new_qid = new_row.id.clone();
+                s.queue.push(new_row);
+                reservation.release_in_session(s);
+                (Some(new_qid), had_scheduled, None)
+            } else {
+                let mut claims = self.inner.notice_claims.lock();
+                if claims.in_flight_pending_commits.contains_key(&sid) {
+                    return Err("Another pending queue update is in progress; draft retained");
+                }
+                let mut preview_queue = s.queue.clone();
+                preview_queue.push(new_row.clone());
+                let mut preview_drafts = s.drafts.clone();
+                preview_drafts.remove(pos);
+                let Some(rx) = self.send_acked_update_pending_with_retired(
+                    &sid,
+                    preview_queue,
+                    preview_drafts,
+                    Vec::new(),
+                    Vec::new(),
+                    s.pending_retired_dispatches.clone(),
+                    false,
+                ) else {
+                    return Err("Failed to persist recovery draft activation; draft retained");
+                };
+                claims
+                    .in_flight_pending_commits
+                    .insert(sid.clone(), Default::default());
+                let commit = Box::new(PendingRecoveryActivationCommit {
+                    hub: Arc::downgrade(&self.inner),
+                    active: true,
+                    new_row,
+                    had_scheduled,
+                    reservation,
+                });
+                (None, false, Some((commit, rx)))
+            }
+        };
+        if let Some((commit, rx)) = step {
+            return Ok(RecoveryActivationCommitStep::Pending(commit, rx));
+        }
+        self.emit_pending(&sid);
+        if sync_had_scheduled {
+            self.cancel_draft_timer(&sid, &draft_id);
+            self.broadcast_sessions();
+        }
+        if let Some(new_qid) = sync_row {
+            self.drain_specific_head(&sid, &new_qid, true, Some(caller));
+        }
+        Ok(RecoveryActivationCommitStep::CommittedSync)
+    }
+
+    /// Apply a durably committed recovery-draft activation to Hub, flush any
+    /// deferred concurrent pending writes, broadcast, and dispatch ONLY if the
+    /// newly committed row is at the queue head under normal drain rules.
+    pub fn commit_recovery_draft_activation(
+        &self,
+        commit: &mut PendingRecoveryActivationCommit,
+        caller: &crate::prompt_origin::RequestCaller,
+    ) {
+        if !commit.active {
+            return;
+        }
+        commit.active = false;
+        let sid = commit.reservation.session_id.clone();
+        let draft_id = commit.reservation.draft_id.clone();
+        let new_qid = commit.new_row.id.clone();
+        let snapshot = {
+            let mut sessions = self.inner.sessions.lock();
+            let mut claims = self.inner.notice_claims.lock();
+            if let Some(s) = sessions.get_mut(&sid) {
+                s.drafts.retain(|m| m.id != draft_id);
+                s.queue.push(commit.new_row.clone());
+                commit.reservation.release_in_session(s);
+                let snapshot = (s.queue.clone(), s.drafts.clone());
+                self.finish_in_flight_pending_commit(&sid, &snapshot.0, &snapshot.1, &mut claims);
+                Some(snapshot)
+            } else {
+                claims.in_flight_pending_commits.remove(&sid);
+                None
+            }
+        };
+        if let Some((q, d)) = snapshot {
+            self.broadcast_pending_snapshot(&sid, &q, &d);
+            if commit.had_scheduled {
+                self.cancel_draft_timer(&sid, &draft_id);
+                self.broadcast_sessions();
+            }
+            self.drain_specific_head(&sid, &new_qid, true, Some(caller));
+        }
+    }
+
+    /// Abort an uncommitted recovery-draft activation, releasing its fences
+    /// while leaving the original draft untouched in `s.drafts`.
+    pub fn abort_recovery_draft_activation(&self, commit: &mut PendingRecoveryActivationCommit) {
+        if !commit.active {
+            return;
+        }
+        commit.active = false;
+        let sid = commit.reservation.session_id.clone();
+        let mut sessions = self.inner.sessions.lock();
+        let mut claims = self.inner.notice_claims.lock();
+        if let Some(s) = sessions.get_mut(&sid) {
+            commit.reservation.release_in_session(s);
+            self.finish_in_flight_pending_commit(&sid, &s.queue, &s.drafts, &mut claims);
+        } else {
+            claims.in_flight_pending_commits.remove(&sid);
+        }
+    }
+
     /// Activate one draft: validate operation ownership and move from drafts to
     /// queue/dispatch atomically under one `sessions` lock so a reused operation
-    /// ID can never discard a draft (Finding 8).
+    /// ID can never discard a draft.
     pub fn activate_draft(
         &self,
         session_id: &str,
@@ -449,17 +829,14 @@ impl Hub {
         {
             return;
         }
+        if id.starts_with("recovery-") {
+            self.activate_recovery_draft_direct(session_id, id, cmid, caller);
+            return;
+        }
         let requested_cmid = cmid.clone();
         let trigger = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
         let wired = self.inner.dispatch_tx.lock().is_some();
         let mut dispatch = None;
-        let mut durable_recovery: Option<(
-            String,
-            String,
-            QueuedMessage,
-            crate::core::hub_managed_calls::StoreAckRx,
-        )> = None;
-        let mut sync_recovery_drain = false;
         let mut had_scheduled = false;
         let mut is_owner_turn = false;
         let mut error_msg: Option<&'static str> = None;
@@ -471,49 +848,17 @@ impl Hub {
             let Some(pos) = s.drafts.iter().position(|m| m.id == id) else {
                 return;
             };
-            let target = &s.drafts[pos];
-            let is_recovery = target.id.starts_with("recovery-");
             let effective_cmid = cmid.or_else(|| {
-                target
+                s.drafts[pos]
                     .cmid
                     .clone()
                     .filter(|cid| !crate::agent_model::is_reserved_call_notice_cmid(cid))
             });
-            if is_recovery
-                && !effective_cmid.as_deref().is_some_and(|op| {
-                    Self::is_authored_cmid(op) && Some(op) != target.cmid.as_deref()
-                })
-            {
-                error_msg =
-                    Some("Resending a parked recovery draft requires a new client operation id");
-                false
-            } else if let Some(op) = effective_cmid.as_deref()
+            if let Some(op) = effective_cmid.as_deref()
                 && Self::prompt_already_accepted_excluding_draft(s, op, Some(pos))
             {
                 error_msg = Some("Activation operation id is already in use; draft retained");
                 false
-            } else if is_recovery {
-                match self.stage_recovery_draft_activation(
-                    session_id,
-                    s,
-                    pos,
-                    effective_cmid.clone().unwrap_or_default(),
-                    trigger,
-                ) {
-                    Ok((scheduled, pending)) => {
-                        had_scheduled = scheduled;
-                        if let Some(entry) = pending {
-                            durable_recovery = Some(entry);
-                        } else {
-                            sync_recovery_drain = true;
-                        }
-                        true
-                    }
-                    Err(msg) => {
-                        error_msg = Some(msg);
-                        false
-                    }
-                }
             } else {
                 let (scheduled, owner_turn, req) = self.stage_regular_draft_activation(
                     session_id,
@@ -539,19 +884,6 @@ impl Hub {
         if !activated {
             return;
         }
-        if let Some((new_qid, op, original, rx)) = durable_recovery {
-            self.spawn_recovery_activation_commit(
-                session_id.to_owned(),
-                id.to_owned(),
-                new_qid,
-                op,
-                original,
-                had_scheduled,
-                caller.clone(),
-                rx,
-            );
-            return;
-        }
         if is_owner_turn {
             self.notify_human_turn(session_id);
         }
@@ -560,10 +892,65 @@ impl Hub {
             self.cancel_draft_timer(session_id, id);
             self.broadcast_sessions();
         }
-        if sync_recovery_drain {
-            self.drain_head(session_id, true, true, Some(caller));
-        } else if let Some(req) = dispatch {
+        if let Some(req) = dispatch {
             self.send_dispatch(req);
+        }
+    }
+
+    fn activate_recovery_draft_direct(
+        &self,
+        session_id: &str,
+        id: &str,
+        cmid: Option<String>,
+        caller: &crate::prompt_origin::RequestCaller,
+    ) {
+        let Some(op) = cmid.as_deref().filter(|op| !op.is_empty()) else {
+            let msg = "Resending a parked recovery draft requires a new client operation id";
+            self.broadcast_error(Some(session_id.to_owned()), msg.to_owned());
+            return;
+        };
+        let reservation = match self.reserve_recovery_draft_activation(session_id, id, op) {
+            Ok(r) => r,
+            Err(RecoveryReserveErr::NotFound) => return,
+            Err(
+                RecoveryReserveErr::InvalidOperationId(msg)
+                | RecoveryReserveErr::OperationInUse(msg)
+                | RecoveryReserveErr::AlreadyActivating(msg),
+            ) => {
+                self.command_result(session_id, op, CommandOutcome::Rejected, msg);
+                self.broadcast_error(Some(session_id.to_owned()), msg.to_owned());
+                return;
+            }
+        };
+        if self.has_store_writer() && tokio::runtime::Handle::try_current().is_err() {
+            let msg = "Failed to persist recovery draft activation; draft retained";
+            self.command_result(session_id, op, CommandOutcome::Rejected, msg);
+            self.broadcast_error(Some(session_id.to_owned()), msg.to_owned());
+            return;
+        }
+        match self.begin_durable_recovery_draft_activation(reservation, caller) {
+            Ok(RecoveryActivationCommitStep::CommittedSync) => {}
+            Ok(RecoveryActivationCommitStep::Pending(mut commit, rx)) => {
+                let hub = self.clone();
+                let sid = session_id.to_owned();
+                let caller = caller.clone();
+                self.spawn_teardown_requeue(async move {
+                    match rx.await {
+                        Ok(Ok(true)) => hub.commit_recovery_draft_activation(&mut commit, &caller),
+                        _ => {
+                            let op_id = commit.op().to_owned();
+                            hub.abort_recovery_draft_activation(&mut commit);
+                            let msg = "Failed to persist recovery draft activation; draft retained";
+                            hub.command_result(&sid, &op_id, CommandOutcome::Rejected, msg);
+                            hub.broadcast_error(Some(sid), msg.to_owned());
+                        }
+                    }
+                });
+            }
+            Err(msg) => {
+                self.command_result(session_id, op, CommandOutcome::Rejected, msg);
+                self.broadcast_error(Some(session_id.to_owned()), msg.to_owned());
+            }
         }
     }
 
@@ -618,124 +1005,6 @@ impl Hub {
             None
         };
         (had_scheduled, is_owner_turn, dispatch)
-    }
-
-    #[allow(clippy::type_complexity)]
-    fn stage_recovery_draft_activation(
-        &self,
-        session_id: &str,
-        s: &mut Session,
-        pos: usize,
-        op: String,
-        trigger: crate::prompt_origin::DeliveryOrigin,
-    ) -> Result<
-        (
-            bool,
-            Option<(
-                String,
-                String,
-                QueuedMessage,
-                crate::core::hub_managed_calls::StoreAckRx,
-            )>,
-        ),
-        &'static str,
-    > {
-        let original = s.drafts.remove(pos);
-        let had_scheduled = original.schedule.is_some();
-        let new_qid = self.next_qid();
-        s.queue.push(QueuedMessage {
-            id: new_qid.clone(),
-            text: original.text.clone(),
-            content: original.content.clone(),
-            cmid: Some(op.clone()),
-            schedule: None,
-            origin: original.origin.clone(),
-            initiator: Some(trigger),
-        });
-        if self.has_store_writer() && tokio::runtime::Handle::try_current().is_ok() {
-            if let Some(rx) = self.send_acked_update_pending_with_retired(
-                session_id,
-                s.queue.clone(),
-                s.drafts.clone(),
-                Vec::new(),
-                Vec::new(),
-                s.pending_retired_dispatches.clone(),
-                false,
-            ) {
-                s.pending_durable_queue_ids.insert(new_qid.clone());
-                Ok((had_scheduled, Some((new_qid, op, original, rx))))
-            } else {
-                s.queue.retain(|m| m.id != new_qid);
-                s.drafts.insert(pos.min(s.drafts.len()), original);
-                Err("Failed to persist recovery draft activation; draft retained")
-            }
-        } else {
-            Ok((had_scheduled, None))
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn spawn_recovery_activation_commit(
-        &self,
-        sid: String,
-        draft_id: String,
-        new_qid: String,
-        op: String,
-        original: QueuedMessage,
-        had_scheduled: bool,
-        caller: crate::prompt_origin::RequestCaller,
-        rx: crate::core::hub_managed_calls::StoreAckRx,
-    ) {
-        let hub = self.clone();
-        self.spawn_teardown_requeue(async move {
-            match rx.await {
-                Ok(Ok(true)) => {
-                    let snapshot = {
-                        let mut sessions = hub.inner.sessions.lock();
-                        sessions.get_mut(&sid).map(|s| {
-                            s.pending_durable_queue_ids.remove(&new_qid);
-                            let visible_queue: Vec<QueuedMessage> = s
-                                .queue
-                                .iter()
-                                .filter(|m| !s.pending_durable_queue_ids.contains(&m.id))
-                                .cloned()
-                                .collect();
-                            (visible_queue, s.drafts.clone())
-                        })
-                    };
-                    if let Some((q, d)) = snapshot {
-                        hub.broadcast_pending_snapshot(&sid, &q, &d);
-                        if had_scheduled {
-                            hub.cancel_draft_timer(&sid, &draft_id);
-                            hub.broadcast_sessions();
-                        }
-                        hub.drain_head(&sid, true, true, Some(&caller));
-                    }
-                }
-                _ => {
-                    let restored = {
-                        let mut sessions = hub.inner.sessions.lock();
-                        sessions.get_mut(&sid).is_some_and(|s| {
-                            s.pending_durable_queue_ids.remove(&new_qid);
-                            let had_row = s.queue.iter().any(|m| m.id == new_qid);
-                            s.queue.retain(|m| m.id != new_qid);
-                            if had_row && !s.drafts.iter().any(|m| m.id == original.id) {
-                                s.drafts.push(original);
-                                true
-                            } else {
-                                false
-                            }
-                        })
-                    };
-                    if restored {
-                        hub.emit_pending(&sid);
-                    }
-                    let msg = "Failed to persist recovery draft activation; draft retained";
-                    hub.command_result(&sid, &op, CommandOutcome::Rejected, msg);
-                    hub.broadcast_error(Some(sid), msg.to_owned());
-                }
-            }
-        });
     }
 
     pub fn activate_all_drafts(

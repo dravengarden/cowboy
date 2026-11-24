@@ -287,7 +287,7 @@ pub enum UndeliveredRequeue {
 }
 
 #[derive(Default)]
-pub(super) struct DeferredPendingFlush {
+pub(in crate::core) struct DeferredPendingFlush {
     pub(super) dirty: bool,
     pub(super) settled_notices: Vec<(String, String)>,
     pub(super) released_claims: Vec<NoticeClaimRelease>,
@@ -306,7 +306,7 @@ pub(in crate::core) struct NoticeClaims {
     pub(super) seen_undelivered_keys: HashSet<(String, String, String)>,
     pub(super) result_relay_reservations: HashMap<(String, String), usize>,
     pub(super) pending_result_consumptions: HashMap<(String, String), String>,
-    pub(super) in_flight_pending_commits: HashMap<String, DeferredPendingFlush>,
+    pub(in crate::core) in_flight_pending_commits: HashMap<String, DeferredPendingFlush>,
     pub(super) commit_locks: HashMap<String, Arc<tokio::sync::Mutex<()>>>,
     pub(super) teardown_tasks: Vec<tokio::task::JoinHandle<()>>,
     /// Bounded per-session parked recovery cmids (in-lifetime idempotency & non-delivery suppression).

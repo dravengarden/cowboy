@@ -446,6 +446,7 @@ async fn worker_echo_overrides_multiblock_and_fails_closed_when_unverified() {
         trigger: DeliveryOrigin::peer("sender-1"),
         dispatched_at_ms: 100,
         undelivered_retired: false,
+        dispatch_seq: 0,
     }]);
 
     hub.push_tagged_from_worker(
@@ -620,6 +621,7 @@ async fn requeued_prompt_resent_after_newer_echo_arms_on_restart_and_trimmed_ech
             trigger: DeliveryOrigin::cowboy("managed_call"),
             dispatched_at_ms: 200,
             undelivered_retired: false,
+            dispatch_seq: 0,
         },
         PromptDispatchRecord {
             session_id: "restart-resent".into(),
@@ -628,6 +630,7 @@ async fn requeued_prompt_resent_after_newer_echo_arms_on_restart_and_trimmed_ech
             trigger: DeliveryOrigin::Owner,
             dispatched_at_ms: 300,
             undelivered_retired: false,
+            dispatch_seq: 0,
         },
     ]);
     hub.push_tagged_from_worker(
@@ -670,6 +673,7 @@ async fn requeued_prompt_resent_after_newer_echo_arms_on_restart_and_trimmed_ech
         trigger: DeliveryOrigin::Owner,
         dispatched_at_ms: 500,
         undelivered_retired: false,
+        dispatch_seq: 0,
     }]);
     hub2.push_tagged_from_worker(
         "restart-trimmed",

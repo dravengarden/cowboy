@@ -106,6 +106,10 @@ pub struct PromptDispatchRecord {
     pub dispatched_at_ms: i64,
     #[serde(default)]
     pub undelivered_retired: bool,
+    /// Durable monotonic per-session dispatch sequence so restart hydration
+    /// never loses a fresh dispatch across backward wall-clock steps.
+    #[serde(default)]
+    pub dispatch_seq: i64,
 }
 
 /// Compute the authoritative dispatch origin for a send.

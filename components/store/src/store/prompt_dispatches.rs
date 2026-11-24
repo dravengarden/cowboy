@@ -35,6 +35,7 @@ fn decode_record(
     trigger_json: &str,
     dispatched_at_ms: i64,
     undelivered_retired: i64,
+    dispatch_seq: i64,
 ) -> Result<PromptDispatchRecord> {
     let origin: DeliveryOrigin =
         serde_json::from_str(origin_json).context("decode prompt_dispatches.origin")?;
@@ -47,6 +48,7 @@ fn decode_record(
         trigger,
         dispatched_at_ms,
         undelivered_retired: undelivered_retired != 0,
+        dispatch_seq,
     })
 }
 
@@ -76,13 +78,14 @@ impl Store {
         let Some(row) = existing else {
             return Ok(false);
         };
-        if row.origin != record.origin {
+        if row.origin != record.origin || row.undelivered_retired {
             return Ok(false);
         }
-        // Keep origin and trigger immutable while recording the latest
-        // compatible send time so a requeued-and-resent prompt still wins
-        // restart pending-echo hydration over older already-echoed turns.
-        if record.dispatched_at_ms > row.dispatched_at_ms {
+        // Keep origin and trigger immutable while advancing durable per-session
+        // dispatch order (and monotonic timestamp) on a new send attempt (even
+        // if the wall clock stepped backward), while leaving an identical
+        // timestamp duplicate untouched.
+        if record.dispatched_at_ms != row.dispatched_at_ms {
             dispatch!(
                 self,
                 touch_prompt_dispatch_timestamp_raw(
@@ -120,16 +123,19 @@ impl Store {
         cmid: &str,
     ) -> Result<Option<PromptDispatchRecord>> {
         let row = dispatch!(self, prompt_dispatch_raw(session_id, cmid))?;
-        row.map(|(origin, trigger, dispatched_at_ms, retired)| {
-            decode_record(
-                session_id.to_owned(),
-                cmid.to_owned(),
-                &origin,
-                &trigger,
-                dispatched_at_ms,
-                retired,
-            )
-        })
+        row.map(
+            |(origin, trigger, dispatched_at_ms, retired, dispatch_seq)| {
+                decode_record(
+                    session_id.to_owned(),
+                    cmid.to_owned(),
+                    &origin,
+                    &trigger,
+                    dispatched_at_ms,
+                    retired,
+                    dispatch_seq,
+                )
+            },
+        )
         .transpose()
     }
 
@@ -148,7 +154,7 @@ impl Store {
     ) -> Result<Vec<PromptDispatchRecord>> {
         let rows = dispatch!(self, recent_prompt_dispatches_raw(per_session_limit))?;
         let mut out = Vec::with_capacity(rows.len());
-        for (session_id, cmid, origin, trigger, dispatched_at_ms, retired) in rows {
+        for (session_id, cmid, origin, trigger, dispatched_at_ms, retired, dispatch_seq) in rows {
             match decode_record(
                 session_id,
                 cmid,
@@ -156,6 +162,7 @@ impl Store {
                 &trigger,
                 dispatched_at_ms,
                 retired,
+                dispatch_seq,
             ) {
                 Ok(record) => out.push(record),
                 Err(error) => {
@@ -225,8 +232,9 @@ macro_rules! shared_impl {
             ) -> Result<u64> {
                 let res = sqlx::query(
                     "INSERT INTO prompt_dispatches \
-                     (session_id, cmid, origin, trigger_origin, dispatched_at_ms) \
-                     VALUES ($1, $2, $3, $4, $5) \
+                     (session_id, cmid, origin, trigger_origin, dispatched_at_ms, dispatch_seq) \
+                     VALUES ($1, $2, $3, $4, $5, \
+                       (SELECT COALESCE(MAX(dispatch_seq), 0) + 1 FROM prompt_dispatches WHERE session_id = $1)) \
                      ON CONFLICT (session_id, cmid) DO NOTHING",
                 )
                 .bind(session_id)
@@ -248,7 +256,8 @@ macro_rules! shared_impl {
             ) -> Result<()> {
                 sqlx::query(
                     "UPDATE prompt_dispatches \
-                     SET dispatched_at_ms = CASE WHEN dispatched_at_ms < $3 THEN $3 ELSE dispatched_at_ms END \
+                     SET dispatched_at_ms = CASE WHEN dispatched_at_ms < $3 THEN $3 ELSE dispatched_at_ms END, \
+                         dispatch_seq = (SELECT COALESCE(MAX(dispatch_seq), 0) + 1 FROM prompt_dispatches WHERE session_id = $1) \
                      WHERE session_id = $1 AND cmid = $2",
                 )
                 .bind(session_id)
@@ -266,9 +275,9 @@ macro_rules! shared_impl {
                 &self,
                 session_id: &str,
                 cmid: &str,
-            ) -> Result<Option<(String, String, i64, i64)>> {
+            ) -> Result<Option<(String, String, i64, i64, i64)>> {
                 sqlx::query_as(
-                    "SELECT origin, trigger_origin, dispatched_at_ms, CAST(undelivered_retired AS BIGINT) \
+                    "SELECT origin, trigger_origin, dispatched_at_ms, CAST(undelivered_retired AS BIGINT), CAST(dispatch_seq AS BIGINT) \
                      FROM prompt_dispatches \
                      WHERE session_id = $1 AND cmid = $2",
                 )
@@ -295,23 +304,24 @@ macro_rules! shared_impl {
             async fn recent_prompt_dispatches_raw(
                 &self,
                 per_session_limit: i64,
-            ) -> Result<Vec<(String, String, String, String, i64, i64)>> {
+            ) -> Result<Vec<(String, String, String, String, i64, i64, i64)>> {
                 sqlx::query_as(concat!(
                     "WITH ranked AS ( ",
                     "SELECT pd.session_id, pd.cmid, pd.origin, pd.trigger_origin, ",
                     "pd.dispatched_at_ms, CAST(pd.undelivered_retired AS BIGINT) AS undelivered_retired, ",
+                    "CAST(pd.dispatch_seq AS BIGINT) AS dispatch_seq, ",
                     "ROW_NUMBER() OVER ( ",
                     "PARTITION BY pd.session_id ",
-                    "ORDER BY pd.dispatched_at_ms DESC, pd.cmid DESC ",
+                    "ORDER BY pd.dispatch_seq DESC, pd.dispatched_at_ms DESC, pd.cmid DESC ",
                     ") AS rn ",
                     "FROM prompt_dispatches pd ",
                     "JOIN sessions s ON s.id = pd.session_id ",
                     "WHERE ",
                     $active_session,
                     " ) ",
-                    "SELECT session_id, cmid, origin, trigger_origin, dispatched_at_ms, undelivered_retired ",
+                    "SELECT session_id, cmid, origin, trigger_origin, dispatched_at_ms, undelivered_retired, dispatch_seq ",
                     "FROM ranked WHERE rn <= $1 ",
-                    "ORDER BY session_id, dispatched_at_ms ASC, cmid ASC"
+                    "ORDER BY session_id, dispatch_seq ASC, dispatched_at_ms ASC, cmid ASC"
                 ))
                 .bind(per_session_limit)
                 .fetch_all(&self.pool)

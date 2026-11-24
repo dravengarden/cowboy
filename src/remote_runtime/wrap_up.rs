@@ -1474,6 +1474,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn exact_undelivered_retirement_survives_restart_without_wall_clock_collision() {
         // Finding 7: exact per-dispatch `undelivered_retired` suppresses the parked/deleted
         // dispatch after restart while NEVER suppressing a fresh dispatch on the exact same
@@ -1519,6 +1520,9 @@ mod tests {
         let owner = crate::prompt_origin::DeliveryOrigin::from_caller(
             &crate::prompt_origin::RequestCaller::Person,
         );
+        // Finding 10: backward clock step (4_999 < 5_000) STILL arms the fresh
+        // dispatch on restart because durable `dispatch_seq` (2 > 1) determines
+        // the latest record instead of wall-clock timestamps.
         hub_restore.hydrate_prompt_dispatches(vec![
             crate::prompt_origin::PromptDispatchRecord {
                 session_id: "s-exact".into(),
@@ -1527,19 +1531,20 @@ mod tests {
                 trigger: owner.clone(),
                 dispatched_at_ms: 5_000,
                 undelivered_retired: true,
+                dispatch_seq: 1,
             },
-            // Same millisecond (5_000) fresh dispatch must NOT be suppressed by cmid-parked.
             crate::prompt_origin::PromptDispatchRecord {
                 session_id: "s-exact".into(),
-                cmid: "cmid-same-ms".into(),
+                cmid: "cmid-backward-clock".into(),
                 origin: owner.clone(),
                 trigger: owner.clone(),
-                dispatched_at_ms: 5_000,
+                dispatched_at_ms: 4_999,
                 undelivered_retired: false,
+                dispatch_seq: 2,
             },
         ]);
         assert!(hub_restore.is_cmid_parked_or_fenced("s-exact", "cmid-parked"));
-        assert!(!hub_restore.is_cmid_parked_or_fenced("s-exact", "cmid-same-ms"));
+        assert!(!hub_restore.is_cmid_parked_or_fenced("s-exact", "cmid-backward-clock"));
         assert!(
             hub_restore
                 .take_pending_echo_for_undelivered("s-exact", "cmid-parked")
@@ -1547,22 +1552,325 @@ mod tests {
         );
         assert!(
             hub_restore
-                .take_pending_echo_for_undelivered("s-exact", "cmid-same-ms")
-                .is_some()
+                .take_pending_echo_for_undelivered("s-exact", "cmid-backward-clock")
+                .is_some(),
+            "fresh dispatch with higher dispatch_seq and lower timestamp must arm on restart"
         );
-        // Even a live dispatch whose timestamp stepped backward (4_999 < 5_000) is NOT suppressed.
-        hub_restore.record_prompt_dispatch(
-            "s-exact",
-            "cmid-clock-step".into(),
-            owner.clone(),
-            owner,
-            4_999,
+        // Conversely, retiring the latest dispatch_seq must NOT resurrect an older row.
+        let hub_latest_retired = Hub::new();
+        hub_latest_retired.create_local_session(
+            "s-latest-ret".into(),
+            "antigravity".into(),
+            "/tmp".into(),
+            "s-latest-ret".into(),
+            SessionOrigin::Web,
+            false,
         );
-        assert!(!hub_restore.is_cmid_parked_or_fenced("s-exact", "cmid-clock-step"));
+        hub_latest_retired.hydrate_prompt_dispatches(vec![
+            crate::prompt_origin::PromptDispatchRecord {
+                session_id: "s-latest-ret".into(),
+                cmid: "cmid-older".into(),
+                origin: owner.clone(),
+                trigger: owner.clone(),
+                dispatched_at_ms: 4_000,
+                undelivered_retired: false,
+                dispatch_seq: 1,
+            },
+            crate::prompt_origin::PromptDispatchRecord {
+                session_id: "s-latest-ret".into(),
+                cmid: "cmid-latest-retired".into(),
+                origin: owner.clone(),
+                trigger: owner,
+                dispatched_at_ms: 3_500,
+                undelivered_retired: true,
+                dispatch_seq: 2,
+            },
+        ]);
         assert!(
-            hub_restore
-                .take_pending_echo_for_undelivered("s-exact", "cmid-clock-step")
-                .is_some()
+            hub_latest_retired
+                .take_pending_echo_for_undelivered("s-latest-ret", "cmid-older")
+                .is_none(),
+            "retiring the latest dispatch must not fall back to an older record"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn round2_recovery_park_fifo_activation_isolation_scheduling_and_bound_events() {
+        let caller = crate::prompt_origin::RequestCaller::Person;
+
+        // Finding 1: when the store FIFO is closed/refusing writes, recovery park
+        // must NEVER confirm delivery prematurely.
+        let health = Arc::new(crate::core::PersistenceHealth::default());
+        let (sink_closed, store_rx_closed) = crate::core::StoreSink::channel(1, health.clone());
+        drop(store_rx_closed);
+        let hub_closed = Hub::with_store(Some(sink_closed));
+        hub_closed.create_local_session(
+            "s-closed".into(),
+            "antigravity".into(),
+            "/tmp".into(),
+            "s-closed".into(),
+            SessionOrigin::Web,
+            false,
+        );
+        let mut closed_events = hub_closed.subscribe();
+        hub_closed.park_recovery_draft(
+            "s-closed",
+            "must not confirm".into(),
+            vec![serde_json::json!({"type": "text", "text": "must not confirm"})],
+            Some("op-closed".into()),
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        while let Ok(frame) = closed_events.try_recv() {
+            if let crate::core::Outbound::SyncPatch { confirmed, .. } = frame.outbound() {
+                assert!(
+                    !confirmed.iter().any(|c| c == "op-closed"),
+                    "failed/closed store write must never confirm client delivery"
+                );
+            }
+        }
+
+        // Findings 2, 3, 6, 8, 9, 11: preview-commit activation keeps s.queue
+        // clean during SQL wait (queue_resync & ClearQueue never touch it),
+        // serializes with notice withdrawal, refuses scheduling recovery drafts,
+        // reserves op ID against concurrent submits, and never drains an older
+        // paused/held head row.
+        let (sink, mut store_rx) = crate::core::StoreSink::channel(16, health);
+        let hub = Hub::with_store(Some(sink));
+        let acks = hub.store_ack_sink();
+        let (disp_tx, mut disp_rx) = tokio::sync::mpsc::channel(16);
+        hub.set_dispatch_tx(disp_tx);
+        hub.create_local_session(
+            "s-r2".into(),
+            "antigravity".into(),
+            "/tmp".into(),
+            "s-r2".into(),
+            SessionOrigin::Web,
+            false,
+        );
+        hub.set_status("s-r2", super::super::Status::Running, None);
+        hub.set_paused("s-r2", true);
+        hub.submit(
+            "s-r2",
+            "older paused prompt".into(),
+            vec![serde_json::json!({"type": "text", "text": "older paused prompt"})],
+            Some("op-older".into()),
+            &caller,
+        );
+        let _ = store_rx.recv().await;
+        hub.park_recovery_draft(
+            "s-r2",
+            "recovered prompt".into(),
+            vec![serde_json::json!({"type": "text", "text": "recovered prompt"})],
+            Some("op-parked".into()),
+        );
+        let park_ack = loop {
+            if let crate::core::StoreWrite::UpdatePending {
+                ack_id: Some(id), ..
+            } = store_rx.recv().await.unwrap()
+            {
+                break id;
+            }
+        };
+        acks.complete(park_ack, Ok(true));
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let draft_id = hub.queue_and_drafts("s-r2", |_| true).unwrap().1[0]
+            .id
+            .clone();
+        assert!(draft_id.starts_with("recovery-"));
+
+        // Finding 9: scheduling or firing a recovery-* draft is refused.
+        hub.schedule_draft(
+            "s-r2",
+            Some(draft_id.clone()),
+            Some("op-sched".into()),
+            String::new(),
+            vec![],
+            chrono::Utc::now().timestamp_millis() + 60_000,
+            crate::core::Delivery::Back,
+            &caller,
+        );
+        assert!(
+            hub.queue_and_drafts("s-r2", |_| true).unwrap().1[0]
+                .schedule
+                .is_none()
+        );
+        hub.fire_scheduled_draft("s-r2", &draft_id);
+        assert_eq!(hub.session_info("s-r2").unwrap().drafts_count, 1);
+
+        // Finding 11: reservation blocks concurrent submit / is_cmid_reserved_for_recovery.
+        let reservation = hub
+            .reserve_recovery_draft_activation("s-r2", &draft_id, "op-res-1")
+            .unwrap();
+        assert!(hub.is_cmid_reserved_for_recovery("s-r2", "op-res-1"));
+        assert_eq!(
+            hub.front_submit_with_outcome(
+                "s-r2",
+                "competing".into(),
+                vec![],
+                Some("op-res-1".into()),
+                &caller,
+            ),
+            crate::core::FrontSubmitOutcome::Duplicate
+        );
+        // Findings 3 & 8: begin durable activation; while awaiting SQL ACK,
+        // queue_resync does NOT confirm op-res-1, and ClearQueue does NOT delete
+        // the recovery draft when SQL subsequently fails!
+        let (mut commit, rx_fail) = match hub
+            .begin_durable_recovery_draft_activation(reservation, &caller)
+            .unwrap()
+        {
+            crate::core::RecoveryActivationCommitStep::Pending(c, rx) => (c, rx),
+            crate::core::RecoveryActivationCommitStep::CommittedSync => panic!("expected Pending"),
+        };
+        let act_fail_ack = loop {
+            if let crate::core::StoreWrite::UpdatePending {
+                ack_id: Some(id), ..
+            } = store_rx.recv().await.unwrap()
+            {
+                break id;
+            }
+        };
+        if let Some(crate::core::Outbound::SyncPatch { confirmed, .. }) = hub.queue_resync("s-r2") {
+            assert!(
+                !confirmed.iter().any(|c| c == "op-res-1"),
+                "queue_resync must not confirm uncommitted recovery activation"
+            );
+        }
+        // ClearQueue during in-flight activation clears only older committed queue rows.
+        let _ = hub.apply_or_preview_owner_notice_withdrawal(
+            "s-r2",
+            &crate::core::OwnerNoticeWithdrawalOp::ClearQueue,
+        );
+        acks.complete(act_fail_ack, Err("disk full".into()));
+        assert!(rx_fail.await.unwrap().is_err());
+        hub.abort_recovery_draft_activation(&mut commit);
+        assert_eq!(
+            hub.session_info("s-r2").unwrap().drafts_count,
+            1,
+            "recovery draft must survive ClearQueue + failed activation"
+        );
+        assert!(!hub.is_cmid_reserved_for_recovery("s-r2", "op-res-1"));
+
+        // Finding 6: re-add older paused prompt, then commit activation -> MUST
+        // NOT manually drain the older paused prompt!
+        hub.submit(
+            "s-r2",
+            "older held prompt".into(),
+            vec![serde_json::json!({"type": "text", "text": "older held prompt"})],
+            Some("op-held".into()),
+            &caller,
+        );
+        let reservation2 = hub
+            .reserve_recovery_draft_activation("s-r2", &draft_id, "op-res-2")
+            .unwrap();
+        let (mut commit2, rx_ok) = match hub
+            .begin_durable_recovery_draft_activation(reservation2, &caller)
+            .unwrap()
+        {
+            crate::core::RecoveryActivationCommitStep::Pending(c, rx) => (c, rx),
+            crate::core::RecoveryActivationCommitStep::CommittedSync => panic!("expected Pending"),
+        };
+        let act_ok_ack = loop {
+            if let crate::core::StoreWrite::UpdatePending {
+                ack_id: Some(id), ..
+            } = store_rx.recv().await.unwrap()
+            {
+                break id;
+            }
+        };
+        acks.complete(act_ok_ack, Ok(true));
+        assert!(rx_ok.await.unwrap().unwrap());
+        hub.commit_recovery_draft_activation(&mut commit2, &caller);
+        assert!(
+            disp_rx.try_recv().is_err(),
+            "committing recovery draft at tail must NOT dispatch an older paused head prompt"
+        );
+        let (q_after, d_after) = hub.queue_and_drafts("s-r2", |_| true).unwrap();
+        assert!(d_after.is_empty());
+        assert_eq!(q_after.len(), 2);
+        assert_eq!(q_after[0].cmid.as_deref(), Some("op-held"));
+        assert_eq!(q_after[1].cmid.as_deref(), Some("op-res-2"));
+
+        // Finding 5: execution-bound default-account session rejects Ready /
+        // TurnStarted events from a binding-mismatched worker epoch.
+        let seed = Hub::new();
+        seed.create_local_session(
+            "s-ev-bound".into(),
+            "antigravity".into(),
+            "/tmp".into(),
+            "s-ev-bound".into(),
+            SessionOrigin::Web,
+            false,
+        );
+        let mut meta = seed.session_info("s-ev-bound").unwrap().meta;
+        meta.execution_binding = Some(crate::execution_environment::ExecutionBinding::from_record(
+            serde_json::json!({
+                "schema": 1,
+                "kind": "remote",
+                "target": "hawk"
+            }),
+        ));
+        let hub_ev = Hub::new();
+        hub_ev.restore_reconciling_runtime(vec![crate::core::RestoredSession {
+            meta: meta.clone(),
+            log: vec![],
+            event_count: 0,
+            reached_start: true,
+            next_seq: 1,
+            queue: vec![],
+            drafts: vec![],
+            config_options: None,
+            config_preferences: serde_json::json!({}),
+            mobile_review_state: serde_json::json!({}),
+            folder_id: None,
+            last_event_at_ms: None,
+        }]);
+        let mut good = busy_snapshot("s-ev-bound", "epoch-good", true);
+        good.launch = Some(crate::runtime_wire::StartSession {
+            session_id: "s-ev-bound".into(),
+            provider: "antigravity".into(),
+            provider_version: String::new(),
+            provider_generation_digest: String::new(),
+            provider_account_id: meta.provider_account_id.clone(),
+            provider_auth_generation: None,
+            provider_behavior: None,
+            cwd: "/tmp".into(),
+            agent_session_id: Some("agent-good".into()),
+            system: false,
+            context_window: None,
+            auto_compact_token_limit: None,
+            cache_protection: None,
+            generation: "g1".into(),
+            fallback_for: None,
+            adopt_only: true,
+            execution_binding: meta.execution_binding.clone(),
+            extensions: None,
+            mcp_plan: None,
+            native_fork: None,
+        });
+        let rt_ev = super::super::RemoteRuntime::for_test(hub_ev.clone(), vec![good]);
+        // Mismatched epoch sends Ready with hijacked native session ID -> MUST be rejected!
+        rt_ev
+            .project_trace_fixture(Frame::WorkerEvent {
+                session_id: "s-ev-bound".into(),
+                worker_epoch: "epoch-bad".into(),
+                runtime_seq: 1,
+                event: crate::runtime_wire::RuntimeEvent::Ready {
+                    agent_session_id: Some("agent-hijacked".into()),
+                },
+                diagnostics: vec![],
+            })
+            .await;
+        assert_ne!(
+            hub_ev
+                .session_info("s-ev-bound")
+                .unwrap()
+                .meta
+                .agent_session_id
+                .as_deref(),
+            Some("agent-hijacked"),
+            "rejected binding-mismatched worker epoch must never project Ready/TurnStarted events"
         );
     }
 }

@@ -901,10 +901,12 @@ pub fn build_prompt_blocks(text: &str, content: &[serde_json::Value]) -> Option<
     }
 }
 
-/// Combined admission refusal and durable notice-withdrawal pre-step for `handle_command`.
+/// Combined admission refusal, durable retired-submit dedupe, durable recovery
+/// activation, and durable notice-withdrawal pre-step for `handle_command`.
 pub async fn prehandle_command(
     state: &Arc<AppState>,
     principal: &ProductPrincipal,
+    caller: &crate::prompt_origin::RequestCaller,
     cmd: &Inbound,
     session_id_for_err: &Option<String>,
 ) -> Option<bool> {
@@ -916,17 +918,58 @@ pub async fn prehandle_command(
     if refuse_command(state, principal, cmd, session_id_for_err, &authored_cmid) {
         return Some(false);
     }
-    if let Some(done) = verify_recovery_draft_activation_op_id(state, cmd).await {
+    if let Inbound::Submit {
+        session_id, cmid, ..
+    } = cmd
+        && let Some(done) = check_durably_retired_submit(state, session_id, cmid.as_deref()).await
+    {
+        return Some(done);
+    }
+    if let Some(done) = try_commit_recovery_draft_activation(state, caller, cmd).await {
         return Some(done);
     }
     try_commit_owner_notice_withdrawal(state, cmd, &authored_cmid).await
 }
 
-/// Reject recovery-draft activation with missing, synthetic, or historically
-/// used operation IDs against durable `prompt_dispatches` + `events` history
-/// BEFORE mutating Hub or removing the recovery draft.
-async fn verify_recovery_draft_activation_op_id(
+/// On an authored submit cache miss, consult durable `prompt_dispatches` so an
+/// offline browser replaying a previously parked/retired operation ID receives
+/// an addressed delivery confirmation instead of executing the retired prompt again.
+pub async fn check_durably_retired_submit(
+    state: &AppState,
+    session_id: &str,
+    cmid: Option<&str>,
+) -> Option<bool> {
+    let op = cmid.filter(|id| crate::core::Hub::is_authored_cmid(id))?;
+    if state.hub.is_cmid_known_in_hub(session_id, op) {
+        return None;
+    }
+    let store = state.store.as_ref()?;
+    match store.prompt_dispatch(session_id, op).await {
+        Ok(Some(row)) if row.undelivered_retired => {
+            state.hub.confirm_durably_retired_cmid(session_id, op);
+            Some(true)
+        }
+        Ok(_) => None,
+        Err(error) => {
+            tracing::warn!(%error, session = %session_id, "failed to check durable prompt retirement");
+            let msg = "Could not verify prompt delivery state; retry shortly";
+            state
+                .hub
+                .command_result(session_id, op, CommandOutcome::Rejected, msg);
+            state
+                .hub
+                .broadcast_error(Some(session_id.to_owned()), msg.to_owned());
+            Some(false)
+        }
+    }
+}
+
+/// Atomically reserve the fresh client operation ID, check durable history,
+/// serialize against per-session pending commits (`pending_commit_lock`), and
+/// durably commit a `recovery-*` draft activation before mutating Hub.
+async fn try_commit_recovery_draft_activation(
     state: &Arc<AppState>,
+    caller: &crate::prompt_origin::RequestCaller,
     cmd: &Inbound,
 ) -> Option<bool> {
     let Inbound::ActivateDraft {
@@ -955,22 +998,79 @@ async fn verify_recovery_draft_activation_op_id(
             .broadcast_error(Some(session_id.clone()), msg.to_owned());
         return Some(false);
     };
-    let store = state.store.as_ref()?;
-    match store.operation_id_used_in_history(session_id, op).await {
-        Ok(false) => None,
-        Ok(true) => {
-            let msg = "Activation operation id is already in use; draft retained";
+    let reservation = match state
+        .hub
+        .reserve_recovery_draft_activation(session_id, id, op)
+    {
+        Ok(r) => r,
+        Err(crate::core::RecoveryReserveErr::NotFound) => return Some(true),
+        Err(
+            crate::core::RecoveryReserveErr::InvalidOperationId(msg)
+            | crate::core::RecoveryReserveErr::OperationInUse(msg)
+            | crate::core::RecoveryReserveErr::AlreadyActivating(msg),
+        ) => {
             state
                 .hub
                 .command_result(session_id, op, CommandOutcome::Rejected, msg);
             state
                 .hub
                 .broadcast_error(Some(session_id.clone()), msg.to_owned());
-            Some(false)
+            return Some(false);
         }
-        Err(error) => {
-            tracing::warn!(%error, session = %session_id, "failed to verify recovery activation op id");
-            let msg = "Could not verify activation operation id; draft retained";
+    };
+    if let Some(store) = state.store.as_ref() {
+        match store.operation_id_used_in_history(session_id, op).await {
+            Ok(false) => {}
+            Ok(true) => {
+                let msg = "Activation operation id is already in use; draft retained";
+                state
+                    .hub
+                    .command_result(session_id, op, CommandOutcome::Rejected, msg);
+                state
+                    .hub
+                    .broadcast_error(Some(session_id.clone()), msg.to_owned());
+                return Some(false);
+            }
+            Err(error) => {
+                tracing::warn!(%error, session = %session_id, "failed to verify recovery activation op id");
+                let msg = "Could not verify activation operation id; draft retained";
+                state
+                    .hub
+                    .command_result(session_id, op, CommandOutcome::Rejected, msg);
+                state
+                    .hub
+                    .broadcast_error(Some(session_id.clone()), msg.to_owned());
+                return Some(false);
+            }
+        }
+    }
+    let _guard = state.hub.pending_commit_lock(session_id).await;
+    let (mut commit, rx) = match state
+        .hub
+        .begin_durable_recovery_draft_activation(reservation, caller)
+    {
+        Ok(crate::core::RecoveryActivationCommitStep::CommittedSync) => return Some(true),
+        Ok(crate::core::RecoveryActivationCommitStep::Pending(commit, rx)) => (commit, rx),
+        Err(msg) => {
+            state
+                .hub
+                .command_result(session_id, op, CommandOutcome::Rejected, msg);
+            state
+                .hub
+                .broadcast_error(Some(session_id.clone()), msg.to_owned());
+            return Some(false);
+        }
+    };
+    match rx.await {
+        Ok(Ok(true)) => {
+            state
+                .hub
+                .commit_recovery_draft_activation(&mut commit, caller);
+            Some(true)
+        }
+        _ => {
+            state.hub.abort_recovery_draft_activation(&mut commit);
+            let msg = "Failed to persist recovery draft activation; draft retained";
             state
                 .hub
                 .command_result(session_id, op, CommandOutcome::Rejected, msg);

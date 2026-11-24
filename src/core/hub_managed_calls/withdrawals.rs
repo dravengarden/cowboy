@@ -209,19 +209,25 @@ impl Hub {
                 }
                 (queue, drafts)
             } else {
-                let Some(rx) = self.send_acked_update_pending(
+                let mut claims = self.inner.notice_claims.lock();
+                if claims.in_flight_pending_commits.contains_key(session_id) {
+                    return OwnerQueueMutation::Rejected(
+                        "another pending queue commit is in progress; retry shortly",
+                    );
+                }
+                let Some(rx) = self.send_acked_update_pending_with_retired(
                     session_id,
                     queue.clone(),
                     drafts.clone(),
                     settled_notices.clone(),
                     Vec::new(),
+                    s.pending_retired_dispatches.clone(),
                     false,
                 ) else {
                     return OwnerQueueMutation::Rejected(
                         "durable store writer unavailable; completion notice withdrawal was not committed",
                     );
                 };
-                let mut claims = self.inner.notice_claims.lock();
                 for (cid, _) in &settled_notices {
                     claims
                         .withdrawing
@@ -288,19 +294,25 @@ impl Hub {
         if settled_notices.is_empty() {
             return None;
         }
-        let Some(rx) = self.send_acked_update_pending(
+        let mut claims = self.inner.notice_claims.lock();
+        if claims.in_flight_pending_commits.contains_key(session_id) {
+            return Some(Err(
+                "another pending queue commit is in progress; retry shortly",
+            ));
+        }
+        let Some(rx) = self.send_acked_update_pending_with_retired(
             session_id,
             queue.clone(),
             drafts.clone(),
             settled_notices.clone(),
             Vec::new(),
+            s.pending_retired_dispatches.clone(),
             false,
         ) else {
             return Some(Err(
                 "durable store writer unavailable; completion notice withdrawal was not committed",
             ));
         };
-        let mut claims = self.inner.notice_claims.lock();
         for (cid, _) in &settled_notices {
             claims
                 .withdrawing
@@ -536,36 +548,52 @@ impl Hub {
                 let queue = s.queue.clone();
                 let drafts = s.drafts.clone();
                 let retired = s.pending_retired_dispatches.clone();
-                if self.has_store_writer() && tokio::runtime::Handle::try_current().is_ok() {
-                    self.send_acked_update_pending_with_retired(
-                        session_id,
-                        queue,
-                        drafts,
-                        Vec::new(),
-                        Vec::new(),
-                        retired,
-                        false,
-                    )
+                if self.has_store_writer() {
+                    let mut claims = self.inner.notice_claims.lock();
+                    if let Some(deferred) = claims.in_flight_pending_commits.get_mut(session_id) {
+                        deferred.dirty = true;
+                        deferred.retired_dispatches.extend(retired);
+                        None
+                    } else if tokio::runtime::Handle::try_current().is_ok() {
+                        self.send_acked_update_pending_with_retired(
+                            session_id,
+                            queue,
+                            drafts,
+                            Vec::new(),
+                            Vec::new(),
+                            retired,
+                            false,
+                        )
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
             };
-            if let Some(rx) = ack_rx {
+            if !self.has_store_writer() {
+                self.finish_committed_recovery_park(session_id, cmid.as_deref());
+                return;
+            }
+            if tokio::runtime::Handle::try_current().is_ok() {
                 let hub = self.clone();
                 let sid = session_id.to_owned();
                 let orig_cid = cmid;
                 self.spawn_teardown_requeue(async move {
-                    let mut current_rx = Some(rx);
-                    for (attempt, delay_ms) in [0_u64, 25, 50, 100].into_iter().enumerate() {
-                        if attempt > 0 {
+                    let mut current_rx = ack_rx;
+                    for (attempt, delay_ms) in [0_u64, 25, 50, 100, 250, 500].into_iter().enumerate() {
+                        if current_rx.is_none() {
+                            if attempt > 0 {
+                                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                            }
                             if !hub.has_store_writer() {
                                 break;
                             }
-                            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                            let _guard = hub.pending_commit_lock(&sid).await;
                             current_rx = hub.retry_recovery_park_write(&sid, orig_cid.as_deref());
                         }
                         let Some(rx) = current_rx.take() else {
-                            break;
+                            continue;
                         };
                         match rx.await {
                             Ok(Ok(true)) => {
@@ -573,16 +601,14 @@ impl Hub {
                                 return;
                             }
                             Ok(Ok(false)) => return,
-                            Ok(Err(_)) => {}
-                            Err(_) => break,
+                            Ok(Err(_)) | Err(_) => {}
                         }
                     }
+                    tracing::warn!(
+                        session_id = %sid,
+                        "recovery park durable commit did not succeed; retaining fenced draft without confirming client delivery"
+                    );
                 });
-            } else {
-                if self.has_store_writer() {
-                    self.emit_pending(session_id);
-                }
-                self.finish_committed_recovery_park(session_id, cmid.as_deref());
             }
             return;
         };
@@ -620,6 +646,15 @@ impl Hub {
     ) -> Option<StoreAckRx> {
         let sessions = self.inner.sessions.lock();
         let s = sessions.get(session_id)?;
+        if self
+            .inner
+            .notice_claims
+            .lock()
+            .in_flight_pending_commits
+            .contains_key(session_id)
+        {
+            return None;
+        }
         let mut retired = s.pending_retired_dispatches.clone();
         if let Some(cid) = orig_cmid
             && !retired.iter().any(|c| c == cid)
@@ -655,13 +690,7 @@ impl Hub {
                     rec.undelivered_retired = true;
                 }
             }
-            let visible_queue: Vec<QueuedMessage> = s
-                .queue
-                .iter()
-                .filter(|m| !s.pending_durable_queue_ids.contains(&m.id))
-                .cloned()
-                .collect();
-            (visible_queue, s.drafts.clone())
+            (s.queue.clone(), s.drafts.clone())
         };
         if let Some(cid) = orig_cmid {
             self.confirm_delivered(session_id, cid);

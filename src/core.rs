@@ -41,6 +41,10 @@ use hub_config::{ConfigPreviews, add_config_choices};
 pub use hub_wrap_up::FrontSubmitOutcome;
 mod hub_events;
 pub use hub_events::FanoutFrame;
+pub use hub_queue::{
+    InFlightDispatchCmidGuard, PendingRecoveryActivationCommit, RecoveryActivationCommitStep,
+    RecoveryActivationReservation, RecoveryReserveErr,
+};
 mod hub_managed_calls;
 pub use hub_managed_calls::{
     NoticeClaimGuard, NoticeRequeueRequest, OwnerNoticeWithdrawalOp, OwnerQueueMutation,
@@ -710,7 +714,9 @@ struct Session {
     restored_last_event_at_ms: Option<i64>,
     pending_retired_dispatches: Vec<String>,
     committed_parked_cmids: VecDeque<String>,
-    pending_durable_queue_ids: HashSet<String>,
+    reserved_recovery_cmids: HashSet<String>,
+    in_flight_dispatch_cmids: HashSet<String>,
+    activating_recovery_drafts: HashSet<String>,
     /// A worker reports the same completed turn through both `TurnEnded` and a
     /// trailing `Busy` -> `Running` lifecycle edge. The first edge may drain the
     /// next prompt before the second arrives. Latch that completion until the
@@ -2321,7 +2327,9 @@ impl Hub {
                         restored_last_event_at_ms: last_event_at_ms,
                         pending_retired_dispatches: Vec::new(),
                         committed_parked_cmids: VecDeque::new(),
-                        pending_durable_queue_ids: HashSet::new(),
+                        reserved_recovery_cmids: HashSet::new(),
+                        in_flight_dispatch_cmids: HashSet::new(),
+                        activating_recovery_drafts: HashSet::new(),
                         turn_completion_latched: false,
                         provider_generation_missing: false,
                         lifecycle_epoch: 0,
@@ -2392,35 +2400,6 @@ impl Hub {
     /// reconciliation. A broker-only placeholder is ignored while a persisted
     /// Busy turn is still waiting for its owner, so it cannot overwrite Busy
     /// with a speculative Starting/Running state.
-    /// Returns false when a known session with an execution binding or named
-    /// provider account receives a snapshot whose launch spec does not match
-    /// the session's bound execution/provider tuple.
-    pub fn matches_runtime_snapshot_binding(&self, worker: &WorkerSnapshot) -> bool {
-        !self.session_info(&worker.session_id).is_some_and(|info| {
-            (info.meta.execution_binding.is_some() || !info.meta.provider_account_id.is_default())
-                && !worker.launch.as_ref().is_some_and(|launch| {
-                    launch.execution_binding == info.meta.execution_binding
-                        && launch.provider == info.meta.provider
-                        && launch.provider_account_id == info.meta.provider_account_id
-                        && launch.provider_version == info.meta.provider_version
-                        && launch.provider_generation_digest == info.meta.provider_generation_digest
-                        && launch.provider_auth_generation == info.meta.provider_auth_generation
-                        && launch.cwd == info.meta.cwd
-                })
-        })
-    }
-
-    /// True when `worker` is a broker-only placeholder for a session still
-    /// awaiting its real connected owner during startup reconciliation.
-    pub fn is_reconciling_runtime_placeholder(&self, worker: &WorkerSnapshot) -> bool {
-        !worker.has_connected_owner()
-            && self
-                .inner
-                .runtime_reconciliation
-                .lock()
-                .contains(&worker.session_id)
-    }
-
     pub fn accept_runtime_snapshot(&self, worker: &WorkerSnapshot) -> bool {
         if !self.accepts_runtime_projection(&worker.session_id)
             || !self.matches_runtime_snapshot_binding(worker)
@@ -3151,7 +3130,9 @@ impl Hub {
                     restored_last_event_at_ms: None,
                     pending_retired_dispatches: Vec::new(),
                     committed_parked_cmids: VecDeque::new(),
-                    pending_durable_queue_ids: HashSet::new(),
+                    reserved_recovery_cmids: HashSet::new(),
+                    activating_recovery_drafts: HashSet::new(),
+                    in_flight_dispatch_cmids: HashSet::new(),
                     turn_completion_latched: false,
                     provider_generation_missing: false,
                     lifecycle_epoch: 0,

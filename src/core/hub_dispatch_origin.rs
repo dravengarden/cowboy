@@ -59,12 +59,20 @@ fn note_dispatch_origin(
     dispatched_at_ms: i64,
     expected_blocks: usize,
 ) {
+    let next_seq = s
+        .dispatched_origins
+        .values()
+        .map(|r| r.dispatch_seq)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
     if let Some(existing) = s.dispatched_origins.get_mut(cmid) {
-        if existing.origin != origin {
-            // Fail closed: never arm or mutate a conflicting provenance entry.
+        if existing.origin != origin || existing.undelivered_retired {
+            // Fail closed: never arm or mutate a conflicting or durably retired entry.
             return;
         }
         existing.dispatched_at_ms = existing.dispatched_at_ms.max(dispatched_at_ms);
+        existing.dispatch_seq = existing.dispatch_seq.max(next_seq);
         let kept_origin = existing.origin.clone();
         note_pending_echo(s, cmid, kept_origin, expected_blocks);
         return;
@@ -85,6 +93,7 @@ fn note_dispatch_origin(
             trigger,
             dispatched_at_ms,
             undelivered_retired: false,
+            dispatch_seq: next_seq,
         },
     );
 }
@@ -277,29 +286,56 @@ impl Hub {
             let Some(s) = sessions.get_mut(&session_id) else {
                 continue;
             };
-            let Some(max_ts) = rows.iter().map(|r| r.dispatched_at_ms).max() else {
+            let Some(max_order) = rows
+                .iter()
+                .map(|r| (r.dispatch_seq, r.dispatched_at_ms))
+                .max()
+            else {
                 continue;
             };
             let trimmed_floor = (!s.reached_start)
                 .then_some(s.restored_last_event_at_ms)
                 .flatten();
-            let candidate = rows
-                .into_iter()
-                .rev()
-                .filter(|r| r.dispatched_at_ms == max_ts)
-                .find(|r| {
-                    !r.undelivered_retired
-                        && !s
-                            .log
-                            .iter()
-                            .any(|env| env.cmid.as_deref() == Some(r.cmid.as_str()))
-                        && !s
-                            .drafts
-                            .iter()
-                            .any(|m| m.cmid.as_deref() == Some(r.cmid.as_str()))
-                });
+            // Select the latest dispatch using durable per-session order
+            // (`dispatch_seq`, falling back to `dispatched_at_ms` for legacy
+            // rows with `dispatch_seq == 0`) and apply retirement to that exact
+            // record so a backward clock step can never suppress a fresh
+            // dispatch and retiring the latest dispatch never resurrects an
+            // older row.
+            let candidate = if max_order.0 > 0 {
+                rows.into_iter()
+                    .rev()
+                    .find(|r| (r.dispatch_seq, r.dispatched_at_ms) == max_order)
+                    .filter(|r| {
+                        !r.undelivered_retired
+                            && !s
+                                .log
+                                .iter()
+                                .any(|env| env.cmid.as_deref() == Some(r.cmid.as_str()))
+                            && !s
+                                .drafts
+                                .iter()
+                                .any(|m| m.cmid.as_deref() == Some(r.cmid.as_str()))
+                    })
+            } else {
+                rows.into_iter()
+                    .rev()
+                    .filter(|r| r.dispatched_at_ms == max_order.1)
+                    .find(|r| {
+                        !r.undelivered_retired
+                            && !s
+                                .log
+                                .iter()
+                                .any(|env| env.cmid.as_deref() == Some(r.cmid.as_str()))
+                            && !s
+                                .drafts
+                                .iter()
+                                .any(|m| m.cmid.as_deref() == Some(r.cmid.as_str()))
+                    })
+            };
             if let Some(record) = candidate
-                && trimmed_floor.is_none_or(|floor| record.dispatched_at_ms >= floor)
+                && (record.dispatch_seq > 0
+                    || trimmed_floor.is_none_or(|floor| record.dispatched_at_ms >= floor))
             {
                 note_pending_echo(
                     s,

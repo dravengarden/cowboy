@@ -302,6 +302,33 @@ pub async fn api_session_prompt(
     if delivery == SendDelivery::Interrupt && req.target.is_some() {
         return send_delivery::submit(state, session_id, caller, req).await;
     }
+    if let Some(done) = super::client_commands::check_durably_retired_submit(
+        &state,
+        &session_id,
+        req.operation.as_deref(),
+    )
+    .await
+    {
+        if !done {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "could not verify prompt delivery state; retry shortly",
+            )
+                .into_response();
+        }
+        if delivery == SendDelivery::WrapUp {
+            return (
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({
+                    "delivery": "wrap_up",
+                    "status": "duplicate",
+                    "hint_emitted": false,
+                })),
+            )
+                .into_response();
+        }
+        return (StatusCode::ACCEPTED, "already accepted").into_response();
+    }
     // Keep the read guard through dispatch. Provider uninstall acquires the
     // write guard before it snapshots active turns, so a prompt can never slip
     // between the fence check and the explicit active-turn confirmation.

@@ -718,7 +718,8 @@ pub async fn handle_command(
     // commands carry one; NewSession doesn't (the session id is assigned
     // by the daemon after success).
     let session_id_for_err: Option<String> = command_session_id(&cmd);
-    if let Some(done) = prehandle_command(state, principal, &cmd, &session_id_for_err).await {
+    if let Some(done) = prehandle_command(state, principal, caller, &cmd, &session_id_for_err).await
+    {
         return done;
     }
     let retry_original = resolve_retry_original(state, &cmd).await;

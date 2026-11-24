@@ -700,9 +700,10 @@ pub(super) struct DispatchedPrompts {
     next_seq: u64,
     /// Evicted command disposition keyed by `(session_id, digest(command_id))`:
     /// `Some(epoch)` when acked with a known handed-off worker epoch, or `None`
-    /// when evicted unacked / without an epoch (always ambiguous on replay).
+    /// when evicted without an epoch (always ambiguous on replay). Entries are
+    /// retained intact up to `MAX_EVICTED_COMMANDS` (cleared on session retire)
+    /// and new fresh prompt admission fails closed when capacity is reached.
     evicted_commands: std::collections::HashMap<(String, [u8; 16]), Option<String>>,
-    evicted_order: std::collections::VecDeque<(String, [u8; 16])>,
 }
 
 impl DispatchedPrompts {
@@ -744,39 +745,43 @@ impl DispatchedPrompts {
             || self.was_command_evicted(session_id, command_id)
     }
 
+    /// True when active or evicted replay tracking has reached its hard bound
+    /// and cannot safely admit a brand-new fresh prompt without forgetting
+    /// earlier replayable handoffs. Existing tracked/evicted commands still
+    /// resolve deterministically.
+    pub(super) fn at_capacity(&mut self) -> bool {
+        self.evict_acked_if_needed();
+        self.entries.len() >= Self::MAX_ENTRIES * 2
+    }
+
+    fn can_record_eviction(&self, session_id: &str, command_id: &str) -> bool {
+        if self.evicted_commands.len() < Self::MAX_EVICTED_COMMANDS {
+            return true;
+        }
+        let key = (session_id.to_owned(), evicted_command_digest(command_id));
+        self.evicted_commands.contains_key(&key)
+    }
+
     fn record_eviction(
         &mut self,
         session_id: String,
         command_id: &str,
         record: DispatchedPromptRecord,
-    ) {
+    ) -> bool {
         let key = (session_id, evicted_command_digest(command_id));
+        if self.evicted_commands.len() >= Self::MAX_EVICTED_COMMANDS
+            && !self.evicted_commands.contains_key(&key)
+        {
+            return false;
+        }
         let disposition = if record.acked { record.epoch } else { None };
         let existing = self.evicted_commands.get(&key);
         let merged = match (existing, disposition) {
             (Some(None), _) | (_, None) => None,
             (_, Some(epoch)) => Some(epoch),
         };
-        let is_new = !self.evicted_commands.contains_key(&key);
-        self.evicted_commands.insert(key.clone(), merged);
-        if is_new {
-            self.evicted_order.push_back(key);
-        }
-        let mut scanned = 0;
-        let max_scan = self.evicted_order.len();
-        while self.evicted_commands.len() > Self::MAX_EVICTED_COMMANDS && scanned < max_scan {
-            let Some(oldest) = self.evicted_order.pop_front() else {
-                break;
-            };
-            scanned += 1;
-            match self.evicted_commands.get(&oldest) {
-                Some(None) => self.evicted_order.push_back(oldest),
-                Some(Some(_)) => {
-                    self.evicted_commands.remove(&oldest);
-                }
-                None => {}
-            }
-        }
+        self.evicted_commands.insert(key, merged);
+        true
     }
 
     fn alloc_seq(&mut self) -> u64 {
@@ -874,7 +879,6 @@ impl DispatchedPrompts {
         self.order.retain(|(sid, _, _)| sid != session_id);
         self.evicted_commands
             .retain(|(sid, _), _| sid != session_id);
-        self.evicted_order.retain(|(sid, _)| sid != session_id);
     }
 
     fn evict_acked_if_needed(&mut self) {
@@ -891,26 +895,22 @@ impl DispatchedPrompts {
                 Some(rec) if !rec.acked => {
                     self.order.push_back((key.0, key.1, seq));
                 }
-                Some(_) => {
+                Some(_) if self.can_record_eviction(&key.0, &key.1) => {
                     if let Some(rec) = self.entries.remove(&key) {
-                        self.record_eviction(key.0, &key.1, rec);
+                        let _ = self.record_eviction(key.0, &key.1, rec);
                     }
+                }
+                Some(_) => {
+                    // Evicted history is at capacity: keep entry intact in
+                    // `entries` so bounded admission fails closed without
+                    // dropping earlier replayable handoffs or growing past cap.
+                    self.order.push_back((key.0, key.1, seq));
+                    break;
                 }
                 None => {}
             }
         }
         let hard_cap = Self::MAX_ENTRIES * 2;
-        while self.entries.len() > hard_cap {
-            let Some((sid, cid, seq)) = self.order.pop_front() else {
-                break;
-            };
-            let key = (sid, cid);
-            if self.entries.get(&key).is_some_and(|rec| rec.seq == seq)
-                && let Some(rec) = self.entries.remove(&key)
-            {
-                self.record_eviction(key.0, &key.1, rec);
-            }
-        }
         if self.order.len() > hard_cap {
             self.compact_order();
         }
@@ -1053,6 +1053,34 @@ impl super::Broker {
         self.route_prompt_inner(None, session_id, command);
     }
 
+    fn dispatch_prior_epoch_prompt(
+        &self,
+        workers: &std::collections::HashMap<String, super::WorkerPeer>,
+        session_id: &str,
+        prev_epoch: &str,
+        command_id: String,
+        command: WorkerCommand,
+    ) -> Option<(String, String)> {
+        if let Some(worker) = workers.get(session_id)
+            && worker.welcomed
+            && worker.epoch == prev_epoch
+            && worker
+                .tx
+                .send(Frame::WorkerCommand {
+                    session_id: session_id.to_owned(),
+                    command: self.trace_worker_dispatch(session_id, command),
+                })
+                .is_ok()
+        {
+            None
+        } else {
+            Some((
+                command_id,
+                "delivery_ambiguous: original worker changed after prompt handoff".to_owned(),
+            ))
+        }
+    }
+
     fn route_prompt_inner(
         &self,
         expected_lease: Option<u64>,
@@ -1102,26 +1130,21 @@ impl super::Broker {
                     reason
                 }
             };
-            if let Some(prev_epoch) = prior_epoch {
-                if let Some(worker) = workers.get(session_id)
-                    && worker.welcomed
-                    && worker.epoch == prev_epoch
-                    && worker
-                        .tx
-                        .send(Frame::WorkerCommand {
-                            session_id: session_id.to_owned(),
-                            command: self.trace_worker_dispatch(session_id, command),
-                        })
-                        .is_ok()
-                {
-                    None
-                } else {
-                    Some((
-                        command_id,
-                        "delivery_ambiguous: original worker changed after prompt handoff"
-                            .to_owned(),
-                    ))
-                }
+            if !dispatched.was_ingressed_or_uncertain(session_id, &command_id)
+                && dispatched.at_capacity()
+            {
+                Some((
+                    command_id,
+                    "unhanded: broker prompt replay history at capacity; retry".to_owned(),
+                ))
+            } else if let Some(prev_epoch) = prior_epoch {
+                self.dispatch_prior_epoch_prompt(
+                    &workers,
+                    session_id,
+                    &prev_epoch,
+                    command_id,
+                    command,
+                )
             } else {
                 match workers.get(session_id) {
                     Some(worker) if worker.welcomed && !worker.snapshot.drain_requested => {
@@ -2536,5 +2559,64 @@ mod tests {
             }
             other => panic!("expected CommandAck, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn broker_dispatched_prompts_bounds_admission_without_forgetting_evicted_handoffs() {
+        let mut tracker = DispatchedPrompts::default();
+        // Saturate evicted_commands to its exact cap with worker-acked handoffs.
+        for i in 0..DispatchedPrompts::MAX_EVICTED_COMMANDS {
+            let cid = format!("evicted-{i}");
+            assert!(tracker.record_eviction(
+                "s-cap".into(),
+                &cid,
+                DispatchedPromptRecord {
+                    epoch: Some("epoch-old".into()),
+                    acked: true,
+                    seq: 0,
+                },
+            ));
+        }
+        assert_eq!(
+            tracker.evicted_commands.len(),
+            DispatchedPrompts::MAX_EVICTED_COMMANDS
+        );
+        // Refuses growing past cap and retains the very first evicted handoff.
+        assert!(!tracker.record_eviction(
+            "s-cap".into(),
+            "evicted-overflow",
+            DispatchedPromptRecord {
+                epoch: Some("epoch-old".into()),
+                acked: true,
+                seq: 0,
+            },
+        ));
+        assert_eq!(
+            tracker.evicted_commands.len(),
+            DispatchedPrompts::MAX_EVICTED_COMMANDS
+        );
+        assert!(
+            tracker.evicted_blocks_replay("s-cap", "evicted-0", "epoch-new"),
+            "earliest worker-acked handoff must never be forgotten"
+        );
+        // Saturate active entries to hard bound; at_capacity() must fail closed
+        // without dropping any evicted record.
+        for i in 0..(DispatchedPrompts::MAX_ENTRIES * 2) {
+            let cid = format!("live-{i}");
+            tracker.entries.insert(
+                ("s-cap".into(), cid),
+                DispatchedPromptRecord {
+                    epoch: Some("epoch-new".into()),
+                    acked: true,
+                    seq: i as u64,
+                },
+            );
+        }
+        assert!(tracker.at_capacity());
+        assert_eq!(
+            tracker.evicted_commands.len(),
+            DispatchedPrompts::MAX_EVICTED_COMMANDS
+        );
+        assert!(tracker.evicted_blocks_replay("s-cap", "evicted-0", "epoch-new"));
     }
 }

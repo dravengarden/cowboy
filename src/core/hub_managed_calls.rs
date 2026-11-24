@@ -118,12 +118,6 @@ impl Hub {
                 return;
             };
             let queue = s.queue.clone();
-            let visible_queue: Vec<QueuedMessage> = s
-                .queue
-                .iter()
-                .filter(|m| !s.pending_durable_queue_ids.contains(&m.id))
-                .cloned()
-                .collect();
             let drafts = s.drafts.clone();
             let retired_dispatches = s.pending_retired_dispatches.clone();
             let mut claims = self.inner.notice_claims.lock();
@@ -139,7 +133,7 @@ impl Hub {
             } else if let Some(tx) = self.inner.store_tx.as_ref() {
                 let _ = tx.send(StoreWrite::UpdatePending {
                     session_id: session_id.to_owned(),
-                    queue,
+                    queue: queue.clone(),
                     drafts: drafts.clone(),
                     settled_notices,
                     released_claims,
@@ -148,12 +142,12 @@ impl Hub {
                     ack_id: None,
                 });
             }
-            (visible_queue, drafts)
+            (queue, drafts)
         };
         self.broadcast_pending_snapshot(session_id, &queue, &drafts);
     }
 
-    fn finish_in_flight_pending_commit(
+    pub(super) fn finish_in_flight_pending_commit(
         &self,
         session_id: &str,
         queue: &[QueuedMessage],

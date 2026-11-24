@@ -263,6 +263,7 @@ async fn retry_resolves_evicted_dispatch_origin_from_durable_store() {
             trigger: DeliveryOrigin::Owner,
             dispatched_at_ms: 10,
             undelivered_retired: false,
+            dispatch_seq: 0,
         })
         .await
         .unwrap();
@@ -274,6 +275,7 @@ async fn retry_resolves_evicted_dispatch_origin_from_durable_store() {
             trigger: DeliveryOrigin::peer("agent-9"),
             dispatched_at_ms: 20,
             undelivered_retired: false,
+            dispatch_seq: 0,
         })
         .await
         .unwrap();
@@ -341,6 +343,7 @@ async fn superagent_evidence_and_turn_budget_consult_durable_prompt_dispatches()
             trigger: DeliveryOrigin::Automation,
             dispatched_at_ms: 100,
             undelivered_retired: false,
+            dispatch_seq: 0,
         })
         .await
         .unwrap();
@@ -406,6 +409,7 @@ async fn superagent_evidence_and_turn_budget_consult_durable_prompt_dispatches()
             trigger: DeliveryOrigin::Owner,
             dispatched_at_ms: 200,
             undelivered_retired: false,
+            dispatch_seq: 0,
         })
         .await
         .unwrap();
@@ -582,4 +586,136 @@ fn hub_wrap_up_front_submit_and_compacting_guards() {
         ),
         Ok(crate::send_delivery::SendDelivery::WrapUp)
     );
+}
+
+#[tokio::test]
+async fn steer_and_durable_retired_submit_honor_recovery_reservation_and_retirement() {
+    let (store, _root) = test_store("r2-recovery").await;
+    let hub = Hub::new();
+    let meta = add_owned_session(&hub, "s-r2-sql", "owner-1", false);
+    store.insert_session(&meta).await.unwrap();
+
+    // Finding 11: while a recovery draft activation holds a reservation on `op-reserved`,
+    // concurrent current-turn steer cannot write `prompt_dispatches` for that op ID.
+    hub.park_recovery_draft(
+        "s-r2-sql",
+        "parked".into(),
+        vec![serde_json::json!({"type": "text", "text": "parked"})],
+        Some("op-orig-retired".into()),
+    );
+    let draft_id = hub.queue_and_drafts("s-r2-sql", |_| true).unwrap().1[0]
+        .id
+        .clone();
+    // Symmetric TOCTOU guard: an in-flight steer/dispatch SQL write reserves the op ID
+    // and rejects concurrent recovery-draft activation on the same op ID.
+    let in_flight_guard = hub
+        .reserve_in_flight_dispatch_cmid("s-r2-sql", "op-mid-steer")
+        .unwrap();
+    assert!(
+        hub.reserve_recovery_draft_activation("s-r2-sql", &draft_id, "op-mid-steer")
+            .is_err()
+    );
+    drop(in_flight_guard);
+
+    let _reservation = hub
+        .reserve_recovery_draft_activation("s-r2-sql", &draft_id, "op-reserved")
+        .unwrap();
+    let steer_err = super::send_delivery::record_steer_dispatch_in(
+        &hub,
+        Some(&store),
+        "s-r2-sql",
+        "op-reserved",
+        &RequestCaller::Person,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        steer_err.contains("reserved"),
+        "expected reservation error, got: {steer_err}"
+    );
+    assert!(
+        store
+            .prompt_dispatch("s-r2-sql", "op-reserved")
+            .await
+            .unwrap()
+            .is_none(),
+        "rejected steer must not claim reserved op ID in SQL"
+    );
+
+    // Finding 4: a durably retired dispatch evicted from Hub caches refuses
+    // record_steer_dispatch_in AND record_prompt_dispatch_if_compatible even
+    // when origin matches.
+    let retired_rec = PromptDispatchRecord {
+        session_id: "s-r2-sql".into(),
+        cmid: "op-evicted-retired".into(),
+        origin: DeliveryOrigin::Owner,
+        trigger: DeliveryOrigin::Owner,
+        dispatched_at_ms: 10_000,
+        undelivered_retired: false,
+        dispatch_seq: 0,
+    };
+    assert!(
+        store
+            .record_prompt_dispatch_if_compatible(&retired_rec)
+            .await
+            .unwrap()
+    );
+    store
+        .update_pending_with_notice_ops(
+            "s-r2-sql",
+            &[],
+            &[],
+            &[],
+            &[],
+            &["op-evicted-retired".to_owned()],
+        )
+        .await
+        .unwrap();
+    // Fresh Hub simulates cache eviction after restart.
+    let cold_hub = Hub::new();
+    cold_hub.create_local_session(
+        "s-r2-sql".into(),
+        "antigravity".into(),
+        "/tmp".into(),
+        "s-r2-sql".into(),
+        SessionOrigin::Web,
+        false,
+    );
+    assert!(!cold_hub.is_cmid_known_in_hub("s-r2-sql", "op-evicted-retired"));
+    assert!(
+        super::send_delivery::record_steer_dispatch_in(
+            &cold_hub,
+            Some(&store),
+            "s-r2-sql",
+            "op-evicted-retired",
+            &RequestCaller::Person,
+        )
+        .await
+        .is_err()
+    );
+    let bg_err = background_jobs::record_dispatch_provenance_in(
+        &cold_hub,
+        Some(&store),
+        "s-r2-sql",
+        Some("op-evicted-retired".into()),
+        DeliveryOrigin::Owner,
+        DeliveryOrigin::Owner,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(bg_err.1, "prompt operation id was durably retired");
+    let mut events = cold_hub.subscribe();
+    cold_hub.confirm_durably_retired_cmid("s-r2-sql", "op-evicted-retired");
+    let confirmed = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let frame = events.recv().await.unwrap();
+            if let crate::core::Outbound::SyncPatch { confirmed, .. } = frame.outbound() {
+                return confirmed.clone();
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(confirmed.iter().any(|c| c == "op-evicted-retired"));
+    assert_eq!(cold_hub.session_info("s-r2-sql").unwrap().queue_count, 0);
 }

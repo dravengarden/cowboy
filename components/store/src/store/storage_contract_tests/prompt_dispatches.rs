@@ -18,6 +18,7 @@ async fn assert_prompt_dispatches_contract(store: &Store) {
             trigger: DeliveryOrigin::Owner,
             dispatched_at_ms: 100,
             undelivered_retired: false,
+            dispatch_seq: 0,
         },
         PromptDispatchRecord {
             session_id: active.into(),
@@ -26,6 +27,7 @@ async fn assert_prompt_dispatches_contract(store: &Store) {
             trigger: DeliveryOrigin::Automation,
             dispatched_at_ms: 200,
             undelivered_retired: false,
+            dispatch_seq: 0,
         },
         PromptDispatchRecord {
             session_id: active.into(),
@@ -34,6 +36,7 @@ async fn assert_prompt_dispatches_contract(store: &Store) {
             trigger: DeliveryOrigin::peer("parent-9"),
             dispatched_at_ms: 300,
             undelivered_retired: false,
+            dispatch_seq: 0,
         },
         PromptDispatchRecord {
             session_id: active.into(),
@@ -42,6 +45,7 @@ async fn assert_prompt_dispatches_contract(store: &Store) {
             trigger: DeliveryOrigin::cowboy("schedule"),
             dispatched_at_ms: 400,
             undelivered_retired: false,
+            dispatch_seq: 0,
         },
         PromptDispatchRecord {
             session_id: other.into(),
@@ -50,6 +54,7 @@ async fn assert_prompt_dispatches_contract(store: &Store) {
             trigger: DeliveryOrigin::peer("other-agent"),
             dispatched_at_ms: 250,
             undelivered_retired: false,
+            dispatch_seq: 0,
         },
         PromptDispatchRecord {
             session_id: deleted.into(),
@@ -58,6 +63,7 @@ async fn assert_prompt_dispatches_contract(store: &Store) {
             trigger: DeliveryOrigin::Owner,
             dispatched_at_ms: 500,
             undelivered_retired: false,
+            dispatch_seq: 0,
         },
     ];
     for record in &records {
@@ -69,13 +75,16 @@ async fn assert_prompt_dispatches_contract(store: &Store) {
         );
     }
 
-    for record in &records {
+    let expected_seqs = [1_i64, 2, 3, 4, 1, 1];
+    for (record, seq) in records.iter().zip(expected_seqs) {
         let fetched = store
             .prompt_dispatch(&record.session_id, &record.cmid)
             .await
             .unwrap()
             .expect("persisted prompt dispatch");
-        assert_eq!(&fetched, record);
+        let mut expected = record.clone();
+        expected.dispatch_seq = seq;
+        assert_eq!(fetched, expected);
     }
     assert_eq!(
         store.prompt_dispatch(active, "missing").await.unwrap(),
@@ -98,6 +107,7 @@ async fn assert_prompt_dispatches_contract(store: &Store) {
         trigger: DeliveryOrigin::Owner,
         dispatched_at_ms: 450,
         undelivered_retired: false,
+        dispatch_seq: 0,
     };
     assert!(
         store
@@ -120,6 +130,7 @@ async fn assert_prompt_dispatches_contract(store: &Store) {
         trigger: DeliveryOrigin::peer("attacker"),
         dispatched_at_ms: 999,
         undelivered_retired: false,
+        dispatch_seq: 0,
     };
     assert!(
         !store
@@ -128,9 +139,11 @@ async fn assert_prompt_dispatches_contract(store: &Store) {
             .unwrap()
     );
     store.record_prompt_dispatch(&forged).await.unwrap();
+    let mut expected_owner = records[0].clone();
+    expected_owner.dispatch_seq = 1;
     assert_eq!(
         store.prompt_dispatch(active, "cmid-owner").await.unwrap(),
-        Some(records[0].clone())
+        Some(expected_owner)
     );
 
     let batch = store
@@ -230,6 +243,7 @@ async fn assert_prompt_dispatches_hydration_and_queue_contract(
         trigger: DeliveryOrigin::peer("creator-1"),
         dispatched_at_ms: now_ms,
         undelivered_retired: false,
+        dispatch_seq: 0,
     };
     let stale_orphan = PromptDispatchRecord {
         session_id: "pd-never-flushed-old".into(),
@@ -238,6 +252,7 @@ async fn assert_prompt_dispatches_hydration_and_queue_contract(
         trigger: DeliveryOrigin::Owner,
         dispatched_at_ms: now_ms - crate::store::prompt_dispatches::ORPHAN_GRACE_MS - 60_000,
         undelivered_retired: false,
+        dispatch_seq: 0,
     };
     assert!(
         store
@@ -265,16 +280,18 @@ async fn assert_prompt_dispatches_hydration_and_queue_contract(
             .unwrap(),
         None
     );
+    let mut expected_early = early.clone();
+    expected_early.dispatch_seq = 1;
     assert_eq!(
         store
             .prompt_dispatch(unflushed, "initial:pd-unflushed")
             .await
             .unwrap(),
-        Some(early.clone())
+        Some(expected_early.clone())
     );
     store.insert_session(&session(unflushed)).await.unwrap();
     let hydrated = store.recent_prompt_dispatches(10).await.unwrap();
-    assert!(hydrated.iter().any(|r| r == &early));
+    assert!(hydrated.iter().any(|r| r == &expected_early));
 
     // Atomic UpdatePending retires exact prompt_dispatches row alongside draft persistence,
     // and operation_id_used_in_history detects durable dispatch/event IDs across restarts.
@@ -320,6 +337,47 @@ async fn assert_prompt_dispatches_hydration_and_queue_contract(
     assert!(hydrated_after.iter().any(|r| r.session_id == unflushed
         && r.cmid == "initial:pd-unflushed"
         && r.undelivered_retired));
+    // Finding 4: record_prompt_dispatch_if_compatible refuses a durably retired
+    // dispatch even when origin matches.
+    assert!(
+        !store
+            .record_prompt_dispatch_if_compatible(&early)
+            .await
+            .unwrap(),
+        "durably retired prompt dispatch must refuse compatible replay"
+    );
+    // Finding 10: a fresh dispatch recorded after a backward wall-clock step
+    // gets a strictly higher durable dispatch_seq and hydrates AFTER the
+    // retired row with higher wall-clock timestamp.
+    let after_clock_step = PromptDispatchRecord {
+        session_id: unflushed.into(),
+        cmid: "fresh-after-clock-step".into(),
+        origin: DeliveryOrigin::Owner,
+        trigger: DeliveryOrigin::Owner,
+        dispatched_at_ms: early.dispatched_at_ms - 5_000,
+        undelivered_retired: false,
+        dispatch_seq: 0,
+    };
+    assert!(
+        store
+            .record_prompt_dispatch_if_compatible(&after_clock_step)
+            .await
+            .unwrap()
+    );
+    let ordered: Vec<_> = store
+        .recent_prompt_dispatches(10)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.session_id == unflushed)
+        .collect();
+    assert_eq!(ordered.len(), 2);
+    assert_eq!(ordered[0].cmid, "initial:pd-unflushed");
+    assert!(ordered[0].undelivered_retired);
+    assert_eq!(ordered[1].cmid, "fresh-after-clock-step");
+    assert!(!ordered[1].undelivered_retired);
+    assert!(ordered[1].dispatch_seq > ordered[0].dispatch_seq);
+    assert!(ordered[1].dispatched_at_ms < ordered[0].dispatched_at_ms);
 }
 
 #[tokio::test]
