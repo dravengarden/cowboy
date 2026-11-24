@@ -1085,7 +1085,9 @@ impl Hub {
             .filter(|draft_id| {
                 s.drafts.iter().any(|m| {
                     m.id == *draft_id
-                        && m.schedule.as_ref().is_some_and(|sc| sc.fire_at_ms <= now_ms)
+                        && m.schedule
+                            .as_ref()
+                            .is_some_and(|sc| sc.fire_at_ms <= now_ms)
                 })
             })
             .collect()
