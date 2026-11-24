@@ -338,12 +338,21 @@ function conversationWidgets(region: HTMLElement | null, includeActions = false)
 function nearestConversationWidget(
   region: HTMLElement,
   widgets: HTMLElement[],
+  preferMarked = false,
 ): HTMLElement | null {
   if (widgets.length === 0) return null;
   const scroller = region.querySelector<HTMLElement>("[data-desktop-transcript-scroller]");
   const bounds = scroller?.getBoundingClientRect() ?? region.getBoundingClientRect();
+  const pool = preferMarked
+    ? widgets.filter((el) => {
+      if (!el.matches("[data-desktop-widget-toggle], [data-desktop-transcript-stop]")) return false;
+      const r = el.getBoundingClientRect();
+      return r.bottom > bounds.top && r.top < bounds.bottom;
+    })
+    : [];
+  const candidates = pool.length > 0 ? pool : widgets;
   const center = bounds.top + bounds.height / 2;
-  return widgets.reduce((nearest, candidate) => {
+  return candidates.reduce((nearest, candidate) => {
     const candidateRect = candidate.getBoundingClientRect();
     const nearestRect = nearest.getBoundingClientRect();
     const candidateDistance = Math.abs(candidateRect.top + candidateRect.height / 2 - center);
@@ -938,9 +947,9 @@ export function DesktopCommandProvider(
       const activeOtherControl = activeEl !== null && !activeWidget && !activeActionStop && isInteractiveControl(activeEl);
       if (workspace.mode === "normal" && scrollNavigation && region && workspaceCommandKey(event) === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey) {
         const stops = conversationWidgets(region, true);
-        const activeStop = activeWidget ?? activeActionStop ?? (activeEl && stops.includes(activeEl) ? activeEl : null);
+        const activeStop = (activeEl && stops.includes(activeEl) ? activeEl : null) ?? activeWidget ?? activeActionStop;
         const current = activeStop ? stops.indexOf(activeStop) : -1;
-        const nearest = nearestConversationWidget(region, stops);
+        const nearest = nearestConversationWidget(region, stops, true);
         const next = current >= 0 ? current + (event.shiftKey ? -1 : 1) : (nearest ? stops.indexOf(nearest) : -1);
         const stop = next >= 0 && next < stops.length ? stops[next] : undefined;
         if (stop) {
