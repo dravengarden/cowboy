@@ -39,6 +39,7 @@ import {
   frontPrompt,
   scheduleDraft,
   submitPrompt,
+  wrapUpPrompt,
 } from "../store";
 import { haptic } from "../haptic";
 import {
@@ -71,6 +72,9 @@ export interface ComposerDraftController {
   currentTurnTracked: (
     target?: import("../currentTurnDelivery").DeliveryTarget,
     nextCheckpoint?: boolean,
+  ) => Promise<void> | null;
+  wrapUpTracked: (
+    target?: import("../currentTurnDelivery").DeliveryTarget,
   ) => Promise<void> | null;
   jumpToFront: (queueLength: number) => boolean;
   jumpToFrontTracked: (queueLength: number) => Promise<void> | null;
@@ -407,15 +411,9 @@ export function useComposerDraftController(
     submitTracked: () =>
       commitTracked(() => submitPrompt(sessionId, preparedText(), attachments)),
     currentTurnTracked: (target, nextCheckpoint) =>
-      commitTracked(() =>
-        currentTurnPrompt(
-          sessionId,
-          preparedText(),
-          attachments,
-          target,
-          nextCheckpoint,
-        )
-      ),
+      commitTracked(() => currentTurnPrompt(sessionId, preparedText(), attachments, target, nextCheckpoint)),
+    wrapUpTracked: (target) =>
+      commitTracked(() => wrapUpPrompt(sessionId, preparedText(), attachments, target)),
     jumpToFront: (queueLength) =>
       queueLength > 0 &&
       commit(() => frontPrompt(sessionId, preparedText(), attachments)),

@@ -322,7 +322,7 @@ async fn create_checked(
         },
         product_session_owner(state.product_auth_enabled, &authenticated.principal),
     )?;
-    super::super::session_context::initialize(
+    super::super::session_context::initialize_with_prompt(
         state,
         &authenticated.principal,
         &session_id,
@@ -332,6 +332,7 @@ async fn create_checked(
             .as_ref()
             .filter(|text| !text.trim().is_empty())
             .map(|_| format!("execution-initial:{session_id}")),
+        request.initial_prompt.as_deref(),
     )
     .await?;
     provider_accounts::registration::register(&state.accounts, registration, scheduling_generation)

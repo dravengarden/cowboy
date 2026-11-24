@@ -913,6 +913,8 @@ pub fn queue_command(
             cmid,
             force,
             front,
+            wrap_up,
+            wrap_up_target,
         } => {
             return submit_command(
                 state,
@@ -925,6 +927,8 @@ pub fn queue_command(
                 cmid,
                 force,
                 front,
+                wrap_up,
+                wrap_up_target,
             );
         }
         Inbound::RemoveQueued {

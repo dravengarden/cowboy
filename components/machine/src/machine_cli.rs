@@ -1,6 +1,7 @@
 //! CLI for the stable Machine host.
 
 mod connection_extensions;
+mod wrap_up_hint;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -1408,11 +1409,9 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
     } else {
         None
     };
-    // Controller replay can also exceed a small frame-count bound while the
-    // local broker socket is flushing one large command. Keep the WebSocket
-    // read loop non-blocking; the writer timeout still fences a stalled broker
-    // and dropping this connection discards the short-lived queue.
     let (runtime_write_tx, runtime_write_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (hint_runtime_tx, hint_runtime_rx) =
+        tokio::sync::mpsc::channel(wrap_up_hint::HINT_RUNTIME_CAPACITY);
     let (login_sessions, login_connection, _browser_uplink) =
         config.attach_browsers(&event_tx, &lane_endpoint);
     let (socket_sink, mut socket_stream) = socket.split();
@@ -1428,7 +1427,12 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
         (chunked, compressed, paced, stream),
         Some(Arc::clone(&credit)),
     ));
-    let mut runtime_writer = tokio::spawn(write_runtime_frames(runtime_writer, runtime_write_rx));
+    let mut runtime_writer = tokio::spawn(wrap_up_hint::run_runtime_writer_with_hints(
+        runtime_writer,
+        runtime_write_rx,
+        hint_runtime_rx,
+        MACHINE_FRAME_SEND_TIMEOUT,
+    ));
     let lanes = Arc::new(crate::machine_lanes::LaneSet::<Message>::default());
     let (lane_signal_tx, mut lane_signal_rx) = tokio::sync::mpsc::unbounded_channel();
     // Dropped when this connection ends, which ends its lanes.
@@ -1576,9 +1580,7 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
                                         )?;
                                         continue;
                                     }
-                                    runtime_write_tx.send(frame).map_err(|_| {
-                                        anyhow::anyhow!("Machine runtime writer queue closed")
-                                    })?;
+                                    wrap_up_hint::route_inbound_runtime_frame(frame, protocol, &runtime_write_tx, &hint_runtime_tx)?;
                                 }
                                 MachineFrame::Command { command } => {
                                     anyhow::ensure!(command.minimum_protocol() <= protocol,
@@ -3852,6 +3854,7 @@ where
     crate::machine_transport::write(socket, messages, features, credit).await
 }
 
+#[cfg(test)]
 async fn write_runtime_frames<W>(
     mut writer: W,
     mut frames: tokio::sync::mpsc::UnboundedReceiver<crate::runtime_wire::Frame>,
@@ -3862,6 +3865,7 @@ where
     write_runtime_frames_with_timeout(&mut writer, &mut frames, MACHINE_FRAME_SEND_TIMEOUT).await
 }
 
+#[cfg(test)]
 async fn write_runtime_frames_with_timeout<W>(
     writer: &mut W,
     frames: &mut tokio::sync::mpsc::UnboundedReceiver<crate::runtime_wire::Frame>,
@@ -3870,12 +3874,7 @@ async fn write_runtime_frames_with_timeout<W>(
 where
     W: tokio::io::AsyncWrite + Unpin,
 {
-    while let Some(frame) = frames.recv().await {
-        tokio::time::timeout(timeout, crate::runtime_wire::write_frame(writer, &frame))
-            .await
-            .context("Machine runtime frame write timed out")??;
-    }
-    Ok(())
+    wrap_up_hint::write_runtime_frames_with_hints(writer, frames, None, timeout).await
 }
 
 async fn send_frame<S>(socket: &mut S, frame: &MachineFrame) -> anyhow::Result<()>

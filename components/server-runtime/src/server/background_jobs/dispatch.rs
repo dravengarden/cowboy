@@ -91,6 +91,7 @@ async fn prepare_dispatch_preflight(
     state: &Arc<AppState>,
     session_id: &str,
     text: &str,
+    content: &[serde_json::Value],
     cmid: Option<&str>,
     dispatch_origin: &crate::prompt_origin::DeliveryOrigin,
 ) -> PreflightOutcome {
@@ -120,13 +121,20 @@ async fn prepare_dispatch_preflight(
     {
         return PreflightOutcome::Retain(error);
     }
-    session_context::rollover::before_dispatch(state, session_id, text, cmid, dispatch_origin)
-        .await;
-    // Links wait for a real message: a preamble would break a slash command.
-    if !crate::session_context::is_command(text)
-        && let Err(error) = session_context::claim_carrier(state, session_id, cmid).await
-    {
-        return PreflightOutcome::Retain(error);
+    let is_command = build_prompt_blocks(text, content).is_some_and(|blocks| {
+        let json_blocks: Vec<serde_json::Value> = blocks
+            .iter()
+            .map(|b| serde_json::to_value(b).unwrap_or_default())
+            .collect();
+        crate::session_context::is_command_blocks(&json_blocks)
+    });
+    if !is_command {
+        session_context::rollover::before_dispatch(state, session_id, text, cmid, dispatch_origin)
+            .await;
+        // Links wait for a real message: a preamble would break a slash command.
+        if let Err(error) = session_context::claim_carrier(state, session_id, cmid).await {
+            return PreflightOutcome::Retain(error);
+        }
     }
     PreflightOutcome::Ready(recovery.map(Box::new))
 }
@@ -161,6 +169,7 @@ async fn dispatch_admitted(state: Arc<AppState>, req: DispatchReq) {
         &state,
         &session_id,
         &text,
+        &content,
         cmid.as_deref(),
         &dispatch_origin,
     )

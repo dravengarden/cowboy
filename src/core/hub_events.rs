@@ -145,6 +145,9 @@ impl Hub {
             {
                 return;
             }
+            if matches!(event, Event::TurnEnd { .. }) {
+                s.active_turn_compacting = false;
+            }
             s.pending_actions.observe(&event);
             let attention = s.pending_actions.summary();
             let attention_changed = s.meta.attention != attention;

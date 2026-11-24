@@ -244,6 +244,7 @@ pub fn heartbeat(text: &str) -> bool {
 
 pub trait Message: Send {
     fn text(&self) -> Option<&str>;
+    fn text_message(text: String) -> Self;
     fn binary(bytes: Vec<u8>) -> Self;
     fn pong(bytes: Vec<u8>) -> Self;
     fn urgent(&self) -> bool;
@@ -257,6 +258,9 @@ macro_rules! message {
                     Self::Text(text) => Some(text.as_str()),
                     _ => None,
                 }
+            }
+            fn text_message(text: String) -> Self {
+                Self::Text(text.into())
             }
             fn binary(bytes: Vec<u8>) -> Self {
                 Self::Binary(bytes.into())
@@ -288,8 +292,24 @@ where
 /// Write `incoming` to `sink`, pacing chunked frames by `credit` when the
 /// connection negotiated it (both `features.paced` and a credit are required).
 pub async fn write<S, M>(
+    sink: S,
+    incoming: mpsc::UnboundedReceiver<M>,
+    features: impl Into<Features>,
+    credit: Option<std::sync::Arc<Credit>>,
+) -> Result<()>
+where
+    S: Sink<M> + Unpin,
+    M: Message,
+{
+    write_with_hints(sink, incoming, None, features, credit).await
+}
+
+/// Write `incoming` to `sink`, selecting reliable messages `biased;` strictly
+/// ahead of bounded best-effort wrap-up `hints`.
+pub async fn write_with_hints<S, M>(
     mut sink: S,
     mut incoming: mpsc::UnboundedReceiver<M>,
+    mut hints: Option<mpsc::Receiver<String>>,
     features: impl Into<Features>,
     credit: Option<std::sync::Arc<Credit>>,
 ) -> Result<()>
@@ -323,9 +343,19 @@ where
     loop {
         let message = match queued.pop_front() {
             Some(message) => message,
-            None => match incoming.recv().await {
-                Some(message) => message,
-                None => return Ok(()),
+            None => match hints.as_mut() {
+                Some(hint_rx) => tokio::select! {
+                    biased;
+                    msg = incoming.recv() => match msg { Some(m) => m, None => return Ok(()) },
+                    hint = hint_rx.recv() => match hint {
+                        Some(text) => M::text_message(text),
+                        None => { hints = None; continue; }
+                    },
+                },
+                None => match incoming.recv().await {
+                    Some(message) => message,
+                    None => return Ok(()),
+                },
             },
         };
         let text = message

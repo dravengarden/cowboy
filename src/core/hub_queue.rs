@@ -390,6 +390,7 @@ impl Hub {
             } else {
                 s.in_flight = false;
                 s.dispatch_pending = None;
+                s.active_turn_compacting = false;
                 s.turn_completion_latched = true;
                 true
             }
@@ -422,6 +423,7 @@ impl Hub {
             } else {
                 s.in_flight = false;
                 s.dispatch_pending = None;
+                s.active_turn_compacting = false;
                 s.turn_completion_latched = true;
                 true
             }

@@ -505,3 +505,77 @@ async fn requeued_call_notice_accelerated_by_person_keeps_exact_cmid_and_reserve
     assert_eq!(err.1, "conflicting provenance for reserved message id");
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn hub_wrap_up_front_submit_and_compacting_guards() {
+    let hub = Hub::new();
+    hub.create_local_session(
+        "s-agy".into(),
+        "antigravity".into(),
+        "/tmp".into(),
+        "s-agy".into(),
+        SessionOrigin::Web,
+        false,
+    );
+    hub.set_status("s-agy", crate::core::Status::Busy, None);
+    hub.set_wrap_up_steering("s-agy", true);
+    assert!(hub.session_info("s-agy").unwrap().meta.wrap_up_steering);
+
+    hub.set_active_turn_compacting("s-agy", true);
+    assert!(hub.is_active_turn_compacting("s-agy"));
+    hub.push(
+        "s-agy",
+        crate::core::Event::TurnEnd {
+            stop_reason: "end_turn".into(),
+            usage: None,
+        },
+    );
+    assert!(!hub.is_active_turn_compacting("s-agy"));
+
+    hub.set_status("s-agy", crate::core::Status::Busy, None);
+    assert_eq!(
+        hub.front_submit_with_outcome(
+            "s-agy",
+            "please wrap up".into(),
+            vec![],
+            Some("cmid-owner-1".into()),
+            &RequestCaller::Person,
+        ),
+        crate::core::FrontSubmitOutcome::QueuedFront,
+    );
+    assert_eq!(
+        hub.front_submit_with_outcome(
+            "s-agy",
+            "please wrap up".into(),
+            vec![],
+            Some("cmid-owner-1".into()),
+            &RequestCaller::Person,
+        ),
+        crate::core::FrontSubmitOutcome::Duplicate,
+    );
+
+    assert!(
+        crate::send_delivery::SendDelivery::resolve(
+            Some(crate::send_delivery::SendDelivery::WrapUp),
+            true,
+            false
+        )
+        .is_err()
+    );
+    assert!(
+        crate::send_delivery::SendDelivery::resolve(
+            Some(crate::send_delivery::SendDelivery::WrapUp),
+            false,
+            true
+        )
+        .is_err()
+    );
+    assert_eq!(
+        crate::send_delivery::SendDelivery::resolve(
+            Some(crate::send_delivery::SendDelivery::WrapUp),
+            false,
+            false
+        ),
+        Ok(crate::send_delivery::SendDelivery::WrapUp)
+    );
+}

@@ -21,6 +21,8 @@ pub const ACCOUNT_NATIVE_CLAUDE_SESSIONS: Key<bool> =
 pub const ACCOUNT_ANTIGRAVITY_ADMITTED: Key<Vec<String>> =
     Key::new(Scope::Service, "accounts.antigravity_admitted");
 pub const ACCOUNT_MACHINE_BROWSER: Key<bool> = Key::new(Scope::Service, "accounts.machine_browser");
+pub const PROVIDER_ANTIGRAVITY_WRAP_UP_STEERING: Key<bool> =
+    Key::new(Scope::Service, "providers.antigravity.wrap_up_steering");
 pub const USAGE_PROVIDER_WINDOW: Key<Duration> = Key::new(Scope::Service, "usage.provider_window");
 pub const USAGE_REQUESTS_PER_WINDOW: Key<i64> =
     Key::new(Scope::Service, "usage.requests_per_window");
@@ -289,6 +291,13 @@ pub static SERVICE_FIELDS: &[Field] = &[
         default: Value::Duration(Duration::from_mins(15)),
         reload: Reload::Live,
         doc: "Memory reclaim only hibernates sessions this long without any event. Busy,\npermission-waiting, background-working, system and cache-protected sessions\nare never chosen.",
+    },
+    Field {
+        key: "providers.antigravity.wrap_up_steering",
+        kind: Kind::Bool,
+        default: Value::Bool(true),
+        reload: Reload::Live,
+        doc: "Allow best-effort wrap-up steering hints for verified Antigravity sessions.\nDisabling stops new wrap-up hints live while preserving front-of-queue\nOwner delivery.",
     },
 ];
 

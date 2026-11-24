@@ -40,6 +40,7 @@ mod readmission;
 mod systemd_exit;
 mod worker_environment;
 mod worker_launch;
+mod wrap_up;
 
 /// Consecutive failed cleanup attempts (about three minutes of backoff) after
 /// which a nominated Session stops holding its handles in this process.
@@ -290,8 +291,8 @@ pub struct MachineBrokerArgs {
 struct Controller {
     lease: u64,
     tx: mpsc::UnboundedSender<Frame>,
-    /// Negotiated runtime protocol of this Controller connection.
     protocol: u16,
+    outer_machine_protocol: Option<u16>,
 }
 
 #[derive(Clone)]
@@ -308,8 +309,11 @@ struct WorkerPeer {
     /// Duplicate of the broker end of this connection, used only to measure
     /// frames the worker already delivered but the broker has not read.
     receive_probe: Option<Arc<OwnedFd>>,
-    /// Heartbeat-gap observation of this connection (`liveness.rs`).
     liveness: Option<Arc<liveness::Connection>>,
+    negotiated_protocol: u16,
+    raw_wrap_up_steering: bool,
+    hint_tx: Option<mpsc::Sender<Frame>>,
+    last_hinted_target: Option<crate::runtime_wire::DeliveryTarget>,
 }
 
 /// Outcome of one heartbeat sweep.
@@ -629,6 +633,7 @@ impl Broker {
                 current_turn_id: None,
                 supports_current_turn: false,
                 delivery_controls: crate::runtime_wire::DeliveryControls::default(),
+                wrap_up_steering: false,
                 supports_subagent_cancel: false,
                 last_runtime_seq: 0,
                 pending_permissions: Vec::new(),
@@ -652,18 +657,14 @@ impl Broker {
         snapshots
     }
 
-    /// Hands a newly connected Controller its handshake and only then makes
-    /// it the live controller. Installing first would let a concurrent worker
-    /// event reach the socket ahead of `Welcome`, which the Controller rejects
-    /// as a protocol violation. Anything published between the `Welcome`
-    /// snapshot and the install is recovered afterwards: workers replay every
-    /// event after the last one a Controller acknowledged, and changed
-    /// snapshots are resent. Events emitted while no Controller was attached
-    /// were never consumed, even though the snapshot already counts them; a
-    /// turn that finished during a Controller restart keeps its transcript.
-    fn attach_controller(&self, protocol: u16, tx: &mpsc::UnboundedSender<Frame>) -> u64 {
+    fn attach_controller_with_outer(
+        &self,
+        protocol: u16,
+        outer_machine_protocol: Option<u16>,
+        tx: &mpsc::UnboundedSender<Frame>,
+    ) -> u64 {
         let lease = self.next_lease.fetch_add(1, Ordering::Relaxed);
-        let welcome = self.snapshots();
+        let welcome = self.sanitized_snapshots(outer_machine_protocol, protocol);
         let _ = tx.send(Frame::Welcome {
             protocol,
             controller_epoch: lease,
@@ -673,6 +674,7 @@ impl Broker {
             lease,
             tx: tx.clone(),
             protocol,
+            outer_machine_protocol,
         });
         for worker in self.workers.lock().values() {
             let session_id = &worker.snapshot.session_id;
@@ -699,6 +701,7 @@ impl Broker {
             lease,
             tx,
             protocol: PROTOCOL_VERSION,
+            outer_machine_protocol: Some(crate::machine_protocol::MACHINE_PROTOCOL_VERSION),
         });
         lease
     }
@@ -1112,6 +1115,7 @@ impl Broker {
             && worker.epoch == snapshot.worker_epoch
         {
             snapshot.drain_requested |= worker.snapshot.drain_requested;
+            worker.raw_wrap_up_steering = snapshot.wrap_up_steering;
             worker.snapshot = snapshot;
             worker.last_seen = Instant::now();
             accepted = true;
@@ -1282,6 +1286,7 @@ impl Broker {
                     current_turn_id: None,
                     supports_current_turn: false,
                     delivery_controls: crate::runtime_wire::DeliveryControls::default(),
+                    wrap_up_steering: false,
                     supports_subagent_cancel: false,
                     last_runtime_seq: 0,
                     pending_permissions: Vec::new(),
@@ -1301,6 +1306,10 @@ impl Broker {
                 last_seen: Instant::now(),
                 receive_probe: None,
                 liveness: None,
+                negotiated_protocol: 0,
+                raw_wrap_up_steering: false,
+                hint_tx: None,
+                last_hinted_target: None,
             },
         );
         drop(workers);
@@ -1350,23 +1359,48 @@ impl Broker {
     }
 
     fn send_controller(&self, mut frame: Frame) {
-        if let Frame::Snapshot { worker } = &mut frame {
-            worker.incarnation = self.reported_lineage(&worker.session_id);
-        }
         let controller = self
             .controller
             .lock()
             .as_ref()
-            .map(|controller| (controller.tx.clone(), controller.protocol));
-        let Some((tx, protocol)) = controller else {
+            .map(|c| (c.tx.clone(), c.protocol, c.outer_machine_protocol));
+        let Some((tx, protocol, outer)) = controller else {
             return;
         };
-        // An older Controller would store observed subagent updates in the
-        // parent timeline: retire them, keeping the runtime sequence intact.
-        if protocol < crate::runtime_wire::SUBAGENT_OBSERVATION_PROTOCOL_VERSION
-            && let Frame::WorkerEvent { event, .. } = &mut frame
-        {
-            crate::runtime_wire::retire_observation(event);
+        match &mut frame {
+            Frame::Snapshot { worker } => {
+                worker.incarnation = self.reported_lineage(&worker.session_id);
+                self.sanitize_snapshot_for_controller_protocols(worker, outer, protocol);
+            }
+            Frame::WorkerEvent {
+                session_id, event, ..
+            } => {
+                if protocol < crate::runtime_wire::SUBAGENT_OBSERVATION_PROTOCOL_VERSION {
+                    crate::runtime_wire::retire_observation(event);
+                }
+                if let RuntimeEvent::Update { update, .. } = event
+                    && crate::runtime_wire::current_turn_support(update).is_some()
+                {
+                    let (raw, wproto) =
+                        self.workers.lock().get(session_id).map_or((false, 0), |p| {
+                            (p.raw_wrap_up_steering, p.negotiated_protocol)
+                        });
+                    let declared = self
+                        .sessions
+                        .lock()
+                        .get(session_id)
+                        .map(|s| s.provider.clone());
+                    wrap_up::sanitize_capability_event(
+                        update,
+                        raw,
+                        wproto,
+                        outer,
+                        protocol,
+                        declared.as_deref(),
+                    );
+                }
+            }
+            _ => {}
         }
         let _ = tx.send(frame);
     }
@@ -3105,6 +3139,9 @@ impl Broker {
             {
                 worker.snapshot.supports_current_turn =
                     crate::runtime_wire::current_turn_support(update).unwrap_or(false);
+                if let Some(raw) = crate::runtime_wire::wrap_up_steering_support(update) {
+                    worker.raw_wrap_up_steering = raw;
+                }
             }
             RuntimeEvent::AgentSessionId { .. }
             | RuntimeEvent::Update { .. }
@@ -3796,7 +3833,7 @@ fn worker_command_id(command: &WorkerCommand) -> Option<&str> {
         | WorkerCommand::Permission { command_id, .. }
         | WorkerCommand::SetConfigOption { command_id, .. }
         | WorkerCommand::Stop { command_id } => Some(command_id),
-        WorkerCommand::Drain => None,
+        WorkerCommand::Drain | WorkerCommand::WrapUpHint { .. } => None,
     }
 }
 
@@ -4159,6 +4196,7 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
         generation,
         executable,
         fallback_for,
+        outer_machine_protocol,
         ..
     } = hello
     else {
@@ -4181,17 +4219,13 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
         .await?;
         return Ok(());
     };
-    let (tx, mut rx) = mpsc::unbounded_channel::<Frame>();
-    let writer_task = tokio::spawn(async move {
-        while let Some(frame) = rx.recv().await {
-            if write_frame(&mut writer, &frame).await.is_err() {
-                break;
-            }
-        }
-    });
+    let (tx, rx) = mpsc::unbounded_channel::<Frame>();
+    let (hint_tx, hint_rx) = mpsc::channel::<Frame>(wrap_up::WORKER_HINT_CAPACITY);
+    let writer_task = tokio::spawn(wrap_up::run_worker_writer(writer, rx, hint_rx));
     match role {
         PeerRole::Core => {
-            let lease = broker.attach_controller(protocol, &tx);
+            drop(hint_tx);
+            let lease = broker.attach_controller_with_outer(protocol, outer_machine_protocol, &tx);
             handle_core(Arc::clone(&broker), lease, &mut reader).await?;
             broker.remove_controller(lease);
         }
@@ -4244,6 +4278,7 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
                 peer_pid.and_then(|pid| u32::try_from(pid).ok()),
             );
             let fd = reader.as_ref().as_fd();
+            broker.attach_worker_wrap_up(&session_id, connection_id, protocol, hint_tx);
             broker.attach_worker_receive_probe(
                 &session_id,
                 connection_id,
@@ -4334,6 +4369,9 @@ async fn handle_core(
                         let _ = worker.tx.send(Frame::ExecutionReply { reply });
                     }
                 }
+                Frame::CoreCommand {
+                    command: CoreCommand::WrapUpHint { session_id, target },
+                } => broker.handle_wrap_up_hint(lease, &session_id, &target),
                 Frame::CoreCommand { command } => match command_tx.try_send(command) {
                     Ok(()) => {}
                     // Refuse only the overflowing command. Reconnecting drops
@@ -4477,12 +4515,12 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
                     accepted: true,
                     reason: None,
                 });
-                if let Some(snapshot) = broker
+                let snapshot = broker
                     .workers
                     .lock()
                     .get(&session.session_id)
-                    .map(|w| w.snapshot.clone())
-                {
+                    .map(|w| w.snapshot.clone());
+                if let Some(snapshot) = snapshot {
                     broker.send_controller(Frame::Snapshot {
                         worker: Box::new(snapshot),
                     });
@@ -4619,6 +4657,7 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
                 });
             }
         }
+        CoreCommand::WrapUpHint { .. } => {}
         CoreCommand::Permission {
             session_id,
             command_id,
@@ -5205,6 +5244,7 @@ mod tests {
                 generation: Some("gen-1".to_owned()),
                 executable: Some("/bin/false".to_owned()),
                 fallback_for: None,
+                outer_machine_protocol: None,
             },
         )
         .await
@@ -6093,6 +6133,7 @@ mod tests {
                 current_turn_id: Some("turn-1".to_owned()),
                 supports_current_turn: false,
                 delivery_controls: crate::runtime_wire::DeliveryControls::default(),
+                wrap_up_steering: false,
                 supports_subagent_cancel: false,
                 last_runtime_seq: 10,
                 pending_permissions: Vec::new(),
@@ -9326,6 +9367,7 @@ mod tests {
                 generation: Some("gen-1".to_owned()),
                 executable: Some("/bin/false".to_owned()),
                 fallback_for: None,
+                outer_machine_protocol: None,
             },
         )
         .await
@@ -9388,6 +9430,7 @@ mod tests {
                 generation: Some("gen-1".into()),
                 executable: Some("/bin/false".into()),
                 fallback_for: None,
+                outer_machine_protocol: None,
             },
         )
         .await
@@ -10568,6 +10611,7 @@ mod tests {
                     current_turn_id: Some("turn-1".to_owned()),
                     supports_current_turn: false,
                     delivery_controls: crate::runtime_wire::DeliveryControls::default(),
+                    wrap_up_steering: false,
                     supports_subagent_cancel: false,
                     last_runtime_seq: 1,
                     pending_permissions: Vec::new(),

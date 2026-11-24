@@ -9,6 +9,8 @@ export interface DeliveryPolicy {
 export interface DeliveryOptions {
   target: DeliveryTarget | null;
   steer: boolean;
+  wrap_up_steering?: boolean;
+  editing?: boolean;
   controls: { version: number; next_checkpoint: boolean };
   status: string;
   paused: boolean;

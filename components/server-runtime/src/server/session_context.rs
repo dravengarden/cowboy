@@ -126,10 +126,35 @@ pub async fn initialize(
     sources: Vec<String>,
     initial_cmid: Option<String>,
 ) -> Result<(), String> {
+    initialize_with_prompt(state, principal, id, sources, initial_cmid, None).await
+}
+
+pub async fn initialize_with_prompt(
+    state: &AppState,
+    principal: &ProductPrincipal,
+    id: &str,
+    sources: Vec<String>,
+    initial_cmid: Option<String>,
+    initial_prompt: Option<&str>,
+) -> Result<(), String> {
     if sources.is_empty() {
         return Ok(());
     }
     let snapshots = capture(state, principal, &sources)?;
+    let initial_is_command = initial_prompt.is_some_and(crate::session_context::is_command);
+    if initial_cmid.is_some() && initial_is_command {
+        // Do not bind linked context to a bootstrap slash command such as
+        // `/compact`; park links in `waiting` so the first non-command message
+        // claims them without blocking the initial command.
+        let waiting = delivered_links(state, &snapshots);
+        let context = Context {
+            revision: 1,
+            applied_revision: 1,
+            waiting,
+            ..Context::default()
+        };
+        return save(state, id, &context).await;
+    }
     let links = if initial_cmid.is_some() {
         delivered_links(state, &snapshots)
     } else {
@@ -702,13 +727,21 @@ async fn deliver(
     if let Some(previous) = replay(&context, &request)? {
         return Ok(previous);
     }
-    if !crate::managed_calls::valid_id(&request.operation)
-        || build_prompt_blocks(&request.text, &request.content).is_none()
-    {
+    let Some(built_blocks) = build_prompt_blocks(&request.text, &request.content) else {
+        return Err("A nonempty message and a stable operation id are required".into());
+    };
+    if !crate::managed_calls::valid_id(&request.operation) {
         return Err("A nonempty message and a stable operation id are required".into());
     }
-    if context.next_agent.is_some() && crate::session_context::is_command(&request.text) {
+    let json_blocks: Vec<serde_json::Value> = built_blocks
+        .iter()
+        .map(|b| serde_json::to_value(b).unwrap_or_default())
+        .collect();
+    if context.next_agent.is_some() && crate::session_context::is_command_blocks(&json_blocks) {
         return Err("A command needs a conversation, so it cannot start the new agent. Write its first message, or go Back to run this here.".into());
+    }
+    if crate::wrap_up::is_compaction_prompt_blocks(&json_blocks) {
+        return Err("Compaction cannot carry pending context changes; send a normal message or cancel pending context changes.".into());
     }
     // Sending names its own carrier, for callers that want a receipt.
     let links_waiting = context.next_agent.is_none() && !context.waiting.is_empty();

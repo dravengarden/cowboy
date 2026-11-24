@@ -36,7 +36,9 @@ mod session_fork;
 pub use session_fork::{FORK_ORIGIN_UPDATE, ForkPoint, ForkRecord, ForkState};
 mod hub_config;
 mod hub_dispatch_origin;
+mod hub_wrap_up;
 use hub_config::{ConfigPreviews, add_config_choices};
+pub use hub_wrap_up::FrontSubmitOutcome;
 mod hub_events;
 pub use hub_events::FanoutFrame;
 mod hub_managed_calls;
@@ -657,6 +659,7 @@ struct Session {
     /// this value, so a delayed cleanup owned by the replaced WebSocket cannot
     /// release the new connection's edit transaction.
     editing_epoch: u64,
+    active_turn_compacting: bool,
     /// True while a queue-dispatched prompt of ours is in flight but the session
     /// hasn't yet flipped back to idle. Guards the dispatch-before-`Busy` window
     /// so a same-tick re-drain can't double-send and overlap turns. Cleared once
@@ -911,18 +914,18 @@ pub enum Inbound {
         /// retry (Phase 2 uses it for the chat/queue path). See QueuedMessage.
         #[serde(default)]
         cmid: Option<String>,
-        /// "Force push" a busy session: instead of appending to the back of the
-        /// queue, jump this prompt to the FRONT and interrupt the running turn so
-        /// it runs next (the long-press-send affordance). No-op on an idle session
-        /// — it just sends normally. Old clients omit it (defaults false).
+        /// Force push to front and interrupt the active turn (defaults false).
         #[serde(default)]
         force: bool,
-        /// "Jump to front" WITHOUT interrupting: insert at the FRONT of the queue
-        /// (runs next after the current turn, ahead of the rest of the queue) but
-        /// do NOT cancel the running turn. Distinct from `force`. No-op on an
-        /// idle/empty-queue session. Old clients omit it (defaults false).
+        /// Insert at front without interrupting the active turn (defaults false).
         #[serde(default)]
         front: bool,
+        /// Queue-backed Antigravity wrap-up steer (mutually exclusive with force).
+        #[serde(default)]
+        wrap_up: bool,
+        /// Captured live target for best-effort wrap-up hint (optional).
+        #[serde(default)]
+        wrap_up_target: Option<crate::send_delivery::DeliveryTarget>,
     },
     /// Drop one queued prompt. `cmid` is the client's durable outbox id for
     /// this command, so a replay whose row already ran receives an addressed
@@ -2278,6 +2281,7 @@ impl Hub {
                         drafts,
                         editing: None,
                         editing_epoch: 0,
+                        active_turn_compacting: false,
                         in_flight: (defer_missing_busy && was_busy)
                             || runtime.is_some_and(|worker| {
                                 worker.current_turn_id.is_some() || worker.pending_prompt_count > 0
@@ -3027,6 +3031,7 @@ impl Hub {
             attention: Default::default(),
             background_tasks: 0,
             supports_current_turn: false,
+            wrap_up_steering: false,
             provider_update: None,
             provider_update_available: None,
             resource_wait: None,
@@ -3088,6 +3093,7 @@ impl Hub {
                     drafts: Vec::new(),
                     editing: None,
                     editing_epoch: 0,
+                    active_turn_compacting: false,
                     in_flight: false,
                     in_flight_epoch: 0,
                     delivery_hold: None,
@@ -3787,6 +3793,7 @@ impl Hub {
             if (completed_turn || terminated) && s.dispatch_pending.is_none() {
                 s.in_flight = false;
                 s.dispatch_pending = None;
+                s.active_turn_compacting = false;
                 s.turn_completion_latched = true;
             }
             if was != status {

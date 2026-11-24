@@ -687,6 +687,19 @@ where
     crate::machine_transport::write(sink, messages, features, credit).await
 }
 
+pub async fn write_machine_messages_with_hints<S>(
+    sink: S,
+    messages: mpsc::UnboundedReceiver<Message>,
+    hints: mpsc::Receiver<String>,
+    features: impl Into<crate::machine_transport::Features>,
+    credit: Option<Arc<crate::machine_transport::Credit>>,
+) -> anyhow::Result<()>
+where
+    S: SinkExt<Message> + Unpin,
+{
+    crate::machine_transport::write_with_hints(sink, messages, Some(hints), features, credit).await
+}
+
 #[allow(clippy::result_unit_err)]
 pub fn queue_machine_message(
     tx: &mpsc::UnboundedSender<Message>,
@@ -767,11 +780,13 @@ pub async fn handle_machine_ws(
     // disconnecting a healthy Machine merely because the queue briefly bursts.
     let (socket_sink, mut socket_stream) = socket.split();
     let (machine_write_tx, machine_write_rx) = mpsc::unbounded_channel();
+    let (hint_ws_tx, hint_ws_rx) = mpsc::channel::<String>(32);
     let execution_calls = Arc::new(tokio::sync::Semaphore::new(64));
     let credit = Arc::new(crate::machine_transport::Credit::default());
-    let mut socket_writer = tokio::spawn(write_machine_messages(
+    let mut socket_writer = tokio::spawn(write_machine_messages_with_hints(
         socket_sink,
         machine_write_rx,
+        hint_ws_rx,
         (chunked, compressed, paced, stream),
         Some(Arc::clone(&credit)),
     ));
@@ -822,6 +837,7 @@ pub async fn handle_machine_ws(
         protocol,
         machine_command_tx,
         runtime_core,
+        hint_ws_tx,
     )
     .await
     else {
@@ -1149,6 +1165,7 @@ async fn register_current_machine_connection(
     protocol: u16,
     machine_command_tx: mpsc::UnboundedSender<crate::machine_protocol::MachineCommand>,
     runtime_core: UnixStream,
+    hint_ws_tx: mpsc::Sender<String>,
 ) -> Option<(crate::machine_control::ConnectionToken, Arc<RemoteRuntime>)> {
     let _reg_guard = super::machine_handshake::machine_registration_lock(&hello.machine_id).await;
     if !store
@@ -1169,8 +1186,14 @@ async fn register_current_machine_connection(
         protocol,
         machine_command_tx,
     );
-    let Some(runtime) = install_machine_runtime(state, hello, &connection, protocol, runtime_core)
-    else {
+    let Some(runtime) = install_machine_runtime(
+        state,
+        hello,
+        &connection,
+        protocol,
+        runtime_core,
+        hint_ws_tx,
+    ) else {
         release_connection(state, &connection);
         return None;
     };
@@ -1186,6 +1209,7 @@ fn install_machine_runtime(
     connection: &crate::machine_control::ConnectionToken,
     protocol: u16,
     runtime_core: UnixStream,
+    hint_ws_tx: mpsc::Sender<String>,
 ) -> Option<Arc<RemoteRuntime>> {
     let router = Arc::clone(&state.runtime_router);
     let hub = state.hub.clone();
@@ -1218,6 +1242,10 @@ fn install_machine_runtime(
         hello.encryption_public_key.clone(),
     );
     runtime.attach_telemetry(machine_id.clone(), runtime_telemetry);
+    runtime.attach_service_config(state.service_config.clone());
+    if protocol >= crate::machine_protocol::WRAP_UP_STEERING_PROTOCOL_VERSION {
+        runtime.attach_wrap_up_hint_tx(hint_ws_tx);
+    }
     if let Some(store) = state.store.as_ref() {
         runtime.attach_native_admission(machine_id.clone(), store.clone());
     }

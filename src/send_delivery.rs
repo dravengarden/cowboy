@@ -30,6 +30,7 @@ pub enum SendDelivery {
     NextTurn,
     CurrentTurn,
     NextCheckpoint,
+    WrapUp,
     Interrupt,
 }
 
@@ -47,6 +48,9 @@ impl SendDelivery {
         }
         if front && matches!(resolved, Self::CurrentTurn | Self::NextCheckpoint) {
             return Err("current_turn has no queue position");
+        }
+        if front && resolved == Self::WrapUp {
+            return Err("wrap_up already queues at the front");
         }
         Ok(resolved)
     }
@@ -80,6 +84,12 @@ mod tests {
         assert!(SendDelivery::resolve(Some(NextTurn), true, false).is_err());
         assert!(SendDelivery::resolve(Some(CurrentTurn), true, false).is_err());
         assert!(SendDelivery::resolve(Some(CurrentTurn), false, true).is_err());
+        assert!(SendDelivery::resolve(Some(WrapUp), true, false).is_err());
+        assert!(SendDelivery::resolve(Some(WrapUp), false, true).is_err());
+        assert_eq!(
+            SendDelivery::resolve(Some(WrapUp), false, false),
+            Ok(WrapUp)
+        );
         assert_eq!(
             SendDelivery::resolve(Some(CurrentTurn), false, false),
             Ok(CurrentTurn)
@@ -92,6 +102,7 @@ mod tests {
             ("next_turn", NextTurn),
             ("current_turn", CurrentTurn),
             ("next_checkpoint", NextCheckpoint),
+            ("wrap_up", WrapUp),
             ("interrupt", Interrupt),
         ] {
             assert_eq!(serde_json::to_value(delivery).unwrap(), name);

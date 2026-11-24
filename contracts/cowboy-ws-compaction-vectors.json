@@ -1,0 +1,309 @@
+{
+  "schema": 1,
+  "description": "Shared COWBOY_WS compaction, slash-command, and substantive-content test vectors verified by both Rust (components/wire) and Node (antigravity-acp).",
+  "compaction_cases": [
+    {
+      "name": "plain_compact",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "/compact"
+        }
+      ],
+      "expected": true
+    },
+    {
+      "name": "uppercase_compact",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "/COMPACT"
+        }
+      ],
+      "expected": true
+    },
+    {
+      "name": "mixed_case_with_args",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "  /CoMpAcT keep key decisions  "
+        }
+      ],
+      "expected": true
+    },
+    {
+      "name": "bom_leading_compact",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "\ufeff/compact"
+        }
+      ],
+      "expected": true
+    },
+    {
+      "name": "bom_after_compact",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "/compact\ufeffkeep"
+        }
+      ],
+      "expected": true
+    },
+    {
+      "name": "ideographic_space_compact",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "\u3000/compact\u3000focus"
+        }
+      ],
+      "expected": true
+    },
+    {
+      "name": "nbsp_line_sep_compact",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "\u00a0\u2028/compact\u2029note"
+        }
+      ],
+      "expected": true
+    },
+    {
+      "name": "nel_u0085_leading_NOT_ws",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "\u0085/compact"
+        }
+      ],
+      "expected": false
+    },
+    {
+      "name": "nel_u0085_after_compact_NOT_ws",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "/compact\u0085note"
+        }
+      ],
+      "expected": false
+    },
+    {
+      "name": "split_blocks_leading_ws",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "   \ufeff"
+        },
+        {
+          "type": "text",
+          "text": "/compact"
+        }
+      ],
+      "expected": true
+    },
+    {
+      "name": "split_blocks_across_word",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "/com"
+        },
+        {
+          "type": "text",
+          "text": "pact"
+        }
+      ],
+      "expected": true
+    },
+    {
+      "name": "split_blocks_with_args",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "/compact"
+        },
+        {
+          "type": "text",
+          "text": " focus on tests"
+        }
+      ],
+      "expected": true
+    },
+    {
+      "name": "compaction_word_not_compact",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "/compaction"
+        }
+      ],
+      "expected": false
+    },
+    {
+      "name": "compact_hyphen_not_compact",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "/compact-now"
+        }
+      ],
+      "expected": false
+    },
+    {
+      "name": "compact_with_image_block",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "/compact"
+        },
+        {
+          "type": "image",
+          "data": "AA==",
+          "mimeType": "image/png"
+        }
+      ],
+      "expected": false
+    },
+    {
+      "name": "empty_blocks",
+      "blocks": [],
+      "expected": false
+    },
+    {
+      "name": "whitespace_only_blocks",
+      "blocks": [
+        {
+          "type": "text",
+          "text": " \t\n\ufeff"
+        }
+      ],
+      "expected": false
+    },
+    {
+      "name": "preamble_then_compact",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "<system-reminder>\nLinked Cowboy sessions: []\n</system-reminder>"
+        },
+        {
+          "type": "text",
+          "text": "/compact"
+        }
+      ],
+      "expected": false
+    },
+    {
+      "name": "ordinary_prompt",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "please /compact later"
+        }
+      ],
+      "expected": false
+    }
+  ],
+  "substantive_cases": [
+    {
+      "name": "empty",
+      "blocks": [],
+      "expected": false
+    },
+    {
+      "name": "empty_text",
+      "blocks": [
+        {
+          "type": "text",
+          "text": ""
+        }
+      ],
+      "expected": false
+    },
+    {
+      "name": "spaces_tabs_newlines",
+      "blocks": [
+        {
+          "type": "text",
+          "text": " \t\r\n"
+        }
+      ],
+      "expected": false
+    },
+    {
+      "name": "bom_and_ideographic_only",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "\ufeff\u3000\u00a0"
+        }
+      ],
+      "expected": false
+    },
+    {
+      "name": "split_empty_text_blocks",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "  "
+        },
+        {
+          "type": "text",
+          "text": "\n\t"
+        }
+      ],
+      "expected": false
+    },
+    {
+      "name": "nel_u0085_is_not_cowboy_ws",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "\u0085"
+        }
+      ],
+      "expected": true
+    },
+    {
+      "name": "plain_text",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "wrap up"
+        }
+      ],
+      "expected": true
+    },
+    {
+      "name": "image_only_is_substantive",
+      "blocks": [
+        {
+          "type": "image",
+          "data": "AA==",
+          "mimeType": "image/png"
+        }
+      ],
+      "expected": true
+    },
+    {
+      "name": "empty_text_plus_image_is_substantive",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "  "
+        },
+        {
+          "type": "image",
+          "data": "AA==",
+          "mimeType": "image/png"
+        }
+      ],
+      "expected": true
+    }
+  ]
+}

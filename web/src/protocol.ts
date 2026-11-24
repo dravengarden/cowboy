@@ -164,6 +164,8 @@ export interface SessionMeta {
   attention?: { approvals: number; questions: number; other?: number };
   /** Advertised by this running worker, never inferred from installed packages. */
   supports_current_turn?: boolean;
+  /** Owner queue-backed wrap-up steering hint support (Antigravity R1). */
+  wrap_up_steering?: boolean;
   id: string;
   provider: string;
   /** Exact immutable Provider generation selected for this session. */
@@ -554,6 +556,8 @@ export type Inbound =
     cmid?: string;
     force?: boolean;
     front?: boolean;
+    wrap_up?: boolean;
+    wrap_up_target?: { worker_epoch: string; turn_id: string } | null;
   }
   // `cmid` on an edit or removal is the outbox mutation id, so a replay whose
   // row already ran is answered with an addressed `stale` result.

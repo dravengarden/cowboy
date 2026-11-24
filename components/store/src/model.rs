@@ -325,6 +325,9 @@ pub struct SessionMeta {
     /// owning runtime reports its capabilities again.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub supports_current_turn: bool,
+    /// Live verified P2 Antigravity wrap-up steering capability. Transient.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub wrap_up_steering: bool,
     /// Provider release switch in progress while `status` is `Starting`.
     /// Lets clients present an unattended idle update as background
     /// maintenance instead of a cold start. Cleared on the next status change.

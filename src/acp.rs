@@ -2317,8 +2317,8 @@ mod startup_mode_tests {
 
     #[test]
     fn prompt_retry_observation_is_isolated_per_turn() {
-        let first = ActivePrompt::new(true);
-        let second = ActivePrompt::new(true);
+        let first = ActivePrompt::new(true, None, false);
+        let second = ActivePrompt::new(true, None, false);
 
         first
             .visible_update
@@ -2522,6 +2522,12 @@ pub enum AgentCommand {
         Option<String>,
         Option<oneshot::Sender<Result<String, String>>>,
     ),
+    /// Detached worker prompt carrying the exact runtime `turn_id` published in `TurnStarted`.
+    TurnPrompt {
+        turn_id: String,
+        blocks: Vec<ContentBlock>,
+        cmid: Option<String>,
+    },
     /// Cancel the current turn (ACP `session/cancel`).
     Cancel,
     /// Stop one subagent's current work: ACP `session/cancel` addressed to
@@ -2728,14 +2734,16 @@ struct ActivePrompt {
     /// message so a successful transparent retry does not leave a false error
     /// in history.
     pending_empty_stream_update: Mutex<Option<serde_json::Value>>,
+    wrap_up: crate::acp_wrap_up::ActiveWrapUp,
 }
 
 impl ActivePrompt {
-    fn new(capture_completion: bool) -> Self {
+    fn new(capture_completion: bool, turn_id: Option<String>, compacting: bool) -> Self {
         Self {
             capture: Mutex::new(capture_completion.then(String::new)),
             visible_update: AtomicBool::new(false),
             pending_empty_stream_update: Mutex::new(None),
+            wrap_up: crate::acp_wrap_up::ActiveWrapUp::new(turn_id, compacting),
         }
     }
 }
@@ -2857,7 +2865,14 @@ pub fn run_agent_with_sink(
             // visible and re-drains once the session recovers. Cancel/Permission
             // commands are transient and intentionally dropped.
             while let Ok(cmd) = cmd_rx.try_recv() {
-                if let AgentCommand::Prompt(blocks, cmid, completion) = cmd {
+                let salvaged = match cmd {
+                    AgentCommand::Prompt(blocks, cmid, completion) => {
+                        Some((blocks, cmid, completion))
+                    }
+                    AgentCommand::TurnPrompt { blocks, cmid, .. } => Some((blocks, cmid, None)),
+                    _ => None,
+                };
+                if let Some((blocks, cmid, completion)) = salvaged {
                     if let Some(tx) = completion {
                         let _ = tx.send(Err(format!("agent failed before prompt: {detail}")));
                         continue;
@@ -3806,6 +3821,32 @@ fn maybe_arm_wakeup(state: &ClientState, update: &serde_json::Value) {
     }
 }
 
+fn echo_prompt_blocks(
+    state: &ClientState,
+    session_id: &str,
+    blocks: &[ContentBlock],
+    cmid: Option<&str>,
+) -> bool {
+    let origin = crate::prompt_origin::origin_from_cmid(cmid);
+    let mut echoed = Vec::with_capacity(blocks.len());
+    for (i, block) in blocks.iter().enumerate() {
+        let content = serde_json::to_value(block).unwrap_or(serde_json::Value::Null);
+        echoed.push(content.clone());
+        let tag = (i == 0).then(|| cmid.map(str::to_owned)).flatten();
+        let mut update = serde_json::json!({
+            "sessionUpdate": "user_message_chunk",
+            "content": content,
+        });
+        crate::prompt_origin::apply_prompt_origin(&mut update, &origin);
+        state
+            .sink
+            .push_tagged(session_id, Event::Update { update }, tag);
+    }
+    let prompt_compacting = crate::wrap_up::is_compaction_prompt_blocks(&echoed);
+    *state.last_echoed_user_contents.lock() = echoed;
+    prompt_compacting
+}
+
 /// The connection's `main_fn`: run the ACP handshake, then a command loop that
 /// drives prompts/cancels/permissions/config changes until the command channel
 /// closes (the supervisor dropped the agent).
@@ -3835,31 +3876,17 @@ async fn run_session(
             )
         })?;
     let initialize_meta = init.meta.clone();
-    let supports_current_turn = initialize_meta
-        .as_ref()
-        .and_then(|meta| meta.get("steering"))
-        .is_some_and(|steering| {
-            steering
-                .get("supported")
-                .and_then(serde_json::Value::as_bool)
-                == Some(true)
-                && steering
-                    .get("idleBehavior")
-                    .and_then(serde_json::Value::as_str)
-                    == Some("promptRequired")
-        });
-    let supports_next_checkpoint = supports_current_turn
-        && initialize_meta
-            .as_ref()
-            .and_then(|meta| meta.get("steering"))
-            .and_then(|steering| steering.get("priorities"))
-            .and_then(serde_json::Value::as_array)
-            .is_some_and(|priorities| priorities.iter().any(|priority| priority == "next"));
-    state.sink.push(&session_id, Event::Update { update: serde_json::json!({
-        "sessionUpdate": crate::runtime_wire::CURRENT_TURN_CAPABILITIES_UPDATE,
-        "currentTurn": supports_current_turn && !state.sink.session_is_managed_read_only(&session_id),
-        "nextCheckpoint": supports_next_checkpoint && !state.sink.session_is_managed_read_only(&session_id),
-    }) });
+    let (cap_update, raw_wrap_up_eligible) = crate::acp_wrap_up::initialize_capabilities_update(
+        provider_id,
+        initialize_meta.as_ref(),
+        state.sink.session_is_managed_read_only(&session_id),
+        state.sink.raw_wrap_up_launch_eligible(&session_id),
+    );
+    let supports_current_turn = cap_update["currentTurn"].as_bool().unwrap_or(false);
+    let supports_next_checkpoint = cap_update["nextCheckpoint"].as_bool().unwrap_or(false);
+    state
+        .sink
+        .push(&session_id, Event::Update { update: cap_update });
     let agent_can_load = init.agent_capabilities.load_session;
     let agent_can_resume = init
         .agent_capabilities
@@ -4255,7 +4282,21 @@ async fn run_session(
         }
     })?;
     let mut config_fences: HashMap<String, ConfigFence> = HashMap::new();
-    while let Some(cmd) = cmd_rx.recv().await {
+    let wrap_up_slot = state.sink.wrap_up_hint_slot(&session_id);
+    while let Some(cmd) =
+        crate::acp_wrap_up::recv_command_or_hint(cmd_rx, wrap_up_slot.as_deref(), |slot| {
+            let active = state.current_prompt();
+            crate::acp_wrap_up::dispatch_pending_wrap_up_hint(
+                slot,
+                state.sink.session_is_managed_read_only(&session_id),
+                |t| state.sink.wrap_up_target_matches(&session_id, t),
+                &acp_id,
+                active.as_deref().map(|p| &p.wrap_up),
+                &cx,
+            );
+        })
+        .await
+    {
         if state.sink.session_is_managed_read_only(&session_id)
             && matches!(&cmd, AgentCommand::SetConfigOption { config_id, .. }
                 if !state.sink.managed_config_option_allowed(&session_id, config_id))
@@ -4342,7 +4383,16 @@ async fn run_session(
                     Ok(())
                 })?;
             }
-            AgentCommand::Prompt(blocks, cmid, completion) => {
+            AgentCommand::Prompt(..) | AgentCommand::TurnPrompt { .. } => {
+                let (prompt_turn_id, blocks, cmid, completion) = match cmd {
+                    AgentCommand::Prompt(b, c, tx) => (None, b, c, tx),
+                    AgentCommand::TurnPrompt {
+                        turn_id,
+                        blocks,
+                        cmid,
+                    } => (Some(turn_id), blocks, cmid, None),
+                    _ => unreachable!(),
+                };
                 state.set_status(Status::Busy, None);
                 // Echo each user content block into the timeline so every
                 // client (Web UI, phone, native shell) sees it — the upstream
@@ -4356,22 +4406,8 @@ async fn run_session(
                 // distinct "↻ resumed turn" note: it isn't something the user
                 // typed, so it must never look like a user bubble (e.g. a wakeup
                 // re-issues a self-check prompt the user never sent).
-                let origin = crate::prompt_origin::origin_from_cmid(cmid.as_deref());
-                let mut echoed = Vec::with_capacity(blocks.len());
-                for (i, block) in blocks.iter().enumerate() {
-                    let content = serde_json::to_value(block).unwrap_or(serde_json::Value::Null);
-                    echoed.push(content.clone());
-                    let tag = if i == 0 { cmid.clone() } else { None };
-                    let mut update = serde_json::json!({
-                        "sessionUpdate": "user_message_chunk",
-                        "content": content,
-                    });
-                    crate::prompt_origin::apply_prompt_origin(&mut update, &origin);
-                    state
-                        .sink
-                        .push_tagged(&session_id, Event::Update { update }, tag);
-                }
-                *state.last_echoed_user_contents.lock() = echoed;
+                let prompt_compacting =
+                    echo_prompt_blocks(state, &session_id, &blocks, cmid.as_deref());
                 let cx = cx.clone();
                 let sink = Arc::clone(&state.sink);
                 let sid = session_id.clone();
@@ -4457,7 +4493,7 @@ async fn run_session(
                         return Ok(());
                     }
                     let mut steering_gate = Some(state.steering_gate.lock().await);
-                    let prompt = Arc::new(ActivePrompt::new(capture_completion));
+                    let prompt = Arc::new(ActivePrompt::new(capture_completion, prompt_turn_id, prompt_compacting));
                     *state.active_prompt.lock() = Some(Arc::clone(&prompt));
                     let mut retries = 0;
                     let mut cancelled_during_retry = false;
@@ -4475,10 +4511,8 @@ async fn run_session(
                             Some(gate) => gate,
                             None => state.steering_gate.lock().await,
                         };
-                        let mut prompt_request = PromptRequest::new(acp.clone(), blocks.clone());
-                        if let Ok(Some(meta)) = &managed_meta {
-                            prompt_request = prompt_request.meta(meta.clone());
-                        }
+                        let attempt_nonce = prompt.wrap_up.begin_attempt(raw_wrap_up_eligible);
+                        let prompt_request = crate::acp_wrap_up::attach_prompt_meta(PromptRequest::new(acp.clone(), blocks.clone()), managed_meta.as_ref().ok().and_then(Option::as_ref), attempt_nonce.as_deref());
                         let request = cx.send_request(prompt_request);
                         drop(gate);
                         // `send_request` synchronously queues the JSON-RPC
@@ -4768,6 +4802,9 @@ async fn run_session(
                 })?;
             }
             AgentCommand::Cancel => {
+                if let Some(p) = state.current_prompt() {
+                    p.wrap_up.mark_cancelled();
+                }
                 state
                     .prompt_cancellation
                     .send_modify(|generation| *generation = generation.wrapping_add(1));

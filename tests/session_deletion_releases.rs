@@ -204,6 +204,7 @@ async fn peer(
             generation: Some("fixture-generation".into()),
             executable: Some("/no-fixture-worker".into()),
             fallback_for: None,
+            outer_machine_protocol: None,
         },
     )
     .await

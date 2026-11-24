@@ -136,11 +136,17 @@ pub(super) async fn settle(execution: Arc<Client>) {
         .await
         .is_err()
     {
+        let pending = execution.ledger().map_or(0, |ledger| ledger.live().len());
         tracing::warn!(
             event_name = "cowboy.execution.ledger_pending",
-            pending = execution.ledger().map_or(0, |ledger| ledger.live().len()),
+            pending,
             "target processes remain; the keeper's reap is the backstop"
         );
+        if pending > 0
+            && let Some(ledger) = execution.ledger()
+        {
+            ledger.mark_termination_uncertain();
+        }
     }
 }
 

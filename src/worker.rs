@@ -92,6 +92,10 @@ pub struct Shared {
     preset_options: std::collections::BTreeSet<String>,
     /// Passive observation of subagents' own updates.
     observation: Observation,
+    /// Raw verified live P2 wrap-up capability observed on ACP initialize.
+    raw_wrap_up_steering: AtomicBool,
+    /// Single-slot O(1) coalesced wrap-up hint handoff to `src/acp.rs`.
+    wrap_up_hint: Arc<crate::acp_wrap_up::WrapUpHintSlot>,
 }
 
 /// Passive observation of subagents' own updates (docs/subagents.md).
@@ -235,6 +239,13 @@ impl Shared {
                     .get("nextCheckpoint")
                     .and_then(serde_json::Value::as_bool)
                     .unwrap_or(false);
+                if let Some(raw_wrap_up) = crate::runtime_wire::wrap_up_steering_support(update) {
+                    self.raw_wrap_up_steering.store(
+                        raw_wrap_up && self.raw_wrap_up_launch_eligible_inner(&snapshot),
+                        Ordering::Relaxed,
+                    );
+                }
+                self.apply_effective_wrap_up(&mut snapshot);
             }
             RuntimeEvent::Update { update, .. }
                 if crate::runtime_wire::background_tasks_count(update).is_some() =>
@@ -267,6 +278,44 @@ impl Shared {
 
     pub fn snapshot(&self) -> WorkerSnapshot {
         self.snapshot.lock().clone()
+    }
+
+    pub(super) fn raw_wrap_up_launch_eligible_inner(&self, snapshot: &WorkerSnapshot) -> bool {
+        !self.managed_read_only()
+            && snapshot.launch.as_ref().is_some_and(|launch| {
+                crate::wrap_up::is_antigravity_provider(&launch.provider)
+                    && crate::wrap_up::semver_at_least(
+                        &launch.provider_version,
+                        crate::wrap_up::ANTIGRAVITY_WRAP_UP_MIN_PROVIDER_VERSION,
+                    )
+                    && !launch.provider_generation_digest.trim().is_empty()
+            })
+    }
+
+    pub(super) fn raw_wrap_up_launch_eligible(&self) -> bool {
+        let snapshot = self.snapshot.lock();
+        self.raw_wrap_up_launch_eligible_inner(&snapshot)
+    }
+
+    fn apply_effective_wrap_up(&self, snapshot: &mut WorkerSnapshot) {
+        let provider = snapshot
+            .launch
+            .as_ref()
+            .map(|launch| launch.provider.as_str());
+        crate::wrap_up::clamp_delivery_capabilities_for_provider(
+            provider,
+            &mut snapshot.supports_current_turn,
+            &mut snapshot.delivery_controls.next_checkpoint,
+        );
+        let peer_protocol = self.observation.peer_protocol.load(Ordering::Relaxed);
+        snapshot.wrap_up_steering = self.raw_wrap_up_steering.load(Ordering::Relaxed)
+            && self.raw_wrap_up_launch_eligible_inner(snapshot)
+            && peer_protocol >= crate::runtime_wire::WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION;
+    }
+
+    fn recompute_wrap_up_steering(&self) {
+        let mut snapshot = self.snapshot.lock();
+        self.apply_effective_wrap_up(&mut snapshot);
     }
 
     /// Hand `command` to the ACP thread. A cancellation fences the current
@@ -521,6 +570,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
                 version: 1,
                 next_checkpoint: false,
             },
+            wrap_up_steering: false,
             // This worker decodes and executes the command itself; whether a
             // given subagent may be stopped is decided per child in ACP.
             supports_subagent_cancel: true,
@@ -556,6 +606,8 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         managed_round,
         preset_options: prepared.preset_options.clone(),
         observation: Observation::default(),
+        raw_wrap_up_steering: AtomicBool::new(false),
+        wrap_up_hint: Arc::new(crate::acp_wrap_up::WrapUpHintSlot::new()),
     });
     execution_launch::observe(&shared);
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -703,6 +755,7 @@ async fn connected(
             generation: Some(shared.generation.clone()),
             executable: shared.executable.clone(),
             fallback_for: shared.fallback_for.clone(),
+            outer_machine_protocol: None,
         },
     )
     .await?;
@@ -716,6 +769,7 @@ async fn connected(
                 .observation
                 .peer_protocol
                 .store(protocol, Ordering::Relaxed);
+            shared.recompute_wrap_up_steering();
         }
         Some(Frame::Reject { reason }) => return Ok(ConnectedExit::Rejected { reason }),
         Some(other) => anyhow::bail!("unexpected Machine broker handshake frame: {other:?}"),
@@ -751,6 +805,9 @@ async fn connected(
                 match frame {
                     Frame::ExecutionReply { reply } => {
                         if let Some(execution) = &shared.execution { execution.complete(*reply); }
+                    }
+                    Frame::WorkerCommand { session_id, command: WorkerCommand::WrapUpHint { session_id: hs, target } } if session_id == shared.session_id && hs == shared.session_id => {
+                        shared.wrap_up_hint.set(target);
                     }
                     Frame::WorkerCommand { session_id, command }
                         if session_id == shared.session_id => {
@@ -860,6 +917,18 @@ pub async fn send_outbox<W: tokio::io::AsyncWrite + Unpin>(
         }
     }
     Ok(())
+}
+
+fn turn_prompt_command(
+    turn_id: &str,
+    blocks: Vec<agent_client_protocol::schema::v1::ContentBlock>,
+    cmid: Option<String>,
+) -> AgentCommand {
+    AgentCommand::TurnPrompt {
+        turn_id: turn_id.to_owned(),
+        blocks,
+        cmid,
+    }
 }
 
 pub fn handle_command(
@@ -993,7 +1062,7 @@ pub fn handle_command(
                 shared.record_prompt_command(cmid.clone(), command_id.clone());
                 (
                     command_id,
-                    Some(AgentCommand::Prompt(blocks, cmid, None)),
+                    Some(turn_prompt_command(&turn_id, blocks, cmid)),
                     Some(turn_id),
                 )
             }
@@ -1072,6 +1141,9 @@ pub fn handle_command(
                     });
                 }
                 return command_ack(shared, "drain".to_owned(), true, None);
+            }
+            WorkerCommand::WrapUpHint { .. } => {
+                return command_ack(shared, String::new(), true, None);
             }
             WorkerCommand::Stop { command_id } => {
                 if !shared.mark_command(&command_id) {
@@ -1175,6 +1247,7 @@ pub fn shared() -> (Arc<Shared>, mpsc::UnboundedReceiver<()>) {
                 current_turn_id: None,
                 supports_current_turn: false,
                 delivery_controls: crate::runtime_wire::DeliveryControls::default(),
+                wrap_up_steering: false,
                 supports_subagent_cancel: false,
                 last_runtime_seq: 0,
                 pending_permissions: vec![],
@@ -1204,6 +1277,8 @@ pub fn shared() -> (Arc<Shared>, mpsc::UnboundedReceiver<()>) {
             managed_round: None,
             preset_options: std::collections::BTreeSet::new(),
             observation: Observation::default(),
+            raw_wrap_up_steering: AtomicBool::new(false),
+            wrap_up_hint: Arc::new(crate::acp_wrap_up::WrapUpHintSlot::new()),
         }),
         rx,
     )
@@ -1877,7 +1952,7 @@ mod tests {
         let snapshot = shared.snapshot();
         assert_eq!(snapshot.current_turn_id.as_deref(), Some("turn-1"));
         assert_eq!(snapshot.state, WorkerState::Busy);
-        assert!(matches!(rx.try_recv(), Ok(AgentCommand::Prompt(..))));
+        assert!(matches!(rx.try_recv(), Ok(AgentCommand::TurnPrompt { .. })));
         assert!(matches!(
             shared.outbox.lock().get(&1),
             Some(RuntimeEvent::TurnStarted { turn_id, .. }) if turn_id == "turn-1"
@@ -2031,7 +2106,7 @@ mod tests {
             },
         );
         assert!(matches!(ack, Frame::CommandAck { accepted: true, .. }));
-        assert!(matches!(rx.try_recv(), Ok(AgentCommand::Prompt(..))));
+        assert!(matches!(rx.try_recv(), Ok(AgentCommand::TurnPrompt { .. })));
 
         let sink = RemoteSink {
             shared: Arc::clone(&shared),

@@ -586,6 +586,39 @@ impl Supervisor {
             .delivery_target(session_id)
     }
 
+    pub fn refresh_wrap_up_steering(&self, session_id: &str) {
+        if let Ok(runtime) = self.runtime_for_session(session_id) {
+            runtime.refresh_wrap_up_steering();
+        }
+    }
+
+    pub fn send_wrap_up_hint(
+        &self,
+        session_id: &str,
+        target: &crate::send_delivery::DeliveryTarget,
+    ) -> bool {
+        if self.hub.is_managed_child(session_id)
+            || self.hub.is_editing(session_id)
+            || self.hub.is_active_turn_compacting(session_id)
+        {
+            return false;
+        }
+        let Some(info) = self.hub.session_info(session_id) else {
+            return false;
+        };
+        if info.meta.paused
+            || info.meta.system
+            || info.meta.closing
+            || info.meta.status != Status::Busy
+            || !info.meta.wrap_up_steering
+            || !crate::wrap_up::is_antigravity_provider(&info.meta.provider)
+        {
+            return false;
+        }
+        self.runtime_for_session(session_id)
+            .is_ok_and(|runtime| runtime.send_wrap_up_hint(session_id, target))
+    }
+
     pub fn send_traced(
         &self,
         session_id: &str,
@@ -696,6 +729,10 @@ impl Supervisor {
                     cmid.as_deref(),
                     blocks,
                 )?;
+                self.hub.set_active_turn_compacting(
+                    session_id,
+                    crate::wrap_up::is_compaction_prompt_blocks(&content),
+                );
                 if runtime.recovery_failed(session_id) {
                     return Err(
                         "Execution recovery failed; prompt held until recovery succeeds".into(),
@@ -740,6 +777,7 @@ impl Supervisor {
                 request_id,
                 option_id,
             } => runtime.permission(session_id, request_id, option_id),
+            AgentCommand::TurnPrompt { .. } => return Err("TurnPrompt is worker-internal".into()),
             AgentCommand::SetConfigOption { config_id, value } => {
                 // The caller saved the value as a session preference, and every
                 // launch replays preferences before its first prompt. A dormant
@@ -1451,6 +1489,7 @@ mod tests {
             current_turn_id: None,
             supports_current_turn: false,
             delivery_controls: crate::runtime_wire::DeliveryControls::default(),
+            wrap_up_steering: false,
             supports_subagent_cancel: false,
             last_runtime_seq: 1,
             pending_permissions: Vec::new(),

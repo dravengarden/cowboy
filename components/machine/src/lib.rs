@@ -21,7 +21,7 @@ pub use cowboy::{
     operation_budget, otlp, owned_json, plugin_auth_probe, plugin_host, plugin_host_bundle,
     plugin_process, plugin_runtime_args, provider_account, provider_behavior, runtime_trace,
     runtime_wire, service_identity, session_deletion_admission, telemetry_plugin,
-    workspace_extensions, workspace_roots,
+    workspace_extensions, workspace_roots, wrap_up,
 };
 #[cfg(feature = "full")]
 pub use cowboy::{

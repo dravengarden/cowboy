@@ -66,6 +66,15 @@ export function pendingAgentSwitch(context: SessionContext | undefined): Session
   return context?.next_agent && context.revision !== context.applied_revision ? context : undefined;
 }
 
+export function isCurrentContextReady(context: SessionContext | undefined): boolean {
+  if (context === undefined) return true;
+  return (
+    context.revision === context.applied_revision &&
+    context.delivery?.state !== "preparing" &&
+    context.delivery?.state !== "unknown"
+  );
+}
+
 export function stagedNextAgent(context: SessionContext): boolean {
   return pendingAgentSwitch(context) !== undefined &&
     context.delivery?.state !== "preparing" &&

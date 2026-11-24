@@ -58,6 +58,7 @@ pub(super) fn admits_event(
         && admit_epoch(shared, session_id, epoch, native)
 }
 
+#[allow(clippy::too_many_lines)]
 pub(super) fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
     if !admits_worker(shared, worker) {
         return false;
@@ -73,6 +74,9 @@ pub(super) fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
     shared
         .hub
         .set_current_turn_support(&worker.session_id, worker.supports_current_turn);
+    shared
+        .hub
+        .set_wrap_up_steering(&worker.session_id, worker.wrap_up_steering);
     shared
         .hub
         .set_machine_lineage(&worker.session_id, worker.incarnation.as_deref());

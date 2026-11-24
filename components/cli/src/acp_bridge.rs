@@ -856,14 +856,12 @@ async fn run_acp_server(
                     );
                 }
                 let (cmid, completion) = bridge.register_prompt(&session_id);
-                if let Err(error) = bridge.send_command(Inbound::Submit {
-                    session_id: session_id.clone(),
-                    text: String::new(),
+                if let Err(error) = bridge.send_command(Inbound::submit_plain(
+                    session_id.clone(),
+                    String::new(),
                     content,
-                    cmid: Some(cmid.clone()),
-                    force: false,
-                    front: false,
-                }) {
+                    Some(cmid.clone()),
+                )) {
                     bridge.fail_prompt(&session_id, &cmid, error.to_string());
                 }
                 let cancellation = responder.cancellation();
@@ -2962,6 +2960,7 @@ mod tests {
             attention: Default::default(),
             background_tasks: 0,
             supports_current_turn: false,
+            wrap_up_steering: false,
             provider_update: None,
             provider_update_available: None,
             resource_wait: None,

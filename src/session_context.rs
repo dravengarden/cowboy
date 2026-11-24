@@ -256,14 +256,13 @@ pub fn workspace_base(hub: &crate::core::Hub, id: &str) -> Option<String> {
 /// path like `/tmp/x` is not one.
 #[must_use]
 pub fn is_command(text: &str) -> bool {
-    let Some(name) = text.trim_start().strip_prefix('/') else {
-        return false;
-    };
-    let name = name.split_whitespace().next().unwrap_or("");
-    name.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | ':'))
+    crate::wrap_up::is_command_text_cowboy_ws(text)
+}
+
+/// Normalized `COWBOY_WS` slash-command and `/compact` check across ACP blocks.
+#[must_use]
+pub fn is_command_blocks(blocks: &[serde_json::Value]) -> bool {
+    crate::wrap_up::is_command_blocks_cowboy_ws(blocks)
 }
 
 /// Sessions the next prompt will read.
@@ -472,30 +471,29 @@ pub fn prompt_content(
     cmid: Option<&str>,
     mut blocks: Vec<agent_client_protocol::schema::v1::ContentBlock>,
 ) -> Result<Vec<serde_json::Value>, String> {
+    // Honor any already-claimed pre-upgrade carrier preamble without stranding links.
     if let Some(text) = preamble(hub, id, cmid)? {
         blocks.insert(
             0,
             agent_client_protocol::schema::v1::ContentBlock::from(text),
         );
     }
-    // A slash command addresses the agent, not the conversation; the renewal
-    // waits for the next message.
-    let command = blocks.iter().find_map(|block| match block {
-        agent_client_protocol::schema::v1::ContentBlock::Text(text) => Some(is_command(&text.text)),
-        _ => None,
-    });
-    if command != Some(true)
-        && let Some(text) = renewal_preamble(hub, id)
-    {
-        blocks.insert(
-            0,
-            agent_client_protocol::schema::v1::ContentBlock::from(text),
-        );
-    }
-    Ok(blocks
+    let mut json_blocks: Vec<serde_json::Value> = blocks
         .into_iter()
         .map(|block| serde_json::to_value(block).expect("ACP content serializes"))
-        .collect())
+        .collect();
+    // A normalized slash command (including split-block `/compact`) addresses
+    // the agent, not the conversation; the renewal waits for the next message.
+    if !is_command_blocks(&json_blocks)
+        && let Some(text) = renewal_preamble(hub, id)
+    {
+        json_blocks.insert(
+            0,
+            serde_json::to_value(agent_client_protocol::schema::v1::ContentBlock::from(text))
+                .expect("ACP content serializes"),
+        );
+    }
+    Ok(json_blocks)
 }
 
 /// Applied only to the admitted message. Retries with its cmid get identical
@@ -1170,5 +1168,74 @@ mod tests {
         let queue = hub.queue_and_drafts("destination", |_| true).unwrap().0;
         assert_eq!(queue[0].content.len(), 2);
         assert_eq!(queue[0].text, "joined");
+    }
+
+    #[test]
+    fn split_block_and_nbsp_compact_skips_renewal_preamble_while_nel_is_not_command() {
+        let split_compact = vec![
+            agent_client_protocol::schema::v1::ContentBlock::from("\u{00a0}/com".to_owned()),
+            agent_client_protocol::schema::v1::ContentBlock::from("pact".to_owned()),
+        ];
+        assert!(is_command_blocks(&[
+            serde_json::json!({"type": "text", "text": "\u{00a0}/com"}),
+            serde_json::json!({"type": "text", "text": "pact"}),
+        ]));
+        assert!(!is_command_blocks(&[serde_json::json!({
+            "type": "text",
+            "text": "\u{0085}/compact"
+        })]));
+
+        let (hub, _rx) = starting_destination();
+        accepted(&hub, "context-op", false);
+        hub.push(
+            "destination",
+            crate::core::Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": crate::context_rollover::MARKER,
+                    "before": 3,
+                }),
+            },
+        );
+        hub.load_settings(vec![(
+            key("destination"),
+            serde_json::json!({
+                "revision": 2,
+                "applied_revision": 2,
+                "sources": ["source"],
+                "rollover": {
+                    "before": 3,
+                    "idle_ms": 60000,
+                    "context_used": 1000,
+                    "digest": { "recent_requests": ["earlier"] },
+                },
+            }),
+        )]);
+        let compact_out = prompt_content(
+            &hub,
+            "destination",
+            Some("c-compact"),
+            split_compact.clone(),
+        )
+        .expect("compact prompt allowed");
+        assert_eq!(
+            compact_out.len(),
+            2,
+            "split-block /compact must not prepend renewal preamble"
+        );
+
+        let ordinary_out = prompt_content(
+            &hub,
+            "destination",
+            Some("c-ordinary"),
+            vec![agent_client_protocol::schema::v1::ContentBlock::from(
+                "hello".to_owned(),
+            )],
+        )
+        .expect("ordinary prompt allowed");
+        assert_eq!(
+            ordinary_out.len(),
+            2,
+            "ordinary prompt gets renewal preamble"
+        );
     }
 }

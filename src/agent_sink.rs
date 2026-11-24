@@ -13,6 +13,25 @@ pub trait AgentSink: Send + Sync + 'static {
     ) -> bool {
         false
     }
+    /// Coalesced 1-slot wrap-up hint channel for verified P2 Antigravity workers.
+    fn wrap_up_hint_slot(
+        &self,
+        _session_id: &str,
+    ) -> Option<std::sync::Arc<crate::acp_wrap_up::WrapUpHintSlot>> {
+        None
+    }
+    /// Whether this worker's broker-verified signed launch satisfies P2 Antigravity requirements.
+    fn raw_wrap_up_launch_eligible(&self, _session_id: &str) -> bool {
+        false
+    }
+    /// Whether `target` matches this worker's live active turn and wrap-up capability.
+    fn wrap_up_target_matches(
+        &self,
+        _session_id: &str,
+        _target: &crate::send_delivery::DeliveryTarget,
+    ) -> bool {
+        false
+    }
     /// Explicit execution hooks carry only local correlation, never prompt
     /// content or a Provider credential/environment binding.
     fn prompt_started(&self, _session_id: &str, _cmid: Option<&str>) {}

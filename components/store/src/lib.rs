@@ -107,6 +107,7 @@ pub use cowboy_wire::provider_account;
 pub use cowboy_wire::runtime_wire;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub use cowboy_wire::service_identity;
+pub use cowboy_wire::wrap_up;
 #[cfg(feature = "full")]
 #[doc(hidden)]
 pub use png;

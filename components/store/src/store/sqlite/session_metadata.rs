@@ -44,6 +44,7 @@ impl SqliteSessionRow {
             attention: crate::model::SessionAttention::default(),
             background_tasks: 0,
             supports_current_turn: false,
+            wrap_up_steering: false,
             provider_update: None,
             provider_update_available: None,
             resource_wait: None,

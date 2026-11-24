@@ -115,6 +115,7 @@ import { reportClientDuration, reportClientLog, reportClientMetric, startClientS
 import { ClientOperations } from "./otelOperations.ts";
 import { isTurnActivityUpdate } from "./turnWaiting.ts";
 import { ContextNavigationNotice, loadSessionContext, requireCurrentAgentContext, sendWithContext, stagedNextAgent } from "./sessionContext";
+import { captureWrapUpTarget, wrapUpOutboxPatch, wrapUpSubmitFields, type WrapUpOutboxFields } from "./wrapUpDelivery";
 import { composeDraftForStagedAgent } from "./contextPendingPrompt";
 
 const telemetryOperations = new ClientOperations(
@@ -211,7 +212,7 @@ import { createOutageTracker } from "./outageTracker";
 /// commands; it never drains or serializes locally. `id` is assigned by the
 /// daemon; `attachments` are reconstructed from the wire content blocks for
 /// display / re-edit.
-export interface QueuedMessage {
+export interface QueuedMessage extends WrapUpOutboxFields {
   /** Local-only native delivery intent; restored outboxes only read its receipt. */
   currentTurn?: boolean;
   nativeDelivery?: "current_turn" | "next_checkpoint" | "interrupt";
@@ -3842,6 +3843,7 @@ function commandForQueueMutation(sessionId: string, m: { name: string; id: strin
     cmid: m.id,
     ...(m.name === "forceQueue" && { force: true }),
     ...(m.name === "frontQueue" && { front: true }),
+    ...wrapUpSubmitFields(state.sessions, sessionId, m.name, row),
   };
 }
 
@@ -4377,14 +4379,9 @@ async function qAdd(
   sessionId: string,
   text: string,
   attachments: Attachment[],
-  opts: {
-    mode?: "back" | "front" | "force";
-    origin?: DeliveryOrigin;
-    schedule?: DraftSchedule;
-    cmid?: string;
-    sourceCmid?: string;
-    currentTurn?: boolean;
-    nativeDelivery?: QueuedMessage["nativeDelivery"];
+  opts: WrapUpOutboxFields & {
+    mode?: "back" | "front" | "force"; origin?: DeliveryOrigin; schedule?: DraftSchedule;
+    cmid?: string; sourceCmid?: string; currentTurn?: boolean; nativeDelivery?: QueuedMessage["nativeDelivery"];
   } = {},
 ): Promise<void> {
   const mode = opts.mode ?? "back";
@@ -4408,6 +4405,7 @@ async function qAdd(
     origin,
     ...(opts.currentTurn ? { currentTurn: true } : {}),
     ...(opts.nativeDelivery ? { nativeDelivery: opts.nativeDelivery } : {}),
+    ...wrapUpOutboxPatch(opts),
     ...(opts.schedule !== undefined ? { schedule: opts.schedule } : {}),
   };
   // Set status BEFORE mutating: the local apply fires `onChange` → commitQueue,
@@ -5136,12 +5134,16 @@ export async function submitPrompt(
   }
 }
 
-/** "Jump to front of queue" (no interrupt): when a turn is in flight with other
- *  messages already queued, send this prompt to the FRONT of the queue WITHOUT
- *  cancelling the running turn — it runs next (after the current turn) ahead of
- *  the rest of the queue. On an idle / empty-queue session there's nothing to
- *  jump ahead of, so it's just a normal send. Mirrors forcePrompt minus the
- *  interrupt. */
+export async function wrapUpPrompt(sessionId: string, text: string, attachments: Attachment[] = [], target?: QueuedMessage["wrapUpTarget"]): Promise<void> {
+  if (sessionActionSnapshot()) throw new Error("Finish or cancel the pending session action before sending.");
+  const trimmed = text.trimEnd();
+  if (!trimmed.trim() && attachments.length === 0) return;
+  try { await requireCurrentAgentContext(sessionId); } catch (error) { contextSendError(sessionId, error); }
+  const captured = await captureWrapUpTarget(sessionId, target);
+  return qAdd("queue", sessionId, trimmed, attachments, { mode: "front", origin: "composer", wrapUp: true, wrapUpSessionId: sessionId, ...(captured ? { wrapUpTarget: captured } : {}) });
+}
+
+/** Jump to front of queue without interrupting the running turn. */
 export async function frontPrompt(sessionId: string, text: string, attachments: Attachment[] = []): Promise<void> {
   const trimmed = text.trimEnd();
   if (!trimmed.trim() && attachments.length === 0) return Promise.resolve();

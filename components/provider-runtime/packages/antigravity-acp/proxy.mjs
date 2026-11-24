@@ -48,7 +48,10 @@ export const RUNTIME_REQUESTS = Object.freeze([
   "session/set_model",
   "session/set_config_option",
 ]);
-export const RUNTIME_NOTIFICATIONS = Object.freeze(["session/cancel"]);
+export const RUNTIME_NOTIFICATIONS = Object.freeze(["session/cancel", "cowboy/wrapUpHint"]);
+export const WRAP_UP_HINT_METHOD = "cowboy/wrapUpHint";
+export const WRAP_UP_CAPABILITY_KEY = "cowboy.dev/wrapUpSteering";
+export const ATTEMPT_NONCE_KEY = "cowboy.dev/attemptNonce";
 /** Agent requests and notifications forwarded to the worker. */
 export const AGENT_REQUESTS = Object.freeze(["session/request_permission"]);
 /** Recalled memory as the prompt block Cowboy prepends. */
@@ -244,9 +247,17 @@ export class AcpProxy {
     this.log = log;
     /** Set once this proxy ended `agy` (a stop it never confirmed). */
     this.killed = undefined;
+    this.closing = false;
+    /** Pre-write prompt reservations kept out of `this.turns` until promotion. */
+    this.reservedTurns = new Map();
+    /** Per-session cancellation generation fencing staged async preparation. */
+    this.cancelGen = new Map();
+    /** Cached resolved runtime for synchronous Stop fencing. */
+    this.readyRuntime = undefined;
     /** Ends the unit's `agy` (a stop `agy` never confirmed leaves nothing running unseen). */
     this.terminate = (reason) => {
       this.killed ??= reason;
+      this.beginShutdown();
       terminate(reason);
     };
     this.pending = new Map();
@@ -308,6 +319,7 @@ export class AcpProxy {
     });
     Promise.resolve(runtime).then(
       (ready) => {
+        this.readyRuntime = ready;
         this.root = ready?.facade?.root;
         this.facade = ready?.facade;
         this.memory = ready?.memory ?? null;
@@ -556,8 +568,96 @@ export class AcpProxy {
     if (shown !== undefined) this.client(shown);
   }
 
-  /** Messages from the worker are handled strictly in order. */
+  /** Latch closing and abort all unwritten reservations cleanly. */
+  beginShutdown() {
+    if (this.closing) return;
+    this.closing = true;
+    this.abortAllReservations();
+  }
+
+  /** Client stdin reached EOF: latch closing and settle unwritten reservations. */
+  closeInput() {
+    this.beginShutdown();
+  }
+
+  abortAllReservations() {
+    for (const [sessionId, reserved] of [...this.reservedTurns]) {
+      reserved.cancelled = true;
+      this.bumpCancelGen(sessionId);
+      reserved.cancelResolve?.();
+      this.releaseReservation(sessionId, reserved);
+      if (reserved.record && !reserved.record.finalized) {
+        this.endPrompt(reserved.record, {
+          jsonrpc: "2.0",
+          id: reserved.id,
+          result: { stopReason: "cancelled" },
+        });
+      }
+    }
+  }
+
+  bumpCancelGen(sessionId) {
+    const next = (this.cancelGen.get(sessionId) ?? 0) + 1;
+    this.cancelGen.set(sessionId, next);
+    return next;
+  }
+
+  releaseReservation(sessionId, reserved) {
+    if (this.reservedTurns.get(sessionId) === reserved) {
+      this.reservedTurns.delete(sessionId);
+    }
+  }
+
+  handleWrapUpHint(params) {
+    const sessionId = params?.sessionId;
+    const attemptNonce = params?.attemptNonce;
+    if (
+      typeof sessionId !== "string" ||
+      typeof attemptNonce !== "string" ||
+      !attemptNonce ||
+      this.managed !== false ||
+      this.subagents.owns(sessionId)
+    ) {
+      return;
+    }
+    const entry = this.turns.get(sessionId) ?? this.reservedTurns.get(sessionId);
+    if (
+      !entry ||
+      entry.attemptNonce !== attemptNonce ||
+      entry.compacting ||
+      entry.cancelled ||
+      entry.structured ||
+      !entry.wrapUp ||
+      entry.wrapUp.delivered
+    ) {
+      return;
+    }
+    entry.wrapUp.pending = true;
+  }
+
+  /** Messages from the worker are handled strictly in order, except synchronous
+   * `cowboy/wrapUpHint` and `session/cancel` bypasses. */
   fromClient(message) {
+    if (
+      message !== null &&
+      typeof message === "object" &&
+      !Array.isArray(message) &&
+      message.id === undefined
+    ) {
+      if (message.method === WRAP_UP_HINT_METHOD) {
+        this.handleWrapUpHint(message.params);
+        return Promise.resolve();
+      }
+      if (message.method === "session/cancel") {
+        if (this.foreignSession(message.params)) {
+          this.log("dropped session/cancel");
+          return Promise.resolve();
+        }
+        return this.cancel(message).catch((error) =>
+          this.log(`client cancel failed: ${error.message}`),
+        );
+      }
+    }
     this.queue = this.queue
       .then(() => this.handleClient(message))
       .catch((error) => this.log(`client message failed: ${error.message}`));
@@ -651,28 +751,39 @@ export class AcpProxy {
         return this.refuse(id, `cowboy_antigravity_unavailable: ${error.message}`, -32603);
       }
     } else if (method === "session/prompt") {
+      if (this.closing) {
+        return this.refuse(id, "Antigravity proxy is shutting down", -32603);
+      }
       const sessionId = forwarded.params?.sessionId;
       if (typeof sessionId !== "string") return this.refuse(id, "sessionId is required", -32602);
-      if (this.turns.has(sessionId)) {
+      if (this.turns.has(sessionId) || this.reservedTurns.has(sessionId)) {
         return this.refuse(id, "A turn is already running in this session", -32603);
       }
-      // A managed turn carries its Machine-written round; nothing else
-      // does. Its metadata never reaches `agy`.
+      // Copy and strip private attemptNonce synchronously before any await or `agy` send.
+      let attemptNonce;
+      if (
+        forwarded.params?._meta &&
+        typeof forwarded.params._meta === "object" &&
+        !Array.isArray(forwarded.params._meta) &&
+        Object.hasOwn(forwarded.params._meta, ATTEMPT_NONCE_KEY)
+      ) {
+        if (typeof forwarded.params._meta[ATTEMPT_NONCE_KEY] === "string") {
+          attemptNonce = forwarded.params._meta[ATTEMPT_NONCE_KEY];
+        }
+        delete forwarded.params._meta[ATTEMPT_NONCE_KEY];
+        if (Object.keys(forwarded.params._meta).length === 0) {
+          delete forwarded.params._meta;
+        }
+      }
+      let stagedSeal = undefined;
       if (runtime.managed) {
         const admitted = managedPrompt(forwarded.params);
         if (admitted.error) return this.refuse(id, admitted.error, -32602);
         forwarded.params = admitted.params;
-        // A schema the proxy cannot enforce exactly is refused before `agy`
-        // runs.
         const refusal = admitted.schema && schemaRefusal(admitted.schema);
         if (refusal) return this.refuse(id, `A managed Antigravity round's ${refusal}`, -32602);
-        // A structured round's session is sealed from admission, before
-        // anything is awaited: native text before its collector exists is
-        // held as thought, never an unchecked answer. A text round unseals.
-        if (admitted.schema) this.sealed.add(sessionId);
-        else this.sealed.delete(sessionId);
+        stagedSeal = Boolean(admitted.schema);
         if (admitted.schema) {
-          // The reply is checked against the schema before it is final.
           record.schema = admitted.schema;
           forwarded.params.prompt = [...forwarded.params.prompt, contractBlock(admitted.schema)];
         }
@@ -680,103 +791,186 @@ export class AcpProxy {
         return this.refuse(id, "This Antigravity session is not a Cowboy managed call", -32602);
       }
       record.sessionId = sessionId;
-      record.cursor = await runtime.evidence.mark();
       const prompt = forwarded.params?.prompt;
-      // Memory recalls for the owner's words, as for Claude and Codex.
-      const text = promptText(prompt);
-      // A repository skill's slash command becomes the instruction to use it
-      // (a managed turn never runs one; `managedPrompt` refused it above).
-      if (!runtime.managed) {
-        forwarded.params.prompt = expandSkillCommand(prompt, this.skills, this.agyCommands);
-      }
-      if (runtime.memory) {
-        const context = await recall(runtime.memory, text);
-        if (context) {
-          forwarded.params.prompt = [
-            { type: "text", text: memoryBlock(context) },
-            ...(Array.isArray(forwarded.params.prompt) ? forwarded.params.prompt : []),
+      const stagedCompaction = this.compaction.begin(prompt);
+      let cancelResolve;
+      const cancelPromise = new Promise((resolve) => {
+        cancelResolve = resolve;
+      });
+      const reserved = {
+        id,
+        sessionId,
+        record,
+        attemptNonce,
+        compacting: Boolean(stagedCompaction),
+        structured: Boolean(record.schema),
+        wrapUp: { pending: false, delivered: false },
+        cancelled: false,
+        cancelGen: this.cancelGen.get(sessionId) ?? 0,
+        cancelResolve,
+      };
+      this.reservedTurns.set(sessionId, reserved);
+      try {
+        const text = promptText(prompt);
+        let stagedPrompt = forwarded.params.prompt;
+        // Native `/compact` must never be rewritten by skill expansion or memory recall.
+        if (!runtime.managed && !stagedCompaction) {
+          stagedPrompt = expandSkillCommand(prompt, this.skills, this.agyCommands);
+        }
+        const cursor = await Promise.race([
+          runtime.evidence.mark(),
+          cancelPromise.then(() => undefined),
+        ]);
+        if (reserved.cancelled || this.closing || record.finalized) {
+          this.releaseReservation(sessionId, reserved);
+          if (!record.finalized) {
+            this.endPrompt(record, { jsonrpc: "2.0", id, result: { stopReason: "cancelled" } });
+          }
+          return;
+        }
+        let memoryContext;
+        if (runtime.memory && !stagedCompaction) {
+          memoryContext = await Promise.race([
+            recall(runtime.memory, text),
+            cancelPromise.then(() => undefined),
+          ]);
+        }
+        // Single uninterrupted synchronous promotion block: zero shared state
+        // mutation occurred before this check.
+        if (
+          reserved.cancelled ||
+          this.closing ||
+          record.finalized ||
+          this.reservedTurns.get(sessionId) !== reserved ||
+          (this.cancelGen.get(sessionId) ?? 0) !== reserved.cancelGen
+        ) {
+          this.releaseReservation(sessionId, reserved);
+          if (!record.finalized) {
+            this.endPrompt(record, { jsonrpc: "2.0", id, result: { stopReason: "cancelled" } });
+          }
+          return;
+        }
+        this.releaseReservation(sessionId, reserved);
+        record.cursor = cursor;
+        record.compaction = stagedCompaction;
+        if (stagedSeal === true) this.sealed.add(sessionId);
+        else if (stagedSeal === false) this.sealed.delete(sessionId);
+        if (memoryContext) {
+          stagedPrompt = [
+            { type: "text", text: memoryBlock(memoryContext) },
+            ...(Array.isArray(stagedPrompt) ? stagedPrompt : []),
           ];
         }
-      }
-      record.compaction = this.compaction.begin(prompt);
-      this.compacting.delete(sessionId);
-      const restated =
-        record.compaction || !Array.isArray(prompt)
-          ? undefined
-          : this.compaction.take(sessionId, prompt);
-      if (restated !== undefined) {
-        record.restated = true;
-        forwarded.params.prompt = [{ type: "text", text: restated }, ...forwarded.params.prompt];
-      }
-      this.turns.set(sessionId, {
-        id,
-        uncertain: undefined,
-        violation: undefined,
-        tools: new Map(),
-        prompt: text,
-        said: "",
-        evidence: [],
-        bytes: 0,
-        recorded: new Set(),
-        // A structured managed round: the reply held back for checking.
-        structured: record.schema
-          ? {
-              schema: record.schema,
-              reply: "",
-              messageId: undefined,
-              // Native message ids of attempts already checked: a late chunk
-              // carrying one is never part of a later answer.
-              retired: new Set(),
-              // Why the current candidate cannot be the answer, if it cannot.
-              invalid: undefined,
-              // Set when the attempt's result arrives: later updates are not
-              // part of its answer.
-              closed: false,
-              corrections: 0,
-              final: undefined,
-              // Earlier attempts' backend evidence and reported usage.
-              backends: [],
-              usage: [],
-            }
-          : undefined,
-      });
-      runtime.facade.beginTurn(sessionId);
-      if (record.compaction) {
-        const started = this.compaction.update(sessionId, record.compaction, "in_progress");
-        if (started) {
-          this.compacting.add(sessionId);
-          this.client(started);
+        this.compacting.delete(sessionId);
+        const restated =
+          record.compaction || !Array.isArray(prompt)
+            ? undefined
+            : this.compaction.take(sessionId, prompt);
+        if (restated !== undefined) {
+          record.restated = true;
+          stagedPrompt = [{ type: "text", text: restated }, ...stagedPrompt];
         }
+        forwarded.params.prompt = stagedPrompt;
+        this.turns.set(sessionId, {
+          id,
+          attemptNonce,
+          compacting: Boolean(record.compaction),
+          wrapUp: reserved.wrapUp,
+          attemptCleanup: null,
+          uncertain: undefined,
+          violation: undefined,
+          tools: new Map(),
+          prompt: text,
+          said: "",
+          evidence: [],
+          bytes: 0,
+          recorded: new Set(),
+          structured: record.schema
+            ? {
+                schema: record.schema,
+                reply: "",
+                messageId: undefined,
+                retired: new Set(),
+                invalid: undefined,
+                closed: false,
+                corrections: 0,
+                final: undefined,
+                backends: [],
+                usage: [],
+              }
+            : undefined,
+        });
+        runtime.facade.beginTurn(sessionId, { wrapUp: reserved.wrapUp });
+        if (record.compaction) {
+          const started = this.compaction.update(sessionId, record.compaction, "in_progress");
+          if (started) {
+            this.compacting.add(sessionId);
+            this.client(started);
+          }
+        }
+        this.pending.set(id, record);
+        this.agent(forwarded);
+        return;
+      } finally {
+        this.releaseReservation(sessionId, reserved);
       }
     }
     this.pending.set(id, record);
     this.agent(forwarded);
   }
 
+  startAttemptCleanup(sessionId, turn, { cancelled = false, errored = false } = {}) {
+    if (!turn) return Promise.resolve();
+    if (turn.attemptCleanup) return turn.attemptCleanup;
+    // Synchronously initiate facade cleanup when runtime is already ready so admission fences at once.
+    if (this.readyRuntime) {
+      turn.attemptCleanup = Promise.resolve(
+        this.readyRuntime.facade.endTurn(sessionId, { cancelled, errored }),
+      );
+    } else {
+      turn.attemptCleanup = (async () => {
+        const runtime = this.readyRuntime ?? (await this.runtime);
+        await runtime.facade.endTurn(sessionId, { cancelled, errored });
+      })();
+    }
+    return turn.attemptCleanup;
+  }
+
   async cancel(message) {
     const sessionId = message.params?.sessionId;
-    if (typeof sessionId === "string" && this.turns.has(sessionId)) {
-      // Marked before anything is awaited: no correction starts after a stop.
-      this.turns.get(sessionId).cancelled = true;
-      this.subagents.cancelled(sessionId);
-      // A stopped session takes the subagents it started with it, fenced
-      // alongside the session itself (not after it).
-      const children = this.subagents.cancelChildren(sessionId);
-      const runtime = await this.runtime;
-      const fenced = Promise.all([
-        runtime.facade.endTurn(sessionId, { cancelled: true }),
-        children,
-      ]);
-      if (this.subagents.owns(sessionId)) {
-        // A subagent's Stop reaches `agy` at once and starts its watchdog;
-        // the facade's cleanup drains beside it, never in front of it (it
-        // would also hold the worker's serialized input).
-        this.agent(message);
-        this.subagents.nativeCancelled(sessionId);
-        await fenced;
+    if (typeof sessionId === "string") {
+      this.bumpCancelGen(sessionId);
+      const reserved = this.reservedTurns.get(sessionId);
+      if (reserved) {
+        reserved.cancelled = true;
+        reserved.cancelResolve?.();
+        this.releaseReservation(sessionId, reserved);
+        if (!reserved.record.finalized) {
+          this.endPrompt(reserved.record, {
+            jsonrpc: "2.0",
+            id: reserved.id,
+            result: { stopReason: "cancelled" },
+          });
+        }
         return;
       }
-      await fenced;
+      const turn = this.turns.get(sessionId);
+      if (turn) {
+        // Latch synchronously before any await so `proxy.correct()` and hints fence immediately.
+        turn.cancelled = true;
+        if (turn.wrapUp) turn.wrapUp.pending = false;
+        this.subagents.cancelled(sessionId);
+        const cleanup = this.startAttemptCleanup(sessionId, turn, { cancelled: true });
+        const children = this.subagents.owns(sessionId)
+          ? Promise.resolve()
+          : this.subagents.cancelChildren(sessionId);
+        // Forward native `session/cancel` to `agy` IMMEDIATELY (both root and child),
+        // without waiting behind facade/extension cleanup!
+        this.agent(message);
+        this.subagents.nativeCancelled(sessionId);
+        await Promise.all([cleanup, children]);
+        return;
+      }
     }
     this.agent(message);
     // From here `agy` has the cancel: a child it does not answer ends the unit.
@@ -904,6 +1098,7 @@ export class AcpProxy {
    * receives the account's signal. Another exit changes nothing.
    */
   settleExit() {
+    this.beginShutdown();
     if (this.killed === undefined) return;
     // Rows first: the worker must see every child end before the parent does.
     this.subagents.exited();
@@ -931,6 +1126,9 @@ export class AcpProxy {
         : { class: "unknown_refusal", successes: 0, barrier: false, transient: 0, refusals: [] };
       const cowboy = { antigravity_backend: backend };
       if (turn?.uncertain !== undefined) cowboy.uncertain_effect = turn.uncertain;
+      else if (this.facade?.hasOpenCommands?.(record.sessionId)) {
+        cowboy.uncertain_effect = "process/terminate";
+      }
       const violation = turn?.violation;
       if (violation !== undefined) cowboy.policy_violation = violation;
       const text =
@@ -1144,6 +1342,25 @@ export class AcpProxy {
     // reaches the worker before any notification read after it (the worker
     // drops session updates until `session/load` completes), and that
     // notification already carries the plan it reported.
+    if (record.method === "initialize" && message.result !== undefined) {
+      const result = structuredClone(message.result);
+      if (result.agentCapabilities?._meta && typeof result.agentCapabilities._meta === "object") {
+        delete result.agentCapabilities._meta.steering;
+        delete result.agentCapabilities._meta[WRAP_UP_CAPABILITY_KEY];
+      }
+      const meta =
+        result._meta && typeof result._meta === "object" && !Array.isArray(result._meta)
+          ? { ...result._meta }
+          : {};
+      delete meta.steering;
+      delete meta[WRAP_UP_CAPABILITY_KEY];
+      if (!runtime.managed) {
+        meta[WRAP_UP_CAPABILITY_KEY] = { supported: true };
+      }
+      if (Object.keys(meta).length > 0) result._meta = meta;
+      else delete result._meta;
+      return this.client({ ...message, result });
+    }
     if (record.method !== "session/prompt") return this.client(message);
     // A prompt reply is never forwarded at once. The turn's facade calls
     // are fenced now, but the turn stays observed until its evidence has
@@ -1157,12 +1374,24 @@ export class AcpProxy {
     // Checked synchronously, and every ending fences the turn's facade calls
     // before anything is awaited; an admitted correction reopens them.
     const problem = this.correction(turn, message);
-    // Both start before anything is awaited: the turn's facade calls are
-    // fenced at once, and nothing a turn started outlives it (its subagents
-    // stop, which a later start of theirs already sees).
-    const fenced = runtime.facade.endTurn(record.sessionId);
+    // Join any Stop-initiated cleanup barrier for this attempt, or start it now.
+    const endedCancelled = Boolean(turn?.cancelled || message.result?.stopReason === "cancelled");
+    const endedErrored = message.error !== undefined;
+    const fenced = turn
+      ? this.startAttemptCleanup(record.sessionId, turn, {
+          cancelled: endedCancelled,
+          errored: endedErrored,
+        })
+      : runtime.facade.endTurn(record.sessionId, {
+          cancelled: endedCancelled,
+          errored: endedErrored,
+        });
     await this.subagents.finish(record.sessionId);
     await fenced;
+    runtime.facade.detachTurn?.(record.sessionId, {
+      cancelled: endedCancelled,
+      errored: endedErrored,
+    });
     // Every ending is classified, a vendor error too: its log window may
     // hold a refusal; an error without one is `unknown_refusal`, never a
     // vendor message the Controller cannot attribute.
@@ -1369,6 +1598,8 @@ export class AcpProxy {
       structured.retired.size >= MAX_MESSAGES ||
       structured.ambiguous === true ||
       structured.terminal !== undefined ||
+      this.closing === true ||
+      record.finalized === true ||
       turn.cancelled === true ||
       turn.violation !== undefined ||
       turn.uncertain !== undefined;
@@ -1391,6 +1622,7 @@ export class AcpProxy {
     structured.final = undefined;
     const retry = `cowboy-correction-${randomUUID()}`;
     this.pending.set(retry, { ...record, cursor, replyId });
+    turn.attemptCleanup = null;
     runtime.facade.beginTurn(record.sessionId);
     this.agent({
       jsonrpc: "2.0",

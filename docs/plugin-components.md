@@ -88,6 +88,19 @@ adapter's lock moves `url` to 2.5.9 for RUSTSEC-2026-0592 (unbounded
 recursion in `Url::origin()` on nested `blob:` URLs). Native pins and its
 component release are unchanged.
 
+Component release 3.149.0 records provider-runtime 1.3.32, whose
+`cowboy-antigravity-acp` 1.0.27 delivers the Antigravity R1 proxy half
+([design](antigravity-steering-r1-design.md)): dual `initialize._meta`
+sanitization and `cowboy.dev/wrapUpSteering` advertisement for unmanaged
+sessions, synchronous `cowboy/wrapUpHint` handling and `attemptNonce`
+stripping across `reservedTurns` and active turns, relay-scoped
+`ambiguousRelays` protection cleared only on verified socket close,
+non-mutating once-per-turn `WRAP_UP_NOTE` attachment after UI presentation,
+full 60 s root Stop confirmation with `UNCERTAIN_REPORT`, and unified
+`COWBOY_WS` `/compact` detection. Antigravity 0.2.35 pins it with zero
+manifest schema changes; the other six Providers pinning provider-runtime
+advance one patch version.
+
 Component release 3.148.0 records provider-runtime 1.3.31, whose
 `cowboy-antigravity-acp` 1.0.26 carries the uncertain-effect L1c proxy half
 ([design](uncertain-effect-recovery.md)): before the proxy exits on a graceful

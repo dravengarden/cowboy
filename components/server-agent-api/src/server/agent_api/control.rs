@@ -800,6 +800,7 @@ fn command_value(name: &str, input: &Value, operation: &str) -> Result<Value, &'
             delivery,
             crate::send_delivery::SendDelivery::CurrentTurn
                 | crate::send_delivery::SendDelivery::NextCheckpoint
+                | crate::send_delivery::SendDelivery::WrapUp
         ) {
             return Err("invalid_argument");
         }
@@ -1045,14 +1046,18 @@ async fn dispatch(
     }
     if name == "queue.submit" && input["delivery"] == "session_default" {
         let session = arg_str(&input, "session_id")?;
-        if state.hub.session_info(session).is_none() {
+        let Some(info) = state.hub.session_info(session) else {
             return Err("session_not_found".into());
-        }
-        input["delivery"] = json!(match web::send_delivery::policy(&state.hub, session).mode {
-            crate::send_delivery::DeliveryMode::Steer => "current_turn",
-            crate::send_delivery::DeliveryMode::ToolBoundary => "next_checkpoint",
-            crate::send_delivery::DeliveryMode::NextTurn => "next_turn",
-        });
+        };
+        input["delivery"] = if crate::wrap_up::is_antigravity_provider(&info.meta.provider) {
+            json!("next_turn")
+        } else {
+            json!(match web::send_delivery::policy(&state.hub, session).mode {
+                crate::send_delivery::DeliveryMode::Steer => "current_turn",
+                crate::send_delivery::DeliveryMode::ToolBoundary => "next_checkpoint",
+                crate::send_delivery::DeliveryMode::NextTurn => "next_turn",
+            })
+        };
     }
     let notify = web::peer_notices::admit(&state.hub, name, &mut input, &parent.id);
     let Ok(notify) = notify else {
@@ -1070,7 +1075,7 @@ async fn dispatch(
             && (input["force"] == true
                 || matches!(
                     input["delivery"].as_str(),
-                    Some("interrupt" | "current_turn" | "next_checkpoint")
+                    Some("interrupt" | "current_turn" | "next_checkpoint" | "wrap_up")
                 )))
             || matches!(
                 name,

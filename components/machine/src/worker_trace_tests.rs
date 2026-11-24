@@ -80,7 +80,7 @@ async fn runtime_trace_crosses_real_dispatch_and_framing_without_history_or_repl
         Frame::CommandAck { accepted: true, .. }
     ));
     assert_eq!(shared.snapshot().last_runtime_seq, sequence);
-    let AgentCommand::Prompt(blocks, _, _) = rx.try_recv().unwrap() else {
+    let AgentCommand::TurnPrompt { blocks, .. } = rx.try_recv().unwrap() else {
         panic!("ACP prompt");
     };
     let content = serde_json::to_string(&blocks).unwrap();

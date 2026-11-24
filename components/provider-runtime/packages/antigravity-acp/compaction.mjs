@@ -11,8 +11,42 @@ import { randomUUID } from "node:crypto";
 /** Sessions whose projection the proxy keeps for a restatement. */
 export const MAX_SESSIONS = 64;
 
-/** The one slash command that compacts in `agy` 1.5.9. */
-const COMMAND = /^\/compact(?:\s|$)/i;
+/**
+ * Closed cross-runtime whitespace set shared identically with Rust
+ * (`components/wire/src/wrap_up.rs:is_cowboy_ws`). Explicitly includes U+FEFF
+ * and excludes U+0085 (NEL).
+ */
+export function isCowboyWs(ch) {
+  if (typeof ch !== "string" || ch.length === 0) return false;
+  const code = ch.charCodeAt(0);
+  return (
+    (code >= 0x0009 && code <= 0x000d) ||
+    code === 0x0020 ||
+    code === 0x00a0 ||
+    code === 0x1680 ||
+    (code >= 0x2000 && code <= 0x200a) ||
+    code === 0x2028 ||
+    code === 0x2029 ||
+    code === 0x202f ||
+    code === 0x205f ||
+    code === 0x3000 ||
+    code === 0xfeff
+  );
+}
+
+export function trimStartCowboyWs(text) {
+  let i = 0;
+  while (i < text.length && isCowboyWs(text[i])) i += 1;
+  return text.slice(i);
+}
+
+export function trimCowboyWs(text) {
+  let start = 0;
+  while (start < text.length && isCowboyWs(text[start])) start += 1;
+  let end = text.length;
+  while (end > start && isCowboyWs(text[end - 1])) end -= 1;
+  return text.slice(start, end);
+}
 
 /** Whether the prompt's blocks are text whose content is `agy`'s `/compact`. */
 export function isCompactionPrompt(prompt) {
@@ -20,19 +54,19 @@ export function isCompactionPrompt(prompt) {
   if (prompt.some((block) => block?.type !== "text" || typeof block.text !== "string")) {
     return false;
   }
-  return COMMAND.test(
-    prompt
-      .map((block) => block.text)
-      .join("")
-      .trim(),
-  );
+  const trimmed = trimCowboyWs(prompt.map((block) => block.text).join(""));
+  if (trimmed.length < 8 || trimmed.slice(0, 8).toLowerCase() !== "/compact") {
+    return false;
+  }
+  return trimmed.length === 8 || isCowboyWs(trimmed[8]);
 }
 
 /** Whether the prompt starts with a slash command `agy` would expand. */
 export function isSlashPrompt(prompt) {
+  if (isCompactionPrompt(prompt)) return true;
   const first = Array.isArray(prompt) ? prompt[0] : undefined;
   return first?.type === "text" && typeof first.text === "string"
-    ? first.text.trimStart().startsWith("/")
+    ? trimStartCowboyWs(first.text).startsWith("/")
     : false;
 }
 

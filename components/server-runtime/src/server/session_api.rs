@@ -343,8 +343,11 @@ pub async fn api_session_prompt(
         )
             .into_response();
     }
-    if build_prompt_blocks(&req.text, &req.content).is_none() {
+    let Some(built_blocks) = build_prompt_blocks(&req.text, &req.content) else {
         return (StatusCode::BAD_REQUEST, "empty prompt: no text or content").into_response();
+    };
+    if delivery == SendDelivery::WrapUp {
+        return submit_wrap_up_prompt(&state, &session_id, &caller, req, &built_blocks);
     }
     // API and UI prompts share one durable queue and cold-admission boundary.
     // Resource pressure must not turn an accepted backend wake into a 404.
@@ -389,6 +392,76 @@ pub async fn api_session_prompt(
             .submit(&session_id, req.text, req.content, cmid, &caller);
     }
     (StatusCode::ACCEPTED, "queued").into_response()
+}
+
+fn submit_wrap_up_prompt(
+    state: &AppState,
+    session_id: &str,
+    caller: &crate::prompt_origin::RequestCaller,
+    req: SessionPromptRequest,
+    built_blocks: &[agent_client_protocol::schema::v1::ContentBlock],
+) -> Response {
+    if !caller.is_person() {
+        return (
+            StatusCode::FORBIDDEN,
+            "wrap_up delivery is restricted to the session owner",
+        )
+            .into_response();
+    }
+    if let Some(op) = req.operation.as_deref()
+        && !crate::core::Hub::is_authored_cmid(op)
+    {
+        return (StatusCode::BAD_REQUEST, "invalid wrap_up operation id").into_response();
+    }
+    let json_blocks: Vec<serde_json::Value> = built_blocks
+        .iter()
+        .map(|b| serde_json::to_value(b).unwrap_or_default())
+        .collect();
+    if !crate::wrap_up::has_substantive_prompt_blocks(&json_blocks) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "empty prompt: no substantive text or content",
+        )
+            .into_response();
+    }
+    let cmid = Some(
+        req.operation
+            .unwrap_or_else(|| format!("api:{}", uuid::Uuid::new_v4())),
+    );
+    let outcome =
+        state
+            .hub
+            .front_submit_with_outcome(session_id, req.text, req.content, cmid, caller);
+    match outcome {
+        crate::core::FrontSubmitOutcome::Refused => (
+            StatusCode::CONFLICT,
+            "session unavailable for wrap_up delivery",
+        )
+            .into_response(),
+        crate::core::FrontSubmitOutcome::Duplicate => (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({"status": "duplicate", "hinted": false})),
+        )
+            .into_response(),
+        crate::core::FrontSubmitOutcome::DispatchedImmediately => (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({"status": "dispatched", "hinted": false})),
+        )
+            .into_response(),
+        crate::core::FrontSubmitOutcome::QueuedFallback => (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({"status": "queued", "hinted": false})),
+        )
+            .into_response(),
+        crate::core::FrontSubmitOutcome::QueuedFront => {
+            let hinted = send_delivery::try_wrap_up_hint(state, session_id, req.target.as_ref());
+            (
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({"status": "queued", "hinted": hinted})),
+            )
+                .into_response()
+        }
+    }
 }
 
 pub async fn api_new_session(
@@ -713,7 +786,7 @@ async fn create_machine_session(
         Ok(registration) => registration,
         Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
     };
-    if let Err(error) = session_context::initialize(
+    if let Err(error) = session_context::initialize_with_prompt(
         state,
         principal,
         &session_id,
@@ -722,6 +795,7 @@ async fn create_machine_session(
             .as_ref()
             .filter(|text| !text.trim().is_empty())
             .map(|_| format!("initial:{session_id}")),
+        req.initial_prompt.as_deref(),
     )
     .await
     {
@@ -778,7 +852,7 @@ async fn create_local_session(
     cwd: Option<String>,
     provider_account_id: crate::provider_account::ProviderAccountId,
 ) -> Response {
-    if let Err(error) = session_context::initialize(
+    if let Err(error) = session_context::initialize_with_prompt(
         state,
         principal,
         &session_id,
@@ -787,6 +861,7 @@ async fn create_local_session(
             .as_ref()
             .filter(|text| !text.trim().is_empty())
             .map(|_| format!("initial:{session_id}")),
+        req.initial_prompt.as_deref(),
     )
     .await
     {

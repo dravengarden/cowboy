@@ -183,7 +183,7 @@ pub const FORCE_CANCEL_GRACE: std::time::Duration = std::time::Duration::from_se
 /// slow link, and the link can stall for 30-60 s. That is progress, not a hung
 /// turn. Recycling instead forces a cold remote resume that crosses the same
 /// link and costs far more than the cancellation it replaces.
-pub const EXECUTION_FORCE_CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(60);
+pub const EXECUTION_FORCE_CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(75);
 pub const QUEUE_EDIT_RECONNECT_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
 /// How long a dropped Machine stays `reconnecting` before the sweeper marks it
 /// offline and clients surface "not connected". A remote Machine reaches the

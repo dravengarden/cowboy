@@ -145,3 +145,10 @@ schema = 1
 # are never chosen.
 # duration string such as "6h", from 5m to 7d; applies live.
 # memory_reclaim_min_idle = "15m"
+
+[providers.antigravity]
+# Allow best-effort wrap-up steering hints for verified Antigravity sessions.
+# Disabling stops new wrap-up hints live while preserving front-of-queue
+# Owner delivery.
+# boolean (true or false); applies live.
+# wrap_up_steering = true

@@ -209,7 +209,11 @@ impl Hub {
         removed
     }
 
-    pub(super) fn reject_reserved_notice_cmid(&self, session_id: &str, cmid: Option<&str>) -> bool {
+    pub(in crate::core) fn reject_reserved_notice_cmid(
+        &self,
+        session_id: &str,
+        cmid: Option<&str>,
+    ) -> bool {
         if cmid.is_some_and(crate::agent_model::is_reserved_call_notice_cmid) {
             self.broadcast_error(
                 Some(session_id.to_owned()),

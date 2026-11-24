@@ -27,7 +27,8 @@ pub struct DeliveryTarget {
 
 /// Current runtime protocol. Version 1 is additive-only: new optional fields
 /// must use serde defaults and existing meanings must not change in place.
-pub const PROTOCOL_VERSION: u16 = 7;
+pub const PROTOCOL_VERSION: u16 = 8;
+pub use crate::wrap_up::{MAX_WRAP_UP_HINT_BYTES, WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION};
 /// Controllers that keep observed subagent transcripts. A Machine forwards
 /// [`SUBAGENT_EVENT_UPDATE`] only to a Controller at this version or later and
 /// retires it for an older one ([`retire_observation`]), so a Controller
@@ -65,6 +66,7 @@ pub enum WorkerState {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct WorkerSnapshot {
     pub session_id: String,
     pub worker_epoch: String,
@@ -96,6 +98,9 @@ pub struct WorkerSnapshot {
     pub supports_current_turn: bool,
     #[serde(default)]
     pub delivery_controls: DeliveryControls,
+    /// Live verified P2 Antigravity wrap-up steering capability.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub wrap_up_steering: bool,
     /// The worker accepts [`WorkerCommand::CancelSubagent`]. Absent from older
     /// workers, which must never receive it: their frame decoder would reject
     /// the whole connection.
@@ -385,6 +390,13 @@ pub fn merge_uncertain_effect(current: &mut Option<UncertainEffect>, observed: U
 pub fn current_turn_support(update: &serde_json::Value) -> Option<bool> {
     (update.get("sessionUpdate")?.as_str()? == CURRENT_TURN_CAPABILITIES_UPDATE)
         .then(|| update.get("currentTurn")?.as_bool())
+        .flatten()
+}
+
+#[must_use]
+pub fn wrap_up_steering_support(update: &serde_json::Value) -> Option<bool> {
+    (update.get("sessionUpdate")?.as_str()? == CURRENT_TURN_CAPABILITIES_UPDATE)
+        .then(|| update.get("wrapUpSteering")?.as_bool())
         .flatten()
 }
 
@@ -702,6 +714,12 @@ pub enum CoreCommand {
         command_id: String,
         subagent_session_id: String,
     },
+    /// Best-effort, payload-free hint asking a verified P2 Antigravity turn to
+    /// wrap up its current step so a front-queued Owner prompt runs next.
+    WrapUpHint {
+        session_id: String,
+        target: DeliveryTarget,
+    },
     Permission {
         session_id: String,
         command_id: String,
@@ -772,6 +790,7 @@ impl CoreCommand {
             | Self::Prompt { session_id, .. }
             | Self::Cancel { session_id, .. }
             | Self::CancelSubagent { session_id, .. }
+            | Self::WrapUpHint { session_id, .. }
             | Self::Permission { session_id, .. }
             | Self::SetConfigOption { session_id, .. }
             | Self::DrainSession { session_id, .. }
@@ -832,6 +851,11 @@ pub enum WorkerCommand {
     CancelSubagent {
         command_id: String,
         subagent_session_id: String,
+    },
+    /// See [`CoreCommand::WrapUpHint`].
+    WrapUpHint {
+        session_id: String,
+        target: DeliveryTarget,
     },
     Permission {
         command_id: String,
@@ -998,6 +1022,10 @@ pub enum Frame {
         executable: Option<String>,
         #[serde(default)]
         fallback_for: Option<String>,
+        /// Outer Machine WebSocket protocol version negotiated with the
+        /// Controller (`None` from older peers, failing closed as `< 53`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outer_machine_protocol: Option<u16>,
     },
     Welcome {
         protocol: u16,
@@ -1213,6 +1241,7 @@ mod tests {
             current_turn_id: None,
             supports_current_turn: false,
             delivery_controls: DeliveryControls::default(),
+            wrap_up_steering: false,
             supports_subagent_cancel: false,
             last_runtime_seq: 0,
             pending_permissions: Vec::new(),

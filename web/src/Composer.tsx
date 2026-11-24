@@ -122,7 +122,7 @@ import {
   sessionSettingsFocusFromEvent,
   sessionSettingsEventMatches,
 } from "./sessionSettingsOpen";
-import { pendingAgentSwitch } from "./sessionContext";
+import { isCurrentContextReady, pendingAgentSwitch } from "./sessionContext";
 
 import { PendingPanel, DesktopRegionShortcut, TOOLBAR_ICON_BTN, AttachmentPreviews } from "./PendingPanel";
 import { ComposerSheet, SessionActionConfirmDialog } from "./ComposerSheet";
@@ -376,7 +376,8 @@ export function ComposerWorkspace({
   const preparing = status === "starting";
   // The context cue strip hides while the mobile keyboard owns the screen, so
   // the placeholder repeats that the next message starts a new agent.
-  const nextAgentContext = pendingAgentSwitch(useAnnouncedSessionContext(sessionId));
+  const sessionContext = useAnnouncedSessionContext(sessionId);
+  const nextAgentContext = pendingAgentSwitch(sessionContext), currentContextReady = isCurrentContextReady(sessionContext);
   const messagePlaceholder = nextAgentContext ? "Message the new agent…" : "Message the agent…";
   const queue = useStoreSelector((snapshot) =>
     snapshot.queues.get(sessionId) ?? EMPTY_QUEUED_MESSAGES
@@ -405,6 +406,7 @@ export function ComposerWorkspace({
     submit,
     submitTracked,
     currentTurnTracked,
+    wrapUpTracked,
     jumpToFrontTracked: jumpCurrentPromptToFrontTracked,
     saveAsDraftTracked,
     scheduleNew,
@@ -560,25 +562,23 @@ export function ComposerWorkspace({
     snapshot.sessions.find((session) => session.id === sessionId)
       ?.supports_current_turn === true
   );
-  const addToCurrentTurn = (
-    target?: DeliveryTarget,
-    nextCheckpoint = false,
-  ): void => {
+  const runTrackedDelivery = (start: () => Promise<void> | null): void => {
     let submitted = false;
     void submitFeedback.run(() => {
-      const confirmation = currentTurnTracked(target, nextCheckpoint);
+      const confirmation = start();
       if (confirmation === null) return Promise.resolve();
       submitted = true;
       return confirmation;
-    })
-      .then((succeeded) => {
-        if (submitted && succeeded) {
-          dismissAfterMobileDelivery();
-          surfaces.setFullscreen(false);
-          onSubmitted?.();
-        }
-      });
+    }).then((succeeded) => {
+      if (submitted && succeeded) {
+        dismissAfterMobileDelivery();
+        surfaces.setFullscreen(false);
+        onSubmitted?.();
+      }
+    });
   };
+  const addToCurrentTurn = (target?: DeliveryTarget, nextCheckpoint = false): void => runTrackedDelivery(() => currentTurnTracked(target, nextCheckpoint));
+  const addWrapUpPrompt = (target?: DeliveryTarget): void => runTrackedDelivery(() => wrapUpTracked(target));
   const timelineState = useStoreSelector(
     (snapshot) => composerTimelineSlice(snapshot.timelines.get(sessionId)),
     sameComposerTimelineSlice,
@@ -720,13 +720,11 @@ export function ComposerWorkspace({
   // Without a live server a send is queued until Cowboy is reachable, so the
   // button names that outcome instead of promising an immediate send.
   const serverConnected = useConnected();
-  const currentTurnAvailable = serverConnected && status === "busy" &&
-    supportsCurrentTurn;
-  // Warm the delivery options as a turn starts, so the busy Send opens on
-  // the session's real policy and checkpoint support without a wait.
+  const currentTurnAvailable = serverConnected && status === "busy" && supportsCurrentTurn;
+  const wrapUpAvailable = serverConnected && status === "busy" && !supportsCurrentTurn && sessionState.wrapUpSteering && !sessionState.paused && currentContextReady;
   useEffect(() => {
-    if (currentTurnAvailable) prefetchDeliveryOptions(sessionId);
-  }, [currentTurnAvailable, sessionId]);
+    if (currentTurnAvailable || wrapUpAvailable) prefetchDeliveryOptions(sessionId);
+  }, [currentTurnAvailable, wrapUpAvailable, sessionId]);
   // A compaction is running right now: the turn is busy AND the live tail is
   // Claude Code's "Compacting..." notice (covers both a hand-fired /compact and
   // the agent's own auto-compaction). Drives the Compact button's disabled +
@@ -2479,13 +2477,14 @@ export function ComposerWorkspace({
         sessionId={sessionId}
         anchor={deliveryAnchor}
         busy={busy}
-        steerReady={currentTurnAvailable}
+        steerReady={currentTurnAvailable} wrapUpReady={wrapUpAvailable} contextReady={currentContextReady}
         paused={paused}
         queueCount={queue.length}
         onClose={closeDeliveryPicker}
         onNextTurn={deliveryChoice(() => submitWithFeedback(() => surfaces.setFullscreen(false)))}
         onQueueFront={deliveryChoice(jumpToFront)}
         onSteer={deliveryChoice(addToCurrentTurn)}
+        onWrapUp={deliveryChoice(addWrapUpPrompt)}
         onSendAndPause={deliveryChoice(() => {
           void submitFeedback.run(async () => {
             await pauseQueueConfirmed(sessionId);

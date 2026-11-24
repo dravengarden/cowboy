@@ -844,3 +844,17 @@ mod machine_scope_and_tools {
         );
     }
 }
+
+#[test]
+fn agent_api_rejects_wrap_up_delivery_for_peer_and_automation_callers() {
+    let err = command_value(
+        "queue.submit",
+        &json!({"session_id": "own", "text": "finish up", "delivery": "wrap_up"}),
+        "op-wrap-1",
+    )
+    .unwrap_err();
+    assert_eq!(err, "invalid_argument");
+
+    assert!(crate::wrap_up::is_antigravity_provider("antigravity"));
+    assert!(!crate::wrap_up::is_antigravity_provider("codex"));
+}

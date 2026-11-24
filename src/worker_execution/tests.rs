@@ -1402,3 +1402,96 @@ fn an_answered_write_or_signal_the_unit_never_read_is_unknown() {
         );
     }
 }
+
+#[tokio::test]
+async fn unconfirmed_process_termination_in_finish_turn_parks_durably_across_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.json");
+    let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
+        "process/start" => {
+            let id = invocation.params["processId"].as_str().unwrap_or("");
+            completed(json!({"result": {"processId": id}}))
+        }
+        "process/terminate" => completed(json!({"result": {}})),
+        "process/read" => {
+            completed(json!({"result": {"chunks": [], "exited": false, "closed": false}}))
+        }
+        _ => completed(json!({"result": {}})),
+    }));
+    let l = ledger(&target.client, Some(path.clone()));
+    l.begin_turn("turn-1");
+    let started = target
+        .client
+        .relay("process/start".into(), start("stuck-1"))
+        .await;
+    assert!(started.get("result").is_some());
+    let finish = target
+        .client
+        .finish_turn("turn-1")
+        .expect("running process triggers barrier");
+    finish.await;
+    assert_eq!(l.uncertain_effect().as_deref(), Some("process/terminate"));
+
+    let reopened = Ledger::open("session", Some(path)).unwrap();
+    assert_eq!(
+        reopened.uncertain_effect().as_deref(),
+        Some("process/terminate")
+    );
+    assert!(!reopened.unwritable());
+}
+
+#[tokio::test]
+async fn unconfirmed_process_termination_in_settle_all_parks_durably_across_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.json");
+    let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
+        "process/start" => {
+            let id = invocation.params["processId"].as_str().unwrap_or("");
+            completed(json!({"result": {"processId": id}}))
+        }
+        "process/terminate" => completed(json!({"result": {}})),
+        "process/read" => {
+            completed(json!({"result": {"chunks": [], "exited": false, "closed": false}}))
+        }
+        _ => completed(json!({"result": {}})),
+    }));
+    let l = ledger(&target.client, Some(path.clone()));
+    l.begin_turn("turn-1");
+    let started = target
+        .client
+        .relay("process/start".into(), start("stuck-2"))
+        .await;
+    assert!(started.get("result").is_some());
+    target.client.settle_all().await;
+    assert_eq!(l.uncertain_effect().as_deref(), Some("process/terminate"));
+
+    let reopened = Ledger::open("session", Some(path)).unwrap();
+    assert_eq!(
+        reopened.uncertain_effect().as_deref(),
+        Some("process/terminate")
+    );
+}
+
+#[tokio::test]
+async fn background_cancel_turn_does_not_park_on_unconfirmed_termination() {
+    let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
+        "process/start" => {
+            let id = invocation.params["processId"].as_str().unwrap_or("");
+            completed(json!({"result": {"processId": id}}))
+        }
+        "process/terminate" => completed(json!({"result": {}})),
+        "process/read" => {
+            completed(json!({"result": {"chunks": [], "exited": false, "closed": false}}))
+        }
+        _ => completed(json!({"result": {}})),
+    }));
+    let l = ledger(&target.client, None);
+    l.begin_turn("turn-1");
+    let _ = target
+        .client
+        .relay("process/start".into(), start("slow-bg"))
+        .await;
+    target.client.cancel_turn();
+    tokio::time::sleep(Duration::from_millis(5300)).await;
+    assert!(l.uncertain_effect().is_none());
+}

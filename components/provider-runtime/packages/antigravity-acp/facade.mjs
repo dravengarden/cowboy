@@ -50,6 +50,10 @@ import { planUpdate } from "./presentation.mjs";
  * facade detected (`src/worker_execution/ledger.rs`); never forwarded. */
 export const UNCERTAIN_REPORT = "cowboy/uncertainEffect";
 
+/** Fixed Cowboy-authored advisory note appended once per root turn on wrap-up hint. */
+export const WRAP_UP_NOTE =
+  "[Cowboy note: the owner asked you to wrap up your current step briefly so they can follow up next.]";
+
 /** The process id prefix of readiness probes (diagnostic only: the worker
  * authorizes the probe from its own state, never from this id). */
 export const READINESS_PREFIX = "cowboy-agy-readiness-";
@@ -104,10 +108,12 @@ export class Facade {
       onResult = () => {},
       onProgress = () => {},
       managed = false,
+      stopConfirmMs = LIMITS.stopConfirmMs,
     },
   ) {
     this.connection = connection;
     this.managed = managed;
+    this.stopConfirmMs = stopConfirmMs;
     this.root = root;
     this.shell = shell;
     this.onUncertain = onUncertain;
@@ -117,6 +123,11 @@ export class Facade {
     this.sessions = new Map();
     /** Per canonical path, how often a publish of it became uncertain. */
     this.invalidations = new Map();
+    /** Active `endTurn` promises kept visible to `settled()` even after turn detach. */
+    this.activeCleanups = new Set();
+    /** Open MCP relay streams (`relayId -> sessionOf`). */
+    this.relays = new Map();
+    this.nextRelayId = 1;
     /** The session's extension tools (`extensions.mjs`), once started. */
     this.extensions = undefined;
     /**
@@ -168,6 +179,8 @@ export class Facade {
         parent: undefined,
         // The parent's turn that was open when the child started.
         parentTurn: undefined,
+        // Relay sockets that were open across an ambiguous turn end; cleared only on verified close.
+        ambiguousRelays: new Set(),
       };
       this.sessions.set(sessionId, session);
     }
@@ -190,12 +203,61 @@ export class Facade {
     if (session && !session.turn && session.commands.size === 0) this.sessions.delete(sessionId);
   }
 
-  beginTurn(sessionId) {
+  registerRelay(sessionOf) {
+    const relayId = this.nextRelayId++;
+    this.relays.set(relayId, sessionOf);
+    return relayId;
+  }
+
+  unregisterRelay(relayId) {
+    this.relays.delete(relayId);
+    for (const session of this.sessions.values()) {
+      session.ambiguousRelays.delete(relayId);
+    }
+  }
+
+  markAmbiguousRelays(sessionId) {
+    const session = this.session(sessionId);
+    if (session.parent !== undefined) return;
+    for (const [relayId, sessionOf] of this.relays) {
+      let bound;
+      try {
+        bound = sessionOf();
+      } catch {
+        bound = undefined;
+      }
+      if (bound === sessionId || bound === undefined) {
+        session.ambiguousRelays.add(relayId);
+      }
+    }
+  }
+
+  hasOpenCommands(sessionId) {
+    return (this.sessions.get(sessionId)?.commands.size ?? 0) > 0;
+  }
+
+  detachTurn(sessionId, { cancelled = false, errored = false } = {}) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    if (
+      session.parent === undefined &&
+      (cancelled || errored || (session.turn?.inflight.size ?? 0) > 0)
+    ) {
+      this.markAmbiguousRelays(sessionId);
+    }
+    if (session.turn) {
+      session.turn.ended = true;
+      session.turn = undefined;
+    }
+  }
+
+  beginTurn(sessionId, { wrapUp = null } = {}) {
     this.session(sessionId).turn = {
       sessionId,
       cancelled: false,
       ended: false,
       uncertain: undefined,
+      wrapUp,
       inflight: new Set(),
       // Aborted when the turn ends or is cancelled: a call waiting on a
       // subagent returns at once instead of holding the end of the turn.
@@ -209,52 +271,72 @@ export class Facade {
    * running), then its admitted mutations are awaited and its commands
    * stopped. A command whose termination is not confirmed stays tracked.
    */
-  async endTurn(sessionId, { cancelled = false } = {}) {
+  async endTurn(sessionId, { cancelled = false, errored = false } = {}) {
     const session = this.session(sessionId);
     const turn = session.turn;
+    const isRoot = session.parent === undefined;
+    const hadUnsettled = (turn?.inflight.size ?? 0) > 0;
+    if (isRoot && (cancelled || errored || hadUnsettled)) {
+      this.markAmbiguousRelays(sessionId);
+    }
     if (turn) {
       turn.cancelled ||= cancelled;
+      if (turn.wrapUp) turn.wrapUp.pending = false;
       if (!cancelled) {
         turn.ended = true;
         session.turn = undefined;
       }
       turn.abort?.abort();
-      await Promise.allSettled([...turn.inflight]);
     }
-    const commands = [...session.commands.values()];
-    // An ended turn waits up to `stopConfirmMs` for its commands' process
-    // trees to exit, so nothing of the turn is still being stopped once it
-    // completes (a worker replaced at the turn's end otherwise cuts off that
-    // stop mid-request, which parks the session). A cancellation keeps the
-    // short wait: its native cancel follows this cleanup.
-    // A subagent keeps the short wait too: its parent bounds the child's
-    // settlement on its own.
-    const confirmMs = cancelled || session.parent !== undefined ? 5000 : LIMITS.stopConfirmMs;
-    await Promise.all(
-      commands.map(async (command) => {
-        // The turn's end takes the stop over from the expiry timer (one
-        // owner, also across overlapping cleanups), and hands it back if
-        // the close stays unconfirmed.
-        clearTimeout(command.timer);
-        command.cleaning = (command.cleaning ?? 0) + 1;
-        let closed;
-        try {
-          closed = await this.terminate(command, confirmMs).catch(() => false);
-        } finally {
-          command.cleaning -= 1;
-        }
-        if (closed) this.forget(session, command);
-        else if (
-          !this.closing &&
-          command.cleaning === 0 &&
-          session.commands.get(command.processId) === command
-        ) {
+    const cleanup = (async () => {
+      if (turn) {
+        await Promise.allSettled([...turn.inflight]);
+      }
+      const commands = [...session.commands.values()];
+      // Root sessions always wait the full `stopConfirmMs` window (native
+      // `session/cancel` is already forwarded before this awaits) and park via
+      // `UNCERTAIN_REPORT` if any root command still fails to confirm exit.
+      const confirmMs = isRoot ? this.stopConfirmMs : 5000;
+      let anyUnconfirmed = false;
+      await Promise.all(
+        commands.map(async (command) => {
           clearTimeout(command.timer);
-          command.timer = setTimeout(() => this.expire(session, command), 5000);
-          command.timer.unref?.();
-        }
-      }),
-    );
+          command.cleaning = (command.cleaning ?? 0) + 1;
+          let closed;
+          try {
+            closed = await this.terminate(command, confirmMs).catch(() => false);
+          } finally {
+            command.cleaning -= 1;
+          }
+          if (closed) this.forget(session, command);
+          else {
+            anyUnconfirmed = true;
+            if (
+              !this.closing &&
+              command.cleaning === 0 &&
+              session.commands.get(command.processId) === command
+            ) {
+              clearTimeout(command.timer);
+              command.timer = setTimeout(() => this.expire(session, command), 5000);
+              command.timer.unref?.();
+            }
+          }
+        }),
+      );
+      if (isRoot && anyUnconfirmed && !this.closing) {
+        if (turn) this.fenceLost(turn, "process/terminate");
+        await this.connection
+          .call(UNCERTAIN_REPORT, { method: "process/terminate" })
+          .catch(() => {});
+        this.onUncertain(sessionId, "process/terminate");
+      }
+    })();
+    this.activeCleanups.add(cleanup);
+    try {
+      await cleanup;
+    } finally {
+      this.activeCleanups.delete(cleanup);
+    }
   }
 
   /**
@@ -275,9 +357,10 @@ export class Facade {
    * bound ended the wait.
    */
   async settled(ms) {
-    const work = [...this.sessions.values()].flatMap((session) => [
-      ...(session.turn?.inflight ?? []),
-    ]);
+    const work = [
+      ...[...this.sessions.values()].flatMap((session) => [...(session.turn?.inflight ?? [])]),
+      ...this.activeCleanups,
+    ];
     let timer;
     const expired = new Promise((resolve) => {
       timer = setTimeout(() => resolve(false), ms);
@@ -296,13 +379,14 @@ export class Facade {
   }
 
   /** One MCP `tools/call`, answered as an MCP tool result. */
-  async call(sessionId, name, args) {
+  async call(sessionId, name, args, relayId = undefined) {
+    const session = sessionId === undefined ? undefined : this.sessions.get(sessionId);
+    const callTurn = session?.turn;
     const call = { sessionId, name, args };
     const running = this.answer(call);
     // A subagent's call is part of its parent's turn: the parent's end waits
     // for it, and for the report of an effect it lost.
-    const parentTurn =
-      sessionId === undefined ? undefined : this.sessions.get(sessionId)?.parentTurn;
+    const parentTurn = session?.parentTurn;
     const tracked = parentTurn?.inflight ? running.catch(() => {}) : undefined;
     if (tracked) parentTurn.inflight.add(tracked);
     let result;
@@ -317,7 +401,54 @@ export class Facade {
     } catch {
       // A presentation failure must not fail the tool.
     }
-    return result;
+    return this.maybeAttachWrapUpNote(session, callTurn, name, result, relayId);
+  }
+
+  /**
+   * Non-mutating attachment of `WRAP_UP_NOTE` strictly once per root turn when
+   * no ambiguous relay exists, after `onResult` presentation has observed the
+   * clean result. Attaches to the first text block (including `[text, image]`
+   * `ReadFile` results), appending a text block only if none exists.
+   */
+  maybeAttachWrapUpNote(session, callTurn, name, result, relayId) {
+    if (
+      this.managed ||
+      session === undefined ||
+      session.parent !== undefined ||
+      session.ambiguousRelays.size > 0 ||
+      (relayId !== undefined && session.ambiguousRelays.has(relayId)) ||
+      callTurn === undefined ||
+      session.turn !== callTurn ||
+      callTurn.cancelled ||
+      callTurn.ended ||
+      callTurn.uncertain !== undefined ||
+      callTurn.wrapUp?.pending !== true ||
+      callTurn.wrapUp.delivered !== false ||
+      name === "UpdatePlan" ||
+      result?.isError ||
+      !Array.isArray(result?.content)
+    ) {
+      return result;
+    }
+    callTurn.wrapUp.pending = false;
+    callTurn.wrapUp.delivered = true;
+    const firstTextIndex = result.content.findIndex(
+      (block) => block?.type === "text" && typeof block.text === "string",
+    );
+    const content =
+      firstTextIndex >= 0
+        ? result.content.map((block, index) =>
+            index === firstTextIndex
+              ? {
+                  ...block,
+                  text: `${block.text}
+
+${WRAP_UP_NOTE}`,
+                }
+              : block,
+          )
+        : [...result.content, { type: "text", text: WRAP_UP_NOTE }];
+    return { ...result, content };
   }
 
   async answer(call) {
@@ -1430,6 +1561,8 @@ export function renderSubagent(id, outcome) {
  * maps the stream's channel to its ACP session when a tool is called.
  */
 export function serveMcp(stream, facade, sessionOf) {
+  const relayId = facade.registerRelay(sessionOf);
+  stream.once("close", () => facade.unregisterRelay(relayId));
   let buffered = "";
   stream.setEncoding("utf8");
   const send = (message) => stream.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
@@ -1450,7 +1583,7 @@ export function serveMcp(stream, facade, sessionOf) {
     if (method === "ping") return send({ id, result: {} });
     if (method === "tools/list") return send({ id, result: { tools: facade.tools() } });
     if (method === "tools/call") {
-      const result = await facade.call(sessionOf(), params?.name, params?.arguments);
+      const result = await facade.call(sessionOf(), params?.name, params?.arguments, relayId);
       return send({ id, result });
     }
     send({ id, error: { code: -32601, message: "Method not found" } });

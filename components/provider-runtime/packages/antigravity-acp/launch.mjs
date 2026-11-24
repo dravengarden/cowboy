@@ -496,26 +496,22 @@ export async function runProxy({
   frames(
     input,
     (message) => proxy.fromClient(message),
-    () => agy.stdin.end(),
+    () => {
+      proxy.closeInput();
+      agy.stdin.end();
+    },
   );
   agy.stdin.on("error", () => {});
   // `close`: after agy's last output was read, so nothing it said is lost.
   const [code, signal] = await new Promise((done) =>
     agy.once("close", (...result) => done(result)),
   );
-  // An `agy` the proxy ended answers each prompt still open with what it
-  // already knows, before this process goes: the account's signals survive.
-  proxy.settleExit();
+  proxy.beginShutdown();
   const ready = await runtime.catch(() => undefined);
   ready?.server.close();
-  // Requests still in flight (a turn's command stops and their confirming
-  // reads) get their replies before the connection closes: a reply cut off
-  // here would leave its effect unknown to the worker (design L1c). No new
-  // facade work starts meanwhile.
+  // Drain in-flight facade work and execution replies BEFORE publishing exit
+  // replies so any uncertainty from `attemptCleanup` settles ahead of TurnEnd.
   ready?.facade.quiesce();
-  // Acknowledged only once the facade's admitted work settled (a publish
-  // waiting for a notification included) and no reply is owed; otherwise the
-  // worker records its drained replies as possibly unread (fail closed).
   const deadline = Date.now() + DRAIN_MS;
   if (
     (await ready?.facade.settled(DRAIN_MS)) &&
@@ -523,6 +519,8 @@ export async function runProxy({
   ) {
     await ready.connection.drained(Math.max(1, deadline - Date.now()));
   }
+  // Now answer each open prompt with settled signals (and open-command uncertainty).
+  proxy.settleExit();
   ready?.connection.close();
   return signal ? 1 : (code ?? 1);
 }

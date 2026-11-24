@@ -18,3 +18,4 @@ pub mod provider_account;
 pub mod runtime_trace;
 pub mod runtime_wire;
 pub mod service_identity;
+pub mod wrap_up;

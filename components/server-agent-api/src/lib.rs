@@ -20,7 +20,7 @@ pub use cowboy::{
     runtime_wire, scheduler, send_delivery, serve_args, service_identity, session_context,
     session_folders, store, subagent_transcripts, superagent, supervisor, task_notifications,
     telemetry_binding, telemetry_file, telemetry_plugin, transcript_anchors, usage, web_push,
-    workspace, workspace_extensions,
+    workspace, workspace_extensions, wrap_up,
 };
 
 pub use cowboy_server_runtime::agent_api;

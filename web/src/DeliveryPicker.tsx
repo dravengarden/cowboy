@@ -31,6 +31,7 @@ import {
   registerDeliveryPickerCommands,
 } from "./deliveryPickerCommands";
 import { DesktopShortcut } from "./desktop/commands/DesktopKeycap";
+import { resolveDeliveryPickerState } from "./wrapUpDelivery";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 
 // The worker names a cycle the agent runs on its own (for example Claude's
@@ -59,6 +60,12 @@ export interface DeliveryPickerProps {
   /** The client's live view (connected, busy, current-turn capable). Steer is
    *  offered from it at once instead of waiting for the options read. */
   steerReady?: boolean;
+  /** Composer-only live readiness for Antigravity wrap-up steering. */
+  wrapUpReady?: boolean;
+  /** Whether the session's current agent context has no pending/unresolved switch. */
+  contextReady?: boolean;
+  /** Composer-only wrap-up action (front-queue + target-fenced wrap-up hint). */
+  onWrapUp?: (target: DeliveryTarget | undefined) => void;
 }
 
 export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element | null {
@@ -136,31 +143,26 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element | 
       initializedFocus.current = false;
     };
   }, [open, props.sessionId]);
-  // A fresh read is authoritative (the turn may just have ended); until it
-  // returns, the live session view decides, and the delivery captures the
-  // turn on submit.
-  const target = fresh && props.busy ? options?.target ?? undefined : undefined;
-  const steer = fresh
-    ? Boolean(props.busy && options?.steer && target)
-    : Boolean(props.busy && props.steerReady);
-  const checkpoint = steer && Boolean(options?.controls.next_checkpoint);
-  const unavailable = !props.busy
-    ? "No active turn"
-    : fresh && !options?.steer
-    ? "Not supported by this worker"
-    : fresh
-    ? "Active turn unavailable"
-    : error
-    ? "Runtime unavailable"
-    : "Checking runtime…";
-  const mode = options?.policy.mode ?? "steer";
-  const preferred = mode === "tool_boundary"
-    ? "checkpoint"
-    : mode === "steer"
-    ? "steer"
-    : props.queued
-    ? "front"
-    : "next";
+  const {
+    target,
+    steer,
+    checkpoint,
+    showWrapUp,
+    wrapUp,
+    unavailable,
+    wrapUpUnavailable,
+    preferred,
+  } = resolveDeliveryPickerState({
+    busy: props.busy,
+    paused: props.paused,
+    queued: Boolean(props.queued),
+    steerReady: Boolean(props.steerReady),
+    wrapUpReady: Boolean(props.wrapUpReady),
+    contextReady: props.contextReady ?? true,
+    fresh,
+    error,
+    options,
+  });
   const preferredRef = useRef(preferred);
   preferredRef.current = preferred;
   // The list mounts a frame after `open` (MUI portals on its own effect), and
@@ -188,7 +190,8 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element | 
   // Keep a disabled row focusable after live invalidation. Activation must not
   // advance to a different action just because the original turn has ended.
   const choose = (id: string | undefined): void => {
-    if (id === "steer" && steer) props.onSteer(target);
+    if (id === "wrap_up" && wrapUp) props.onWrapUp?.(target);
+    else if (id === "steer" && steer) props.onSteer(target);
     else if (id === "checkpoint" && checkpoint) props.onSteer(target, true);
     else if (id === "next") props.onNextTurn();
     else if (id === "front" && props.queueCount > 0) props.onQueueFront();
@@ -289,25 +292,16 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element | 
         },
       }}
     >
-      <MenuItem
-        data-delivery-command="steer"
-        disabled={!steer}
-        onClick={() => choose("steer")}
-      >
-        <ListItemIcon>
-          <AltRoute />
-        </ListItemIcon>
-        <ListItemText
-          primary={props.paused ? "Steer once" : "Steer"}
-          secondary={!steer
-            ? unavailable
-            : props.paused
-            ? "Queue stays paused"
-            : target?.turn_id.startsWith(NATIVE_CYCLE_PREFIX)
-            ? "Joins the agent's follow-up now"
-            : undefined}
-        />
-      </MenuItem>
+      <PrimaryDeliveryRow
+        showWrapUp={showWrapUp}
+        wrapUp={wrapUp}
+        wrapUpUnavailable={wrapUpUnavailable}
+        steer={steer}
+        unavailable={unavailable}
+        paused={props.paused}
+        nativeCycle={Boolean(target?.turn_id.startsWith(NATIVE_CYCLE_PREFIX))}
+        onChoose={choose}
+      />
       {!props.queued && (<MenuItem
         data-delivery-command="next"
         onClick={() => choose("next")}
@@ -395,5 +389,57 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element | 
         </Box>
       )}
     </Menu>
+  );
+}
+
+function PrimaryDeliveryRow(props: {
+  showWrapUp: boolean;
+  wrapUp: boolean;
+  wrapUpUnavailable: string;
+  steer: boolean;
+  unavailable: string;
+  paused: boolean;
+  nativeCycle: boolean;
+  onChoose: (id: string) => void;
+}): React.JSX.Element {
+  if (props.showWrapUp) {
+    return (
+      <MenuItem
+        data-delivery-command="wrap_up"
+        disabled={!props.wrapUp}
+        onClick={() => props.onChoose("wrap_up")}
+      >
+        <ListItemIcon>
+          <AltRoute />
+        </ListItemIcon>
+        <ListItemText
+          primary="Wrap up & send next"
+          secondary={props.wrapUp
+            ? "Asks agent to finish current step, then sends next"
+            : props.wrapUpUnavailable}
+        />
+      </MenuItem>
+    );
+  }
+  return (
+    <MenuItem
+      data-delivery-command="steer"
+      disabled={!props.steer}
+      onClick={() => props.onChoose("steer")}
+    >
+      <ListItemIcon>
+        <AltRoute />
+      </ListItemIcon>
+      <ListItemText
+        primary={props.paused ? "Steer once" : "Steer"}
+        secondary={!props.steer
+          ? props.unavailable
+          : props.paused
+          ? "Queue stays paused"
+          : props.nativeCycle
+          ? "Joins the agent's follow-up now"
+          : undefined}
+      />
+    </MenuItem>
   );
 }

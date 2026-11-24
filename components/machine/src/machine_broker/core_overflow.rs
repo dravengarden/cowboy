@@ -66,7 +66,8 @@ pub(super) fn overflow_refusal(command: &CoreCommand) -> Option<(String, String)
             command_id,
             ..
         } => Some((session_id.clone(), command_id.clone())),
-        CoreCommand::StopSession { .. }
+        CoreCommand::WrapUpHint { .. }
+        | CoreCommand::StopSession { .. }
         | CoreCommand::DrainSession { .. }
         | CoreCommand::SetDesiredGeneration { .. }
         | CoreCommand::RollProvider { .. } => None,

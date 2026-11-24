@@ -30,6 +30,9 @@ pub(super) struct PromptArgs {
     /// Stable identity for retrying the same submission after a lost response.
     #[arg(long)]
     operation: Option<String>,
+    /// Explicit delivery target (`<worker_epoch>:<turn_id>`) for wrap_up or retry.
+    #[arg(long)]
+    target: Option<String>,
     /// From inside a Cowboy session: when this prompt's turn ends, Cowboy
     /// queues one notice into the calling session. End your turn instead
     /// of polling. Next-turn delivery only; needs no product login.
@@ -62,13 +65,51 @@ pub(super) async fn prompt(client: &Client, args: PromptArgs) -> Result<()> {
         delivery,
         front,
         operation,
+        target: explicit_target,
         notify: _,
     } = args;
     SendDelivery::resolve(Some(delivery), false, front).map_err(anyhow::Error::msg)?;
+    let user_supplied_operation = operation.is_some();
     let operation = operation.unwrap_or_else(|| format!("cli:{}", uuid::Uuid::new_v4()));
     eprintln!("operation: {operation}");
-    let target = if delivery == SendDelivery::NextTurn {
+    let target = if let Some(raw_target) = explicit_target {
+        let Some((worker_epoch, turn_id)) = raw_target.split_once(':') else {
+            bail!("--target must be formatted as <worker_epoch>:<turn_id>");
+        };
+        ensure!(
+            !worker_epoch.is_empty() && !turn_id.is_empty(),
+            "--target must be formatted as <worker_epoch>:<turn_id>"
+        );
+        json!({"worker_epoch": worker_epoch, "turn_id": turn_id})
+    } else if delivery == SendDelivery::NextTurn {
         Value::Null
+    } else if delivery == SendDelivery::WrapUp {
+        if user_supplied_operation {
+            // Manual retry without --target stays queue-only so it never hints a newer turn.
+            Value::Null
+        } else {
+            let captured = client
+                .expect(
+                    Method::GET,
+                    &format!("/api/sessions/{session}/delivery-options"),
+                    None,
+                )
+                .await
+                .ok()
+                .and_then(|body| serde_json::from_str::<Value>(&body).ok())
+                .map(|options| options["target"].clone())
+                .filter(|value| !value.is_null())
+                .unwrap_or(Value::Null);
+            if let (Some(epoch), Some(turn)) = (
+                captured["worker_epoch"].as_str(),
+                captured["turn_id"].as_str(),
+            ) {
+                eprintln!("target: {epoch}:{turn}");
+            } else {
+                eprintln!("target: none");
+            }
+            captured
+        }
     } else {
         let options = client
             .expect(

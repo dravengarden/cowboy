@@ -24,6 +24,8 @@ pub mod acp;
 #[cfg(feature = "full")]
 pub mod acp_memory;
 #[cfg(feature = "full")]
+pub mod acp_wrap_up;
+#[cfg(feature = "full")]
 pub use cowboy_store::admin;
 #[cfg(all(unix, any(feature = "full", feature = "machine-host")))]
 pub mod agent_mcp;
@@ -218,6 +220,8 @@ pub mod send_delivery;
 pub mod serve_args;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub use cowboy_wire::service_identity;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+pub use cowboy_wire::wrap_up;
 #[cfg(feature = "full")]
 pub mod session_context;
 #[cfg(any(feature = "full", feature = "machine-host"))]

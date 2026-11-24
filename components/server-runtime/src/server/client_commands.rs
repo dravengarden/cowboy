@@ -241,6 +241,8 @@ pub fn submit_command(
     cmid: Option<String>,
     force: bool,
     front: bool,
+    wrap_up: bool,
+    wrap_up_target: Option<crate::send_delivery::DeliveryTarget>,
 ) -> ControlFlow<bool, Result<(), String>> {
     ControlFlow::Continue({
         // Only an authorized, exact session can create runtime correlation
@@ -264,6 +266,60 @@ pub fn submit_command(
         {
             // Nothing queued, nothing cancelled: a retired session only parks.
             return ControlFlow::Continue(Err(refusal.to_owned()));
+        }
+        if wrap_up {
+            if force {
+                return ControlFlow::Continue(Err("wrap_up conflicts with force".to_owned()));
+            }
+            if !caller.is_person() {
+                return ControlFlow::Continue(Err(
+                    "wrap_up delivery is restricted to the session owner".to_owned(),
+                ));
+            }
+            if !cmid
+                .as_deref()
+                .is_some_and(crate::core::Hub::is_authored_cmid)
+            {
+                return ControlFlow::Continue(Err(
+                    "wrap_up requires an authored client message id".to_owned(),
+                ));
+            }
+            let Some(built_blocks) = build_prompt_blocks(&text, &content) else {
+                return ControlFlow::Continue(Err(
+                    "empty prompt: no substantive text or content".to_owned()
+                ));
+            };
+            let json_blocks: Vec<serde_json::Value> = built_blocks
+                .iter()
+                .map(|b| serde_json::to_value(b).unwrap_or_default())
+                .collect();
+            if !crate::wrap_up::has_substantive_prompt_blocks(&json_blocks) {
+                return ControlFlow::Continue(Err(
+                    "empty prompt: no substantive text or content".to_owned()
+                ));
+            }
+            return match state.hub.front_submit_with_outcome(
+                &session_id,
+                text,
+                content,
+                cmid,
+                caller,
+            ) {
+                crate::core::FrontSubmitOutcome::Refused => ControlFlow::Continue(Err(
+                    "session unavailable for wrap_up delivery".to_owned(),
+                )),
+                crate::core::FrontSubmitOutcome::Duplicate => ControlFlow::Break(true),
+                crate::core::FrontSubmitOutcome::DispatchedImmediately
+                | crate::core::FrontSubmitOutcome::QueuedFallback => ControlFlow::Continue(Ok(())),
+                crate::core::FrontSubmitOutcome::QueuedFront => {
+                    let _ = send_delivery::try_wrap_up_hint(
+                        state,
+                        &session_id,
+                        wrap_up_target.as_ref(),
+                    );
+                    ControlFlow::Continue(Ok(()))
+                }
+            };
         }
         if force {
             // Long-press send: jump to the front of the queue and interrupt the

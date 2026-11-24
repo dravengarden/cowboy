@@ -37,6 +37,7 @@ mod reset_admission;
 mod startup_watch;
 pub mod turn_end;
 mod worker_authority;
+mod wrap_up;
 use crate::runtime_wire::{
     CoreCommand, Frame, FrameReader, PROTOCOL_VERSION, PeerRole, RuntimeEvent, StartSession,
     WorkerSnapshot, WorkerState, read_frame, write_frame,
@@ -49,6 +50,8 @@ use config_sync::{
     queue_persisted_config_for_session, sync_config_for_worker, take_pending_prompts,
 };
 use pending_commands::PendingCommands;
+#[cfg(test)]
+use wrap_up::merge_worker_snapshots;
 
 const BROKER_RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(100);
 const BROKER_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
@@ -186,6 +189,7 @@ pub struct Shared {
     /// Optional wakeup hook fired after runtime-teardown notice retention so a
     /// dormant (`Exited`) parent wakes if a replacement runtime already connected (Finding 11).
     teardown_notice_wake: Mutex<Option<TeardownNoticeWake>>,
+    wrap_up: wrap_up::WrapUpState,
 }
 
 /// Callback invoked after runtime-teardown notice retention to wake a dormant parent.
@@ -309,6 +313,7 @@ impl RemoteRuntime {
                 recovery_fence_counter: AtomicU64::new(0),
                 projection_fence: Mutex::new(false),
                 teardown_notice_wake: Mutex::new(None),
+                wrap_up: wrap_up::WrapUpState::default(),
             }),
             notify_rx: Mutex::new(Some(notify_rx)),
         })
@@ -387,6 +392,7 @@ impl RemoteRuntime {
                 recovery_fence_counter: AtomicU64::new(0),
                 projection_fence: Mutex::new(false),
                 teardown_notice_wake: Mutex::new(None),
+                wrap_up: wrap_up::WrapUpState::default(),
             }),
             notify_rx: Mutex::new(Some(notify_rx)),
         })
@@ -458,10 +464,9 @@ impl RemoteRuntime {
             if shared.shutdown.load(Ordering::Acquire) {
                 return;
             }
-            // Production installs a connecting runtime with an empty worker
-            // map. Seed ownership before marking the broker ready; projecting
-            // only Hub metadata temporarily makes every live slot look free.
-            merge_worker_snapshots(&shared, bootstrap.workers).await;
+            shared.protocol.store(bootstrap.protocol, Ordering::Release);
+            merge_worker_snapshots_with_protocol(&shared, bootstrap.workers, bootstrap.protocol)
+                .await;
             if shared.shutdown.load(Ordering::Acquire) {
                 return;
             }
@@ -492,6 +497,7 @@ impl RemoteRuntime {
                 }
                 runtime.recover_stalled_startups(&mut watch, tokio::time::Instant::now());
                 runtime.refresh_pending_delivery();
+                runtime.refresh_wrap_up_steering();
             }
         });
     }
@@ -1457,17 +1463,14 @@ impl RemoteRuntime {
         self.shared.in_flight_prompts.lock().clear();
     }
 
-    /// Fence a disconnected Machine runtime without entering the local socket
-    /// reconnect loop. Acquires `projection_fence` before returning so no
-    /// concurrent bootstrap/event task can project into a replacement's `Hub`.
-    /// Provably unsent completion notices are durably requeued; attempted sends
-    /// remain fenced.
+    /// Fence a disconnected Machine runtime and drop any direct hint channel.
     pub fn disconnect(&self) {
         {
             let mut fenced = self.shared.projection_fence.lock();
             *fenced = true;
             self.shared.shutdown.store(true, Ordering::Release);
             self.shared.connected.store(false, Ordering::Release);
+            self.shared.wrap_up.clear_hint_tx();
         }
         let _ = self.shared.notify.send(());
         notice_recovery::requeue_unsent_notices_on_disconnect(&self.shared);
@@ -1551,6 +1554,7 @@ async fn connect_once(
             generation: None,
             executable: None,
             fallback_for: None,
+            outer_machine_protocol: Some(crate::machine_protocol::MACHINE_PROTOCOL_VERSION),
         },
     )
     .await?;
@@ -1588,6 +1592,7 @@ async fn connect_once_stream(
             generation: None,
             executable: None,
             fallback_for: None,
+            outer_machine_protocol: None,
         },
     )
     .await?;
@@ -1708,7 +1713,8 @@ async fn connection_manager(
             Some(connection) => Ok(connection),
             None => match connect_settled(&shared.socket).await {
                 Ok((reader, writer, workers, buffered, protocol)) => {
-                    merge_worker_snapshots(&shared, workers).await;
+                    shared.protocol.store(protocol, Ordering::Release);
+                    merge_worker_snapshots_with_protocol(&shared, workers, protocol).await;
                     Ok((reader, writer, buffered, protocol))
                 }
                 Err(error) => Err(error),
@@ -2352,7 +2358,12 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
             })
             .await;
         }
-        Frame::Welcome { workers, .. } => update_worker_snapshots(shared, workers).await,
+        Frame::Welcome {
+            workers, protocol, ..
+        } => {
+            shared.protocol.store(protocol, Ordering::Release);
+            update_worker_snapshots(shared, workers, protocol).await;
+        }
         Frame::Heartbeat => {}
         Frame::Reject { reason } => anyhow::bail!("Machine broker rejected controller: {reason}"),
         other => tracing::debug!(?other, "ignoring unrelated Machine broker frame"),
@@ -2453,32 +2464,46 @@ async fn adopt_snapshot(shared: &Shared, worker: &WorkerSnapshot) {
 }
 
 fn project_snapshot(shared: &Shared, worker: &WorkerSnapshot) {
-    // A worker of a cleared context owns nothing: no cache entry, launch or notice.
+    let mut worker = worker.clone();
+    shared.wrap_up.record_raw_and_sanitize(
+        &mut worker,
+        shared.machine_protocol,
+        shared.protocol.load(Ordering::Acquire),
+        &shared.hub,
+    );
     let _projection = shared.hub.runtime_projection_guard();
-    if !snapshot::current_context(shared, worker) {
+    if !snapshot::current_context(shared, &worker) {
         return;
     }
-    update_declaration(shared, worker);
+    update_declaration(shared, &worker);
     shared
         .workers
         .lock()
         .insert(worker.session_id.clone(), worker.clone());
-    acknowledge_pending_ensure_from_snapshot(shared, worker);
-    apply_snapshot(shared, worker);
-    notice_recovery::spawn_record_snapshot_worker_epoch_if_notice(shared, worker);
+    acknowledge_pending_ensure_from_snapshot(shared, &worker);
+    apply_snapshot(shared, &worker);
+    notice_recovery::spawn_record_snapshot_worker_epoch_if_notice(shared, &worker);
 }
 
-async fn update_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
+async fn update_worker_snapshots(
+    shared: &Shared,
+    workers: Vec<WorkerSnapshot>,
+    runtime_protocol: u16,
+) {
     let ids: HashSet<_> = workers
         .iter()
         .map(|worker| worker.session_id.clone())
         .collect();
-    merge_worker_snapshots(shared, workers).await;
+    merge_worker_snapshots_with_protocol(shared, workers, runtime_protocol).await;
     shared.workers.lock().retain(|id, _| ids.contains(id));
 }
 
-async fn merge_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
-    for worker in workers {
+async fn merge_worker_snapshots_with_protocol(
+    shared: &Shared,
+    workers: Vec<WorkerSnapshot>,
+    runtime_protocol: u16,
+) {
+    for mut worker in workers {
         if shared.shutdown.load(Ordering::Acquire) {
             return;
         }
@@ -2489,6 +2514,12 @@ async fn merge_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
         if shared.resetting.lock().contains(&worker.session_id) {
             continue;
         }
+        shared.wrap_up.record_raw_and_sanitize(
+            &mut worker,
+            shared.machine_protocol,
+            runtime_protocol,
+            &shared.hub,
+        );
         native_admission::snapshot(shared, &worker, || {
             let _projection = shared.hub.runtime_projection_guard();
             if !snapshot::current_context(shared, &worker) {
@@ -2678,6 +2709,7 @@ fn update_snapshot_from_event(
                 .get("nextCheckpoint")
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
+            shared.apply_wrap_up_capability_update(session_id, update, worker);
         }
         RuntimeEvent::Update { update, .. }
             if crate::runtime_wire::background_tasks_count(update).is_some() =>
@@ -2743,10 +2775,7 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
         RuntimeEvent::Update { update, .. }
             if crate::runtime_wire::current_turn_support(&update).is_some() =>
         {
-            hub.set_current_turn_support(
-                session_id,
-                crate::runtime_wire::current_turn_support(&update).unwrap_or(false),
-            );
+            wrap_up::apply_current_turn_capability_event(hub, session_id, &update);
         }
         RuntimeEvent::Update { update, .. }
             if crate::runtime_wire::background_tasks_count(&update).is_some() =>
@@ -3215,7 +3244,7 @@ mod tests {
             worker.config_options =
                 Some(serde_json::json!([{ "id": "model", "currentValue": "different" }]));
             assert!(!apply_snapshot(&runtime.shared, &worker));
-            update_worker_snapshots(&runtime.shared, vec![worker.clone()]).await;
+            update_worker_snapshots(&runtime.shared, vec![worker.clone()], PROTOCOL_VERSION).await;
             assert!(runtime.shared.declarations.lock().is_empty());
             reset_after_workspace_replacement(&runtime.shared, "s");
             assert!(runtime.pending_for_test().is_empty());
@@ -4062,6 +4091,7 @@ mod tests {
             current_turn_id: Some("turn-1".to_owned()),
             supports_current_turn: false,
             delivery_controls: crate::runtime_wire::DeliveryControls::default(),
+            wrap_up_steering: false,
             supports_subagent_cancel: false,
             last_runtime_seq: 4,
             pending_permissions: Vec::new(),
@@ -5325,7 +5355,7 @@ mod tests {
         // registry placeholder, which is no worker.
         let mut placeholder = worker.clone();
         placeholder.worker_epoch = "broker-placeholder".to_owned();
-        update_worker_snapshots(&runtime.shared, vec![placeholder]).await;
+        update_worker_snapshots(&runtime.shared, vec![placeholder], PROTOCOL_VERSION).await;
         assert_eq!(
             runtime.last_crashed_worker("s"),
             CrashedWorkerObservation::Absent

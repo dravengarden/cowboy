@@ -83,11 +83,19 @@ for await (const line of createInterface({ input: process.stdin })) {
         update: { sessionUpdate: "tool_call_update", ...call, status: "completed", rawInput },
       },
     });
+    const textBlocks = (result.result.content ?? []).filter(
+      (block) => block?.type === "text" && typeof block.text === "string",
+    );
+    const combinedText = textBlocks.map((block) => block.text).join("\n");
     send({
       method: "session/update",
       params: {
         sessionId,
-        update: { sessionUpdate: "agent_message_chunk", content: result.result.content[0] },
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content:
+            textBlocks.length > 0 ? { type: "text", text: combinedText } : result.result.content[0],
+        },
       },
     });
     // The proxy gives agy a closed environment; a marker file in HOME selects refusal.

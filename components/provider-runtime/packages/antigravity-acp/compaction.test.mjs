@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   Compaction,
@@ -69,4 +70,20 @@ test("projections are bounded and a restatement is consumed once", () => {
   assert.equal(compaction.take("s1", [text("/goal")]), undefined);
   assert.match(compaction.take("s1", [text("hi")]), /\nP1\n<\/cowboy_context_restated>$/);
   assert.equal(compaction.take("s1", [text("hi")]), undefined);
+});
+
+test("shared COWBOY_WS compaction vectors match Rust and JS", () => {
+  const raw = readFileSync(
+    new URL("../../../../contracts/cowboy-ws-compaction-vectors.json", import.meta.url),
+    "utf8",
+  );
+  const { compaction_cases } = JSON.parse(raw);
+  assert.ok(Array.isArray(compaction_cases) && compaction_cases.length > 0);
+  for (const entry of compaction_cases) {
+    assert.equal(
+      isCompactionPrompt(entry.blocks),
+      entry.expected,
+      `vector ${entry.name}: ${JSON.stringify(entry.blocks)}`,
+    );
+  }
 });

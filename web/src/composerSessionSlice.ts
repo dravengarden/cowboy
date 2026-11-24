@@ -15,6 +15,7 @@ export interface ComposerSessionSlice {
   providerVersion: string | undefined;
   providerDigest: string | undefined;
   paused: boolean;
+  wrapUpSteering: boolean;
   contextUsed: number;
   contextSize: number;
   /** A completed compaction left the reading as history. */
@@ -46,6 +47,7 @@ export function composerSessionSlice(
     providerVersion: active?.provider_version,
     providerDigest: active?.provider_generation_digest,
     paused: active?.paused ?? false,
+    wrapUpSteering: active?.wrap_up_steering === true,
     contextUsed: active?.context_used ?? 0,
     contextSize: active?.context_size ?? 0,
     contextStale: contextStaleAfterCompaction(active),
@@ -84,6 +86,7 @@ export function sameComposerSessionSlice(
       a.providerVersion === b.providerVersion &&
       a.providerDigest === b.providerDigest &&
       a.paused === b.paused &&
+      a.wrapUpSteering === b.wrapUpSteering &&
       a.contextUsed === b.contextUsed &&
       a.contextSize === b.contextSize &&
       a.contextStale === b.contextStale &&

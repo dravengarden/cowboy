@@ -538,7 +538,25 @@ pub async fn receipt(
     }
 }
 
+pub fn try_wrap_up_hint(
+    state: &AppState,
+    session_id: &str,
+    target: Option<&crate::send_delivery::DeliveryTarget>,
+) -> bool {
+    let Some(target) = target else {
+        return false;
+    };
+    if !state
+        .service_config
+        .get(&crate::config::schema::PROVIDER_ANTIGRAVITY_WRAP_UP_STEERING)
+    {
+        return false;
+    }
+    state.supervisor.send_wrap_up_hint(session_id, target)
+}
+
 pub async fn options(State(state): State<Arc<AppState>>, Path(session): Path<String>) -> Response {
+    state.supervisor.refresh_wrap_up_steering(&session);
     let Some(info) = state.hub.session_info(&session) else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -546,6 +564,8 @@ pub async fn options(State(state): State<Arc<AppState>>, Path(session): Path<Str
         "target": state.supervisor.delivery_target(&session),
         "controls": state.supervisor.delivery_controls(&session),
         "steer": info.meta.supports_current_turn,
+        "wrap_up_steering": info.meta.wrap_up_steering,
+        "editing": state.hub.is_editing(&session),
         "status": info.meta.status,
         "paused": info.meta.paused,
         "hold": state.hub.delivery_hold(&session),

@@ -234,6 +234,7 @@
           ./migrations
           ./web/src/protocol.ts
           ./contracts/agent-api-coverage.json
+          ./contracts/cowboy-ws-compaction-vectors.json
           ./contracts/code-buffer-client.fixture.json
           ./contracts/code-buffer-sync.fixture.json
           ./contracts/code-buffer-sync-budget.fixture.json
@@ -371,6 +372,7 @@
         ./src/acp_subagent_routing.rs
         ./src/acp_process.rs
         ./src/acp_subagents.rs
+        ./src/acp_wrap_up.rs
         ./components/store/src/agent_model.rs
         # The worker's prompt-origin tags and echoed-image references.
         ./components/store/src/prompt_origin.rs
@@ -396,6 +398,7 @@
         ./components/wire/src/provider_account.rs
         ./components/wire/src/provider_account
         ./components/wire/src/runtime_wire.rs
+        ./components/wire/src/wrap_up.rs
         ./components/wire/src/execution_environment.rs
         ./components/wire/src/execution_protocol.rs
         ./components/wire/src/runtime_trace.rs

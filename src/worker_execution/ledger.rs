@@ -464,6 +464,10 @@ impl Ledger {
         self.state.lock().unwritable
     }
 
+    pub fn mark_termination_uncertain(&self) {
+        self.mark_uncertain("process/terminate");
+    }
+
     pub(super) fn mark_uncertain(&self, method: &str) {
         let mut state = self.state.lock();
         state.record.uncertain_effect = Some(method.to_owned());
@@ -840,7 +844,7 @@ impl Client {
         tracing::info!(event_name = "cowboy.execution.turn_fenced", session = %self.session, %turn, processes = processes.len(), reason = "cancelled", "execution turn fenced");
         let client = Arc::clone(self);
         ledger.runtime.spawn(async move {
-            client.terminate_all(processes).await;
+            client.terminate_all(processes, false).await;
         });
     }
 
@@ -865,7 +869,7 @@ impl Client {
                 .await;
             // Starts admitted before the fence was raised are recorded too.
             let processes = ledger.fence(Some(&turn));
-            client.terminate_all(processes).await;
+            client.terminate_all(processes, true).await;
         })
     }
 
@@ -886,10 +890,10 @@ impl Client {
                         .any(|process| state.servers.contains(process))
                 })
                 .await;
-            self.terminate_all(ledger.server_processes()).await;
+            self.terminate_all(ledger.server_processes(), false).await;
             ledger.wait_until(|ledger| ledger.drained(None)).await;
             let processes = ledger.fence(None);
-            self.terminate_all(processes).await;
+            self.terminate_all(processes, true).await;
         }
     }
 
@@ -900,15 +904,20 @@ impl Client {
         }
     }
 
-    async fn terminate_all(self: &Arc<Self>, processes: Vec<String>) {
-        futures::future::join_all(processes.into_iter().map(|process| self.terminate(process)))
-            .await;
+    async fn terminate_all(self: &Arc<Self>, processes: Vec<String>, park_on_unconfirmed: bool) {
+        futures::future::join_all(
+            processes
+                .into_iter()
+                .map(|process| self.terminate(process, park_on_unconfirmed)),
+        )
+        .await;
     }
 
     /// Ask the target to terminate `process` and observe its end, within a
-    /// bound. A process that does not end in time stays recorded; the
-    /// target keeper's unattended reap is the backstop.
-    async fn terminate(self: &Arc<Self>, process: String) {
+    /// bound. On terminal turn-end/teardown barriers (`park_on_unconfirmed`),
+    /// an unconfirmed exit durably marks `process/terminate` uncertain so the
+    /// session stays parked across worker replacement until acknowledged.
+    async fn terminate(self: &Arc<Self>, process: String, park_on_unconfirmed: bool) {
         let Some(ledger) = self.ledger().cloned() else {
             return;
         };
@@ -941,7 +950,10 @@ impl Client {
             .await
             .is_err()
         {
-            tracing::warn!(event_name = "cowboy.execution.terminate_unconfirmed", session = %self.session, %process, "target process end unconfirmed; the keeper's reap is the backstop");
+            tracing::warn!(event_name = "cowboy.execution.terminate_unconfirmed", session = %self.session, %process, park_on_unconfirmed, "target process end unconfirmed; the keeper's reap is the backstop");
+            if park_on_unconfirmed {
+                ledger.mark_uncertain("process/terminate");
+            }
         }
     }
 }
