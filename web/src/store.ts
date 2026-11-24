@@ -27,12 +27,14 @@ import { replicaTailConflicts, trimReplicaTail } from "./replicaTail";
 import { deriveSyncStatus, type SyncStatus, type SyncStatusInput } from "./syncStatus";
 import { ProductSessionEndEvent, productSessionSignal } from "./productSessionEnd";
 import { productSyncPrincipal } from "./productSyncIdentity";
-import { type Attachment, blocksToAttachments, buildContentBlocks } from "./attachments";
+import { type Attachment, buildContentBlocks } from "./attachments";
+import { fromWire } from "./queueWire";
 import { actionErrorMessage } from "./actionErrorMessage";
 import {
   envelopeCompletesPromptEcho,
   promptEchoReadyToReplaceOptimistic,
   promptEchoText,
+  promptsEchoedBeforeReceipt,
   rememberSendImagePreviews,
   transcriptDeliveryVisible,
 } from "./sendImagePreviews";
@@ -1048,20 +1050,6 @@ export function setSessionConfigOptions(
 // exactly as a prompt would carry them (empty ⇒ plain text).
 function contentOf(text: string, attachments: readonly Attachment[]): ContentBlock[] {
   return buildContentBlocks(text, attachments) ?? [];
-}
-
-// Convert a server `WireQueued` (raw ACP content blocks) into the UI shape, with
-// attachments reconstructed for display / re-edit.
-function fromWire(list: WireQueued[]): QueuedMessage[] {
-  return list.map((m) => ({
-    id: m.id,
-    text: m.text,
-    attachments: blocksToAttachments(m.content, m.text),
-    // Carried so an optimistic row can reconcile against its confirmed twin by
-    // id. `?? undefined` keeps `exactOptionalPropertyTypes` happy.
-    ...(m.cmid !== undefined && { cmid: m.cmid }),
-    ...(m.schedule !== undefined && { schedule: m.schedule }),
-  }));
 }
 
 function sameQueuedContent(
@@ -4737,6 +4725,12 @@ function applyQueuePatch(sessionId: string, version: number, value: unknown, con
       commandForQueueMutation(sessionId, mutation) !== null
     ) dispatchQueueMutation(sessionId, mutation);
   }
+  // A receipt for a prompt this value does not hold proves its echo already
+  // exists, possibly before the loaded window; retire it instead of waiting.
+  const echoed = promptsEchoedBeforeReceipt(confirmed, next, [
+    ...(state.optimisticMessages.get(sessionId) ?? []),
+    ...acceptedQueueRows,
+  ], state.timelines.get(sessionId) ?? []);
   if (acceptsValue && acceptedQueueRows.length > 0) {
     const optimisticMessages = new Map(state.optimisticMessages);
     const bubbles = [...(optimisticMessages.get(sessionId) ?? [])];
@@ -4744,7 +4738,7 @@ function applyQueuePatch(sessionId: string, version: number, value: unknown, con
       if (next.queue.some((item) => item.cmid === row.cmid) ||
         next.drafts.some((item) => item.cmid === row.cmid) ||
         bubbles.some((item) => item.cmid === row.cmid) ||
-        promptEchoReadyToReplaceOptimistic(row, state.timelines.get(sessionId) ?? [])) continue;
+        (row.cmid !== undefined && echoed.has(row.cmid))) continue;
       if (row.cmid !== undefined) rememberSendImagePreviews(row.cmid, row.attachments, row.text);
       bubbles.push(withDelivery(row, "sending"));
     }
@@ -4757,7 +4751,7 @@ function applyQueuePatch(sessionId: string, version: number, value: unknown, con
     const base = store.baseValue();
     const set = new Set<string | undefined>(delivered.filter((cmid) =>
       base.queue.some((row) => row.cmid === cmid) ||
-      base.drafts.some((row) => row.cmid === cmid)
+      base.drafts.some((row) => row.cmid === cmid) || echoed.has(cmid)
     ));
     setState({ ...state, optimisticMessages: reconcileOptimistic(state.optimisticMessages, sessionId, set) });
   }

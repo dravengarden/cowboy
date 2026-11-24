@@ -219,3 +219,15 @@ test("pending preview Show more toggles on a stationary touch", () => {
   assert(button.includes("disclosureTap.onClick(e);"));
   assertEquals(button.includes("setExpanded("), false);
 });
+
+test("a queue receipt for an already-echoed prompt retires its bubble instead of failing it", async () => {
+  const store = await readFile(new URL("./store.ts", import.meta.url), "utf8");
+  const body = declarationSource(store, "applyQueuePatch");
+  assert(body.length > 0);
+  const echoed = body.indexOf("promptsEchoedBeforeReceipt(confirmed, next,");
+  assert(echoed >= 0);
+  assert(body.includes("echoed.has(row.cmid)"));
+  assert(body.includes("base.drafts.some((row) => row.cmid === cmid) || echoed.has(cmid)"));
+  // Retirement runs before the retained-bubble deadline is armed.
+  assert(echoed < body.indexOf("armMsgTimers(sessionId, row.cmid)"));
+});
