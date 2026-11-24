@@ -2,21 +2,26 @@
 //! persisted intent to spend the account's nearest reset at a chosen time,
 //! through exactly the admission and dispatch of a confirmed reset.
 //!
-//! - It is bound to the exact sign-in it was created under: the verified
-//!   identity, the account's admission revision and the reset route's own
-//!   binding (the native login, or the portable sign-in generation). The
-//!   timer compares it under the account lock after admission, and the
-//!   dispatch rechecks that binding, so any new sign-in, even to the same
-//!   identity, withdraws it unspent; a token rotation does not. So does a
+//! - It is bound to the exact sign-in it was created under, in two parts:
+//!   the account's verified identity and admission revision, whose change
+//!   withdraws it unspent, and the reset route's own binding (the native
+//!   login, or the portable sign-in generation), compared under the account
+//!   lock after admission and rechecked by the dispatch. Another binding (a
+//!   new sign-in to the same identity, or another Machine's login while the
+//!   scheduled one is offline) is never spent from: it waits, uncounted,
+//!   until the cutoff withdraws it. A token rotation changes nothing. A
 //!   disabled or revoking account, a disabled owner, or a fire more than
-//!   [`OVERDUE_MS`] late (a Controller that was down or rolled back).
-//! - The timer admits first (route, account lock, Provider starts). A short
-//!   pacing wait only delays it; a long one (an account backoff) releases
-//!   the Provider hold and counts like any other refusal, which sent nothing
-//!   and is retried a minute later, [`PREFLIGHT_ATTEMPTS`] times in all.
+//!   [`OVERDUE_MS`] late (a Controller that was down or rolled back) also
+//!   withdraws it; the owner and the cutoff are checked again just before the
+//!   claim.
+//! - The timer admits first (route, account lock, Provider starts). Pacing
+//!   only delays it (a wait over [`PACED_HOLD_MS`] releases the Provider
+//!   hold); any other refusal sent nothing and is retried a minute later,
+//!   [`PREFLIGHT_ATTEMPTS`] times in all.
 //! - It spends the nearest available grant of the admitted binding's
 //!   successful observation, at most [`FRESH_MS`] old (refreshed through the
-//!   ordinary budgeted read first when older than [`REFRESH_AFTER_MS`]).
+//!   ordinary budgeted read first when older than [`REFRESH_AFTER_MS`]);
+//!   without one nothing is reserved and it waits, uncounted.
 //! - Only then is the row claimed (deleted under its key), before the audit
 //!   row and the dispatch: it fires at most once, even across a restart.
 //!   After the claim it is never retried. Until the claim an admitted start
@@ -43,6 +48,8 @@ const FRESH_MS: i64 = 10 * 60 * 1_000;
 /// How often the timer looks for due schedules, and at most how many per look.
 const TICK: std::time::Duration = std::time::Duration::from_secs(15);
 const BATCH: i64 = 32;
+const GONE: &str = "The account's sign-in changed or it is no longer available; no reset was sent.";
+const LATE: &str = "The scheduled reset was more than an hour overdue; no reset was sent.";
 
 #[derive(Deserialize)]
 pub struct ScheduleRequest {
@@ -50,24 +57,40 @@ pub struct ScheduleRequest {
     pub confirm: String,
 }
 
-/// The exact sign-in a schedule is bound to: the owner, the account's
-/// verified identity and admission revision, and the reset route's binding.
+/// The exact sign-in a schedule is bound to, in two parts: the account's
+/// (owner, verified identity, admission revision), whose change withdraws
+/// it, and the reset route's binding (native login, portable sign-in
+/// generation), which it waits for: another existing login of the same
+/// sign-in (its Machine offline) is not this one, and is never spent from.
 /// None without a verified identity, which no reset may spend from.
 fn authority(
     owner: &str,
     account: &crate::store::provider_accounts::Account,
     binding: &Scope,
 ) -> Option<String> {
+    Some(format!(
+        "{}.{}",
+        account_authority(owner, account)?,
+        digest(&binding)?
+    ))
+}
+
+fn account_authority(
+    owner: &str,
+    account: &crate::store::provider_accounts::Account,
+) -> Option<String> {
     let identity = account.identity_fingerprint.as_deref()?;
-    let bound = (
+    digest(&(
         owner,
         account.id.as_str(),
         identity,
         account.admission_revision,
-        binding,
-    );
-    let bytes = serde_json::to_vec(&bound).ok()?;
-    Some(format!("sha256:{}", crate::admin::hex_sha256(&bytes)))
+    ))
+}
+
+fn digest(value: &impl serde::Serialize) -> Option<String> {
+    let bytes = serde_json::to_vec(value).ok()?;
+    Some(crate::admin::hex_sha256(&bytes))
 }
 
 /// The owner's account, if it is available for a reset.
@@ -299,6 +322,57 @@ impl Due<'_> {
         &self.schedule.idempotency_key
     }
 
+    /// The checks before admission: withdraw it if its owner or account no
+    /// longer holds, and make sure a fresh observation exists. False when the
+    /// attempt ends here.
+    async fn prepared(&self) -> bool {
+        // Withdrawals first; the route's binding is compared after admission.
+        match (
+            owner_enabled(self.state, self.owner()).await,
+            available_account(self.store, self.owner(), &self.id).await,
+        ) {
+            (Err(()), _) | (_, Err("unavailable")) => return false,
+            (Ok(true), Ok(account)) if self.account_matches(&account) => {}
+            _ => {
+                self.withdraw(GONE).await;
+                return false;
+            }
+        }
+        // Pick the grant from a recent observation. The refresh is budgeted like
+        // any read and never waits behind a spend holding the account; without a
+        // fresh observation nothing is reserved and it waits, uncounted.
+        let observed_at = self.observed_at().await.unwrap_or(0);
+        if now_ms().saturating_sub(observed_at) > REFRESH_AFTER_MS {
+            let busy = self
+                .state
+                .usage
+                .native
+                .entry(self.owner(), self.id.as_str())
+                .collection
+                .try_lock()
+                .is_err();
+            if !busy {
+                let _ = refresh_one(self.state, self.owner(), &self.id).await;
+            }
+        }
+        if now_ms().saturating_sub(self.observed_at().await.unwrap_or(0)) > FRESH_MS {
+            self.defer(now_ms().saturating_add(PREFLIGHT_RETRY_MS), false)
+                .await;
+            return false;
+        }
+        true
+    }
+
+    /// Whether the account part of its authority still holds.
+    fn account_matches(&self, account: &crate::store::provider_accounts::Account) -> bool {
+        account_authority(self.owner(), account).is_some_and(|part| {
+            self.schedule
+                .authority
+                .split_once('.')
+                .is_some_and(|(stored, _)| stored == part)
+        })
+    }
+
     fn overdue(&self) -> bool {
         now_ms().saturating_sub(self.schedule.fire_at_ms) > OVERDUE_MS
     }
@@ -404,26 +478,11 @@ async fn fire(state: &Arc<AppState>, store: &crate::store::Store, schedule: &Acc
         id,
     };
     let owner = due.owner();
-    const GONE: &str =
-        "The account's sign-in changed or it is no longer available; no reset was sent.";
-    const LATE: &str = "The scheduled reset was more than an hour overdue; no reset was sent.";
     if due.overdue() {
         return due.withdraw(LATE).await;
     }
-    // Cheap withdrawals first; the binding is compared after admission.
-    match (
-        owner_enabled(state, owner).await,
-        available_account(store, owner, &due.id).await,
-    ) {
-        (Err(()), _) | (_, Err("unavailable")) => return,
-        (Ok(true), Ok(_)) => {}
-        _ => return due.withdraw(GONE).await,
-    }
-    // Pick the grant from a recent observation; the refresh is budgeted like
-    // any read, and the admission below then waits for the Provider spacing.
-    let observed_at = due.observed_at().await.unwrap_or(0);
-    if now_ms().saturating_sub(observed_at) > REFRESH_AFTER_MS {
-        let _ = refresh_one(state, owner, &due.id).await;
+    if !due.prepared().await {
+        return;
     }
     let admitted = match admit(state, owner, &due.id).await {
         Ok(admitted) => Unclaimed(Some(admitted)),
@@ -432,17 +491,16 @@ async fn fire(state: &Arc<AppState>, store: &crate::store::Store, schedule: &Acc
             retry_at_ms: Some(at),
             held,
         }) => {
-            if at.saturating_sub(now_ms()) <= PACED_HOLD_MS {
-                // A short wait only delays it; the Provider stays held.
-                due.defer(at, false).await;
-            } else {
-                // An account backoff: never hold other accounts' polls for it.
-                if let Some(provider) = held {
-                    let key = crate::usage::limiter::Limiter::account_key(owner, due.id.as_str());
-                    state.usage.limiter.release_priority(&provider, &key);
-                }
-                due.refused("usage_reset_paced").await;
+            // Pacing only delays it (the cutoff bounds the wait). A long
+            // wait (an account backoff, a long Provider window) never holds
+            // other accounts' polls meanwhile.
+            if at.saturating_sub(now_ms()) > PACED_HOLD_MS
+                && let Some(provider) = held
+            {
+                let key = crate::usage::limiter::Limiter::account_key(owner, due.id.as_str());
+                state.usage.limiter.release_priority(&provider, &key);
             }
+            due.defer(at, false).await;
             return;
         }
         Err(Refused { code, .. }) => return due.refused(code).await,
@@ -455,8 +513,17 @@ async fn fire(state: &Arc<AppState>, store: &crate::store::Store, schedule: &Acc
         Err("unavailable") => return,
         Err(_) => return due.withdraw(GONE).await,
     };
-    if authority(owner, &account, &binding).as_deref() != Some(schedule.authority.as_str()) {
+    if !due.account_matches(&account) {
         return due.withdraw(GONE).await;
+    }
+    if authority(owner, &account, &binding).as_deref() != Some(schedule.authority.as_str()) {
+        // Another binding of the same sign-in: never spent from; wait for the
+        // scheduled one (uncounted; the cutoff withdraws it if it never
+        // returns).
+        drop(admitted);
+        due.defer(now_ms().saturating_add(PREFLIGHT_RETRY_MS), false)
+            .await;
+        return;
     }
     let Some(credit) = due
         .fresh_observation(&binding)
@@ -467,16 +534,12 @@ async fn fire(state: &Arc<AppState>, store: &crate::store::Store, schedule: &Acc
         if due.fresh_observation(&binding).is_some() {
             return due.refused("reset_unavailable").await;
         }
-        // No fresh observation yet: wait without counting (the cutoff bounds it).
+        // No fresh observation of this binding: wait, uncounted.
         due.defer(now_ms().saturating_add(PREFLIGHT_RETRY_MS), false)
             .await;
         return;
     };
-    // The last checks before the one-shot claim.
-    if due.overdue() {
-        drop(admitted);
-        return due.withdraw(LATE).await;
-    }
+    // The last checks before the one-shot claim, the cutoff last.
     match owner_enabled(state, owner).await {
         Ok(true) => {}
         Ok(false) => {
@@ -484,6 +547,10 @@ async fn fire(state: &Arc<AppState>, store: &crate::store::Store, schedule: &Acc
             return due.withdraw(GONE).await;
         }
         Err(()) => return,
+    }
+    if due.overdue() {
+        drop(admitted);
+        return due.withdraw(LATE).await;
     }
     // Only the caller that removes the row spends it.
     if !due.claim().await {
@@ -567,7 +634,14 @@ mod tests {
         };
         let binding = portable(Some(1));
         let bound = authority("owner", &account, &binding).unwrap();
-        assert!(bound.starts_with("sha256:"));
+        let (account_part, _) = bound.split_once('.').unwrap();
+        assert_eq!(
+            account_authority("owner", &account).as_deref(),
+            Some(account_part)
+        );
+        // Another binding of the same sign-in keeps the account part.
+        let other = authority("owner", &account, &portable(Some(2))).unwrap();
+        assert_eq!(other.split_once('.').unwrap().0, account_part);
         // The same inputs bind the same authority (a token rotation keeps it).
         assert_eq!(
             authority("owner", &account, &portable(Some(1))),

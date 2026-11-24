@@ -189,28 +189,32 @@ Cancel even while its reset cannot be spent. Scheduling needs the same
 eligibility as a reset now, including a usage admission ledger that has not
 failed closed. The timer looks every 15 seconds:
 
-- The schedule is bound to the exact sign-in it was created under: the
-  account's verified identity and admission revision and the reset route's own
-  binding (the native login, or the portable sign-in generation). The timer
-  compares it under the account lock after admission, and the dispatch
-  rechecks that binding, so any new sign-in (even to the same identity)
-  withdraws it unspent, while a token rotation keeps it. A disabled or
-  revoking account, a disabled owner (checked again just before the claim), or
-  a fire more than an hour late (a Controller that was down or rolled back,
-  also checked again before the claim) withdraws it too, logged `cancelled`.
-  An owner disabled in the milliseconds between that check and the enqueue is
-  not caught, as for a confirmed reset.
+- The schedule is bound to the exact sign-in it was created under, in two
+  parts. A change of the account's verified identity or admission revision, a
+  disabled or revoking account, or a disabled owner withdraws it unspent,
+  logged `cancelled`. The reset route's own binding (the native login, or the
+  portable sign-in generation, read again after the vault was sampled) is
+  compared under the account lock after admission and rechecked by the
+  dispatch: another binding (a new sign-in to the same identity, or another
+  Machine's login while the scheduled one is offline) is never spent from,
+  and the schedule waits, uncounted. A fire more than an hour late (a
+  Controller that was down or rolled back, or a binding that never returned)
+  withdraws it. The owner and the cutoff are checked again just before the
+  claim; an owner disabled in the milliseconds between that check and the
+  enqueue is not caught, as for a confirmed reset, and a same-identity
+  Codex sign-in committing inside the dispatch's own lock window is the same
+  verified subscription. A token rotation changes nothing.
 - It spends the nearest available grant of the admitted binding's successful
-  observation, at most ten minutes old; an observation older than two minutes
-  is refreshed through the ordinary budgeted read first, and without a fresh
-  one the attempt waits a minute (uncounted, bounded by the one-hour cutoff).
+  observation, at most ten minutes old. An observation older than two minutes
+  is refreshed first through the ordinary budgeted read (never waiting behind
+  a spend that holds the account); without a fresh one nothing is reserved
+  and the attempt waits a minute, uncounted.
 - It is admitted exactly like a confirmed reset (route, account lock, Provider
-  starts). A pacing wait of up to two minutes moves the next attempt to the
-  named time and keeps the Provider held for it; a longer one (an account
-  backoff) releases the hold so other accounts keep polling, and counts as a
-  refusal. A refusal sent nothing and is retried a minute later, three
-  attempts in all, then logged `failed`. An admission dropped before the claim
-  (a shutdown) releases its starts unused.
+  starts). Pacing only delays it to the named time; a wait over two minutes (an
+  account backoff, a long Provider window) releases the Provider hold so
+  other accounts keep polling. Any other refusal sent nothing and is retried a
+  minute later, three attempts in all, then logged `failed`. An admission
+  dropped before the claim (a shutdown) releases its starts unused.
 - Only after admission is the row deleted under its idempotency key (the
   one-shot claim), before the audit row and the dispatch, so it fires at most
   once even across a restart. Without a written `started` audit row nothing is

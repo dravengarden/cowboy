@@ -124,7 +124,21 @@ async fn route(
         .map_err(public_code)?
     {
         Resolved::Native(target) => native_route(state, *target),
-        Resolved::Portable(target) => portable::route(state, owner, id, *target),
+        Resolved::Portable(target) => {
+            // A sign-in committed while the target was resolved could pair
+            // the earlier sign-in with the new vault generation: read it
+            // again after the vault was sampled. A later one advances the
+            // vault generation the dispatch compares under the account lock.
+            let store = state.store.as_ref().ok_or("unavailable")?;
+            let sign_in = store
+                .latest_vault_sign_in(owner, id)
+                .await
+                .map_err(|_| "unavailable")?;
+            if sign_in != target.scope.sign_in_generation {
+                return Err("account_binding_changed");
+            }
+            portable::route(state, owner, id, *target)
+        }
     }
 }
 
