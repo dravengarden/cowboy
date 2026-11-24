@@ -131,7 +131,7 @@ try {
     await waitFor(`${regionNow} === '${region}'`, `Ctrl+${key.toUpperCase()} reaches ${region}`);
   }
   console.log(JSON.stringify({ window_motion: hops.map(([key, , , region]) => `^${key}→${region}`).join(" ") }));
-  // The Draft title in the real App (Vim on): `␣T` puts a Normal cursor on
+  // The Draft title in the real App (Vim on): `␣R` puts a Normal cursor on
   // it, and each documented way back reaches the body.
   await page.evaluate(`(() => {
     localStorage.setItem("cowboy:vim", "1");

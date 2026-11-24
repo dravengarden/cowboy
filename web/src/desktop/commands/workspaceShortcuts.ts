@@ -112,7 +112,7 @@ export const DESKTOP_WORKSPACE_KEYS = {
   // Step through the tab strip (Vim's `[b` / `]b`).
   previousTab: "[",
   nextTab: "]",
-  // Rename the current Session (a Draft's name is its title, `␣T`).
+  // Rename the current Session (a Draft's name is its title, also `␣R`).
   rename: "R",
   commandPalette: "K",
   // The Sessions group mirrors Top bar: the doubled key focuses the surface,

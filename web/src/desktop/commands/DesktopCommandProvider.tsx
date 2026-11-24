@@ -180,8 +180,8 @@ export function desktopLeaderGroupAvailable(
   );
 }
 
-/** A page's own root command (`␣T` Title on a Draft) takes its key over a
- *  group of the same letter, which needs the other page (Top bar). */
+/** A page's own root command (`␣R` Title on a Draft) takes its key over a
+ *  group of the same letter, if one exists on another page. */
 export function desktopSurfaceCommandOwnsKey(
   commands: Iterable<DesktopCommand>,
   key: string,

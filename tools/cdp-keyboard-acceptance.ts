@@ -158,9 +158,9 @@ const draftFlow = async (): Promise<void> => {
   await sleep(800);
   check(
     await page.evaluate<boolean>(
-      "document.querySelector('[data-draft-title-shortcut]')?.textContent.includes('␣T')",
+      "document.querySelector('[data-draft-title-shortcut]')?.textContent.includes('␣R')",
     ),
-    "The title shows its ␣T slot",
+    "The title shows its ␣R slot",
   );
   // Write two lines in the shared Vim editor.
   await click("[data-workspace-document] .cm-content");

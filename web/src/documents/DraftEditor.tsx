@@ -311,7 +311,7 @@ function DraftEditingSession(
   }, [focusLayout]);
   const vim = useVimSetting();
   const toolbar = useComposerToolbar();
-  // The title is the document's first line (Obsidian inline title): `␣T`
+  // The title is the document's first line (Obsidian inline title): `␣R`
   // or a Vim Normal `k` on the body's first line puts the cursor on its end
   // in Normal; `↑` in Insert enters it typing. `Enter`/`↓`/`Tab` (and `j`
   // in Normal) return to the body start, `Esc` to where the body caret was

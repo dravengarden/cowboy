@@ -51,7 +51,7 @@ export interface DesktopToolbarButtonSpec {
   disabled?: boolean;
   reason?: string;
   onClick: () => void;
-  formatTier?: "primary" | "secondary";
+  formatTier?: "primary" | "secondary" | "extra";
   pressed?: boolean;
   anywhere?: boolean;
   tone?: "error";
@@ -285,6 +285,7 @@ export interface DesktopEditorFormatRowProps {
   kind: "session" | "document";
   ariaLabel: string;
   menuId: string;
+  formatIds?: readonly string[] | undefined;
   canInsert: boolean;
   canAttach: boolean;
   writable?: boolean;
@@ -317,6 +318,7 @@ export function DesktopEditorFormatRow(
     kind,
     ariaLabel,
     menuId,
+    formatIds = DESKTOP_QUICK_FORMATS,
     canInsert,
     canAttach,
     writable = true,
@@ -375,18 +377,25 @@ export function DesktopEditorFormatRow(
           renderAction={renderAction}
         />
         <Divider orientation="vertical" flexItem sx={{ my: 0.75, mx: 0.5 }} />
-        {DESKTOP_QUICK_FORMATS.map((id, index) => {
-          const command = COMPOSER_COMMANDS_BY_ID[id]!;
+        {formatIds.map((id) => {
+          const command = COMPOSER_COMMANDS_BY_ID[id];
+          if (!command) return null;
+          const chord = DESKTOP_COMPOSER_FORMAT_CHORDS[id];
+          const tier = ["bold", "italic", "code"].includes(id)
+            ? "primary"
+            : ["undo", "redo", "link", "bulletList"].includes(id)
+            ? "secondary"
+            : "extra";
           return renderAction({
             id,
             icon: command.icon,
             label: command.label,
-            shortcut: DESKTOP_COMPOSER_FORMAT_CHORDS[id]!,
+            ...(chord ? { shortcut: chord } : {}),
             disabled: composing || !writable,
             reason: composing
               ? "Finish text composition first"
               : "This draft cannot be edited",
-            formatTier: index < 3 ? "primary" : "secondary",
+            formatTier: tier,
             onClick: () => onFormat(id),
           });
         })}

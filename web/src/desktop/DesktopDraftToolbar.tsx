@@ -473,6 +473,9 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
           "& [data-format-tier='secondary']": { display: "inline-flex" },
           "& [data-composer-action-label]": { display: "inline" },
         },
+        "@container draft-tools (min-width: 54rem)": {
+          "& [data-format-tier='extra']": { display: "inline-flex" },
+        },
       }}
     >
       <Box data-draft-format-toolbar>
@@ -480,6 +483,9 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
           kind="document"
           ariaLabel="Draft formatting"
           menuId="desktop-draft-more-menu"
+          formatIds={props.toolbar.filter((id) =>
+            !["slash", "mention", "attach", "sourceMode"].includes(id)
+          )}
           canInsert={false}
           canAttach={props.writable}
           writable={props.writable}
