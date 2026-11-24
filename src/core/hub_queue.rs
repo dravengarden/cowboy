@@ -266,6 +266,17 @@ impl Hub {
         manual: bool,
         trigger: Option<&crate::prompt_origin::RequestCaller>,
     ) {
+        self.drain_head_inner(session_id, allow_revive, manual, trigger, None);
+    }
+
+    fn drain_head_inner(
+        &self,
+        session_id: &str,
+        allow_revive: bool,
+        manual: bool,
+        trigger: Option<&crate::prompt_origin::RequestCaller>,
+        expected_head_id: Option<&str>,
+    ) {
         if self.inner.dispatch_tx.lock().is_none() {
             return;
         }
@@ -274,6 +285,11 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            if let Some(expected) = expected_head_id
+                && s.queue.first().is_none_or(|head| head.id != expected)
+            {
+                return;
+            }
             let decision = Self::drain_decision(s, allow_revive, manual, |cmid| {
                 self.context_allows_dispatch(session_id, cmid)
             });
@@ -374,16 +390,13 @@ impl Hub {
         allow_revive: bool,
         trigger: Option<&crate::prompt_origin::RequestCaller>,
     ) {
-        let is_target_head = self
-            .inner
-            .sessions
-            .lock()
-            .get(session_id)
-            .is_some_and(|s| s.queue.first().is_some_and(|head| head.id == target_row_id));
-        if !is_target_head {
-            return;
-        }
-        self.drain_head(session_id, allow_revive, false, trigger);
+        self.drain_head_inner(
+            session_id,
+            allow_revive,
+            false,
+            trigger,
+            Some(target_row_id),
+        );
     }
 
     pub(super) fn try_drain(&self, session_id: &str) {

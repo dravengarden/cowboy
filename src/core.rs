@@ -2031,8 +2031,9 @@ impl Hub {
                 .flat_map(|s| {
                     let sid = s.meta.id.clone();
                     s.drafts.iter().filter_map(move |m| {
-                        m.schedule
-                            .as_ref()
+                        (!m.id.starts_with("recovery-"))
+                            .then_some(m.schedule.as_ref())
+                            .flatten()
                             .map(|sc| (sid.clone(), m.id.clone(), sc.fire_at_ms))
                     })
                 })
